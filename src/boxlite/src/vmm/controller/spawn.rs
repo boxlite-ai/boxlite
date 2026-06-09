@@ -77,7 +77,7 @@ impl<'a> ShimSpawner<'a> {
         let mut builder = JailerBuilder::new()
             .with_box_id(self.box_id)
             .with_layout(self.layout.clone())
-            .with_security(self.options.advanced.security.clone())
+            .with_security(self.options.advanced.security())
             .with_volumes(self.options.volumes.clone())
             .with_detach(detach);
 
@@ -92,7 +92,7 @@ impl<'a> ShimSpawner<'a> {
 
         // 4. Build isolated command — no CLI args, config sent via stdin pipe
         let no_args: &[String] = &[];
-        let mut cmd = jail.command(self.binary_path, no_args);
+        let mut cmd = jail.command(self.binary_path, no_args)?;
 
         // 5. Configure environment
         self.configure_env(&mut cmd);
@@ -154,8 +154,8 @@ impl<'a> ShimSpawner<'a> {
         // `krun-empty-root-*` under `env::temp_dir()` when booting from block
         // devices; under deny-default seatbelt this must resolve to an
         // explicitly granted path.
-        if self.options.advanced.security.jailer_enabled
-            && self.options.advanced.security.sandbox_profile.is_none()
+        if self.options.advanced.security().jailer_enabled
+            && self.options.advanced.security().sandbox_profile.is_none()
         {
             let tmp_dir = self.layout.tmp_dir();
             cmd.env("TMPDIR", &tmp_dir);
@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn test_configure_env_sets_box_scoped_temp_dir() {
-        use crate::runtime::advanced_options::{AdvancedBoxOptions, SecurityOptions};
+        use crate::runtime::advanced_options::SecurityOptions;
         use crate::runtime::layout::{BoxFilesystemLayout, FsLayoutConfig};
         use std::path::PathBuf;
 
@@ -221,16 +221,10 @@ mod tests {
             FsLayoutConfig::without_bind_mount(),
             false,
         );
-        let options = BoxOptions {
-            advanced: AdvancedBoxOptions {
-                security: SecurityOptions {
-                    jailer_enabled: true,
-                    ..SecurityOptions::default()
-                },
-                ..AdvancedBoxOptions::default()
-            },
-            ..BoxOptions::default()
-        };
+        let options = BoxOptions::default().with_security(SecurityOptions {
+            jailer_enabled: true,
+            ..SecurityOptions::default()
+        });
 
         let spawner = ShimSpawner::new(
             Path::new("/usr/bin/boxlite-shim"),
@@ -265,7 +259,7 @@ mod tests {
 
     #[test]
     fn test_configure_env_does_not_override_temp_for_custom_profile() {
-        use crate::runtime::advanced_options::{AdvancedBoxOptions, SecurityOptions};
+        use crate::runtime::advanced_options::SecurityOptions;
         use crate::runtime::layout::{BoxFilesystemLayout, FsLayoutConfig};
         use std::path::PathBuf;
 
@@ -274,17 +268,11 @@ mod tests {
             FsLayoutConfig::without_bind_mount(),
             false,
         );
-        let options = BoxOptions {
-            advanced: AdvancedBoxOptions {
-                security: SecurityOptions {
-                    jailer_enabled: true,
-                    sandbox_profile: Some(PathBuf::from("/tmp/custom.sbpl")),
-                    ..SecurityOptions::default()
-                },
-                ..AdvancedBoxOptions::default()
-            },
-            ..BoxOptions::default()
-        };
+        let options = BoxOptions::default().with_security(SecurityOptions {
+            jailer_enabled: true,
+            sandbox_profile: Some(PathBuf::from("/tmp/custom.sbpl")),
+            ..SecurityOptions::default()
+        });
 
         let spawner = ShimSpawner::new(
             Path::new("/usr/bin/boxlite-shim"),
@@ -327,7 +315,7 @@ mod tests {
         // sandbox-exec, which would block the `/usr/bin/yes` stand-in.
         // The setsid pre_exec hook is unaffected by sandbox state.
         let mut options = BoxOptions::default();
-        options.advanced.security = SecurityOptions::development();
+        options.advanced.security = Some(SecurityOptions::development());
         let spawner = ShimSpawner::new(
             std::path::Path::new("/usr/bin/yes"),
             &layout,
@@ -381,7 +369,7 @@ mod tests {
         std::fs::create_dir_all(&box_dir).expect("mkdir box");
         let layout = BoxFilesystemLayout::new(box_dir, FsLayoutConfig::without_bind_mount(), false);
         let mut options = BoxOptions::default();
-        options.advanced.security = SecurityOptions::development();
+        options.advanced.security = Some(SecurityOptions::development());
         let spawner = ShimSpawner::new(
             std::path::Path::new("/usr/bin/yes"),
             &layout,

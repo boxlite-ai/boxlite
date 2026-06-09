@@ -26,15 +26,12 @@ fn health_check_opts(
 ) -> BoxOptions {
     BoxOptions {
         rootfs: RootfsSpec::Image("alpine:latest".into()),
-        advanced: AdvancedBoxOptions {
-            health_check: Some(HealthCheckOptions {
-                interval,
-                timeout,
-                retries,
-                start_period,
-            }),
-            ..Default::default()
-        },
+        advanced: AdvancedBoxOptions::default().with_health_check(HealthCheckOptions {
+            interval,
+            timeout,
+            retries,
+            start_period,
+        }),
         auto_remove: false,
         ..Default::default()
     }

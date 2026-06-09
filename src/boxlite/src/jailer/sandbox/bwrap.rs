@@ -109,17 +109,24 @@ impl Sandbox for BwrapSandbox {
         // =====================================================================
         // Environment sanitization
         // =====================================================================
-        bwrap_cmd
-            .with_clearenv()
-            .setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
-            .setenv("HOME", "/root");
+        if ctx.sanitize_env {
+            bwrap_cmd
+                .with_clearenv()
+                // Safe, fixed values regardless of host PATH/HOME
+                .setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+                .setenv("HOME", "/root");
 
-        // Preserve debugging environment variables
-        if let Ok(rust_log) = std::env::var("RUST_LOG") {
-            bwrap_cmd.setenv("RUST_LOG", rust_log);
-        }
-        if let Ok(rust_backtrace) = std::env::var("RUST_BACKTRACE") {
-            bwrap_cmd.setenv("RUST_BACKTRACE", rust_backtrace);
+            // Pass through each allowlisted variable if present in host env.
+            // PATH and HOME are already set above with safe values, so skip them
+            // to avoid overwriting with potentially unsafe host values.
+            for key in ctx.env_allowlist {
+                if key == "PATH" || key == "HOME" {
+                    continue;
+                }
+                if let Ok(val) = std::env::var(key) {
+                    bwrap_cmd.setenv(key, val);
+                }
+            }
         }
 
         bwrap_cmd.chdir("/");

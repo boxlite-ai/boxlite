@@ -175,6 +175,16 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       skipStart: skipStart,
       organizationId: sandbox.organizationId,
       regionId: sandbox.region,
+      security: sandbox.effectiveSecurityOptions ?? undefined,
+    }
+
+    if (sandbox.effectiveSecurityOptions && Object.keys(sandbox.effectiveSecurityOptions).length > 0) {
+      this.logger.log({
+        event: 'runner.security.applied',
+        sandboxId: sandbox.id,
+        runnerId: this.runner.id,
+        jailerEnabled: sandbox.effectiveSecurityOptions['jailer_enabled'],
+      })
     }
 
     await this.jobService.createJob(

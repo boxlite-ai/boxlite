@@ -178,6 +178,7 @@ export class SandboxStartAction extends SandboxAction {
     }
 
     const declarativeBuildScoreThreshold = this.configService.get('runnerScore.thresholds.declarativeBuild')
+    const requireSecurityOptions = this.requiresSecurityCapableRunner(sandbox)
 
     // Try to assign an available runner with the snapshot already available
     try {
@@ -185,6 +186,7 @@ export class SandboxStartAction extends SandboxAction {
         regions: [sandbox.region],
         sandboxClass: sandbox.class,
         snapshotRef: snapshotRef,
+        requireSecurityOptions,
         ...(isBuild &&
           declarativeBuildScoreThreshold !== undefined && {
             availabilityScoreThreshold: declarativeBuildScoreThreshold,
@@ -217,6 +219,11 @@ export class SandboxStartAction extends SandboxAction {
         continue
       }
 
+      // skip runners that cannot enforce the required security policy
+      if (requireSecurityOptions && !runner.supportsSecurityOptions) {
+        continue
+      }
+
       if (declarativeBuildScoreThreshold === undefined || runner.availabilityScore >= declarativeBuildScoreThreshold) {
         if (snapshotRunner.state === targetState) {
           await this.updateSandboxState(sandbox, targetSandboxState, lockCode, runner.id)
@@ -238,6 +245,7 @@ export class SandboxStartAction extends SandboxAction {
         regions: [sandbox.region],
         sandboxClass: sandbox.class,
         excludedRunnerIds: excludedRunnerIds,
+        requireSecurityOptions,
         ...(isBuild &&
           declarativeBuildScoreThreshold !== undefined && {
             availabilityScoreThreshold: declarativeBuildScoreThreshold,
@@ -445,6 +453,7 @@ export class SandboxStartAction extends SandboxAction {
           const availableRunners = await this.runnerService.findAvailableRunners({
             regions: [sandbox.region],
             sandboxClass: sandbox.class,
+            requireSecurityOptions: this.requiresSecurityCapableRunner(sandbox),
           })
           const lessUsedRunners = availableRunners.filter((runner) => runner.id !== originalRunnerId)
 
@@ -717,6 +726,7 @@ export class SandboxStartAction extends SandboxAction {
     let availableRunners: Runner[] = []
 
     const excludedRunnerIds: string[] = excludedRunnerId ? [excludedRunnerId] : []
+    const requireSecurityOptions = this.requiresSecurityCapableRunner(sandbox)
 
     const runnersWithBaseSnapshot: Runner[] = snapshotRef
       ? await this.runnerService.findAvailableRunners({
@@ -724,6 +734,7 @@ export class SandboxStartAction extends SandboxAction {
           sandboxClass: sandbox.class,
           snapshotRef,
           excludedRunnerIds,
+          requireSecurityOptions,
         })
       : []
     if (runnersWithBaseSnapshot.length > 0) {
@@ -733,6 +744,7 @@ export class SandboxStartAction extends SandboxAction {
       availableRunners = await this.runnerService.findAvailableRunners({
         regions: [sandbox.region],
         excludedRunnerIds,
+        requireSecurityOptions,
       })
     }
 
@@ -839,6 +851,25 @@ export class SandboxStartAction extends SandboxAction {
       this.configService.get('sandboxOtel.endpointUrl'),
     )
     return null
+  }
+
+  /**
+   * Returns true when this sandbox must run on a security-capable runner
+   * (supportsSecurityOptions=true).
+   *
+   * Only the stored policy drives this decision. Using the global flag here would
+   * route a pre-existing sandbox (created before the flag was enabled, with no stored
+   * policy) to a capable runner while sending no security payload — a false enforcement
+   * signal. The invariant must be: capability required ↔ security payload sent.
+   *
+   * Coverage of all cases:
+   * - New sandbox (flag on)          → effectiveSecurityOptions stored → true  → capable runner + payload sent ✓
+   * - Pre-existing sandbox (flag on, no stored policy) → false → any runner OK + no payload sent ✓
+   * - Pre-existing sandbox (flag now off, stored policy) → true → capable runner + payload sent ✓
+   */
+  private requiresSecurityCapableRunner(sandbox: Sandbox): boolean {
+    const policy = sandbox.effectiveSecurityOptions
+    return policy != null && Object.keys(policy).length > 0
   }
 
   private async removeSandboxFromPreviousRunner(sandbox: Sandbox): Promise<void> {

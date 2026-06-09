@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::litebox::BoxStatus;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
+use crate::runtime::advanced_options::SecurityOptions;
 use crate::runtime::options::{CloneOptions, ExportOptions, SnapshotOptions};
 
 // ============================================================================
@@ -101,7 +102,7 @@ pub(crate) struct CreateBoxRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detach: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub security: Option<String>,
+    pub security: Option<SecurityOptions>,
 }
 
 impl CreateBoxRequest {
@@ -144,7 +145,10 @@ impl CreateBoxRequest {
             secrets,
             auto_remove: Some(options.auto_remove),
             detach: Some(options.detach),
-            security: None, // TODO: map security preset
+            // Only forward security when explicitly configured by the caller.
+            // advanced.security is None by default; any Some(...) value means the caller
+            // opted in to v2-runner enforcement and the field is forwarded to the API.
+            security: options.advanced.security.clone(),
         }
     }
 }
@@ -493,6 +497,60 @@ mod tests {
         // None fields should be skipped
         assert!(!json.contains("rootfs_path"));
         assert!(!json.contains("disk_size_gb"));
+    }
+
+    /// Default BoxOptions must NOT include security in the REST request.
+    /// `from_options` must only send security when the caller explicitly configured it via
+    /// `BoxOptions::with_security`; otherwise every default create call becomes an explicit
+    /// security request, breaking warm-pool reuse and causing BadRequestError on non-v2 runners.
+    #[test]
+    fn test_create_box_request_default_options_omit_security() {
+        use crate::runtime::options::{BoxOptions, RootfsSpec};
+
+        let opts = BoxOptions {
+            rootfs: RootfsSpec::Image("alpine:latest".into()),
+            ..Default::default()
+        };
+        let req = CreateBoxRequest::from_options(&opts, None);
+        // A default BoxOptions has no explicit security request → field must be omitted.
+        assert!(
+            req.security.is_none(),
+            "default options must not send security field"
+        );
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(
+            !json.contains("\"security\""),
+            "default JSON must not contain security key"
+        );
+    }
+
+    /// When security is explicitly set via `BoxOptions::with_security`, it must be included
+    /// in the REST request so the API can route to v2 runners that support security options.
+    #[test]
+    fn test_create_box_request_explicit_security_is_forwarded() {
+        use crate::runtime::advanced_options::SecurityOptions;
+        use crate::runtime::options::{BoxOptions, RootfsSpec};
+
+        let opts = BoxOptions {
+            rootfs: RootfsSpec::Image("alpine:latest".into()),
+            ..Default::default()
+        }
+        .with_security(SecurityOptions::maximum());
+
+        let req = CreateBoxRequest::from_options(&opts, None);
+        assert!(
+            req.security.is_some(),
+            "explicit security must be included in the REST request"
+        );
+        assert!(
+            req.security.as_ref().unwrap().jailer_enabled,
+            "maximum() preset must have jailer_enabled=true"
+        );
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(
+            json.contains("\"security\""),
+            "explicit security JSON must contain security key"
+        );
     }
 
     #[test]

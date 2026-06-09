@@ -54,6 +54,37 @@ type ClientConfig struct {
 	VolumeCleanupExclusionPeriod time.Duration
 }
 
+// dtoToSecurityOptions maps SecurityOptionsDTO fields to the Go SDK SecurityOptions type.
+// Both structs use snake_case JSON tags that match Rust SecurityOptions serde names.
+func dtoToSecurityOptions(d *dto.SecurityOptionsDTO) boxlite.SecurityOptions {
+	sec := boxlite.SecurityOptions{
+		JailerEnabled:  d.JailerEnabled,
+		SeccompEnabled: d.SeccompEnabled,
+		UID:            d.UID,
+		GID:            d.GID,
+		NewPIDNS:       d.NewPIDNS,
+		NewNetNS:       d.NewNetNS,
+		ChrootBase:     d.ChrootBase,
+		ChrootEnabled:  d.ChrootEnabled,
+		CloseFDs:       d.CloseFDs,
+		SanitizeEnv:    d.SanitizeEnv,
+		EnvAllowlist:   d.EnvAllowlist,
+		SandboxProfile: d.SandboxProfile,
+		NetworkEnabled: d.NetworkEnabled,
+		Preset:         d.Preset,
+	}
+	if d.ResourceLimits != nil {
+		sec.ResourceLimits = &boxlite.SecurityResourceLimits{
+			MaxOpenFiles: d.ResourceLimits.MaxOpenFiles,
+			MaxFileSize:  d.ResourceLimits.MaxFileSize,
+			MaxProcesses: d.ResourceLimits.MaxProcesses,
+			MaxMemory:    d.ResourceLimits.MaxMemory,
+			MaxCpuTime:   d.ResourceLimits.MaxCpuTime,
+		}
+	}
+	return sec
+}
+
 func networkSpec(blockAll *bool, allowList *string) boxlite.NetworkSpec {
 	if blockAll != nil && *blockAll {
 		return boxlite.NetworkSpec{Mode: boxlite.NetworkModeDisabled}
@@ -194,6 +225,10 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 	}
 
 	opts = append(opts, boxlite.WithNetwork(networkSpec(sandboxDto.NetworkBlockAll, sandboxDto.NetworkAllowList)))
+
+	if sandboxDto.Security != nil {
+		opts = append(opts, boxlite.WithSecurity(dtoToSecurityOptions(sandboxDto.Security)))
+	}
 
 	bx, err := c.runtime.Create(ctx, sandboxDto.Snapshot, opts...)
 	if err != nil {

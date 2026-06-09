@@ -166,6 +166,19 @@ export class Runner {
   })
   draining: boolean
 
+  /**
+   * Whether this runner has been confirmed to support security-options enforcement
+   * in the v2 job payload.
+   *
+   * Defaults to false for all existing runners so that a mixed rollout does not
+   * silently accept security requests on runners that will ignore the new field.
+   * Set to true when a runner registers and its build includes security-options support.
+   */
+  @Column({
+    default: false,
+  })
+  supportsSecurityOptions: boolean
+
   @Column({
     type: 'jsonb',
     nullable: true,
@@ -195,6 +208,7 @@ export class Runner {
     apiUrl?: string
     proxyUrl?: string
     appVersion?: string | null
+    supportsSecurityOptions?: boolean
   }) {
     this.region = params.region
     this.name = params.name
@@ -210,6 +224,9 @@ export class Runner {
     this.appVersion = params.appVersion ?? null
     this.gpu = null
     this.gpuType = null
+    // The entity constructor defaults to false as a safe fallback; the service
+    // create() method applies the correct per-version default (true for new v2).
+    this.supportsSecurityOptions = params.supportsSecurityOptions ?? false
 
     if (this.apiVersion === '0') {
       if (!this.apiUrl) {

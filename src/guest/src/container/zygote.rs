@@ -12,6 +12,7 @@
 //! See `docs/investigations/concurrent-exec-deadlock.md` for full analysis.
 
 use super::capabilities::capability_names;
+use super::spec::ResourceLimits;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use libcontainer::container::builder::ContainerBuilder;
 use libcontainer::syscall::syscall::SyscallType;
@@ -58,6 +59,9 @@ pub(crate) struct BuildSpec {
     pub args: Vec<String>,
     pub uid: u32,
     pub gid: u32,
+    /// Resource limits to apply to the exec'd process via prlimit64().
+    #[serde(default)]
+    pub resource_limits: ResourceLimits,
 }
 
 /// Build outcome. Invalid states are unrepresentable.
@@ -92,7 +96,7 @@ pub(crate) enum WaitResult {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 enum ZygoteRequest {
     /// Build a new container process. May include SCM_RIGHTS fds for stdio pipes.
-    Build(BuildSpec),
+    Build(Box<BuildSpec>),
     /// Wait for a container process to exit and return its exit status.
     /// The zygote must handle this because it's the parent of all container
     /// processes (they were created by clone3() inside the zygote).
@@ -151,7 +155,7 @@ impl Zygote {
     pub fn build(&self, spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BoxliteResult<Pid> {
         let sock = self.sock.lock().unwrap();
         let fd = sock.as_raw_fd();
-        send_request(fd, &ZygoteRequest::Build(spec), fds)?;
+        send_request(fd, &ZygoteRequest::Build(Box::new(spec)), fds)?;
         match recv_response(fd)? {
             ZygoteResponse::Build(BuildResult::Spawned { pid }) => Ok(Pid::from_raw(pid)),
             ZygoteResponse::Build(BuildResult::Failed { error }) => {
@@ -207,7 +211,7 @@ fn serve(sock: OwnedFd) -> ! {
     loop {
         match recv_request(fd) {
             Ok((ZygoteRequest::Build(spec), fds)) => {
-                let result = do_build(spec, fds);
+                let result = do_build(*spec, fds);
                 if let Err(e) = send_response(fd, &ZygoteResponse::Build(result)) {
                     eprintln!("[zygote] send_response failed: {e}");
                     std::process::exit(1);
@@ -304,8 +308,61 @@ fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
     };
 
     match build_fn() {
-        Ok(pid) => BuildResult::Spawned { pid: pid.as_raw() },
+        Ok(pid) => {
+            apply_resource_limits(pid.as_raw(), &spec.resource_limits);
+            BuildResult::Spawned { pid: pid.as_raw() }
+        }
         Err(error) => BuildResult::Failed { error },
+    }
+}
+
+/// Apply resource limits to a running process via prlimit64.
+///
+/// Called immediately after the exec process is spawned. Both soft and hard
+/// limits are lowered so the process cannot raise them back. As root inside
+/// the VM we have CAP_SYS_RESOURCE so we can lower the hard limit too.
+///
+/// The race window (process spawned → prlimit called) is negligible: the
+/// process is still in execve and has not had time to open significant
+/// resources. This approach avoids modifying libcontainer's tenant builder.
+fn apply_resource_limits(pid: i32, limits: &ResourceLimits) {
+    use libc::{RLIMIT_AS, RLIMIT_CPU, RLIMIT_FSIZE, RLIMIT_NOFILE, RLIMIT_NPROC};
+
+    let mut applied = 0u32;
+
+    let entries: &[(libc::c_int, Option<u64>)] = &[
+        (RLIMIT_NOFILE as libc::c_int, limits.max_open_files),
+        (RLIMIT_NPROC as libc::c_int, limits.max_processes),
+        (RLIMIT_FSIZE as libc::c_int, limits.max_file_size),
+        (RLIMIT_AS as libc::c_int, limits.max_memory),
+        (RLIMIT_CPU as libc::c_int, limits.max_cpu_time),
+    ];
+
+    for (resource, maybe_val) in entries {
+        let Some(val) = maybe_val else { continue };
+        let rlim = libc::rlimit {
+            rlim_cur: *val,
+            rlim_max: *val,
+        };
+        // SAFETY: pid is a valid process we just spawned; rlim is stack-allocated.
+        // Cast resource to the platform's __rlimit_resource_t (u32 on x86_64, i32 on
+        // aarch64); use `as _` so the compiler picks the correct type per target.
+        let ret = unsafe { libc::prlimit(pid, *resource as _, &rlim, std::ptr::null_mut()) };
+        if ret != 0 {
+            tracing::warn!(
+                pid,
+                resource,
+                val,
+                errno = std::io::Error::last_os_error().raw_os_error(),
+                "prlimit failed for exec process"
+            );
+        } else {
+            applied += 1;
+        }
+    }
+
+    if applied > 0 {
+        tracing::debug!(pid, applied, "applied resource limits to exec process");
     }
 }
 
@@ -482,6 +539,7 @@ mod tests {
             ],
             uid: 1000,
             gid: 1000,
+            resource_limits: ResourceLimits::default(),
         }
     }
 
@@ -545,12 +603,12 @@ mod tests {
 
     #[test]
     fn zygote_request_build_serde_roundtrip() {
-        let request = ZygoteRequest::Build(sample_spec());
+        let request = ZygoteRequest::Build(Box::new(sample_spec()));
         let json = serde_json::to_vec(&request).unwrap();
         let decoded: ZygoteRequest = serde_json::from_slice(&json).unwrap();
         // Verify it decoded as Build variant with matching spec
         match decoded {
-            ZygoteRequest::Build(spec) => assert_eq!(spec, sample_spec()),
+            ZygoteRequest::Build(spec) => assert_eq!(*spec, sample_spec()),
             other => panic!("expected Build, got: {other:?}"),
         }
     }
@@ -577,6 +635,7 @@ mod tests {
             args: vec![],
             uid: 0,
             gid: 0,
+            resource_limits: ResourceLimits::default(),
         };
         let json = serde_json::to_vec(&spec).unwrap();
         let decoded: BuildSpec = serde_json::from_slice(&json).unwrap();
@@ -603,11 +662,11 @@ mod tests {
         let fd_b = b.as_raw_fd();
 
         let spec = sample_spec();
-        send_request(fd_a, &ZygoteRequest::Build(spec.clone()), None).unwrap();
+        send_request(fd_a, &ZygoteRequest::Build(Box::new(spec.clone())), None).unwrap();
 
         let (received, fds) = recv_request(fd_b).unwrap();
         match received {
-            ZygoteRequest::Build(recv_spec) => assert_eq!(spec, recv_spec),
+            ZygoteRequest::Build(recv_spec) => assert_eq!(spec, *recv_spec),
             other => panic!("expected Build request, got: {other:?}"),
         }
         assert!(fds.is_none());
@@ -632,11 +691,16 @@ mod tests {
 
         let spec = sample_spec();
         let send_fds = [r0.as_raw_fd(), w1.as_raw_fd(), w2.as_raw_fd()];
-        send_request(fd_a, &ZygoteRequest::Build(spec.clone()), Some(send_fds)).unwrap();
+        send_request(
+            fd_a,
+            &ZygoteRequest::Build(Box::new(spec.clone())),
+            Some(send_fds),
+        )
+        .unwrap();
 
         let (received, recv_fds) = recv_request(fd_b).unwrap();
         match received {
-            ZygoteRequest::Build(recv_spec) => assert_eq!(spec, recv_spec),
+            ZygoteRequest::Build(recv_spec) => assert_eq!(spec, *recv_spec),
             other => panic!("expected Build request, got: {other:?}"),
         }
         let recv_fds = recv_fds.expect("should have received fds");
@@ -800,12 +864,13 @@ mod tests {
             args,
             uid: 65534,
             gid: 65534,
+            resource_limits: ResourceLimits::default(),
         };
 
-        send_request(fd_a, &ZygoteRequest::Build(spec.clone()), None).unwrap();
+        send_request(fd_a, &ZygoteRequest::Build(Box::new(spec.clone())), None).unwrap();
         let (received, fds) = recv_request(fd_b).unwrap();
         match received {
-            ZygoteRequest::Build(recv_spec) => assert_eq!(spec, recv_spec),
+            ZygoteRequest::Build(recv_spec) => assert_eq!(spec, *recv_spec),
             other => panic!("expected Build request, got: {other:?}"),
         }
         assert!(fds.is_none());
@@ -829,6 +894,7 @@ mod tests {
             args: vec![],
             uid: 0,
             gid: 0,
+            resource_limits: ResourceLimits::default(),
         };
 
         let (a, _b) = socketpair(
@@ -839,7 +905,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = send_request(a.as_raw_fd(), &ZygoteRequest::Build(spec), None);
+        let result = send_request(a.as_raw_fd(), &ZygoteRequest::Build(Box::new(spec)), None);
         assert!(result.is_err(), "oversized request should be rejected");
         let err = result.unwrap_err().to_string();
         assert!(
@@ -981,6 +1047,7 @@ mod tests {
                     args: vec!["echo".to_string()],
                     uid: 0,
                     gid: 0,
+                    resource_limits: ResourceLimits::default(),
                 };
                 z.build(spec, None).unwrap()
             }));

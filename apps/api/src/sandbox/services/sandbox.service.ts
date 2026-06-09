@@ -89,6 +89,8 @@ import {
 import { SandboxLookupCacheInvalidationService } from './sandbox-lookup-cache-invalidation.service'
 import { Region } from '../../region/entities/region.entity'
 import { SandboxActivityService } from './sandbox-activity.service'
+import { SecurityPolicyService, PolicyContext } from './security-policy.service'
+import { isSecurityOptionsEnabled } from '../../common/constants/feature-flags'
 
 const DEFAULT_CPU = 1
 const DEFAULT_MEMORY = 1
@@ -123,6 +125,7 @@ export class SandboxService {
     private readonly snapshotService: SnapshotService,
     private readonly sandboxLookupCacheInvalidationService: SandboxLookupCacheInvalidationService,
     private readonly sandboxActivityService: SandboxActivityService,
+    private readonly securityPolicyService: SecurityPolicyService,
   ) {}
 
   protected getLockKey(id: string): string {
@@ -332,6 +335,10 @@ export class SandboxService {
       regions: [sandbox.region],
       sandboxClass: sandbox.class,
       snapshotRef: snapshot.ref,
+      // Warm pool sandboxes are assigned to real users on demand.  When security enforcement
+      // is active, we must pre-select a capable runner so that the security policy can be
+      // applied at assignment time without a runner swap.
+      requireSecurityOptions: isSecurityOptionsEnabled(),
     })
 
     sandbox.runnerId = runner.id
@@ -437,8 +444,25 @@ export class SandboxService {
         pendingDiskIncrement = disk
       }
 
+      // Fail fast when the caller explicitly requests security options but the
+      // platform flag is off.  Silently dropping the security object would give
+      // the caller a false signal that isolation is active.
+      if (createSandboxDto.security && !isSecurityOptionsEnabled()) {
+        throw new BadRequestError(
+          'Security options require SECURITY_OPTIONS_ENABLED to be set. ' +
+            'Contact your platform administrator.',
+        )
+      }
+
       if (!createSandboxDto.volumes || createSandboxDto.volumes.length === 0) {
-        const skipWarmPool = (await this.redis.exists(`warm-pool:skip:${snapshot.id}`)) === 1
+        // Skip warm-pool whenever security enforcement is enabled: warm-pool sandboxes
+        // are created without an effectiveSecurityOptions policy, so reusing one when
+        // the flag is on would silently serve a sandbox without the platform-default
+        // isolation (jailer, sanitize_env, etc.).  This is true even when the caller
+        // did not send an explicit security object — the platform default still applies.
+        const skipWarmPool =
+          isSecurityOptionsEnabled() ||
+          (await this.redis.exists(`warm-pool:skip:${snapshot.id}`)) === 1
 
         if (!skipWarmPool) {
           const warmPoolSandbox = await this.warmPoolService.fetchWarmPoolSandbox({
@@ -464,10 +488,16 @@ export class SandboxService {
         await this.volumeService.validateVolumes(organization.id, volumeIdOrNames)
       }
 
+      const securityEnabled = isSecurityOptionsEnabled()
+
       const runner = await this.runnerService.getRandomAvailableRunner({
         regions: [region.id],
         sandboxClass,
         snapshotRef: snapshot.ref,
+        // Pre-filter the pool so capable runners are selected from the start.
+        // Checking after random selection would cause intermittent failures in a
+        // mixed pool where only some runners support security options.
+        requireSecurityOptions: securityEnabled,
       })
 
       const sandbox = new Sandbox(region.id, createSandboxDto.name)
@@ -495,6 +525,19 @@ export class SandboxService {
 
       if (createSandboxDto.networkAllowList !== undefined) {
         sandbox.networkAllowList = this.resolveNetworkAllowList(createSandboxDto.networkAllowList)
+      }
+
+      if (securityEnabled) {
+        // The runner was already selected from the capable pool (requireSecurityOptions=true).
+        // No post-selection capability check needed.
+        const policyCtx: PolicyContext = { organizationId: organization.id }
+        const securityResult = this.securityPolicyService.computeEffectiveSecurity(
+          createSandboxDto.security,
+          policyCtx,
+        )
+        sandbox.requestedSecurityOptions = securityResult.requested
+        sandbox.effectiveSecurityOptions = securityResult.effective
+        sandbox.securityPolicyResult = securityResult.policyResult as Record<string, unknown>
       }
 
       if (createSandboxDto.autoStopInterval !== undefined) {
@@ -652,6 +695,16 @@ export class SandboxService {
         await this.volumeService.validateVolumes(organization.id, volumeIdOrNames)
       }
 
+      // Fail fast when the caller explicitly requests security options but the
+      // platform flag is off.  Silently dropping the security object would give
+      // the caller a false signal that isolation is active.
+      if (createSandboxDto.security && !isSecurityOptionsEnabled()) {
+        throw new BadRequestError(
+          'Security options require SECURITY_OPTIONS_ENABLED to be set. ' +
+            'Contact your platform administrator.',
+        )
+      }
+
       const sandbox = new Sandbox(region.id, createSandboxDto.name)
 
       sandbox.organizationId = organization.id
@@ -714,6 +767,24 @@ export class SandboxService {
         sandbox.buildInfo = buildInfoEntity
       }
 
+      const securityEnabled = isSecurityOptionsEnabled()
+
+      // Always compute and persist effective security options when the feature flag is on.
+      // This must happen unconditionally — before the runner lookup — so that sandboxes
+      // entering PENDING_BUILD state (no runner has the snapshot yet) still carry the
+      // correct effective policy.  The start action enforces runner capability when the
+      // sandbox eventually runs.
+      if (securityEnabled) {
+        const policyCtx: PolicyContext = { organizationId: organization.id }
+        const securityResult = this.securityPolicyService.computeEffectiveSecurity(
+          createSandboxDto.security,
+          policyCtx,
+        )
+        sandbox.requestedSecurityOptions = securityResult.requested
+        sandbox.effectiveSecurityOptions = securityResult.effective
+        sandbox.securityPolicyResult = securityResult.policyResult as Record<string, unknown>
+      }
+
       let runner: Runner
 
       try {
@@ -725,6 +796,10 @@ export class SandboxService {
           ...(declarativeBuildScoreThreshold !== undefined && {
             availabilityScoreThreshold: declarativeBuildScoreThreshold,
           }),
+          // Pre-filter the pool so that, when security enforcement is on, only capable
+          // runners are candidates.  This avoids the post-selection check that caused
+          // intermittent failures in mixed pools.
+          requireSecurityOptions: securityEnabled,
         })
         sandbox.runnerId = runner.id
       } catch (error) {
@@ -735,6 +810,30 @@ export class SandboxService {
         ) {
           throw error
         }
+
+        // Before queuing as PENDING_BUILD, verify that the failure is "snapshot not
+        // built yet" rather than "no security-capable runners exist at all."
+        // Both cases produce the same "No available runners" error when the combined
+        // filter (snapshotRef + requireSecurityOptions) yields an empty set.
+        // If no security-capable runners exist anywhere in the region, the sandbox
+        // could never start — PENDING_BUILD would be permanently stuck.
+        if (securityEnabled) {
+          const capableRunners = await this.runnerService.findAvailableRunners({
+            regions: [sandbox.region],
+            sandboxClass: sandbox.class,
+            requireSecurityOptions: true,
+            // No snapshotRef: check raw security capacity, not snapshot coverage.
+          })
+          if (capableRunners.length === 0) {
+            throw new BadRequestError(
+              'No security-capable runners available in this region; cannot create security-enabled sandbox',
+            )
+          }
+        }
+
+        // No runner has the snapshot yet — queue for background build.
+        // effectiveSecurityOptions is already set above; the start action will
+        // enforce requiresSecurityCapableRunner when the sandbox eventually runs.
         sandbox.state = SandboxState.PENDING_BUILD
       }
 

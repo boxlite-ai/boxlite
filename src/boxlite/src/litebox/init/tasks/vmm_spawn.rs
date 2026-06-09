@@ -211,7 +211,7 @@ async fn build_config(
         engine: VmmKind::Libkrun, // only engine — will be dynamic when others are added
         // Box identification and security
         box_id: box_id.to_string(),
-        security: options.advanced.security.clone(),
+        security: options.advanced.security().clone(),
         // VM resources
         cpus: options.cpus,
         memory_mib: options.memory_mib,

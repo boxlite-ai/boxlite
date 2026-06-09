@@ -473,3 +473,225 @@ func TestBuildCOptions_RejectsAllowNetWithDisabledMode(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+// ============================================================================
+// Security preset validation
+// ============================================================================
+
+// TestPresetDefaults_KnownPresets verifies that each documented preset name
+// expands to a non-zero SecurityOptions without error.
+func TestPresetDefaults_KnownPresets(t *testing.T) {
+	known := []string{"development", "standard", "maximum"}
+	for _, name := range known {
+		opts, err := presetDefaults(name)
+		if err != nil {
+			t.Errorf("presetDefaults(%q) returned unexpected error: %v", name, err)
+		}
+		if opts.JailerEnabled == nil {
+			t.Errorf("presetDefaults(%q): JailerEnabled is nil", name)
+		}
+	}
+}
+
+// TestPresetDefaults_UnknownPreset verifies that a typo like "maximun" returns
+// an error instead of silently falling back to standard isolation.
+func TestPresetDefaults_UnknownPreset(t *testing.T) {
+	_, err := presetDefaults("maximun")
+	if err == nil {
+		t.Fatal("presetDefaults(\"maximun\"): expected error for unknown preset, got nil")
+	}
+}
+
+// TestExpandSecurityPreset_UnknownPreset exercises the same path via the
+// higher-level expandSecurityPreset so the error reaches buildCOptions callers.
+func TestExpandSecurityPreset_UnknownPreset(t *testing.T) {
+	typo := "maximun"
+	sec := &SecurityOptions{Preset: &typo}
+	_, err := expandSecurityPreset(sec)
+	if err == nil {
+		t.Fatal("expandSecurityPreset with unknown preset: expected error, got nil")
+	}
+}
+
+// TestExpandSecurityPreset_NilAndNilPreset confirms the nil-safe early returns.
+func TestExpandSecurityPreset_NilAndNilPreset(t *testing.T) {
+	got, err := expandSecurityPreset(nil)
+	if err != nil || got != nil {
+		t.Errorf("expandSecurityPreset(nil): want (nil, nil), got (%v, %v)", got, err)
+	}
+	sec := &SecurityOptions{}
+	got, err = expandSecurityPreset(sec)
+	if err != nil || got != sec {
+		t.Errorf("expandSecurityPreset(no preset): want (same ptr, nil), got (%v, %v)", got, err)
+	}
+}
+
+// ============================================================================
+// SecurityOptions field and preset tests
+// ============================================================================
+
+// TestWithSecurity_AppliedToConfig verifies that WithSecurity stores all fields
+// in boxConfig so they reach buildCOptions unchanged.
+func TestWithSecurity_AppliedToConfig(t *testing.T) {
+	trueVal := true
+	falseVal := false
+	uid := uint32(1000)
+	gid := uint32(2000)
+	maxFiles := uint64(256)
+	maxProcs := uint64(10)
+	allowlist := []string{"PATH", "HOME"}
+
+	cfg := &boxConfig{}
+	WithSecurity(SecurityOptions{
+		JailerEnabled:  &trueVal,
+		SeccompEnabled: &falseVal,
+		UID:            &uid,
+		GID:            &gid,
+		CloseFDs:       &trueVal,
+		SanitizeEnv:    &trueVal,
+		EnvAllowlist:   &allowlist,
+		ResourceLimits: &SecurityResourceLimits{
+			MaxOpenFiles: &maxFiles,
+			MaxProcesses: &maxProcs,
+		},
+	})(cfg)
+
+	if cfg.security == nil {
+		t.Fatal("security should be set")
+	}
+	if cfg.security.JailerEnabled == nil || !*cfg.security.JailerEnabled {
+		t.Error("JailerEnabled: want true")
+	}
+	if cfg.security.UID == nil || *cfg.security.UID != 1000 {
+		t.Errorf("UID: got %v, want 1000", cfg.security.UID)
+	}
+	if cfg.security.GID == nil || *cfg.security.GID != 2000 {
+		t.Errorf("GID: got %v, want 2000", cfg.security.GID)
+	}
+	if cfg.security.EnvAllowlist == nil || len(*cfg.security.EnvAllowlist) != 2 {
+		t.Errorf("EnvAllowlist: got %v, want [PATH HOME]", cfg.security.EnvAllowlist)
+	}
+	if cfg.security.ResourceLimits == nil {
+		t.Fatal("ResourceLimits should be set")
+	}
+	if cfg.security.ResourceLimits.MaxOpenFiles == nil || *cfg.security.ResourceLimits.MaxOpenFiles != 256 {
+		t.Errorf("MaxOpenFiles: got %v, want 256", cfg.security.ResourceLimits.MaxOpenFiles)
+	}
+	if cfg.security.ResourceLimits.MaxProcesses == nil || *cfg.security.ResourceLimits.MaxProcesses != 10 {
+		t.Errorf("MaxProcesses: got %v, want 10", cfg.security.ResourceLimits.MaxProcesses)
+	}
+}
+
+// TestWithSecurityPreset_AppliedToConfig verifies that WithSecurityPreset stores
+// the preset name so expandSecurityPreset can resolve it in buildCOptions.
+func TestWithSecurityPreset_AppliedToConfig(t *testing.T) {
+	cfg := &boxConfig{}
+	WithSecurityPreset("maximum")(cfg)
+
+	if cfg.security == nil {
+		t.Fatal("security should be set")
+	}
+	if cfg.security.Preset == nil || *cfg.security.Preset != "maximum" {
+		t.Errorf("Preset: got %v, want \"maximum\"", cfg.security.Preset)
+	}
+}
+
+// TestPresetDefaults_DevelopmentDisablesIsolation verifies development() fields.
+func TestPresetDefaults_DevelopmentDisablesIsolation(t *testing.T) {
+	opts, err := presetDefaults("development")
+	if err != nil {
+		t.Fatalf("presetDefaults(\"development\"): %v", err)
+	}
+	if opts.JailerEnabled == nil || *opts.JailerEnabled {
+		t.Error("development: JailerEnabled should be false")
+	}
+	if opts.SeccompEnabled == nil || *opts.SeccompEnabled {
+		t.Error("development: SeccompEnabled should be false")
+	}
+	if opts.SanitizeEnv == nil || *opts.SanitizeEnv {
+		t.Error("development: SanitizeEnv should be false")
+	}
+	if opts.CloseFDs == nil || *opts.CloseFDs {
+		t.Error("development: CloseFDs should be false")
+	}
+	// development preset should not impose resource limits
+	if opts.ResourceLimits != nil {
+		t.Error("development: ResourceLimits should be nil")
+	}
+}
+
+// TestPresetDefaults_MaximumEnablesIsolationAndLimits verifies maximum() fields.
+func TestPresetDefaults_MaximumEnablesIsolationAndLimits(t *testing.T) {
+	opts, err := presetDefaults("maximum")
+	if err != nil {
+		t.Fatalf("presetDefaults(\"maximum\"): %v", err)
+	}
+	if opts.JailerEnabled == nil || !*opts.JailerEnabled {
+		t.Error("maximum: JailerEnabled should be true")
+	}
+	if opts.SeccompEnabled == nil || !*opts.SeccompEnabled {
+		t.Error("maximum: SeccompEnabled should be true")
+	}
+	if opts.SanitizeEnv == nil || !*opts.SanitizeEnv {
+		t.Error("maximum: SanitizeEnv should be true")
+	}
+	if opts.CloseFDs == nil || !*opts.CloseFDs {
+		t.Error("maximum: CloseFDs should be true")
+	}
+	if opts.ResourceLimits == nil {
+		t.Fatal("maximum: ResourceLimits should be set")
+	}
+	if opts.ResourceLimits.MaxOpenFiles == nil || *opts.ResourceLimits.MaxOpenFiles == 0 {
+		t.Error("maximum: MaxOpenFiles should be a positive value")
+	}
+	if opts.ResourceLimits.MaxProcesses == nil || *opts.ResourceLimits.MaxProcesses == 0 {
+		t.Error("maximum: MaxProcesses should be a positive value")
+	}
+}
+
+// TestPresetDefaults_StandardEnablesSanitizeEnv verifies standard() fields.
+func TestPresetDefaults_StandardEnablesSanitizeEnv(t *testing.T) {
+	opts, err := presetDefaults("standard")
+	if err != nil {
+		t.Fatalf("presetDefaults(\"standard\"): %v", err)
+	}
+	if opts.JailerEnabled == nil || !*opts.JailerEnabled {
+		t.Error("standard: JailerEnabled should be true")
+	}
+	if opts.SanitizeEnv == nil || !*opts.SanitizeEnv {
+		t.Error("standard: SanitizeEnv should be true")
+	}
+	if opts.CloseFDs == nil || !*opts.CloseFDs {
+		t.Error("standard: CloseFDs should be true")
+	}
+	// standard preset should not restrict resources
+	if opts.ResourceLimits != nil {
+		t.Error("standard: ResourceLimits should be nil")
+	}
+}
+
+// TestExpandSecurityPreset_MaximumFieldsOverridable confirms that explicit
+// fields set alongside a preset name override the preset's defaults.
+func TestExpandSecurityPreset_MaximumFieldsOverridable(t *testing.T) {
+	falseVal := false
+	preset := "maximum"
+	// maximum enables seccomp; override to false.
+	sec := &SecurityOptions{Preset: &preset, SeccompEnabled: &falseVal}
+
+	expanded, err := expandSecurityPreset(sec)
+	if err != nil {
+		t.Fatalf("expandSecurityPreset: %v", err)
+	}
+	// JailerEnabled still comes from the preset.
+	if expanded.JailerEnabled == nil || !*expanded.JailerEnabled {
+		t.Error("JailerEnabled: want true (from maximum preset)")
+	}
+	// SeccompEnabled was overridden.
+	if expanded.SeccompEnabled == nil || *expanded.SeccompEnabled {
+		t.Error("SeccompEnabled: want false (explicit override)")
+	}
+	// Preset field must be cleared — Rust does not know this key.
+	if expanded.Preset != nil {
+		t.Error("Preset: want nil after expansion")
+	}
+}

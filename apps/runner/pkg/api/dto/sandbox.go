@@ -4,6 +4,36 @@
 
 package dto
 
+// SecurityResourceLimitsDTO carries process resource limits from the hosted API to the runner.
+// Field names use snake_case to match Rust SecurityOptions serde fields.
+type SecurityResourceLimitsDTO struct {
+	MaxOpenFiles *uint64 `json:"max_open_files,omitempty"`
+	MaxFileSize  *uint64 `json:"max_file_size,omitempty"`
+	MaxProcesses *uint64 `json:"max_processes,omitempty"`
+	MaxMemory    *uint64 `json:"max_memory,omitempty"`
+	MaxCpuTime   *uint64 `json:"max_cpu_time,omitempty"`
+} //	@name	SecurityResourceLimitsDTO
+
+// SecurityOptionsDTO carries security isolation settings from the hosted API to the runner.
+// Field names use snake_case to match Rust SecurityOptions serde fields.
+type SecurityOptionsDTO struct {
+	Preset         *string                    `json:"preset,omitempty"`
+	JailerEnabled  *bool                      `json:"jailer_enabled,omitempty"`
+	SeccompEnabled *bool                      `json:"seccomp_enabled,omitempty"`
+	UID            *uint32                    `json:"uid,omitempty"`
+	GID            *uint32                    `json:"gid,omitempty"`
+	NewPIDNS       *bool                      `json:"new_pid_ns,omitempty"`
+	NewNetNS       *bool                      `json:"new_net_ns,omitempty"`
+	ChrootBase     *string                    `json:"chroot_base,omitempty"`
+	ChrootEnabled  *bool                      `json:"chroot_enabled,omitempty"`
+	CloseFDs       *bool                      `json:"close_fds,omitempty"`
+	SanitizeEnv    *bool                      `json:"sanitize_env,omitempty"`
+	EnvAllowlist   *[]string                  `json:"env_allowlist,omitempty"`
+	ResourceLimits *SecurityResourceLimitsDTO `json:"resource_limits,omitempty"`
+	SandboxProfile *string                    `json:"sandbox_profile,omitempty"`
+	NetworkEnabled *bool                      `json:"network_enabled,omitempty"`
+} //	@name	SecurityOptionsDTO
+
 type CreateSandboxDTO struct {
 	Id               string            `json:"id" validate:"required"`
 	FromVolumeId     string            `json:"fromVolumeId,omitempty"`
@@ -28,6 +58,9 @@ type CreateSandboxDTO struct {
 	// Nullable for backward compatibility
 	OrganizationId *string `json:"organizationId,omitempty"`
 	RegionId       *string `json:"regionId,omitempty"`
+
+	// Security isolation options. When present, effectiveSecurityOptions computed by apps/api.
+	Security *SecurityOptionsDTO `json:"security,omitempty"`
 } //	@name	CreateSandboxDTO
 
 type ResizeSandboxDTO struct {

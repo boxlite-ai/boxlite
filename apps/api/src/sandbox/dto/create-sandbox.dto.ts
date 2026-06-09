@@ -4,11 +4,13 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { IsEnum, IsObject, IsOptional, IsString, IsNumber, IsBoolean, IsArray } from 'class-validator'
+import { IsEnum, IsObject, IsOptional, IsString, IsNumber, IsBoolean, IsArray, ValidateNested } from 'class-validator'
+import { Type } from 'class-transformer'
 import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { SandboxClass } from '../enums/sandbox-class.enum'
 import { SandboxVolume } from './sandbox.dto'
 import { CreateBuildInfoDto } from './create-build-info.dto'
+import { SecurityOptionsDto } from './security-options.dto'
 
 @ApiSchema({ name: 'CreateSandbox' })
 export class CreateSandboxDto {
@@ -177,4 +179,13 @@ export class CreateSandboxDto {
   @IsOptional()
   @IsObject()
   buildInfo?: CreateBuildInfoDto
+
+  @ApiPropertyOptional({
+    description: 'Security isolation options for the sandbox',
+    type: SecurityOptionsDto,
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SecurityOptionsDto)
+  security?: SecurityOptionsDto
 }

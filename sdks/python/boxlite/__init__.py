@@ -10,6 +10,7 @@ import warnings
 try:
     from .boxlite import (
         AccessToken,
+        AdvancedBoxOptions,
         ApiKeyCredential,
         Box,
         BoxInfo,
@@ -45,6 +46,7 @@ try:
         # Core Rust API
         "Options",
         "ImageRegistry",
+        "AdvancedBoxOptions",
         "BoxOptions",
         "BoxliteRestOptions",
         "ApiKeyCredential",

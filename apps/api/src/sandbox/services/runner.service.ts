@@ -113,12 +113,18 @@ export class RunnerService {
         })
         break
       case '2':
+        // Intentional default: omitting supportsSecurityOptions resolves to false.
+        // Operators must explicitly set supportsSecurityOptions: true in the admin DTO
+        // when registering a runner binary that is known to handle security payloads.
+        // Auto-promoting unknown runners to true would silently send security options
+        // to a runner that may ignore them, bypassing isolation enforcement.
         runner = new Runner({
           region: createRunnerDto.regionId,
           name: createRunnerDto.name,
           apiVersion: createRunnerDto.apiVersion,
           apiKey: apiKey,
           appVersion: createRunnerDto.appVersion,
+          supportsSecurityOptions: createRunnerDto.supportsSecurityOptions ?? false,
         })
         break
       default:
@@ -333,6 +339,10 @@ export class RunnerService {
       runnerFilter.class = params.sandboxClass
     }
 
+    if (params.requireSecurityOptions) {
+      runnerFilter.supportsSecurityOptions = true
+    }
+
     const runners = await this.runnerRepository.find({
       where: runnerFilter,
     })
@@ -412,6 +422,11 @@ export class RunnerService {
       state: RunnerState.READY,
       lastChecked: new Date(),
     }
+
+    // supportsSecurityOptions is fixed at registration time (create()) and is not
+    // updated on healthcheck.  Existing runners that predate the feature were migrated
+    // with DEFAULT false; new registrations default to true.  Healthcheck must not
+    // auto-promote capability because it cannot verify the runner binary version.
 
     if (domain) {
       updateData.domain = domain
@@ -1055,6 +1070,13 @@ export class GetRunnerParams {
   snapshotRef?: string
   excludedRunnerIds?: string[]
   availabilityScoreThreshold?: number
+  /**
+   * When true, only runners that have explicitly declared security-options support
+   * (supportsSecurityOptions=true) are considered.  Must be set when
+   * SECURITY_OPTIONS_ENABLED=true so that the capable-runner check happens inside
+   * the pool query instead of after a random pick.
+   */
+  requireSecurityOptions?: boolean
 }
 
 interface AvailabilityScoreParams {

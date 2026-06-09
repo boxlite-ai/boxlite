@@ -14,7 +14,7 @@
 //! - [`run_config_matrix()`] — sequential runner
 //! - [`config_matrix_tests!`] — generates individual `#[tokio::test]` per config
 
-use boxlite::runtime::advanced_options::{AdvancedBoxOptions, SecurityOptions};
+use boxlite::runtime::advanced_options::SecurityOptions;
 use boxlite::runtime::options::{BoxOptions, RootfsSpec};
 
 // ============================================================================
@@ -99,12 +99,9 @@ pub fn default_configs() -> Vec<BoxConfig> {
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
                 auto_remove: false,
-                advanced: AdvancedBoxOptions {
-                    security: SecurityOptions::standard(),
-                    ..Default::default()
-                },
                 ..Default::default()
-            },
+            }
+            .with_security(SecurityOptions::standard()),
             skip_on: SkipCondition::default(),
         },
         BoxConfig {
@@ -112,12 +109,9 @@ pub fn default_configs() -> Vec<BoxConfig> {
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
                 auto_remove: false,
-                advanced: AdvancedBoxOptions {
-                    security: SecurityOptions::development(),
-                    ..Default::default()
-                },
                 ..Default::default()
-            },
+            }
+            .with_security(SecurityOptions::development()),
             skip_on: SkipCondition::default(),
         },
         BoxConfig {
@@ -164,12 +158,9 @@ pub fn default_configs() -> Vec<BoxConfig> {
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
                 auto_remove: false,
-                advanced: AdvancedBoxOptions {
-                    security: SecurityOptions::maximum(),
-                    ..Default::default()
-                },
                 ..Default::default()
-            },
+            }
+            .with_security(SecurityOptions::maximum()),
             skip_on: SkipCondition::default(),
         },
     ]

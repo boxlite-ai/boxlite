@@ -3,6 +3,7 @@
 //! Provides a builder pattern for spawning processes inside containers,
 //! following the `std::process::Command` pattern.
 
+use super::spec::ResourceLimits;
 use super::zygote::{self, BuildSpec};
 use crate::service::exec::exec_handle::{ExecHandle, PtyConfig};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -65,6 +66,9 @@ pub struct ContainerCommand {
 
     /// PTY configuration (set via with_pty())
     pty_config: Option<PtyConfig>,
+
+    /// Resource limits to enforce on exec'd processes.
+    resource_limits: ResourceLimits,
 }
 
 impl ContainerCommand {
@@ -78,6 +82,7 @@ impl ContainerCommand {
         env: HashMap<String, String>,
         user: (u32, u32),
         rootfs: PathBuf,
+        resource_limits: ResourceLimits,
     ) -> Self {
         Self {
             program: None,
@@ -91,6 +96,7 @@ impl ContainerCommand {
             pty_config: None,
             id,
             state_root,
+            resource_limits,
         }
     }
 
@@ -386,6 +392,7 @@ impl ContainerCommand {
             args: container_args.clone(),
             uid,
             gid,
+            resource_limits: self.resource_limits.clone(),
         };
 
         // Blocking IPC to zygote — use spawn_blocking to not block tokio.
@@ -556,6 +563,7 @@ mod tests {
             HashMap::new(),
             (0, 0),
             PathBuf::from("/tmp/rootfs"),
+            ResourceLimits::default(),
         )
     }
 

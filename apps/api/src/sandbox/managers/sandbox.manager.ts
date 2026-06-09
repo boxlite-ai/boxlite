@@ -347,10 +347,16 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
 
                 try {
                   const startScoreThreshold = this.configService.get('runnerScore.thresholds.start') || 0
+                  // Only the stored policy drives capability routing — see requiresSecurityCapableRunner
+                  // in sandbox-start.action.ts for the full invariant explanation.
+                  const hasStoredPolicy =
+                    sandbox.effectiveSecurityOptions != null &&
+                    Object.keys(sandbox.effectiveSecurityOptions).length > 0
                   const targetRunner = await this.runnerService.getRandomAvailableRunner({
                     snapshotRef: sandbox.backupSnapshot,
                     excludedRunnerIds: [runner.id],
                     availabilityScoreThreshold: startScoreThreshold,
+                    requireSecurityOptions: hasStoredPolicy,
                   })
 
                   await this.reassignSandbox(sandbox, runner.id, targetRunner.id)

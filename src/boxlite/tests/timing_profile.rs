@@ -185,15 +185,12 @@ async fn boot_timing_profile_no_jailer() {
     let opts = BoxOptions {
         rootfs: boxlite::runtime::options::RootfsSpec::Image("alpine:latest".into()),
         auto_remove: false,
-        advanced: boxlite::AdvancedBoxOptions {
-            security: boxlite::SecurityOptions {
-                jailer_enabled: false,
-                ..Default::default()
-            },
-            ..Default::default()
-        },
         ..Default::default()
-    };
+    }
+    .with_security(boxlite::SecurityOptions {
+        jailer_enabled: false,
+        ..Default::default()
+    });
 
     let handle = runtime.create(opts, None).await.unwrap();
     let box_id = handle.id().clone();

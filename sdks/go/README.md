@@ -97,6 +97,35 @@ for _, image := range cached {
 - `WithNetwork(boxlite.NetworkSpec{Mode: boxlite.NetworkModeDisabled})` disables the guest network interface entirely.
 - `WithSecret(boxlite.Secret{...})` configures host-side HTTP(S) secret substitution; `Placeholder` defaults to `<BOXLITE_SECRET:{Name}>`.
 
+### Security Options
+
+`WithSecurity(boxlite.SecurityOptions{...})` sets fine-grained isolation options.
+`WithSecurityPreset(preset)` sets a named preset (`"development"`, `"standard"`, `"maximum"`).
+
+```go
+// Named preset — recommended for most use cases
+box, err := rt.Create(ctx, "alpine:latest",
+    boxlite.WithSecurityPreset("standard"),
+)
+
+// Custom options — override individual fields
+t := true
+box, err = rt.Create(ctx, "alpine:latest",
+    boxlite.WithSecurity(boxlite.SecurityOptions{
+        JailerEnabled:  &t,
+        SanitizeEnv:    &t,
+        EnvAllowlist:   &[]string{"PATH", "HOME"},
+        ResourceLimits: &boxlite.SecurityResourceLimits{
+            MaxOpenFiles: func(v uint64) *uint64 { return &v }(1024),
+            MaxProcesses: func(v uint64) *uint64 { return &v }(100),
+        },
+    }),
+)
+```
+
+`EnvAllowlist` is a `*[]string` (pointer): `nil` means "use platform defaults";
+`&[]string{}` means "preserve no host variables (empty list)".
+
 ## Development
 
 Build from source (requires Rust toolchain):

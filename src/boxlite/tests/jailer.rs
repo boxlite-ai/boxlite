@@ -8,7 +8,7 @@
 
 mod common;
 
-use boxlite::runtime::advanced_options::{AdvancedBoxOptions, SecurityOptions};
+use boxlite::runtime::advanced_options::SecurityOptions;
 use boxlite::runtime::options::BoxOptions;
 use common::box_test::BoxTestBase;
 use std::path::PathBuf;
@@ -84,35 +84,24 @@ impl JailerHome {
 }
 
 fn jailer_enabled_options() -> BoxOptions {
-    BoxOptions {
-        advanced: AdvancedBoxOptions {
-            security: SecurityOptions {
-                jailer_enabled: true,
-                ..SecurityOptions::default()
-            },
-            ..Default::default()
-        },
-        ..common::alpine_opts()
-    }
+    common::alpine_opts().with_security(SecurityOptions {
+        jailer_enabled: true,
+        ..SecurityOptions::default()
+    })
 }
 
 fn jailer_disabled_options() -> BoxOptions {
-    BoxOptions {
-        advanced: AdvancedBoxOptions {
-            security: SecurityOptions {
-                jailer_enabled: false,
-                ..SecurityOptions::default()
-            },
-            ..Default::default()
-        },
-        ..common::alpine_opts()
-    }
+    common::alpine_opts().with_security(SecurityOptions {
+        jailer_enabled: false,
+        ..SecurityOptions::default()
+    })
 }
 
 #[cfg(target_os = "macos")]
-fn with_sandbox_profile(mut options: BoxOptions, profile_path: std::path::PathBuf) -> BoxOptions {
-    options.advanced.security.sandbox_profile = Some(profile_path);
-    options
+fn with_sandbox_profile(options: BoxOptions, profile_path: std::path::PathBuf) -> BoxOptions {
+    let mut security = options.advanced.security().clone();
+    security.sandbox_profile = Some(profile_path);
+    options.with_security(security)
 }
 
 #[cfg(target_os = "macos")]
@@ -324,6 +313,80 @@ async fn jailer_disabled_with_same_profile_still_starts() {
     assert!(
         out.contains("profile-ignored-with-jailer-disabled"),
         "Control case should start and execute"
+    );
+}
+
+// ============================================================================
+// RESOURCE LIMITS: SecurityOptions enforcement
+// ============================================================================
+
+/// Verify that max_open_files from SecurityOptions is enforced inside the box.
+///
+/// The guest's file descriptor limit (ulimit -n) must not exceed the configured
+/// value. This is the Rust counterpart of:
+///  - sdks/go/security_resource_limits_integration_test.go::TestSecurityMaxOpenFiles
+///  - sdks/node/tests/security-resource-limits.integration.test.ts
+///  - sdks/python/tests/test_resource_limits.py::TestMaxOpenFiles
+#[tokio::test]
+async fn security_max_open_files_enforced() {
+    use boxlite::runtime::advanced_options::ResourceLimits;
+
+    const LIMIT: u64 = 64;
+
+    let jh = JailerHome::new();
+    let opts = common::alpine_opts().with_security(SecurityOptions {
+        resource_limits: ResourceLimits {
+            max_open_files: Some(LIMIT),
+            ..ResourceLimits::default()
+        },
+        ..SecurityOptions::default()
+    });
+    let t = BoxTestBase::with_home(jh.home, opts).await;
+    t.bx.start().await.unwrap();
+
+    let out = t.exec_stdout("sh", &["-c", "ulimit -n"]).await;
+    let reported: u64 = out
+        .trim()
+        .parse()
+        .expect("ulimit -n should return a number");
+    assert!(
+        reported <= LIMIT,
+        "max_open_files not enforced: ulimit -n = {reported}, want ≤ {LIMIT}"
+    );
+}
+
+/// Verify that sanitize_env=true filters host environment variables that are
+/// not in env_allowlist from the guest environment.
+#[tokio::test]
+async fn security_sanitize_env_filters_unlisted_vars() {
+    let jh = JailerHome::new();
+    let opts = common::alpine_opts().with_security(SecurityOptions {
+        sanitize_env: true,
+        env_allowlist: vec!["PATH".to_string(), "HOME".to_string()],
+        ..SecurityOptions::default()
+    });
+    let t = BoxTestBase::with_home(jh.home, opts).await;
+    t.bx.start().await.unwrap();
+
+    // PATH must be available — it is explicitly allowed.
+    let path_out = t.exec_stdout("sh", &["-c", "echo $PATH"]).await;
+    assert!(
+        !path_out.trim().is_empty(),
+        "PATH should be present in guest env (it is in the allowlist)"
+    );
+
+    // A variable that is not in the allowlist must not appear in the guest.
+    // `grep -c` returns 0 when there are no matches; `|| true` keeps exit 0.
+    let grep_out = t
+        .exec_stdout(
+            "sh",
+            &["-c", "env | grep -c BOXLITE_SHOULD_NOT_EXIST || true"],
+        )
+        .await;
+    let count: u32 = grep_out.trim().parse().unwrap_or(0);
+    assert_eq!(
+        count, 0,
+        "sanitize_env did not remove unlisted variable from guest env"
     );
 }
 

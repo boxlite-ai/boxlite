@@ -174,6 +174,9 @@ const configuration = {
     disk: parseInt(process.env.DEFAULT_RUNNER_DISK || '50', 10),
     apiVersion: (process.env.DEFAULT_RUNNER_API_VERSION || '2') as '0' | '2',
     name: process.env.DEFAULT_RUNNER_NAME,
+    // When SECURITY_OPTIONS_ENABLED=true, set this to true so that the
+    // auto-created default runner is included in capable-runner selection.
+    supportsSecurityOptions: process.env.RUNNER_SUPPORTS_SECURITY_OPTIONS === 'true',
   },
   runnerScore: {
     thresholds: {

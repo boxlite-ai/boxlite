@@ -328,13 +328,41 @@ impl Vmm for Krun {
                 }
             }
 
-            // Configure rlimits that will be set in the guest
-            // Format: "RLIMIT_NAME=soft:hard" where soft and hard are limits
-            // These limits ensure the guest has adequate resources for container workloads
-            let rlimits = vec![
-                "6=4096:8192".to_string(),       // RLIMIT_NPROC = 6
-                "7=1048576:1048576".to_string(), // RLIMIT_NOFILE = 7
-            ];
+            // Configure rlimits that will be set in the guest kernel via libkrun.
+            // Format: "RESOURCE_NUM=soft:hard" (libkrun calls setrlimit inside init.krun).
+            // These limits apply to the VM's init process and are inherited by ALL guest
+            // processes — including boxlite-guest agent itself.
+            //
+            // NOFILE is intentionally excluded here: a low user-configured value (e.g. 64)
+            // would prevent boxlite-guest from opening enough vsock/pipe file descriptors to
+            // function. NOFILE enforcement is applied per-process instead:
+            //   - Container init: via OCI spec PosixRlimit in spec.rs
+            //   - Exec processes: via prlimit64 in zygote.rs after fork
+            let limits = &config.security.resource_limits;
+            let mut rlimits: Vec<String> = Vec::new();
+
+            // RLIMIT_NPROC = 6: max number of processes.
+            // Applied VM-wide so the guest kernel enforces the process count ceiling.
+            // boxlite-guest itself uses only a handful of threads/processes, so typical
+            // user limits (≥ 16) do not interfere with its operation.
+            let max_procs = limits.max_processes.unwrap_or(4096);
+            rlimits.push(format!("6={}:{}", max_procs, max_procs));
+
+            // RLIMIT_FSIZE = 1: max file size in bytes (only if configured)
+            if let Some(max_fsize) = limits.max_file_size {
+                rlimits.push(format!("1={}:{}", max_fsize, max_fsize));
+            }
+
+            // RLIMIT_AS = 9: max virtual memory in bytes (only if configured)
+            if let Some(max_mem) = limits.max_memory {
+                rlimits.push(format!("9={}:{}", max_mem, max_mem));
+            }
+
+            // RLIMIT_CPU = 0: max CPU time in seconds (only if configured)
+            if let Some(max_cpu) = limits.max_cpu_time {
+                rlimits.push(format!("0={}:{}", max_cpu, max_cpu));
+            }
+
             tracing::debug!("Configuring guest rlimits: {:?}", rlimits);
             ctx.set_rlimits(&rlimits)?;
 

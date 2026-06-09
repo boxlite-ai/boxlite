@@ -9,6 +9,7 @@ use crate::net::constants::{GATEWAY_IP, GUEST_CIDR, GUEST_INTERFACE};
 use crate::pipeline::PipelineTask;
 use crate::portal::GuestSession;
 use crate::portal::interfaces::{ContainerRootfsInitConfig, GuestInitConfig, NetworkInitConfig};
+use crate::runtime::advanced_options::ResourceLimits;
 use crate::runtime::options::NetworkSpec;
 use crate::runtime::types::ContainerID;
 use crate::volumes::{ContainerMount, GuestVolumeManager};
@@ -32,6 +33,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             container_mounts,
             network_spec,
             ca_cert_pem,
+            security,
         ) =
             {
                 let mut ctx = ctx.lock().await;
@@ -54,6 +56,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                 })?;
                 let network_spec = ctx.config.options.network.clone();
                 let ca_cert_pem = ctx.ca_cert_pem.clone();
+                let security = ctx.config.options.advanced.security();
                 (
                     guest_session,
                     container_image_config,
@@ -63,6 +66,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                     container_mounts,
                     network_spec,
                     ca_cert_pem,
+                    security,
                 )
             };
 
@@ -75,6 +79,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             &container_mounts,
             &network_spec,
             ca_cert_pem.as_deref(),
+            &security.resource_limits,
         )
         .await
         .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
@@ -104,6 +109,7 @@ async fn run_guest_init(
     container_mounts: &[ContainerMount],
     network_spec: &NetworkSpec,
     ca_cert_pem: Option<&str>,
+    resource_limits: &ResourceLimits,
 ) -> BoxliteResult<()> {
     let container_id_str = container_id.as_str();
 
@@ -141,6 +147,7 @@ async fn run_guest_init(
             rootfs_init.clone(),
             container_mounts.to_vec(),
             ca_certs,
+            resource_limits,
         )
         .await?;
     tracing::info!(container_id = %returned_id, "Container initialized");

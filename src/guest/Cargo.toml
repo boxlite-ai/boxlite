@@ -20,6 +20,7 @@ base64 = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 nix = { version = "0.29", features = ["mount", "process", "fs", "sched", "socket"] }
+libc = "0.2"
 async-trait = "0.1"
 uuid = { version = "1.10", features = ["v4"] }
 tonic = "0.12"

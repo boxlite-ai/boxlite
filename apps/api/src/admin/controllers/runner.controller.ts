@@ -89,6 +89,7 @@ export class AdminRunnerController {
       cpu: createRunnerDto.cpu,
       memoryGiB: createRunnerDto.memoryGiB,
       diskGiB: createRunnerDto.diskGiB,
+      supportsSecurityOptions: createRunnerDto.supportsSecurityOptions,
     })
 
     return CreateRunnerResponseDto.fromRunner(runner, apiKey)

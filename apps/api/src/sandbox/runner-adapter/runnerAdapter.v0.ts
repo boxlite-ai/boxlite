@@ -227,6 +227,18 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       skipStart: skipStart,
       organizationId: sandbox.organizationId,
       regionId: sandbox.region,
+      // v0 runners accept the security field in the DTO but do not enforce it.
+      // Log a warning so operators know security options won't take effect.
+      security: undefined,
+    }
+
+    if (sandbox.effectiveSecurityOptions && Object.keys(sandbox.effectiveSecurityOptions).length > 0) {
+      this.logger.warn({
+        event: 'runner.security.capability_rejected',
+        reason: 'v0 runner does not enforce security options',
+        sandboxId: sandbox.id,
+        runnerId: sandbox.runnerId,
+      })
     }
 
     const response = await this.sandboxApiClient.create(createSandboxDto)

@@ -4,6 +4,7 @@
 
 use super::capabilities::default_capabilities;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use oci_spec::runtime::{
@@ -11,6 +12,19 @@ use oci_spec::runtime::{
     LinuxNamespaceType, Mount, MountBuilder, PosixRlimitBuilder, PosixRlimitType, ProcessBuilder,
     RootBuilder, Spec, SpecBuilder, UserBuilder,
 };
+
+/// Resource limits for the container process (RLIMIT_* values).
+///
+/// All fields are optional. Unset fields use the kernel defaults or the VM-wide
+/// limits inherited from krun_set_rlimits.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ResourceLimits {
+    pub max_open_files: Option<u64>,
+    pub max_processes: Option<u64>,
+    pub max_file_size: Option<u64>,
+    pub max_memory: Option<u64>,
+    pub max_cpu_time: Option<u64>,
+}
 
 /// User-specified bind mount for container
 #[derive(Debug, Clone)]
@@ -54,6 +68,7 @@ pub fn create_oci_spec(
     gid: u32,
     bundle_path: &Path,
     user_mounts: &[UserMount],
+    resource_limits: &ResourceLimits,
 ) -> BoxliteResult<Spec> {
     let caps = build_default_capabilities()?;
     let namespaces = build_default_namespaces()?;
@@ -90,7 +105,7 @@ pub fn create_oci_spec(
         );
     }
 
-    let process = build_process_spec(entrypoint, env, workdir, uid, gid, caps)?;
+    let process = build_process_spec(entrypoint, env, workdir, uid, gid, caps, resource_limits)?;
     let root = build_root_spec(rootfs)?;
     let linux = build_linux_spec(container_id, namespaces)?;
 
@@ -310,6 +325,7 @@ fn build_process_spec(
     uid: u32,
     gid: u32,
     caps: oci_spec::runtime::LinuxCapabilities,
+    resource_limits: &ResourceLimits,
 ) -> BoxliteResult<oci_spec::runtime::Process> {
     let user = UserBuilder::default()
         .uid(uid)
@@ -317,16 +333,65 @@ fn build_process_spec(
         .build()
         .map_err(|e| BoxliteError::Internal(format!("Failed to build user spec: {}", e)))?;
 
-    // Build rlimits
-    // Set NOFILE to 1048576 to match Docker's defaults
-    // This allows applications to open many files/connections (databases, web servers, etc.)
-    #[allow(unused)]
-    let rlimits = vec![PosixRlimitBuilder::default()
+    // Build rlimits from resource_limits. Default NOFILE to 1048576 (Docker's default)
+    // when no explicit limit is set, allowing apps to open many files/connections.
+    let nofile = resource_limits.max_open_files.unwrap_or(1024 * 1024);
+    let mut rlimits = vec![PosixRlimitBuilder::default()
         .typ(PosixRlimitType::RlimitNofile)
-        .hard(1024u64 * 1024u64)
-        .soft(1024u64 * 1024u64)
+        .hard(nofile)
+        .soft(nofile)
         .build()
-        .map_err(|e| BoxliteError::Internal(format!("Failed to build rlimit: {}", e)))?];
+        .map_err(|e| BoxliteError::Internal(format!("Failed to build NOFILE rlimit: {}", e)))?];
+
+    if let Some(max_proc) = resource_limits.max_processes {
+        rlimits.push(
+            PosixRlimitBuilder::default()
+                .typ(PosixRlimitType::RlimitNproc)
+                .hard(max_proc)
+                .soft(max_proc)
+                .build()
+                .map_err(|e| {
+                    BoxliteError::Internal(format!("Failed to build NPROC rlimit: {}", e))
+                })?,
+        );
+    }
+
+    if let Some(max_fsize) = resource_limits.max_file_size {
+        rlimits.push(
+            PosixRlimitBuilder::default()
+                .typ(PosixRlimitType::RlimitFsize)
+                .hard(max_fsize)
+                .soft(max_fsize)
+                .build()
+                .map_err(|e| {
+                    BoxliteError::Internal(format!("Failed to build FSIZE rlimit: {}", e))
+                })?,
+        );
+    }
+
+    if let Some(max_mem) = resource_limits.max_memory {
+        rlimits.push(
+            PosixRlimitBuilder::default()
+                .typ(PosixRlimitType::RlimitAs)
+                .hard(max_mem)
+                .soft(max_mem)
+                .build()
+                .map_err(|e| BoxliteError::Internal(format!("Failed to build AS rlimit: {}", e)))?,
+        );
+    }
+
+    if let Some(max_cpu) = resource_limits.max_cpu_time {
+        rlimits.push(
+            PosixRlimitBuilder::default()
+                .typ(PosixRlimitType::RlimitCpu)
+                .hard(max_cpu)
+                .soft(max_cpu)
+                .build()
+                .map_err(|e| {
+                    BoxliteError::Internal(format!("Failed to build CPU rlimit: {}", e))
+                })?,
+        );
+    }
 
     ProcessBuilder::default()
         .terminal(false)

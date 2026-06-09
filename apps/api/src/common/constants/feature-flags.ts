@@ -7,4 +7,8 @@
 export const FeatureFlags = {
   ORGANIZATION_INFRASTRUCTURE: 'organization_infrastructure',
   SANDBOX_RESIZE: 'sandbox_resize',
+  SECURITY_OPTIONS: 'security_options',
 } as const
+
+export const isSecurityOptionsEnabled = (): boolean =>
+  process.env.SECURITY_OPTIONS_ENABLED === 'true'

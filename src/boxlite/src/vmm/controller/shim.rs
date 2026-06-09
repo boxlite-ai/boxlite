@@ -303,7 +303,7 @@ impl VmmController for ShimController {
             engine: self.engine_type,
             // Box identification and security (from ShimController)
             box_id: self.box_id.to_string(),
-            security: self.options.advanced.security.clone(),
+            security: self.options.advanced.security().clone(),
             // VM configuration
             cpus: config.cpus,
             memory_mib: config.memory_mib,

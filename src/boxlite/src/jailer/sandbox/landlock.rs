@@ -91,6 +91,8 @@ mod tests {
             resource_limits: limits,
             network_enabled: false,
             sandbox_profile: None,
+            sanitize_env: true,
+            env_allowlist: &[],
         }
     }
 

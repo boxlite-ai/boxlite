@@ -1454,6 +1454,93 @@
           "items": {
             "$ref": "#/definitions/dto.VolumeDTO"
           }
+        },
+        "security": {
+          "description": "Effective security options from apps/api (snake_case, matches Rust SecurityOptions serde fields). Absent means platform defaults apply.",
+          "$ref": "#/definitions/SecurityOptionsDTO"
+        }
+      }
+    },
+    "SecurityResourceLimitsDTO": {
+      "type": "object",
+      "properties": {
+        "max_open_files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_file_size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_processes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_memory": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_cpu_time": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "SecurityOptionsDTO": {
+      "type": "object",
+      "properties": {
+        "preset": {
+          "type": "string",
+          "enum": ["development", "standard", "maximum"]
+        },
+        "jailer_enabled": {
+          "type": "boolean"
+        },
+        "seccomp_enabled": {
+          "type": "boolean"
+        },
+        "uid": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "gid": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "new_pid_ns": {
+          "type": "boolean"
+        },
+        "new_net_ns": {
+          "type": "boolean"
+        },
+        "chroot_base": {
+          "type": "string"
+        },
+        "chroot_enabled": {
+          "type": "boolean"
+        },
+        "close_fds": {
+          "type": "boolean"
+        },
+        "sanitize_env": {
+          "type": "boolean"
+        },
+        "env_allowlist": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "resource_limits": {
+          "$ref": "#/definitions/SecurityResourceLimitsDTO"
+        },
+        "sandbox_profile": {
+          "type": "string"
+        },
+        "network_enabled": {
+          "type": "boolean"
         }
       }
     },

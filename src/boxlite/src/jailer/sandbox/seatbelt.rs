@@ -117,6 +117,29 @@ impl Sandbox for SeatbeltSandbox {
         new_cmd.args(sandbox_args);
         new_cmd.arg(&binary);
         new_cmd.args(&args);
+
+        // Mirror the bwrap env-sanitization policy: if sanitize_env is set,
+        // clear all inherited host env vars and re-add only safe fixed values
+        // plus any explicitly allow-listed keys.
+        if ctx.sanitize_env {
+            new_cmd.env_clear();
+            // Safe, fixed values regardless of host PATH/HOME
+            new_cmd.env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin");
+            new_cmd.env("HOME", "/var/root");
+
+            // Pass through each allowlisted variable if present in host env.
+            // PATH and HOME are already set above with safe values, so skip
+            // them to avoid overwriting with potentially unsafe host values.
+            for key in ctx.env_allowlist {
+                if key == "PATH" || key == "HOME" {
+                    continue;
+                }
+                if let Ok(val) = std::env::var(key) {
+                    new_cmd.env(key, val);
+                }
+            }
+        }
+
         *cmd = new_cmd;
     }
 
@@ -645,6 +668,149 @@ mod tests {
     fn test_seatbelt_sandbox_name() {
         let sandbox = SeatbeltSandbox::new();
         assert_eq!(sandbox.name(), "seatbelt");
+    }
+
+    /// When sanitize_env=true, apply() must call env_clear() on the new Command
+    /// and then set the safe fixed PATH/HOME values.  We verify this by inspecting
+    /// the environment of the resulting command through the SeatbeltSandbox::apply API.
+    ///
+    /// Approach: set a known env var on the current process, build a Command with it
+    /// inherited, run apply() with sanitize_env=true, then confirm the var is absent
+    /// from the rebuilt command's env while PATH/HOME are present with safe values.
+    #[test]
+    fn test_seatbelt_apply_sanitize_env_clears_inherited_env() {
+        use crate::runtime::advanced_options::ResourceLimits;
+        use std::collections::HashMap;
+
+        // Plant a marker in the current process env so we can detect leakage.
+        let marker_key = "BOXLITE_SEATBELT_SANITIZE_TEST_SECRET";
+        let marker_val = "should-not-appear-in-cmd";
+        // SAFETY: test-only; single-threaded test context; cleaned up at end.
+        unsafe { std::env::set_var(marker_key, marker_val) };
+
+        let sandbox = SeatbeltSandbox::new();
+        let limits = ResourceLimits::default();
+        let ctx = SandboxContext {
+            id: "test-sanitize",
+            paths: vec![],
+            resource_limits: &limits,
+            network_enabled: false,
+            sandbox_profile: None,
+            sanitize_env: true,
+            env_allowlist: &[],
+        };
+
+        let mut cmd = Command::new("/bin/sh");
+        sandbox.apply(&ctx, &mut cmd);
+
+        // Collect the env vars that will be passed to the process.
+        // get_envs() yields (&OsStr, Option<&OsStr>); collecting into a HashMap
+        // gives HashMap<&OsStr, Option<&OsStr>>.
+        let env_map: HashMap<_, _> = cmd.get_envs().collect();
+
+        // The marker must NOT be present — env was cleared.
+        assert!(
+            !env_map.contains_key(std::ffi::OsStr::new(marker_key)),
+            "sanitize_env=true must prevent host secret '{}' from leaking into the command env",
+            marker_key
+        );
+
+        // Safe fixed values must be present.
+        // env_map.get(k) returns Option<&Option<&OsStr>>; .copied() gives Option<Option<&OsStr>>;
+        // .flatten() gives Option<&OsStr>.
+        assert_eq!(
+            env_map.get(std::ffi::OsStr::new("PATH")).copied().flatten(),
+            Some(std::ffi::OsStr::new("/usr/bin:/bin:/usr/sbin:/sbin")),
+            "sanitize_env=true must set PATH to the fixed safe value"
+        );
+        assert_eq!(
+            env_map.get(std::ffi::OsStr::new("HOME")).copied().flatten(),
+            Some(std::ffi::OsStr::new("/var/root")),
+            "sanitize_env=true must set HOME to the fixed safe value"
+        );
+
+        // Clean up.
+        // SAFETY: test-only; single-threaded test context.
+        unsafe { std::env::remove_var(marker_key) };
+    }
+
+    /// When sanitize_env=false (the default for local/dev sandboxes), apply() must
+    /// NOT call env_clear(): the host environment is inherited unchanged.
+    #[test]
+    fn test_seatbelt_apply_no_sanitize_env_inherits_host_env() {
+        use crate::runtime::advanced_options::ResourceLimits;
+
+        let sandbox = SeatbeltSandbox::new();
+        let limits = ResourceLimits::default();
+        let ctx = SandboxContext {
+            id: "test-no-sanitize",
+            paths: vec![],
+            resource_limits: &limits,
+            network_enabled: false,
+            sandbox_profile: None,
+            sanitize_env: false,
+            env_allowlist: &[],
+        };
+
+        let mut cmd = Command::new("/bin/sh");
+        sandbox.apply(&ctx, &mut cmd);
+
+        // When sanitize_env=false, no env_clear() is called, so get_envs() returns
+        // an empty iterator (all vars are inherited from parent process implicitly).
+        // Verify that PATH/HOME are NOT explicitly overridden to our fixed values.
+        let env_map: std::collections::HashMap<_, _> = cmd.get_envs().collect();
+        assert!(
+            !env_map.contains_key(std::ffi::OsStr::new("PATH")),
+            "sanitize_env=false must not explicitly set PATH (host env inherited implicitly)"
+        );
+    }
+
+    /// When sanitize_env=true and env_allowlist contains a key, that key must appear
+    /// in the command env with its host value.
+    #[test]
+    fn test_seatbelt_apply_sanitize_env_allowlist_propagated() {
+        use crate::runtime::advanced_options::ResourceLimits;
+
+        let allowlist_key = "BOXLITE_SEATBELT_ALLOWED_VAR";
+        let allowlist_val = "allowed-value";
+        // SAFETY: test-only; single-threaded test context; cleaned up at end.
+        unsafe { std::env::set_var(allowlist_key, allowlist_val) };
+
+        let sandbox = SeatbeltSandbox::new();
+        let limits = ResourceLimits::default();
+        let allowlist = vec![allowlist_key.to_string()];
+        let ctx = SandboxContext {
+            id: "test-allowlist",
+            paths: vec![],
+            resource_limits: &limits,
+            network_enabled: false,
+            sandbox_profile: None,
+            sanitize_env: true,
+            env_allowlist: &allowlist,
+        };
+
+        let mut cmd = Command::new("/bin/sh");
+        sandbox.apply(&ctx, &mut cmd);
+
+        let env_map: std::collections::HashMap<_, _> = cmd.get_envs().collect();
+        assert_eq!(
+            env_map
+                .get(std::ffi::OsStr::new(allowlist_key))
+                .copied()
+                .flatten(),
+            Some(std::ffi::OsStr::new(allowlist_val)),
+            "allow-listed env var must be forwarded even when sanitize_env=true"
+        );
+
+        // PATH must remain the fixed safe value.
+        assert_eq!(
+            env_map.get(std::ffi::OsStr::new("PATH")).copied().flatten(),
+            Some(std::ffi::OsStr::new("/usr/bin:/bin:/usr/sbin:/sbin")),
+            "PATH must remain the fixed safe value even if allow-listed"
+        );
+
+        // SAFETY: test-only; single-threaded test context.
+        unsafe { std::env::remove_var(allowlist_key) };
     }
 
     /// Empty path list must produce a valid SBPL write policy with no grants.

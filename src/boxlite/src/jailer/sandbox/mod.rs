@@ -125,6 +125,10 @@ pub struct SandboxContext<'a> {
     pub network_enabled: bool,
     /// Custom sandbox profile path (macOS only).
     pub sandbox_profile: Option<&'a Path>,
+    /// Whether to clear the environment before exec (Linux/bwrap).
+    pub sanitize_env: bool,
+    /// Environment variable names to preserve when sanitize_env=true.
+    pub env_allowlist: &'a [String],
 }
 
 impl SandboxContext<'_> {

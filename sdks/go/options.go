@@ -6,6 +6,7 @@ package boxlite
 */
 import "C"
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -82,6 +83,36 @@ type Secret struct {
 	Placeholder string
 }
 
+// SecurityResourceLimits specifies process resource limits for a box.
+type SecurityResourceLimits struct {
+	MaxOpenFiles *uint64 `json:"max_open_files,omitempty"`
+	MaxFileSize  *uint64 `json:"max_file_size,omitempty"`
+	MaxProcesses *uint64 `json:"max_processes,omitempty"`
+	MaxMemory    *uint64 `json:"max_memory,omitempty"`
+	MaxCpuTime   *uint64 `json:"max_cpu_time,omitempty"`
+}
+
+// SecurityOptions controls how the boxlite-shim process is isolated from the host.
+// All fields are optional; unset fields inherit the platform default.
+// JSON tags use snake_case to match Rust SecurityOptions serde field names.
+type SecurityOptions struct {
+	Preset         *string                 `json:"preset,omitempty"`
+	JailerEnabled  *bool                   `json:"jailer_enabled,omitempty"`
+	SeccompEnabled *bool                   `json:"seccomp_enabled,omitempty"`
+	UID            *uint32                 `json:"uid,omitempty"`
+	GID            *uint32                 `json:"gid,omitempty"`
+	NewPIDNS       *bool                   `json:"new_pid_ns,omitempty"`
+	NewNetNS       *bool                   `json:"new_net_ns,omitempty"`
+	ChrootBase     *string                 `json:"chroot_base,omitempty"`
+	ChrootEnabled  *bool                   `json:"chroot_enabled,omitempty"`
+	CloseFDs       *bool                   `json:"close_fds,omitempty"`
+	SanitizeEnv    *bool                   `json:"sanitize_env,omitempty"`
+	EnvAllowlist   *[]string               `json:"env_allowlist,omitempty"`
+	ResourceLimits *SecurityResourceLimits `json:"resource_limits,omitempty"`
+	SandboxProfile *string                 `json:"sandbox_profile,omitempty"`
+	NetworkEnabled *bool                   `json:"network_enabled,omitempty"`
+}
+
 type boxConfig struct {
 	name       string
 	cpus       int
@@ -97,6 +128,7 @@ type boxConfig struct {
 	detach     *bool
 	network    *NetworkSpec
 	secrets    []Secret
+	security   *SecurityOptions
 }
 
 type volumeEntry struct {
@@ -191,6 +223,135 @@ func WithNetwork(spec NetworkSpec) BoxOption {
 func WithSecret(secret Secret) BoxOption {
 	return func(c *boxConfig) {
 		c.secrets = append(c.secrets, secret)
+	}
+}
+
+// WithSecurity sets the security isolation options for the box.
+func WithSecurity(sec SecurityOptions) BoxOption {
+	return func(c *boxConfig) { c.security = &sec }
+}
+
+// presetDefaults returns the concrete SecurityOptions fields for a named preset.
+// The "preset" string field is not a Rust SecurityOptions wire field; callers
+// must expand it into concrete fields before JSON serialization.
+// Returns an error for unrecognized preset names so that typos surface
+// immediately rather than silently falling back to "standard" isolation.
+func presetDefaults(preset string) (SecurityOptions, error) {
+	t := func(b bool) *bool { return &b }
+	u := func(v uint64) *uint64 { return &v }
+	switch preset {
+	case "development":
+		return SecurityOptions{
+			JailerEnabled:  t(false),
+			SeccompEnabled: t(false),
+			CloseFDs:       t(false),
+			SanitizeEnv:    t(false),
+			NetworkEnabled: t(true),
+		}, nil
+	case "maximum":
+		return SecurityOptions{
+			JailerEnabled:  t(true),
+			SeccompEnabled: t(true),
+			CloseFDs:       t(true),
+			SanitizeEnv:    t(true),
+			NetworkEnabled: t(true),
+			ResourceLimits: &SecurityResourceLimits{
+				MaxOpenFiles: u(1024),
+				MaxFileSize:  u(1073741824),
+				MaxProcesses: u(100),
+			},
+		}, nil
+	case "standard":
+		return SecurityOptions{
+			JailerEnabled:  t(true),
+			SeccompEnabled: t(false),
+			CloseFDs:       t(true),
+			SanitizeEnv:    t(true),
+			NetworkEnabled: t(true),
+		}, nil
+	default:
+		return SecurityOptions{}, fmt.Errorf("boxlite: unknown security preset %q: valid values are development, standard, maximum", preset)
+	}
+}
+
+// mergeSecurityOptions merges explicit overrides on top of base, mutating base.
+// Any non-nil field in overrides replaces the corresponding field in base.
+func mergeSecurityOptions(base, overrides *SecurityOptions) {
+	if overrides.JailerEnabled != nil {
+		base.JailerEnabled = overrides.JailerEnabled
+	}
+	if overrides.SeccompEnabled != nil {
+		base.SeccompEnabled = overrides.SeccompEnabled
+	}
+	if overrides.UID != nil {
+		base.UID = overrides.UID
+	}
+	if overrides.GID != nil {
+		base.GID = overrides.GID
+	}
+	if overrides.NewPIDNS != nil {
+		base.NewPIDNS = overrides.NewPIDNS
+	}
+	if overrides.NewNetNS != nil {
+		base.NewNetNS = overrides.NewNetNS
+	}
+	if overrides.ChrootBase != nil {
+		base.ChrootBase = overrides.ChrootBase
+	}
+	if overrides.ChrootEnabled != nil {
+		base.ChrootEnabled = overrides.ChrootEnabled
+	}
+	if overrides.CloseFDs != nil {
+		base.CloseFDs = overrides.CloseFDs
+	}
+	if overrides.SanitizeEnv != nil {
+		base.SanitizeEnv = overrides.SanitizeEnv
+	}
+	if overrides.EnvAllowlist != nil {
+		base.EnvAllowlist = overrides.EnvAllowlist
+	}
+	if overrides.ResourceLimits != nil {
+		base.ResourceLimits = overrides.ResourceLimits
+	}
+	if overrides.SandboxProfile != nil {
+		base.SandboxProfile = overrides.SandboxProfile
+	}
+	if overrides.NetworkEnabled != nil {
+		base.NetworkEnabled = overrides.NetworkEnabled
+	}
+}
+
+// expandSecurityPreset resolves cfg.security.Preset into concrete fields.
+// The Preset string is NOT a Rust SecurityOptions wire field; Rust ignores it.
+// Any explicit fields in the original options override preset defaults.
+// Returns an error if the preset name is not one of the known values.
+func expandSecurityPreset(sec *SecurityOptions) (*SecurityOptions, error) {
+	if sec == nil || sec.Preset == nil {
+		return sec, nil
+	}
+	// Capture explicit overrides before we clear Preset.
+	overrides := *sec
+	overrides.Preset = nil
+
+	// Start from preset defaults, then apply explicit overrides.
+	expanded, err := presetDefaults(*sec.Preset)
+	if err != nil {
+		return nil, err
+	}
+	mergeSecurityOptions(&expanded, &overrides)
+	return &expanded, nil
+}
+
+// WithSecurityPreset sets a named security preset (development, standard, maximum).
+// Explicit WithSecurity options take precedence over preset defaults.
+// The preset is expanded into concrete fields before serialization so that
+// the Rust runtime receives only the fields it knows about.
+func WithSecurityPreset(preset string) BoxOption {
+	return func(c *boxConfig) {
+		if c.security == nil {
+			c.security = &SecurityOptions{}
+		}
+		c.security.Preset = &preset
 	}
 }
 
@@ -320,6 +481,22 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 		cArgs, argc := toCStringArray(cfg.cmd)
 		C.boxlite_options_set_cmd(cOpts, cArgs, C.int(argc))
 		freeCStringArray(cArgs, argc)
+	}
+	if cfg.security != nil {
+		// Resolve any named preset into concrete fields before serialization.
+		// The "preset" key is not a Rust SecurityOptions wire field and would
+		// be silently dropped by serde, leaving the caller with no isolation.
+		sec, err := expandSecurityPreset(cfg.security)
+		if err != nil {
+			C.boxlite_options_free(cOpts)
+			return nil, err
+		}
+		secJSON, err := json.Marshal(sec)
+		if err == nil {
+			cJSON := toCString(string(secJSON))
+			C.boxlite_options_set_security_json(cOpts, cJSON)
+			C.free(unsafe.Pointer(cJSON))
+		}
 	}
 
 	return cOpts, nil

@@ -248,6 +248,16 @@ message ContainerInitError {
 }
 
 // Container configuration (OCI-derived, from image)
+// Resource limits to enforce inside the container (RLIMIT_* via OCI spec).
+// All fields are optional; unset fields use the guest OS defaults.
+message ContainerResourceLimits {
+  optional uint64 max_open_files = 1;  // RLIMIT_NOFILE
+  optional uint64 max_processes = 2;   // RLIMIT_NPROC
+  optional uint64 max_file_size = 3;   // RLIMIT_FSIZE (bytes)
+  optional uint64 max_memory = 4;      // RLIMIT_AS (bytes)
+  optional uint64 max_cpu_time = 5;    // RLIMIT_CPU (seconds)
+}
+
 message ContainerConfig {
   // Entrypoint command (e.g., ["/bin/sh", "-c", "echo hello"])
   repeated string entrypoint = 1;
@@ -260,6 +270,9 @@ message ContainerConfig {
 
   // Username or UID (format: <name|uid>[:<group|gid>]).
   string user = 4;
+
+  // Resource limits for the container process.
+  optional ContainerResourceLimits resource_limits = 5;
 }
 
 // ============================================================================

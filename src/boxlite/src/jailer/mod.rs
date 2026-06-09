@@ -139,7 +139,13 @@ pub trait Jail: Send + Sync {
     ///
     /// Returns a `Command` with sandbox wrapping and pre_exec hook
     /// (FD cleanup, rlimits, cgroup join, PID file).
-    fn command(&self, binary: &Path, args: &[String]) -> Command;
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when `jailer_enabled=true` and the platform sandbox is
+    /// unavailable. Failing open (running without isolation) is not an option
+    /// when isolation was explicitly requested.
+    fn command(&self, binary: &Path, args: &[String]) -> BoxliteResult<Command>;
 }
 
 // ============================================================================
@@ -339,7 +345,21 @@ impl<S: Sandbox> Jail for Jailer<S> {
         self.sandbox.setup(&self.context())
     }
 
-    fn command(&self, binary: &Path, args: &[String]) -> Command {
+    fn command(&self, binary: &Path, args: &[String]) -> BoxliteResult<Command> {
+        // Fail closed: when isolation was explicitly requested but the platform
+        // sandbox is unavailable, refuse to start. Running without isolation
+        // while reporting enforcement would be a silent security bypass.
+        if self.security.jailer_enabled && !self.sandbox.is_available() {
+            return Err(crate::jailer::JailerError::Config(
+                crate::jailer::ConfigError::InvalidConfig(format!(
+                    "jailer_enabled=true but sandbox backend '{}' is not available on this platform; \
+                     refusing to start without isolation",
+                    self.sandbox.name(),
+                )),
+            )
+            .into());
+        }
+
         // Pre-create writable files + dirs for sandbox bind-mounting
         if self.security.jailer_enabled {
             let _ = std::fs::create_dir_all(self.layout.logs_dir());
@@ -391,11 +411,10 @@ impl<S: Sandbox> Jail for Jailer<S> {
         let mut cmd = Command::new(&effective_binary);
         cmd.args(args);
 
-        if self.security.jailer_enabled && self.sandbox.is_available() {
+        if self.security.jailer_enabled {
+            // is_available() was already checked above — we only reach here when true.
             tracing::info!(sandbox = self.sandbox.name(), "Applying sandbox isolation");
             self.sandbox.apply(&ctx, &mut cmd);
-        } else if self.security.jailer_enabled {
-            tracing::warn!("Sandbox not available, falling back to direct command");
         } else {
             tracing::info!("Jailer disabled, running shim without sandbox isolation");
         }
@@ -403,16 +422,23 @@ impl<S: Sandbox> Jail for Jailer<S> {
         // Pre-exec hook: FD preservation, FD cleanup, rlimits, PID file.
         // Sandbox-specific pre_exec hooks (cgroup, Landlock) are already added
         // by sandbox.apply() above — Command supports multiple pre_exec closures.
-        let resource_limits = self.security.resource_limits.clone();
+        //
+        // Resource limits (max_open_files, max_processes, etc.) are NOT applied
+        // to the host shim process here. For VM-based boxes, resource limits are
+        // enforced inside the guest via krun_set_rlimits() in the VMM engine —
+        // applying them on the host would constrain libkrun itself (which runs in
+        // the shim process) and prevent the VM from starting with low limit values.
         let pid_writer = self.pid_file_writer();
+        let close_fds = self.security.close_fds;
         pre_exec::add_pre_exec_hook(
             &mut cmd,
-            resource_limits,
+            ResourceLimits::default(),
             pid_writer,
             self.preserved_fds.clone(),
+            close_fds,
             self.detach,
         );
-        cmd
+        Ok(cmd)
     }
 }
 
@@ -452,6 +478,15 @@ impl<S: Sandbox> Jailer<S> {
         &self.security.resource_limits
     }
 
+    /// Whether the platform sandbox backend is available.
+    ///
+    /// When `jailer_enabled=true` and this returns `false`, `command()` will
+    /// return an error. Callers can use this to distinguish "no platform sandbox"
+    /// from other failures.
+    pub fn sandbox_available(&self) -> bool {
+        self.sandbox.is_available()
+    }
+
     /// Translate SecurityOptions → SandboxContext.
     ///
     /// Delegates to [`build_path_access`] for granular filesystem rules.
@@ -473,6 +508,8 @@ impl<S: Sandbox> Jailer<S> {
             resource_limits: &self.security.resource_limits,
             network_enabled: self.security.network_enabled,
             sandbox_profile: self.security.sandbox_profile.as_deref(),
+            sanitize_env: self.security.sanitize_env,
+            env_allowlist: &self.security.env_allowlist,
         }
     }
 
@@ -844,24 +881,33 @@ mod tests {
         // prepare() should succeed
         jail.prepare().unwrap();
 
-        // command() should not panic and should pre-create files
-        let _cmd = jail.command(
+        // command() succeeds only when the platform sandbox is available.
+        let result = jail.command(
             std::path::Path::new("/usr/bin/boxlite-shim"),
             &["--engine".to_string(), "Libkrun".to_string()],
         );
 
-        // Verify pre-create side effects
-        assert!(
-            layout.logs_dir().exists(),
-            "logs_dir should be created by command()"
-        );
-        assert!(
-            layout.exit_file_path().exists(),
-            "exit file should be created by command()"
-        );
-        assert!(
-            layout.console_output_path().exists(),
-            "console.log should be created by command()"
-        );
+        if jail.sandbox_available() {
+            // Sandbox available: command succeeds and must pre-create files.
+            assert!(result.is_ok());
+            assert!(
+                layout.logs_dir().exists(),
+                "logs_dir should be created by command()"
+            );
+            assert!(
+                layout.exit_file_path().exists(),
+                "exit file should be created by command()"
+            );
+            assert!(
+                layout.console_output_path().exists(),
+                "console.log should be created by command()"
+            );
+        } else {
+            // Sandbox unavailable: command must fail closed, not run without isolation.
+            assert!(
+                result.is_err(),
+                "Expected Err when jailer_enabled=true but sandbox is unavailable"
+            );
+        }
     }
 }

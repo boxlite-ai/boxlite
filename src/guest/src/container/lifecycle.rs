@@ -47,6 +47,8 @@ pub struct Container {
     env: HashMap<String, String>,
     /// Resolved (uid, gid) from image USER directive, propagated to exec commands.
     user: (u32, u32),
+    /// Resource limits applied to exec processes spawned in this container.
+    resource_limits: spec::ResourceLimits,
     /// Stdio pipes that keep init process alive.
     /// Dropping this closes pipes → init gets EOF → init exits.
     #[allow(dead_code)]
@@ -81,6 +83,7 @@ impl Container {
     /// - Failed to create container directory
     /// - Failed to create or start container
     /// - Init process exited immediately
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         container_id: &str,
         rootfs: impl AsRef<Path>,
@@ -89,6 +92,7 @@ impl Container {
         workdir: impl AsRef<Path>,
         user: &str,
         user_mounts: Vec<UserMount>,
+        resource_limits: spec::ResourceLimits,
     ) -> BoxliteResult<Self> {
         let rootfs = rootfs.as_ref();
         let workdir = workdir.as_ref();
@@ -163,6 +167,7 @@ impl Container {
             gid,
             &layout.containers_dir(),
             &user_mounts,
+            &resource_limits,
         )?;
 
         // Create stdio pipes before container creation.
@@ -179,6 +184,7 @@ impl Container {
             bundle_path,
             env: env_map,
             user: (uid, gid),
+            resource_limits,
             stdio,
             is_shutdown: std::sync::atomic::AtomicBool::new(false),
         })
@@ -266,6 +272,7 @@ impl Container {
             self.env.clone(),
             self.user,
             self.bundle_path.join("rootfs"),
+            self.resource_limits.clone(),
         )
     }
 

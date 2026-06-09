@@ -24,6 +24,13 @@ export type CreateRunnerV2InternalDto = {
   name: string
   apiVersion: '2'
   appVersion?: string
+  /**
+   * Whether this runner supports security-options enforcement in the v2 job payload.
+   * Defaults to true for new registrations — runners created post-deployment are
+   * assumed to run a binary that enforces the field.  Pass false explicitly to opt
+   * out during a staged rollout or for testing with an older binary.
+   */
+  supportsSecurityOptions?: boolean
 }
 
 export type CreateRunnerInternalDto = CreateRunnerV0InternalDto | CreateRunnerV2InternalDto

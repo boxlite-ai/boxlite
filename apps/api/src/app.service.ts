@@ -148,6 +148,9 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
         regionId: this.configService.getOrThrow('defaultRegion.id'),
         apiVersion: runnerVersion,
         name: this.configService.getOrThrow('defaultRunner.name'),
+        // Propagate RUNNER_SUPPORTS_SECURITY_OPTIONS so that the default runner
+        // is included in capable-runner selection when SECURITY_OPTIONS_ENABLED=true.
+        supportsSecurityOptions: this.configService.get('defaultRunner.supportsSecurityOptions'),
       })
 
       this.logger.log(`Waiting for runner ${runner.name} to be healthy...`)

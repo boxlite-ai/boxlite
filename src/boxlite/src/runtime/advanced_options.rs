@@ -83,7 +83,8 @@ impl Default for HealthCheckOptions {
 ///
 /// These options control how the boxlite-shim process is isolated from the host.
 /// Different presets are available for different security requirements.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SecurityOptions {
     /// Enable jailer isolation.
     ///
@@ -185,7 +186,8 @@ pub struct SecurityOptions {
 }
 
 /// Resource limits for the jailed process.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ResourceLimits {
     /// Maximum number of open file descriptors (RLIMIT_NOFILE).
     #[serde(default)]
@@ -569,18 +571,36 @@ impl SecurityOptionsBuilder {
 ///
 /// Entry-level users can ignore this — defaults are compatibility-focused.
 /// Only modify these if you understand the security implications.
+///
+/// # Construction
+///
+/// All fields are public. Use struct literal syntax with `..Default::default()` spread,
+/// or the builder methods (`with_security`, `with_health_check`, `with_isolate_mounts`)
+/// for a more ergonomic API.
+///
+/// # Security field semantics
+///
+/// `security` is `None` by default, meaning the REST layer omits the field from the API
+/// request and old runners remain eligible for warm-pool reuse. Set it to `Some(...)` via
+/// `BoxOptions::with_security()` (or direct field assignment) to opt in to v2-runner
+/// enforcement. Only runners that support security options will be selected.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AdvancedBoxOptions {
     /// Security isolation options (jailer, seccomp, namespaces, resource limits).
     ///
-    /// Defaults are compatibility-focused (jailer enabled on macOS, disabled on Linux/other
-    /// platforms; seccomp disabled). Use presets:
+    /// `None` (default) — not sent to the API. The runner uses platform defaults, and
+    /// warm-pool reuse is unaffected. Use when you do not need to control isolation.
+    ///
+    /// `Some(opts)` — sent to the API. Only v2 runners that support security options
+    /// are selected; warm-pool boxes that pre-date security support are bypassed.
+    ///
+    /// Available presets:
     /// - `SecurityOptions::default()` — compatibility-focused defaults
     /// - `SecurityOptions::standard()` — recommended for production
     /// - `SecurityOptions::development()` — minimal isolation for debugging
     /// - `SecurityOptions::maximum()` — maximum isolation for untrusted workloads
     #[serde(default)]
-    pub security: SecurityOptions,
+    pub security: Option<SecurityOptions>,
 
     /// Enable bind mount isolation for the shared mounts directory.
     ///
@@ -601,4 +621,279 @@ pub struct AdvancedBoxOptions {
     /// Most users should rely on the defaults.
     #[serde(default)]
     pub health_check: Option<HealthCheckOptions>,
+}
+
+impl AdvancedBoxOptions {
+    /// Return the effective security options.
+    ///
+    /// Returns the explicitly configured security if set, or platform defaults otherwise.
+    /// Call sites that need the concrete security value (e.g., jailer, shim config) use
+    /// this to avoid spreading `unwrap_or_default()` everywhere.
+    pub fn security(&self) -> SecurityOptions {
+        self.security.clone().unwrap_or_default()
+    }
+
+    /// Set security options and mark them as explicitly configured.
+    ///
+    /// Sets `security` to `Some(security)` so the REST layer forwards the field.
+    /// When `security` is `None` (the default), the REST layer omits the field from
+    /// the API request to avoid triggering v2-runner enforcement on old runners.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use boxlite::runtime::options::BoxOptions;
+    /// use boxlite::runtime::advanced_options::SecurityOptions;
+    ///
+    /// let opts = BoxOptions::default().with_security(SecurityOptions::maximum());
+    /// assert!(opts.security_explicit());
+    /// ```
+    pub fn with_security(mut self, security: SecurityOptions) -> Self {
+        self.security = Some(security);
+        self
+    }
+
+    /// Set health check options.
+    pub fn with_health_check(mut self, health_check: HealthCheckOptions) -> Self {
+        self.health_check = Some(health_check);
+        self
+    }
+
+    /// Enable or disable mount isolation.
+    pub fn with_isolate_mounts(mut self, isolate: bool) -> Self {
+        self.isolate_mounts = isolate;
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_security_is_none() {
+        // Default: security is None (not sent to API, warm-pool reuse unaffected).
+        let advanced = AdvancedBoxOptions::default();
+        assert!(advanced.security.is_none(), "default security must be None");
+    }
+
+    #[test]
+    fn with_security_sets_some() {
+        // After with_security: security is Some(...) and getter returns configured values.
+        let advanced = AdvancedBoxOptions::default().with_security(SecurityOptions::maximum());
+        assert!(
+            advanced.security.is_some(),
+            "with_security must set security to Some(...)"
+        );
+        assert!(
+            advanced.security().jailer_enabled,
+            "security() getter must return maximum() preset (jailer_enabled=true)"
+        );
+    }
+
+    #[test]
+    fn struct_literal_with_spread_compiles() {
+        // Regression: private fields on AdvancedBoxOptions blocked struct literal
+        // construction from outside the module (including external crates).
+        // All fields are now public; this pattern must compile and work correctly.
+        let hc = HealthCheckOptions::default();
+        let advanced = AdvancedBoxOptions {
+            health_check: Some(hc),
+            security: Some(SecurityOptions::maximum()),
+            ..Default::default()
+        };
+        assert!(advanced.health_check.is_some());
+        assert!(advanced.security.is_some());
+    }
+
+    #[test]
+    fn struct_literal_with_none_security_compiles() {
+        // External crates can construct AdvancedBoxOptions with security=None (the default).
+        let hc = HealthCheckOptions::default();
+        let advanced = AdvancedBoxOptions {
+            health_check: Some(hc),
+            ..Default::default()
+        };
+        assert!(advanced.health_check.is_some());
+        assert!(advanced.security.is_none());
+    }
+
+    #[test]
+    fn box_options_with_security_sets_explicit() {
+        use crate::runtime::options::BoxOptions;
+
+        let opts = BoxOptions::default().with_security(SecurityOptions::maximum());
+        assert!(
+            opts.security_explicit(),
+            "BoxOptions::with_security must make security_explicit() return true"
+        );
+        assert!(
+            opts.advanced.security().jailer_enabled,
+            "BoxOptions::with_security must forward jailer_enabled from maximum()"
+        );
+    }
+
+    #[test]
+    fn direct_field_assignment_also_sets_explicit() {
+        use crate::runtime::options::BoxOptions;
+
+        // Direct field assignment to Some(...) is equivalent to with_security().
+        // security_explicit() is derived from advanced.security.is_some().
+        let mut opts = BoxOptions::default();
+        opts.advanced.security = Some(SecurityOptions::maximum());
+        assert!(
+            opts.security_explicit(),
+            "setting advanced.security = Some(...) makes security_explicit() true"
+        );
+    }
+
+    #[test]
+    fn security_accessor_returns_default_when_none() {
+        // Callers such as JailerBuilder use `.advanced.security()` rather than
+        // spreading `unwrap_or_default()` at every call site.  When the field
+        // is None, the accessor must be equivalent to SecurityOptions::default()
+        // — the exact value is platform-specific (jailer_enabled is true on
+        // macOS, false on Linux), so we compare structurally rather than
+        // asserting individual fields.
+        let advanced = AdvancedBoxOptions::default();
+        assert!(
+            advanced.security.is_none(),
+            "pre-condition: security field must be None for default AdvancedBoxOptions"
+        );
+        assert_eq!(
+            advanced.security(),
+            SecurityOptions::default(),
+            "security() with None field must equal SecurityOptions::default()"
+        );
+    }
+
+    #[test]
+    fn none_security_leaves_explicit_false() {
+        use crate::runtime::options::BoxOptions;
+
+        let opts = BoxOptions::default();
+        assert!(
+            !opts.security_explicit(),
+            "default BoxOptions must have security_explicit() == false"
+        );
+    }
+
+    // ── Preset field value tests ──────────────────────────────────────────────
+
+    #[test]
+    fn maximum_preset_sets_resource_limits() {
+        let s = SecurityOptions::maximum();
+        assert_eq!(
+            s.resource_limits.max_open_files,
+            Some(1024),
+            "maximum() must set max_open_files=1024"
+        );
+        assert_eq!(
+            s.resource_limits.max_processes,
+            Some(100),
+            "maximum() must set max_processes=100"
+        );
+        assert_eq!(
+            s.resource_limits.max_file_size,
+            Some(1024 * 1024 * 1024),
+            "maximum() must set max_file_size=1GiB"
+        );
+        // cpu_time and memory are intentionally unset — VM config governs these.
+        assert!(
+            s.resource_limits.max_cpu_time.is_none(),
+            "maximum() should leave max_cpu_time unset"
+        );
+        assert!(
+            s.resource_limits.max_memory.is_none(),
+            "maximum() should leave max_memory unset"
+        );
+    }
+
+    #[test]
+    fn maximum_preset_sets_privilege_drop() {
+        let s = SecurityOptions::maximum();
+        assert_eq!(
+            s.uid,
+            Some(65534),
+            "maximum() must drop to uid=65534 (nobody)"
+        );
+        assert_eq!(
+            s.gid,
+            Some(65534),
+            "maximum() must drop to gid=65534 (nogroup)"
+        );
+    }
+
+    #[test]
+    fn maximum_preset_enables_isolation() {
+        let s = SecurityOptions::maximum();
+        assert!(s.jailer_enabled, "maximum() must enable jailer");
+        assert!(s.close_fds, "maximum() must close inherited fds");
+        assert!(s.sanitize_env, "maximum() must sanitize environment");
+    }
+
+    #[test]
+    fn standard_preset_enables_sanitize_env_and_close_fds() {
+        let s = SecurityOptions::standard();
+        assert!(s.sanitize_env, "standard() must sanitize environment");
+        assert!(s.close_fds, "standard() must close inherited fds");
+    }
+
+    #[test]
+    fn standard_preset_has_no_resource_limits() {
+        // standard() is for normal use; resource limits are an opt-in.
+        let s = SecurityOptions::standard();
+        assert!(
+            s.resource_limits.max_open_files.is_none(),
+            "standard() must not restrict max_open_files"
+        );
+        assert!(
+            s.resource_limits.max_processes.is_none(),
+            "standard() must not restrict max_processes"
+        );
+    }
+
+    #[test]
+    fn development_preset_disables_all_isolation() {
+        let s = SecurityOptions::development();
+        assert!(!s.jailer_enabled, "development() must disable jailer");
+        assert!(!s.seccomp_enabled, "development() must disable seccomp");
+        assert!(!s.sanitize_env, "development() must not sanitize env");
+        assert!(!s.close_fds, "development() must not close fds");
+        assert!(!s.chroot_enabled, "development() must disable chroot");
+    }
+
+    #[test]
+    fn development_preset_has_no_resource_limits() {
+        let s = SecurityOptions::development();
+        assert!(
+            s.resource_limits.max_open_files.is_none(),
+            "development() must not restrict max_open_files"
+        );
+        assert!(
+            s.resource_limits.max_processes.is_none(),
+            "development() must not restrict max_processes"
+        );
+    }
+
+    #[test]
+    fn builder_max_open_files_overrides_default() {
+        let s = SecurityOptionsBuilder::new().max_open_files(512).build();
+        assert_eq!(s.resource_limits.max_open_files, Some(512));
+    }
+
+    #[test]
+    fn builder_standard_plus_resource_limit() {
+        // Common pattern: take standard preset, add file descriptor limit.
+        let s = SecurityOptionsBuilder::standard()
+            .max_open_files(2048)
+            .build();
+        assert!(s.jailer_enabled, "standard base must enable jailer");
+        assert!(s.sanitize_env, "standard base must sanitize env");
+        assert_eq!(
+            s.resource_limits.max_open_files,
+            Some(2048),
+            "explicit limit must override standard default (none)"
+        );
+    }
 }

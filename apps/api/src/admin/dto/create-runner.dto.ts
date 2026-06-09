@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { IsNumber, IsOptional, IsString } from 'class-validator'
+import { IsBoolean, IsNumber, IsOptional, IsString } from 'class-validator'
 import { ApiProperty, ApiSchema } from '@nestjs/swagger'
 import { CreateRunnerDto } from '../../sandbox/dto/create-runner.dto'
 
@@ -75,4 +75,13 @@ export class AdminCreateRunnerDto extends CreateRunnerDto {
   })
   @IsOptional()
   diskGiB?: number
+
+  @IsBoolean()
+  @ApiProperty({
+    description:
+      'Whether this runner supports security-options enforcement in the v2 job payload. Defaults to false; must be explicitly set to true only for runner binaries that include security payload support.',
+    required: false,
+  })
+  @IsOptional()
+  supportsSecurityOptions?: boolean
 }

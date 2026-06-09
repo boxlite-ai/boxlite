@@ -538,7 +538,9 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
 
         if let Some(advanced) = py_opts.advanced {
             if let Some(security) = advanced.security {
-                opts.advanced.security = SecurityOptions::from(security);
+                // Use with_security so security_explicit is set; the REST layer
+                // only forwards the security field when the flag is true.
+                opts = opts.with_security(SecurityOptions::from(security));
             }
             if let Some(health_check) = advanced.health_check {
                 opts.advanced.health_check = Some(HealthCheckOptions::from(health_check));
@@ -929,5 +931,95 @@ impl From<PyBoxliteRestOptions> for BoxliteRestOptions {
             opts = opts.with_path_prefix(path_prefix);
         }
         opts
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::advanced_options::{PyAdvancedBoxOptions, PySecurityOptions};
+
+    /// SDK-provided security options must be marked explicit so the REST layer
+    /// forwards them. Regression: direct opts.advanced.security assignment omitted
+    /// security_explicit, causing CreateBoxRequest::from_options to silently drop
+    /// the security field.
+    #[test]
+    fn box_options_from_py_security_marks_explicit() {
+        let py_opts = PyBoxOptions {
+            image: Some("alpine:latest".into()),
+            rootfs_path: None,
+            cpus: None,
+            memory_mib: None,
+            disk_size_gb: None,
+            working_dir: None,
+            env: vec![],
+            volumes: vec![],
+            network: None,
+            ports: vec![],
+            auto_remove: None,
+            detach: None,
+            entrypoint: None,
+            cmd: None,
+            user: None,
+            advanced: Some(PyAdvancedBoxOptions {
+                security: Some(PySecurityOptions {
+                    jailer_enabled: true,
+                    seccomp_enabled: true,
+                    max_open_files: None,
+                    max_file_size: None,
+                    max_processes: None,
+                    max_memory: None,
+                    max_cpu_time: None,
+                    network_enabled: true,
+                    close_fds: true,
+                    uid: None,
+                    gid: None,
+                    new_pid_ns: false,
+                    new_net_ns: false,
+                    chroot_base: None,
+                    chroot_enabled: false,
+                    sanitize_env: true,
+                    env_allowlist: vec![],
+                    sandbox_profile: None,
+                }),
+                health_check: None,
+            }),
+            secrets: vec![],
+        };
+
+        let opts = BoxOptions::try_from(py_opts).unwrap();
+        assert!(
+            opts.security_explicit(),
+            "security_explicit must be true when caller provides security options"
+        );
+    }
+
+    #[test]
+    fn box_options_from_py_no_security_leaves_explicit_false() {
+        let py_opts = PyBoxOptions {
+            image: Some("alpine:latest".into()),
+            rootfs_path: None,
+            cpus: None,
+            memory_mib: None,
+            disk_size_gb: None,
+            working_dir: None,
+            env: vec![],
+            volumes: vec![],
+            network: None,
+            ports: vec![],
+            auto_remove: None,
+            detach: None,
+            entrypoint: None,
+            cmd: None,
+            user: None,
+            advanced: None,
+            secrets: vec![],
+        };
+
+        let opts = BoxOptions::try_from(py_opts).unwrap();
+        assert!(
+            !opts.security_explicit(),
+            "security_explicit must remain false when no security options provided"
+        );
     }
 }

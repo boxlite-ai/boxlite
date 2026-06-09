@@ -127,6 +127,15 @@ export class Sandbox {
   networkAllowList?: string
 
   @Column('jsonb', { nullable: true })
+  requestedSecurityOptions?: Record<string, unknown>
+
+  @Column('jsonb', { nullable: true })
+  effectiveSecurityOptions?: Record<string, unknown>
+
+  @Column('jsonb', { nullable: true })
+  securityPolicyResult?: Record<string, unknown>
+
+  @Column('jsonb', { nullable: true })
   labels: { [key: string]: string }
 
   @Column({ nullable: true })

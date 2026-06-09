@@ -21,44 +21,63 @@ import type {
 
 /**
  * Security isolation options for a box.
+ *
+ * All fields are optional; unset fields inherit the platform default.
  */
 export interface SecurityOptions {
   /** Enable jailer isolation (Linux/macOS). */
   jailerEnabled?: boolean;
 
-  /** Enable seccomp syscall filtering (Linux only). */
+  /** Enable seccomp syscall filtering (Linux only). Requires jailerEnabled. */
   seccompEnabled?: boolean;
 
-  /**
-   * Maximum number of open file descriptors.
-   */
+  /** Maximum number of open file descriptors (RLIMIT_NOFILE). */
   maxOpenFiles?: number;
 
-  /**
-   * Maximum file size in bytes.
-   */
+  /** Maximum file size in bytes (RLIMIT_FSIZE). */
   maxFileSize?: number;
 
-  /**
-   * Maximum number of processes.
-   */
+  /** Maximum number of processes (RLIMIT_NPROC). */
   maxProcesses?: number;
 
-  /**
-   * Maximum virtual memory in bytes.
-   */
+  /** Maximum virtual memory in bytes (RLIMIT_AS). */
   maxMemory?: number;
 
-  /**
-   * Maximum CPU time in seconds.
-   */
+  /** Maximum CPU time in seconds (RLIMIT_CPU). */
   maxCpuTime?: number;
 
-  /** Enable network access in sandbox (macOS only). */
+  /** Enable network access in sandbox. */
   networkEnabled?: boolean;
 
-  /** Close inherited file descriptors. */
+  /** Close inherited file descriptors before VM start. */
   closeFds?: boolean;
+
+  /** UID to drop shim process to (Linux only, undefined = auto-allocate). */
+  uid?: number;
+
+  /** GID to drop shim process to (Linux only, undefined = auto-allocate). */
+  gid?: number;
+
+  /** Create new PID namespace (Linux only). */
+  newPidNs?: boolean;
+
+  /** Create new network namespace (Linux only). */
+  newNetNs?: boolean;
+
+  /** Base directory for chroot jails (Linux only). */
+  chrootBase?: string;
+
+  /** Enable chroot filesystem isolation (Linux only). */
+  chrootEnabled?: boolean;
+
+  /** Sanitize environment variables before shim exec. */
+  sanitizeEnv?: boolean;
+
+  /** Environment variables to preserve when sanitizeEnv is true. */
+  envAllowlist?: string[];
+
+  /** macOS sandbox profile path (allowlisted values only). */
+  sandboxProfile?: string;
 }
 
 /**
@@ -152,6 +171,15 @@ function normalizeSecurityOptions(
     maxCpuTime: normalizeU64Limit(security.maxCpuTime, "security.maxCpuTime"),
     networkEnabled: security.networkEnabled,
     closeFds: security.closeFds,
+    uid: security.uid,
+    gid: security.gid,
+    newPidNs: security.newPidNs,
+    newNetNs: security.newNetNs,
+    chrootBase: security.chrootBase,
+    chrootEnabled: security.chrootEnabled,
+    sanitizeEnv: security.sanitizeEnv,
+    envAllowlist: security.envAllowlist,
+    sandboxProfile: security.sandboxProfile,
   };
 }
 

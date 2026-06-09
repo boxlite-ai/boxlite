@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use boxlite::runtime::advanced_options::{HealthCheckOptions, ResourceLimits, SecurityOptions};
 use pyo3::prelude::*;
 
@@ -126,6 +128,42 @@ pub struct PySecurityOptions {
     /// Close inherited file descriptors.
     #[pyo3(get, set)]
     pub close_fds: bool,
+
+    /// UID to drop shim process to (Linux only). None = auto-allocate.
+    #[pyo3(get, set)]
+    pub uid: Option<u32>,
+
+    /// GID to drop shim process to (Linux only). None = auto-allocate.
+    #[pyo3(get, set)]
+    pub gid: Option<u32>,
+
+    /// Create new PID namespace (Linux only).
+    #[pyo3(get, set)]
+    pub new_pid_ns: bool,
+
+    /// Create new network namespace (Linux only).
+    #[pyo3(get, set)]
+    pub new_net_ns: bool,
+
+    /// Base directory for chroot jails (Linux only).
+    #[pyo3(get, set)]
+    pub chroot_base: Option<String>,
+
+    /// Enable chroot filesystem isolation (Linux only).
+    #[pyo3(get, set)]
+    pub chroot_enabled: bool,
+
+    /// Sanitize environment variables before shim exec.
+    #[pyo3(get, set)]
+    pub sanitize_env: bool,
+
+    /// Environment variables to preserve when sanitize_env is true.
+    #[pyo3(get, set)]
+    pub env_allowlist: Vec<String>,
+
+    /// macOS sandbox profile path. None = built-in profile.
+    #[pyo3(get, set)]
+    pub sandbox_profile: Option<String>,
 }
 
 #[pymethods]
@@ -142,6 +180,15 @@ impl PySecurityOptions {
         max_cpu_time=None,
         network_enabled=true,
         close_fds=true,
+        uid=None,
+        gid=None,
+        new_pid_ns=false,
+        new_net_ns=false,
+        chroot_base=None,
+        chroot_enabled=false,
+        sanitize_env=true,
+        env_allowlist=vec![],
+        sandbox_profile=None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -154,6 +201,15 @@ impl PySecurityOptions {
         max_cpu_time: Option<u64>,
         network_enabled: bool,
         close_fds: bool,
+        uid: Option<u32>,
+        gid: Option<u32>,
+        new_pid_ns: bool,
+        new_net_ns: bool,
+        chroot_base: Option<String>,
+        chroot_enabled: bool,
+        sanitize_env: bool,
+        env_allowlist: Vec<String>,
+        sandbox_profile: Option<String>,
     ) -> Self {
         Self {
             jailer_enabled,
@@ -165,6 +221,15 @@ impl PySecurityOptions {
             max_cpu_time,
             network_enabled,
             close_fds,
+            uid,
+            gid,
+            new_pid_ns,
+            new_net_ns,
+            chroot_base,
+            chroot_enabled,
+            sanitize_env,
+            env_allowlist,
+            sandbox_profile,
         }
     }
 
@@ -183,6 +248,15 @@ impl PySecurityOptions {
             max_cpu_time: None,
             network_enabled: true,
             close_fds: false,
+            uid: None,
+            gid: None,
+            new_pid_ns: false,
+            new_net_ns: false,
+            chroot_base: None,
+            chroot_enabled: false,
+            sanitize_env: false,
+            env_allowlist: vec![],
+            sandbox_profile: None,
         }
     }
 
@@ -201,6 +275,15 @@ impl PySecurityOptions {
             max_cpu_time: None,
             network_enabled: true,
             close_fds: true,
+            uid: None,
+            gid: None,
+            new_pid_ns: false,
+            new_net_ns: false,
+            chroot_base: None,
+            chroot_enabled: cfg!(target_os = "linux"),
+            sanitize_env: true,
+            env_allowlist: vec![],
+            sandbox_profile: None,
         }
     }
 
@@ -215,10 +298,19 @@ impl PySecurityOptions {
             max_open_files: Some(1024),
             max_file_size: Some(1024 * 1024 * 1024), // 1 GiB
             max_processes: Some(100),
-            max_memory: None,   // Let VM config handle this
-            max_cpu_time: None, // Let VM config handle this
+            max_memory: None,
+            max_cpu_time: None,
             network_enabled: true,
             close_fds: true,
+            uid: None,
+            gid: None,
+            new_pid_ns: false,
+            new_net_ns: false,
+            chroot_base: None,
+            chroot_enabled: cfg!(target_os = "linux"),
+            sanitize_env: true,
+            env_allowlist: vec![],
+            sandbox_profile: None,
         }
     }
 
@@ -237,6 +329,18 @@ impl From<PySecurityOptions> for SecurityOptions {
             seccomp_enabled: py_opts.seccomp_enabled,
             network_enabled: py_opts.network_enabled,
             close_fds: py_opts.close_fds,
+            uid: py_opts.uid,
+            gid: py_opts.gid,
+            new_pid_ns: py_opts.new_pid_ns,
+            new_net_ns: py_opts.new_net_ns,
+            chroot_base: py_opts
+                .chroot_base
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("/srv/boxlite")),
+            chroot_enabled: py_opts.chroot_enabled,
+            sanitize_env: py_opts.sanitize_env,
+            env_allowlist: py_opts.env_allowlist,
+            sandbox_profile: py_opts.sandbox_profile.map(PathBuf::from),
             resource_limits: ResourceLimits {
                 max_open_files: py_opts.max_open_files,
                 max_file_size: py_opts.max_file_size,
@@ -244,7 +348,6 @@ impl From<PySecurityOptions> for SecurityOptions {
                 max_memory: py_opts.max_memory,
                 max_cpu_time: py_opts.max_cpu_time,
             },
-            ..Default::default()
         }
     }
 }

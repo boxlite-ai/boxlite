@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { IsString } from 'class-validator'
-import { ApiProperty, ApiSchema } from '@nestjs/swagger'
+import { IsBoolean, IsOptional, IsString } from 'class-validator'
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 
 @ApiSchema({ name: 'CreateRunner' })
 export class CreateRunnerDto {
@@ -16,4 +16,15 @@ export class CreateRunnerDto {
   @IsString()
   @ApiProperty()
   name: string
+
+  @IsOptional()
+  @IsBoolean()
+  @ApiPropertyOptional({
+    description:
+      'Declare that this runner binary supports the security-options payload. ' +
+      'Defaults to false — must be explicitly set to true only for runner builds ' +
+      'that handle the security field in CreateSandboxDTO.',
+    default: false,
+  })
+  supportsSecurityOptions?: boolean
 }

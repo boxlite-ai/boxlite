@@ -65,6 +65,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter'
 import { SandboxLastActivity } from './entities/sandbox-last-activity.entity'
 import { SandboxActivityService } from './services/sandbox-activity.service'
 import { SandboxStateWaiterService } from './services/sandbox-state-waiter.service'
+import { SecurityPolicyService } from './services/security-policy.service'
 
 @Module({
   imports: [
@@ -124,6 +125,7 @@ import { SandboxStateWaiterService } from './services/sandbox-state-waiter.servi
     JobStateHandlerService,
     SandboxActivityService,
     SandboxStateWaiterService,
+    SecurityPolicyService,
     SandboxAccessGuard,
     RunnerAccessGuard,
     RegionRunnerAccessGuard,

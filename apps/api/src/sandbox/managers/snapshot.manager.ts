@@ -461,11 +461,17 @@ export class SnapshotManager implements TrackableJobExecutions, OnApplicationShu
                 }
 
                 try {
+                  // Only the stored policy drives capability routing — see requiresSecurityCapableRunner
+                  // in sandbox-start.action.ts for the full invariant explanation.
+                  const hasStoredPolicy =
+                    sandbox.effectiveSecurityOptions != null &&
+                    Object.keys(sandbox.effectiveSecurityOptions).length > 0
                   // Get an available runner in the same region with the same class
                   const targetRunner = await this.runnerService.getRandomAvailableRunner({
                     regions: [sandbox.region],
                     sandboxClass: sandbox.class,
                     excludedRunnerIds: [runner.id],
+                    requireSecurityOptions: hasStoredPolicy,
                   })
 
                   // Check if snapshot runner entry already exists

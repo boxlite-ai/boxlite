@@ -386,11 +386,6 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             .map(|e| (e.key, e.value))
             .collect();
 
-        let security = js_opts
-            .security
-            .map(SecurityOptions::from)
-            .unwrap_or_default();
-
         let health_check = js_opts.health_check.map(HealthCheckOptions::from);
         let secrets = js_opts
             .secrets
@@ -406,7 +401,13 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             })
             .collect();
 
-        Ok(BoxOptions {
+        let advanced = if let Some(hc) = health_check {
+            AdvancedBoxOptions::default().with_health_check(hc)
+        } else {
+            AdvancedBoxOptions::default()
+        };
+
+        let mut opts = BoxOptions {
             cpus: js_opts.cpus,
             memory_mib: js_opts.memory_mib,
             disk_size_gb: js_opts.disk_size_gb.map(|v| v as u64),
@@ -416,18 +417,22 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             volumes,
             network,
             ports,
-            advanced: AdvancedBoxOptions {
-                security,
-                health_check,
-                ..Default::default()
-            },
+            advanced,
             auto_remove: js_opts.auto_remove.unwrap_or(false),
             detach: js_opts.detach.unwrap_or(false),
             entrypoint: js_opts.entrypoint,
             cmd: js_opts.cmd,
             user: js_opts.user,
             secrets,
-        })
+        };
+
+        // Use with_security to mark security_explicit so the REST layer forwards
+        // the field. A default SecurityOptions must not reach the API.
+        if let Some(js_security) = js_opts.security {
+            opts = opts.with_security(SecurityOptions::from(js_security));
+        }
+
+        Ok(opts)
     }
 }
 
@@ -764,5 +769,90 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("network.mode=\"disabled\""));
+    }
+
+    /// SDK-provided security options must be marked explicit so the REST layer
+    /// forwards them. Regression: direct AdvancedBoxOptions construction omitted
+    /// security_explicit, causing CreateBoxRequest::from_options to silently drop
+    /// the security field.
+    #[test]
+    fn box_options_from_js_security_marks_explicit() {
+        use crate::advanced_options::JsSecurityOptions;
+
+        let js = JsBoxOptions {
+            image: Some("alpine:latest".into()),
+            rootfs_path: None,
+            cpus: None,
+            memory_mib: None,
+            disk_size_gb: None,
+            working_dir: None,
+            env: None,
+            volumes: None,
+            network: None,
+            ports: None,
+            auto_remove: None,
+            detach: None,
+            entrypoint: None,
+            cmd: None,
+            user: None,
+            security: Some(JsSecurityOptions {
+                jailer_enabled: Some(true),
+                seccomp_enabled: Some(true),
+                max_open_files: None,
+                max_file_size: None,
+                max_processes: None,
+                max_memory: None,
+                max_cpu_time: None,
+                network_enabled: None,
+                close_fds: None,
+                uid: None,
+                gid: None,
+                new_pid_ns: None,
+                new_net_ns: None,
+                chroot_base: None,
+                chroot_enabled: None,
+                sanitize_env: None,
+                env_allowlist: None,
+                sandbox_profile: None,
+            }),
+            health_check: None,
+            secrets: None,
+        };
+
+        let opts = BoxOptions::try_from(js).unwrap();
+        assert!(
+            opts.security_explicit(),
+            "security_explicit must be true when caller provides security options"
+        );
+    }
+
+    #[test]
+    fn box_options_from_js_no_security_leaves_explicit_false() {
+        let js = JsBoxOptions {
+            image: Some("alpine:latest".into()),
+            rootfs_path: None,
+            cpus: None,
+            memory_mib: None,
+            disk_size_gb: None,
+            working_dir: None,
+            env: None,
+            volumes: None,
+            network: None,
+            ports: None,
+            auto_remove: None,
+            detach: None,
+            entrypoint: None,
+            cmd: None,
+            user: None,
+            security: None,
+            health_check: None,
+            secrets: None,
+        };
+
+        let opts = BoxOptions::try_from(js).unwrap();
+        assert!(
+            !opts.security_explicit(),
+            "security_explicit must remain false when no security options provided"
+        );
     }
 }

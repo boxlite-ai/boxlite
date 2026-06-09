@@ -232,6 +232,23 @@ Configuration options for creating a box.
   - Protocol: `"tcp"` or `"udp"`
 - `secrets: List[Secret]` - Host-side HTTP(S) secret substitution rules
 - `auto_remove: bool` - Auto cleanup after stop (default: True)
+- `security: SecurityOptions | None` - Security isolation options (default: None, platform default applied)
+
+`SecurityOptions` fields (all optional):
+
+- `preset: str | None` - `"development"`, `"standard"`, or `"maximum"`
+- `jailer_enabled: bool | None` - Enable platform sandbox wrapping
+- `seccomp_enabled: bool | None` - Enable Linux seccomp syscall filtering
+- `uid: int | None` - UID to drop to (Linux only)
+- `gid: int | None` - GID to drop to (Linux only)
+- `new_pid_ns: bool | None` - New PID namespace (Linux only)
+- `close_fds: bool | None` - Close inherited FDs before VM start
+- `sanitize_env: bool | None` - Sanitize environment variables
+- `env_allowlist: List[str] | None` - Variables to preserve when `sanitize_env=True`
+- `resource_limits: SecurityResourceLimits | None` - rlimit settings
+- `network_enabled: bool | None` - Enable network access in sandbox
+
+`SecurityResourceLimits` fields (all optional integers): `max_open_files`, `max_file_size`, `max_processes`, `max_memory`, `max_cpu_time`.
 
 `NetworkSpec` uses:
 
@@ -269,6 +286,31 @@ options = boxlite.BoxOptions(
             hosts=["api.openai.com"],
         ),
     ],
+)
+box = runtime.create(options)
+```
+
+**Security example:**
+
+```python
+# Named preset
+options = boxlite.BoxOptions(
+    image="python:slim",
+    security=boxlite.SecurityOptions(preset="standard"),
+)
+
+# Custom isolation — sanitize env and cap resource limits
+options = boxlite.BoxOptions(
+    image="python:slim",
+    security=boxlite.SecurityOptions(
+        jailer_enabled=True,
+        sanitize_env=True,
+        env_allowlist=["PATH", "HOME"],
+        resource_limits=boxlite.SecurityResourceLimits(
+            max_open_files=1024,
+            max_processes=100,
+        ),
+    ),
 )
 box = runtime.create(options)
 ```

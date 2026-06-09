@@ -2,11 +2,12 @@
 
 use boxlite_shared::{
     BindMount, BoxliteError, BoxliteResult, CaCert, ContainerClient,
-    ContainerConfig as ProtoContainerConfig, ContainerInitRequest, DiskRootfs, MergedRootfs,
-    OverlayRootfs, RootfsInit, container_init_response,
+    ContainerConfig as ProtoContainerConfig, ContainerInitRequest, ContainerResourceLimits,
+    DiskRootfs, MergedRootfs, OverlayRootfs, RootfsInit, container_init_response,
 };
 use tonic::transport::Channel;
 
+use crate::runtime::advanced_options::ResourceLimits;
 use crate::volumes::ContainerMount;
 
 /// Container rootfs initialization strategy.
@@ -99,12 +100,34 @@ impl ContainerInterface {
         rootfs: ContainerRootfsInitConfig,
         mounts: Vec<ContainerMount>,
         ca_certs: Vec<String>,
+        resource_limits: &ResourceLimits,
     ) -> BoxliteResult<String> {
+        let proto_resource_limits = {
+            let rl = resource_limits;
+            if rl.max_open_files.is_some()
+                || rl.max_processes.is_some()
+                || rl.max_file_size.is_some()
+                || rl.max_memory.is_some()
+                || rl.max_cpu_time.is_some()
+            {
+                Some(ContainerResourceLimits {
+                    max_open_files: rl.max_open_files,
+                    max_processes: rl.max_processes,
+                    max_file_size: rl.max_file_size,
+                    max_memory: rl.max_memory,
+                    max_cpu_time: rl.max_cpu_time,
+                })
+            } else {
+                None
+            }
+        };
+
         let proto_config = ProtoContainerConfig {
             entrypoint: image_config.final_cmd(),
             env: image_config.env.clone(),
             workdir: image_config.working_dir.clone(),
             user: image_config.user.clone(),
+            resource_limits: proto_resource_limits,
         };
 
         // Convert ContainerMount to proto BindMount

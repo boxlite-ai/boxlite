@@ -32,7 +32,7 @@ mod tests {
 
         let binary = Path::new("/usr/bin/boxlite-shim");
         let args = vec!["--listen".to_string(), "vsock://2:2695".to_string()];
-        let cmd = jail.command(binary, &args);
+        let cmd = jail.command(binary, &args).unwrap();
 
         // Direct command: program IS the binary itself
         assert_eq!(cmd.get_program(), binary);
@@ -42,9 +42,10 @@ mod tests {
         assert_eq!(cmd_args, &["--listen", "vsock://2:2695"]);
     }
 
-    /// When `jailer_enabled=true`, on macOS (with sandbox-exec) or Linux (with bwrap),
-    /// the program should NOT be the binary directly — it should be wrapped.
-    /// On platforms without a sandbox, it falls back to direct.
+    /// When `jailer_enabled=true`, command() succeeds only when the platform sandbox
+    /// is available. On platforms where bwrap/sandbox-exec is present, the binary
+    /// is wrapped. On platforms without any sandbox, command() returns an error —
+    /// failing open is not an option when isolation was requested.
     #[test]
     fn test_command_jailer_enabled_wraps_binary() {
         let security = SecurityOptions {
@@ -60,30 +61,46 @@ mod tests {
 
         let binary = Path::new("/usr/bin/boxlite-shim");
         let args = vec!["--listen".to_string()];
-        let cmd = jail.command(binary, &args);
+        let result = jail.command(binary, &args);
 
-        // On macOS: should be "sandbox-exec" (if available) or binary (fallback)
-        // On Linux: should be "bwrap" (if available) or binary (fallback)
-        // On other: always direct (binary)
-        // We can't assert the exact program without knowing the platform,
-        // but we verify the command was constructed without panics.
-        let _program = cmd.get_program();
+        // On Linux/macOS (where bwrap/sandbox-exec is available): command succeeds.
+        // On other platforms (no sandbox): command returns an error rather than
+        // falling back silently to an un-isolated direct command.
+        if jail.sandbox_available() {
+            assert!(result.is_ok(), "Expected Ok when sandbox is available");
+        } else {
+            assert!(
+                result.is_err(),
+                "Expected Err when sandbox is unavailable and jailer_enabled=true"
+            );
+        }
     }
 
-    /// Verify that NoopSandbox produces a direct command.
+    /// Verify that NoopSandbox with jailer disabled produces a direct command.
+    /// NoopSandbox.is_available() is always false; when jailer_enabled=false the
+    /// availability check is skipped and the direct command is returned as expected.
     #[test]
     fn test_noop_sandbox_produces_direct_command() {
         use crate::jailer::NoopSandbox;
+        use crate::runtime::advanced_options::SecurityOptions;
+
+        // Explicitly disable the jailer so the NoopSandbox availability check is skipped.
+        let security = SecurityOptions {
+            jailer_enabled: false,
+            ..SecurityOptions::default()
+        };
 
         let jail = JailerBuilder::new()
             .with_box_id("test-box")
             .with_layout(test_layout("/tmp/test-box"))
+            .with_security(security)
             .build_with(NoopSandbox::new())
             .unwrap();
 
         let binary = Path::new("/usr/bin/boxlite-shim");
         let args = vec!["--arg1".to_string()];
-        let cmd = jail.command(binary, &args);
+        // jailer_enabled=false → availability not checked → Ok(direct command)
+        let cmd = jail.command(binary, &args).unwrap();
 
         assert_eq!(cmd.get_program(), binary);
         let cmd_args: Vec<_> = cmd.get_args().collect();
@@ -103,7 +120,8 @@ mod tests {
             .unwrap();
 
         let binary = Path::new("/usr/bin/boxlite-shim");
-        let cmd = jail.command(binary, &[]);
+        // jailer_enabled=false → no sandbox check → always succeeds
+        let cmd = jail.command(binary, &[]).unwrap();
 
         // Development preset → jailer_enabled=false → direct command
         assert_eq!(cmd.get_program(), binary);
@@ -190,16 +208,18 @@ mod tests {
             .build_with(sandbox)
             .unwrap();
 
-        // Trigger command() which calls context() internally
-        let _cmd = jail.command(Path::new("/usr/bin/shim"), &[]);
+        // Trigger command() which calls context() internally.
+        // CaptureSandbox.is_available() returns true, so this must succeed.
+        let _cmd = jail.command(Path::new("/usr/bin/shim"), &[]).unwrap();
 
         // Verify the context translation
         assert_eq!(captured_id.lock().unwrap().as_deref(), Some("ctx-test-box"));
         assert_eq!(*captured_network.lock().unwrap(), Some(false));
     }
 
-    /// When jailer_enabled=true, command() must pre-create logs_dir, exit file,
-    /// and console.log before the sandbox is activated.
+    /// When jailer_enabled=true and the platform sandbox is available, command() must
+    /// pre-create logs_dir, exit file, and console.log before the sandbox is activated.
+    /// When the sandbox is unavailable, command() returns Err and no files are created.
     #[test]
     fn test_command_precreates_logs_dir_and_files() {
         use tempfile::tempdir;
@@ -224,20 +244,62 @@ mod tests {
         assert!(!layout.exit_file_path().exists());
         assert!(!layout.console_output_path().exists());
 
-        let _cmd = jail.command(Path::new("/usr/bin/boxlite-shim"), &[]);
+        let result = jail.command(Path::new("/usr/bin/boxlite-shim"), &[]);
 
-        // After command(), pre-created files must exist
+        if jail.sandbox_available() {
+            // Sandbox available: command succeeds and must pre-create files.
+            assert!(result.is_ok(), "Expected Ok when sandbox is available");
+            assert!(
+                layout.logs_dir().exists() && layout.logs_dir().is_dir(),
+                "logs_dir should be pre-created as directory"
+            );
+            assert!(
+                layout.exit_file_path().exists() && layout.exit_file_path().is_file(),
+                "exit file should be pre-created"
+            );
+            assert!(
+                layout.console_output_path().exists() && layout.console_output_path().is_file(),
+                "console.log should be pre-created"
+            );
+        } else {
+            // Sandbox unavailable: command must fail closed (no silent bypass).
+            assert!(
+                result.is_err(),
+                "Expected Err when jailer_enabled=true but sandbox is unavailable"
+            );
+        }
+    }
+
+    /// When jailer_enabled=true and the sandbox is unavailable, command() must return
+    /// an error rather than silently running the process without isolation.
+    #[test]
+    fn test_command_fails_closed_when_jailer_enabled_sandbox_unavailable() {
+        use crate::jailer::NoopSandbox;
+
+        // NoopSandbox.is_available() always returns false — simulates a runner
+        // where bwrap/sandbox-exec is missing. With jailer_enabled=true the
+        // policy service has stored and promised isolation; running without it
+        // is a silent security bypass. command() must refuse.
+        let security = SecurityOptions {
+            jailer_enabled: true,
+            ..SecurityOptions::default()
+        };
+        let jail = JailerBuilder::new()
+            .with_box_id("fail-closed-test")
+            .with_layout(test_layout("/tmp/fail-closed"))
+            .with_security(security)
+            .build_with(NoopSandbox::new())
+            .unwrap();
+
+        let result = jail.command(Path::new("/usr/bin/boxlite-shim"), &[]);
         assert!(
-            layout.logs_dir().exists() && layout.logs_dir().is_dir(),
-            "logs_dir should be pre-created as directory"
+            result.is_err(),
+            "command() must fail closed when jailer_enabled=true and sandbox is unavailable"
         );
+        let err_msg = result.unwrap_err().to_string();
         assert!(
-            layout.exit_file_path().exists() && layout.exit_file_path().is_file(),
-            "exit file should be pre-created"
-        );
-        assert!(
-            layout.console_output_path().exists() && layout.console_output_path().is_file(),
-            "console.log should be pre-created"
+            err_msg.contains("noop") || err_msg.contains("not available"),
+            "error message should identify the unavailable sandbox: {err_msg}"
         );
     }
 
@@ -261,7 +323,10 @@ mod tests {
             .build()
             .unwrap();
 
-        let _cmd = jail.command(Path::new("/usr/bin/boxlite-shim"), &[]);
+        // jailer_enabled=false → no sandbox check → always succeeds
+        let _cmd = jail
+            .command(Path::new("/usr/bin/boxlite-shim"), &[])
+            .unwrap();
 
         // Nothing should be created when jailer is disabled
         assert!(

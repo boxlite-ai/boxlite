@@ -17,6 +17,7 @@ default = []
 [dependencies]
 boxlite = { workspace = true, features = ["rest"] }
 futures = "0.3"
+serde_json = "1.0"
 tokio = { version = "1.37", features = ["rt", "rt-multi-thread"] }
 
 [dev-dependencies]

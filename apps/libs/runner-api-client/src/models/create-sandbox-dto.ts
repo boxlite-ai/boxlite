@@ -152,4 +152,33 @@ export interface CreateSandboxDTO {
      * @memberof CreateSandboxDTO
      */
     'volumes'?: Array<DtoVolumeDTO>;
+    /**
+     * Security isolation options (effectiveSecurityOptions from apps/api).
+     * Field names use snake_case to match Rust SecurityOptions serde fields.
+     * @type {object}
+     * @memberof CreateSandboxDTO
+     */
+    'security'?: {
+        preset?: string;
+        jailer_enabled?: boolean;
+        seccomp_enabled?: boolean;
+        uid?: number;
+        gid?: number;
+        new_pid_ns?: boolean;
+        new_net_ns?: boolean;
+        chroot_base?: string;
+        chroot_enabled?: boolean;
+        close_fds?: boolean;
+        sanitize_env?: boolean;
+        env_allowlist?: string[];
+        resource_limits?: {
+            max_open_files?: number;
+            max_file_size?: number;
+            max_processes?: number;
+            max_memory?: number;
+            max_cpu_time?: number;
+        };
+        sandbox_profile?: string;
+        network_enabled?: boolean;
+    };
 }

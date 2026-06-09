@@ -81,4 +81,6 @@ pub(crate) use command::SpawnResult;
 #[cfg(target_os = "linux")]
 pub use lifecycle::Container;
 #[cfg(target_os = "linux")]
+pub(crate) use spec::ResourceLimits;
+#[cfg(target_os = "linux")]
 pub use spec::UserMount;

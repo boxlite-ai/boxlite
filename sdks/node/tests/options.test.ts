@@ -80,6 +80,85 @@ describe("SimpleBoxOptions", () => {
     expect(opts.security?.maxOpenFiles).toBe(1024);
   });
 
+  test("accepts all SecurityOptions fields", () => {
+    const opts: SimpleBoxOptions = {
+      security: {
+        jailerEnabled: true,
+        seccompEnabled: true,
+        uid: 1000,
+        gid: 1000,
+        newPidNs: true,
+        newNetNs: false,
+        chrootBase: "/srv/boxlite",
+        chrootEnabled: true,
+        closeFds: true,
+        sanitizeEnv: true,
+        envAllowlist: ["PATH", "HOME"],
+        maxOpenFiles: 256,
+        maxFileSize: 1073741824,
+        maxProcesses: 10,
+        maxMemory: 536870912,
+        maxCpuTime: 60,
+        networkEnabled: true,
+        sandboxProfile: "/etc/boxlite/sandbox.sb",
+      },
+    };
+
+    expect(opts.security?.uid).toBe(1000);
+    expect(opts.security?.gid).toBe(1000);
+    expect(opts.security?.newPidNs).toBe(true);
+    expect(opts.security?.newNetNs).toBe(false);
+    expect(opts.security?.chrootBase).toBe("/srv/boxlite");
+    expect(opts.security?.chrootEnabled).toBe(true);
+    expect(opts.security?.closeFds).toBe(true);
+    expect(opts.security?.sanitizeEnv).toBe(true);
+    expect(opts.security?.envAllowlist).toEqual(["PATH", "HOME"]);
+    expect(opts.security?.maxOpenFiles).toBe(256);
+    expect(opts.security?.maxFileSize).toBe(1073741824);
+    expect(opts.security?.maxProcesses).toBe(10);
+    expect(opts.security?.maxMemory).toBe(536870912);
+    expect(opts.security?.maxCpuTime).toBe(60);
+    expect(opts.security?.networkEnabled).toBe(true);
+    expect(opts.security?.sandboxProfile).toBe("/etc/boxlite/sandbox.sb");
+  });
+
+  test("security options defaults to undefined", () => {
+    const opts: SimpleBoxOptions = {};
+    expect(opts.security).toBeUndefined();
+  });
+
+  test("security jailerEnabled defaults to undefined", () => {
+    const opts: SimpleBoxOptions = { security: {} };
+    expect(opts.security?.jailerEnabled).toBeUndefined();
+  });
+
+  test("sanitizeEnv with empty envAllowlist", () => {
+    const opts: SimpleBoxOptions = {
+      security: {
+        sanitizeEnv: true,
+        envAllowlist: [],
+      },
+    };
+    expect(opts.security?.sanitizeEnv).toBe(true);
+    expect(opts.security?.envAllowlist).toEqual([]);
+  });
+
+  test("security options combine with other box options", () => {
+    const opts: SimpleBoxOptions = {
+      image: "alpine:latest",
+      memoryMib: 512,
+      cpus: 2,
+      security: {
+        jailerEnabled: true,
+        maxOpenFiles: 512,
+      },
+    };
+    expect(opts.security?.jailerEnabled).toBe(true);
+    expect(opts.security?.maxOpenFiles).toBe(512);
+    expect(opts.memoryMib).toBe(512);
+    expect(opts.cpus).toBe(2);
+  });
+
   test("cmd and user can be combined with other options", () => {
     const opts: SimpleBoxOptions = {
       image: "python:slim",

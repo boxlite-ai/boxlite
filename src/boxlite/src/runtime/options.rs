@@ -530,10 +530,40 @@ impl BoxOptions {
         Ok(())
     }
 
-    /// Set security options (convenience for `advanced.security`).
+    /// Set security options and mark them as explicitly configured.
+    ///
+    /// This is the correct way to configure security when using the REST backend.
+    /// It sets `advanced.security` to `Some(security)` so the REST layer forwards
+    /// the field to the API, enabling v2-runner enforcement.
+    ///
+    /// When `advanced.security` is `None` (the default), the REST layer omits the
+    /// security field from the API request to avoid unintended warm-pool bypass.
+    ///
+    /// Direct field assignment (`opts.advanced.security = Some(...)`) also works and
+    /// is equivalent. `None` means "use server defaults, don't send to API"; any
+    /// `Some(...)` value is forwarded as-is.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use boxlite::runtime::options::BoxOptions;
+    /// use boxlite::runtime::advanced_options::SecurityOptions;
+    ///
+    /// let opts = BoxOptions::default().with_security(SecurityOptions::maximum());
+    /// assert!(opts.security_explicit());
+    /// ```
     pub fn with_security(mut self, security: SecurityOptions) -> Self {
-        self.advanced.security = security;
+        self.advanced = self.advanced.with_security(security);
         self
+    }
+
+    /// Returns `true` if security options were explicitly configured by the caller.
+    ///
+    /// When `false` (`advanced.security` is `None`), the REST layer omits the
+    /// security field from the API request to avoid unintended warm-pool bypass and
+    /// v2-runner enforcement.
+    pub fn security_explicit(&self) -> bool {
+        self.advanced.security.is_some()
     }
 }
 

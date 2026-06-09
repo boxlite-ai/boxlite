@@ -469,6 +469,7 @@ dependencies = [
  "boxlite",
  "cbindgen",
  "futures",
+ "serde_json",
  "tokio",
 ]
 
@@ -528,6 +529,7 @@ dependencies = [
  "boxlite-shared",
  "clap",
  "futures",
+ "libc",
  "libcontainer",
  "nix 0.29.0",
  "oci-spec 0.6.7",

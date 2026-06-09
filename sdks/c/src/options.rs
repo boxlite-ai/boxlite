@@ -1,5 +1,6 @@
 use std::os::raw::{c_char, c_int};
 
+use boxlite::runtime::advanced_options::SecurityOptions;
 use boxlite::runtime::options::{
     BoxOptions, NetworkSpec, PortProtocol, PortSpec, RootfsSpec, Secret, VolumeSpec,
 };
@@ -145,6 +146,24 @@ pub unsafe extern "C" fn boxlite_options_set_cmd(
     argc: c_int,
 ) {
     options_set_cmd(opts, args, argc)
+}
+
+/// Set security options from a JSON string.
+///
+/// Returns `true` on success, `false` if the JSON is malformed or contains
+/// unrecognised fields that prevent parsing into `SecurityOptions`.
+///
+/// The `preset` key is not a native `SecurityOptions` wire field; this function
+/// expands it to concrete fields (matching the Go SDK's `presetDefaults()`)
+/// before deserializing, so `{"preset":"maximum"}` is equivalent to passing
+/// the full maximum-isolation field set.  Unknown fields other than `preset`
+/// cause the function to return `false`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_security_json(
+    opts: *mut CBoxliteOptions,
+    security_json: *const c_char,
+) -> bool {
+    options_set_security_json(opts, security_json)
 }
 
 #[unsafe(no_mangle)]
@@ -404,6 +423,110 @@ pub unsafe fn options_set_cmd(handle: *mut OptionsHandle, args: *const *const c_
     }
 }
 
+/// Expand a named preset string into concrete `SecurityOptions` fields.
+///
+/// Returns `true` if the preset is recognised and expanded, `false` if the
+/// preset string is unknown.  Callers must treat `false` as a hard error so
+/// that typos (e.g. `"maximun"`) are rejected rather than silently falling
+/// through to "standard" defaults — a false security signal at the FFI boundary.
+///
+/// Mirrors Go SDK's `presetDefaults()` so callers using `{"preset":"maximum"}`
+/// receive the same concrete isolation settings whether they use Go or C.
+fn expand_security_preset(
+    preset: &str,
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+) -> bool {
+    use serde_json::{Value, json};
+    // Inject only the keys that are NOT already present — explicit caller fields win.
+    let defaults: &[(&str, Value)] = match preset {
+        "development" => &[
+            ("jailer_enabled", json!(false)),
+            ("seccomp_enabled", json!(false)),
+            ("close_fds", json!(false)),
+            ("sanitize_env", json!(false)),
+            ("network_enabled", json!(true)),
+        ],
+        "maximum" => &[
+            ("jailer_enabled", json!(true)),
+            ("seccomp_enabled", json!(true)),
+            ("close_fds", json!(true)),
+            ("sanitize_env", json!(true)),
+            ("network_enabled", json!(true)),
+            (
+                "resource_limits",
+                json!({
+                    "max_open_files": 1024_u64,
+                    "max_file_size":  1_073_741_824_u64,
+                    "max_processes":  100_u64
+                }),
+            ),
+        ],
+        "standard" => &[
+            ("jailer_enabled", json!(true)),
+            ("seccomp_enabled", json!(false)),
+            ("close_fds", json!(true)),
+            ("sanitize_env", json!(true)),
+            ("network_enabled", json!(true)),
+        ],
+        // Unknown preset — reject explicitly rather than silently applying standard defaults.
+        // Any unrecognised string is a caller error (e.g. a typo), not a preset.
+        _ => return false,
+    };
+    for (key, value) in defaults {
+        obj.entry(*key).or_insert_with(|| value.clone());
+    }
+    true
+}
+
+#[allow(clippy::collapsible_if)]
+pub unsafe fn options_set_security_json(
+    handle: *mut OptionsHandle,
+    security_json: *const c_char,
+) -> bool {
+    unsafe {
+        if handle.is_null() || security_json.is_null() {
+            return false;
+        }
+        let json_str = match c_str_to_string(security_json) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+
+        // Parse as a generic JSON object first so we can inspect and expand the
+        // "preset" key before deserializing into SecurityOptions.  The Rust
+        // SecurityOptions struct has no preset field; passing the key through
+        // would be silently ignored by serde (no deny_unknown_fields), but the
+        // caller would receive default isolation rather than the requested preset.
+        let mut obj: serde_json::Map<String, serde_json::Value> =
+            match serde_json::from_str(&json_str) {
+                Ok(serde_json::Value::Object(m)) => m,
+                _ => return false,
+            };
+
+        // If a preset is specified, expand it into concrete fields.
+        // Explicit caller fields are preserved (they take precedence over preset defaults).
+        // Unrecognised presets are rejected — returning false surfaces the caller's typo
+        // rather than silently applying standard defaults (a false security signal).
+        if let Some(serde_json::Value::String(preset)) = obj.remove("preset") {
+            if !expand_security_preset(&preset, &mut obj) {
+                return false;
+            }
+        }
+
+        let expanded_value = serde_json::Value::Object(obj);
+        match serde_json::from_value::<SecurityOptions>(expanded_value) {
+            Ok(security) => {
+                // Take the options out, call with_security (which sets security_explicit),
+                // then put them back so the REST layer forwards the field.
+                let owned = std::mem::take(&mut (*handle).options);
+                (*handle).options = owned.with_security(security);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+}
+
 pub unsafe fn options_free(handle: *mut OptionsHandle) {
     if !handle.is_null() {
         unsafe {
@@ -431,4 +554,203 @@ fn parse_c_string_array(args: *const *const c_char, argc: c_int) -> Vec<String> 
     }
 
     values
+}
+
+#[cfg(test)]
+mod security_json_tests {
+    use super::*;
+    use std::ffi::CString;
+
+    unsafe fn make_options() -> *mut OptionsHandle {
+        let image = CString::new("alpine:latest").unwrap();
+        let mut opts: *mut OptionsHandle = std::ptr::null_mut();
+        let mut err = crate::error::FFIError::default();
+        let code = options_new(image.as_ptr(), &mut opts, &mut err);
+        assert_eq!(code, BoxliteErrorCode::Ok, "options_new failed");
+        opts
+    }
+
+    #[test]
+    fn returns_false_for_malformed_json() {
+        unsafe {
+            let handle = make_options();
+            let bad = CString::new("{not valid json").unwrap();
+            let ok = options_set_security_json(handle, bad.as_ptr());
+            assert!(!ok, "malformed JSON should return false");
+            options_free(handle);
+        }
+    }
+
+    #[test]
+    fn returns_false_for_null_handle() {
+        unsafe {
+            let json = CString::new(r#"{"jailer_enabled":true}"#).unwrap();
+            let ok = options_set_security_json(std::ptr::null_mut(), json.as_ptr());
+            assert!(!ok, "null handle should return false");
+        }
+    }
+
+    #[test]
+    fn returns_false_for_null_json() {
+        unsafe {
+            let handle = make_options();
+            let ok = options_set_security_json(handle, std::ptr::null());
+            assert!(!ok, "null JSON should return false");
+            options_free(handle);
+        }
+    }
+
+    #[test]
+    fn maximum_preset_sets_jailer_and_seccomp() {
+        // {"preset":"maximum"} must expand to jailer_enabled=true, seccomp_enabled=true.
+        // Before the fix, serde silently ignored the unknown "preset" field and returned
+        // platform defaults — jailer_enabled depended on cfg!, seccomp_enabled was false.
+        unsafe {
+            let handle = make_options();
+            let json = CString::new(r#"{"preset":"maximum"}"#).unwrap();
+            let ok = options_set_security_json(handle, json.as_ptr());
+            assert!(ok, "maximum preset should parse successfully");
+            let security = (*handle).options.advanced.security().clone();
+            assert!(security.jailer_enabled, "maximum preset must enable jailer");
+            assert!(
+                security.seccomp_enabled,
+                "maximum preset must enable seccomp"
+            );
+            assert!(security.close_fds, "maximum preset must enable close_fds");
+            assert!(
+                security.sanitize_env,
+                "maximum preset must enable sanitize_env"
+            );
+            assert!(
+                security.resource_limits.max_open_files.is_some(),
+                "maximum preset must set max_open_files"
+            );
+            options_free(handle);
+        }
+    }
+
+    #[test]
+    fn development_preset_disables_jailer_and_seccomp() {
+        unsafe {
+            let handle = make_options();
+            let json = CString::new(r#"{"preset":"development"}"#).unwrap();
+            let ok = options_set_security_json(handle, json.as_ptr());
+            assert!(ok, "development preset should parse successfully");
+            let security = (*handle).options.advanced.security().clone();
+            assert!(
+                !security.jailer_enabled,
+                "development preset must disable jailer"
+            );
+            assert!(
+                !security.seccomp_enabled,
+                "development preset must disable seccomp"
+            );
+            assert!(
+                !security.close_fds,
+                "development preset must disable close_fds"
+            );
+            assert!(
+                !security.sanitize_env,
+                "development preset must disable sanitize_env"
+            );
+            options_free(handle);
+        }
+    }
+
+    #[test]
+    fn explicit_field_overrides_preset() {
+        // When both preset and explicit field are present, explicit field wins.
+        // {"preset":"maximum","jailer_enabled":false} must leave jailer_enabled=false.
+        unsafe {
+            let handle = make_options();
+            let json = CString::new(r#"{"preset":"maximum","jailer_enabled":false}"#).unwrap();
+            let ok = options_set_security_json(handle, json.as_ptr());
+            assert!(
+                ok,
+                "preset with explicit override should parse successfully"
+            );
+            let security = (*handle).options.advanced.security().clone();
+            // The explicit jailer_enabled=false takes precedence over maximum's true.
+            assert!(
+                !security.jailer_enabled,
+                "explicit jailer_enabled=false must override preset"
+            );
+            // Other maximum fields are still expanded.
+            assert!(
+                security.seccomp_enabled,
+                "seccomp_enabled comes from maximum preset"
+            );
+            options_free(handle);
+        }
+    }
+
+    #[test]
+    fn concrete_json_without_preset_still_works() {
+        unsafe {
+            let handle = make_options();
+            let json = CString::new(r#"{"jailer_enabled":true,"seccomp_enabled":false}"#).unwrap();
+            let ok = options_set_security_json(handle, json.as_ptr());
+            assert!(
+                ok,
+                "concrete security JSON without preset should parse successfully"
+            );
+            let security = (*handle).options.advanced.security().clone();
+            assert!(security.jailer_enabled);
+            assert!(!security.seccomp_enabled);
+            options_free(handle);
+        }
+    }
+
+    #[test]
+    fn security_explicit_is_set_after_successful_parse() {
+        // options_set_security_json must call with_security() which sets security_explicit=true
+        // so the REST layer forwards the security field in the API request.
+        unsafe {
+            let handle = make_options();
+            let json = CString::new(r#"{"preset":"standard"}"#).unwrap();
+            let ok = options_set_security_json(handle, json.as_ptr());
+            assert!(ok);
+            assert!(
+                (*handle).options.security_explicit(),
+                "security_explicit must be true after set_security_json succeeds"
+            );
+            options_free(handle);
+        }
+    }
+
+    #[test]
+    fn returns_false_for_camelcase_unknown_field() {
+        // Regression: {"seccompEnabled": true} uses camelCase instead of snake_case.
+        // Without deny_unknown_fields, serde silently drops the unknown key and returns
+        // a SecurityOptions with seccomp_enabled=false — a false security signal.
+        // The FFI boundary must reject unknown fields and return false.
+        unsafe {
+            let handle = make_options();
+            let json = CString::new(r#"{"seccompEnabled": true}"#).unwrap();
+            let ok = options_set_security_json(handle, json.as_ptr());
+            assert!(
+                !ok,
+                "camelCase key seccompEnabled is unknown — must return false, not silently ignore it"
+            );
+            options_free(handle);
+        }
+    }
+
+    #[test]
+    fn returns_false_for_unknown_preset() {
+        // Regression: {"preset": "maximun"} is a typo for "maximum".
+        // Without explicit rejection, expand_security_preset falls through to the "standard"
+        // arm and returns true — a false security signal (caller gets standard, not maximum).
+        // The FFI boundary must reject unrecognised presets and return false.
+        unsafe {
+            let handle = make_options();
+            let json = CString::new(r#"{"preset": "maximun"}"#).unwrap();
+            let ok = options_set_security_json(handle, json.as_ptr());
+            assert!(
+                !ok,
+                "unknown preset 'maximun' must return false, not silently apply standard"
+            );
+            options_free(handle);
+        }
+    }
 }

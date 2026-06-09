@@ -523,6 +523,18 @@ void boxlite_options_set_entrypoint(CBoxliteOptions *opts, const char *const *ar
 
 void boxlite_options_set_cmd(CBoxliteOptions *opts, const char *const *args, int argc);
 
+// Set security options from a JSON string.
+//
+// Returns `true` on success, `false` if the JSON is malformed or contains
+// unrecognised fields that prevent parsing into `SecurityOptions`.
+//
+// The `preset` key is not a native `SecurityOptions` wire field; this function
+// expands it to concrete fields (matching the Go SDK's `presetDefaults()`)
+// before deserializing, so `{"preset":"maximum"}` is equivalent to passing
+// the full maximum-isolation field set.  Unknown fields other than `preset`
+// cause the function to return `false`.
+bool boxlite_options_set_security_json(CBoxliteOptions *opts, const char *security_json);
+
 void boxlite_options_free(CBoxliteOptions *opts);
 
 // Create an API-key credential.

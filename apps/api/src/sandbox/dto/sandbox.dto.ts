@@ -277,6 +277,16 @@ export class SandboxDto {
   })
   toolboxProxyUrl: string
 
+  @ApiPropertyOptional({
+    description: 'Effective security options applied to this sandbox, including policy normalization result',
+    required: false,
+  })
+  effectiveSecurity?: {
+    requestedSecurityOptions?: Record<string, unknown>
+    effectiveSecurityOptions?: Record<string, unknown>
+    securityPolicyResult?: Record<string, unknown>
+  }
+
   static fromSandbox(sandbox: Sandbox, toolboxProxyUrl: string): SandboxDto {
     return {
       id: sandbox.id,
@@ -319,6 +329,14 @@ export class SandboxDto {
       daemonVersion: sandbox.daemonVersion,
       runnerId: sandbox.runnerId,
       toolboxProxyUrl,
+      effectiveSecurity:
+        sandbox.effectiveSecurityOptions || sandbox.requestedSecurityOptions || sandbox.securityPolicyResult
+          ? {
+              requestedSecurityOptions: sandbox.requestedSecurityOptions ?? undefined,
+              effectiveSecurityOptions: sandbox.effectiveSecurityOptions ?? undefined,
+              securityPolicyResult: sandbox.securityPolicyResult ?? undefined,
+            }
+          : undefined,
     }
   }
 

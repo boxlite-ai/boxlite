@@ -2,10 +2,49 @@
 
 use super::Jailer;
 use super::sandbox::{PlatformSandbox, Sandbox};
+use crate::jailer::ConfigError;
 use crate::runtime::advanced_options::SecurityOptions;
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::options::VolumeSpec;
 use std::os::fd::RawFd;
+
+/// Validate security options before building the jailer.
+///
+/// Returns an error for options that cannot be honored at runtime.
+/// Emits warnings for options that are accepted but not yet enforced.
+fn validate_security_options(security: &SecurityOptions) -> Result<(), crate::jailer::JailerError> {
+    // new_net_ns=true is incompatible with gvproxy networking (which always requires
+    // the host network namespace). Callers must set new_net_ns=false (the default).
+    if security.new_net_ns {
+        return Err(ConfigError::InvalidConfig(
+            "new_net_ns=true is not supported: gvproxy VM networking requires the host \
+             network namespace. Set new_net_ns=false (the default)."
+                .to_string(),
+        )
+        .into());
+    }
+
+    // uid/gid privilege dropping is defined in SecurityOptions but not yet implemented
+    // in the jailer pre_exec path. Log a warning so callers can discover the gap.
+    if security.uid.is_some() || security.gid.is_some() {
+        tracing::warn!(
+            uid = ?security.uid,
+            gid = ?security.gid,
+            "SecurityOptions uid/gid privilege dropping is not yet implemented; \
+             the shim will run with the parent process credentials"
+        );
+    }
+
+    // seccomp_enabled is accepted but the syscall filter is not yet applied.
+    if security.seccomp_enabled {
+        tracing::warn!(
+            "SecurityOptions seccomp_enabled=true is not yet enforced; \
+             no syscall filter will be applied"
+        );
+    }
+
+    Ok(())
+}
 
 /// Builder for constructing a [`Jailer`].
 ///
@@ -135,7 +174,8 @@ impl JailerBuilder {
     /// # Errors
     ///
     /// Returns [`JailerError::Config`](super::JailerError) with
-    /// [`ConfigError::InvalidConfig`](super::ConfigError) if `box_id` or `layout` was not set.
+    /// [`ConfigError::InvalidConfig`](super::ConfigError) if `box_id` or `layout` was not set,
+    /// or if security options contain values that cannot be honored at runtime.
     pub fn build_with<S: Sandbox>(
         self,
         sandbox: S,
@@ -147,6 +187,8 @@ impl JailerBuilder {
         let layout = self.layout.ok_or_else(|| {
             crate::jailer::ConfigError::InvalidConfig("layout is required".to_string())
         })?;
+
+        validate_security_options(&self.security)?;
 
         Ok(Jailer {
             sandbox,
@@ -263,5 +305,57 @@ mod tests {
             .expect("Should build with custom sandbox");
 
         assert_eq!(jailer.box_id(), "test-box");
+    }
+
+    #[test]
+    fn test_validate_new_net_ns_rejected() {
+        use crate::runtime::advanced_options::SecurityOptions;
+
+        let security = SecurityOptions {
+            new_net_ns: true,
+            ..SecurityOptions::default()
+        };
+        let result = JailerBuilder::new()
+            .with_box_id("test-box")
+            .with_layout(test_layout("/tmp/box"))
+            .with_security(security)
+            .build();
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("new_net_ns"));
+    }
+
+    #[test]
+    fn test_validate_uid_gid_warns_but_succeeds() {
+        use crate::runtime::advanced_options::SecurityOptions;
+
+        // uid/gid are accepted (with a warning) — they don't cause build failure
+        let security = SecurityOptions {
+            uid: Some(1000),
+            gid: Some(1000),
+            ..SecurityOptions::default()
+        };
+        let result = JailerBuilder::new()
+            .with_box_id("test-box")
+            .with_layout(test_layout("/tmp/box"))
+            .with_security(security)
+            .build();
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_maximum_preset_succeeds() {
+        use crate::runtime::advanced_options::SecurityOptions;
+
+        // SecurityOptions::maximum() sets uid/gid/new_pid_ns but not new_net_ns=true.
+        // It must build successfully.
+        let result = JailerBuilder::new()
+            .with_box_id("test-box")
+            .with_layout(test_layout("/tmp/box"))
+            .with_security(SecurityOptions::maximum())
+            .build();
+
+        assert!(result.is_ok());
     }
 }

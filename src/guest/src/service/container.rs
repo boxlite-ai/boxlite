@@ -14,7 +14,7 @@ use nix::mount::{mount, MsFlags};
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
 
-use crate::container::{Container, UserMount};
+use crate::container::{Container, ResourceLimits, UserMount};
 use crate::layout::GuestLayout;
 use crate::storage::block_device::BlockDeviceMount;
 
@@ -239,6 +239,18 @@ impl ContainerService for GuestServer {
             "Container configuration"
         );
 
+        // Convert proto resource limits to guest ResourceLimits
+        let resource_limits = match config.resource_limits {
+            Some(rl) => ResourceLimits {
+                max_open_files: rl.max_open_files,
+                max_processes: rl.max_processes,
+                max_file_size: rl.max_file_size,
+                max_memory: rl.max_memory,
+                max_cpu_time: rl.max_cpu_time,
+            },
+            None => ResourceLimits::default(),
+        };
+
         // Start container using OCI bundle rootfs
         // Container init process uses pipe-based stdio to stay alive indefinitely.
         // boxlite-guest holds the write-end of stdin pipe open, so init blocks on read() forever.
@@ -255,6 +267,7 @@ impl ContainerService for GuestServer {
             &config.workdir,
             &config.user,
             user_mounts,
+            resource_limits,
         ) {
             Ok(mut container) => {
                 debug!(container_id = %container_id, "Container started, checking if init process is running");

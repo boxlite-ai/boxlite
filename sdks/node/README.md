@@ -219,6 +219,39 @@ console.log(box.info()); // Metadata
 await box.stop();
 ```
 
+**Security options** — pass a `SecurityOptions` object to control isolation:
+
+```typescript
+import { SimpleBox, SecurityOptions } from 'boxlite';
+
+// Named preset
+const box1 = new SimpleBox({
+  image: 'python:slim',
+  security: { preset: 'standard' },
+});
+
+// Custom isolation
+const box2 = new SimpleBox({
+  image: 'python:slim',
+  security: {
+    jailerEnabled: true,
+    sanitizeEnv: true,
+    envAllowlist: ['PATH', 'HOME'],
+    resourceLimits: {
+      maxOpenFiles: 1024,
+      maxProcesses: 100,
+    },
+  } satisfies SecurityOptions,
+});
+```
+
+`SecurityOptions` fields (all optional): `preset`, `jailerEnabled`, `seccompEnabled`,
+`uid`, `gid`, `newPidNs`, `newNetNs`, `chrootBase`, `chrootEnabled`, `closeFds`,
+`sanitizeEnv`, `envAllowlist`, `resourceLimits`, `sandboxProfile`, `networkEnabled`.
+
+`SecurityResourceLimits` fields (all optional numbers): `maxOpenFiles`, `maxFileSize`,
+`maxProcesses`, `maxMemory`, `maxCpuTime`.
+
 ### Runtime Image Management
 
 ```typescript

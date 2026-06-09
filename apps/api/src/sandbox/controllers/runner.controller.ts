@@ -120,6 +120,7 @@ export class RunnerController {
       regionId: createRunnerDto.regionId,
       name: createRunnerDto.name,
       apiVersion: '2',
+      supportsSecurityOptions: createRunnerDto.supportsSecurityOptions,
     })
 
     return CreateRunnerResponseDto.fromRunner(runner, apiKey)
