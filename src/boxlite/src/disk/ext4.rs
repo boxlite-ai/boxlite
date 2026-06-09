@@ -103,17 +103,17 @@ struct WidenedPerm {
 /// `/etc/gshadow` in RHEL UBI images) is denied because POSIX consults only the
 /// owner-class bits, which have no read bit. `chmod` is authorized by *ownership*
 /// (not the read bit), and unprivileged OCI extraction leaves every file owned by
-/// the current user, so the widen always succeeds. The original modes are returned
-/// so the caller can restore them — both on the source tree and, authoritatively,
-/// inside the image via debugfs: `mke2fs` records the *widened* mode, so the image
-/// must be corrected afterward.
+/// the current user, so the widen always succeeds. Each widened entry's original
+/// mode is appended to `widened` so the caller can restore it — both on the source
+/// tree and, authoritatively, inside the image via debugfs: `mke2fs` records the
+/// *widened* mode, so the image must be corrected afterward.
 ///
-/// Walks top-down: a `0000` directory cannot be listed until its own owner
-/// read+search bits are restored, so each directory is widened before descent.
-fn widen_unreadable_owner(source: &Path) -> BoxliteResult<Vec<WidenedPerm>> {
-    let mut widened = Vec::new();
-    widen_dir_recursive(source, source, &mut widened)?;
-    Ok(widened)
+/// Entries are appended as they are mutated, so a partial failure still leaves the
+/// caller's guard owning every already-widened entry. Walks top-down: a `0000`
+/// directory cannot be listed until its own owner read+search bits are restored,
+/// so each directory is widened before descent.
+fn widen_unreadable_owner(source: &Path, widened: &mut Vec<WidenedPerm>) -> BoxliteResult<()> {
+    widen_dir_recursive(source, source, widened)
 }
 
 fn widen_dir_recursive(
@@ -191,24 +191,35 @@ fn record_and_widen(
     Ok(())
 }
 
-/// Restore the original modes on the source tree after `mke2fs` has read it.
+/// Owns the source entries whose owner bits were temporarily widened for
+/// `mke2fs` and restores them on drop — so the source tree is cleaned up on
+/// every exit path, including the early returns when `mke2fs` or the debugfs
+/// pass fails, not just the happy path.
 ///
-/// Hygiene only — the image is already correct via debugfs — so failures are
-/// logged, not fatal. Must run *after* the debugfs pass, which re-walks the
-/// source and would fail on a directory restored to `0000`.
-fn restore_source_modes(widened: &[WidenedPerm]) {
-    use std::os::unix::fs::PermissionsExt;
+/// Restores **bottom-up** (children before parents): entries are recorded
+/// top-down, so restoring a `0000` directory before its children would make the
+/// child `set_permissions` fail with EACCES and leave it widened. The image
+/// already holds the authoritative modes via debugfs, so a failed source
+/// restore is logged, not fatal.
+struct SourceModeGuard {
+    widened: Vec<WidenedPerm>,
+}
 
-    for w in widened {
-        if let Err(e) = std::fs::set_permissions(
-            &w.source_path,
-            std::fs::Permissions::from_mode(w.mode & 0o7777),
-        ) {
-            tracing::warn!(
-                "Failed to restore source mode on {}: {}",
-                w.source_path.display(),
-                e
-            );
+impl Drop for SourceModeGuard {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+
+        for w in self.widened.iter().rev() {
+            if let Err(e) = std::fs::set_permissions(
+                &w.source_path,
+                std::fs::Permissions::from_mode(w.mode & 0o7777),
+            ) {
+                tracing::warn!(
+                    "Failed to restore source mode on {}: {}",
+                    w.source_path.display(),
+                    e
+                );
+            }
         }
     }
 }
@@ -239,13 +250,15 @@ pub fn create_ext4_from_dir(source: &Path, output_path: &Path) -> BoxliteResult<
     // `mke2fs -d` opens every source file as the current user. When unprivileged,
     // an unreadable file (mode 0000, e.g. /etc/gshadow in RHEL UBI images) is
     // denied, aborting the build. Temporarily widen owner-read on such entries;
-    // their original modes are restored in the image (via debugfs) and on the
-    // source tree afterward. As root the read bit is bypassed, so skip the widen.
-    let widened = if unsafe { libc::geteuid() } != 0 {
-        widen_unreadable_owner(source)?
-    } else {
-        Vec::new()
+    // the guard restores the source modes on every exit path (drop), and the
+    // original modes are written back into the image via debugfs below. As root
+    // the read bit is bypassed, so skip the widen.
+    let mut source_modes = SourceModeGuard {
+        widened: Vec::new(),
     };
+    if unsafe { libc::geteuid() } != 0 {
+        widen_unreadable_owner(source, &mut source_modes.widened)?;
+    }
 
     let mke2fs = get_mke2fs_path();
 
@@ -290,18 +303,14 @@ pub fn create_ext4_from_dir(source: &Path, output_path: &Path) -> BoxliteResult<
         )));
     }
 
-    // Normalize ownership to 0:0 and restore widened modes in the image (debugfs
-    // re-walks the source, so this must run before the source modes are restored).
-    normalize_inodes_with_debugfs(output_path, source, &widened)?;
+    // Normalize ownership to 0:0 and restore widened modes in the image. This
+    // re-walks the source while it is still widened, so it must run before the
+    // guard drops and restores the source modes.
+    normalize_inodes_with_debugfs(output_path, source, &source_modes.widened)?;
 
-    // Restore the source tree to its original modes (hygiene; the image is set).
-    restore_source_modes(&widened);
-
-    Ok(Disk::new(
-        output_path.to_path_buf(),
-        DiskFormat::Ext4,
-        false,
-    ))
+    let disk = Disk::new(output_path.to_path_buf(), DiskFormat::Ext4, false);
+    // `source_modes` drops here, restoring the widened source entries bottom-up.
+    Ok(disk)
 }
 
 /// Normalize inode metadata in the ext4 image via debugfs: set every file's
@@ -393,21 +402,25 @@ fn normalize_inodes_with_debugfs(
 
     let duration = start.elapsed();
 
+    // This is the only pass that writes the original 0000 modes back into the
+    // image, so a failure must abort the build rather than yield an image with
+    // wrong inode metadata.
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::warn!(
-            "debugfs inode normalization had errors (took {:?}): {}",
-            duration,
+        return Err(BoxliteError::Storage(format!(
+            "debugfs inode normalization failed (exit {:?}) on {}: {}",
+            output.status.code(),
+            image_path.display(),
             stderr
-        );
-    } else {
-        tracing::info!(
-            "Normalized {} inodes to 0:0 ({} mode-restored) in {:?}",
-            paths.len(),
-            widened.len(),
-            duration
-        );
+        )));
     }
+
+    tracing::info!(
+        "Normalized {} inodes to 0:0 ({} mode-restored) in {:?}",
+        paths.len(),
+        widened.len(),
+        duration
+    );
 
     Ok(())
 }
@@ -573,6 +586,11 @@ mod tests {
             .arg(&out)
             .output()
             .expect("run debugfs stat");
+        assert!(
+            stat.status.success(),
+            "debugfs stat failed: {}",
+            String::from_utf8_lossy(&stat.stderr)
+        );
         let stat_out = String::from_utf8_lossy(&stat.stdout);
         let tokens: Vec<&str> = stat_out.split_whitespace().collect();
         let mode = tokens
@@ -592,9 +610,66 @@ mod tests {
             .arg(&out)
             .output()
             .expect("run debugfs cat");
+        assert!(
+            cat.status.success(),
+            "debugfs cat failed: {}",
+            String::from_utf8_lossy(&cat.stderr)
+        );
         assert_eq!(
             cat.stdout, content,
             "gshadow content must be preserved in image"
+        );
+    }
+
+    /// Regression: after a successful build, the source tree must be restored to
+    /// its original modes — including a `0000` file nested under a `0000`
+    /// directory. The restore must run bottom-up: restoring the parent dir to
+    /// `0000` first makes the child `set_permissions` fail with EACCES, leaving
+    /// the child widened (readable). This walks through the public API so the
+    /// same test holds before and after the fix.
+    ///
+    /// Skipped when e2fsprogs is absent or running as root (no widen happens).
+    #[test]
+    fn create_ext4_restores_nested_unreadable_source_modes() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        if util::find_binary("mke2fs").is_err() || util::find_binary("debugfs").is_err() {
+            eprintln!("skipping: mke2fs/debugfs not found (run `make runtime:debug`)");
+            return;
+        }
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("skipping: must run unprivileged (root skips the widen)");
+            return;
+        }
+
+        let src_root = tempfile::tempdir().expect("source tempdir");
+        let src = src_root.path().join("rootfs");
+        let secret = src.join("etc/secret");
+        std::fs::create_dir_all(&secret).expect("mkdir tree");
+        let locked = secret.join("locked");
+        std::fs::write(&locked, b"x").expect("write locked");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
+            .expect("chmod 0000 file");
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o000))
+            .expect("chmod 0000 dir");
+
+        let out_root = tempfile::tempdir().expect("output tempdir");
+        let out = out_root.path().join("rootfs.ext4");
+        let _disk = create_ext4_from_dir(&src, &out).expect("ext4 build must succeed");
+
+        // The dir restores fine even with the bug (it's restored first).
+        assert_eq!(
+            std::fs::symlink_metadata(&secret).unwrap().mode() & 0o7777,
+            0o000,
+            "source dir mode must be restored to 0000"
+        );
+        // Re-grant search on the parent (we own it) only to inspect the child;
+        // this does not change the child's own mode.
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(
+            std::fs::symlink_metadata(&locked).unwrap().mode() & 0o7777,
+            0o000,
+            "source file under a 0000 dir must be restored to 0000 (bottom-up restore)"
         );
     }
 
@@ -618,7 +693,8 @@ mod tests {
         std::fs::set_permissions(&secret_dir, std::fs::Permissions::from_mode(0o000))
             .expect("chmod 0000 dir");
 
-        let widened = widen_unreadable_owner(&src).expect("widen must succeed as owner");
+        let mut widened = Vec::new();
+        widen_unreadable_owner(&src, &mut widened).expect("widen must succeed as owner");
 
         // Dir and file are now owner read/searchable.
         assert_eq!(
