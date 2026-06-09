@@ -74,6 +74,8 @@ mod start;
 #[cfg(target_os = "linux")]
 mod stdio;
 #[cfg(target_os = "linux")]
+mod validating_executor;
+#[cfg(target_os = "linux")]
 pub(crate) mod zygote;
 
 #[cfg(target_os = "linux")]
