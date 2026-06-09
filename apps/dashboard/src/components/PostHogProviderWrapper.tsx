@@ -61,6 +61,16 @@ export const PostHogProviderWrapper: FC<PostHogProviderWrapperProps> = ({ childr
   }
 
   if (!posthogConfigured) {
+    // Production must never bootstrap flags to `true` (fail-open). If PostHog
+    // isn't configured in a prod build, render without a provider so every
+    // flag resolves falsy (fail-closed) — matching the pre-bootstrap behavior.
+    // `import.meta.env.PROD` is Vite's production-build equivalent of
+    // NODE_ENV==='production'; infra-local runs `vite` dev (PROD=false), so it
+    // still gets the local-dev bootstrap below.
+    if (import.meta.env.PROD) {
+      return children
+    }
+
     // Local-dev / unconfigured path. Mount PostHogProvider with a stub key +
     // bootstrap feature flags so `useFeatureFlagEnabled(...)` returns the
     // defaults above. All network behavior disabled: no /decide call (we

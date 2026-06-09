@@ -39,7 +39,13 @@ export class OpenFeaturePostHogProvider implements Provider {
   constructor(config: OpenFeaturePostHogProviderConfig = {}) {
     this.evaluateLocally = config.evaluateLocally ?? false
     this.isConfigured = !!config.apiKey
-    this.bootstrapFlags = config.bootstrapFlags ?? {}
+    // Bootstrap flags are a local-dev convenience only. Hard-refuse them in
+    // production so an unconfigured prod (no PostHog key) falls through to each
+    // call-site's `defaultValue` (fail closed) instead of resolving them true
+    // (fail open). Defense-in-depth: the injection site (app.module) also skips
+    // passing them in production.
+    this.bootstrapFlags =
+      process.env.NODE_ENV === 'production' ? {} : (config.bootstrapFlags ?? {})
 
     if (config.apiKey) {
       try {
