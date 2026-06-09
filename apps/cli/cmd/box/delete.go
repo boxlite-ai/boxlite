@@ -72,9 +72,9 @@ var DeleteCmd = &cobra.Command{
 							sem <- struct{}{}
 							defer func() { <-sem }()
 
-							_, res, err := apiClient.BoxAPI.DeleteBox(ctx, sb.Id).Execute()
+							_, _, err := apiClient.BoxAPI.DeleteBox(ctx, sb.Id).Execute()
 							if err != nil {
-								fmt.Printf("Failed to delete box %s: %s\n", sb.Id, apiclient_cli.HandleErrorResponse(res, err))
+								fmt.Printf("Failed to delete box %s\n", sb.Id)
 							} else {
 								atomic.AddInt64(&deletedCount, 1)
 							}
