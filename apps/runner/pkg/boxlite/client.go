@@ -333,21 +333,21 @@ func (c *Client) Exec(ctx context.Context, sandboxId string, command string, arg
 }
 
 // CopyInto copies a file from host into a sandbox.
-func (c *Client) CopyInto(ctx context.Context, sandboxId string, hostSrc, guestDst string) error {
+func (c *Client) CopyInto(ctx context.Context, sandboxId string, hostSrc, guestDst string, opts ...boxlite.CopyOption) error {
 	bx, err := c.getOrFetchBox(ctx, sandboxId)
 	if err != nil {
 		return err
 	}
-	return bx.CopyInto(ctx, hostSrc, guestDst)
+	return bx.CopyInto(ctx, hostSrc, guestDst, opts...)
 }
 
 // CopyOut copies a file from a sandbox to the host.
-func (c *Client) CopyOut(ctx context.Context, sandboxId string, guestSrc, hostDst string) error {
+func (c *Client) CopyOut(ctx context.Context, sandboxId string, guestSrc, hostDst string, opts ...boxlite.CopyOption) error {
 	bx, err := c.getOrFetchBox(ctx, sandboxId)
 	if err != nil {
 		return err
 	}
-	return bx.CopyOut(ctx, guestSrc, hostDst)
+	return bx.CopyOut(ctx, guestSrc, hostDst, opts...)
 }
 
 // PullImage pulls an OCI image into the runtime's cache.
