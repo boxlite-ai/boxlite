@@ -12,14 +12,16 @@
 //! See `docs/investigations/concurrent-exec-deadlock.md` for full analysis.
 
 use super::capabilities::CapabilitySet;
+use super::validating_executor::ValidatingExecutor;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use libcontainer::container::builder::ContainerBuilder;
 use libcontainer::syscall::syscall::SyscallType;
+use nix::fcntl::OFlag;
 use nix::sys::socket::{
     recvmsg, sendmsg, socketpair, AddressFamily, ControlMessage, ControlMessageOwned, MsgFlags,
     SockFlag, SockType,
 };
-use nix::unistd::{fork, ForkResult, Pid};
+use nix::unistd::{fork, pipe2, ForkResult, Pid};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{IoSlice, IoSliceMut};
@@ -78,11 +80,28 @@ pub(crate) struct InitBuildSpec {
     pub console_socket: Option<String>,
 }
 
+/// Classifies *why* a build failed, so the host can map it to the right status
+/// without re-parsing youki's volatile error text. Set at the source in
+/// [`do_build`] from the [`ValidatingExecutor`](super::validating_executor)
+/// fd side-channel.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub(crate) enum BuildFailureKind {
+    /// The user-supplied command can't be run (not found / not executable / no
+    /// PATH). Maps to `BoxliteError::Execution` → HTTP 422.
+    UserCommandError,
+    /// A genuine platform failure (cgroup, mount, seccomp, init death, IPC).
+    /// Maps to `BoxliteError::Internal` → HTTP 500, stays visible to SRE.
+    Platform,
+}
+
 /// Build outcome. Invalid states are unrepresentable.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub(crate) enum BuildResult {
     Spawned { pid: i32 },
-    Failed { error: String },
+    Failed {
+        kind: BuildFailureKind,
+        error: String,
+    },
 }
 
 /// Tagged IPC request from parent to zygote.
@@ -158,9 +177,13 @@ impl Zygote {
         send_request(fd, &ZygoteRequest::Build(spec), fds)?;
         match recv_response(fd)? {
             ZygoteResponse::Build(BuildResult::Spawned { pid }) => Ok(Pid::from_raw(pid)),
-            ZygoteResponse::Build(BuildResult::Failed { error }) => {
-                Err(BoxliteError::Internal(error))
-            }
+            // Type-driven classification — no string matching. The `kind` was
+            // decided at the source (do_build) from the executor fd signal.
+            // `Execution` is the existing 422 mapping; `Internal` stays 500.
+            ZygoteResponse::Build(BuildResult::Failed { kind, error }) => Err(match kind {
+                BuildFailureKind::UserCommandError => BoxliteError::Execution(error),
+                BuildFailureKind::Platform => BoxliteError::Internal(error),
+            }),
             other => Err(BoxliteError::Internal(format!(
                 "zygote protocol violation: Build answered with {other:?}"
             ))),
@@ -179,7 +202,7 @@ impl Zygote {
         send_request(fd, &ZygoteRequest::BuildInit(spec), fds)?;
         match recv_response(fd)? {
             ZygoteResponse::BuildInit(BuildResult::Spawned { pid }) => Ok(Pid::from_raw(pid)),
-            ZygoteResponse::BuildInit(BuildResult::Failed { error }) => {
+            ZygoteResponse::BuildInit(BuildResult::Failed { error, .. }) => {
                 Err(BoxliteError::Internal(error))
             }
             other => Err(BoxliteError::Internal(format!(
@@ -270,6 +293,23 @@ fn sanitize_ambient_runtime_environment() {
 /// This is the same ContainerBuilder chain that was in `command.rs build_and_spawn()`,
 /// moved here to run in the zygote's single-threaded context where clone3() is safe.
 fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
+    // Typed side-channel for user-command errors. The ValidatingExecutor (running
+    // in the clone3'd init child, post-pivot) writes a byte here when youki's
+    // workload validator rejects the program; we read it after build() fails to
+    // classify the failure without parsing youki's error text. O_CLOEXEC so the
+    // fd never leaks into a successfully exec'd user process; O_NONBLOCK so the
+    // post-build read can't hang. A pipe() failure is itself a platform fault.
+    let (signal_read, signal_write) = match pipe2(OFlag::O_CLOEXEC | OFlag::O_NONBLOCK) {
+        Ok(pair) => pair,
+        Err(e) => {
+            return BuildResult::Failed {
+                kind: BuildFailureKind::Platform,
+                error: format!("zygote signal pipe: {e}"),
+            }
+        }
+    };
+    let signal_write_fd = signal_write.as_raw_fd();
+
     let build_fn = || -> Result<Pid, String> {
         // Own the received fds before any fallible step: they arrived via
         // SCM_RIGHTS and this process must close them on every path, or each
@@ -287,11 +327,15 @@ fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
             .with_root_path(spec.state_root.clone())
             .map_err(|e| format!("Failed to set container root path: {e}"))?
             .with_console_socket(spec.console_socket.clone())
+            // Intercept youki's workload validation to flag user-command errors
+            // over the fd above. Set on the base builder so it carries into both
+            // the TTY and non-TTY tenant paths below.
+            .with_executor(ValidatingExecutor::new(signal_write_fd))
             .validate_id()
             .map_err(|e| format!("Invalid container ID: {e}"))?;
 
         // The image entrypoint and ordinary exec requests retain Youki's
-        // default executor. Only a typed internal SSH workload installs the
+        // default validation and exec (wrapped by ValidatingExecutor). Only a typed internal SSH workload installs the
         // direct BoxLite dispatcher in the final tenant child.
         if let Some(workload) = spec.ssh_workload.clone() {
             builder =
@@ -364,7 +408,42 @@ fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
         Ok(pid)
     };
 
-    build_with_default_sigpipe(build_fn)
+    let outcome = build_with_default_sigpipe(build_fn);
+
+    // Drop our copy of the write end before reading. We don't depend on EOF —
+    // the child wrote (if at all) before its init returned Err, which happens
+    // before build() returns, so any byte is already buffered. A non-blocking
+    // peek is enough.
+    drop(signal_write);
+
+    match outcome {
+        Ok(pid) => BuildResult::Spawned { pid: pid.as_raw() },
+        Err(error) => {
+            let kind = if signal_pipe_fired(&signal_read) {
+                BuildFailureKind::UserCommandError
+            } else {
+                BuildFailureKind::Platform
+            };
+            BuildResult::Failed { kind, error }
+        }
+    }
+}
+
+/// Non-blocking peek: did the [`ValidatingExecutor`](super::validating_executor)
+/// write its user-command-error byte? Any byte read means yes. EAGAIN / empty /
+/// error means no — we fail safe toward `Platform` (HTTP 500), so a lost signal
+/// can never *downgrade* a real platform fault into a user error.
+fn signal_pipe_fired(read_fd: &OwnedFd) -> bool {
+    let mut buf = [0u8; 1];
+    // SAFETY: read_fd is a valid owned fd; read up to 1 byte into a stack buffer.
+    let n = unsafe {
+        nix::libc::read(
+            read_fd.as_raw_fd(),
+            buf.as_mut_ptr() as *mut nix::libc::c_void,
+            1,
+        )
+    };
+    n > 0
 }
 
 /// Execute a container init build. Called inside the zygote (single-threaded).
@@ -434,7 +513,15 @@ fn do_build_init(spec: InitBuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
             .ok_or_else(|| "built container state has no init pid".to_string())
     };
 
-    let result = build_with_default_sigpipe(build_fn);
+    // Init runs with youki's default executor, so there is no user-command
+    // signal to classify: every init build failure is a platform failure.
+    let result = match build_with_default_sigpipe(build_fn) {
+        Ok(pid) => BuildResult::Spawned { pid: pid.as_raw() },
+        Err(error) => BuildResult::Failed {
+            kind: BuildFailureKind::Platform,
+            error,
+        },
+    };
 
     // Greppable from the guest console: proves init creation actually routed
     // through the zygote rather than silently reverting to an in-guest build.
@@ -443,7 +530,7 @@ fn do_build_init(spec: InitBuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
             "[zygote] init build: container_id={} pid={}",
             spec.container_id, pid
         ),
-        BuildResult::Failed { error } => eprintln!(
+        BuildResult::Failed { error, .. } => eprintln!(
             "[zygote] init build failed: container_id={} error={}",
             spec.container_id, error
         ),
@@ -467,7 +554,9 @@ fn do_build_init(spec: InitBuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
 /// restore SIG_IGN immediately after — the long-lived single-threaded zygote
 /// keeps the agent's EPIPE-as-error behavior on its own IPC socket, while the
 /// forked child (and everything it execs) starts with the standard default.
-fn build_with_default_sigpipe(build_fn: impl FnOnce() -> Result<Pid, String>) -> BuildResult {
+fn build_with_default_sigpipe(
+    build_fn: impl FnOnce() -> Result<Pid, String>,
+) -> Result<Pid, String> {
     use nix::sys::signal::{signal, SigHandler, Signal};
     let prev_sigpipe = unsafe { signal(Signal::SIGPIPE, SigHandler::SigDfl) };
 
@@ -480,10 +569,7 @@ fn build_with_default_sigpipe(build_fn: impl FnOnce() -> Result<Pid, String>) ->
         }
     }
 
-    match result {
-        Ok(pid) => BuildResult::Spawned { pid: pid.as_raw() },
-        Err(error) => BuildResult::Failed { error },
-    }
+    result
 }
 
 // ============================================================================
@@ -677,6 +763,7 @@ mod tests {
     #[test]
     fn build_result_failed_serde_roundtrip() {
         let result = BuildResult::Failed {
+            kind: BuildFailureKind::UserCommandError,
             error: "build failed: container not found".to_string(),
         };
         let json = serde_json::to_vec(&result).unwrap();
@@ -828,13 +915,15 @@ mod tests {
         let fd_b = b.as_raw_fd();
 
         let response = ZygoteResponse::Build(BuildResult::Failed {
+            kind: BuildFailureKind::Platform,
             error: "container not found".to_string(),
         });
         send_response(fd_a, &response).unwrap();
 
         let received = recv_response(fd_b).unwrap();
         match received {
-            ZygoteResponse::Build(BuildResult::Failed { error }) => {
+            ZygoteResponse::Build(BuildResult::Failed { kind, error }) => {
+                assert_eq!(kind, BuildFailureKind::Platform);
                 assert_eq!(error, "container not found");
             }
             other => panic!("expected Build(Failed) response, got: {other:?}"),
@@ -924,6 +1013,7 @@ mod tests {
     #[test]
     fn ipc_oversized_response_rejected() {
         let response = ZygoteResponse::Build(BuildResult::Failed {
+            kind: BuildFailureKind::Platform,
             error: "x".repeat(2 * 1024 * 1024), // 2 MiB error string
         });
 
@@ -1309,6 +1399,7 @@ mod tests {
                 panic!("expected BuildInit request");
             };
             let response = ZygoteResponse::BuildInit(BuildResult::Failed {
+                kind: BuildFailureKind::Platform,
                 error: "bundle exploded: no config.json".to_string(),
             });
             send_response(child_fd, &response).unwrap();
@@ -1529,7 +1620,7 @@ mod tests {
             },
             None,
         );
-        let BuildResult::Failed { error } = result else {
+        let BuildResult::Failed { error, .. } = result else {
             panic!("an init build without any stdio must fail, got: {result:?}");
         };
         assert!(error.contains("stdio"), "unexpected error: {error}");
