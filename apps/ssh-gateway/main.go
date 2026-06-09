@@ -174,18 +174,18 @@ func (g *SSHGateway) handleConnection(conn net.Conn, serverConfig *ssh.ServerCon
 		return
 	}
 
-	log.Printf("Validating token: %s", token)
+	log.Printf("Validating SSH token")
 
 	// Validate the token using the API
 	validation, _, err := g.apiClient.BoxAPI.ValidateSshAccess(context.Background()).Token(token).Execute()
 	if err != nil {
-		log.Printf("Failed to validate SSH access: %v", err)
+		log.Printf("Failed to validate SSH access")
 		conn.Close()
 		return
 	}
 
 	if !validation.Valid {
-		log.Printf("Invalid token: %s", token)
+		log.Printf("Invalid SSH token")
 		conn.Close()
 		return
 	}
@@ -214,9 +214,9 @@ func (g *SSHGateway) handleConnection(conn net.Conn, serverConfig *ssh.ServerCon
 		log.Printf("Checking box state for box: %s", boxId)
 		box, _, err := g.apiClient.BoxAPI.GetBox(context.Background(), boxId).Execute()
 		if err != nil {
-			log.Printf("Failed to get box state for %s: %v", boxId, err)
+			log.Printf("Failed to get box state for %s", boxId)
 			// Send error message to client and close connection
-			g.sendErrorAndClose(conn, fmt.Sprintf("Failed to verify box state: %v", err))
+			g.sendErrorAndClose(conn, "Failed to verify box state.")
 			return
 		}
 
