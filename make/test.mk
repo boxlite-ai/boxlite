@@ -328,7 +328,7 @@ test\:e2e\:setup:
 	@python3 scripts/test/e2e/fixture_setup.py
 
 test\:e2e:
-	@cd scripts/test/e2e && python3 -m pytest cases/ -v
+	@bash scripts/test/e2e/run.sh
 
 test\:e2e\:two-sided:
 	@PR_REF=$${PR_REF:?must set PR_REF=<branch>} bash scripts/test/e2e/two_sided.sh

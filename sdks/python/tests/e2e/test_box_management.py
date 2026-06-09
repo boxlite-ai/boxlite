@@ -5,6 +5,7 @@ the local API. The source file uses Boxlite.default() (local FFI) —
 this version uses Boxlite.rest() so a regression in the proxy
 controller surfaces.
 """
+
 from __future__ import annotations
 
 import boxlite
@@ -17,13 +18,14 @@ async def test_create_named_box(rt, image):
     get_info."""
     name = "e2e-test-box"
     box = await rt.create(
-        boxlite.BoxOptions(image=image, auto_remove=True), name=name,
+        boxlite.BoxOptions(image=image, auto_remove=True),
+        name=name,
     )
     try:
         info = await rt.get_info(box.id)
         assert info is not None
         assert getattr(info, "name", "") == name, (
-            f"name not propagated: got {getattr(info,'name',None)!r}"
+            f"name not propagated: got {getattr(info, 'name', None)!r}"
         )
     finally:
         await rt.remove(box.id, force=True)
@@ -44,7 +46,8 @@ async def test_list_info_includes_created_box(rt, image):
 async def test_box_options_env_propagates_through_rest(rt, image):
     box = await rt.create(
         boxlite.BoxOptions(
-            image=image, auto_remove=True,
+            image=image,
+            auto_remove=True,
             env=[("BOXLITE_E2E_MARKER", "yes-its-there")],
         ),
     )
@@ -52,8 +55,9 @@ async def test_box_options_env_propagates_through_rest(rt, image):
         # Don't trust serialization round-trip — just exec and check
         # the env var is visible inside the VM. This proves
         # client → API → runner → guest env wiring.
-        from conftest import drain
+        from e2e_helpers import drain
         import asyncio
+
         ex = await box.exec("sh", ["-c", "echo $BOXLITE_E2E_MARKER"], None)
         out, _ = await drain(ex)
         await asyncio.wait_for(ex.wait(), timeout=30)

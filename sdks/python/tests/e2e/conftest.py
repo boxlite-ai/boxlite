@@ -1,14 +1,14 @@
-"""Pytest fixtures for the e2e suite.
+"""Pytest fixtures for the Python SDK e2e suite.
 
-Every fixture here forces the **REST** path. There is no `Boxlite.default()`
-fixture in this file by design — local-FFI tests belong under
-`sdks/python/tests/`, not `scripts/test/e2e/`.
+Every fixture here forces the **REST** path. Local-FFI tests live under
+`sdks/python/tests/` (sibling of this `e2e/` dir).
 
 The autouse fixture `verify_runner_saw_all_boxes` proves per-test that
 every box the test created actually reached the runner via the API. If a
 test accidentally swaps to local-FFI or talks to the wrong endpoint,
 that fixture fails the test with a path-bypass error.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -23,7 +23,11 @@ import pytest_asyncio
 
 import boxlite
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
+# Shared path-verification helpers live at the stack-infra root so all
+# per-SDK e2e dirs can reach them via the same parents[4] hop.
+sys.path.insert(
+    0, str(Path(__file__).resolve().parents[4] / "scripts" / "test" / "e2e" / "lib")
+)
 from path_verification import runner_journal_seek, runner_hits_for_box
 
 DEFAULT_PROFILE = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
@@ -89,6 +93,7 @@ async def rt():
         try:
             close = runtime.close()
             import inspect
+
             if inspect.isawaitable(close):
                 await close
         except Exception:
@@ -121,8 +126,7 @@ async def verify_runner_saw_all_boxes(rt):
     deadline = time.time() + 5.0
     missing = []
     while True:
-        missing = [bid for bid, _ in created
-                   if runner_hits_for_box(since, bid) < 1]
+        missing = [bid for bid, _ in created if runner_hits_for_box(since, bid) < 1]
         if not missing or time.time() > deadline:
             break
         await asyncio.sleep(0.3)
@@ -131,7 +135,7 @@ async def verify_runner_saw_all_boxes(rt):
         f"box(es) created in this test never reached the runner journal: "
         f"{missing}. Either the SDK degraded to local FFI, the API did not "
         f"forward to the runner, or journalctl access broke. See "
-        f"scripts/test/e2e/README.md for the chain spec."
+        f"sdks/python/tests/e2e/README.md for the chain spec."
     )
 
 
@@ -152,23 +156,5 @@ async def box(rt, image):
 
 
 # ─── helpers shared across cases ────────────────────────────────────────────
-
-async def collect_stream(stream) -> str:
-    if stream is None:
-        return ""
-    chunks: list[str] = []
-    async for ch in stream:
-        chunks.append(ch.decode("utf-8", "replace") if isinstance(ch, bytes) else str(ch))
-    return "".join(chunks)
-
-
-async def drain(ex) -> tuple[str, str]:
-    """Drain stdout + stderr concurrently — required for REST exec."""
-    import asyncio
-    out_t = asyncio.create_task(collect_stream(ex.stdout()))
-    err_t = asyncio.create_task(collect_stream(ex.stderr()))
-    return await asyncio.gather(out_t, err_t)
-
-
-def stdout_line_count(s: str) -> int:
-    return len([ln for ln in s.splitlines() if ln])
+# Moved to scripts/test/e2e/lib/e2e_helpers.py so test files can import them
+# under `--import-mode=importlib`, which doesn't put conftest on sys.path.

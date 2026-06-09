@@ -1,4 +1,4 @@
-// Minimal C SDK e2e smoke driver, called by cases/test_c_entry.py.
+// Minimal C SDK e2e smoke driver, called by the sibling test_c_entry.py.
 //
 // The C SDK's box-create + remove are callback-based async; we wrap each
 // with a pthread condvar to synchronize. Exec is also callback-based and

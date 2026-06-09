@@ -4,6 +4,7 @@ Source verifies exec-time options (working_dir, env, tty) against the
 local FFI runtime. Re-tests the same surface via REST, so any drop
 or rename in the proxy controller surfaces.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -11,7 +12,7 @@ import asyncio
 import boxlite
 import pytest
 
-from conftest import drain
+from e2e_helpers import drain
 
 
 @pytest.mark.asyncio
@@ -32,7 +33,8 @@ async def test_exec_env_vars(rt, image):
     box = await rt.create(boxlite.BoxOptions(image=image, auto_remove=True))
     try:
         ex = await box.exec(
-            "sh", ["-c", "echo $MY_VAR"],
+            "sh",
+            ["-c", "echo $MY_VAR"],
             env=[("MY_VAR", "boxlite-e2e")],
         )
         out, _ = await drain(ex)

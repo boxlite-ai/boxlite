@@ -1,4 +1,4 @@
-// Minimal Go SDK e2e smoke driver, called by cases/test_go_entry.py.
+// Minimal Go SDK e2e smoke driver, called by the sibling test_go_entry.py.
 //
 // Reads connection settings from env (BOXLITE_E2E_URL / API_KEY / PREFIX /
 // IMAGE), creates a box via the REST runtime, exec's `echo HELLO-FROM-GO`,

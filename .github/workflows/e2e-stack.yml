@@ -18,9 +18,16 @@ on:
     branches: [main]
     paths:
       - 'sdks/c/src/exec/**'
+      - 'sdks/c/tests/e2e/**'
       - 'sdks/python/src/**'
+      - 'sdks/python/tests/e2e/**'
+      - 'sdks/go/src/**'
+      - 'sdks/go/tests/e2e/**'
+      - 'sdks/node/src/**'
+      - 'sdks/node/tests/e2e/**'
       - 'src/boxlite/src/rest/**'
       - 'src/boxlite/src/cli/**'
+      - 'src/cli/tests/e2e/**'
       - 'apps/runner/**'
       - 'apps/api/src/**'
       - 'scripts/test/e2e/**'
@@ -29,9 +36,16 @@ on:
     branches: [main]
     paths:
       - 'sdks/c/src/exec/**'
+      - 'sdks/c/tests/e2e/**'
       - 'sdks/python/src/**'
+      - 'sdks/python/tests/e2e/**'
+      - 'sdks/go/src/**'
+      - 'sdks/go/tests/e2e/**'
+      - 'sdks/node/src/**'
+      - 'sdks/node/tests/e2e/**'
       - 'src/boxlite/src/rest/**'
       - 'src/boxlite/src/cli/**'
+      - 'src/cli/tests/e2e/**'
       - 'apps/runner/**'
       - 'apps/api/src/**'
       - 'scripts/test/e2e/**'

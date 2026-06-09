@@ -1,4 +1,5 @@
-// Minimal Node SDK e2e smoke driver, called by cases/test_node_entry.py.
+// Minimal Node SDK e2e smoke driver, invoked by the sibling test_node_entry.py
+// via tsx.
 //
 // Imports from the LOCAL sdks/node build (the repo root has a stale
 // @boxlite-ai/boxlite 0.9.5 install with field-name glitches; we want
@@ -9,8 +10,10 @@
 // Exec stdout streaming is covered by the Python / Go / CLI smokes.
 
 import {
-  JsBoxlite, BoxliteRestOptions, ApiKeyCredential,
-} from '../../../../../sdks/node';
+  JsBoxlite,
+  BoxliteRestOptions,
+  ApiKeyCredential,
+} from "../../lib/index.ts";
 
 function env(k: string, def: string): string {
   const v = process.env[k];
@@ -23,16 +26,18 @@ function die(msg: string): never {
 }
 
 (async () => {
-  const url = env('BOXLITE_E2E_URL', 'http://localhost:3000/api');
-  const apiKey = env('BOXLITE_E2E_API_KEY', 'devkey');
-  const prefix = env('BOXLITE_E2E_PREFIX', '');
-  const image = env('BOXLITE_E2E_IMAGE', 'alpine:3.23');
+  const url = env("BOXLITE_E2E_URL", "http://localhost:3000/api");
+  const apiKey = env("BOXLITE_E2E_API_KEY", "devkey");
+  const prefix = env("BOXLITE_E2E_PREFIX", "");
+  const image = env("BOXLITE_E2E_IMAGE", "alpine:3.23");
 
-  const rt = JsBoxlite.rest(new BoxliteRestOptions({
-    url,
-    credential: new ApiKeyCredential(apiKey),
-    pathPrefix: prefix,
-  }));
+  const rt = JsBoxlite.rest(
+    new BoxliteRestOptions({
+      url,
+      credential: new ApiKeyCredential(apiKey),
+      pathPrefix: prefix,
+    }),
+  );
 
   let boxId: string | null = null;
   try {
@@ -43,9 +48,13 @@ function die(msg: string): never {
     die(`error: ${e.message ?? e}`);
   } finally {
     if (boxId) {
-      try { await rt.remove(boxId, true); } catch { /* best-effort */ }
+      try {
+        await rt.remove(boxId, true);
+      } catch {
+        /* best-effort */
+      }
     }
   }
 
-  console.log('OK');
+  console.log("OK");
 })();

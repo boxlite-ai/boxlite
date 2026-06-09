@@ -1,4 +1,4 @@
-"""Node SDK entry-point e2e: builds and runs scripts/test/e2e/sdks/node/e2e_basic.ts
+"""Node SDK entry-point e2e: builds and runs the e2e_basic.ts next to this file
 against the local @boxlite-ai/boxlite napi build, asserts a successful box
 round-trip + runner journal contains the box id.
 
@@ -17,11 +17,11 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
+REPO = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(REPO / "scripts" / "test" / "e2e" / "lib"))
 from path_verification import runner_journal_seek, runner_hits_for_box
 
-REPO = Path(__file__).resolve().parents[4]
-SRC = REPO / "scripts/test/e2e/sdks/node/e2e_basic.ts"
+SRC = Path(__file__).parent / "e2e_basic.ts"
 NODE_SDK = REPO / "sdks/node"
 UUID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"

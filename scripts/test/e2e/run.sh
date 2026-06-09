@@ -22,7 +22,14 @@ python3 -c "import pytest_asyncio" 2>/dev/null || \
 python3 -c "import boxlite" 2>/dev/null || \
     pip install --break-system-packages --quiet boxlite
 
-# 4. run
+# 4. run — point pytest at each SDK's tests/e2e dir explicitly (paths outside
+# pytest.ini's rootdir don't resolve via testpaths, so list them on the CLI).
 echo "── pytest ──"
-cd "$SCRIPT_DIR"
-exec python3 -m pytest cases/ -v "$@"
+REPO="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+exec python3 -m pytest -c "$SCRIPT_DIR/pytest.ini" -v \
+    "$REPO/sdks/python/tests/e2e" \
+    "$REPO/sdks/c/tests/e2e" \
+    "$REPO/sdks/go/tests/e2e" \
+    "$REPO/sdks/node/tests/e2e" \
+    "$REPO/src/cli/tests/e2e" \
+    "$@"

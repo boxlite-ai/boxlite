@@ -5,6 +5,7 @@ local FFI runtime. This file exercises the same surface but in REST
 mode, so any behaviour difference between the REST proxy controller
 and the local runtime surfaces.
 """
+
 from __future__ import annotations
 
 import boxlite

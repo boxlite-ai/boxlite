@@ -5,6 +5,7 @@ execution and is appropriately rejected on a non-TTY one. In REST mode
 the resize travels SDK → API → runner as a WS control message; this
 test catches regressions in that message wiring.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -12,7 +13,7 @@ import asyncio
 import boxlite
 import pytest
 
-from conftest import drain
+from e2e_helpers import drain
 
 
 @pytest.mark.asyncio

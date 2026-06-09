@@ -16,17 +16,19 @@ If either check fails, downstream regression tests cannot be trusted —
 they may be passing because they're talking to something other than the
 production exec path.
 """
+
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
 import pytest
-import pytest_asyncio
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
+sys.path.insert(
+    0, str(Path(__file__).resolve().parents[4] / "scripts" / "test" / "e2e" / "lib")
+)
 from path_verification import runner_journal_seek, runner_hits_for_box
-from conftest import drain
+from e2e_helpers import drain
 
 
 @pytest.mark.asyncio
@@ -36,6 +38,7 @@ async def test_sdk_runtime_is_rest_against_local_api(rt):
     # Boxlite.rest() always wires REST; check the URL the SDK is actually
     # going to use by inspecting the credentials we built it from.
     import tomllib
+
     cred = tomllib.loads((Path.home() / ".boxlite/credentials.toml").read_text())
     p = cred["profiles"]["p1"]
     url = p["url"]

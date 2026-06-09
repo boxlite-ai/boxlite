@@ -1,4 +1,4 @@
-"""C SDK entry-point e2e: compiles and runs scripts/test/e2e/sdks/c/e2e_basic.c
+"""C SDK entry-point e2e: compiles and runs the e2e_basic.c next to this file
 against libboxlite.so, asserts a successful box round-trip + runner journal
 contains the box id.
 
@@ -18,11 +18,11 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
+REPO = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(REPO / "scripts" / "test" / "e2e" / "lib"))
 from path_verification import runner_journal_seek, runner_hits_for_box
 
-REPO = Path(__file__).resolve().parents[4]
-SRC = REPO / "scripts/test/e2e/sdks/c/e2e_basic.c"
+SRC = Path(__file__).parent / "e2e_basic.c"
 HDR = REPO / "sdks/c/include"
 LIB_DIR = REPO / "target/release"
 UUID_RE = re.compile(

@@ -50,7 +50,7 @@ sleep 2
 echo ""
 echo "═══ Phase A: against MAIN runner — expect FAIL ═══"
 set +e
-python3 -m pytest "$SCRIPT_DIR/cases/" -v
+bash "$SCRIPT_DIR/run.sh"
 PHASE_A=$?
 set -e
 echo "Phase A exit = $PHASE_A (expect 1)"
@@ -61,7 +61,7 @@ sleep 2
 echo ""
 echo "═══ Phase B: against PR runner — expect PASS ═══"
 set +e
-python3 -m pytest "$SCRIPT_DIR/cases/" -v
+bash "$SCRIPT_DIR/run.sh"
 PHASE_B=$?
 set -e
 echo "Phase B exit = $PHASE_B (expect 0)"

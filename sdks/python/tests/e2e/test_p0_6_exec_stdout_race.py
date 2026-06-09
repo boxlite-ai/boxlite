@@ -17,6 +17,7 @@ Loss-rate threshold (`MAX_LOSS_RATE`) is set deliberately tight so a
 regression on either side of the race window deterministically trips it.
 Stock 0.9.5: ~90% loss. With fix: 0% loss.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -24,9 +25,8 @@ import os
 
 import boxlite
 import pytest
-import pytest_asyncio
 
-from conftest import drain, stdout_line_count
+from e2e_helpers import drain, stdout_line_count
 
 ROUNDS = int(os.environ.get("BOXLITE_E2E_P06_ROUNDS", "5"))
 MAX_LOSS_RATE = float(os.environ.get("BOXLITE_E2E_P06_MAX_LOSS", "0.05"))
@@ -68,8 +68,10 @@ async def test_short_command_stdout_not_dropped(rt, image):
                 losses += 1
 
     loss_rate = losses / execs if execs else 1.0
-    print(f"\nP0-6: execs={execs} losses={losses} "
-          f"rate={loss_rate:.1%} histogram={dict(sorted(histogram.items()))}")
+    print(
+        f"\nP0-6: execs={execs} losses={losses} "
+        f"rate={loss_rate:.1%} histogram={dict(sorted(histogram.items()))}"
+    )
     assert loss_rate <= MAX_LOSS_RATE, (
         f"stdout silently dropped on {losses}/{execs} execs (rate={loss_rate:.1%}); "
         f"this is the #563 regression — see PR for the FFI drain-barrier fix"

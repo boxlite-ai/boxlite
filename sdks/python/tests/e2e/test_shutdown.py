@@ -10,6 +10,7 @@ what shutdown means at the REST layer:
     when a second runtime against the same API is built.
   - A double-close is a no-op (idempotent).
 """
+
 from __future__ import annotations
 
 import tomllib
@@ -20,14 +21,16 @@ import pytest
 
 
 def _build_runtime():
-    p = tomllib.loads(
-        (Path.home() / ".boxlite/credentials.toml").read_text()
-    )["profiles"]["p1"]
-    return boxlite.Boxlite.rest(boxlite.BoxliteRestOptions(
-        url=p["url"],
-        credential=boxlite.ApiKeyCredential(p["api_key"]),
-        path_prefix=p.get("path_prefix") or "",
-    ))
+    p = tomllib.loads((Path.home() / ".boxlite/credentials.toml").read_text())[
+        "profiles"
+    ]["p1"]
+    return boxlite.Boxlite.rest(
+        boxlite.BoxliteRestOptions(
+            url=p["url"],
+            credential=boxlite.ApiKeyCredential(p["api_key"]),
+            path_prefix=p.get("path_prefix") or "",
+        )
+    )
 
 
 @pytest.mark.asyncio
@@ -56,8 +59,7 @@ async def test_two_runtimes_share_world(rt, image):
         infos = await rt2.list_info()
         ids = {info.id for info in infos}
         assert box.id in ids, (
-            f"second runtime didn't see box {box.id} created by first; "
-            f"got {ids}"
+            f"second runtime didn't see box {box.id} created by first; got {ids}"
         )
     finally:
         await rt.remove(box.id, force=True)

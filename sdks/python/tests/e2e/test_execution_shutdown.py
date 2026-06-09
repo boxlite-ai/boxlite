@@ -4,6 +4,7 @@ Verifies the behaviour of exec and box state during/after box.stop():
 pending exec.wait() should resolve, new exec attempts on a stopped
 box should be cleanly rejected (not 5xx).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -11,7 +12,7 @@ import asyncio
 import boxlite
 import pytest
 
-from conftest import drain
+from e2e_helpers import drain
 
 
 @pytest.mark.asyncio

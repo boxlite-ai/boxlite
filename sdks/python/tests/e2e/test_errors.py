@@ -6,9 +6,9 @@ This file keeps the error-type contract honest end-to-end:
     (not a bare RuntimeError, not a 5xx leak).
   - The error message preserves the server's reason / code.
 """
+
 from __future__ import annotations
 
-import json
 import tomllib
 import urllib.error
 import urllib.request
@@ -19,9 +19,9 @@ import pytest
 
 
 def _profile():
-    return tomllib.loads(
-        (Path.home() / ".boxlite/credentials.toml").read_text()
-    )["profiles"]["p1"]
+    return tomllib.loads((Path.home() / ".boxlite/credentials.toml").read_text())[
+        "profiles"
+    ]["p1"]
 
 
 @pytest.mark.asyncio
@@ -42,10 +42,11 @@ async def test_create_with_unknown_image_returns_typed_error(rt):
         f"unknown image leaked a 5xx: {msg!r}"
     )
     # Must mention either the image name or "not found" / "snapshot"
-    assert ("not found" in msg.lower() or "snapshot" in msg.lower()
-            or "image" in msg.lower()), (
-        f"error message doesn't explain the problem: {msg!r}"
-    )
+    assert (
+        "not found" in msg.lower()
+        or "snapshot" in msg.lower()
+        or "image" in msg.lower()
+    ), f"error message doesn't explain the problem: {msg!r}"
 
 
 @pytest.mark.asyncio

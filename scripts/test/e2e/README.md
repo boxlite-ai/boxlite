@@ -3,7 +3,7 @@
 These tests exercise the **full production path**:
 
 ```
-Python SDK (boxlite.Boxlite.rest) → HTTP → NestJS API → HTTP → boxlite-runner → libkrun VM
+SDK (Python / Go / Node / C / CLI) → HTTP → NestJS API → HTTP → boxlite-runner → libkrun VM
 ```
 
 Existing `make test:integration:*` tests use the local PyO3 / FFI path
@@ -12,17 +12,62 @@ only surfaces on the REST → API → runner chain (e.g. #563's exec-stdout drop
 #627's attach re-drain) will pass those tests and reach production. This suite
 exists to catch those.
 
+## Layout
+
+Cases live next to the SDK they exercise, so each SDK's tests stay with that
+SDK's source. The shared stack-level infra (bootstrap, fixtures, helpers)
+stays under `scripts/test/e2e/`.
+
+```
+scripts/test/e2e/                # stack-level infra only
+├── README.md
+├── bootstrap.sh                 # Install / build services from working tree
+├── fixture_setup.py             # Register snapshots / quota / profiles (idempotent)
+├── teardown.sh                  # Revert bootstrap state (3 modes)
+├── run.sh                       # bootstrap + fixture_setup + pytest
+├── two_sided.sh                 # Validates test catches bug + PR fixes it
+├── pytest.ini                   # testpaths = all per-SDK e2e dirs
+└── lib/
+    └── path_verification.py     # Helpers that prove SDK→API→Runner was the route
+
+sdks/python/tests/e2e/           # Python SDK e2e (pytest)
+├── conftest.py                  # rt / image / box fixtures (REST-only)
+├── test_path_verification.py    # Meta-test: prove the path
+├── test_p0_6_exec_stdout_race.py
+├── test_lifecycle.py
+└── ... (one file per behavior class)
+
+sdks/c/tests/e2e/                # C SDK e2e (pytest driver + C subprocess)
+├── e2e_basic.c                  # Subprocess target compiled & invoked by the driver
+└── test_c_entry.py              # pytest driver
+
+sdks/go/tests/e2e/               # Go SDK e2e (pytest driver + Go subprocess)
+├── e2e_basic.go
+└── test_go_entry.py
+
+sdks/node/tests/e2e/             # Node SDK e2e (pytest driver + tsx subprocess)
+├── e2e_basic.ts
+└── test_node_entry.py
+
+src/cli/tests/e2e/               # CLI binary e2e (pytest driver)
+└── test_cli_entry.py
+```
+
 ## What the suite verifies
 
-Every test in `cases/` uses the REST-mode runtime built by `conftest.py::rt`.
-There is no path to local FFI from this directory — tests would fail import if
-they tried.
+Every Python SDK case uses the REST-mode runtime built by
+`sdks/python/tests/e2e/conftest.py::rt`. There is no path to local FFI from
+that fixture — tests would fail at import if they tried.
 
-`cases/test_path_verification.py` is the meta-test: it spawns one box, runs
-one exec, and asserts that **both** `:3000` (API) and `:8080` (runner)
-received the corresponding HTTP requests by tailing `/var/log/boxlite-api.log`
-and `journalctl -u boxlite-runner`. If that meta-test passes, every other
-case in this suite is using the same fixtures and the same path.
+`sdks/python/tests/e2e/test_path_verification.py` is the meta-test: it spawns
+one box, runs one exec, and asserts that the runner journal
+(`journalctl -u boxlite-runner`) saw the corresponding job. If that meta-test
+passes, every other Python case is using the same fixtures and the same path.
+
+Cross-SDK entry tests (test_{c,go,node}_entry.py, test_cli_entry.py) drive
+each SDK's binding layer via subprocess and check the runner journal
+themselves — the Python autouse fixture can't see across subprocess
+boundaries.
 
 ## Prereqs
 
@@ -64,10 +109,11 @@ python3 scripts/test/e2e/fixture_setup.py
 
 This:
 
-- Registers `alpine:3.23` snapshot via the API admin endpoint
-- Waits for the snapshot to reach `active` state (runner pulls + pushes to local registry)
+- Registers `alpine:3.23` and `ubuntu:22.04` snapshots via the API admin endpoint
+- Waits for snapshots to reach `active` state (runner pulls + pushes to local registry)
 - Sets reasonable per-sandbox quotas on the admin org
-- Adds a `[profiles.p1]` entry in `~/.boxlite/credentials.toml` pointing at the local API
+- Writes `[profiles.p1]` AND `[profiles.default]` in `~/.boxlite/credentials.toml`
+  (CLI uses `default` without a flag; Python conftest uses `p1`)
 
 ## Running
 
@@ -75,37 +121,19 @@ This:
 # Everything (after bootstrap + fixture_setup):
 scripts/test/e2e/run.sh
 
-# Or via pytest directly:
-pytest scripts/test/e2e/cases/
+# Or via pytest directly (uses scripts/test/e2e/pytest.ini's testpaths):
+cd scripts/test/e2e && python3 -m pytest -v
 
 # Just one case:
-pytest scripts/test/e2e/cases/test_p0_6_exec_stdout_race.py -v
+pytest sdks/python/tests/e2e/test_p0_6_exec_stdout_race.py -v
 
 # Two-sided (proves the suite detects the bug and the PR fixes it):
 PR_REF=<branch>  scripts/test/e2e/two_sided.sh
 ```
 
-## Layout
-
-```
-scripts/test/e2e/
-├── README.md
-├── bootstrap.sh             # Install services
-├── fixture_setup.py         # Register snapshots / quota / profile (idempotent)
-├── run.sh                   # bootstrap + fixture_setup + pytest
-├── two_sided.sh             # Validates that test catches bug + PR fixes it
-├── pytest.ini
-├── lib/
-│   └── path_verification.py # Helpers that prove SDK→API→Runner was the route
-└── cases/
-    ├── conftest.py          # rt / image / box fixtures (REST-only)
-    ├── test_path_verification.py    # Meta-test: prove the path
-    └── test_p0_6_exec_stdout_race.py
-```
-
 ## Adding a case
 
-1. Drop a `test_*.py` into `cases/`
-2. Take fixtures from `conftest.py` — at minimum `rt` (already REST-bound)
+1. Pick the SDK the case primarily exercises and drop a `test_*.py` into that SDK's `tests/e2e/` dir (or `src/cli/tests/e2e/` for CLI)
+2. Take fixtures from the nearest `conftest.py` — at minimum `rt` (already REST-bound) for Python SDK tests
 3. Reference the issue / PR in the docstring so it survives the regression
-4. Run `pytest cases/test_yours.py -v` locally first
+4. Run `pytest <your test file> -v` locally first
