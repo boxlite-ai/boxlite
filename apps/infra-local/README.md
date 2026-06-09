@@ -128,7 +128,7 @@ After `make stack-up` you have 10 L1 daemon boxes + 1 one-shot bootstrap
 | Service        | Host endpoint              | Notes                                    |
 |---|---|---|
 | Dashboard (Vite) | `http://127.0.0.1:3000/`   | React + OIDC login flow                  |
-| API (NestJS)     | `http://127.0.0.1:3001/api`| Reads `apps/.env`; auto-seeds admin org + default region |
+| API (NestJS)     | `http://127.0.0.1:3001/api`| Reads `apps/.env` (→ `apps/api/.env`, seeded on first `stack-up` from `configs/api.env`); auto-seeds admin org + default region |
 | Proxy (Go)       | `http://127.0.0.1:4000`    | Sandbox port-preview `<port>-<token>.localhost:28080` reverse-proxy target |
 | Runner (Go)      | `http://127.0.0.1:3003`    | Native arm64; spawns L3 microVMs in `~/.boxlite-runner/` |
 

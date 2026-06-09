@@ -69,6 +69,15 @@ for bin in "${RUNNER_BIN}" "${PROXY_BIN}"; do
   fi
 done
 
+# ---------- API .env (local-stack config) ----------
+# apps/api/.env is gitignored (prod holds real secrets there), so a fresh
+# clone has no file for the symlink below to point at. Seed it from the
+# checked-in local-stack template on first run; never clobber a dev's edits.
+if [ ! -f "${APPS_DIR}/api/.env" ]; then
+  log "apps/api/.env missing — seeding from infra-local template"
+  cp "${INFRA_LOCAL_DIR}/configs/api.env" "${APPS_DIR}/api/.env"
+fi
+
 # ---------- Symlinks NestJS needs ----------
 # apps/.env → apps/api/.env (NestJS reads .env from cwd=apps/)
 [ -L "${APPS_DIR}/.env" ] || ln -sf api/.env "${APPS_DIR}/.env"
