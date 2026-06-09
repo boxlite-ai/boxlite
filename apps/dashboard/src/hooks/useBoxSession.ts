@@ -125,7 +125,10 @@ export function useBoxSession(options?: UseBoxSessionOptions): UseBoxSessionResu
 
   const boxQuery = useQuery<Box>({
     queryKey: queryKeys.box.instance(resolvedScope, boxId),
-    queryFn: () => client?.get(boxId) ?? Promise.reject(new Error('Client not initialized')),
+    queryFn: async () => {
+      if (!client) throw new Error('Client not initialized')
+      return await client.get(boxId)
+    },
     enabled: !!resolvedScope && !!boxId && !!client,
   })
 
