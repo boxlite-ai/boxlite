@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	sdkboxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/pkg/boxlite"
 	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
@@ -74,7 +75,7 @@ func BoxliteExec(ctx *gin.Context) {
 
 	execId, err := execManager.Start(ctx.Request.Context(), bx, boxId, startOpts)
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("exec failed: %s", err)})
+		ctx.JSON(classifyExecError(err), gin.H{"error": fmt.Sprintf("exec failed: %s", err)})
 		return
 	}
 
@@ -231,7 +232,16 @@ func classifyExecError(err error) int {
 		return http.StatusConflict
 	case errors.Is(err, boxlite.ErrExecNotTTY):
 		return http.StatusBadRequest
-	default:
-		return http.StatusInternalServerError
 	}
+	// SDK typed errors (sdks/go/errors.go) — the Start() path tunnels
+	// these out of the Rust core when the box was already gone / stopped
+	// before the call landed. The canonical mapping
+	// (src/shared/src/errors.rs:198-280) puts them at 404 / 409 / 409.
+	if sdkboxlite.IsNotFound(err) {
+		return http.StatusNotFound
+	}
+	if sdkboxlite.IsStopped(err) || sdkboxlite.IsInvalidState(err) {
+		return http.StatusConflict
+	}
+	return http.StatusInternalServerError
 }
