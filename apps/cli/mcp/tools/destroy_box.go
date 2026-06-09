@@ -44,10 +44,10 @@ func DestroyBox(ctx context.Context, request mcp.CallToolRequest, args DestroyBo
 		_, _, err := apiClient.BoxAPI.DeleteBox(ctx, *args.Id).Execute()
 		if err != nil {
 			if retry == maxRetries-1 {
-				return &mcp.CallToolResult{IsError: true}, fmt.Errorf("failed to destroy box after %d retries: %v", maxRetries, err)
+				return &mcp.CallToolResult{IsError: true}, fmt.Errorf("failed to destroy box after %d retries", maxRetries)
 			}
 
-			log.Infof("Box creation failed, retrying: %v", err)
+			log.Infof("Box destroy request failed, retrying")
 
 			time.Sleep(retryDelay)
 			retryDelay = retryDelay * 3 / 2 // Exponential backoff
