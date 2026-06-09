@@ -342,7 +342,7 @@ func (g *SSHGateway) handleChannel(newChannel ssh.NewChannel, runnerID string, r
 		// Update immediately upon starting
 		_, err := g.apiClient.BoxAPI.UpdateLastActivity(keepAliveContext, boxId).Execute()
 		if err != nil {
-			log.Warnf("failed to update last activity for box %s (will retry): %v", boxId, err)
+			log.Warnf("failed to update last activity for box %s (will retry)", boxId)
 		}
 
 		// Then every 45 seconds
@@ -354,7 +354,7 @@ func (g *SSHGateway) handleChannel(newChannel ssh.NewChannel, runnerID string, r
 			case <-ticker.C:
 				_, err := g.apiClient.BoxAPI.UpdateLastActivity(keepAliveContext, boxId).Execute()
 				if err != nil {
-					log.Errorf("failed to update last activity for box %s: %v", boxId, err)
+					log.Errorf("failed to update last activity for box %s", boxId)
 				}
 			case <-keepAliveContext.Done():
 				return
