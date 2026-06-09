@@ -330,7 +330,93 @@ Notes on the as-built matrix (one row per copy_in/copy_out × option):
 - No change to the gRPC guest `Files` service contract — the guest already
   honors all options; the REST/serve layer and the SDK option surfaces are
   brought in line instead.
-- No `apps/` (Go runner / daemon toolbox) changes.
+- Cloud REST path parity (the Go `apps/runner` files endpoints) is addressed
+  separately in §10 — the local / `--url` / `serve` / SDK layers above are the
+  original scope.
 - Node SDK code unchanged (already consistent by construction).
 - ~~The `--include-parent` CLI flag ergonomics nit is deferred.~~ Addressed:
   replaced with `--no-include-parent` (see §3).
+
+## 10. Cloud REST path parity (apps/runner)
+
+§1–§9 cover the local backend, the Rust REST client (`--url`), `boxlite serve`,
+and the SDKs. The **production cloud copy path is a different code path** not
+covered above:
+
+<pre>
+SDK(rest) ──HTTP──> apps/api ─────proxy─────> apps/runner ──> Go SDK ──> boxlite local backend
+            ?path&         boxlite-proxy        boxlite_files.go   sdks/go    (already correct)
+            overwrite&...  .controller.ts       (Go hand-rolled tar)
+                           @All(':boxId/files')
+                           → /v1/boxes/{id}/files
+</pre>
+
+The cloud client is the Rust REST client: `client.rs` builds
+`{base}/v1/{prefix}/boxes/{id}/files`, and `apps/api`
+(`@Controller('v1/:prefix/boxes')`, `@All(':boxId/files')`) is a transparent
+proxy that forwards query + body to the runner. So the runner must honor the
+same contract §4.1 defines — but it does not.
+
+### 10.1 Gaps in `apps/runner/pkg/api/controllers/boxlite_files.go`
+
+- **G1 — options dropped.** Reads only `ctx.Query("path")`; never
+  `overwrite`/`include_parent`/`follow_symlinks`. The proxy forwards them; the
+  Go handler ignores them → zero effect on the cloud path.
+- **G2 — copy_in does not extract the tar.** Writes the PUT body to a temp
+  `*.tar` and calls `bx.CopyInto(tmpTarPath, destPath)`; the Go SDK copies a
+  host *path*, it does not unpack a tar → the box gets the raw tar (or wrong
+  structure). Matches the known "dev.boxlite.ai copy broken" symptom.
+- **G3 — copy_out re-tars by hand and loses fidelity.** `filepath.Walk` +
+  `tar.FileInfoHeader(info, "")`: `if info.IsDir() { return }` drops **empty
+  directories**; empty linkname + `os.Open(path)` **mangles symlinks**.
+- **G4 — two tar implementations** (Rust `boxlite_shared::tar` vs Go stdlib
+  `archive/tar`) → cross-language drift.
+
+### 10.2 Approach A — mirror the Rust serve handler in Go
+
+Re-implement the runner endpoints against the §4.1 contract using the Go SDK
+copy options (`WithOverwrite`/`WithIncludeParent`/`WithFollowSymlinks`) plus two
+faithful tar helpers. No new SDK surface, no gRPC guest-contract change.
+
+- **`pkg/api/controllers/filestar.go`** (the G2/G3 bug layer; pure, unit-tested
+  without a box):
+  - `extractTar(r, destDir)` — preserve files, dirs (incl. empty), symlinks
+    (with target), modes; reject path-escape entries. Lays the tar's contents at
+    the staged root (reproducing the Rust `tar::unpack(force_directory:true)`
+    semantics), so `CopyInto(tmpDir, path, include_parent=false)` resolves
+    file-vs-dir from `path`.
+  - `packDir(srcDir, w)` — emit a tar preserving dir entries, empty dirs, and
+    symlinks; replaces the broken inline `filepath.Walk`.
+- **`pkg/boxlite/client.go`** — `CopyInto/CopyOut` gain `opts ...boxlite.CopyOption`,
+  forwarded to the SDK.
+- **`pkg/api/controllers/boxlite_files.go`** — rewrite:
+  - upload: read `path` + `overwrite` (default true); `extractTar(body→tmp)`;
+    `CopyInto(tmp, path, WithIncludeParent(false), WithOverwrite(ow))`; 204.
+  - download: read `path` + `include_parent` (default true) + `follow_symlinks`
+    (default false); `CopyOut(path, tmp, WithIncludeParent(ip), WithFollowSymlinks(fs))`;
+    `packDir(tmp → response)`.
+
+Data flow (aligned with §4.3/§4.4):
+
+<pre>
+copy_in :  client tar ─PUT?path&overwrite─> [extractTar→tmp] ─CopyInto(tmp,dst,!parent,ow)─> box
+copy_out:  GET?path&include_parent&follow ─> CopyOut(src,tmp,ip,fs) ─[packDir tmp]─> tar ─> client
+</pre>
+
+### 10.3 Tests (handler + real box)
+
+- `filestar_test.go` — VM-free unit tests for `extractTar`/`packDir`
+  round-trips: symlink preserved, empty dir preserved, nested tree, file mode,
+  path-escape rejected. Directly guards G3.
+- `boxlite_files_test.go` — real-box integration (M5): seed the `runner`
+  singleton with a real `blclient.Client` (own the seeding via `TestMain`/`sync.Once`
+  — the singleton has no reset), create a box, drive the handlers via `httptest`
+  across the §5 scenario matrix (F-010, include_parent ±, overwrite reject,
+  follow_symlinks ±), asserting round-trip fidelity.
+
+### 10.4 Error handling / scope
+
+Copy failures (incl. `overwrite=false` conflict) surface as HTTP 500 with the
+SDK message — same as Rust serve (§6); 4xx reclassification stays out of scope.
+Missing `path` → 400. Out of scope: guest gRPC contract, `apps/api` (already
+transparent), Node SDK, the deprecated Daytona `/toolbox/.../files` endpoint.
