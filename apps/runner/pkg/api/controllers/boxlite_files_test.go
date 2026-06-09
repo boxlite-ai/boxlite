@@ -132,13 +132,27 @@ func (e *copyTestEnv) download(t *testing.T, query string) (int, *bytes.Buffer) 
 	return w.Code, w.Body
 }
 
+// boxCat reads a file from the box, polling until it appears. A copy_into
+// returns 204 before the written bytes are visible to a subsequent guest exec
+// (a guest-side propagation lag, observed ~<500ms), so a single immediate read
+// races empty. We poll for the file to exist and be non-empty, then return its
+// contents for the caller to assert — the content check stays in the test, so
+// this gates on visibility without masking a wrong-content write.
 func (e *copyTestEnv) boxCat(t *testing.T, path string) string {
 	t.Helper()
-	res, err := e.client.Exec(context.Background(), e.boxID, "/bin/sh", "-c", "cat '"+path+"' 2>/dev/null")
-	if err != nil {
-		t.Fatalf("exec cat: %v", err)
+	var last string
+	for attempt := 0; attempt < 40; attempt++ {
+		res, err := e.client.Exec(context.Background(), e.boxID, "/bin/sh", "-c", "cat '"+path+"' 2>/dev/null")
+		if err != nil {
+			t.Fatalf("exec cat: %v", err)
+		}
+		last = res.StdOut
+		if last != "" {
+			return last
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
-	return res.StdOut
+	return last
 }
 
 // G2: copy_in must EXTRACT the tar; the box gets the FILE, not a tar.
