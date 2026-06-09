@@ -20,7 +20,38 @@ pub unsafe extern "C" fn boxlite_copy_into(
     user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    box_copy_into(handle, host_src, guest_dst, cb, user_data, out_error)
+    box_copy_into(
+        handle,
+        host_src,
+        guest_dst,
+        default_copy_options(),
+        cb,
+        user_data,
+        out_error,
+    )
+}
+
+/// Variant of `boxlite_copy_into` that takes an explicit `overwrite`
+/// flag. Required for REST-mode `copy_in(..., overwrite=False)` to
+/// reach the guest unchanged — `boxlite_copy_into` hard-codes
+/// `overwrite=true` (the SDK's default) and there's no other way to
+/// pass the flag across the C ABI today. All other CopyOptions
+/// (recursive, follow_symlinks, include_parent) stay defaulted because
+/// the runner-side staging step encodes them at archive-creation time
+/// before this call is reached.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_copy_into_with_options(
+    handle: *mut CBoxHandle,
+    host_src: *const c_char,
+    guest_dst: *const c_char,
+    overwrite: bool,
+    cb: CBoxCopyCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    let mut opts = default_copy_options();
+    opts.overwrite = overwrite;
+    box_copy_into(handle, host_src, guest_dst, opts, cb, user_data, out_error)
 }
 
 #[unsafe(no_mangle)]
@@ -48,6 +79,7 @@ unsafe fn box_copy_into(
     handle: *mut BoxHandle,
     host_src: *const c_char,
     guest_dst: *const c_char,
+    opts: CopyOptions,
     cb: CBoxCopyCb,
     user_data: *mut c_void,
     out_error: *mut FFIError,
@@ -80,7 +112,7 @@ unsafe fn box_copy_into(
         let user_data_addr = user_data as usize;
 
         handle_ref.tokio_rt.spawn(async move {
-            let result = lite.copy_into(src, dst, default_copy_options()).await;
+            let result = lite.copy_into(src, dst, opts).await;
             push_event(
                 &queue,
                 RuntimeEvent::Copy {
