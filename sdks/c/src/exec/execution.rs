@@ -13,11 +13,11 @@
 use futures::StreamExt;
 use std::os::raw::{c_int, c_void};
 use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::runtime::Runtime as TokioRuntime;
-use tokio::sync::oneshot;
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
 /// Synthetic exit code emitted when `boxlite_execution_free` tears down a
@@ -64,10 +64,21 @@ pub struct ExecutionHandle {
     /// waits-for-completion (with a bounded timeout) when the pump has
     /// claimed dispatch.
     exit_pump_handle: Mutex<Option<JoinHandle<()>>>,
-    /// One receiver per registered stream pump. `register_exit` drains this
-    /// list and `exit_pump` awaits each before pushing the Exit event so
-    /// the Exit callback is strictly the last one for the execution.
-    stream_done_rx: Mutex<Vec<oneshot::Receiver<()>>>,
+    /// Count of registered stream pumps that have not yet finished. Both
+    /// `exit_pump` and the `execution_wait` task await this hitting zero
+    /// before pushing their terminal events, so every `Stdout`/`Stderr`
+    /// event for the execution lands in the queue ahead of `Exit`/`Wait`.
+    /// Without this on the wait path, the wait gRPC reply can race ahead
+    /// of still-in-flight attach chunks: the Go SDK observes wait
+    /// completion, returns from `box.Exec`, and never sees stdout that
+    /// reaches the queue moments later.
+    streams_pending: Arc<AtomicI32>,
+    /// Notified by stream pumps when `streams_pending` transitions to 0.
+    /// `notify_waiters` doesn't store a permit, so consumers MUST follow
+    /// the standard register-then-check pattern (register `notified()`,
+    /// then load the counter, then `await`) to avoid the
+    /// post-notification miss.
+    streams_done: Arc<Notify>,
     /// `(cb, user_data)` for the exit callback, captured at register time.
     /// Used by `_free` to synthesise an Exit event when the process is
     /// torn down before it would have exited naturally — guarantees the
@@ -260,7 +271,8 @@ unsafe fn box_exec(
                     pending_stderr: stderr,
                     pumps: Mutex::new(Vec::new()),
                     exit_pump_handle: Mutex::new(None),
-                    stream_done_rx: Mutex::new(Vec::new()),
+                    streams_pending: Arc::new(AtomicI32::new(0)),
+                    streams_done: Arc::new(Notify::new()),
                     exit_dispatch: Mutex::new(None),
                     queue: handle_ref.queue.clone(),
                     tokio_rt: handle_ref.tokio_rt.clone(),
@@ -304,11 +316,20 @@ unsafe fn register_stdout(
 
         let queue = exec_ref.queue.clone();
         let user_data_addr = user_data as usize;
-        let (done_tx, done_rx) = oneshot::channel::<()>();
-        exec_ref.stream_done_rx.lock().unwrap().push(done_rx);
-        let pump = exec_ref
-            .tokio_rt
-            .spawn(stdout_pump(stream, cb, user_data_addr, queue, done_tx));
+        // Bump the pending-stream counter BEFORE spawning so any wait /
+        // exit task already polling can't observe a transient zero and
+        // push its terminal event ahead of us.
+        exec_ref.streams_pending.fetch_add(1, Ordering::AcqRel);
+        let pending = exec_ref.streams_pending.clone();
+        let done = exec_ref.streams_done.clone();
+        let pump = exec_ref.tokio_rt.spawn(stdout_pump(
+            stream,
+            cb,
+            user_data_addr,
+            queue,
+            pending,
+            done,
+        ));
         exec_ref.pumps.lock().unwrap().push(pump);
         BoxliteErrorCode::Ok
     }
@@ -339,11 +360,18 @@ unsafe fn register_stderr(
 
         let queue = exec_ref.queue.clone();
         let user_data_addr = user_data as usize;
-        let (done_tx, done_rx) = oneshot::channel::<()>();
-        exec_ref.stream_done_rx.lock().unwrap().push(done_rx);
-        let pump = exec_ref
-            .tokio_rt
-            .spawn(stderr_pump(stream, cb, user_data_addr, queue, done_tx));
+        // See register_stdout for the ordering rationale on the pre-spawn bump.
+        exec_ref.streams_pending.fetch_add(1, Ordering::AcqRel);
+        let pending = exec_ref.streams_pending.clone();
+        let done = exec_ref.streams_done.clone();
+        let pump = exec_ref.tokio_rt.spawn(stderr_pump(
+            stream,
+            cb,
+            user_data_addr,
+            queue,
+            pending,
+            done,
+        ));
         exec_ref.pumps.lock().unwrap().push(pump);
         BoxliteErrorCode::Ok
     }
@@ -370,11 +398,8 @@ unsafe fn register_exit(
         // Capture (cb, user_data) so the force-cleanup path in
         // `execution_free` can synthesise an Exit event on teardown.
         *exec_ref.exit_dispatch.lock().unwrap() = Some((cb, user_data_addr));
-        // Take ownership of all stream-pump completion receivers — exit_pump
-        // awaits each before pushing Exit, so Exit is the strictly-last
-        // event for this execution. Stream registrations after this point
-        // would not be respected; today the API forbids re-registration.
-        let stream_dones = std::mem::take(&mut *exec_ref.stream_done_rx.lock().unwrap());
+        let streams_pending = exec_ref.streams_pending.clone();
+        let streams_done = exec_ref.streams_done.clone();
         let pump = exec_ref.tokio_rt.spawn(exit_pump(
             exec_arc,
             cb,
@@ -382,7 +407,8 @@ unsafe fn register_exit(
             queue,
             process_completed,
             exit_dispatched,
-            stream_dones,
+            streams_pending,
+            streams_done,
         ));
         // Track exit_pump separately from stream pumps so `_free` can wait
         // for an in-flight Exit push instead of aborting it mid-yield. API
@@ -477,6 +503,8 @@ unsafe fn execution_wait(
         let queue = exec_ref.queue.clone();
         let user_data_addr = user_data as usize;
         let process_completed = exec_ref.process_completed.clone();
+        let streams_pending = exec_ref.streams_pending.clone();
+        let streams_done = exec_ref.streams_done.clone();
 
         exec_ref.tokio_rt.spawn(async move {
             let result = wait_on_clone(&exec_arc).await;
@@ -488,6 +516,13 @@ unsafe fn execution_wait(
             if result.is_ok() {
                 process_completed.store(true, Ordering::Release);
             }
+            // The wait gRPC reply can return ahead of still-in-flight
+            // stdout/stderr chunks on the attach stream. Drain registered
+            // stream pumps before pushing Wait so every Stdout/Stderr
+            // event lands ahead of it; otherwise a fast caller (e.g.
+            // Go SDK's `box.Exec`) returns from Wait before its stream
+            // callbacks observe the final chunks.
+            await_streams_drained(&streams_pending, &streams_done).await;
             push_event(
                 &queue,
                 RuntimeEvent::Wait {
@@ -661,13 +696,22 @@ unsafe fn execution_free(execution: *mut ExecutionHandle) {
         //
         // Aborting drops the stream pump's future; if it was waiting
         // on push_event's yield_now loop, the future is dropped before
-        // the next push_event re-check, so no Stdout/Stderr lands. If
-        // it was on its own done_tx send, the receiver (already-
-        // completed exit_pump) is gone — harmless.
+        // the next push_event re-check, so no Stdout/Stderr lands. The
+        // aborted pump never reaches `finish_stream`, so streams_pending
+        // never decrements for it — see the explicit clamp below.
         let pumps = std::mem::take(&mut *exec_box.pumps.lock().unwrap());
         for pump in &pumps {
             pump.abort();
         }
+
+        // The aborted pumps never ran `finish_stream`, so any in-flight
+        // exit/wait task parked in `await_streams_drained` would hang
+        // forever waiting for the count to hit 0. Clamp it to 0 and
+        // wake all waiters so they push their terminal events and
+        // unblock the Go SDK's `box.Exec` rather than deadlock on the
+        // user's `Close()`.
+        exec_box.streams_pending.store(0, Ordering::Release);
+        exec_box.streams_done.notify_waiters();
 
         // Race exit dispatch with `exit_pump`. Two outcomes:
         //
@@ -724,7 +768,8 @@ async fn stdout_pump<S>(
     cb: CBoxStdoutFn,
     user_data_addr: usize,
     queue: Arc<EventQueue>,
-    done_tx: oneshot::Sender<()>,
+    streams_pending: Arc<AtomicI32>,
+    streams_done: Arc<Notify>,
 ) where
     S: futures::Stream<Item = String> + Unpin,
 {
@@ -739,9 +784,7 @@ async fn stdout_pump<S>(
         )
         .await;
     }
-    // Signal the exit pump we're done. Failure (rx dropped) means exit_pump
-    // already completed or was never registered — either way harmless.
-    let _ = done_tx.send(());
+    finish_stream(&streams_pending, &streams_done);
 }
 
 async fn stderr_pump<S>(
@@ -749,7 +792,8 @@ async fn stderr_pump<S>(
     cb: CBoxStderrFn,
     user_data_addr: usize,
     queue: Arc<EventQueue>,
-    done_tx: oneshot::Sender<()>,
+    streams_pending: Arc<AtomicI32>,
+    streams_done: Arc<Notify>,
 ) where
     S: futures::Stream<Item = String> + Unpin,
 {
@@ -764,7 +808,33 @@ async fn stderr_pump<S>(
         )
         .await;
     }
-    let _ = done_tx.send(());
+    finish_stream(&streams_pending, &streams_done);
+}
+
+/// Decrement the per-execution pending-stream counter and, on the 1→0
+/// transition, wake everyone parked in `await_streams_drained`. Only
+/// notify on that transition so we don't churn the waker for every
+/// pump that finishes mid-run.
+fn finish_stream(pending: &AtomicI32, done: &Notify) {
+    if pending.fetch_sub(1, Ordering::AcqRel) == 1 {
+        done.notify_waiters();
+    }
+}
+
+/// Park until `streams_pending` reaches 0. `tokio::sync::Notify::
+/// notify_waiters` does NOT store a permit, so a notification that
+/// fires between our load and `await` would be lost. Registering
+/// `notified()` BEFORE the load closes that window — if pending
+/// dropped to 0 after our register but before our load, the load
+/// returns 0 and we exit without awaiting.
+async fn await_streams_drained(pending: &AtomicI32, done: &Notify) {
+    loop {
+        let notified = done.notified();
+        if pending.load(Ordering::Acquire) <= 0 {
+            return;
+        }
+        notified.await;
+    }
 }
 
 async fn exit_pump(
@@ -774,16 +844,14 @@ async fn exit_pump(
     queue: Arc<EventQueue>,
     process_completed: Arc<AtomicBool>,
     exit_dispatched: Arc<AtomicBool>,
-    stream_dones: Vec<oneshot::Receiver<()>>,
+    streams_pending: Arc<AtomicI32>,
+    streams_done: Arc<Notify>,
 ) {
     let exit_code = wait_on_clone(&exec_arc).await.unwrap_or(-1);
     // Drain stream pumps before pushing Exit so Exit is the strictly-last
     // event for this execution; the Go SDK relies on this to safely delete
-    // the shared cgo.Handle in its exit handler. Aborted pumps drop their
-    // tx → rx.await returns Err → harmless.
-    for rx in stream_dones {
-        let _ = rx.await;
-    }
+    // the shared cgo.Handle in its exit handler.
+    await_streams_drained(&streams_pending, &streams_done).await;
     process_completed.store(true, Ordering::Release);
     // Claim the Exit dispatch slot. If `execution_free` already won the
     // race (force-close before natural exit propagated), we silently
@@ -867,7 +935,8 @@ mod tests {
             pending_stderr: None,
             pumps: Mutex::new(Vec::new()),
             exit_pump_handle: Mutex::new(None),
-            stream_done_rx: Mutex::new(Vec::new()),
+            streams_pending: Arc::new(AtomicI32::new(0)),
+            streams_done: Arc::new(Notify::new()),
             exit_dispatch: Mutex::new(None),
             queue: Arc::new(EventQueue::new()),
             tokio_rt: runtime,
@@ -1290,6 +1359,178 @@ mod tests {
         );
     }
 
+    // ─── Terminal event must not precede a still-pending stream pump ─────
+    //
+    // The drain-before-wait fix: exit_pump (and the wait task) await
+    // `await_streams_drained` before pushing their terminal Exit/Wait event,
+    // so a fast command's last stdout chunks reach the consumer before it
+    // observes exit. Without the barrier the terminal event races the
+    // still-draining pump → the Go SDK's `box.Exec` returns with empty stdout.
+    //
+    // Deterministic: we pin the racy mid-state (a pump registered but not yet
+    // finished — `pending == 1`) and assert the terminal task is *gated* on
+    // the drain, rather than trying to reproduce the timing race. Removing the
+    // `await_streams_drained` line from `exit_pump` flips this test red.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn exit_event_waits_for_pending_stdout_drain() {
+        let queue = Arc::new(EventQueue::new());
+        let pending = Arc::new(AtomicI32::new(1)); // one stdout pump in flight
+        let done = Arc::new(Notify::new());
+
+        // Drive the real exit terminal path. An empty execution makes
+        // `wait_on_clone` error (exit_code -1), but the drain+push logic runs
+        // unchanged — so a regression in production `exit_pump` fails here.
+        let exec: Arc<Mutex<Option<Execution>>> = Arc::new(Mutex::new(None));
+        let task = {
+            let queue = queue.clone();
+            let pending = pending.clone();
+            let done = done.clone();
+            tokio::spawn(exit_pump(
+                exec,
+                race_exit_cb,
+                0xBEEF,
+                queue,
+                Arc::new(AtomicBool::new(false)), // process_completed
+                Arc::new(AtomicBool::new(false)), // exit_dispatched
+                pending,
+                done,
+            ))
+        };
+
+        // Let the task reach (and park at) await_streams_drained.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // INVARIANT: while a stdout pump is still pending, Exit must not be
+        // queued. Pre-fix (no drain await) it is → this assertion flips red.
+        {
+            let g = queue.inner.lock().unwrap();
+            assert!(
+                !g.iter().any(|e| matches!(e, RuntimeEvent::Exit { .. })),
+                "Exit was queued before the still-pending stdout pump drained \
+                 (terminal event raced the stream pump)"
+            );
+        }
+
+        // Drain the pump: push its tail chunk, then finish_stream (1→0 + notify).
+        push_event(
+            &queue,
+            RuntimeEvent::Stdout {
+                cb: noop_stdout_cb,
+                user_data: 0xFEED,
+                data: b"tail-output".to_vec(),
+            },
+        )
+        .await;
+        finish_stream(&pending, &done);
+
+        // The exit task now unparks and pushes Exit.
+        task.await.expect("exit_pump task joined");
+
+        // Order: the stdout tail chunk must precede the Exit event.
+        let events: Vec<RuntimeEvent> = {
+            let mut g = queue.inner.lock().unwrap();
+            g.drain(..).collect()
+        };
+        let stdout_idx = events
+            .iter()
+            .position(|e| matches!(e, RuntimeEvent::Stdout { .. }));
+        let exit_idx = events
+            .iter()
+            .position(|e| matches!(e, RuntimeEvent::Exit { .. }));
+        assert!(
+            matches!((stdout_idx, exit_idx), (Some(s), Some(x)) if s < x),
+            "stdout must precede Exit; got stdout={stdout_idx:?} exit={exit_idx:?}"
+        );
+    }
+
+    // Symmetric guard for the wait task (execution_wait, line ~525). The wait
+    // task is spawned inline, so we drive it via the real `boxlite_execution_wait`
+    // on a handle whose stream-pump counter is pre-bumped to 1. An empty
+    // execution makes the inner wait error, but the drain+push-Wait logic runs
+    // unchanged. Removing line 525's `await_streams_drained` flips this red.
+    // Sync test (not #[tokio::test]): empty_handle() owns a Runtime, and
+    // dropping a Runtime inside an async context panics. We drive the async
+    // bits through the handle's own runtime via block_on, mirroring
+    // signal_dispatches_signal_event_through_queue.
+    #[test]
+    fn wait_event_waits_for_pending_stdout_drain() {
+        use std::sync::atomic::Ordering as O;
+        use std::time::{Duration, Instant};
+
+        let mut handle = empty_handle(); // execution = None
+        handle.streams_pending.store(1, O::Release); // one stdout pump in flight
+        let queue = handle.queue.clone();
+        let pending = handle.streams_pending.clone();
+        let done = handle.streams_done.clone();
+        let rt = handle.tokio_rt.clone();
+
+        let mut error = FFIError::default();
+        let code = unsafe {
+            boxlite_execution_wait(
+                &mut handle as *mut _,
+                Some(noop_wait),
+                ptr::null_mut(),
+                &mut error,
+            )
+        };
+        assert_eq!(code, BoxliteErrorCode::Ok);
+        unsafe { crate::boxlite_error_free(&mut error as *mut _) };
+
+        // Let the spawned wait task reach (and park at) await_streams_drained.
+        rt.block_on(async { tokio::time::sleep(Duration::from_millis(100)).await });
+
+        // INVARIANT: while a stdout pump is pending, Wait must not be queued.
+        {
+            let g = queue.inner.lock().unwrap();
+            assert!(
+                !g.iter().any(|e| matches!(e, RuntimeEvent::Wait { .. })),
+                "Wait was queued before the still-pending stdout pump drained \
+                 (terminal event raced the stream pump)"
+            );
+        }
+
+        // Drain the pump: push tail chunk, then finish_stream (1→0 + notify).
+        rt.block_on(push_event(
+            &queue,
+            RuntimeEvent::Stdout {
+                cb: noop_stdout_cb,
+                user_data: 0xFEED,
+                data: b"tail-output".to_vec(),
+            },
+        ));
+        finish_stream(&pending, &done);
+
+        // The wait task runs on the handle's own runtime; poll until Wait lands.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            {
+                let g = queue.inner.lock().unwrap();
+                if g.iter().any(|e| matches!(e, RuntimeEvent::Wait { .. })) {
+                    break;
+                }
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            rt.block_on(async { tokio::time::sleep(Duration::from_millis(10)).await });
+        }
+
+        let events: Vec<RuntimeEvent> = {
+            let mut g = queue.inner.lock().unwrap();
+            g.drain(..).collect()
+        };
+        let stdout_idx = events
+            .iter()
+            .position(|e| matches!(e, RuntimeEvent::Stdout { .. }));
+        let wait_idx = events
+            .iter()
+            .position(|e| matches!(e, RuntimeEvent::Wait { .. }));
+        assert!(
+            matches!((stdout_idx, wait_idx), (Some(s), Some(w)) if s < w),
+            "stdout must precede Wait; got stdout={stdout_idx:?} wait={wait_idx:?}"
+        );
+    }
+
     // ─── Stream pumps must forward chunks byte-exact ─────────────────────
     //
     // The upstream contract from `boxlite::portal::interfaces::exec::
@@ -1340,7 +1581,10 @@ mod tests {
     #[tokio::test]
     async fn stdout_pump_forwards_chunks_byte_exact() {
         let queue = Arc::new(EventQueue::new());
-        let (done_tx, _done_rx) = oneshot::channel::<()>();
+        // Matches a real registration: counter is bumped to 1 before
+        // spawn; the pump's `finish_stream` decrements it on completion.
+        let pending = Arc::new(AtomicI32::new(1));
+        let done = Arc::new(Notify::new());
         let chunks = vec![
             "hello".to_string(),                    // no trailing \n
             "world".to_string(),                    // boundary chunk
@@ -1349,7 +1593,15 @@ mod tests {
         ];
         let stream = stream_iter(chunks.into_iter());
 
-        stdout_pump(stream, noop_stdout_cb, 0xFEED_DEAD, queue.clone(), done_tx).await;
+        stdout_pump(
+            stream,
+            noop_stdout_cb,
+            0xFEED_DEAD,
+            queue.clone(),
+            pending,
+            done,
+        )
+        .await;
 
         let bytes = drain_stdout_bytes(&queue);
         assert_eq!(bytes.len(), 4, "expected 4 stdout events");
@@ -1371,11 +1623,20 @@ mod tests {
     #[tokio::test]
     async fn stderr_pump_forwards_chunks_byte_exact() {
         let queue = Arc::new(EventQueue::new());
-        let (done_tx, _done_rx) = oneshot::channel::<()>();
+        let pending = Arc::new(AtomicI32::new(1));
+        let done = Arc::new(Notify::new());
         let chunks = vec!["error".to_string(), "trace".to_string()];
         let stream = stream_iter(chunks.into_iter());
 
-        stderr_pump(stream, noop_stderr_cb, 0xCAFE_BABE, queue.clone(), done_tx).await;
+        stderr_pump(
+            stream,
+            noop_stderr_cb,
+            0xCAFE_BABE,
+            queue.clone(),
+            pending,
+            done,
+        )
+        .await;
 
         let bytes = drain_stderr_bytes(&queue);
         assert_eq!(bytes.len(), 2);
