@@ -323,7 +323,7 @@ func (p *Proxy) updateLastActivity(ctx context.Context, boxId string, shouldPoll
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return
 			}
-			log.Errorf("failed to update last activity for box %s: %v", boxId, err)
+			log.Errorf("failed to update last activity for box %s", boxId)
 			return
 		}
 
