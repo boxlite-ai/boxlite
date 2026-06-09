@@ -5,6 +5,10 @@
 # "Require code scanning results" ruleset rule can be satisfied without an admin
 # bypass.
 #
+# GitHub rejects advanced CodeQL uploads while default setup is enabled, so keep
+# this workflow dormant until repository variable CODEQL_ADVANCED_SETUP_ENABLED
+# is set to "true" after default setup is disabled.
+#
 # Languages use `build-mode: none` (source-only analysis, no compile step) where
 # CodeQL supports it. Go does not support `none` — its extractor must observe a
 # build — so Go uses `autobuild` (the same mode default setup used successfully
@@ -16,6 +20,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
   schedule:
     # Weekly full scan of the default branch (Mondays 03:31 UTC).
     - cron: "31 3 * * 1"
@@ -27,6 +32,7 @@ concurrency:
 
 jobs:
   analyze:
+    if: vars.CODEQL_ADVANCED_SETUP_ENABLED == 'true'
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
     permissions:
@@ -53,15 +59,17 @@ jobs:
             build-mode: none
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
 
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"
