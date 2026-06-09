@@ -19,6 +19,7 @@ import (
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/boxlite-ai/runner/pkg/models/enums"
 	"github.com/containerd/errdefs"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 // Client wraps the BoxLite Go SDK to provide the same interface as the Docker client.
@@ -48,6 +49,8 @@ type ClientConfig struct {
 	Logger                       *slog.Logger
 	HomeDir                      string
 	InsecureRegistries           []string
+	GhcrUsername                 string
+	GhcrToken                    string
 	AWSRegion                    string
 	AWSEndpointUrl               string
 	AWSAccessKeyId               string
@@ -77,7 +80,7 @@ func networkSpec(blockAll *bool, allowList *string) boxlite.NetworkSpec {
 	return spec
 }
 
-func daemonSandboxEnv(sandboxDto dto.CreateSandboxDTO) map[string]string {
+func daemonSandboxEnv(ctx context.Context, sandboxDto dto.CreateSandboxDTO) map[string]string {
 	env := map[string]string{
 		"BOXLITE_SANDBOX_ID": sandboxDto.Id,
 	}
@@ -90,7 +93,47 @@ func daemonSandboxEnv(sandboxDto dto.CreateSandboxDTO) map[string]string {
 	if sandboxDto.RegionId != nil && *sandboxDto.RegionId != "" {
 		env["BOXLITE_REGION_ID"] = *sandboxDto.RegionId
 	}
+	// Propagate the active W3C trace context into the box so the in-box daemon's telemetry
+	// joins the SAME traceId as the api->runner spans, instead of rooting a fresh disjoint
+	// trace. With no active span the carrier is empty => env is byte-identical to before.
+	carrier := propagation.MapCarrier{}
+	propagation.TraceContext{}.Inject(ctx, carrier)
+	if traceParent := carrier.Get("traceparent"); traceParent != "" {
+		env["BOXLITE_TRACEPARENT"] = traceParent
+		if traceState := carrier.Get("tracestate"); traceState != "" {
+			env["BOXLITE_TRACESTATE"] = traceState
+		}
+	}
 	return env
+}
+
+// buildImageRegistries assembles the runtime-scoped OCI registry list handed to boxlite-core:
+// the existing insecure (HTTP, no-auth) registries, plus — when ghcr credentials are provided —
+// a single authenticated ghcr.io HTTPS entry so core can pull our private first-party images
+// directly from ghcr (no self-hosted registry mirror required). Auth is runtime-scoped because
+// boxlite.Runtime.Create has no per-call credential parameter. When ghcrUsername/ghcrToken are
+// empty this is byte-for-byte the previous behavior (anonymous), so it is safe to ship dark.
+// Kept as a pure function so the wiring can be unit-tested without constructing a real runtime.
+func buildImageRegistries(insecureRegistries []string, ghcrUsername, ghcrToken string) []boxlite.ImageRegistry {
+	registries := make([]boxlite.ImageRegistry, 0, len(insecureRegistries)+1)
+	for _, host := range insecureRegistries {
+		registries = append(registries, boxlite.ImageRegistry{
+			Host:       host,
+			Transport:  boxlite.RegistryTransportHTTP,
+			SkipVerify: true,
+		})
+	}
+	if ghcrUsername != "" && ghcrToken != "" {
+		registries = append(registries, boxlite.ImageRegistry{
+			Host:      "ghcr.io",
+			Transport: boxlite.RegistryTransportHTTPS,
+			Auth: boxlite.ImageRegistryAuth{
+				Username: ghcrUsername,
+				Password: ghcrToken,
+			},
+		})
+	}
+	return registries
 }
 
 // NewClient creates a new BoxLite client backed by the BoxLite VM runtime.
@@ -105,15 +148,8 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 		opts = append(opts, boxlite.WithHomeDir(config.HomeDir))
 	}
 	insecureRegistries := normalizeRegistryHosts(config.InsecureRegistries)
-	if len(insecureRegistries) > 0 {
-		registries := make([]boxlite.ImageRegistry, 0, len(insecureRegistries))
-		for _, host := range insecureRegistries {
-			registries = append(registries, boxlite.ImageRegistry{
-				Host:       host,
-				Transport:  boxlite.RegistryTransportHTTP,
-				SkipVerify: true,
-			})
-		}
+	registries := buildImageRegistries(insecureRegistries, config.GhcrUsername, config.GhcrToken)
+	if len(registries) > 0 {
 		opts = append(opts, boxlite.WithImageRegistries(registries...))
 	}
 
@@ -206,7 +242,7 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 	for k, v := range sandboxDto.Env {
 		opts = append(opts, boxlite.WithEnv(k, v))
 	}
-	for k, v := range daemonSandboxEnv(sandboxDto) {
+	for k, v := range daemonSandboxEnv(ctx, sandboxDto) {
 		opts = append(opts, boxlite.WithEnv(k, v))
 	}
 

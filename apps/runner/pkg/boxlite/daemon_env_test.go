@@ -4,9 +4,11 @@
 package boxlite
 
 import (
+	"context"
 	"testing"
 
 	"github.com/boxlite-ai/runner/pkg/api/dto"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func TestDaemonSandboxEnvIncludesRequiredSandboxIdentity(t *testing.T) {
@@ -14,7 +16,7 @@ func TestDaemonSandboxEnvIncludesRequiredSandboxIdentity(t *testing.T) {
 	regionID := "region-1"
 	otelEndpoint := "http://otel.local:4318"
 
-	got := daemonSandboxEnv(dto.CreateSandboxDTO{
+	got := daemonSandboxEnv(context.Background(), dto.CreateSandboxDTO{
 		Id:             "sandbox-1",
 		OrganizationId: &organizationID,
 		RegionId:       &regionID,
@@ -41,7 +43,7 @@ func TestDaemonSandboxEnvIncludesRequiredSandboxIdentity(t *testing.T) {
 func TestDaemonSandboxEnvOmitsEmptyOptionalValues(t *testing.T) {
 	empty := ""
 
-	got := daemonSandboxEnv(dto.CreateSandboxDTO{
+	got := daemonSandboxEnv(context.Background(), dto.CreateSandboxDTO{
 		Id:             "sandbox-1",
 		OrganizationId: &empty,
 		RegionId:       &empty,
@@ -53,5 +55,43 @@ func TestDaemonSandboxEnvOmitsEmptyOptionalValues(t *testing.T) {
 	}
 	if got["BOXLITE_SANDBOX_ID"] != "sandbox-1" {
 		t.Fatalf("BOXLITE_SANDBOX_ID = %q, want sandbox-1", got["BOXLITE_SANDBOX_ID"])
+	}
+}
+
+// With an active (remote) span in context, daemonSandboxEnv must propagate it as a W3C
+// BOXLITE_TRACEPARENT env so the in-box daemon joins the same traceId. The value crosses
+// propagation.TraceContext{}.Inject (production code), so this is non-tautological.
+func TestDaemonSandboxEnvPropagatesTraceparentWhenSpanActive(t *testing.T) {
+	traceID, err := trace.TraceIDFromHex("0af7651916cd43dd8448eb211c80319c")
+	if err != nil {
+		t.Fatalf("trace id: %v", err)
+	}
+	spanID, err := trace.SpanIDFromHex("b7ad6b7169203331")
+	if err != nil {
+		t.Fatalf("span id: %v", err)
+	}
+	sc := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    traceID,
+		SpanID:     spanID,
+		TraceFlags: trace.FlagsSampled,
+		Remote:     true,
+	})
+	ctx := trace.ContextWithSpanContext(context.Background(), sc)
+
+	got := daemonSandboxEnv(ctx, dto.CreateSandboxDTO{Id: "sandbox-1"})
+
+	wantTP := "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+	if got["BOXLITE_TRACEPARENT"] != wantTP {
+		t.Fatalf("BOXLITE_TRACEPARENT = %q, want %q", got["BOXLITE_TRACEPARENT"], wantTP)
+	}
+}
+
+// With no active span, BOXLITE_TRACEPARENT must be absent (behavior identical to before the
+// propagation change), so the fix is safe to ship dark.
+func TestDaemonSandboxEnvOmitsTraceparentWhenNoSpan(t *testing.T) {
+	got := daemonSandboxEnv(context.Background(), dto.CreateSandboxDTO{Id: "sandbox-1"})
+
+	if _, ok := got["BOXLITE_TRACEPARENT"]; ok {
+		t.Fatalf("BOXLITE_TRACEPARENT must be absent without an active span, got %#v", got)
 	}
 }

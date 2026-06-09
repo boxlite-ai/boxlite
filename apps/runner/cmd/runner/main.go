@@ -110,6 +110,8 @@ func run() int {
 		Logger:                       logger,
 		HomeDir:                      cfg.BoxliteHomeDir,
 		InsecureRegistries:           insecureRegs,
+		GhcrUsername:                 cfg.GhcrUsername,
+		GhcrToken:                    cfg.GhcrToken,
 		AWSRegion:                    cfg.AWSRegion,
 		AWSEndpointUrl:               cfg.AWSEndpointUrl,
 		AWSAccessKeyId:               cfg.AWSAccessKeyId,
