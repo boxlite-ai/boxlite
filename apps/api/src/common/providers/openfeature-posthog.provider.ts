@@ -16,6 +16,14 @@ export interface OpenFeaturePostHogProviderConfig {
   clientOptions?: PostHogOptions
   /** Whether to evaluate flags locally (default: false) */
   evaluateLocally?: boolean
+  /**
+   * Local-dev bootstrap values used when PostHog isn't configured (no apiKey).
+   * Mirrors the dashboard's `PostHogProviderWrapper` bootstrap pattern.
+   * Without these, `@RequireFlagsEnabled([X])` decorators always fail because
+   * each call-site's `defaultValue` is `false` — so e.g. POST /regions and
+   * GET /runners return 404 ("hidden route") in local dev. Map key = flag name.
+   */
+  bootstrapFlags?: Record<string, boolean | string | number>
 }
 
 export class OpenFeaturePostHogProvider implements Provider {
@@ -26,10 +34,18 @@ export class OpenFeaturePostHogProvider implements Provider {
   private readonly client?: PostHog
   private readonly evaluateLocally: boolean
   private readonly isConfigured: boolean
+  private readonly bootstrapFlags: Record<string, boolean | string | number>
 
   constructor(config: OpenFeaturePostHogProviderConfig = {}) {
     this.evaluateLocally = config.evaluateLocally ?? false
     this.isConfigured = !!config.apiKey
+    // Bootstrap flags are a local-dev convenience only. Hard-refuse them in
+    // production so an unconfigured prod (no PostHog key) falls through to each
+    // call-site's `defaultValue` (fail closed) instead of resolving them true
+    // (fail open). Defense-in-depth: the injection site (app.module) also skips
+    // passing them in production.
+    this.bootstrapFlags =
+      process.env.NODE_ENV === 'production' ? {} : (config.bootstrapFlags ?? {})
 
     if (config.apiKey) {
       try {
@@ -92,8 +108,10 @@ export class OpenFeaturePostHogProvider implements Provider {
     context: EvaluationContext,
     logger: Logger,
   ): Promise<ResolutionDetails<T>> {
-    // If PostHog is not configured, return default value
+    // Bootstrap-aware (mirror evaluateFlag's behavior for object resolution).
     if (!this.isConfigured || !this.client) {
+      // Object flags are rare in our usage; not added to bootstrapFlags map
+      // (typed as boolean | string | number). Fall through to default.
       logger.debug(`PostHog not configured, returning default value for flag ${flagKey}`)
       return {
         value: defaultValue,
@@ -147,8 +165,17 @@ export class OpenFeaturePostHogProvider implements Provider {
     context: EvaluationContext,
     logger: Logger,
   ): Promise<ResolutionDetails<any>> {
-    // If PostHog is not configured, return default value
+    // If PostHog is not configured, prefer bootstrap value if present, then
+    // fall back to call-site defaultValue.
     if (!this.isConfigured || !this.client) {
+      if (Object.prototype.hasOwnProperty.call(this.bootstrapFlags, flagKey)) {
+        const bootstrap = this.bootstrapFlags[flagKey]
+        logger.debug(`PostHog not configured, using bootstrap value for flag ${flagKey}: ${bootstrap}`)
+        return {
+          value: bootstrap,
+          reason: StandardResolutionReasons.STATIC,
+        }
+      }
       logger.debug(`PostHog not configured, returning default value for flag ${flagKey}`)
       return {
         value: defaultValue,
