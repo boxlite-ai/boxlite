@@ -11,9 +11,9 @@ import { createAdapter } from '@socket.io/redis-adapter'
 import { SandboxEvents } from '../../sandbox/constants/sandbox-events.constants'
 import { SandboxState } from '../../sandbox/enums/sandbox-state.enum'
 import { SandboxDto } from '../../sandbox/dto/sandbox.dto'
-import { SnapshotDto } from '../../sandbox/dto/snapshot.dto'
-import { SnapshotEvents } from '../../sandbox/constants/snapshot-events'
-import { SnapshotState } from '../../sandbox/enums/snapshot-state.enum'
+import { BoxTemplateDto } from '../../sandbox/dto/box-template.dto'
+import { BoxTemplateEvents } from '../../sandbox/constants/box-template-events'
+import { BoxTemplateState } from '../../sandbox/enums/box-template-state.enum'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import Redis from 'ioredis'
 import { JwtStrategy } from '../../auth/jwt.strategy'
@@ -121,18 +121,16 @@ export class NotificationGateway extends NotificationEmitter implements OnGatewa
       .emit(SandboxEvents.DESIRED_STATE_UPDATED, { sandbox, oldDesiredState, newDesiredState })
   }
 
-  emitSnapshotCreated(snapshot: SnapshotDto) {
-    this.server.to(snapshot.organizationId).emit(SnapshotEvents.CREATED, snapshot)
+  emitTemplateCreated(template: BoxTemplateDto) {
+    this.server.to(template.organizationId).emit(BoxTemplateEvents.CREATED, template)
   }
 
-  emitSnapshotStateUpdated(snapshot: SnapshotDto, oldState: SnapshotState, newState: SnapshotState) {
-    this.server
-      .to(snapshot.organizationId)
-      .emit(SnapshotEvents.STATE_UPDATED, { snapshot: snapshot, oldState, newState })
+  emitBoxTemplateStateUpdated(template: BoxTemplateDto, oldState: BoxTemplateState, newState: BoxTemplateState) {
+    this.server.to(template.organizationId).emit(BoxTemplateEvents.STATE_UPDATED, { template, oldState, newState })
   }
 
-  emitSnapshotRemoved(snapshot: SnapshotDto) {
-    this.server.to(snapshot.organizationId).emit(SnapshotEvents.REMOVED, snapshot)
+  emitTemplateRemoved(template: BoxTemplateDto) {
+    this.server.to(template.organizationId).emit(BoxTemplateEvents.REMOVED, template)
   }
 
   emitVolumeCreated(volume: VolumeDto) {

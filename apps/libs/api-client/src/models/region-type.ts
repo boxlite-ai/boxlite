@@ -12,8 +12,6 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  * The type of the region
  * @export
@@ -21,9 +19,9 @@
  */
 
 export const RegionType = {
-    SHARED: 'shared',
-    DEDICATED: 'dedicated',
-    CUSTOM: 'custom'
-} as const;
+  SHARED: 'shared',
+  DEDICATED: 'dedicated',
+  CUSTOM: 'custom',
+} as const
 
-export type RegionType = typeof RegionType[keyof typeof RegionType];
+export type RegionType = (typeof RegionType)[keyof typeof RegionType]

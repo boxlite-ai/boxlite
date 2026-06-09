@@ -20,7 +20,7 @@ import {
 } from '@/enums/Playground'
 import { usePlayground } from '@/hooks/usePlayground'
 import { usePlaygroundSandbox } from '@/hooks/usePlaygroundSandbox'
-import { createErrorMessageOutput } from '@/lib/playground'
+import { createErrorMessageOutput, getLanguageCodeToRun } from '@/lib/playground'
 import { cn } from '@/lib/utils'
 import { CodeLanguage, Sandbox } from '@boxlite-ai/sdk'
 import { ChevronUpIcon, Loader2, PanelBottom, Play, XIcon } from 'lucide-react'
@@ -150,11 +150,12 @@ const SandboxCodeSnippetsResponse = ({ className }: { className?: string }) => {
     })
   }, [pendingScrollSection, scrollToSection, clearPendingScrollSection])
 
-  const codeSnippetParams = useMemo<CodeSnippetParams>(
-    () => ({
+  const createCodeSnippetParams = useCallback(
+    (codeSnippetLanguage: CodeLanguage): CodeSnippetParams => ({
       state: sandboxParametersState,
       config: getSandboxParametersInfo(),
       actions: {
+        codeSnippetLanguage,
         useConfigObject,
         fileSystemListFilesLocationSet,
         fileSystemCreateFolderParamsSet,
@@ -193,29 +194,31 @@ const SandboxCodeSnippetsResponse = ({ className }: { className?: string }) => {
 
   const sandboxCodeSnippetsData = useMemo(
     () => ({
-      [CodeLanguage.PYTHON]: { code: codeSnippetGenerators[CodeLanguage.PYTHON].buildFullSnippet(codeSnippetParams) },
+      [CodeLanguage.PYTHON]: {
+        code: codeSnippetGenerators[CodeLanguage.PYTHON].buildFullSnippet(createCodeSnippetParams(CodeLanguage.PYTHON)),
+      },
       [CodeLanguage.TYPESCRIPT]: {
-        code: codeSnippetGenerators[CodeLanguage.TYPESCRIPT].buildFullSnippet(codeSnippetParams),
+        code: codeSnippetGenerators[CodeLanguage.TYPESCRIPT].buildFullSnippet(
+          createCodeSnippetParams(CodeLanguage.TYPESCRIPT),
+        ),
       },
     }),
-    [codeSnippetParams],
+    [createCodeSnippetParams],
   )
 
   const runCodeSnippet = async () => {
     setIsCodeSnippetRunning(true)
-    let codeSnippetOutput = 'Creating sandbox...\n'
+    let codeSnippetOutput = 'Creating box...\n'
     setCodeSnippetOutput(codeSnippetOutput)
     let sandbox: Sandbox | undefined
 
     try {
       sandbox = await createSandbox()
-      codeSnippetOutput = `Sandbox successfully created: ${sandbox.id}\n`
+      codeSnippetOutput = `Box successfully created: ${sandbox.id}\n`
       setCodeSnippetOutput(codeSnippetOutput)
       if (codeToRunExists) {
         setCodeSnippetOutput(codeSnippetOutput + '\nRunning code...')
-        const codeRunResponse = await sandbox.process.codeRun(
-          sandboxParametersState['codeRunParams'].languageCode as string,
-        ) // codeToRunExists guarantees that value isn't undefined so we put as string to silence TS compiler
+        const codeRunResponse = await sandbox.process.codeRun(getLanguageCodeToRun(codeSnippetLanguage))
         codeSnippetOutput += `\nCode run result: ${codeRunResponse.result}`
         setCodeSnippetOutput(codeSnippetOutput)
       }
@@ -299,7 +302,7 @@ const SandboxCodeSnippetsResponse = ({ className }: { className?: string }) => {
         response.branches.forEach((branch) => (codeSnippetOutput += `Branch: ${branch}\n`))
         setCodeSnippetOutput(codeSnippetOutput)
       }
-      setCodeSnippetOutput(codeSnippetOutput + '\nSandbox session finished.')
+      setCodeSnippetOutput(codeSnippetOutput + '\nBox session finished.')
     } catch (error) {
       console.error(error)
       setCodeSnippetOutput(
@@ -318,7 +321,7 @@ const SandboxCodeSnippetsResponse = ({ className }: { className?: string }) => {
 
   return (
     <Window className={className}>
-      <WindowTitleBar>Sandbox Code</WindowTitleBar>
+      <WindowTitleBar>Box Code</WindowTitleBar>
       <WindowContent className="relative">
         <Tabs
           value={codeSnippetLanguage}

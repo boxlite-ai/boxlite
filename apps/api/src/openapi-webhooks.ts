@@ -9,9 +9,9 @@ import { WebhookEvent } from './webhook/constants/webhook-events.constants'
 import {
   SandboxCreatedWebhookDto,
   SandboxStateUpdatedWebhookDto,
-  SnapshotCreatedWebhookDto,
-  SnapshotStateUpdatedWebhookDto,
-  SnapshotRemovedWebhookDto,
+  BoxTemplateCreatedWebhookDto,
+  BoxTemplateStateUpdatedWebhookDto,
+  BoxTemplateRemovedWebhookDto,
   VolumeCreatedWebhookDto,
   VolumeStateUpdatedWebhookDto,
 } from './webhook/dto/webhook-event-payloads.dto'
@@ -76,13 +76,13 @@ export function addWebhookDocumentation(document: OpenAPIObject): OpenAPIObjectW
           },
         },
       },
-      [WebhookEvent.SNAPSHOT_CREATED]: {
+      [WebhookEvent.TEMPLATE_CREATED]: {
         post: {
           requestBody: {
-            description: 'Snapshot created event',
+            description: 'BoxTemplate created event',
             content: {
               'application/json': {
-                schema: { $ref: getSchemaPath(SnapshotCreatedWebhookDto) },
+                schema: { $ref: getSchemaPath(BoxTemplateCreatedWebhookDto) },
               },
             },
           },
@@ -93,13 +93,13 @@ export function addWebhookDocumentation(document: OpenAPIObject): OpenAPIObjectW
           },
         },
       },
-      [WebhookEvent.SNAPSHOT_STATE_UPDATED]: {
+      [WebhookEvent.TEMPLATE_STATE_UPDATED]: {
         post: {
           requestBody: {
-            description: 'Snapshot state updated event',
+            description: 'BoxTemplate state updated event',
             content: {
               'application/json': {
-                schema: { $ref: getSchemaPath(SnapshotStateUpdatedWebhookDto) },
+                schema: { $ref: getSchemaPath(BoxTemplateStateUpdatedWebhookDto) },
               },
             },
           },
@@ -110,13 +110,13 @@ export function addWebhookDocumentation(document: OpenAPIObject): OpenAPIObjectW
           },
         },
       },
-      [WebhookEvent.SNAPSHOT_REMOVED]: {
+      [WebhookEvent.TEMPLATE_REMOVED]: {
         post: {
           requestBody: {
-            description: 'Snapshot removed event',
+            description: 'BoxTemplate removed event',
             content: {
               'application/json': {
-                schema: { $ref: getSchemaPath(SnapshotRemovedWebhookDto) },
+                schema: { $ref: getSchemaPath(BoxTemplateRemovedWebhookDto) },
               },
             },
           },

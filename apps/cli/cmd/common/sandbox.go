@@ -28,9 +28,9 @@ func RequireStartedState(sandbox *apiclient.Sandbox) error {
 	case apiclient.SANDBOXSTATE_STOPPED:
 		return fmt.Errorf("sandbox is stopped. Start it with: boxlite sandbox start %s", sandboxRef)
 	case apiclient.SANDBOXSTATE_ARCHIVED:
-		return fmt.Errorf("sandbox is archived. Start it with: boxlite sandbox start %s", sandboxRef)
+		return fmt.Errorf("sandbox is archived and cannot be used")
 	case apiclient.SANDBOXSTATE_ARCHIVING:
-		return fmt.Errorf("sandbox is archiving. Start it with: boxlite sandbox start %s", sandboxRef)
+		return fmt.Errorf("sandbox is archiving and cannot be used")
 	case apiclient.SANDBOXSTATE_STARTING:
 		return fmt.Errorf("sandbox is starting. Please wait for it to be ready")
 	case apiclient.SANDBOXSTATE_STOPPING:

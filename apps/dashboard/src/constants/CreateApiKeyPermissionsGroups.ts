@@ -8,39 +8,7 @@ import { CreateApiKeyPermissionsEnum } from '@boxlite-ai/api-client'
 
 export const CREATE_API_KEY_PERMISSIONS_GROUPS: { name: string; permissions: CreateApiKeyPermissionsEnum[] }[] = [
   {
-    name: 'Sandboxes',
+    name: 'Boxes',
     permissions: [CreateApiKeyPermissionsEnum.WRITE_SANDBOXES, CreateApiKeyPermissionsEnum.DELETE_SANDBOXES],
-  },
-  {
-    name: 'Snapshots',
-    permissions: [CreateApiKeyPermissionsEnum.WRITE_SNAPSHOTS, CreateApiKeyPermissionsEnum.DELETE_SNAPSHOTS],
-  },
-  {
-    name: 'Registries',
-    permissions: [CreateApiKeyPermissionsEnum.WRITE_REGISTRIES, CreateApiKeyPermissionsEnum.DELETE_REGISTRIES],
-  },
-  {
-    name: 'Volumes',
-    permissions: [
-      CreateApiKeyPermissionsEnum.READ_VOLUMES,
-      CreateApiKeyPermissionsEnum.WRITE_VOLUMES,
-      CreateApiKeyPermissionsEnum.DELETE_VOLUMES,
-    ],
-  },
-  {
-    name: 'Regions',
-    permissions: [CreateApiKeyPermissionsEnum.WRITE_REGIONS, CreateApiKeyPermissionsEnum.DELETE_REGIONS],
-  },
-  {
-    name: 'Runners',
-    permissions: [
-      CreateApiKeyPermissionsEnum.READ_RUNNERS,
-      CreateApiKeyPermissionsEnum.WRITE_RUNNERS,
-      CreateApiKeyPermissionsEnum.DELETE_RUNNERS,
-    ],
-  },
-  {
-    name: 'Audit',
-    permissions: [CreateApiKeyPermissionsEnum.READ_AUDIT_LOGS],
   },
 ]

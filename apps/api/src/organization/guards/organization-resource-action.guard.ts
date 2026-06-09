@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Injectable, ExecutionContext, Logger } from '@nestjs/common'
+import { CanActivate, Injectable, ExecutionContext, Logger, Type } from '@nestjs/common'
+import { GUARDS_METADATA } from '@nestjs/common/constants'
 import { Reflector } from '@nestjs/core'
 import { OrganizationAccessGuard } from './organization-access.guard'
 import { RequiredOrganizationResourcePermissions } from '../decorators/required-organization-resource-permissions.decorator'
@@ -13,6 +14,11 @@ import { OrganizationService } from '../services/organization.service'
 import { OrganizationUserService } from '../services/organization-user.service'
 import { OrganizationAuthContext } from '../../common/interfaces/auth-context.interface'
 import { SystemRole } from '../../user/enums/system-role.enum'
+import { RunnerAuthGuard } from '../../auth/runner-auth.guard'
+import { isRunnerContext } from '../../common/interfaces/runner-context.interface'
+import { OR_GUARD_INNER_GUARDS } from '../../auth/or.guard'
+
+const RUNNER_COMPATIBLE_RESOURCE_GUARD_NAMES = new Set(['RunnerAuthGuard', 'SandboxAccessGuard'])
 
 @Injectable()
 export class OrganizationResourceActionGuard extends OrganizationAccessGuard {
@@ -26,11 +32,18 @@ export class OrganizationResourceActionGuard extends OrganizationAccessGuard {
     super(organizationService, organizationUserService)
   }
   async canActivate(context: ExecutionContext): Promise<boolean> {
+    const request = context.switchToHttp().getRequest()
+    if (isRunnerContext(request.user) && this.handlerAllowsRunnerResourceAccess(context)) {
+      return true
+    }
+
     const canActivate = await super.canActivate(context)
 
-    const request = context.switchToHttp().getRequest()
     // TODO: initialize authContext safely
     const authContext: OrganizationAuthContext = request.user
+    if (!authContext) {
+      return false
+    }
 
     if (authContext.role === SystemRole.ADMIN) {
       return true
@@ -61,5 +74,28 @@ export class OrganizationResourceActionGuard extends OrganizationAccessGuard {
       : new Set(authContext.organizationUser.assignedRoles.flatMap((role) => role.permissions))
 
     return requiredPermissions.every((permission) => assignedPermissions.has(permission))
+  }
+
+  private handlerAllowsRunnerResourceAccess(context: ExecutionContext): boolean {
+    const guards =
+      this.reflector.getAllAndMerge<Array<unknown>>(GUARDS_METADATA, [context.getHandler(), context.getClass()]) ?? []
+    return guards.some((guard) => this.guardAllowsRunnerResourceAccess(guard))
+  }
+
+  private guardAllowsRunnerResourceAccess(guard: unknown): boolean {
+    if (guard === RunnerAuthGuard) {
+      return true
+    }
+
+    const innerGuards = (guard as { [OR_GUARD_INNER_GUARDS]?: Type<CanActivate>[] })?.[OR_GUARD_INNER_GUARDS]
+    if (innerGuards?.some((innerGuard) => this.guardAllowsRunnerResourceAccess(innerGuard))) {
+      return true
+    }
+
+    return RUNNER_COMPATIBLE_RESOURCE_GUARD_NAMES.has(this.guardName(guard))
+  }
+
+  private guardName(guard: unknown): string {
+    return typeof guard === 'function' ? guard.name : ''
   }
 }

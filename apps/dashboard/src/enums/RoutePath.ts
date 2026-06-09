@@ -18,8 +18,10 @@ export enum RoutePath {
 
   // Dashboard sub-routes
   KEYS = '/dashboard/keys',
-  SANDBOXES = '/dashboard/sandboxes',
-  SNAPSHOTS = '/dashboard/snapshots',
+  BOXES = '/dashboard/boxes',
+  BILLING = '/dashboard/billing',
+  PRICING = '/dashboard/pricing',
+  IMAGES = '/dashboard/images',
   REGISTRIES = '/dashboard/registries',
   VOLUMES = '/dashboard/volumes',
   LIMITS = '/dashboard/limits',
@@ -42,10 +44,17 @@ export enum RoutePath {
   // Webhooks
   WEBHOOKS = '/dashboard/webhooks',
   WEBHOOK_ENDPOINT_DETAILS = '/dashboard/webhooks/:endpointId',
-  // Sandboxes
-  SANDBOX_DETAILS = '/dashboard/sandboxes/:sandboxId',
-  SANDBOX_TERMINAL = '/dashboard/sandboxes/:sandboxId/terminal',
-  SANDBOX_VNC = '/dashboard/sandboxes/:sandboxId/vnc',
+  // Boxes
+  BOX_DETAILS = '/dashboard/boxes/:sandboxId',
+  BOX_TERMINAL = '/dashboard/boxes/:sandboxId/terminal',
+  BOX_VNC = '/dashboard/boxes/:sandboxId/vnc',
+
+  // Legacy sandbox routes
+  LEGACY_SANDBOXES = '/dashboard/sandboxes',
+  LEGACY_SANDBOX_DETAILS = '/dashboard/sandboxes/:sandboxId',
+  LEGACY_SANDBOX_TERMINAL = '/dashboard/sandboxes/:sandboxId/terminal',
+  LEGACY_SANDBOX_VNC = '/dashboard/sandboxes/:sandboxId/vnc',
+  LEGACY_TEMPLATES = '/dashboard/templates',
 
   // Email verification
   EMAIL_VERIFY = '/dashboard/organization/:organizationId/verify-email/:email/:token',

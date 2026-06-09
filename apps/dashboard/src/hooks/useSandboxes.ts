@@ -7,6 +7,7 @@
 import { QueryKey, useQuery } from '@tanstack/react-query'
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
+import { isTransitioning } from '@/lib/utils/sandbox'
 import {
   ListSandboxesPaginatedOrderEnum,
   ListSandboxesPaginatedSortEnum,
@@ -20,7 +21,7 @@ export interface SandboxFilters {
   labels?: Record<string, string>
   includeErroredDeleted?: boolean
   states?: ListSandboxesPaginatedStatesEnum[]
-  snapshots?: string[]
+  templates?: string[]
   regions?: string[]
   minCpu?: number
   maxCpu?: number
@@ -88,7 +89,7 @@ export function useSandboxes(queryKey: QueryKey, params: SandboxQueryParams) {
         filters.labels ? JSON.stringify(filters.labels) : undefined,
         filters.includeErroredDeleted,
         filters.states,
-        filters.snapshots,
+        filters.templates,
         filters.regions,
         filters.minCpu,
         filters.maxCpu,
@@ -128,6 +129,10 @@ export function useSandboxes(queryKey: QueryKey, params: SandboxQueryParams) {
     },
     enabled: !!selectedOrganization,
     staleTime: 1000 * 10, // 10 seconds
+    refetchInterval: (query) => {
+      const sandboxes = query.state.data?.items
+      return sandboxes?.some(isTransitioning) ? 3000 : false
+    },
     gcTime: 1000 * 60 * 5, // 5 minutes,
   })
 }

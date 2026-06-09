@@ -38,10 +38,16 @@ export class SandboxVolume {
 @ApiSchema({ name: 'Sandbox' })
 export class SandboxDto {
   @ApiProperty({
-    description: 'The ID of the sandbox',
-    example: 'sandbox123',
+    description: 'The internal UUID of the sandbox',
+    example: 'fd955d93-e74a-48e7-9f2d-fcbe6dd9e920',
   })
   id: string
+
+  @ApiProperty({
+    description: 'The public Box ID shown to users and SDK clients',
+    example: 'aB3cD4eF5gH6',
+  })
+  boxId: string
 
   @ApiProperty({
     description: 'The organization ID of the sandbox',
@@ -56,10 +62,10 @@ export class SandboxDto {
   name: string
 
   @ApiPropertyOptional({
-    description: 'The snapshot used for the sandbox',
-    example: 'boxlite-ai/sandbox:latest',
+    description: 'The template used for the sandbox',
+    example: 'boxlite/base',
   })
-  snapshot: string
+  template: string
 
   @ApiProperty({
     description: 'The user associated with the project',
@@ -196,14 +202,6 @@ export class SandboxDto {
   autoStopInterval?: number
 
   @ApiPropertyOptional({
-    description: 'Auto-archive interval in minutes',
-    example: 7 * 24 * 60,
-    required: false,
-  })
-  @IsOptional()
-  autoArchiveInterval?: number
-
-  @ApiPropertyOptional({
     description:
       'Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping)',
     example: 30,
@@ -280,10 +278,11 @@ export class SandboxDto {
   static fromSandbox(sandbox: Sandbox, toolboxProxyUrl: string): SandboxDto {
     return {
       id: sandbox.id,
+      boxId: sandbox.boxId,
       organizationId: sandbox.organizationId,
       name: sandbox.name,
       target: sandbox.region,
-      snapshot: sandbox.snapshot,
+      template: sandbox.template,
       user: sandbox.osUser,
       env: sandbox.env,
       cpu: sandbox.cpu,
@@ -302,7 +301,6 @@ export class SandboxDto {
       backupState: sandbox.backupState,
       backupCreatedAt: sandbox.lastBackupAt ? new Date(sandbox.lastBackupAt).toISOString() : undefined,
       autoStopInterval: sandbox.autoStopInterval,
-      autoArchiveInterval: sandbox.autoArchiveInterval,
       autoDeleteInterval: sandbox.autoDeleteInterval,
       class: sandbox.class,
       createdAt: sandbox.createdAt ? new Date(sandbox.createdAt).toISOString() : undefined,
@@ -313,7 +311,7 @@ export class SandboxDto {
             contextHashes: sandbox.buildInfo.contextHashes,
             createdAt: sandbox.buildInfo.createdAt,
             updatedAt: sandbox.buildInfo.updatedAt,
-            snapshotRef: sandbox.buildInfo.snapshotRef,
+            artifactRef: sandbox.buildInfo.artifactRef,
           }
         : undefined,
       daemonVersion: sandbox.daemonVersion,
@@ -338,9 +336,6 @@ export class SandboxDto {
         }
         if (sandbox.desiredState === SandboxDesiredState.DESTROYED) {
           return SandboxState.DESTROYING
-        }
-        if (sandbox.desiredState === SandboxDesiredState.ARCHIVED) {
-          return SandboxState.ARCHIVING
         }
         break
       case SandboxState.UNKNOWN:

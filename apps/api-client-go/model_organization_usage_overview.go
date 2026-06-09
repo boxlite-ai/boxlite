@@ -21,11 +21,11 @@ var _ MappedNullable = &OrganizationUsageOverview{}
 
 // OrganizationUsageOverview struct for OrganizationUsageOverview
 type OrganizationUsageOverview struct {
-	RegionUsage []RegionUsageOverview `json:"regionUsage"`
-	TotalSnapshotQuota float32 `json:"totalSnapshotQuota"`
-	CurrentSnapshotUsage float32 `json:"currentSnapshotUsage"`
-	TotalVolumeQuota float32 `json:"totalVolumeQuota"`
-	CurrentVolumeUsage float32 `json:"currentVolumeUsage"`
+	RegionUsage          []RegionUsageOverview `json:"regionUsage"`
+	TotalTemplateQuota   float32               `json:"totalTemplateQuota"`
+	CurrentTemplateUsage float32               `json:"currentTemplateUsage"`
+	TotalVolumeQuota     float32               `json:"totalVolumeQuota"`
+	CurrentVolumeUsage   float32               `json:"currentVolumeUsage"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -35,11 +35,11 @@ type _OrganizationUsageOverview OrganizationUsageOverview
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewOrganizationUsageOverview(regionUsage []RegionUsageOverview, totalSnapshotQuota float32, currentSnapshotUsage float32, totalVolumeQuota float32, currentVolumeUsage float32) *OrganizationUsageOverview {
+func NewOrganizationUsageOverview(regionUsage []RegionUsageOverview, totalTemplateQuota float32, currentTemplateUsage float32, totalVolumeQuota float32, currentVolumeUsage float32) *OrganizationUsageOverview {
 	this := OrganizationUsageOverview{}
 	this.RegionUsage = regionUsage
-	this.TotalSnapshotQuota = totalSnapshotQuota
-	this.CurrentSnapshotUsage = currentSnapshotUsage
+	this.TotalTemplateQuota = totalTemplateQuota
+	this.CurrentTemplateUsage = currentTemplateUsage
 	this.TotalVolumeQuota = totalVolumeQuota
 	this.CurrentVolumeUsage = currentVolumeUsage
 	return &this
@@ -77,52 +77,52 @@ func (o *OrganizationUsageOverview) SetRegionUsage(v []RegionUsageOverview) {
 	o.RegionUsage = v
 }
 
-// GetTotalSnapshotQuota returns the TotalSnapshotQuota field value
-func (o *OrganizationUsageOverview) GetTotalSnapshotQuota() float32 {
+// GetTotalTemplateQuota returns the TotalTemplateQuota field value
+func (o *OrganizationUsageOverview) GetTotalTemplateQuota() float32 {
 	if o == nil {
 		var ret float32
 		return ret
 	}
 
-	return o.TotalSnapshotQuota
+	return o.TotalTemplateQuota
 }
 
-// GetTotalSnapshotQuotaOk returns a tuple with the TotalSnapshotQuota field value
+// GetTotalTemplateQuotaOk returns a tuple with the TotalTemplateQuota field value
 // and a boolean to check if the value has been set.
-func (o *OrganizationUsageOverview) GetTotalSnapshotQuotaOk() (*float32, bool) {
+func (o *OrganizationUsageOverview) GetTotalTemplateQuotaOk() (*float32, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return &o.TotalSnapshotQuota, true
+	return &o.TotalTemplateQuota, true
 }
 
-// SetTotalSnapshotQuota sets field value
-func (o *OrganizationUsageOverview) SetTotalSnapshotQuota(v float32) {
-	o.TotalSnapshotQuota = v
+// SetTotalTemplateQuota sets field value
+func (o *OrganizationUsageOverview) SetTotalTemplateQuota(v float32) {
+	o.TotalTemplateQuota = v
 }
 
-// GetCurrentSnapshotUsage returns the CurrentSnapshotUsage field value
-func (o *OrganizationUsageOverview) GetCurrentSnapshotUsage() float32 {
+// GetCurrentTemplateUsage returns the CurrentTemplateUsage field value
+func (o *OrganizationUsageOverview) GetCurrentTemplateUsage() float32 {
 	if o == nil {
 		var ret float32
 		return ret
 	}
 
-	return o.CurrentSnapshotUsage
+	return o.CurrentTemplateUsage
 }
 
-// GetCurrentSnapshotUsageOk returns a tuple with the CurrentSnapshotUsage field value
+// GetCurrentTemplateUsageOk returns a tuple with the CurrentTemplateUsage field value
 // and a boolean to check if the value has been set.
-func (o *OrganizationUsageOverview) GetCurrentSnapshotUsageOk() (*float32, bool) {
+func (o *OrganizationUsageOverview) GetCurrentTemplateUsageOk() (*float32, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return &o.CurrentSnapshotUsage, true
+	return &o.CurrentTemplateUsage, true
 }
 
-// SetCurrentSnapshotUsage sets field value
-func (o *OrganizationUsageOverview) SetCurrentSnapshotUsage(v float32) {
-	o.CurrentSnapshotUsage = v
+// SetCurrentTemplateUsage sets field value
+func (o *OrganizationUsageOverview) SetCurrentTemplateUsage(v float32) {
+	o.CurrentTemplateUsage = v
 }
 
 // GetTotalVolumeQuota returns the TotalVolumeQuota field value
@@ -174,7 +174,7 @@ func (o *OrganizationUsageOverview) SetCurrentVolumeUsage(v float32) {
 }
 
 func (o OrganizationUsageOverview) MarshalJSON() ([]byte, error) {
-	toSerialize,err := o.ToMap()
+	toSerialize, err := o.ToMap()
 	if err != nil {
 		return []byte{}, err
 	}
@@ -184,8 +184,8 @@ func (o OrganizationUsageOverview) MarshalJSON() ([]byte, error) {
 func (o OrganizationUsageOverview) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["regionUsage"] = o.RegionUsage
-	toSerialize["totalSnapshotQuota"] = o.TotalSnapshotQuota
-	toSerialize["currentSnapshotUsage"] = o.CurrentSnapshotUsage
+	toSerialize["totalTemplateQuota"] = o.TotalTemplateQuota
+	toSerialize["currentTemplateUsage"] = o.CurrentTemplateUsage
 	toSerialize["totalVolumeQuota"] = o.TotalVolumeQuota
 	toSerialize["currentVolumeUsage"] = o.CurrentVolumeUsage
 
@@ -202,8 +202,8 @@ func (o *OrganizationUsageOverview) UnmarshalJSON(data []byte) (err error) {
 	// that every required field exists as a key in the generic map.
 	requiredProperties := []string{
 		"regionUsage",
-		"totalSnapshotQuota",
-		"currentSnapshotUsage",
+		"totalTemplateQuota",
+		"currentTemplateUsage",
 		"totalVolumeQuota",
 		"currentVolumeUsage",
 	}
@@ -213,10 +213,10 @@ func (o *OrganizationUsageOverview) UnmarshalJSON(data []byte) (err error) {
 	err = json.Unmarshal(data, &allProperties)
 
 	if err != nil {
-		return err;
+		return err
 	}
 
-	for _, requiredProperty := range(requiredProperties) {
+	for _, requiredProperty := range requiredProperties {
 		if _, exists := allProperties[requiredProperty]; !exists {
 			return fmt.Errorf("no value given for required property %v", requiredProperty)
 		}
@@ -236,8 +236,8 @@ func (o *OrganizationUsageOverview) UnmarshalJSON(data []byte) (err error) {
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "regionUsage")
-		delete(additionalProperties, "totalSnapshotQuota")
-		delete(additionalProperties, "currentSnapshotUsage")
+		delete(additionalProperties, "totalTemplateQuota")
+		delete(additionalProperties, "currentTemplateUsage")
 		delete(additionalProperties, "totalVolumeQuota")
 		delete(additionalProperties, "currentVolumeUsage")
 		o.AdditionalProperties = additionalProperties

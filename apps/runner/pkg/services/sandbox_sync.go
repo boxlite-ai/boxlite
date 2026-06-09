@@ -183,8 +183,8 @@ func (s *SandboxSyncService) convertToApiState(localState enums.SandboxState) ap
 		return apiclient.SANDBOXSTATE_STOPPING
 	case enums.SandboxStateError:
 		return apiclient.SANDBOXSTATE_ERROR
-	case enums.SandboxStatePullingSnapshot:
-		return apiclient.SANDBOXSTATE_PULLING_SNAPSHOT
+	case enums.SandboxStatePullingArtifact:
+		return apiclient.SANDBOXSTATE_PULLING_ARTIFACT
 	default:
 		return apiclient.SANDBOXSTATE_UNKNOWN
 	}
@@ -210,8 +210,8 @@ func (s *SandboxSyncService) convertFromApiState(apiState apiclient.SandboxState
 		return enums.SandboxStateStopping
 	case apiclient.SANDBOXSTATE_ERROR:
 		return enums.SandboxStateError
-	case apiclient.SANDBOXSTATE_PULLING_SNAPSHOT:
-		return enums.SandboxStatePullingSnapshot
+	case apiclient.SANDBOXSTATE_PULLING_ARTIFACT:
+		return enums.SandboxStatePullingArtifact
 	default:
 		return enums.SandboxStateUnknown
 	}

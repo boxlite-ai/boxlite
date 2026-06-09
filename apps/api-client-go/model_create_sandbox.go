@@ -22,8 +22,8 @@ var _ MappedNullable = &CreateSandbox{}
 type CreateSandbox struct {
 	// The name of the sandbox. If not provided, the sandbox ID will be used as the name
 	Name *string `json:"name,omitempty"`
-	// The ID or name of the snapshot used for the sandbox
-	Snapshot *string `json:"snapshot,omitempty"`
+	// The ID or name of the template used for the box
+	TemplateId *string `json:"templateId,omitempty"`
 	// The user associated with the project
 	User *string `json:"user,omitempty"`
 	// Environment variables for the sandbox
@@ -50,14 +50,12 @@ type CreateSandbox struct {
 	Disk *int32 `json:"disk,omitempty"`
 	// Auto-stop interval in minutes (0 means disabled)
 	AutoStopInterval *int32 `json:"autoStopInterval,omitempty"`
-	// Auto-archive interval in minutes (0 means the maximum interval will be used)
-	AutoArchiveInterval *int32 `json:"autoArchiveInterval,omitempty"`
 	// Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping)
 	AutoDeleteInterval *int32 `json:"autoDeleteInterval,omitempty"`
 	// Array of volumes to attach to the sandbox
 	Volumes []SandboxVolume `json:"volumes,omitempty"`
 	// Build information for the sandbox
-	BuildInfo *CreateBuildInfo `json:"buildInfo,omitempty"`
+	BuildInfo            *CreateBuildInfo `json:"buildInfo,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -112,36 +110,36 @@ func (o *CreateSandbox) SetName(v string) {
 	o.Name = &v
 }
 
-// GetSnapshot returns the Snapshot field value if set, zero value otherwise.
-func (o *CreateSandbox) GetSnapshot() string {
-	if o == nil || IsNil(o.Snapshot) {
+// GetTemplateId returns the TemplateId field value if set, zero value otherwise.
+func (o *CreateSandbox) GetTemplateId() string {
+	if o == nil || IsNil(o.TemplateId) {
 		var ret string
 		return ret
 	}
-	return *o.Snapshot
+	return *o.TemplateId
 }
 
-// GetSnapshotOk returns a tuple with the Snapshot field value if set, nil otherwise
+// GetTemplateIdOk returns a tuple with the TemplateId field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *CreateSandbox) GetSnapshotOk() (*string, bool) {
-	if o == nil || IsNil(o.Snapshot) {
+func (o *CreateSandbox) GetTemplateIdOk() (*string, bool) {
+	if o == nil || IsNil(o.TemplateId) {
 		return nil, false
 	}
-	return o.Snapshot, true
+	return o.TemplateId, true
 }
 
-// HasSnapshot returns a boolean if a field has been set.
-func (o *CreateSandbox) HasSnapshot() bool {
-	if o != nil && !IsNil(o.Snapshot) {
+// HasTemplateId returns a boolean if a field has been set.
+func (o *CreateSandbox) HasTemplateId() bool {
+	if o != nil && !IsNil(o.TemplateId) {
 		return true
 	}
 
 	return false
 }
 
-// SetSnapshot gets a reference to the given string and assigns it to the Snapshot field.
-func (o *CreateSandbox) SetSnapshot(v string) {
-	o.Snapshot = &v
+// SetTemplateId gets a reference to the given string and assigns it to the TemplateId field.
+func (o *CreateSandbox) SetTemplateId(v string) {
+	o.TemplateId = &v
 }
 
 // GetUser returns the User field value if set, zero value otherwise.
@@ -560,38 +558,6 @@ func (o *CreateSandbox) SetAutoStopInterval(v int32) {
 	o.AutoStopInterval = &v
 }
 
-// GetAutoArchiveInterval returns the AutoArchiveInterval field value if set, zero value otherwise.
-func (o *CreateSandbox) GetAutoArchiveInterval() int32 {
-	if o == nil || IsNil(o.AutoArchiveInterval) {
-		var ret int32
-		return ret
-	}
-	return *o.AutoArchiveInterval
-}
-
-// GetAutoArchiveIntervalOk returns a tuple with the AutoArchiveInterval field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *CreateSandbox) GetAutoArchiveIntervalOk() (*int32, bool) {
-	if o == nil || IsNil(o.AutoArchiveInterval) {
-		return nil, false
-	}
-	return o.AutoArchiveInterval, true
-}
-
-// HasAutoArchiveInterval returns a boolean if a field has been set.
-func (o *CreateSandbox) HasAutoArchiveInterval() bool {
-	if o != nil && !IsNil(o.AutoArchiveInterval) {
-		return true
-	}
-
-	return false
-}
-
-// SetAutoArchiveInterval gets a reference to the given int32 and assigns it to the AutoArchiveInterval field.
-func (o *CreateSandbox) SetAutoArchiveInterval(v int32) {
-	o.AutoArchiveInterval = &v
-}
-
 // GetAutoDeleteInterval returns the AutoDeleteInterval field value if set, zero value otherwise.
 func (o *CreateSandbox) GetAutoDeleteInterval() int32 {
 	if o == nil || IsNil(o.AutoDeleteInterval) {
@@ -689,7 +655,7 @@ func (o *CreateSandbox) SetBuildInfo(v CreateBuildInfo) {
 }
 
 func (o CreateSandbox) MarshalJSON() ([]byte, error) {
-	toSerialize,err := o.ToMap()
+	toSerialize, err := o.ToMap()
 	if err != nil {
 		return []byte{}, err
 	}
@@ -701,8 +667,8 @@ func (o CreateSandbox) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.Name) {
 		toSerialize["name"] = o.Name
 	}
-	if !IsNil(o.Snapshot) {
-		toSerialize["snapshot"] = o.Snapshot
+	if !IsNil(o.TemplateId) {
+		toSerialize["templateId"] = o.TemplateId
 	}
 	if !IsNil(o.User) {
 		toSerialize["user"] = o.User
@@ -743,9 +709,6 @@ func (o CreateSandbox) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.AutoStopInterval) {
 		toSerialize["autoStopInterval"] = o.AutoStopInterval
 	}
-	if !IsNil(o.AutoArchiveInterval) {
-		toSerialize["autoArchiveInterval"] = o.AutoArchiveInterval
-	}
 	if !IsNil(o.AutoDeleteInterval) {
 		toSerialize["autoDeleteInterval"] = o.AutoDeleteInterval
 	}
@@ -778,7 +741,7 @@ func (o *CreateSandbox) UnmarshalJSON(data []byte) (err error) {
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "name")
-		delete(additionalProperties, "snapshot")
+		delete(additionalProperties, "templateId")
 		delete(additionalProperties, "user")
 		delete(additionalProperties, "env")
 		delete(additionalProperties, "labels")
@@ -792,7 +755,6 @@ func (o *CreateSandbox) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "memory")
 		delete(additionalProperties, "disk")
 		delete(additionalProperties, "autoStopInterval")
-		delete(additionalProperties, "autoArchiveInterval")
 		delete(additionalProperties, "autoDeleteInterval")
 		delete(additionalProperties, "volumes")
 		delete(additionalProperties, "buildInfo")

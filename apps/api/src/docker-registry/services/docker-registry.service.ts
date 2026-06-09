@@ -25,9 +25,9 @@ import { RegionCreatedEvent } from '../../region/events/region-created.event'
 import { RegionDeletedEvent } from '../../region/events/region-deleted.event'
 import { RegionService } from '../../region/services/region.service'
 import {
-  RegionSnapshotManagerCredsRegeneratedEvent,
-  RegionSnapshotManagerUpdatedEvent,
-} from '../../region/events/region-snapshot-manager-creds.event'
+  RegionArtifactRegistryCredsRegeneratedEvent,
+  RegionArtifactRegistryUpdatedEvent,
+} from '../../region/events/region-artifact-registry-creds.event'
 
 const AXIOS_TIMEOUT_MS = 3000
 const DOCKER_HUB_REGISTRY = 'registry-1.docker.io'
@@ -169,12 +169,12 @@ export class DockerRegistryService {
   }
 
   /**
-   * Returns an available internal registry for storing snapshots.
+   * Returns an available internal registry for storing runtime artifacts.
    *
-   * If a snapshot manager _is_ configured for the region identified by the provided _regionId_, only an internal registry that matches the region snapshot manager can be returned.
+   * If a artifact registry _is_ configured for the region identified by the provided _regionId_, only an internal registry that matches the region artifact registry can be returned.
    * If no matching internal registry is found, _null_ will be returned.
    *
-   * If a snapshot manager _is not_ configured for the provided region, the default internal registry will be returned (if available).
+   * If a artifact registry _is not_ configured for the provided region, the default internal registry will be returned (if available).
    * If no default internal registry is found, _null_ will be returned.
    *
    * @param regionId - The ID of the region.
@@ -185,7 +185,7 @@ export class DockerRegistryService {
       return null
     }
 
-    if (region.snapshotManagerUrl) {
+    if (region.artifactRegistryUrl) {
       return this.dockerRegistryRepository.findOne({
         where: { region: regionId, registryType: RegistryType.INTERNAL },
       })
@@ -197,12 +197,12 @@ export class DockerRegistryService {
   }
 
   /**
-   * Returns an available transient registry for pushing snapshots.
+   * Returns an available transient registry for pushing runtime artifacts.
    *
-   * If a snapshot manager _is_ configured for the region identified by the provided _regionId_, only a transient registry that matches the region snapshot manager can be returned.
+   * If a artifact registry _is_ configured for the region identified by the provided _regionId_, only a transient registry that matches the region artifact registry can be returned.
    * If no matching transient registry is found, _null_ will be returned.
    *
-   * If a snapshot manager _is not_ configured for the provided region or no region is provided, the default transient registry will be returned (if available).
+   * If a artifact registry _is not_ configured for the provided region or no region is provided, the default transient registry will be returned (if available).
    * If no default transient registry is found, _null_ will be returned.
    *
    * @param regionId - (Optional) The ID of the region.
@@ -214,7 +214,7 @@ export class DockerRegistryService {
         return null
       }
 
-      if (region.snapshotManagerUrl) {
+      if (region.artifactRegistryUrl) {
         return this.dockerRegistryRepository.findOne({
           where: { region: regionId, registryType: RegistryType.TRANSIENT },
         })
@@ -238,12 +238,12 @@ export class DockerRegistryService {
   }
 
   /**
-   * Returns an available backup registry for storing snapshots.
+   * Returns an available backup registry for storing runtime artifacts.
    *
-   * If a snapshot manager _is_ configured for the region identified by the provided _preferredRegionId_, only a backup registry that matches the region snapshot manager can be returned.
+   * If a artifact registry _is_ configured for the region identified by the provided _preferredRegionId_, only a backup registry that matches the region artifact registry can be returned.
    * If no matching backup registry is found, _null_ will be returned.
    *
-   * If a snapshot manager _is not_ configured for the provided region, a backup registry in the preferred region will be returned (if available).
+   * If a artifact registry _is not_ configured for the provided region, a backup registry in the preferred region will be returned (if available).
    * If no backup registry is found in the preferred region, a fallback backup registry will be returned (if available).
    * If no fallback backup registry is found, _null_ will be returned.
    *
@@ -255,7 +255,7 @@ export class DockerRegistryService {
       return null
     }
 
-    if (region.snapshotManagerUrl) {
+    if (region.artifactRegistryUrl) {
       return this.dockerRegistryRepository.findOne({
         where: { region: preferredRegionId, registryType: RegistryType.BACKUP },
       })
@@ -291,14 +291,14 @@ export class DockerRegistryService {
   }
 
   /**
-   * Returns an internal registry that matches the snapshot ref.
+   * Returns an internal registry that matches the artifact ref.
    *
    * If no matching internal registry is found, _null_ will be returned.
    *
-   * @param ref - The snapshot ref.
+   * @param ref - The artifact ref.
    * @param regionId - The ID of the region which needs access to the internal registry.
    */
-  async findInternalRegistryBySnapshotRef(ref: string, regionId: string): Promise<DockerRegistry | null> {
+  async findInternalRegistryByArtifactRef(ref: string, regionId: string): Promise<DockerRegistry | null> {
     const region = await this.regionService.findOne(regionId)
     if (!region) {
       return null
@@ -306,7 +306,7 @@ export class DockerRegistryService {
 
     let registries: DockerRegistry[]
 
-    if (region.snapshotManagerUrl) {
+    if (region.artifactRegistryUrl) {
       registries = await this.dockerRegistryRepository.find({
         where: {
           region: regionId,
@@ -326,14 +326,14 @@ export class DockerRegistryService {
   }
 
   /**
-   * Returns a source registry that matches the snapshot image name and can be used to pull the image.
+   * Returns a source registry that matches the artifact image name and can be used to pull the image.
    *
    * If no matching source registry is found, _null_ will be returned.
    *
    * @param imageName - The user-provided image.
    * @param regionId - The ID of the region which needs access to the source registry.
    */
-  async findSourceRegistryBySnapshotImageName(
+  async findSourceRegistryByTemplateImageName(
     imageName: string,
     regionId: string,
     organizationId?: string,
@@ -360,8 +360,8 @@ export class DockerRegistryService {
       })
     }
 
-    if (region.snapshotManagerUrl) {
-      // internal registry associated with region snapshot manager
+    if (region.artifactRegistryUrl) {
+      // internal registry associated with region artifact registry
       whereCondition.push({
         region: regionId,
         registryType: RegistryType.INTERNAL,
@@ -391,14 +391,14 @@ export class DockerRegistryService {
   }
 
   /**
-   * Returns a transient registry that matches the snapshot image name.
+   * Returns a transient registry that matches the artifact image name.
    *
    * If no matching transient registry is found, _null_ will be returned.
    *
    * @param imageName - The user-provided image.
    * @param regionId - The ID of the region which needs access to the transient registry.
    */
-  async findTransientRegistryBySnapshotImageName(imageName: string, regionId: string): Promise<DockerRegistry | null> {
+  async findTransientRegistryByTemplateImageName(imageName: string, regionId: string): Promise<DockerRegistry | null> {
     const region = await this.regionService.findOne(regionId)
     if (!region) {
       return null
@@ -406,7 +406,7 @@ export class DockerRegistryService {
 
     let registries: DockerRegistry[]
 
-    if (region.snapshotManagerUrl) {
+    if (region.artifactRegistryUrl) {
       registries = await this.dockerRegistryRepository.find({
         where: {
           region: regionId,
@@ -534,7 +534,7 @@ export class DockerRegistryService {
 
     if (parsedImage.registry) {
       // Image has registry prefix, try to find matching registry in database first
-      const registry = await this.findSourceRegistryBySnapshotImageName(imageName, regionId, organizationId)
+      const registry = await this.findSourceRegistryByTemplateImageName(imageName, regionId, organizationId)
       if (registry) {
         return registry
       }
@@ -699,7 +699,7 @@ export class DockerRegistryService {
 
   async deleteSandboxRepository(repository: string, registry: DockerRegistry): Promise<void> {
     try {
-      // Delete both backup and snapshot repositories - necessary due to renaming
+      // Delete both backup and legacy snapshot-prefixed repositories.
       await this.deleteRepositoryWithPrefix(repository, 'backup-', registry)
       await this.deleteRepositoryWithPrefix(repository, 'snapshot-', registry)
     } catch (error) {
@@ -804,35 +804,35 @@ export class DockerRegistryService {
   }
 
   @OnAsyncEvent({
-    event: RegionEvents.SNAPSHOT_MANAGER_CREDENTIALS_REGENERATED,
+    event: RegionEvents.ARTIFACT_REGISTRY_CREDENTIALS_REGENERATED,
   })
-  private async _handleRegionSnapshotManagerCredsRegenerated(
-    payload: RegionSnapshotManagerCredsRegeneratedEvent,
+  private async _handleRegionArtifactRegistryCredsRegenerated(
+    payload: RegionArtifactRegistryCredsRegeneratedEvent,
   ): Promise<void> {
-    const { regionId, snapshotManagerUrl, username, password, entityManager } = payload
+    const { regionId, artifactRegistryUrl, username, password, entityManager } = payload
 
     const em = entityManager ?? this.dockerRegistryRepository.manager
 
     const registries = await em.count(DockerRegistry, {
-      where: { region: regionId, url: snapshotManagerUrl },
+      where: { region: regionId, url: artifactRegistryUrl },
     })
 
     if (registries === 0) {
-      throw new NotFoundException(`No registries found for region ${regionId} with URL ${snapshotManagerUrl}`)
+      throw new NotFoundException(`No registries found for region ${regionId} with URL ${artifactRegistryUrl}`)
     }
 
-    await em.update(DockerRegistry, { region: regionId, url: snapshotManagerUrl }, { username, password })
+    await em.update(DockerRegistry, { region: regionId, url: artifactRegistryUrl }, { username, password })
   }
 
   @OnAsyncEvent({
-    event: RegionEvents.SNAPSHOT_MANAGER_UPDATED,
+    event: RegionEvents.ARTIFACT_REGISTRY_UPDATED,
   })
-  private async _handleRegionSnapshotManagerUpdated(payload: RegionSnapshotManagerUpdatedEvent): Promise<void> {
+  private async _handleRegionArtifactRegistryUpdated(payload: RegionArtifactRegistryUpdatedEvent): Promise<void> {
     const {
       region,
       organizationId,
-      snapshotManagerUrl,
-      prevSnapshotManagerUrl,
+      artifactRegistryUrl,
+      prevArtifactRegistryUrl,
       entityManager,
       newUsername,
       newPassword,
@@ -840,26 +840,26 @@ export class DockerRegistryService {
 
     const em = entityManager ?? this.dockerRegistryRepository.manager
 
-    if (prevSnapshotManagerUrl) {
-      // Update old registries associated with previous snapshot manager URL
-      if (snapshotManagerUrl) {
+    if (prevArtifactRegistryUrl) {
+      // Update old registries associated with previous artifact registry URL
+      if (artifactRegistryUrl) {
         await em.update(
           DockerRegistry,
           {
             region: region.id,
-            url: prevSnapshotManagerUrl,
+            url: prevArtifactRegistryUrl,
           },
           {
-            url: snapshotManagerUrl,
+            url: artifactRegistryUrl,
             username: newUsername,
             password: newPassword,
           },
         )
       } else {
-        // If snapshot manager URL is removed, delete associated registries
+        // If artifact registry URL is removed, delete associated registries
         await em.delete(DockerRegistry, {
           region: region.id,
-          url: prevSnapshotManagerUrl,
+          url: prevArtifactRegistryUrl,
         })
       }
 
@@ -867,7 +867,7 @@ export class DockerRegistryService {
     }
 
     const registries = await em.count(DockerRegistry, {
-      where: { region: region.id, url: snapshotManagerUrl },
+      where: { region: region.id, url: artifactRegistryUrl },
     })
 
     if (registries === 0) {
@@ -881,18 +881,18 @@ export class DockerRegistryService {
     event: RegionEvents.CREATED,
   })
   private async _handleRegionCreatedEvent(payload: RegionCreatedEvent): Promise<void> {
-    const { entityManager, region, organizationId, snapshotManagerUsername, snapshotManagerPassword } = payload
+    const { entityManager, region, organizationId, artifactRegistryUsername, artifactRegistryPassword } = payload
 
-    if (!region.snapshotManagerUrl || !snapshotManagerUsername || !snapshotManagerPassword) {
+    if (!region.artifactRegistryUrl || !artifactRegistryUsername || !artifactRegistryPassword) {
       return
     }
 
     await this.create(
       {
         name: `${region.name}-backup`,
-        url: region.snapshotManagerUrl,
-        username: snapshotManagerUsername,
-        password: snapshotManagerPassword,
+        url: region.artifactRegistryUrl,
+        username: artifactRegistryUsername,
+        password: artifactRegistryPassword,
         registryType: RegistryType.BACKUP,
         regionId: region.id,
       },
@@ -904,9 +904,9 @@ export class DockerRegistryService {
     await this.create(
       {
         name: `${region.name}-internal`,
-        url: region.snapshotManagerUrl,
-        username: snapshotManagerUsername,
-        password: snapshotManagerPassword,
+        url: region.artifactRegistryUrl,
+        username: artifactRegistryUsername,
+        password: artifactRegistryPassword,
         registryType: RegistryType.INTERNAL,
         regionId: region.id,
       },
@@ -918,9 +918,9 @@ export class DockerRegistryService {
     await this.create(
       {
         name: `${region.name}-transient`,
-        url: region.snapshotManagerUrl,
-        username: snapshotManagerUsername,
-        password: snapshotManagerPassword,
+        url: region.artifactRegistryUrl,
+        username: artifactRegistryUsername,
+        password: artifactRegistryPassword,
         registryType: RegistryType.TRANSIENT,
         regionId: region.id,
       },
@@ -936,7 +936,7 @@ export class DockerRegistryService {
   async handleRegionDeletedEvent(payload: RegionDeletedEvent): Promise<void> {
     const { entityManager, region } = payload
 
-    if (!region.snapshotManagerUrl) {
+    if (!region.artifactRegistryUrl) {
       return
     }
 

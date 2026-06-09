@@ -13,21 +13,21 @@ import (
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 )
 
-func AwaitSnapshotState(ctx context.Context, apiClient *apiclient.APIClient, name string, state apiclient.SnapshotState) error {
+func AwaitBoxTemplateState(ctx context.Context, apiClient *apiclient.APIClient, name string, state apiclient.BoxTemplateState) error {
 	for {
-		snapshot, res, err := apiClient.SnapshotsAPI.GetSnapshot(ctx, name).Execute()
+		template, res, err := apiClient.TemplatesAPI.GetBoxTemplate(ctx, name).Execute()
 		if err != nil {
 			return apiclient_cli.HandleErrorResponse(res, err)
 		}
 
-		switch snapshot.State {
+		switch template.State {
 		case state:
 			return nil
-		case apiclient.SNAPSHOTSTATE_ERROR, apiclient.SNAPSHOTSTATE_BUILD_FAILED:
-			if !snapshot.ErrorReason.IsSet() {
-				return fmt.Errorf("snapshot processing failed")
+		case apiclient.BOXTEMPLATESTATE_ERROR, apiclient.BOXTEMPLATESTATE_BUILD_FAILED:
+			if template.ErrorReason == nil {
+				return fmt.Errorf("template processing failed")
 			}
-			return fmt.Errorf("snapshot processing failed: %s", *snapshot.ErrorReason.Get())
+			return fmt.Errorf("template processing failed: %s", *template.ErrorReason)
 		}
 
 		time.Sleep(time.Second)

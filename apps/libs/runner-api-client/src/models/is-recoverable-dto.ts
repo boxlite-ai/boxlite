@@ -12,18 +12,16 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  *
  * @export
  * @interface IsRecoverableDTO
  */
 export interface IsRecoverableDTO {
-    /**
-     *
-     * @type {string}
-     * @memberof IsRecoverableDTO
-     */
-    'errorReason': string;
+  /**
+   *
+   * @type {string}
+   * @memberof IsRecoverableDTO
+   */
+  errorReason: string
 }

@@ -12,24 +12,22 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  *
  * @export
  * @interface MouseMoveResponse
  */
 export interface MouseMoveResponse {
-    /**
-     * The actual X coordinate where the mouse cursor ended up
-     * @type {number}
-     * @memberof MouseMoveResponse
-     */
-    'x': number;
-    /**
-     * The actual Y coordinate where the mouse cursor ended up
-     * @type {number}
-     * @memberof MouseMoveResponse
-     */
-    'y': number;
+  /**
+   * The actual X coordinate where the mouse cursor ended up
+   * @type {number}
+   * @memberof MouseMoveResponse
+   */
+  x: number
+  /**
+   * The actual Y coordinate where the mouse cursor ended up
+   * @type {number}
+   * @memberof MouseMoveResponse
+   */
+  y: number
 }

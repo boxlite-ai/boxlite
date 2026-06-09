@@ -13,6 +13,7 @@ import { useSandboxQuery } from '@/hooks/queries/useSandboxQuery'
 import { useTerminalSessionQuery } from '@/hooks/queries/useTerminalSessionQuery'
 import { useSandboxSessionContext } from '@/hooks/useSandboxSessionContext'
 import { useSandboxWsSync } from '@/hooks/useSandboxWsSync'
+import { getSandboxDisplayName, getSandboxPublicId } from '@/lib/sandbox-identity'
 import { isStoppable } from '@/lib/utils/sandbox'
 import { Container, Play, RefreshCw, TerminalSquare } from 'lucide-react'
 import { SandboxFullscreenShell } from './SandboxFullscreenShell'
@@ -46,14 +47,14 @@ export default function SandboxTerminalFullscreen() {
     setActivated(true)
   }
 
-  const backPath = sandboxId ? RoutePath.SANDBOX_DETAILS.replace(':sandboxId', sandboxId) : RoutePath.SANDBOXES
+  const backPath = sandboxId ? RoutePath.BOX_DETAILS.replace(':sandboxId', sandboxId) : RoutePath.BOXES
 
   let body: ReactNode
   if (sandboxLoading) {
     body = (
       <div className="flex-1 flex items-center justify-center gap-2 text-muted-foreground">
         <Spinner className="size-4" />
-        <span className="text-sm">Loading sandbox...</span>
+        <span className="text-sm">Loading box...</span>
       </div>
     )
   } else if (sandboxIsError || !sandbox) {
@@ -63,7 +64,7 @@ export default function SandboxTerminalFullscreen() {
           <EmptyMedia variant="icon">
             <Container className="size-4" />
           </EmptyMedia>
-          <EmptyTitle>Sandbox not found</EmptyTitle>
+          <EmptyTitle>Box not found</EmptyTitle>
           <EmptyDescription>Are you sure you're in the right organization?</EmptyDescription>
         </EmptyHeader>
         <Button variant="outline" size="sm" asChild>
@@ -78,8 +79,8 @@ export default function SandboxTerminalFullscreen() {
           <EmptyMedia variant="icon">
             <TerminalSquare className="size-4" />
           </EmptyMedia>
-          <EmptyTitle>Sandbox is not running</EmptyTitle>
-          <EmptyDescription>Start the sandbox to access the terminal.</EmptyDescription>
+          <EmptyTitle>Box is not running</EmptyTitle>
+          <EmptyDescription>Start the box to access the terminal.</EmptyDescription>
         </EmptyHeader>
         <Button variant="outline" size="sm" asChild>
           <Link to={backPath}>Back</Link>
@@ -94,7 +95,7 @@ export default function SandboxTerminalFullscreen() {
             <TerminalSquare className="size-4" />
           </EmptyMedia>
           <EmptyTitle>Terminal</EmptyTitle>
-          <EmptyDescription>Connect to an interactive terminal session in your sandbox.</EmptyDescription>
+          <EmptyDescription>Connect to an interactive terminal session in your box.</EmptyDescription>
         </EmptyHeader>
         <Button onClick={handleConnect}>
           <Play className="size-4" />
@@ -126,14 +127,11 @@ export default function SandboxTerminalFullscreen() {
     body = <SandboxTerminalFrame sessionUrl={session.url} className="flex-1" />
   }
 
-  const label = sandbox?.name || sandbox?.id || sandboxId
+  const label = sandbox ? getSandboxDisplayName(sandbox) : sandboxId
+  const publicBoxId = sandbox ? getSandboxPublicId(sandbox) : ''
 
   return (
-    <SandboxFullscreenShell
-      sandboxId={sandboxId}
-      title={label}
-      copyValue={sandbox ? sandbox.name || sandbox.id : undefined}
-    >
+    <SandboxFullscreenShell sandboxId={sandboxId} title={label} copyValue={publicBoxId || undefined}>
       {body}
     </SandboxFullscreenShell>
   )

@@ -29,9 +29,9 @@ import boxlite
 
 async def main():
     # Create a box and run a command
-    async with boxlite.SimpleBox(image="python:slim") as box:
-        result = await box.exec("python", "-c", "print('Hello from BoxLite!')")
-        print(result.stdout)
+    async with boxlite.SimpleBox(image="busybox:1.36.1") as box:
+        result = await box.exec("echo", "Hello from BoxLite!")
+        print(result.stdout, end="")
         # Output: Hello from BoxLite!
 
 
@@ -45,9 +45,9 @@ python hello.py
 ```
 
 **What's happening:**
-1. BoxLite pulls the `python:slim` OCI image (first run only)
+1. BoxLite pulls the `busybox:1.36.1` OCI image (first run only)
 2. Creates a lightweight VM with the image
-3. Executes the Python command inside the VM
+3. Executes the command inside the VM
 4. Streams output back to your application
 5. Automatically cleans up when the context exits
 

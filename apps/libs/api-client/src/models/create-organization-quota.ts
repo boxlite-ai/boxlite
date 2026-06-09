@@ -12,66 +12,64 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  *
  * @export
  * @interface CreateOrganizationQuota
  */
 export interface CreateOrganizationQuota {
-    /**
-     *
-     * @type {number}
-     * @memberof CreateOrganizationQuota
-     */
-    'totalCpuQuota'?: number;
-    /**
-     *
-     * @type {number}
-     * @memberof CreateOrganizationQuota
-     */
-    'totalMemoryQuota'?: number;
-    /**
-     *
-     * @type {number}
-     * @memberof CreateOrganizationQuota
-     */
-    'totalDiskQuota'?: number;
-    /**
-     *
-     * @type {number}
-     * @memberof CreateOrganizationQuota
-     */
-    'maxCpuPerSandbox'?: number;
-    /**
-     *
-     * @type {number}
-     * @memberof CreateOrganizationQuota
-     */
-    'maxMemoryPerSandbox'?: number;
-    /**
-     *
-     * @type {number}
-     * @memberof CreateOrganizationQuota
-     */
-    'maxDiskPerSandbox'?: number;
-    /**
-     *
-     * @type {number}
-     * @memberof CreateOrganizationQuota
-     */
-    'snapshotQuota'?: number;
-    /**
-     *
-     * @type {number}
-     * @memberof CreateOrganizationQuota
-     */
-    'maxSnapshotSize'?: number;
-    /**
-     *
-     * @type {number}
-     * @memberof CreateOrganizationQuota
-     */
-    'volumeQuota'?: number;
+  /**
+   *
+   * @type {number}
+   * @memberof CreateOrganizationQuota
+   */
+  totalCpuQuota?: number
+  /**
+   *
+   * @type {number}
+   * @memberof CreateOrganizationQuota
+   */
+  totalMemoryQuota?: number
+  /**
+   *
+   * @type {number}
+   * @memberof CreateOrganizationQuota
+   */
+  totalDiskQuota?: number
+  /**
+   *
+   * @type {number}
+   * @memberof CreateOrganizationQuota
+   */
+  maxCpuPerSandbox?: number
+  /**
+   *
+   * @type {number}
+   * @memberof CreateOrganizationQuota
+   */
+  maxMemoryPerSandbox?: number
+  /**
+   *
+   * @type {number}
+   * @memberof CreateOrganizationQuota
+   */
+  maxDiskPerSandbox?: number
+  /**
+   *
+   * @type {number}
+   * @memberof CreateOrganizationQuota
+   */
+  templateQuota?: number
+  /**
+   *
+   * @type {number}
+   * @memberof CreateOrganizationQuota
+   */
+  maxTemplateSize?: number
+  /**
+   *
+   * @type {number}
+   * @memberof CreateOrganizationQuota
+   */
+  volumeQuota?: number
 }

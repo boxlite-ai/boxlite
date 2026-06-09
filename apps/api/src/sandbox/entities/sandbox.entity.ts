@@ -20,20 +20,23 @@ import { SandboxState } from '../enums/sandbox-state.enum'
 import { SandboxDesiredState } from '../enums/sandbox-desired-state.enum'
 import { SandboxClass } from '../enums/sandbox-class.enum'
 import { BackupState } from '../enums/backup-state.enum'
-import { v4 as uuidv4 } from 'uuid'
+import { randomUUID } from 'crypto'
 import { SandboxVolume } from '../dto/sandbox.dto'
 import { BuildInfo } from './build-info.entity'
 import { nanoid } from 'nanoid'
 import { SandboxLastActivity } from './sandbox-last-activity.entity'
+import { BOX_ID_LENGTH, BOX_ID_REGEX, generateBoxId } from '../utils/box-id.util'
 
 @Entity()
 @Unique(['organizationId', 'name'])
+@Index('sandbox_boxid_unique_idx', ['boxId'], { unique: true })
 @Index('sandbox_state_idx', ['state'])
 @Index('sandbox_desiredstate_idx', ['desiredState'])
-@Index('sandbox_snapshot_idx', ['snapshot'])
+@Index('sandbox_template_idx', ['template'])
 @Index('sandbox_runnerid_idx', ['runnerId'])
 @Index('sandbox_runner_state_idx', ['runnerId', 'state'])
 @Index('sandbox_organizationid_idx', ['organizationId'])
+@Index('sandbox_organizationid_boxid_idx', ['organizationId', 'boxId'])
 @Index('sandbox_region_idx', ['region'])
 @Index('sandbox_resources_idx', ['cpu', 'mem', 'disk', 'gpu'])
 @Index('sandbox_backupstate_idx', ['backupState'])
@@ -52,6 +55,9 @@ import { SandboxLastActivity } from './sandbox-last-activity.entity'
 export class Sandbox {
   @PrimaryColumn({ default: () => 'uuid_generate_v4()' })
   id: string
+
+  @Column({ type: 'character varying', length: BOX_ID_LENGTH })
+  boxId: string = generateBoxId()
 
   @Column({
     type: 'uuid',
@@ -100,7 +106,7 @@ export class Sandbox {
   desiredState = SandboxDesiredState.STARTED
 
   @Column({ nullable: true })
-  snapshot?: string
+  template?: string
 
   @Column()
   osUser: string
@@ -196,10 +202,6 @@ export class Sandbox {
   @Column({ default: 15, type: 'int' })
   autoStopInterval: number | undefined = 15
 
-  //  this is the interval in minutes after which a continuously stopped workspace will be automatically archived
-  @Column({ default: 7 * 24 * 60, type: 'int' })
-  autoArchiveInterval: number | undefined = 7 * 24 * 60
-
   //  this is the interval in minutes after which a continuously stopped workspace will be automatically deleted
   //  if set to negative value, auto delete will be disabled
   //  if set to 0, sandbox will be immediately deleted upon stopping
@@ -222,7 +224,7 @@ export class Sandbox {
   daemonVersion?: string
 
   constructor(region: string, name?: string) {
-    this.id = uuidv4()
+    this.id = randomUUID()
     // Set name - use provided name or fallback to ID
     this.name = name || this.id
     this.region = region
@@ -289,7 +291,14 @@ export class Sandbox {
    * Asserts that the current entity state is valid.
    */
   assertValid(): void {
+    this.validateBoxId()
     this.validateDesiredStateTransition()
+  }
+
+  private validateBoxId(): void {
+    if (!BOX_ID_REGEX.test(this.boxId)) {
+      throw new Error(`Sandbox ${this.id} has invalid boxId ${this.boxId}`)
+    }
   }
 
   private validateDesiredStateTransition(): void {
@@ -300,14 +309,12 @@ export class Sandbox {
             SandboxState.STARTED,
             SandboxState.STOPPED,
             SandboxState.STARTING,
-            SandboxState.ARCHIVED,
             SandboxState.CREATING,
             SandboxState.UNKNOWN,
             SandboxState.RESTORING,
             SandboxState.PENDING_BUILD,
-            SandboxState.BUILDING_SNAPSHOT,
-            SandboxState.PULLING_SNAPSHOT,
-            SandboxState.ARCHIVING,
+            SandboxState.BUILDING_ARTIFACT,
+            SandboxState.PULLING_ARTIFACT,
             SandboxState.ERROR,
             SandboxState.BUILD_FAILED,
             SandboxState.RESIZING,
@@ -330,19 +337,6 @@ export class Sandbox {
           break
         }
         throw new Error(`Sandbox ${this.id} is not in a valid state to be stopped. State: ${this.state}`)
-      case SandboxDesiredState.ARCHIVED:
-        if (
-          [
-            SandboxState.ARCHIVED,
-            SandboxState.ARCHIVING,
-            SandboxState.STOPPED,
-            SandboxState.ERROR,
-            SandboxState.BUILD_FAILED,
-          ].includes(this.state)
-        ) {
-          break
-        }
-        throw new Error(`Sandbox ${this.id} is not in a valid state to be archived. State: ${this.state}`)
       case SandboxDesiredState.DESTROYED:
         if (
           [
@@ -383,11 +377,7 @@ export class Sandbox {
     if (this.pending && String(this.state) === String(this.desiredState)) {
       changes.pending = false
     }
-    if (
-      this.state === SandboxState.ERROR ||
-      this.state === SandboxState.BUILD_FAILED ||
-      this.desiredState === SandboxDesiredState.ARCHIVED
-    ) {
+    if (this.state === SandboxState.ERROR || this.state === SandboxState.BUILD_FAILED) {
       changes.pending = false
     }
 

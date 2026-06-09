@@ -13,8 +13,9 @@ export const PlaygroundSandboxContext = createContext<UseSandboxSessionResult | 
 
 export const PlaygroundSandboxProvider: React.FC<{
   activeTab: PlaygroundCategories
+  vncEnabled: boolean
   children: React.ReactNode
-}> = ({ activeTab, children }) => {
+}> = ({ activeTab, vncEnabled, children }) => {
   const { getSandboxParametersInfo } = usePlayground()
   const { createSandboxParams } = getSandboxParametersInfo()
   const stableCreateParams = useDeepCompareMemo(createSandboxParams)
@@ -23,7 +24,7 @@ export const PlaygroundSandboxProvider: React.FC<{
     scope: 'playground',
     createParams: stableCreateParams,
     terminal: true,
-    vnc: true,
+    vnc: vncEnabled,
     notify: { vnc: activeTab === PlaygroundCategories.VNC },
   })
 
@@ -31,20 +32,21 @@ export const PlaygroundSandboxProvider: React.FC<{
   createRef.current = session.sandbox.create
 
   useEffect(() => {
-    const needsSandbox = activeTab === PlaygroundCategories.TERMINAL || activeTab === PlaygroundCategories.VNC
+    const needsSandbox =
+      activeTab === PlaygroundCategories.TERMINAL || (vncEnabled && activeTab === PlaygroundCategories.VNC)
     if (needsSandbox && !session.sandbox.instance && !session.sandbox.loading && !session.sandbox.error) {
       createRef.current()
     }
-  }, [activeTab, session.sandbox.instance, session.sandbox.loading, session.sandbox.error])
+  }, [activeTab, session.sandbox.instance, session.sandbox.loading, session.sandbox.error, vncEnabled])
 
   const vncSandboxId = useRef<string | null>(null)
   useEffect(() => {
     const id = session.sandbox.instance?.id
-    if (id && vncSandboxId.current !== id) {
+    if (vncEnabled && id && vncSandboxId.current !== id) {
       vncSandboxId.current = id
       session.vnc.start()
     }
-  }, [session.sandbox.instance?.id, session.vnc])
+  }, [session.sandbox.instance?.id, session.vnc, vncEnabled])
 
   return <PlaygroundSandboxContext.Provider value={session}>{children}</PlaygroundSandboxContext.Provider>
 }

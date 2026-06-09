@@ -75,7 +75,7 @@ export const SandboxUsageTable: React.FC<SandboxUsageTableProps> = ({ data, isLo
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Sandbox ID</TableHead>
+            <TableHead>Box ID</TableHead>
             <SortableTableHead
               field="totalPrice"
               label="Total Price"
@@ -129,7 +129,7 @@ export const SandboxUsageTable: React.FC<SandboxUsageTableProps> = ({ data, isLo
                     <div className="flex items-center gap-2 group/copy-button">
                       <span className="truncate max-w-[200px]">{sandbox.sandboxId}</span>
                       {sandbox.sandboxId && (
-                        <CopyButton value={sandbox.sandboxId} tooltipText="Copy sandbox ID" size="icon-xs" autoHide />
+                        <CopyButton value={sandbox.sandboxId} tooltipText="Copy box ID" size="icon-xs" autoHide />
                       )}
                     </div>
                   </TableCell>

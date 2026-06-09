@@ -201,6 +201,7 @@ func TestBoxOptions(t *testing.T) {
 	WithEnv("FOO", "bar")(cfg)
 	WithVolume("/host", "/guest")(cfg)
 	WithVolumeReadOnly("/ro-host", "/ro-guest")(cfg)
+	WithPort(2280, 31280)(cfg)
 	WithWorkDir("/app")(cfg)
 	WithEntrypoint("/bin/sh")(cfg)
 	WithCmd("-c", "echo hi")(cfg)
@@ -227,6 +228,9 @@ func TestBoxOptions(t *testing.T) {
 	}
 	if cfg.volumes[0].readOnly {
 		t.Error("first volume should be read-write")
+	}
+	if len(cfg.ports) != 1 || cfg.ports[0] != (portEntry{guestPort: 2280, hostPort: 31280}) {
+		t.Errorf("ports: got %v", cfg.ports)
 	}
 	if !cfg.volumes[1].readOnly {
 		t.Error("second volume should be read-only")
@@ -470,6 +474,19 @@ func TestBuildCOptions_RejectsAllowNetWithDisabledMode(t *testing.T) {
 		t.Fatal("expected error for disabled network with allowlist")
 	}
 	if err.Error() != "network.mode=\"disabled\" is incompatible with allow_net" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBuildCOptions_RejectsInvalidPort(t *testing.T) {
+	cfg := &boxConfig{}
+	WithPort(0, 31280)(cfg)
+
+	_, err := buildCOptions("alpine:latest", cfg)
+	if err == nil {
+		t.Fatal("expected error for invalid guest port")
+	}
+	if err.Error() != "invalid guest port 0" {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

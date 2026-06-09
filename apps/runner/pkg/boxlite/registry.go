@@ -17,38 +17,31 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 )
 
-// Default registry-pull platform. Daytona's original hardcode of
-// `linux/amd64` is correct for prod EC2 runners but breaks on Apple Silicon
-// (`/bin/sh` lands as x86 ELF → `ENOEXEC: Exec format error` when libkrun
-// tries to exec inside the microVM). Detect at startup based on host arch.
-var linuxHostPlatform = v1.Platform{
-	OS:           "linux",
-	Architecture: runtime.GOARCH, // "amd64", "arm64", etc.
-}
+var linuxRunnerPlatform = v1.Platform{OS: "linux", Architecture: runnerLinuxArchitecture()}
 
-// PullSnapshot pulls a snapshot image and mirrors it to the destination registry when requested.
-func (c *Client) PullSnapshot(ctx context.Context, req dto.PullSnapshotRequestDTO) error {
-	c.logger.Info("pulling snapshot", "snapshot", req.Snapshot)
+// PullArtifact pulls an artifact image and mirrors it to the destination registry when requested.
+func (c *Client) PullArtifact(ctx context.Context, req dto.PullArtifactRequestDTO) error {
+	c.logger.Info("pulling artifact", "artifactRef", req.ArtifactRef)
 
 	if req.DestinationRegistry == nil {
-		return c.PullImage(ctx, req.Snapshot)
+		return c.PullImage(ctx, req.ArtifactRef)
 	}
 
 	if req.DestinationRegistry.Project == nil || strings.TrimSpace(*req.DestinationRegistry.Project) == "" {
 		return fmt.Errorf("project is required when pushing to registry")
 	}
 
-	targetRef, err := c.getPullSnapshotTargetRef(ctx, req)
+	targetRef, err := c.getPullArtifactTargetRef(ctx, req)
 	if err != nil {
 		return err
 	}
 
-	if err := c.copyRegistryImage(ctx, req.Snapshot, req.Registry, targetRef, req.DestinationRegistry); err != nil {
+	if err := c.copyRegistryImage(ctx, req.ArtifactRef, req.Registry, targetRef, req.DestinationRegistry); err != nil {
 		return err
 	}
 
 	if err := c.PullImage(ctx, targetRef); err != nil {
-		return fmt.Errorf("failed to pull copied snapshot %s into BoxLite cache: %w", targetRef, err)
+		return fmt.Errorf("failed to pull copied artifact %s into BoxLite cache: %w", targetRef, err)
 	}
 
 	return nil
@@ -78,19 +71,19 @@ func (c *Client) InspectImageInRegistry(ctx context.Context, imageName string, r
 	}, nil
 }
 
-func (c *Client) getPullSnapshotTargetRef(ctx context.Context, req dto.PullSnapshotRequestDTO) (string, error) {
+func (c *Client) getPullArtifactTargetRef(ctx context.Context, req dto.PullArtifactRequestDTO) (string, error) {
 	if req.DestinationRef != nil && strings.TrimSpace(*req.DestinationRef) != "" {
 		return sanitizeImageReference(*req.DestinationRef), nil
 	}
 
-	digest, err := c.InspectImageInRegistry(ctx, req.Snapshot, req.Registry)
+	digest, err := c.InspectImageInRegistry(ctx, req.ArtifactRef, req.Registry)
 	if err != nil {
 		return "", err
 	}
 
 	hash := strings.TrimPrefix(digest.Digest, "sha256:")
 	if hash == "" {
-		return "", fmt.Errorf("registry returned empty digest for image %s", req.Snapshot)
+		return "", fmt.Errorf("registry returned empty digest for image %s", req.ArtifactRef)
 	}
 
 	registryURL := sanitizeRegistryURL(req.DestinationRegistry.Url)
@@ -120,7 +113,7 @@ func (c *Client) copyRegistryImage(
 	}
 
 	if err := remote.Write(targetRef, img, c.remoteOptions(ctx, targetRegistry)...); err != nil {
-		return fmt.Errorf("failed to push copied snapshot to registry: %w", err)
+		return fmt.Errorf("failed to push copied artifact to registry: %w", err)
 	}
 
 	return nil
@@ -175,7 +168,7 @@ func (c *Client) parseReference(imageName string, registry *dto.RegistryDTO) (na
 func (c *Client) remoteOptions(ctx context.Context, registry *dto.RegistryDTO) []remote.Option {
 	opts := []remote.Option{
 		remote.WithContext(ctx),
-		remote.WithPlatform(linuxHostPlatform),
+		remote.WithPlatform(linuxRunnerPlatform),
 	}
 
 	if registry != nil && registry.HasAuth() {
@@ -186,6 +179,21 @@ func (c *Client) remoteOptions(ctx context.Context, registry *dto.RegistryDTO) [
 	}
 
 	return opts
+}
+
+func runnerLinuxArchitecture() string {
+	return linuxArchitectureForGoarch(runtime.GOARCH)
+}
+
+func linuxArchitectureForGoarch(goarch string) string {
+	switch goarch {
+	case "arm64":
+		return "arm64"
+	case "amd64":
+		return "amd64"
+	default:
+		return goarch
+	}
 }
 
 func (c *Client) nameOptions(registry *dto.RegistryDTO) []name.Option {

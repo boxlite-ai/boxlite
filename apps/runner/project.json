@@ -74,11 +74,10 @@
       ]
     },
     "serve": {
-      "executor": "@nx-go/nx-go:serve",
+      "executor": "nx:run-commands",
       "options": {
-        "cmd": "sudo -E PATH=/usr/local/go/bin:$PATH $(which gow)",
         "cwd": ".",
-        "main": "{projectRoot}/cmd/runner/main.go"
+        "command": "go run -tags boxlite_dev {projectRoot}/cmd/runner/main.go"
       },
       "configurations": {
         "production": {}

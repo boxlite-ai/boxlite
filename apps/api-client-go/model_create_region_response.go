@@ -27,11 +27,11 @@ type CreateRegionResponse struct {
 	ProxyApiKey NullableString `json:"proxyApiKey,omitempty"`
 	// SSH Gateway API key for the region
 	SshGatewayApiKey NullableString `json:"sshGatewayApiKey,omitempty"`
-	// Snapshot Manager username for the region
-	SnapshotManagerUsername NullableString `json:"snapshotManagerUsername,omitempty"`
-	// Snapshot Manager password for the region
-	SnapshotManagerPassword NullableString `json:"snapshotManagerPassword,omitempty"`
-	AdditionalProperties map[string]interface{}
+	// Artifact Registry username for the region
+	ArtifactRegistryUsername NullableString `json:"artifactRegistryUsername,omitempty"`
+	// Artifact Registry password for the region
+	ArtifactRegistryPassword NullableString `json:"artifactRegistryPassword,omitempty"`
+	AdditionalProperties     map[string]interface{}
 }
 
 type _CreateRegionResponse CreateRegionResponse
@@ -110,6 +110,7 @@ func (o *CreateRegionResponse) HasProxyApiKey() bool {
 func (o *CreateRegionResponse) SetProxyApiKey(v string) {
 	o.ProxyApiKey.Set(&v)
 }
+
 // SetProxyApiKeyNil sets the value for ProxyApiKey to be an explicit nil
 func (o *CreateRegionResponse) SetProxyApiKeyNil() {
 	o.ProxyApiKey.Set(nil)
@@ -152,6 +153,7 @@ func (o *CreateRegionResponse) HasSshGatewayApiKey() bool {
 func (o *CreateRegionResponse) SetSshGatewayApiKey(v string) {
 	o.SshGatewayApiKey.Set(&v)
 }
+
 // SetSshGatewayApiKeyNil sets the value for SshGatewayApiKey to be an explicit nil
 func (o *CreateRegionResponse) SetSshGatewayApiKeyNil() {
 	o.SshGatewayApiKey.Set(nil)
@@ -162,92 +164,94 @@ func (o *CreateRegionResponse) UnsetSshGatewayApiKey() {
 	o.SshGatewayApiKey.Unset()
 }
 
-// GetSnapshotManagerUsername returns the SnapshotManagerUsername field value if set, zero value otherwise (both if not set or set to explicit null).
-func (o *CreateRegionResponse) GetSnapshotManagerUsername() string {
-	if o == nil || IsNil(o.SnapshotManagerUsername.Get()) {
+// GetArtifactRegistryUsername returns the ArtifactRegistryUsername field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *CreateRegionResponse) GetArtifactRegistryUsername() string {
+	if o == nil || IsNil(o.ArtifactRegistryUsername.Get()) {
 		var ret string
 		return ret
 	}
-	return *o.SnapshotManagerUsername.Get()
+	return *o.ArtifactRegistryUsername.Get()
 }
 
-// GetSnapshotManagerUsernameOk returns a tuple with the SnapshotManagerUsername field value if set, nil otherwise
+// GetArtifactRegistryUsernameOk returns a tuple with the ArtifactRegistryUsername field value if set, nil otherwise
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *CreateRegionResponse) GetSnapshotManagerUsernameOk() (*string, bool) {
+func (o *CreateRegionResponse) GetArtifactRegistryUsernameOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return o.SnapshotManagerUsername.Get(), o.SnapshotManagerUsername.IsSet()
+	return o.ArtifactRegistryUsername.Get(), o.ArtifactRegistryUsername.IsSet()
 }
 
-// HasSnapshotManagerUsername returns a boolean if a field has been set.
-func (o *CreateRegionResponse) HasSnapshotManagerUsername() bool {
-	if o != nil && o.SnapshotManagerUsername.IsSet() {
+// HasArtifactRegistryUsername returns a boolean if a field has been set.
+func (o *CreateRegionResponse) HasArtifactRegistryUsername() bool {
+	if o != nil && o.ArtifactRegistryUsername.IsSet() {
 		return true
 	}
 
 	return false
 }
 
-// SetSnapshotManagerUsername gets a reference to the given NullableString and assigns it to the SnapshotManagerUsername field.
-func (o *CreateRegionResponse) SetSnapshotManagerUsername(v string) {
-	o.SnapshotManagerUsername.Set(&v)
-}
-// SetSnapshotManagerUsernameNil sets the value for SnapshotManagerUsername to be an explicit nil
-func (o *CreateRegionResponse) SetSnapshotManagerUsernameNil() {
-	o.SnapshotManagerUsername.Set(nil)
+// SetArtifactRegistryUsername gets a reference to the given NullableString and assigns it to the ArtifactRegistryUsername field.
+func (o *CreateRegionResponse) SetArtifactRegistryUsername(v string) {
+	o.ArtifactRegistryUsername.Set(&v)
 }
 
-// UnsetSnapshotManagerUsername ensures that no value is present for SnapshotManagerUsername, not even an explicit nil
-func (o *CreateRegionResponse) UnsetSnapshotManagerUsername() {
-	o.SnapshotManagerUsername.Unset()
+// SetArtifactRegistryUsernameNil sets the value for ArtifactRegistryUsername to be an explicit nil
+func (o *CreateRegionResponse) SetArtifactRegistryUsernameNil() {
+	o.ArtifactRegistryUsername.Set(nil)
 }
 
-// GetSnapshotManagerPassword returns the SnapshotManagerPassword field value if set, zero value otherwise (both if not set or set to explicit null).
-func (o *CreateRegionResponse) GetSnapshotManagerPassword() string {
-	if o == nil || IsNil(o.SnapshotManagerPassword.Get()) {
+// UnsetArtifactRegistryUsername ensures that no value is present for ArtifactRegistryUsername, not even an explicit nil
+func (o *CreateRegionResponse) UnsetArtifactRegistryUsername() {
+	o.ArtifactRegistryUsername.Unset()
+}
+
+// GetArtifactRegistryPassword returns the ArtifactRegistryPassword field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *CreateRegionResponse) GetArtifactRegistryPassword() string {
+	if o == nil || IsNil(o.ArtifactRegistryPassword.Get()) {
 		var ret string
 		return ret
 	}
-	return *o.SnapshotManagerPassword.Get()
+	return *o.ArtifactRegistryPassword.Get()
 }
 
-// GetSnapshotManagerPasswordOk returns a tuple with the SnapshotManagerPassword field value if set, nil otherwise
+// GetArtifactRegistryPasswordOk returns a tuple with the ArtifactRegistryPassword field value if set, nil otherwise
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *CreateRegionResponse) GetSnapshotManagerPasswordOk() (*string, bool) {
+func (o *CreateRegionResponse) GetArtifactRegistryPasswordOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return o.SnapshotManagerPassword.Get(), o.SnapshotManagerPassword.IsSet()
+	return o.ArtifactRegistryPassword.Get(), o.ArtifactRegistryPassword.IsSet()
 }
 
-// HasSnapshotManagerPassword returns a boolean if a field has been set.
-func (o *CreateRegionResponse) HasSnapshotManagerPassword() bool {
-	if o != nil && o.SnapshotManagerPassword.IsSet() {
+// HasArtifactRegistryPassword returns a boolean if a field has been set.
+func (o *CreateRegionResponse) HasArtifactRegistryPassword() bool {
+	if o != nil && o.ArtifactRegistryPassword.IsSet() {
 		return true
 	}
 
 	return false
 }
 
-// SetSnapshotManagerPassword gets a reference to the given NullableString and assigns it to the SnapshotManagerPassword field.
-func (o *CreateRegionResponse) SetSnapshotManagerPassword(v string) {
-	o.SnapshotManagerPassword.Set(&v)
-}
-// SetSnapshotManagerPasswordNil sets the value for SnapshotManagerPassword to be an explicit nil
-func (o *CreateRegionResponse) SetSnapshotManagerPasswordNil() {
-	o.SnapshotManagerPassword.Set(nil)
+// SetArtifactRegistryPassword gets a reference to the given NullableString and assigns it to the ArtifactRegistryPassword field.
+func (o *CreateRegionResponse) SetArtifactRegistryPassword(v string) {
+	o.ArtifactRegistryPassword.Set(&v)
 }
 
-// UnsetSnapshotManagerPassword ensures that no value is present for SnapshotManagerPassword, not even an explicit nil
-func (o *CreateRegionResponse) UnsetSnapshotManagerPassword() {
-	o.SnapshotManagerPassword.Unset()
+// SetArtifactRegistryPasswordNil sets the value for ArtifactRegistryPassword to be an explicit nil
+func (o *CreateRegionResponse) SetArtifactRegistryPasswordNil() {
+	o.ArtifactRegistryPassword.Set(nil)
+}
+
+// UnsetArtifactRegistryPassword ensures that no value is present for ArtifactRegistryPassword, not even an explicit nil
+func (o *CreateRegionResponse) UnsetArtifactRegistryPassword() {
+	o.ArtifactRegistryPassword.Unset()
 }
 
 func (o CreateRegionResponse) MarshalJSON() ([]byte, error) {
-	toSerialize,err := o.ToMap()
+	toSerialize, err := o.ToMap()
 	if err != nil {
 		return []byte{}, err
 	}
@@ -263,11 +267,11 @@ func (o CreateRegionResponse) ToMap() (map[string]interface{}, error) {
 	if o.SshGatewayApiKey.IsSet() {
 		toSerialize["sshGatewayApiKey"] = o.SshGatewayApiKey.Get()
 	}
-	if o.SnapshotManagerUsername.IsSet() {
-		toSerialize["snapshotManagerUsername"] = o.SnapshotManagerUsername.Get()
+	if o.ArtifactRegistryUsername.IsSet() {
+		toSerialize["artifactRegistryUsername"] = o.ArtifactRegistryUsername.Get()
 	}
-	if o.SnapshotManagerPassword.IsSet() {
-		toSerialize["snapshotManagerPassword"] = o.SnapshotManagerPassword.Get()
+	if o.ArtifactRegistryPassword.IsSet() {
+		toSerialize["artifactRegistryPassword"] = o.ArtifactRegistryPassword.Get()
 	}
 
 	for key, value := range o.AdditionalProperties {
@@ -290,10 +294,10 @@ func (o *CreateRegionResponse) UnmarshalJSON(data []byte) (err error) {
 	err = json.Unmarshal(data, &allProperties)
 
 	if err != nil {
-		return err;
+		return err
 	}
 
-	for _, requiredProperty := range(requiredProperties) {
+	for _, requiredProperty := range requiredProperties {
 		if _, exists := allProperties[requiredProperty]; !exists {
 			return fmt.Errorf("no value given for required property %v", requiredProperty)
 		}
@@ -315,8 +319,8 @@ func (o *CreateRegionResponse) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "id")
 		delete(additionalProperties, "proxyApiKey")
 		delete(additionalProperties, "sshGatewayApiKey")
-		delete(additionalProperties, "snapshotManagerUsername")
-		delete(additionalProperties, "snapshotManagerPassword")
+		delete(additionalProperties, "artifactRegistryUsername")
+		delete(additionalProperties, "artifactRegistryPassword")
 		o.AdditionalProperties = additionalProperties
 	}
 

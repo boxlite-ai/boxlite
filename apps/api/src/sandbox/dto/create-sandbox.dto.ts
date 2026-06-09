@@ -21,12 +21,12 @@ export class CreateSandboxDto {
   name?: string
 
   @ApiPropertyOptional({
-    description: 'The ID or name of the snapshot used for the sandbox',
-    example: 'ubuntu-4vcpu-8ram-100gb',
+    description: 'The ID or name of the template used for the box',
+    example: 'ubuntu-template-id',
   })
   @IsOptional()
   @IsString()
-  snapshot?: string
+  templateId?: string
 
   @ApiPropertyOptional({
     description: 'The user associated with the project',
@@ -141,15 +141,6 @@ export class CreateSandboxDto {
   @IsOptional()
   @IsNumber()
   autoStopInterval?: number
-
-  @ApiPropertyOptional({
-    description: 'Auto-archive interval in minutes (0 means the maximum interval will be used)',
-    example: 7 * 24 * 60,
-    type: 'integer',
-  })
-  @IsOptional()
-  @IsNumber()
-  autoArchiveInterval?: number
 
   @ApiPropertyOptional({
     description:

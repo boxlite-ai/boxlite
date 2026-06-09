@@ -60,7 +60,7 @@ export const UsageSummary: React.FC<AggregatedUsageChartProps> = ({ data, isLoad
         </div>
       </div>
       <div className="flex flex-col gap-1">
-        <div>Sandboxes</div>
+        <div>Boxes</div>
         <div className="relative">
           <div className={cn('text-2xl font-semibold', isLoading && 'invisible')}>
             <NumberFlow value={sandboxCount} />

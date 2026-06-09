@@ -19,16 +19,19 @@ import VNCInteractionOptions from '@/components/Playground/VNC/Interaction'
 import { Button } from '@/components/ui/button'
 import { Drawer, DrawerContent } from '@/components/ui/drawer'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { FeatureFlags } from '@/enums/FeatureFlags'
 import { PlaygroundCategories } from '@/enums/Playground'
+import { isDashboardVncEnabled } from '@/lib/dashboard-features'
 import { PlaygroundProvider } from '@/providers/PlaygroundProvider'
 import { PlaygroundSandboxProvider } from '@/providers/PlaygroundSandboxProvider'
 import { AnimatePresence, motion } from 'framer-motion'
 import { SettingsIcon } from 'lucide-react'
+import { useFeatureFlagEnabled } from 'posthog-js/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useResizeObserver } from 'usehooks-ts'
 
 const playgroundCategoriesData = [
-  { value: PlaygroundCategories.SANDBOX, label: 'Sandbox' },
+  { value: PlaygroundCategories.SANDBOX, label: 'Box' },
   { value: PlaygroundCategories.TERMINAL, label: 'Terminal' },
   { value: PlaygroundCategories.VNC, label: 'VNC' },
 ]
@@ -47,7 +50,12 @@ const SlideLeftRight = ({ children, direction }: { children: React.ReactNode; di
 }
 
 const Playground: React.FC = () => {
+  const vncEnabled = isDashboardVncEnabled(useFeatureFlagEnabled(FeatureFlags.DASHBOARD_VNC))
   const [playgroundCategory, setPlaygroundCategory] = useState<PlaygroundCategories>(PlaygroundCategories.SANDBOX)
+  const availableCategories = useMemo(
+    () => playgroundCategoriesData.filter((category) => vncEnabled || category.value !== PlaygroundCategories.VNC),
+    [vncEnabled],
+  )
 
   const [drawerOpen, setDrawerOpen] = useState<PlaygroundCategories | null>(null)
   const handleDrawerOpenChange = (open: boolean) => {
@@ -75,11 +83,18 @@ const Playground: React.FC = () => {
     prevCategory.current = playgroundCategory
   }, [playgroundCategory])
 
+  useEffect(() => {
+    if (!vncEnabled && playgroundCategory === PlaygroundCategories.VNC) {
+      setPlaygroundCategory(PlaygroundCategories.SANDBOX)
+      setDrawerOpen(null)
+    }
+  }, [playgroundCategory, vncEnabled])
+
   const direction = useMemo(() => {
-    const currentIndex = playgroundCategoriesData.findIndex((category) => category.value === playgroundCategory)
-    const prevIndex = playgroundCategoriesData.findIndex((category) => category.value === prevCategory.current)
+    const currentIndex = availableCategories.findIndex((category) => category.value === playgroundCategory)
+    const prevIndex = availableCategories.findIndex((category) => category.value === prevCategory.current)
     return currentIndex > prevIndex ? 'right' : 'left'
-  }, [playgroundCategory])
+  }, [availableCategories, playgroundCategory])
 
   const sidePanel = useMemo(() => {
     if (playgroundCategory === PlaygroundCategories.SANDBOX) return <SandboxParameters />
@@ -96,7 +111,7 @@ const Playground: React.FC = () => {
 
       <PageContent size="full" className="!p-0 h-full flex flex-col flex-1 overflow-auto" ref={pageContentRef}>
         <PlaygroundProvider>
-          <PlaygroundSandboxProvider activeTab={playgroundCategory}>
+          <PlaygroundSandboxProvider activeTab={playgroundCategory} vncEnabled={vncEnabled}>
             <Tabs
               value={playgroundCategory}
               onValueChange={(value) => setPlaygroundCategory(value as PlaygroundCategories)}
@@ -104,7 +119,7 @@ const Playground: React.FC = () => {
             >
               <div className="flex items-center justify-between shadow-[inset_0_-1px] shadow-border pr-4">
                 <TabsList className="px-2 shadow-none bg-transparent w-auto pb-0">
-                  {playgroundCategoriesData.map((category) => (
+                  {availableCategories.map((category) => (
                     <TabsTrigger
                       value={category.value}
                       key={category.value}

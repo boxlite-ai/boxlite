@@ -58,16 +58,16 @@ export class Organization {
   @Column({
     type: 'int',
     default: 20,
-    name: 'max_snapshot_size',
+    name: 'max_template_size',
   })
-  maxSnapshotSize: number
+  maxTemplateSize: number
 
   @Column({
     type: 'int',
     default: 100,
-    name: 'snapshot_quota',
+    name: 'template_quota',
   })
-  snapshotQuota: number
+  templateQuota: number
 
   @Column({
     type: 'int',
@@ -173,9 +173,9 @@ export class Organization {
   @Column({
     type: 'int',
     default: 20160,
-    name: 'snapshot_deactivation_timeout_minutes',
+    name: 'template_deactivation_timeout_minutes',
   })
-  snapshotDeactivationTimeoutMinutes: number
+  templateDeactivationTimeoutMinutes: number
 
   @Column({
     default: false,

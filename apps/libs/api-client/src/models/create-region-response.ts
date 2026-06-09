@@ -12,42 +12,40 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  *
  * @export
  * @interface CreateRegionResponse
  */
 export interface CreateRegionResponse {
-    /**
-     * ID of the created region
-     * @type {string}
-     * @memberof CreateRegionResponse
-     */
-    'id': string;
-    /**
-     * Proxy API key for the region
-     * @type {string}
-     * @memberof CreateRegionResponse
-     */
-    'proxyApiKey'?: string | null;
-    /**
-     * SSH Gateway API key for the region
-     * @type {string}
-     * @memberof CreateRegionResponse
-     */
-    'sshGatewayApiKey'?: string | null;
-    /**
-     * Snapshot Manager username for the region
-     * @type {string}
-     * @memberof CreateRegionResponse
-     */
-    'snapshotManagerUsername'?: string | null;
-    /**
-     * Snapshot Manager password for the region
-     * @type {string}
-     * @memberof CreateRegionResponse
-     */
-    'snapshotManagerPassword'?: string | null;
+  /**
+   * ID of the created region
+   * @type {string}
+   * @memberof CreateRegionResponse
+   */
+  id: string
+  /**
+   * Proxy API key for the region
+   * @type {string}
+   * @memberof CreateRegionResponse
+   */
+  proxyApiKey?: string | null
+  /**
+   * SSH Gateway API key for the region
+   * @type {string}
+   * @memberof CreateRegionResponse
+   */
+  sshGatewayApiKey?: string | null
+  /**
+   * Artifact Registry username for the region
+   * @type {string}
+   * @memberof CreateRegionResponse
+   */
+  artifactRegistryUsername?: string | null
+  /**
+   * Artifact Registry password for the region
+   * @type {string}
+   * @memberof CreateRegionResponse
+   */
+  artifactRegistryPassword?: string | null
 }

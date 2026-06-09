@@ -12,10 +12,9 @@
  * Do not edit the class manually.
  */
 
-
 // May contain unused imports in some cases
 // @ts-ignore
-import type { RegistryDTO } from './registry-dto';
+import type { RegistryDTO } from './registry-dto'
 
 /**
  *
@@ -23,16 +22,16 @@ import type { RegistryDTO } from './registry-dto';
  * @interface CreateBackupDTO
  */
 export interface CreateBackupDTO {
-    /**
-     *
-     * @type {RegistryDTO}
-     * @memberof CreateBackupDTO
-     */
-    'registry': RegistryDTO;
-    /**
-     *
-     * @type {string}
-     * @memberof CreateBackupDTO
-     */
-    'snapshot': string;
+  /**
+   *
+   * @type {RegistryDTO}
+   * @memberof CreateBackupDTO
+   */
+  registry: RegistryDTO
+  /**
+   *
+   * @type {string}
+   * @memberof CreateBackupDTO
+   */
+  snapshot: string
 }

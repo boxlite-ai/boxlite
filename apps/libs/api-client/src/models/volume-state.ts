@@ -12,8 +12,6 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  * Volume state
  * @export
@@ -21,13 +19,13 @@
  */
 
 export const VolumeState = {
-    CREATING: 'creating',
-    READY: 'ready',
-    PENDING_CREATE: 'pending_create',
-    PENDING_DELETE: 'pending_delete',
-    DELETING: 'deleting',
-    DELETED: 'deleted',
-    ERROR: 'error'
-} as const;
+  CREATING: 'creating',
+  READY: 'ready',
+  PENDING_CREATE: 'pending_create',
+  PENDING_DELETE: 'pending_delete',
+  DELETING: 'deleting',
+  DELETED: 'deleted',
+  ERROR: 'error',
+} as const
 
-export type VolumeState = typeof VolumeState[keyof typeof VolumeState];
+export type VolumeState = (typeof VolumeState)[keyof typeof VolumeState]

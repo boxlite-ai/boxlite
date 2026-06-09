@@ -24,6 +24,11 @@
 
 - `make help` — list all targets ([Makefile](./Makefile))
 - Always use `make` targets for build, test, lint, format, setup, and distribution. Do not run `cargo`, `npm`, `python`, `go`, or `cbindgen` directly when a make target exists — the Makefile encapsulates correct flags, cross-compilation, environment setup, and ordering.
+- Dashboard-only work against the shared dev API uses `npm run start`.
+- Full local dashboard/API auth development uses `npm run dev:dex`; it starts Docker Postgres, Redis, Dex, and the apps workspace with OIDC pointed at Dex.
+- Local browser E2E must use `npm run e2e:local`. Do not use `npm run start`, `npm run start:dex`, or `npm --prefix apps run serve-slim` directly as an E2E entrypoint; `e2e:local` owns startup and the Dex login contract.
+- The local Dex E2E account is `admin@boxlite.dev` / `password`. Browser tests must log in through Dex when redirected instead of relying on a previously cached browser session.
+- `dev:dex` and `e2e:local` require Docker Desktop and create/reuse `boxlite-local-postgres`, `boxlite-local-redis`, and `boxlite-local-dex`.
 
 ## Code Style
 

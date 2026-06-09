@@ -12,18 +12,16 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  *
  * @export
  * @interface CreateSessionRequest
  */
 export interface CreateSessionRequest {
-    /**
-     * The ID of the session
-     * @type {string}
-     * @memberof CreateSessionRequest
-     */
-    'sessionId': string;
+  /**
+   * The ID of the session
+   * @type {string}
+   * @memberof CreateSessionRequest
+   */
+  sessionId: string
 }

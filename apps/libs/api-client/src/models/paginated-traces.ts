@@ -12,10 +12,9 @@
  * Do not edit the class manually.
  */
 
-
 // May contain unused imports in some cases
 // @ts-ignore
-import type { TraceSummary } from './trace-summary';
+import type { TraceSummary } from './trace-summary'
 
 /**
  *
@@ -23,28 +22,28 @@ import type { TraceSummary } from './trace-summary';
  * @interface PaginatedTraces
  */
 export interface PaginatedTraces {
-    /**
-     * List of trace summaries
-     * @type {Array<TraceSummary>}
-     * @memberof PaginatedTraces
-     */
-    'items': Array<TraceSummary>;
-    /**
-     * Total number of traces matching the query
-     * @type {number}
-     * @memberof PaginatedTraces
-     */
-    'total': number;
-    /**
-     * Current page number
-     * @type {number}
-     * @memberof PaginatedTraces
-     */
-    'page': number;
-    /**
-     * Total number of pages
-     * @type {number}
-     * @memberof PaginatedTraces
-     */
-    'totalPages': number;
+  /**
+   * List of trace summaries
+   * @type {Array<TraceSummary>}
+   * @memberof PaginatedTraces
+   */
+  items: Array<TraceSummary>
+  /**
+   * Total number of traces matching the query
+   * @type {number}
+   * @memberof PaginatedTraces
+   */
+  total: number
+  /**
+   * Current page number
+   * @type {number}
+   * @memberof PaginatedTraces
+   */
+  page: number
+  /**
+   * Total number of pages
+   * @type {number}
+   * @memberof PaginatedTraces
+   */
+  totalPages: number
 }

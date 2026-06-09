@@ -4,7 +4,8 @@
  */
 
 import { OrganizationSuspendedError } from '@/api/errors'
-import { PageHeader, PageLayout, PageTitle } from '@/components/PageLayout'
+import { OnboardingGuideDialog } from '@/components/OnboardingGuideDialog'
+import { PageLayout } from '@/components/PageLayout'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,8 +20,8 @@ import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { FeatureFlags } from '@/enums/FeatureFlags'
+import { LocalStorageKey } from '@/enums/LocalStorageKey'
 import { RoutePath } from '@/enums/RoutePath'
-import { useArchiveSandboxMutation } from '@/hooks/mutations/useArchiveSandboxMutation'
 import { useDeleteSandboxMutation } from '@/hooks/mutations/useDeleteSandboxMutation'
 import { useRecoverSandboxMutation } from '@/hooks/mutations/useRecoverSandboxMutation'
 import { useStartSandboxMutation } from '@/hooks/mutations/useStartSandboxMutation'
@@ -32,16 +33,28 @@ import { useMatchMedia } from '@/hooks/useMatchMedia'
 import { useRegions } from '@/hooks/useRegions'
 import { useSandboxWsSync } from '@/hooks/useSandboxWsSync'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
+import { isDashboardVncEnabled, isSandboxContentTabAvailable } from '@/lib/dashboard-features'
 import { handleApiError } from '@/lib/error-handling'
+import { setLocalStorageItem } from '@/lib/local-storage'
+import {
+  ONBOARDING_ENTRY_HIGHLIGHT_EVENT,
+  ONBOARDING_OPEN_EVENT,
+  getOnboardingCoreProgress,
+  mergeOnboardingProgress,
+  ONBOARDING_PROGRESS_EVENT,
+  readOnboardingProgress,
+  type OnboardingProgress,
+} from '@/lib/onboarding-progress'
 import { isStoppable, isTransitioning } from '@/lib/utils/sandbox'
 import { OrganizationRolePermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { isAxiosError } from 'axios'
-import { Container, GripVertical, RefreshCw } from 'lucide-react'
+import { Code2, Container, GripVertical, ListChecks, RefreshCw } from 'lucide-react'
 import { useQueryState } from 'nuqs'
 import { useFeatureFlagEnabled } from 'posthog-js/react'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { useAuth } from 'react-oidc-context'
 import { Group, Panel, Separator } from 'react-resizable-panels'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { CreateSshAccessDialog } from './CreateSshAccessDialog'
 import { RevokeSshAccessDialog } from './RevokeSshAccessDialog'
@@ -53,19 +66,87 @@ import { tabParser } from './SearchParams'
 export default function SandboxDetails() {
   const { sandboxId } = useParams<{ sandboxId: string }>()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const config = useConfig()
+  const { user } = useAuth()
+  const userId = user?.profile.sub
   const { sandboxApi } = useApi()
   const { authenticatedUserOrganizationMember, selectedOrganization, authenticatedUserHasPermission } =
     useSelectedOrganization()
   const { getRegionName } = useRegions()
 
   const experimentsEnabled = useFeatureFlagEnabled(FeatureFlags.ORGANIZATION_EXPERIMENTS)
+  const vncEnabled = isDashboardVncEnabled(useFeatureFlagEnabled(FeatureFlags.DASHBOARD_VNC))
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [createSshDialogOpen, setCreateSshDialogOpen] = useState(false)
   const [revokeSshDialogOpen, setRevokeSshDialogOpen] = useState(false)
+  const [showOnboardingDialog, setShowOnboardingDialog] = useState(false)
+  const [onboardingProgress, setOnboardingProgress] = useState<OnboardingProgress>(() => readOnboardingProgress(userId))
   const [tab, setTab] = useQueryState('tab', tabParser)
   const isDesktop = useMatchMedia('(min-width: 1024px)')
+
+  const updateOnboardingProgress = useCallback(
+    (progress: OnboardingProgress) => {
+      setOnboardingProgress(mergeOnboardingProgress(userId, progress))
+    },
+    [userId],
+  )
+
+  useEffect(() => {
+    setOnboardingProgress(readOnboardingProgress(userId))
+  }, [userId])
+
+  useEffect(() => {
+    const handleOnboardingProgress = (event: Event) => {
+      const progress = (event as CustomEvent<OnboardingProgress>).detail
+      setOnboardingProgress(progress ?? readOnboardingProgress(userId))
+    }
+
+    window.addEventListener(ONBOARDING_PROGRESS_EVENT, handleOnboardingProgress)
+    return () => window.removeEventListener(ONBOARDING_PROGRESS_EVENT, handleOnboardingProgress)
+  }, [userId])
+
+  useEffect(() => {
+    if (!selectedOrganization || !user?.profile.sub) {
+      return
+    }
+
+    if (searchParams.get('onboarding') === '1') {
+      setShowOnboardingDialog(true)
+    }
+  }, [searchParams, selectedOrganization, user?.profile.sub])
+
+  useEffect(() => {
+    const handleOpenOnboarding = (event: Event) => {
+      event.preventDefault()
+      setShowOnboardingDialog(true)
+    }
+
+    window.addEventListener(ONBOARDING_OPEN_EVENT, handleOpenOnboarding)
+    return () => window.removeEventListener(ONBOARDING_OPEN_EVENT, handleOpenOnboarding)
+  }, [])
+
+  const clearOnboardingUrlParam = useCallback(() => {
+    if (searchParams.get('onboarding') !== '1') {
+      return
+    }
+
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.delete('onboarding')
+    setSearchParams(nextParams, { replace: true })
+  }, [searchParams, setSearchParams])
+
+  const closeOnboardingDialog = useCallback(() => {
+    if (userId) {
+      setLocalStorageItem(`${LocalStorageKey.SkipOnboardingPrefix}${userId}`, 'true')
+    }
+    setShowOnboardingDialog(false)
+    window.setTimeout(() => {
+      window.dispatchEvent(new Event(ONBOARDING_ENTRY_HIGHLIGHT_EVENT))
+      clearOnboardingUrlParam()
+    }, 220)
+  }, [clearOnboardingUrlParam, userId])
 
   // On desktop (lg+), the overview tab is hidden in the sidebar, so switch to a content tab
   useEffect(() => {
@@ -74,21 +155,34 @@ export default function SandboxDetails() {
     }
   }, [isDesktop, tab, setTab, experimentsEnabled])
 
-  // When experiments are disabled, coerce experimental tabs back to a supported default
+  // Coerce hidden tabs back to a supported default.
   useEffect(() => {
-    if (!experimentsEnabled && (tab === 'logs' || tab === 'traces' || tab === 'metrics' || tab === 'spending')) {
+    if (!isSandboxContentTabAvailable(tab, { experimentsEnabled, vncEnabled })) {
       setTab('terminal')
     }
-  }, [experimentsEnabled, tab, setTab])
+  }, [experimentsEnabled, tab, setTab, vncEnabled])
 
   const { data: sandbox, isLoading, isError, error, refetch, isFetching } = useSandboxQuery(sandboxId ?? '')
   const isNotFound = isError && isAxiosError(error.cause) && error.cause?.status === 404
+  const onboardingCoreProgress = getOnboardingCoreProgress(onboardingProgress)
+  const showOnboardingNudge = Boolean(sandbox && !onboardingCoreProgress.isComplete)
 
   useSandboxWsSync({ sandboxId })
 
+  useEffect(() => {
+    if (sandbox && !onboardingProgress.boxCreated) {
+      updateOnboardingProgress({ boxCreated: true })
+    }
+  }, [onboardingProgress.boxCreated, sandbox, updateOnboardingProgress])
+
+  useEffect(() => {
+    if (sandbox && tab === 'terminal' && !onboardingProgress.terminalOpened) {
+      updateOnboardingProgress({ boxCreated: true, terminalOpened: true })
+    }
+  }, [onboardingProgress.terminalOpened, sandbox, tab, updateOnboardingProgress])
+
   const startMutation = useStartSandboxMutation()
   const stopMutation = useStopSandboxMutation()
-  const archiveMutation = useArchiveSandboxMutation()
   const recoverMutation = useRecoverSandboxMutation()
   const deleteMutation = useDeleteSandboxMutation()
 
@@ -96,20 +190,16 @@ export default function SandboxDetails() {
   const deletePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.DELETE_SANDBOXES)
   const transitioning = sandbox ? isTransitioning(sandbox) : false
   const anyMutating =
-    startMutation.isPending ||
-    stopMutation.isPending ||
-    archiveMutation.isPending ||
-    recoverMutation.isPending ||
-    deleteMutation.isPending
+    startMutation.isPending || stopMutation.isPending || recoverMutation.isPending || deleteMutation.isPending
   const actionsDisabled = anyMutating || transitioning
 
   const handleStart = async () => {
     if (!sandbox) return
     try {
-      await startMutation.mutateAsync({ sandboxId: sandbox.id })
-      toast.success('Sandbox started')
+      await startMutation.mutateAsync({ sandboxId: sandbox.id, detailRef: sandboxId })
+      toast.success('Box started')
     } catch (error) {
-      handleApiError(error, 'Failed to start sandbox', {
+      handleApiError(error, 'Failed to start box', {
         action:
           error instanceof OrganizationSuspendedError &&
           config.billingApiUrl &&
@@ -125,48 +215,38 @@ export default function SandboxDetails() {
   const handleStop = async () => {
     if (!sandbox) return
     try {
-      await stopMutation.mutateAsync({ sandboxId: sandbox.id })
-      toast.success('Sandbox stopped')
+      await stopMutation.mutateAsync({ sandboxId: sandbox.id, detailRef: sandboxId })
+      toast.success('Box stopped')
     } catch (error) {
-      handleApiError(error, 'Failed to stop sandbox')
-    }
-  }
-
-  const handleArchive = async () => {
-    if (!sandbox) return
-    try {
-      await archiveMutation.mutateAsync({ sandboxId: sandbox.id })
-      toast.success('Sandbox archived')
-    } catch (error) {
-      handleApiError(error, 'Failed to archive sandbox')
+      handleApiError(error, 'Failed to stop box')
     }
   }
 
   const handleRecover = async () => {
     if (!sandbox) return
     try {
-      await recoverMutation.mutateAsync({ sandboxId: sandbox.id })
-      toast.success('Sandbox recovery started')
+      await recoverMutation.mutateAsync({ sandboxId: sandbox.id, detailRef: sandboxId })
+      toast.success('Box recovery started')
     } catch (error) {
-      handleApiError(error, 'Failed to recover sandbox')
+      handleApiError(error, 'Failed to recover box')
     }
   }
 
   const handleDelete = async () => {
     if (!sandbox) return
     try {
-      await deleteMutation.mutateAsync({ sandboxId: sandbox.id })
-      toast.success('Sandbox deleted')
+      await deleteMutation.mutateAsync({ sandboxId: sandbox.id, detailRef: sandboxId })
+      toast.success('Box deleted')
       setDeleteDialogOpen(false)
-      navigate(RoutePath.SANDBOXES)
+      navigate(RoutePath.BOXES)
     } catch (error) {
-      handleApiError(error, 'Failed to delete sandbox')
+      handleApiError(error, 'Failed to delete box')
     }
   }
 
   const handleScreenRecordings = async () => {
     if (!sandbox || !isStoppable(sandbox)) {
-      toast.error('Sandbox must be started to access Screen Recordings')
+      toast.error('Box must be started to access Screen Recordings')
       return
     }
     try {
@@ -180,10 +260,18 @@ export default function SandboxDetails() {
 
   return (
     <PageLayout className="h-[var(--app-content-height,calc(100svh_-_3.5rem))] overflow-hidden">
-      <PageHeader className="hidden sm:flex">
-        <PageTitle>Sandboxes</PageTitle>
-      </PageHeader>
-
+      <OnboardingGuideDialog
+        open={showOnboardingDialog}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) {
+            closeOnboardingDialog()
+          } else {
+            setShowOnboardingDialog(true)
+          }
+        }}
+        onProgressChange={updateOnboardingProgress}
+        progress={onboardingProgress}
+      />
       <SandboxHeader
         sandbox={sandbox}
         isLoading={isLoading}
@@ -193,21 +281,45 @@ export default function SandboxDetails() {
         isFetching={isFetching}
         onStart={handleStart}
         onStop={handleStop}
-        onArchive={handleArchive}
         onRecover={handleRecover}
         onDelete={() => setDeleteDialogOpen(true)}
         onRefresh={() => refetch()}
-        onBack={() => navigate(RoutePath.SANDBOXES)}
+        onBack={() => navigate(RoutePath.BOXES)}
         onCreateSshAccess={() => setCreateSshDialogOpen(true)}
         onRevokeSshAccess={() => setRevokeSshDialogOpen(true)}
         onScreenRecordings={handleScreenRecordings}
         mutations={{
           start: startMutation.isPending,
           stop: stopMutation.isPending,
-          archive: archiveMutation.isPending,
           recover: recoverMutation.isPending,
         }}
       />
+
+      {showOnboardingNudge && (
+        <div className="shrink-0 border-b border-border bg-card px-4 py-3 sm:px-5">
+          <div className="mx-auto flex max-w-[1440px] flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="flex min-w-0 flex-1 items-start gap-3">
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+                <ListChecks className="size-4" />
+              </span>
+              <div className="min-w-0">
+                <div className="text-sm font-semibold">Connect with the SDK</div>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <span className="inline-flex items-center gap-1">
+                    <Code2 className="size-3.5" />
+                    Generate an API key and run the SDK example.
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2 sm:justify-end">
+              <Button type="button" size="sm" onClick={() => setShowOnboardingDialog(true)}>
+                Open SDK guide
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {isNotFound ? (
         <div className="flex flex-1 min-h-0 items-center justify-center">
@@ -216,11 +328,11 @@ export default function SandboxDetails() {
               <EmptyMedia variant="icon">
                 <Container className="size-4" />
               </EmptyMedia>
-              <EmptyTitle>Sandbox not found</EmptyTitle>
+              <EmptyTitle>Box not found</EmptyTitle>
               <EmptyDescription>Are you sure you're in the right organization?</EmptyDescription>
             </EmptyHeader>
-            <Button variant="outline" size="sm" onClick={() => navigate(RoutePath.SANDBOXES)}>
-              Back to Sandboxes
+            <Button variant="outline" size="sm" onClick={() => navigate(RoutePath.BOXES)}>
+              Back to Boxes
             </Button>
           </Empty>
         </div>
@@ -233,7 +345,7 @@ export default function SandboxDetails() {
                 minSize={250}
                 maxSize={550}
                 defaultSize={320}
-                className="flex flex-col overflow-hidden"
+                className="flex flex-col overflow-hidden bg-card"
               >
                 <div className="flex items-center px-5 border-b border-border shrink-0 h-[41px]">
                   <span className="text-sm font-medium">Overview</span>
@@ -243,7 +355,7 @@ export default function SandboxDetails() {
                     <InfoPanelSkeleton />
                   ) : isError || !sandbox ? (
                     <div className="flex flex-col items-center justify-center gap-3 p-8 text-center text-muted-foreground">
-                      <p className="text-sm">Failed to load sandbox details.</p>
+                      <p className="text-sm">Failed to load box details.</p>
                       <Button variant="outline" size="sm" onClick={() => refetch()}>
                         <RefreshCw className="size-4" />
                         Retry
@@ -262,6 +374,7 @@ export default function SandboxDetails() {
               sandbox={sandbox}
               isLoading={isLoading}
               experimentsEnabled={experimentsEnabled}
+              vncEnabled={vncEnabled}
               tab={tab}
               onTabChange={setTab}
             />
@@ -272,9 +385,9 @@ export default function SandboxDetails() {
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Sandbox</AlertDialogTitle>
+            <AlertDialogTitle>Delete Box</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete this sandbox? This action cannot be undone.
+              Are you sure you want to delete this box? This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

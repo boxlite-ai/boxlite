@@ -13,8 +13,8 @@ package apiclient
 
 import (
 	"encoding/json"
-	"time"
 	"fmt"
+	"time"
 )
 
 // checks if the Organization type satisfies the MappedNullable interface at compile time
@@ -50,8 +50,8 @@ type Organization struct {
 	MaxMemoryPerSandbox float32 `json:"maxMemoryPerSandbox"`
 	// Max disk per sandbox
 	MaxDiskPerSandbox float32 `json:"maxDiskPerSandbox"`
-	// Time in minutes before an unused snapshot is deactivated
-	SnapshotDeactivationTimeoutMinutes float32 `json:"snapshotDeactivationTimeoutMinutes"`
+	// Time in minutes before an unused template is deactivated
+	TemplateDeactivationTimeoutMinutes float32 `json:"templateDeactivationTimeoutMinutes"`
 	// Sandbox default network block all
 	SandboxLimitedNetworkEgress bool `json:"sandboxLimitedNetworkEgress"`
 	// Default region ID
@@ -70,7 +70,7 @@ type Organization struct {
 	SandboxCreateRateLimitTtlSeconds NullableFloat32 `json:"sandboxCreateRateLimitTtlSeconds"`
 	// Sandbox lifecycle rate limit TTL in seconds
 	SandboxLifecycleRateLimitTtlSeconds NullableFloat32 `json:"sandboxLifecycleRateLimitTtlSeconds"`
-	AdditionalProperties map[string]interface{}
+	AdditionalProperties                map[string]interface{}
 }
 
 type _Organization Organization
@@ -79,7 +79,7 @@ type _Organization Organization
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewOrganization(id string, name string, createdBy string, personal bool, createdAt time.Time, updatedAt time.Time, suspended bool, suspendedAt time.Time, suspensionReason string, suspendedUntil time.Time, suspensionCleanupGracePeriodHours float32, maxCpuPerSandbox float32, maxMemoryPerSandbox float32, maxDiskPerSandbox float32, snapshotDeactivationTimeoutMinutes float32, sandboxLimitedNetworkEgress bool, authenticatedRateLimit NullableFloat32, sandboxCreateRateLimit NullableFloat32, sandboxLifecycleRateLimit NullableFloat32, experimentalConfig map[string]interface{}, authenticatedRateLimitTtlSeconds NullableFloat32, sandboxCreateRateLimitTtlSeconds NullableFloat32, sandboxLifecycleRateLimitTtlSeconds NullableFloat32) *Organization {
+func NewOrganization(id string, name string, createdBy string, personal bool, createdAt time.Time, updatedAt time.Time, suspended bool, suspendedAt time.Time, suspensionReason string, suspendedUntil time.Time, suspensionCleanupGracePeriodHours float32, maxCpuPerSandbox float32, maxMemoryPerSandbox float32, maxDiskPerSandbox float32, templateDeactivationTimeoutMinutes float32, sandboxLimitedNetworkEgress bool, authenticatedRateLimit NullableFloat32, sandboxCreateRateLimit NullableFloat32, sandboxLifecycleRateLimit NullableFloat32, experimentalConfig map[string]interface{}, authenticatedRateLimitTtlSeconds NullableFloat32, sandboxCreateRateLimitTtlSeconds NullableFloat32, sandboxLifecycleRateLimitTtlSeconds NullableFloat32) *Organization {
 	this := Organization{}
 	this.Id = id
 	this.Name = name
@@ -95,7 +95,7 @@ func NewOrganization(id string, name string, createdBy string, personal bool, cr
 	this.MaxCpuPerSandbox = maxCpuPerSandbox
 	this.MaxMemoryPerSandbox = maxMemoryPerSandbox
 	this.MaxDiskPerSandbox = maxDiskPerSandbox
-	this.SnapshotDeactivationTimeoutMinutes = snapshotDeactivationTimeoutMinutes
+	this.TemplateDeactivationTimeoutMinutes = templateDeactivationTimeoutMinutes
 	this.SandboxLimitedNetworkEgress = sandboxLimitedNetworkEgress
 	this.AuthenticatedRateLimit = authenticatedRateLimit
 	this.SandboxCreateRateLimit = sandboxCreateRateLimit
@@ -112,8 +112,8 @@ func NewOrganization(id string, name string, createdBy string, personal bool, cr
 // but it doesn't guarantee that properties required by API are set
 func NewOrganizationWithDefaults() *Organization {
 	this := Organization{}
-	var snapshotDeactivationTimeoutMinutes float32 = 20160
-	this.SnapshotDeactivationTimeoutMinutes = snapshotDeactivationTimeoutMinutes
+	var templateDeactivationTimeoutMinutes float32 = 20160
+	this.TemplateDeactivationTimeoutMinutes = templateDeactivationTimeoutMinutes
 	return &this
 }
 
@@ -453,28 +453,28 @@ func (o *Organization) SetMaxDiskPerSandbox(v float32) {
 	o.MaxDiskPerSandbox = v
 }
 
-// GetSnapshotDeactivationTimeoutMinutes returns the SnapshotDeactivationTimeoutMinutes field value
-func (o *Organization) GetSnapshotDeactivationTimeoutMinutes() float32 {
+// GetTemplateDeactivationTimeoutMinutes returns the TemplateDeactivationTimeoutMinutes field value
+func (o *Organization) GetTemplateDeactivationTimeoutMinutes() float32 {
 	if o == nil {
 		var ret float32
 		return ret
 	}
 
-	return o.SnapshotDeactivationTimeoutMinutes
+	return o.TemplateDeactivationTimeoutMinutes
 }
 
-// GetSnapshotDeactivationTimeoutMinutesOk returns a tuple with the SnapshotDeactivationTimeoutMinutes field value
+// GetTemplateDeactivationTimeoutMinutesOk returns a tuple with the TemplateDeactivationTimeoutMinutes field value
 // and a boolean to check if the value has been set.
-func (o *Organization) GetSnapshotDeactivationTimeoutMinutesOk() (*float32, bool) {
+func (o *Organization) GetTemplateDeactivationTimeoutMinutesOk() (*float32, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return &o.SnapshotDeactivationTimeoutMinutes, true
+	return &o.TemplateDeactivationTimeoutMinutes, true
 }
 
-// SetSnapshotDeactivationTimeoutMinutes sets field value
-func (o *Organization) SetSnapshotDeactivationTimeoutMinutes(v float32) {
-	o.SnapshotDeactivationTimeoutMinutes = v
+// SetTemplateDeactivationTimeoutMinutes sets field value
+func (o *Organization) SetTemplateDeactivationTimeoutMinutes(v float32) {
+	o.TemplateDeactivationTimeoutMinutes = v
 }
 
 // GetSandboxLimitedNetworkEgress returns the SandboxLimitedNetworkEgress field value
@@ -714,7 +714,7 @@ func (o *Organization) SetSandboxLifecycleRateLimitTtlSeconds(v float32) {
 }
 
 func (o Organization) MarshalJSON() ([]byte, error) {
-	toSerialize,err := o.ToMap()
+	toSerialize, err := o.ToMap()
 	if err != nil {
 		return []byte{}, err
 	}
@@ -737,7 +737,7 @@ func (o Organization) ToMap() (map[string]interface{}, error) {
 	toSerialize["maxCpuPerSandbox"] = o.MaxCpuPerSandbox
 	toSerialize["maxMemoryPerSandbox"] = o.MaxMemoryPerSandbox
 	toSerialize["maxDiskPerSandbox"] = o.MaxDiskPerSandbox
-	toSerialize["snapshotDeactivationTimeoutMinutes"] = o.SnapshotDeactivationTimeoutMinutes
+	toSerialize["templateDeactivationTimeoutMinutes"] = o.TemplateDeactivationTimeoutMinutes
 	toSerialize["sandboxLimitedNetworkEgress"] = o.SandboxLimitedNetworkEgress
 	if !IsNil(o.DefaultRegionId) {
 		toSerialize["defaultRegionId"] = o.DefaultRegionId
@@ -776,7 +776,7 @@ func (o *Organization) UnmarshalJSON(data []byte) (err error) {
 		"maxCpuPerSandbox",
 		"maxMemoryPerSandbox",
 		"maxDiskPerSandbox",
-		"snapshotDeactivationTimeoutMinutes",
+		"templateDeactivationTimeoutMinutes",
 		"sandboxLimitedNetworkEgress",
 		"authenticatedRateLimit",
 		"sandboxCreateRateLimit",
@@ -792,10 +792,10 @@ func (o *Organization) UnmarshalJSON(data []byte) (err error) {
 	err = json.Unmarshal(data, &allProperties)
 
 	if err != nil {
-		return err;
+		return err
 	}
 
-	for _, requiredProperty := range(requiredProperties) {
+	for _, requiredProperty := range requiredProperties {
 		if _, exists := allProperties[requiredProperty]; !exists {
 			return fmt.Errorf("no value given for required property %v", requiredProperty)
 		}
@@ -828,7 +828,7 @@ func (o *Organization) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "maxCpuPerSandbox")
 		delete(additionalProperties, "maxMemoryPerSandbox")
 		delete(additionalProperties, "maxDiskPerSandbox")
-		delete(additionalProperties, "snapshotDeactivationTimeoutMinutes")
+		delete(additionalProperties, "templateDeactivationTimeoutMinutes")
 		delete(additionalProperties, "sandboxLimitedNetworkEgress")
 		delete(additionalProperties, "defaultRegionId")
 		delete(additionalProperties, "authenticatedRateLimit")

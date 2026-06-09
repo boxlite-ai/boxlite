@@ -21,21 +21,21 @@ var _ MappedNullable = &UpdateOrganizationQuota{}
 
 // UpdateOrganizationQuota struct for UpdateOrganizationQuota
 type UpdateOrganizationQuota struct {
-	MaxCpuPerSandbox NullableFloat32 `json:"maxCpuPerSandbox"`
-	MaxMemoryPerSandbox NullableFloat32 `json:"maxMemoryPerSandbox"`
-	MaxDiskPerSandbox NullableFloat32 `json:"maxDiskPerSandbox"`
-	SnapshotQuota NullableFloat32 `json:"snapshotQuota"`
-	MaxSnapshotSize NullableFloat32 `json:"maxSnapshotSize"`
-	VolumeQuota NullableFloat32 `json:"volumeQuota"`
-	AuthenticatedRateLimit NullableFloat32 `json:"authenticatedRateLimit"`
-	SandboxCreateRateLimit NullableFloat32 `json:"sandboxCreateRateLimit"`
-	SandboxLifecycleRateLimit NullableFloat32 `json:"sandboxLifecycleRateLimit"`
-	AuthenticatedRateLimitTtlSeconds NullableFloat32 `json:"authenticatedRateLimitTtlSeconds"`
-	SandboxCreateRateLimitTtlSeconds NullableFloat32 `json:"sandboxCreateRateLimitTtlSeconds"`
+	MaxCpuPerSandbox                    NullableFloat32 `json:"maxCpuPerSandbox"`
+	MaxMemoryPerSandbox                 NullableFloat32 `json:"maxMemoryPerSandbox"`
+	MaxDiskPerSandbox                   NullableFloat32 `json:"maxDiskPerSandbox"`
+	TemplateQuota                       NullableFloat32 `json:"templateQuota"`
+	MaxTemplateSize                     NullableFloat32 `json:"maxTemplateSize"`
+	VolumeQuota                         NullableFloat32 `json:"volumeQuota"`
+	AuthenticatedRateLimit              NullableFloat32 `json:"authenticatedRateLimit"`
+	SandboxCreateRateLimit              NullableFloat32 `json:"sandboxCreateRateLimit"`
+	SandboxLifecycleRateLimit           NullableFloat32 `json:"sandboxLifecycleRateLimit"`
+	AuthenticatedRateLimitTtlSeconds    NullableFloat32 `json:"authenticatedRateLimitTtlSeconds"`
+	SandboxCreateRateLimitTtlSeconds    NullableFloat32 `json:"sandboxCreateRateLimitTtlSeconds"`
 	SandboxLifecycleRateLimitTtlSeconds NullableFloat32 `json:"sandboxLifecycleRateLimitTtlSeconds"`
-	// Time in minutes before an unused snapshot is deactivated
-	SnapshotDeactivationTimeoutMinutes NullableFloat32 `json:"snapshotDeactivationTimeoutMinutes"`
-	AdditionalProperties map[string]interface{}
+	// Time in minutes before an unused template is deactivated
+	TemplateDeactivationTimeoutMinutes NullableFloat32 `json:"templateDeactivationTimeoutMinutes"`
+	AdditionalProperties               map[string]interface{}
 }
 
 type _UpdateOrganizationQuota UpdateOrganizationQuota
@@ -44,13 +44,13 @@ type _UpdateOrganizationQuota UpdateOrganizationQuota
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewUpdateOrganizationQuota(maxCpuPerSandbox NullableFloat32, maxMemoryPerSandbox NullableFloat32, maxDiskPerSandbox NullableFloat32, snapshotQuota NullableFloat32, maxSnapshotSize NullableFloat32, volumeQuota NullableFloat32, authenticatedRateLimit NullableFloat32, sandboxCreateRateLimit NullableFloat32, sandboxLifecycleRateLimit NullableFloat32, authenticatedRateLimitTtlSeconds NullableFloat32, sandboxCreateRateLimitTtlSeconds NullableFloat32, sandboxLifecycleRateLimitTtlSeconds NullableFloat32, snapshotDeactivationTimeoutMinutes NullableFloat32) *UpdateOrganizationQuota {
+func NewUpdateOrganizationQuota(maxCpuPerSandbox NullableFloat32, maxMemoryPerSandbox NullableFloat32, maxDiskPerSandbox NullableFloat32, templateQuota NullableFloat32, maxTemplateSize NullableFloat32, volumeQuota NullableFloat32, authenticatedRateLimit NullableFloat32, sandboxCreateRateLimit NullableFloat32, sandboxLifecycleRateLimit NullableFloat32, authenticatedRateLimitTtlSeconds NullableFloat32, sandboxCreateRateLimitTtlSeconds NullableFloat32, sandboxLifecycleRateLimitTtlSeconds NullableFloat32, templateDeactivationTimeoutMinutes NullableFloat32) *UpdateOrganizationQuota {
 	this := UpdateOrganizationQuota{}
 	this.MaxCpuPerSandbox = maxCpuPerSandbox
 	this.MaxMemoryPerSandbox = maxMemoryPerSandbox
 	this.MaxDiskPerSandbox = maxDiskPerSandbox
-	this.SnapshotQuota = snapshotQuota
-	this.MaxSnapshotSize = maxSnapshotSize
+	this.TemplateQuota = templateQuota
+	this.MaxTemplateSize = maxTemplateSize
 	this.VolumeQuota = volumeQuota
 	this.AuthenticatedRateLimit = authenticatedRateLimit
 	this.SandboxCreateRateLimit = sandboxCreateRateLimit
@@ -58,7 +58,7 @@ func NewUpdateOrganizationQuota(maxCpuPerSandbox NullableFloat32, maxMemoryPerSa
 	this.AuthenticatedRateLimitTtlSeconds = authenticatedRateLimitTtlSeconds
 	this.SandboxCreateRateLimitTtlSeconds = sandboxCreateRateLimitTtlSeconds
 	this.SandboxLifecycleRateLimitTtlSeconds = sandboxLifecycleRateLimitTtlSeconds
-	this.SnapshotDeactivationTimeoutMinutes = snapshotDeactivationTimeoutMinutes
+	this.TemplateDeactivationTimeoutMinutes = templateDeactivationTimeoutMinutes
 	return &this
 }
 
@@ -148,56 +148,56 @@ func (o *UpdateOrganizationQuota) SetMaxDiskPerSandbox(v float32) {
 	o.MaxDiskPerSandbox.Set(&v)
 }
 
-// GetSnapshotQuota returns the SnapshotQuota field value
+// GetTemplateQuota returns the TemplateQuota field value
 // If the value is explicit nil, the zero value for float32 will be returned
-func (o *UpdateOrganizationQuota) GetSnapshotQuota() float32 {
-	if o == nil || o.SnapshotQuota.Get() == nil {
+func (o *UpdateOrganizationQuota) GetTemplateQuota() float32 {
+	if o == nil || o.TemplateQuota.Get() == nil {
 		var ret float32
 		return ret
 	}
 
-	return *o.SnapshotQuota.Get()
+	return *o.TemplateQuota.Get()
 }
 
-// GetSnapshotQuotaOk returns a tuple with the SnapshotQuota field value
+// GetTemplateQuotaOk returns a tuple with the TemplateQuota field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *UpdateOrganizationQuota) GetSnapshotQuotaOk() (*float32, bool) {
+func (o *UpdateOrganizationQuota) GetTemplateQuotaOk() (*float32, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return o.SnapshotQuota.Get(), o.SnapshotQuota.IsSet()
+	return o.TemplateQuota.Get(), o.TemplateQuota.IsSet()
 }
 
-// SetSnapshotQuota sets field value
-func (o *UpdateOrganizationQuota) SetSnapshotQuota(v float32) {
-	o.SnapshotQuota.Set(&v)
+// SetTemplateQuota sets field value
+func (o *UpdateOrganizationQuota) SetTemplateQuota(v float32) {
+	o.TemplateQuota.Set(&v)
 }
 
-// GetMaxSnapshotSize returns the MaxSnapshotSize field value
+// GetMaxTemplateSize returns the MaxTemplateSize field value
 // If the value is explicit nil, the zero value for float32 will be returned
-func (o *UpdateOrganizationQuota) GetMaxSnapshotSize() float32 {
-	if o == nil || o.MaxSnapshotSize.Get() == nil {
+func (o *UpdateOrganizationQuota) GetMaxTemplateSize() float32 {
+	if o == nil || o.MaxTemplateSize.Get() == nil {
 		var ret float32
 		return ret
 	}
 
-	return *o.MaxSnapshotSize.Get()
+	return *o.MaxTemplateSize.Get()
 }
 
-// GetMaxSnapshotSizeOk returns a tuple with the MaxSnapshotSize field value
+// GetMaxTemplateSizeOk returns a tuple with the MaxTemplateSize field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *UpdateOrganizationQuota) GetMaxSnapshotSizeOk() (*float32, bool) {
+func (o *UpdateOrganizationQuota) GetMaxTemplateSizeOk() (*float32, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return o.MaxSnapshotSize.Get(), o.MaxSnapshotSize.IsSet()
+	return o.MaxTemplateSize.Get(), o.MaxTemplateSize.IsSet()
 }
 
-// SetMaxSnapshotSize sets field value
-func (o *UpdateOrganizationQuota) SetMaxSnapshotSize(v float32) {
-	o.MaxSnapshotSize.Set(&v)
+// SetMaxTemplateSize sets field value
+func (o *UpdateOrganizationQuota) SetMaxTemplateSize(v float32) {
+	o.MaxTemplateSize.Set(&v)
 }
 
 // GetVolumeQuota returns the VolumeQuota field value
@@ -382,34 +382,34 @@ func (o *UpdateOrganizationQuota) SetSandboxLifecycleRateLimitTtlSeconds(v float
 	o.SandboxLifecycleRateLimitTtlSeconds.Set(&v)
 }
 
-// GetSnapshotDeactivationTimeoutMinutes returns the SnapshotDeactivationTimeoutMinutes field value
+// GetTemplateDeactivationTimeoutMinutes returns the TemplateDeactivationTimeoutMinutes field value
 // If the value is explicit nil, the zero value for float32 will be returned
-func (o *UpdateOrganizationQuota) GetSnapshotDeactivationTimeoutMinutes() float32 {
-	if o == nil || o.SnapshotDeactivationTimeoutMinutes.Get() == nil {
+func (o *UpdateOrganizationQuota) GetTemplateDeactivationTimeoutMinutes() float32 {
+	if o == nil || o.TemplateDeactivationTimeoutMinutes.Get() == nil {
 		var ret float32
 		return ret
 	}
 
-	return *o.SnapshotDeactivationTimeoutMinutes.Get()
+	return *o.TemplateDeactivationTimeoutMinutes.Get()
 }
 
-// GetSnapshotDeactivationTimeoutMinutesOk returns a tuple with the SnapshotDeactivationTimeoutMinutes field value
+// GetTemplateDeactivationTimeoutMinutesOk returns a tuple with the TemplateDeactivationTimeoutMinutes field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *UpdateOrganizationQuota) GetSnapshotDeactivationTimeoutMinutesOk() (*float32, bool) {
+func (o *UpdateOrganizationQuota) GetTemplateDeactivationTimeoutMinutesOk() (*float32, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return o.SnapshotDeactivationTimeoutMinutes.Get(), o.SnapshotDeactivationTimeoutMinutes.IsSet()
+	return o.TemplateDeactivationTimeoutMinutes.Get(), o.TemplateDeactivationTimeoutMinutes.IsSet()
 }
 
-// SetSnapshotDeactivationTimeoutMinutes sets field value
-func (o *UpdateOrganizationQuota) SetSnapshotDeactivationTimeoutMinutes(v float32) {
-	o.SnapshotDeactivationTimeoutMinutes.Set(&v)
+// SetTemplateDeactivationTimeoutMinutes sets field value
+func (o *UpdateOrganizationQuota) SetTemplateDeactivationTimeoutMinutes(v float32) {
+	o.TemplateDeactivationTimeoutMinutes.Set(&v)
 }
 
 func (o UpdateOrganizationQuota) MarshalJSON() ([]byte, error) {
-	toSerialize,err := o.ToMap()
+	toSerialize, err := o.ToMap()
 	if err != nil {
 		return []byte{}, err
 	}
@@ -421,8 +421,8 @@ func (o UpdateOrganizationQuota) ToMap() (map[string]interface{}, error) {
 	toSerialize["maxCpuPerSandbox"] = o.MaxCpuPerSandbox.Get()
 	toSerialize["maxMemoryPerSandbox"] = o.MaxMemoryPerSandbox.Get()
 	toSerialize["maxDiskPerSandbox"] = o.MaxDiskPerSandbox.Get()
-	toSerialize["snapshotQuota"] = o.SnapshotQuota.Get()
-	toSerialize["maxSnapshotSize"] = o.MaxSnapshotSize.Get()
+	toSerialize["templateQuota"] = o.TemplateQuota.Get()
+	toSerialize["maxTemplateSize"] = o.MaxTemplateSize.Get()
 	toSerialize["volumeQuota"] = o.VolumeQuota.Get()
 	toSerialize["authenticatedRateLimit"] = o.AuthenticatedRateLimit.Get()
 	toSerialize["sandboxCreateRateLimit"] = o.SandboxCreateRateLimit.Get()
@@ -430,7 +430,7 @@ func (o UpdateOrganizationQuota) ToMap() (map[string]interface{}, error) {
 	toSerialize["authenticatedRateLimitTtlSeconds"] = o.AuthenticatedRateLimitTtlSeconds.Get()
 	toSerialize["sandboxCreateRateLimitTtlSeconds"] = o.SandboxCreateRateLimitTtlSeconds.Get()
 	toSerialize["sandboxLifecycleRateLimitTtlSeconds"] = o.SandboxLifecycleRateLimitTtlSeconds.Get()
-	toSerialize["snapshotDeactivationTimeoutMinutes"] = o.SnapshotDeactivationTimeoutMinutes.Get()
+	toSerialize["templateDeactivationTimeoutMinutes"] = o.TemplateDeactivationTimeoutMinutes.Get()
 
 	for key, value := range o.AdditionalProperties {
 		toSerialize[key] = value
@@ -447,8 +447,8 @@ func (o *UpdateOrganizationQuota) UnmarshalJSON(data []byte) (err error) {
 		"maxCpuPerSandbox",
 		"maxMemoryPerSandbox",
 		"maxDiskPerSandbox",
-		"snapshotQuota",
-		"maxSnapshotSize",
+		"templateQuota",
+		"maxTemplateSize",
 		"volumeQuota",
 		"authenticatedRateLimit",
 		"sandboxCreateRateLimit",
@@ -456,7 +456,7 @@ func (o *UpdateOrganizationQuota) UnmarshalJSON(data []byte) (err error) {
 		"authenticatedRateLimitTtlSeconds",
 		"sandboxCreateRateLimitTtlSeconds",
 		"sandboxLifecycleRateLimitTtlSeconds",
-		"snapshotDeactivationTimeoutMinutes",
+		"templateDeactivationTimeoutMinutes",
 	}
 
 	allProperties := make(map[string]interface{})
@@ -464,10 +464,10 @@ func (o *UpdateOrganizationQuota) UnmarshalJSON(data []byte) (err error) {
 	err = json.Unmarshal(data, &allProperties)
 
 	if err != nil {
-		return err;
+		return err
 	}
 
-	for _, requiredProperty := range(requiredProperties) {
+	for _, requiredProperty := range requiredProperties {
 		if _, exists := allProperties[requiredProperty]; !exists {
 			return fmt.Errorf("no value given for required property %v", requiredProperty)
 		}
@@ -489,8 +489,8 @@ func (o *UpdateOrganizationQuota) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "maxCpuPerSandbox")
 		delete(additionalProperties, "maxMemoryPerSandbox")
 		delete(additionalProperties, "maxDiskPerSandbox")
-		delete(additionalProperties, "snapshotQuota")
-		delete(additionalProperties, "maxSnapshotSize")
+		delete(additionalProperties, "templateQuota")
+		delete(additionalProperties, "maxTemplateSize")
 		delete(additionalProperties, "volumeQuota")
 		delete(additionalProperties, "authenticatedRateLimit")
 		delete(additionalProperties, "sandboxCreateRateLimit")
@@ -498,7 +498,7 @@ func (o *UpdateOrganizationQuota) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "authenticatedRateLimitTtlSeconds")
 		delete(additionalProperties, "sandboxCreateRateLimitTtlSeconds")
 		delete(additionalProperties, "sandboxLifecycleRateLimitTtlSeconds")
-		delete(additionalProperties, "snapshotDeactivationTimeoutMinutes")
+		delete(additionalProperties, "templateDeactivationTimeoutMinutes")
 		o.AdditionalProperties = additionalProperties
 	}
 

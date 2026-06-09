@@ -36,7 +36,7 @@ import { RequiredApiRole } from '../../common/decorators/required-role.decorator
 import { SystemRole } from '../../user/enums/system-role.enum'
 import { ProxyGuard } from '../guards/proxy.guard'
 import { RunnerDto } from '../dto/runner.dto'
-import { RunnerSnapshotDto } from '../dto/runner-snapshot.dto'
+import { RunnerArtifactCacheDto } from '../dto/runner-artifact-cache.dto'
 import { Audit, TypedRequest } from '../../audit/decorators/audit.decorator'
 import { AuditAction } from '../../audit/enums/audit-action.enum'
 import { AuditTarget } from '../../audit/enums/audit-target.enum'
@@ -162,26 +162,26 @@ export class RunnerController {
     return RunnerFullDto.fromRunner(runner)
   }
 
-  @Get('/by-snapshot-ref')
+  @Get('/by-artifact-ref')
   @HttpCode(200)
   @ApiOperation({
-    summary: 'Get runners by snapshot ref',
-    operationId: 'getRunnersBySnapshotRef',
+    summary: 'Get runners by artifact ref',
+    operationId: 'getRunnersByArtifactRef',
   })
   @ApiResponse({
     status: 200,
-    type: [RunnerSnapshotDto],
+    type: [RunnerArtifactCacheDto],
   })
   @ApiQuery({
-    name: 'ref',
-    description: 'Snapshot ref',
+    name: 'artifactRef',
+    description: 'Artifact ref',
     type: String,
     required: true,
   })
   @UseGuards(OrGuard([SystemActionGuard, ProxyGuard, SshGatewayGuard]))
   @RequiredApiRole([SystemRole.ADMIN, 'proxy', 'ssh-gateway'])
-  async getRunnersBySnapshotRef(@Query('ref') ref: string): Promise<RunnerSnapshotDto[]> {
-    return this.runnerService.getRunnersBySnapshotRef(ref)
+  async getRunnersByArtifactRef(@Query('artifactRef') artifactRef: string): Promise<RunnerArtifactCacheDto[]> {
+    return this.runnerService.getRunnersByArtifactRef(artifactRef)
   }
 
   @Get(':id')

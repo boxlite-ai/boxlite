@@ -12,42 +12,40 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  *
  * @export
  * @interface GitCommitInfo
  */
 export interface GitCommitInfo {
-    /**
-     *
-     * @type {string}
-     * @memberof GitCommitInfo
-     */
-    'hash': string;
-    /**
-     *
-     * @type {string}
-     * @memberof GitCommitInfo
-     */
-    'message': string;
-    /**
-     *
-     * @type {string}
-     * @memberof GitCommitInfo
-     */
-    'author': string;
-    /**
-     *
-     * @type {string}
-     * @memberof GitCommitInfo
-     */
-    'email': string;
-    /**
-     *
-     * @type {string}
-     * @memberof GitCommitInfo
-     */
-    'timestamp': string;
+  /**
+   *
+   * @type {string}
+   * @memberof GitCommitInfo
+   */
+  hash: string
+  /**
+   *
+   * @type {string}
+   * @memberof GitCommitInfo
+   */
+  message: string
+  /**
+   *
+   * @type {string}
+   * @memberof GitCommitInfo
+   */
+  author: string
+  /**
+   *
+   * @type {string}
+   * @memberof GitCommitInfo
+   */
+  email: string
+  /**
+   *
+   * @type {string}
+   * @memberof GitCommitInfo
+   */
+  timestamp: string
 }

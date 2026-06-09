@@ -21,23 +21,23 @@ type SandboxState string
 
 // List of SandboxState
 const (
-	SANDBOXSTATE_CREATING SandboxState = "creating"
-	SANDBOXSTATE_RESTORING SandboxState = "restoring"
-	SANDBOXSTATE_DESTROYED SandboxState = "destroyed"
-	SANDBOXSTATE_DESTROYING SandboxState = "destroying"
-	SANDBOXSTATE_STARTED SandboxState = "started"
-	SANDBOXSTATE_STOPPED SandboxState = "stopped"
-	SANDBOXSTATE_STARTING SandboxState = "starting"
-	SANDBOXSTATE_STOPPING SandboxState = "stopping"
-	SANDBOXSTATE_ERROR SandboxState = "error"
-	SANDBOXSTATE_BUILD_FAILED SandboxState = "build_failed"
-	SANDBOXSTATE_PENDING_BUILD SandboxState = "pending_build"
-	SANDBOXSTATE_BUILDING_SNAPSHOT SandboxState = "building_snapshot"
-	SANDBOXSTATE_UNKNOWN SandboxState = "unknown"
-	SANDBOXSTATE_PULLING_SNAPSHOT SandboxState = "pulling_snapshot"
-	SANDBOXSTATE_ARCHIVED SandboxState = "archived"
-	SANDBOXSTATE_ARCHIVING SandboxState = "archiving"
-	SANDBOXSTATE_RESIZING SandboxState = "resizing"
+	SANDBOXSTATE_CREATING          SandboxState = "creating"
+	SANDBOXSTATE_RESTORING         SandboxState = "restoring"
+	SANDBOXSTATE_DESTROYED         SandboxState = "destroyed"
+	SANDBOXSTATE_DESTROYING        SandboxState = "destroying"
+	SANDBOXSTATE_STARTED           SandboxState = "started"
+	SANDBOXSTATE_STOPPED           SandboxState = "stopped"
+	SANDBOXSTATE_STARTING          SandboxState = "starting"
+	SANDBOXSTATE_STOPPING          SandboxState = "stopping"
+	SANDBOXSTATE_ERROR             SandboxState = "error"
+	SANDBOXSTATE_BUILD_FAILED      SandboxState = "build_failed"
+	SANDBOXSTATE_PENDING_BUILD     SandboxState = "pending_build"
+	SANDBOXSTATE_BUILDING_ARTIFACT SandboxState = "building_artifact"
+	SANDBOXSTATE_UNKNOWN           SandboxState = "unknown"
+	SANDBOXSTATE_PULLING_ARTIFACT  SandboxState = "pulling_artifact"
+	SANDBOXSTATE_ARCHIVED          SandboxState = "archived"
+	SANDBOXSTATE_ARCHIVING         SandboxState = "archiving"
+	SANDBOXSTATE_RESIZING          SandboxState = "resizing"
 )
 
 // All allowed values of SandboxState enum
@@ -53,9 +53,9 @@ var AllowedSandboxStateEnumValues = []SandboxState{
 	"error",
 	"build_failed",
 	"pending_build",
-	"building_snapshot",
+	"building_artifact",
 	"unknown",
-	"pulling_snapshot",
+	"pulling_artifact",
 	"archived",
 	"archiving",
 	"resizing",

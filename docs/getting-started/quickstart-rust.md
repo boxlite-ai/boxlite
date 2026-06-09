@@ -27,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create box
     let options = BoxOptions {
-        rootfs: RootfsSpec::Image("alpine:latest".into()),
+        rootfs: RootfsSpec::Image("busybox:1.36.1".into()),
         ..Default::default()
     };
     let litebox = runtime.create(options, None).await?;
@@ -43,6 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", line);
     }
 
+    litebox.stop().await?;
     Ok(())
 }
 ```

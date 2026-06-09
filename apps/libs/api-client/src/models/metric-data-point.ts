@@ -12,24 +12,22 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  *
  * @export
  * @interface MetricDataPoint
  */
 export interface MetricDataPoint {
-    /**
-     * Timestamp of the data point
-     * @type {string}
-     * @memberof MetricDataPoint
-     */
-    'timestamp': string;
-    /**
-     * Value at this timestamp
-     * @type {number}
-     * @memberof MetricDataPoint
-     */
-    'value': number;
+  /**
+   * Timestamp of the data point
+   * @type {string}
+   * @memberof MetricDataPoint
+   */
+  timestamp: string
+  /**
+   * Value at this timestamp
+   * @type {number}
+   * @memberof MetricDataPoint
+   */
+  value: number
 }

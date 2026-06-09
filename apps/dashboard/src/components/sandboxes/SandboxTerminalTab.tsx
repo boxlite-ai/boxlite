@@ -10,6 +10,7 @@ import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
 import { RoutePath } from '@/enums/RoutePath'
 import { useTerminalSessionQuery } from '@/hooks/queries/useTerminalSessionQuery'
 import { useSandboxSessionContext } from '@/hooks/useSandboxSessionContext'
+import { getSandboxRouteId } from '@/lib/sandbox-identity'
 import { isStoppable } from '@/lib/utils/sandbox'
 import { Sandbox } from '@boxlite-ai/api-client'
 import { Spinner } from '@/components/ui/spinner'
@@ -44,9 +45,9 @@ export function SandboxTerminalTab({ sandbox }: { sandbox: Sandbox }) {
               <EmptyMedia variant="icon">
                 <TerminalSquare className="size-4" />
               </EmptyMedia>
-              <EmptyTitle>Sandbox is not running</EmptyTitle>
+              <EmptyTitle>Box is not running</EmptyTitle>
               <EmptyDescription>
-                Start the sandbox to access the terminal.{' '}
+                Start the box to access the terminal.{' '}
                 <a href={`${BOXLITE_DOCS_URL}/en/web-terminal`} target="_blank" rel="noopener noreferrer">
                   Learn more
                 </a>
@@ -71,7 +72,7 @@ export function SandboxTerminalTab({ sandbox }: { sandbox: Sandbox }) {
               </EmptyMedia>
               <EmptyTitle>Terminal</EmptyTitle>
               <EmptyDescription>
-                Connect to an interactive terminal session in your sandbox.{' '}
+                Connect to an interactive terminal session in your box.{' '}
                 <a href={`${BOXLITE_DOCS_URL}/en/web-terminal`} target="_blank" rel="noopener noreferrer">
                   Learn more
                 </a>
@@ -121,7 +122,7 @@ export function SandboxTerminalTab({ sandbox }: { sandbox: Sandbox }) {
   }
 
   // Active session
-  const fullscreenHref = RoutePath.SANDBOX_TERMINAL.replace(':sandboxId', sandbox.id)
+  const fullscreenHref = RoutePath.BOX_TERMINAL.replace(':sandboxId', getSandboxRouteId(sandbox))
   return (
     <div className="flex-1 flex flex-col p-2 sm:p-4">
       <div className="relative flex-1 min-h-0 rounded-md border border-border bg-black overflow-hidden p-1">

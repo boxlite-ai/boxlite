@@ -19,7 +19,6 @@ boxlite [flags]
 
 ### SEE ALSO
 
-* [boxlite archive](boxlite_archive.md)  - Archive a sandbox
 * [boxlite autocomplete](boxlite_autocomplete.md)  - Adds a completion script for your shell environment
 * [boxlite create](boxlite_create.md)  - Create a new sandbox
 * [boxlite delete](boxlite_delete.md)  - Delete a sandbox

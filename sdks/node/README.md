@@ -43,7 +43,7 @@ npm install @boxlite-ai/boxlite
 import { SimpleBox } from '@boxlite-ai/boxlite';
 
 async function main() {
-  const box = new SimpleBox({ image: 'alpine:latest' });
+  const box = new SimpleBox({ image: 'busybox:1.36.1' });
 
   try {
     const result = await box.exec('echo', 'Hello from BoxLite!');
@@ -59,10 +59,10 @@ main();
 ### TypeScript
 
 ```typescript
-import { SimpleBox } from 'boxlite';
+import { SimpleBox } from '@boxlite-ai/boxlite';
 
 async function main() {
-  const box = new SimpleBox({ image: 'alpine:latest' });
+  const box = new SimpleBox({ image: 'busybox:1.36.1' });
 
   try {
     const result = await box.exec('echo', 'Hello from BoxLite!');
@@ -78,10 +78,10 @@ main();
 ### TypeScript 5.2+ (Async Disposal)
 
 ```typescript
-import { SimpleBox } from 'boxlite';
+import { SimpleBox } from '@boxlite-ai/boxlite';
 
 async function main() {
-  await using box = new SimpleBox({ image: 'alpine:latest' });
+  await using box = new SimpleBox({ image: 'busybox:1.36.1' });
   const result = await box.exec('echo', 'Hello!');
   console.log(result.stdout);
   // Box automatically stopped when leaving scope
@@ -95,21 +95,23 @@ main();
 ### Remote BoxLite server (REST)
 
 Connect to a remote BoxLite server instead of the local runtime.
-Construct an `ApiKeyCredential` and pass it positionally:
-`Boxlite.rest(url, credential)`.
+Construct a `BoxliteRestOptions` bag with an `ApiKeyCredential`:
 
 ```typescript
-import { JsBoxlite, ApiKeyCredential } from '@boxlite-ai/boxlite';
+import { JsBoxlite, BoxliteRestOptions, ApiKeyCredential } from '@boxlite-ai/boxlite';
 
-const rt = JsBoxlite.rest(
-  'http://localhost:8100',
-  new ApiKeyCredential('your-api-key'),
-);
+const rt = JsBoxlite.rest(new BoxliteRestOptions({
+  url: 'http://localhost:8100',
+  credential: new ApiKeyCredential('your-api-key'),
+}));
 const boxes = await rt.listInfo();
 
 // Env discovery — returns null when BOXLITE_API_KEY is unset:
 const cred = ApiKeyCredential.fromEnv();
-const rt2 = JsBoxlite.rest('http://localhost:8100', cred ?? undefined);
+const rt2 = JsBoxlite.rest(new BoxliteRestOptions({
+  url: 'http://localhost:8100',
+  credential: cred ?? undefined,
+}));
 ```
 
 `ApiKeyCredential` structurally satisfies the exported `Credential`
@@ -147,7 +149,7 @@ correctly without an extra flag.
 ### Runtime Registry Options
 
 ```typescript
-import { JsBoxlite } from 'boxlite';
+import { JsBoxlite } from '@boxlite-ai/boxlite';
 
 const runtime = new JsBoxlite({
   imageRegistries: [
@@ -169,7 +171,7 @@ const runtime = new JsBoxlite({
 Basic container for command execution.
 
 ```typescript
-import { SimpleBox } from 'boxlite';
+import { SimpleBox } from '@boxlite-ai/boxlite';
 
 const box = new SimpleBox({
   image: 'python:slim',
@@ -222,11 +224,11 @@ await box.stop();
 ### Runtime Image Management
 
 ```typescript
-import { JsBoxlite } from "boxlite";
+import { JsBoxlite } from "@boxlite-ai/boxlite";
 
 const runtime = JsBoxlite.withDefaultConfig();
 
-const pulled = await runtime.images.pull("alpine:latest");
+const pulled = await runtime.images.pull("busybox:1.36.1");
 console.log(pulled.reference, pulled.configDigest, pulled.layerCount);
 
 const images = await runtime.images.list();
@@ -240,7 +242,7 @@ for (const image of images) {
 Python code execution sandbox.
 
 ```typescript
-import { CodeBox } from 'boxlite';
+import { CodeBox } from '@boxlite-ai/boxlite';
 
 const codebox = new CodeBox({
   image: 'python:slim',  // default
@@ -277,7 +279,7 @@ print(response.text)
 Browser automation with remote debugging.
 
 ```typescript
-import { BrowserBox } from 'boxlite';
+import { BrowserBox } from '@boxlite-ai/boxlite';
 
 const browser = new BrowserBox({
   browser: 'chromium',  // 'chromium', 'firefox', or 'webkit'
@@ -312,7 +314,7 @@ try {
 Desktop automation with web access.
 
 ```typescript
-import { ComputerBox } from 'boxlite';
+import { ComputerBox } from '@boxlite-ai/boxlite';
 
 const desktop = new ComputerBox({
   cpus: 2,
@@ -365,10 +367,10 @@ try {
 Interactive terminal sessions with PTY.
 
 ```typescript
-import { InteractiveBox } from 'boxlite';
+import { InteractiveBox } from '@boxlite-ai/boxlite';
 
 const box = new InteractiveBox({
-  image: 'alpine:latest',
+  image: 'busybox:1.36.1',
   shell: '/bin/sh',
   tty: true,  // Auto-detected if undefined
   memoryMib: 512,
@@ -404,10 +406,10 @@ node simplebox.js
 ## Error Handling
 
 ```typescript
-import { SimpleBox, ExecError, TimeoutError, ParseError } from 'boxlite';
+import { SimpleBox, ExecError, TimeoutError, ParseError } from '@boxlite-ai/boxlite';
 
 try {
-  const box = new SimpleBox({ image: 'alpine:latest' });
+  const box = new SimpleBox({ image: 'busybox:1.36.1' });
   await box.exec('false');  // Exit code 1
 } catch (err) {
   if (err instanceof ExecError) {
@@ -459,7 +461,7 @@ import {
   type ExecResult,
   type Screenshot,
   type BrowserType
-} from 'boxlite';
+} from '@boxlite-ai/boxlite';
 ```
 
 ## Platform Requirements

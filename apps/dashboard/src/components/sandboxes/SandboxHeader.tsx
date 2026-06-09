@@ -17,9 +17,10 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
-import { isArchivable, isRecoverable, isStartable, isStoppable } from '@/lib/utils/sandbox'
+import { getSandboxDisplayName, getSandboxPublicId, getSandboxPublicIdLabel } from '@/lib/sandbox-identity'
+import { isRecoverable, isSshAccessible, isStartable, isStoppable } from '@/lib/utils/sandbox'
 import { Sandbox } from '@boxlite-ai/api-client'
-import { ArrowLeft, MoreHorizontal, Play, RefreshCw, Square, Wrench } from 'lucide-react'
+import { ArrowLeft, MoreHorizontal, Play, RefreshCw, Square, Terminal, Wrench } from 'lucide-react'
 
 interface SandboxHeaderProps {
   sandbox: Sandbox | undefined
@@ -30,7 +31,6 @@ interface SandboxHeaderProps {
   isFetching: boolean
   onStart: () => void
   onStop: () => void
-  onArchive: () => void
   onRecover: () => void
   onDelete: () => void
   onRefresh: () => void
@@ -41,7 +41,6 @@ interface SandboxHeaderProps {
   mutations: {
     start: boolean
     stop: boolean
-    archive: boolean
     recover: boolean
   }
 }
@@ -55,7 +54,6 @@ export function SandboxHeader({
   isFetching,
   onStart,
   onStop,
-  onArchive,
   onRecover,
   onDelete,
   onRefresh,
@@ -65,6 +63,8 @@ export function SandboxHeader({
   onScreenRecordings,
   mutations,
 }: SandboxHeaderProps) {
+  const publicBoxId = sandbox ? getSandboxPublicId(sandbox) : ''
+
   return (
     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 min-w-0 px-4 sm:px-5 py-1.5 sm:py-2 border-b border-border shrink-0">
       <div className="flex items-center gap-2 min-w-0">
@@ -76,13 +76,15 @@ export function SandboxHeader({
         ) : sandbox ? (
           <div className="min-w-0">
             <div className="flex items-center gap-1 min-w-0">
-              <h2 className="text-base font-medium truncate">{sandbox.name || sandbox.id}</h2>
-              <CopyButton value={sandbox.name || sandbox.id} tooltipText="Copy name" size="icon-xs" />
+              <h2 className="text-base font-medium truncate">{getSandboxDisplayName(sandbox)}</h2>
+              <CopyButton value={getSandboxDisplayName(sandbox)} tooltipText="Copy name" size="icon-xs" />
             </div>
             <div className="hidden sm:flex items-center gap-1 min-w-0">
-              <span className="text-xs text-muted-foreground shrink-0">UUID</span>
-              <span className="text-sm text-muted-foreground font-mono truncate">{sandbox.id}</span>
-              <CopyButton value={sandbox.id} tooltipText="Copy ID" size="icon-xs" />
+              <span className="text-xs text-muted-foreground shrink-0">Box ID</span>
+              <span className="text-sm text-muted-foreground font-mono truncate">
+                {getSandboxPublicIdLabel(sandbox)}
+              </span>
+              {publicBoxId && <CopyButton value={publicBoxId} tooltipText="Copy Box ID" size="icon-xs" />}
             </div>
           </div>
         ) : null}
@@ -120,6 +122,12 @@ export function SandboxHeader({
                       Recover
                     </Button>
                   )}
+                  {isSshAccessible(sandbox) && (
+                    <Button variant="outline" size="sm" onClick={onCreateSshAccess} disabled={actionsDisabled}>
+                      <Terminal className="size-4" />
+                      SSH
+                    </Button>
+                  )}
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button variant="outline" size="icon-sm" aria-label="More actions">
@@ -134,9 +142,6 @@ export function SandboxHeader({
                         <DropdownMenuSeparator />
                       </DropdownMenuGroup>
                       <DropdownMenuGroup>
-                        <DropdownMenuItem onClick={onCreateSshAccess} disabled={actionsDisabled}>
-                          Create SSH Access
-                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={onRevokeSshAccess} disabled={actionsDisabled}>
                           Revoke SSH Access
                         </DropdownMenuItem>
@@ -145,16 +150,6 @@ export function SandboxHeader({
                           Screen Recordings
                         </DropdownMenuItem>
                       </DropdownMenuGroup>
-                      {isArchivable(sandbox) && (
-                        <>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuGroup>
-                            <DropdownMenuItem onClick={onArchive} disabled={actionsDisabled}>
-                              Archive
-                            </DropdownMenuItem>
-                          </DropdownMenuGroup>
-                        </>
-                      )}
                       {deletePermitted && (
                         <>
                           <DropdownMenuSeparator />

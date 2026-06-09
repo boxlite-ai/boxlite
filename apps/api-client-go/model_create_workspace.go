@@ -44,12 +44,10 @@ type CreateWorkspace struct {
 	Disk *int32 `json:"disk,omitempty"`
 	// Auto-stop interval in minutes (0 means disabled)
 	AutoStopInterval *int32 `json:"autoStopInterval,omitempty"`
-	// Auto-archive interval in minutes (0 means the maximum interval will be used)
-	AutoArchiveInterval *int32 `json:"autoArchiveInterval,omitempty"`
 	// Array of volumes to attach to the workspace
 	Volumes []SandboxVolume `json:"volumes,omitempty"`
 	// Build information for the workspace
-	BuildInfo *CreateBuildInfo `json:"buildInfo,omitempty"`
+	BuildInfo            *CreateBuildInfo `json:"buildInfo,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -456,38 +454,6 @@ func (o *CreateWorkspace) SetAutoStopInterval(v int32) {
 	o.AutoStopInterval = &v
 }
 
-// GetAutoArchiveInterval returns the AutoArchiveInterval field value if set, zero value otherwise.
-func (o *CreateWorkspace) GetAutoArchiveInterval() int32 {
-	if o == nil || IsNil(o.AutoArchiveInterval) {
-		var ret int32
-		return ret
-	}
-	return *o.AutoArchiveInterval
-}
-
-// GetAutoArchiveIntervalOk returns a tuple with the AutoArchiveInterval field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *CreateWorkspace) GetAutoArchiveIntervalOk() (*int32, bool) {
-	if o == nil || IsNil(o.AutoArchiveInterval) {
-		return nil, false
-	}
-	return o.AutoArchiveInterval, true
-}
-
-// HasAutoArchiveInterval returns a boolean if a field has been set.
-func (o *CreateWorkspace) HasAutoArchiveInterval() bool {
-	if o != nil && !IsNil(o.AutoArchiveInterval) {
-		return true
-	}
-
-	return false
-}
-
-// SetAutoArchiveInterval gets a reference to the given int32 and assigns it to the AutoArchiveInterval field.
-func (o *CreateWorkspace) SetAutoArchiveInterval(v int32) {
-	o.AutoArchiveInterval = &v
-}
-
 // GetVolumes returns the Volumes field value if set, zero value otherwise.
 func (o *CreateWorkspace) GetVolumes() []SandboxVolume {
 	if o == nil || IsNil(o.Volumes) {
@@ -553,7 +519,7 @@ func (o *CreateWorkspace) SetBuildInfo(v CreateBuildInfo) {
 }
 
 func (o CreateWorkspace) MarshalJSON() ([]byte, error) {
-	toSerialize,err := o.ToMap()
+	toSerialize, err := o.ToMap()
 	if err != nil {
 		return []byte{}, err
 	}
@@ -598,9 +564,6 @@ func (o CreateWorkspace) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.AutoStopInterval) {
 		toSerialize["autoStopInterval"] = o.AutoStopInterval
 	}
-	if !IsNil(o.AutoArchiveInterval) {
-		toSerialize["autoArchiveInterval"] = o.AutoArchiveInterval
-	}
 	if !IsNil(o.Volumes) {
 		toSerialize["volumes"] = o.Volumes
 	}
@@ -641,7 +604,6 @@ func (o *CreateWorkspace) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "memory")
 		delete(additionalProperties, "disk")
 		delete(additionalProperties, "autoStopInterval")
-		delete(additionalProperties, "autoArchiveInterval")
 		delete(additionalProperties, "volumes")
 		delete(additionalProperties, "buildInfo")
 		o.AdditionalProperties = additionalProperties

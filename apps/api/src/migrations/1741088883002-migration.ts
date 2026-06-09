@@ -48,7 +48,7 @@ export class Migration1741088883002 implements MigrationInterface {
         ("id", "name", "description", "permissions", "isGlobal")
       VALUES
         (
-          '${GlobalOrganizationRolesIds.SNAPSHOTS_ADMIN}',
+          '${GlobalOrganizationRolesIds.TEMPLATES_ADMIN}',
           'Images Admin',
           'Grants admin access to images in the organization',
           ARRAY[

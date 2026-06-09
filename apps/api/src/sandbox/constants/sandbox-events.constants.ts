@@ -5,7 +5,6 @@
  */
 
 export const SandboxEvents = {
-  ARCHIVED: 'sandbox.archived',
   STATE_UPDATED: 'sandbox.state.updated',
   DESIRED_STATE_UPDATED: 'sandbox.desired-state.updated',
   CREATED: 'sandbox.created',

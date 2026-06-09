@@ -17,8 +17,8 @@ import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
 import { SandboxEvents } from '../constants/sandbox-events.constants'
 import { SandboxOrganizationUpdatedEvent } from '../events/sandbox-organization-updated.event'
 import { ConfigService } from '@nestjs/config'
-import { Snapshot } from '../entities/snapshot.entity'
-import { SnapshotState } from '../enums/snapshot-state.enum'
+import { BoxTemplate } from '../entities/box-template.entity'
+import { BoxTemplateState } from '../enums/box-template-state.enum'
 import { SandboxClass } from '../enums/sandbox-class.enum'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { SandboxState } from '../enums/sandbox-state.enum'
@@ -33,7 +33,7 @@ import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
 export type FetchWarmPoolSandboxParams = {
-  snapshot: string | Snapshot
+  template: string | BoxTemplate
   target: string
   class: SandboxClass
   cpu: number
@@ -54,8 +54,8 @@ export class SandboxWarmPoolService {
     @InjectRepository(WarmPool)
     private readonly warmPoolRepository: Repository<WarmPool>,
     private readonly sandboxRepository: SandboxRepository,
-    @InjectRepository(Snapshot)
-    private readonly snapshotRepository: Repository<Snapshot>,
+    @InjectRepository(BoxTemplate)
+    private readonly boxTemplateRepository: Repository<BoxTemplate>,
     @InjectRepository(Runner)
     private readonly runnerRepository: Repository<Runner>,
     private readonly redisLockProvider: RedisLockProvider,
@@ -71,39 +71,39 @@ export class SandboxWarmPoolService {
   }
 
   async fetchWarmPoolSandbox(params: FetchWarmPoolSandboxParams): Promise<Sandbox | null> {
-    //  validate snapshot
-    let snapshot: Snapshot | null = null
-    if (typeof params.snapshot === 'string') {
-      const sandboxSnapshot = params.snapshot || this.configService.get<string>('DEFAULT_SNAPSHOT')
+    //  validate template
+    let template: BoxTemplate | null = null
+    if (typeof params.template === 'string') {
+      const sandboxTemplate = params.template || this.configService.get<string>('defaultTemplate')
 
-      const snapshotFilter: FindOptionsWhere<Snapshot>[] = [
-        { organizationId: params.organizationId, name: sandboxSnapshot, state: SnapshotState.ACTIVE },
-        { general: true, name: sandboxSnapshot, state: SnapshotState.ACTIVE },
+      const templateFilter: FindOptionsWhere<BoxTemplate>[] = [
+        { organizationId: params.organizationId, name: sandboxTemplate, state: BoxTemplateState.ACTIVE },
+        { general: true, name: sandboxTemplate, state: BoxTemplateState.ACTIVE },
       ]
 
-      if (isValidUuid(sandboxSnapshot)) {
-        snapshotFilter.push(
-          { organizationId: params.organizationId, id: sandboxSnapshot, state: SnapshotState.ACTIVE },
-          { general: true, id: sandboxSnapshot, state: SnapshotState.ACTIVE },
+      if (isValidUuid(sandboxTemplate)) {
+        templateFilter.push(
+          { organizationId: params.organizationId, id: sandboxTemplate, state: BoxTemplateState.ACTIVE },
+          { general: true, id: sandboxTemplate, state: BoxTemplateState.ACTIVE },
         )
       }
 
-      snapshot = await this.snapshotRepository.findOne({
-        where: snapshotFilter,
+      template = await this.boxTemplateRepository.findOne({
+        where: templateFilter,
       })
-      if (!snapshot) {
+      if (!template) {
         throw new BadRequestError(
-          `Snapshot ${sandboxSnapshot} not found. Did you add it through the BoxLite Dashboard?`,
+          `BoxTemplate ${sandboxTemplate} not found. Did you add it through the BoxLite Dashboard?`,
         )
       }
     } else {
-      snapshot = params.snapshot
+      template = params.template
     }
 
     //  check if sandbox is warm pool
     const warmPoolItem = await this.warmPoolRepository.findOne({
       where: {
-        snapshot: snapshot.name,
+        template: template.name,
         target: params.target,
         class: params.class,
         cpu: params.cpu,
@@ -131,7 +131,7 @@ export class SandboxWarmPoolService {
         .andWhere('sandbox.cpu = :cpu', { cpu: warmPoolItem.cpu })
         .andWhere('sandbox.mem = :mem', { mem: warmPoolItem.mem })
         .andWhere('sandbox.disk = :disk', { disk: warmPoolItem.disk })
-        .andWhere('sandbox.snapshot = :snapshot', { snapshot: snapshot.name })
+        .andWhere('sandbox.template = :template', { template: template.name })
         .andWhere('sandbox.osUser = :osUser', { osUser: warmPoolItem.osUser })
         .andWhere('sandbox.env = :env', { env: warmPoolItem.env })
         .andWhere('sandbox.organizationId = :organizationId', {
@@ -163,8 +163,8 @@ export class SandboxWarmPoolService {
       return warmPoolSandbox
     }
 
-    //  no warm pool config exists for this snapshot — cache it so callers can skip
-    await this.redis.set(`warm-pool:skip:${snapshot.id}`, '1', 'EX', 60)
+    //  no warm pool config exists for this template — cache it so callers can skip
+    await this.redis.set(`warm-pool:skip:${template.id}`, '1', 'EX', 60)
 
     return null
   }
@@ -185,7 +185,7 @@ export class SandboxWarmPoolService {
 
         const sandboxCount = await this.sandboxRepository.count({
           where: {
-            snapshot: warmPoolItem.snapshot,
+            template: warmPoolItem.template,
             organizationId: SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
             class: warmPoolItem.class,
             osUser: warmPoolItem.osUser,
@@ -227,7 +227,7 @@ export class SandboxWarmPoolService {
     }
     const warmPoolItem = await this.warmPoolRepository.findOne({
       where: {
-        snapshot: event.sandbox.snapshot,
+        template: event.sandbox.template,
         class: event.sandbox.class,
         cpu: event.sandbox.cpu,
         mem: event.sandbox.mem,
@@ -245,7 +245,7 @@ export class SandboxWarmPoolService {
 
     const sandboxCount = await this.sandboxRepository.count({
       where: {
-        snapshot: warmPoolItem.snapshot,
+        template: warmPoolItem.template,
         organizationId: SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
         class: warmPoolItem.class,
         osUser: warmPoolItem.osUser,

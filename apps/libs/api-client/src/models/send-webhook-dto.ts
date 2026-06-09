@@ -12,10 +12,9 @@
  * Do not edit the class manually.
  */
 
-
 // May contain unused imports in some cases
 // @ts-ignore
-import type { WebhookEvent } from './webhook-event';
+import type { WebhookEvent } from './webhook-event'
 
 /**
  *
@@ -23,22 +22,22 @@ import type { WebhookEvent } from './webhook-event';
  * @interface SendWebhookDto
  */
 export interface SendWebhookDto {
-    /**
-     * The type of event being sent
-     * @type {WebhookEvent}
-     * @memberof SendWebhookDto
-     */
-    'eventType': WebhookEvent;
-    /**
-     * The payload data to send
-     * @type {object}
-     * @memberof SendWebhookDto
-     */
-    'payload': object;
-    /**
-     * Optional event ID for idempotency
-     * @type {string}
-     * @memberof SendWebhookDto
-     */
-    'eventId'?: string;
+  /**
+   * The type of event being sent
+   * @type {WebhookEvent}
+   * @memberof SendWebhookDto
+   */
+  eventType: WebhookEvent
+  /**
+   * The payload data to send
+   * @type {object}
+   * @memberof SendWebhookDto
+   */
+  payload: object
+  /**
+   * Optional event ID for idempotency
+   * @type {string}
+   * @memberof SendWebhookDto
+   */
+  eventId?: string
 }

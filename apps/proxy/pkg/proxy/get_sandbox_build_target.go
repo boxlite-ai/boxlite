@@ -44,10 +44,10 @@ func (p *Proxy) getSandboxBuildTarget(ctx *gin.Context) (*url.URL, map[string]st
 	}
 
 	queryParams := ctx.Request.URL.Query()
-	queryParams.Add("snapshotRef", sandbox.BuildInfo.SnapshotRef)
+	queryParams.Add("artifactRef", sandbox.BuildInfo.ArtifactRef)
 
 	// Build the target URL
-	targetURL := fmt.Sprintf("%s/snapshots/logs", runnerInfo.ApiUrl)
+	targetURL := fmt.Sprintf("%s/artifacts/logs", runnerInfo.ApiUrl)
 
 	// Create the complete target URL with path
 	target, err := url.Parse(targetURL)

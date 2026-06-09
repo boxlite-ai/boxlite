@@ -44,8 +44,8 @@ For env-based client configuration (`use_env_config.py`), set:
 ```bash
 BOXLITE_REST_URL=http://localhost:8100
 BOXLITE_API_KEY=your-api-key
-# Optional (default in SDK is v1):
-BOXLITE_REST_PREFIX=v1
+# Optional for multi-tenant deployments:
+BOXLITE_REST_PATH_PREFIX=your-organization-id
 ```
 
 `BoxliteRestOptions.from_env()` reads these and wraps `BOXLITE_API_KEY`

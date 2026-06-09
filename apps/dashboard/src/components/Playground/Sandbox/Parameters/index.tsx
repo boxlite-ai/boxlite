@@ -33,16 +33,16 @@ const SandboxParameters = ({ className }: { className?: string }) => {
   const { openedParametersSections, setOpenedParametersSections, enabledSections, enableSection, disableSection } =
     usePlayground()
 
-  // TODO - Currently, snapshot selection is not supported in the Playground, so we are using empty array and false for loading. We keep to code commented to enable it in future if requested by users.
-  // const { snapshotApi } = useApi()
+  // TODO - Currently, template selection is not supported in the Playground, so we are using empty array and false for loading. We keep the code commented to enable it in future if requested by users.
+  // const { templatesApi } = useApi()
   // const { selectedOrganization } = useSelectedOrganization()
 
-  // const { data: snapshotsData = [], isLoading: snapshotsLoading } = useQuery({
-  //   queryKey: ['snapshots', selectedOrganization?.id, 'all'],
+  // const { data: templatesData = [], isLoading: templatesLoading } = useQuery({
+  //   queryKey: ['templates', selectedOrganization?.id, 'all'],
   //   queryFn: async () => {
   //     if (!selectedOrganization) return []
-  //     const response = await snapshotApi.getAllSnapshots(selectedOrganization.id)
-  //     return response.data.items
+  //     const response = await templatesApi.listBoxTemplates(selectedOrganization.id)
+  //     return response.data
   //   },
   //   enabled: !!selectedOrganization,
   // })
@@ -50,7 +50,7 @@ const SandboxParameters = ({ className }: { className?: string }) => {
   return (
     <div className={cn('flex flex-col gap-6', className)}>
       <div>
-        <h2>Sandbox Configuration</h2>
+        <h2>Box Configuration</h2>
         <p className="text-sm text-muted-foreground mt-1">Manage resources, lifecycle policies, and file systems.</p>
       </div>
       <Accordion
@@ -103,7 +103,7 @@ const SandboxParameters = ({ className }: { className?: string }) => {
                     {section.value === SandboxParametersSections.FILE_SYSTEM && <SandboxFileSystem />}
                     {section.value === SandboxParametersSections.GIT_OPERATIONS && <SandboxGitOperations />}
                     {section.value === SandboxParametersSections.SANDBOX_MANAGEMENT && (
-                      <SandboxManagementParameters snapshotsData={[]} snapshotsLoading={false} />
+                      <SandboxManagementParameters templatesData={[]} templatesLoading={false} />
                     )}
                     {section.value === SandboxParametersSections.PROCESS_CODE_EXECUTION && (
                       <SandboxProcessCodeExecution />

@@ -12,10 +12,9 @@
  * Do not edit the class manually.
  */
 
-
 // May contain unused imports in some cases
 // @ts-ignore
-import type { FileStatus } from './file-status';
+import type { FileStatus } from './file-status'
 
 /**
  *
@@ -23,34 +22,34 @@ import type { FileStatus } from './file-status';
  * @interface GitStatus
  */
 export interface GitStatus {
-    /**
-     *
-     * @type {string}
-     * @memberof GitStatus
-     */
-    'currentBranch': string;
-    /**
-     *
-     * @type {Array<FileStatus>}
-     * @memberof GitStatus
-     */
-    'fileStatus': Array<FileStatus>;
-    /**
-     *
-     * @type {number}
-     * @memberof GitStatus
-     */
-    'ahead'?: number;
-    /**
-     *
-     * @type {number}
-     * @memberof GitStatus
-     */
-    'behind'?: number;
-    /**
-     *
-     * @type {boolean}
-     * @memberof GitStatus
-     */
-    'branchPublished'?: boolean;
+  /**
+   *
+   * @type {string}
+   * @memberof GitStatus
+   */
+  currentBranch: string
+  /**
+   *
+   * @type {Array<FileStatus>}
+   * @memberof GitStatus
+   */
+  fileStatus: Array<FileStatus>
+  /**
+   *
+   * @type {number}
+   * @memberof GitStatus
+   */
+  ahead?: number
+  /**
+   *
+   * @type {number}
+   * @memberof GitStatus
+   */
+  behind?: number
+  /**
+   *
+   * @type {boolean}
+   * @memberof GitStatus
+   */
+  branchPublished?: boolean
 }

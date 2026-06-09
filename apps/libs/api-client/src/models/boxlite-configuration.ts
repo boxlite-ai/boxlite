@@ -12,19 +12,18 @@
  * Do not edit the class manually.
  */
 
-
 // May contain unused imports in some cases
 // @ts-ignore
-import type { Announcement } from './announcement';
+import type { Announcement } from './announcement'
 // May contain unused imports in some cases
 // @ts-ignore
-import type { OidcConfig } from './oidc-config';
+import type { OidcConfig } from './oidc-config'
 // May contain unused imports in some cases
 // @ts-ignore
-import type { PosthogConfig } from './posthog-config';
+import type { PosthogConfig } from './posthog-config'
 // May contain unused imports in some cases
 // @ts-ignore
-import type { RateLimitConfig } from './rate-limit-config';
+import type { RateLimitConfig } from './rate-limit-config'
 
 /**
  *
@@ -32,112 +31,106 @@ import type { RateLimitConfig } from './rate-limit-config';
  * @interface BoxliteConfiguration
  */
 export interface BoxliteConfiguration {
-    /**
-     * BoxLite version
-     * @type {string}
-     * @memberof BoxliteConfiguration
-     */
-    'version': string;
-    /**
-     * PostHog configuration
-     * @type {PosthogConfig}
-     * @memberof BoxliteConfiguration
-     */
-    'posthog'?: PosthogConfig;
-    /**
-     * OIDC configuration
-     * @type {OidcConfig}
-     * @memberof BoxliteConfiguration
-     */
-    'oidc': OidcConfig;
-    /**
-     * Whether linked accounts are enabled
-     * @type {boolean}
-     * @memberof BoxliteConfiguration
-     */
-    'linkedAccountsEnabled': boolean;
-    /**
-     * System announcements
-     * @type {{ [key: string]: Announcement; }}
-     * @memberof BoxliteConfiguration
-     */
-    'announcements': { [key: string]: Announcement; };
-    /**
-     * Pylon application ID
-     * @type {string}
-     * @memberof BoxliteConfiguration
-     */
-    'pylonAppId'?: string;
-    /**
-     * Proxy template URL
-     * @type {string}
-     * @memberof BoxliteConfiguration
-     */
-    'proxyTemplateUrl': string;
-    /**
-     * Toolbox template URL
-     * @type {string}
-     * @memberof BoxliteConfiguration
-     */
-    'proxyToolboxUrl': string;
-    /**
-     * Default snapshot for sandboxes
-     * @type {string}
-     * @memberof BoxliteConfiguration
-     */
-    'defaultSnapshot': string;
-    /**
-     * Dashboard URL
-     * @type {string}
-     * @memberof BoxliteConfiguration
-     */
-    'dashboardUrl': string;
-    /**
-     * Maximum auto-archive interval in minutes
-     * @type {number}
-     * @memberof BoxliteConfiguration
-     */
-    'maxAutoArchiveInterval': number;
-    /**
-     * Whether maintenance mode is enabled
-     * @type {boolean}
-     * @memberof BoxliteConfiguration
-     */
-    'maintananceMode': boolean;
-    /**
-     * Current environment
-     * @type {string}
-     * @memberof BoxliteConfiguration
-     */
-    'environment': string;
-    /**
-     * Billing API URL
-     * @type {string}
-     * @memberof BoxliteConfiguration
-     */
-    'billingApiUrl'?: string;
-    /**
-     * Analytics API URL
-     * @type {string}
-     * @memberof BoxliteConfiguration
-     */
-    'analyticsApiUrl'?: string;
-    /**
-     * SSH Gateway command
-     * @type {string}
-     * @memberof BoxliteConfiguration
-     */
-    'sshGatewayCommand'?: string;
-    /**
-     * Base64 encoded SSH Gateway public key
-     * @type {string}
-     * @memberof BoxliteConfiguration
-     */
-    'sshGatewayPublicKey'?: string;
-    /**
-     * Rate limit configuration
-     * @type {RateLimitConfig}
-     * @memberof BoxliteConfiguration
-     */
-    'rateLimit'?: RateLimitConfig;
+  /**
+   * BoxLite version
+   * @type {string}
+   * @memberof BoxliteConfiguration
+   */
+  version: string
+  /**
+   * PostHog configuration
+   * @type {PosthogConfig}
+   * @memberof BoxliteConfiguration
+   */
+  posthog?: PosthogConfig
+  /**
+   * OIDC configuration
+   * @type {OidcConfig}
+   * @memberof BoxliteConfiguration
+   */
+  oidc: OidcConfig
+  /**
+   * Whether linked accounts are enabled
+   * @type {boolean}
+   * @memberof BoxliteConfiguration
+   */
+  linkedAccountsEnabled: boolean
+  /**
+   * System announcements
+   * @type {{ [key: string]: Announcement; }}
+   * @memberof BoxliteConfiguration
+   */
+  announcements: { [key: string]: Announcement }
+  /**
+   * Pylon application ID
+   * @type {string}
+   * @memberof BoxliteConfiguration
+   */
+  pylonAppId?: string
+  /**
+   * Proxy template URL
+   * @type {string}
+   * @memberof BoxliteConfiguration
+   */
+  proxyTemplateUrl: string
+  /**
+   * Toolbox template URL
+   * @type {string}
+   * @memberof BoxliteConfiguration
+   */
+  proxyToolboxUrl: string
+  /**
+   * Default template for sandboxes
+   * @type {string}
+   * @memberof BoxliteConfiguration
+   */
+  defaultTemplate: string
+  /**
+   * Dashboard URL
+   * @type {string}
+   * @memberof BoxliteConfiguration
+   */
+  dashboardUrl: string
+  /**
+   * Whether maintenance mode is enabled
+   * @type {boolean}
+   * @memberof BoxliteConfiguration
+   */
+  maintananceMode: boolean
+  /**
+   * Current environment
+   * @type {string}
+   * @memberof BoxliteConfiguration
+   */
+  environment: string
+  /**
+   * Billing API URL
+   * @type {string}
+   * @memberof BoxliteConfiguration
+   */
+  billingApiUrl?: string
+  /**
+   * Analytics API URL
+   * @type {string}
+   * @memberof BoxliteConfiguration
+   */
+  analyticsApiUrl?: string
+  /**
+   * SSH Gateway command
+   * @type {string}
+   * @memberof BoxliteConfiguration
+   */
+  sshGatewayCommand?: string
+  /**
+   * Base64 encoded SSH Gateway public key
+   * @type {string}
+   * @memberof BoxliteConfiguration
+   */
+  sshGatewayPublicKey?: string
+  /**
+   * Rate limit configuration
+   * @type {RateLimitConfig}
+   * @memberof BoxliteConfiguration
+   */
+  rateLimit?: RateLimitConfig
 }

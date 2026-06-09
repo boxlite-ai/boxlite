@@ -4,11 +4,16 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { FeatureFlags } from '@/enums/FeatureFlags'
 import { RoutePath } from '@/enums/RoutePath'
+import { isDashboardVncEnabled } from '@/lib/dashboard-features'
+import { getSandboxRouteId } from '@/lib/sandbox-identity'
 import { SandboxState } from '@boxlite-ai/api-client'
 import { Terminal, MoreVertical, Play, Square, Loader2, Wrench } from 'lucide-react'
+import { useFeatureFlagEnabled } from 'posthog-js/react'
 import { generatePath, useNavigate } from 'react-router-dom'
 import { useMemo } from 'react'
+import TooltipButton from '../TooltipButton'
 import { Button } from '../ui/button'
 import {
   DropdownMenu,
@@ -28,7 +33,6 @@ export function SandboxTableActions({
   onStart,
   onStop,
   onDelete,
-  onArchive,
   onVnc,
   onOpenWebTerminal,
   onCreateSshAccess,
@@ -37,6 +41,7 @@ export function SandboxTableActions({
   onScreenRecordings,
 }: SandboxTableActionsProps) {
   const navigate = useNavigate()
+  const vncEnabled = isDashboardVncEnabled(useFeatureFlagEnabled(FeatureFlags.DASHBOARD_VNC))
   const isTransitioning = sandbox.state === SandboxState.STARTING || sandbox.state === SandboxState.STOPPING
 
   const primaryAction = useMemo(() => {
@@ -76,8 +81,8 @@ export function SandboxTableActions({
 
     items.push({
       key: 'open',
-      label: 'Open',
-      onClick: () => navigate(generatePath(RoutePath.SANDBOX_DETAILS, { sandboxId: sandbox.id })),
+      label: 'View Details',
+      onClick: () => navigate(generatePath(RoutePath.BOX_DETAILS, { sandboxId: getSandboxRouteId(sandbox) })),
       disabled: isLoading,
     })
 
@@ -89,12 +94,14 @@ export function SandboxTableActions({
           onClick: () => onOpenWebTerminal(sandbox.id),
           disabled: isLoading,
         })
-        items.push({
-          key: 'vnc',
-          label: 'VNC',
-          onClick: () => onVnc(sandbox.id),
-          disabled: isLoading,
-        })
+        if (vncEnabled) {
+          items.push({
+            key: 'vnc',
+            label: 'VNC',
+            onClick: () => onVnc(getSandboxRouteId(sandbox)),
+            disabled: isLoading,
+          })
+        }
         items.push({
           key: 'screen-recordings',
           label: 'Screen Recordings',
@@ -107,7 +114,7 @@ export function SandboxTableActions({
           onClick: () => onStop(sandbox.id),
           disabled: isLoading,
         })
-      } else if (sandbox.state === SandboxState.STOPPED || sandbox.state === SandboxState.ARCHIVED) {
+      } else if (sandbox.state === SandboxState.STOPPED) {
         items.push({
           key: 'start',
           label: 'Start',
@@ -119,15 +126,6 @@ export function SandboxTableActions({
           key: 'recover',
           label: 'Recover',
           onClick: () => onRecover(sandbox.id),
-          disabled: isLoading,
-        })
-      }
-
-      if (sandbox.state === SandboxState.STOPPED) {
-        items.push({
-          key: 'archive',
-          label: 'Archive',
-          onClick: () => onArchive(sandbox.id),
           disabled: isLoading,
         })
       }
@@ -167,18 +165,19 @@ export function SandboxTableActions({
     deletePermitted,
     sandbox.state,
     sandbox.id,
+    sandbox.boxId,
     isLoading,
     sandbox.recoverable,
     onStart,
     onStop,
     onDelete,
-    onArchive,
     onVnc,
     onOpenWebTerminal,
     onCreateSshAccess,
     onRevokeSshAccess,
     onRecover,
     onScreenRecordings,
+    vncEnabled,
     navigate,
   ])
 
@@ -245,10 +244,10 @@ export function SandboxTableActions({
 
   return (
     <div className="flex items-center justify-end gap-2">
-      <Button
+      <TooltipButton
         variant="outline"
-        size="icon-sm"
         className="text-muted-foreground"
+        tooltipText={primaryAction.label}
         disabled={isLoading || isTransitioning}
         onClick={(e) => {
           e.stopPropagation()
@@ -256,13 +255,13 @@ export function SandboxTableActions({
         }}
       >
         {primaryAction.icon}
-      </Button>
+      </TooltipButton>
 
       {sandbox.state === SandboxState.STARTED ? (
-        <Button
+        <TooltipButton
           variant="outline"
-          size="icon-sm"
           className="text-muted-foreground"
+          tooltipText="Open terminal"
           disabled={isLoading}
           onClick={(e) => {
             e.stopPropagation()
@@ -270,11 +269,16 @@ export function SandboxTableActions({
           }}
         >
           <Terminal className="w-4 h-4" />
-        </Button>
+        </TooltipButton>
       ) : (
-        <Button variant="outline" size="icon-sm" className="text-muted-foreground" disabled>
+        <TooltipButton
+          variant="outline"
+          className="text-muted-foreground"
+          tooltipText="Terminal available when running"
+          disabled
+        >
           <Terminal className="w-4 h-4" />
-        </Button>
+        </TooltipButton>
       )}
 
       <DropdownMenu>

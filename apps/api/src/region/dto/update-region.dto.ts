@@ -25,10 +25,10 @@ export class UpdateRegionDto {
   sshGatewayUrl?: string
 
   @ApiProperty({
-    description: 'Snapshot Manager URL for the region',
-    example: 'https://snapshot-manager.example.com',
+    description: 'Artifact Registry URL for the region',
+    example: 'https://artifact-registry.example.com',
     nullable: true,
     required: false,
   })
-  snapshotManagerUrl?: string
+  artifactRegistryUrl?: string
 }

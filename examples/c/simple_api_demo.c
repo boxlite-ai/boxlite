@@ -16,9 +16,9 @@ int main() {
     CBoxliteSimple* box;
     CBoxliteError error = {0};
 
-    printf("Creating Python box...\n");
+    printf("Creating BusyBox box...\n");
     BoxliteErrorCode result = boxlite_simple_new(
-        "python:slim",  // image
+        "busybox:1.36.1",  // image
         0,              // cpus (0 = default)
         0,              // memory_mib (0 = default)
         &box,
@@ -35,13 +35,13 @@ int main() {
     printf("✅ Box created successfully!\n\n");
 
     // Run a simple command
-    printf("Command 1: python --version\n");
+    printf("Command 1: uname -a\n");
     printf("---\n");
 
-    const char* args1[] = {"--version", NULL};
+    const char* args1[] = {"-a", NULL};
     CBoxliteExecResult* result1;
 
-    result = boxlite_simple_run(box, "python", args1, 1, &result1, &error);
+    result = boxlite_simple_run(box, "uname", args1, 1, &result1, &error);
     if (result == Ok) {
         printf("Exit code: %d\n", result1->exit_code);
         printf("Output: %s\n", result1->stdout_text);
@@ -52,14 +52,14 @@ int main() {
     }
     printf("\n");
 
-    // Run a Python script
-    printf("Command 2: python -c 'print(\"Hello from BoxLite!\")'\n");
+    // Run another command
+    printf("Command 2: echo 'Hello from BoxLite!'\n");
     printf("---\n");
 
-    const char* args2[] = {"-c", "print('Hello from BoxLite!')", NULL};
+    const char* args2[] = {"Hello from BoxLite!", NULL};
     CBoxliteExecResult* result2;
 
-    result = boxlite_simple_run(box, "python", args2, 2, &result2, &error);
+    result = boxlite_simple_run(box, "echo", args2, 1, &result2, &error);
     if (result == Ok) {
         printf("Exit code: %d\n", result2->exit_code);
         printf("Output: %s\n", result2->stdout_text);

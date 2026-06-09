@@ -45,7 +45,7 @@ export function SandboxTerminalFrame({ sessionUrl, fullscreenHref, className }: 
     <div className={cn('relative min-h-0 bg-black', className)}>
       <iframe
         ref={frameRef}
-        title="Sandbox terminal"
+        title="Box terminal"
         src={iframeSrc}
         onLoad={handleLoad}
         className="absolute inset-0 h-full w-full border-0 bg-black"

@@ -10,6 +10,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 
 interface StopSandboxVariables {
   sandboxId: string
+  detailRef?: string
 }
 
 export const useStopSandboxMutation = () => {
@@ -21,10 +22,15 @@ export const useStopSandboxMutation = () => {
     mutationFn: async ({ sandboxId }: StopSandboxVariables) => {
       await sandboxApi.stopSandbox(sandboxId, selectedOrganization?.id)
     },
-    onSuccess: (_, { sandboxId }) => {
+    onSuccess: (_, { sandboxId, detailRef }) => {
       queryClient.invalidateQueries({
         queryKey: queryKeys.sandboxes.detail(selectedOrganization?.id ?? '', sandboxId),
       })
+      if (detailRef && detailRef !== sandboxId) {
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.sandboxes.detail(selectedOrganization?.id ?? '', detailRef),
+        })
+      }
     },
   })
 }

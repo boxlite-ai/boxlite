@@ -20,7 +20,7 @@ import {
   RegionsApi,
   RunnersApi,
   SandboxApi,
-  SnapshotsApi,
+  TemplatesApi,
   ToolboxApi,
   UsersApi,
   VolumesApi,
@@ -31,7 +31,7 @@ import { BoxliteError } from './errors'
 
 export class ApiClient {
   private config: Configuration
-  private _snapshotApi: SnapshotsApi
+  private _templatesApi: TemplatesApi
   private _sandboxApi: SandboxApi
   private _userApi: UsersApi
   private _apiKeyApi: ApiKeysApi
@@ -54,6 +54,13 @@ export class ApiClient {
     })
 
     const axiosInstance = axios.create()
+    axiosInstance.interceptors.request.use((request) => {
+      request.headers?.delete?.('User-Agent')
+      if (request.headers) {
+        delete (request.headers as Record<string, unknown>)['User-Agent']
+      }
+      return request
+    })
     axiosInstance.interceptors.response.use(
       (response) => {
         return response
@@ -72,7 +79,7 @@ export class ApiClient {
     )
 
     // Initialize APIs
-    this._snapshotApi = new SnapshotsApi(this.config, undefined, axiosInstance)
+    this._templatesApi = new TemplatesApi(this.config, undefined, axiosInstance)
     this._sandboxApi = new SandboxApi(this.config, undefined, axiosInstance)
     this._userApi = new UsersApi(this.config, undefined, axiosInstance)
     this._apiKeyApi = new ApiKeysApi(this.config, undefined, axiosInstance)
@@ -108,8 +115,8 @@ export class ApiClient {
     this.config.accessToken = accessToken
   }
 
-  public get snapshotApi() {
-    return this._snapshotApi
+  public get templatesApi() {
+    return this._templatesApi
   }
 
   public get sandboxApi() {

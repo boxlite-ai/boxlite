@@ -12,24 +12,22 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  *
  * @export
  * @interface WebhookAppPortalAccess
  */
 export interface WebhookAppPortalAccess {
-    /**
-     * The authentication token for the Svix consumer app portal
-     * @type {string}
-     * @memberof WebhookAppPortalAccess
-     */
-    'token': string;
-    /**
-     * The URL to the webhook app portal
-     * @type {string}
-     * @memberof WebhookAppPortalAccess
-     */
-    'url': string;
+  /**
+   * The authentication token for the Svix consumer app portal
+   * @type {string}
+   * @memberof WebhookAppPortalAccess
+   */
+  token: string
+  /**
+   * The URL to the webhook app portal
+   * @type {string}
+   * @memberof WebhookAppPortalAccess
+   */
+  url: string
 }

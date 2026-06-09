@@ -4,14 +4,16 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { getTemplateDisplayName } from '@/lib/template-display'
+import { getSandboxDisplayName, getSandboxPublicIdLabel } from '@/lib/sandbox-identity'
 import { formatTimestamp, getRelativeTimeString } from '@/lib/utils'
-import { Sandbox, SandboxDesiredState, SandboxState } from '@boxlite-ai/api-client'
+import { Sandbox, SandboxState } from '@boxlite-ai/api-client'
 import { ColumnDef } from '@tanstack/react-table'
 import { ArrowDown, ArrowUp } from 'lucide-react'
 import React from 'react'
 import { EllipsisWithTooltip } from '../EllipsisWithTooltip'
+import { ResourceChip } from '../ResourceChip'
 import { Checkbox } from '../ui/checkbox'
-import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip'
 import { SandboxState as SandboxStateComponent } from './SandboxState'
 import { SandboxTableActions } from './SandboxTableActions'
 
@@ -23,10 +25,10 @@ interface SortableHeaderProps {
 
 const SortableHeader: React.FC<SortableHeaderProps> = ({ column, label, dataState }) => {
   return (
-    <div
-      role="button"
+    <button
+      type="button"
       onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
-      className="flex items-center"
+      className="flex h-11 w-full cursor-pointer items-center justify-start rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
       {...(dataState && { 'data-state': dataState })}
     >
       {label}
@@ -37,7 +39,7 @@ const SortableHeader: React.FC<SortableHeaderProps> = ({ column, label, dataStat
       ) : (
         <div className="ml-2 w-4 h-4" />
       )}
-    </div>
+    </button>
   )
 }
 
@@ -45,7 +47,6 @@ interface GetColumnsProps {
   handleStart: (id: string) => void
   handleStop: (id: string) => void
   handleDelete: (id: string) => void
-  handleArchive: (id: string) => void
   handleVnc: (id: string) => void
   getWebTerminalUrl: (id: string) => Promise<string | null>
   sandboxIsLoading: Record<string, boolean>
@@ -62,7 +63,6 @@ export function getColumns({
   handleStart,
   handleStop,
   handleDelete,
-  handleArchive,
   handleVnc,
   getWebTerminalUrl,
   sandboxIsLoading,
@@ -122,9 +122,9 @@ export function getColumns({
     },
     {
       id: 'name',
-      size: 320,
+      size: 220,
       enableSorting: true,
-      enableHiding: true,
+      enableHiding: false,
       header: ({ column }) => {
         return <SortableHeader column={column} label="Name" />
       },
@@ -139,12 +139,29 @@ export function getColumns({
       },
     },
     {
+      id: 'boxId',
+      size: 140,
+      enableSorting: true,
+      enableHiding: false,
+      header: ({ column }) => {
+        return <SortableHeader column={column} label="Box ID" />
+      },
+      accessorKey: 'boxId',
+      cell: ({ row }) => {
+        return (
+          <div className="w-full truncate">
+            <span className="truncate block font-mono text-xs">{getSandboxPublicIdLabel(row.original)}</span>
+          </div>
+        )
+      },
+    },
+    {
       id: 'id',
       size: 320,
-      enableSorting: false,
+      enableSorting: true,
       enableHiding: true,
-      header: () => {
-        return <span>UUID</span>
+      header: ({ column }) => {
+        return <SortableHeader column={column} label="Internal UUID" />
       },
       accessorKey: 'id',
       cell: ({ row }) => {
@@ -157,7 +174,7 @@ export function getColumns({
     },
     {
       id: 'state',
-      size: 140,
+      size: 120,
       enableSorting: true,
       enableHiding: false,
       header: ({ column }) => {
@@ -175,29 +192,29 @@ export function getColumns({
       accessorKey: 'state',
     },
     {
-      id: 'snapshot',
+      id: 'template',
       size: 150,
       enableSorting: true,
       enableHiding: false,
       header: ({ column }) => {
-        return <SortableHeader column={column} label="Snapshot" />
+        return <SortableHeader column={column} label="Image" />
       },
       cell: ({ row }) => {
         return (
           <div className="w-full truncate">
-            {row.original.snapshot ? (
-              <EllipsisWithTooltip>{row.original.snapshot}</EllipsisWithTooltip>
+            {row.original.template ? (
+              <EllipsisWithTooltip>{getTemplateDisplayName(row.original.template)}</EllipsisWithTooltip>
             ) : (
               <div className="truncate text-muted-foreground/50">-</div>
             )}
           </div>
         )
       },
-      accessorKey: 'snapshot',
+      accessorKey: 'template',
     },
     {
       id: 'region',
-      size: 100,
+      size: 80,
       enableSorting: true,
       enableHiding: false,
       header: ({ column }) => {
@@ -214,7 +231,7 @@ export function getColumns({
     },
     {
       id: 'resources',
-      size: 190,
+      size: 230,
       enableSorting: false,
       enableHiding: false,
       header: () => {
@@ -222,60 +239,17 @@ export function getColumns({
       },
       cell: ({ row }) => {
         return (
-          <div className="flex items-center gap-2 w-full truncate">
-            <div className="whitespace-nowrap">
-              {row.original.cpu} <span className="text-muted-foreground">vCPU</span>
-            </div>
-            <div className="w-[1px] h-6 bg-muted-foreground/20 rounded-full inline-block"></div>
-            <div className="whitespace-nowrap">
-              {row.original.memory} <span className="text-muted-foreground">GiB</span>
-            </div>
-            <div className="w-[1px] h-6 bg-muted-foreground/20 rounded-full inline-block"></div>
-            <div className="whitespace-nowrap">
-              {row.original.disk} <span className="text-muted-foreground">GiB</span>
-            </div>
+          <div className="flex w-full items-center gap-1.5 truncate">
+            <ResourceChip resource="cpu" value={row.original.cpu} />
+            <ResourceChip resource="memory" value={row.original.memory} />
+            <ResourceChip resource="disk" value={row.original.disk} />
           </div>
         )
       },
     },
     {
-      id: 'labels',
-      size: 110,
-      enableSorting: false,
-      enableHiding: true,
-      header: () => {
-        return <span>Labels</span>
-      },
-      cell: ({ row }) => {
-        const labels = Object.entries(row.original.labels ?? {})
-          .map(([key, value]) => `${key}: ${value}`)
-          .join(', ')
-
-        const labelCount = Object.keys(row.original.labels ?? {}).length
-        return (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              {labelCount > 0 ? (
-                <div className="truncate w-fit bg-blue-100 rounded-sm text-blue-800 dark:bg-blue-950 dark:text-blue-200 px-1">
-                  {labelCount > 0 ? (labelCount === 1 ? '1 label' : `${labelCount} labels`) : '/'}
-                </div>
-              ) : (
-                <div className="truncate max-w-md text-muted-foreground/50">-</div>
-              )}
-            </TooltipTrigger>
-            {labels && (
-              <TooltipContent>
-                <p className="max-w-[300px]">{labels}</p>
-              </TooltipContent>
-            )}
-          </Tooltip>
-        )
-      },
-      accessorFn: (row) => Object.entries(row.labels ?? {}).map(([key, value]) => `${key}: ${value}`),
-    },
-    {
       id: 'lastEvent',
-      size: 120,
+      size: 105,
       enableSorting: true,
       enableHiding: false,
       header: ({ column }) => {
@@ -293,7 +267,7 @@ export function getColumns({
     },
     {
       id: 'createdAt',
-      size: 200,
+      size: 170,
       enableSorting: true,
       enableHiding: false,
       header: ({ column }) => {
@@ -322,7 +296,6 @@ export function getColumns({
             onStart={handleStart}
             onStop={handleStop}
             onDelete={handleDelete}
-            onArchive={handleArchive}
             onVnc={handleVnc}
             onOpenWebTerminal={handleOpenWebTerminal}
             onCreateSshAccess={handleCreateSshAccess}
@@ -338,19 +311,7 @@ export function getColumns({
   return columns
 }
 
-export function getSandboxDisplayName(sandbox: Sandbox): string {
-  // If the sandbox is destroying and the name starts with "DESTROYED_", trim the prefix and timestamp
-  if (sandbox.desiredState === SandboxDesiredState.DESTROYED && sandbox.name.startsWith('DESTROYED_')) {
-    // Remove "DESTROYED_" prefix and everything after the last underscore (timestamp)
-    const withoutPrefix = sandbox.name.substring(10) // Remove "DESTROYED_"
-    const lastUnderscoreIndex = withoutPrefix.lastIndexOf('_')
-    if (lastUnderscoreIndex !== -1) {
-      return withoutPrefix.substring(0, lastUnderscoreIndex)
-    }
-    return withoutPrefix
-  }
-  return sandbox.name
-}
+export { getSandboxDisplayName, getSandboxPublicIdLabel }
 
 export function getSandboxLastEvent(sandbox: Sandbox): { date: Date; relativeTimeString: string } {
   return getRelativeTimeString(sandbox.updatedAt)

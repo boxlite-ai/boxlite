@@ -10,7 +10,6 @@ import { User, UserSSHKeyPair } from './user.entity'
 import { DataSource, ILike, In, Repository } from 'typeorm'
 import { CreateUserDto } from './dto/create-user.dto'
 import * as crypto from 'crypto'
-import * as forge from 'node-forge'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { UserEvents } from './constants/user-events.constant'
 import { UpdateUserDto } from './dto/update-user.dto'
@@ -127,18 +126,48 @@ export class UserService {
           if (error) {
             reject(error)
           } else {
-            const publicKeySShEncoded = forge.ssh.publicKeyToOpenSSH(forge.pki.publicKeyFromPem(publicKey), comment)
-
-            const privateKeySShEncoded = forge.ssh.privateKeyToOpenSSH(forge.pki.privateKeyFromPem(privateKey))
-
             resolve({
-              publicKey: publicKeySShEncoded,
-              privateKey: privateKeySShEncoded,
+              publicKey: this.encodeOpenSshRsaPublicKey(publicKey, comment),
+              privateKey,
             })
           }
         },
       )
     })
+  }
+
+  private encodeOpenSshRsaPublicKey(publicKeyPem: string, comment: string): string {
+    const publicKey = crypto.createPublicKey(publicKeyPem)
+    const jwk = publicKey.export({ format: 'jwk' }) as { e?: string; n?: string }
+
+    if (!jwk.e || !jwk.n) {
+      throw new Error('Failed to export RSA public key as JWK')
+    }
+
+    const wireKey = Buffer.concat([
+      this.encodeSshString(Buffer.from('ssh-rsa')),
+      this.encodeSshMpint(this.base64UrlToBuffer(jwk.e)),
+      this.encodeSshMpint(this.base64UrlToBuffer(jwk.n)),
+    ])
+
+    return `ssh-rsa ${wireKey.toString('base64')} ${comment}`
+  }
+
+  private encodeSshString(value: Buffer): Buffer {
+    const length = Buffer.alloc(4)
+    length.writeUInt32BE(value.length, 0)
+    return Buffer.concat([length, value])
+  }
+
+  private encodeSshMpint(value: Buffer): Buffer {
+    const needsSignPadding = value.length > 0 && (value[0] & 0x80) !== 0
+    const normalized = needsSignPadding ? Buffer.concat([Buffer.from([0]), value]) : value
+    return this.encodeSshString(normalized)
+  }
+
+  private base64UrlToBuffer(value: string): Buffer {
+    const base64 = value.replace(/-/g, '+').replace(/_/g, '/')
+    return Buffer.from(base64.padEnd(Math.ceil(base64.length / 4) * 4, '='), 'base64')
   }
 
   // TODO: discuss if we need separate methods for updating specific fields

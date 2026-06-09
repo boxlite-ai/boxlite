@@ -55,12 +55,21 @@ func (c *Client) Resize(ctx context.Context, sandboxId string, resizeDto dto.Res
 		boxlite.WithNetwork(boxlite.NetworkSpec{Mode: boxlite.NetworkModeEnabled}),
 	}
 
+	toolboxHostPort, err := c.reserveToolboxHostPort(ctx, sandboxId)
+	if err != nil {
+		return fmt.Errorf("failed to reserve toolbox port during resize: %w", err)
+	}
+	opts = append(opts, boxlite.WithPort(ToolboxGuestPort, toolboxHostPort))
+
 	if resizeDto.Disk > 0 {
 		opts = append(opts, boxlite.WithDiskSize(int(resizeDto.Disk)))
 	}
 
 	newBox, err := c.runtime.Create(ctx, info.Image, opts...)
 	if err != nil {
+		if cleanupErr := c.removeToolboxPortRecord(ctx, sandboxId); cleanupErr != nil {
+			c.logger.Warn("failed to remove toolbox port record after resize create failure", "sandbox", sandboxId, "error", cleanupErr)
+		}
 		return fmt.Errorf("failed to recreate box during resize: %w", err)
 	}
 
@@ -83,14 +92,14 @@ func (c *Client) RecoverSandbox(ctx context.Context, sandboxId string, recoverDt
 		c.logger.Warn("failed to destroy during recover", "error", err)
 	}
 
-	snapshot := "alpine:latest"
+	artifactRef := "alpine:latest"
 	if recoverDto.Snapshot != nil {
-		snapshot = *recoverDto.Snapshot
+		artifactRef = *recoverDto.Snapshot
 	}
 
 	createDto := dto.CreateSandboxDTO{
 		Id:               sandboxId,
-		Snapshot:         snapshot,
+		ArtifactRef:      artifactRef,
 		OsUser:           recoverDto.OsUser,
 		CpuQuota:         recoverDto.CpuQuota,
 		MemoryQuota:      recoverDto.MemoryQuota,
@@ -114,11 +123,11 @@ func (c *Client) CreateBackup(ctx context.Context, sandboxId string, backupDto d
 	return errdefs.ErrNotImplemented.WithMessage("backup is not supported by the BoxLite Go SDK")
 }
 
-// BuildSnapshot builds an image from a Dockerfile.
+// BuildArtifact builds a runtime artifact from a Dockerfile.
 // TODO: Implement OCI builder integration.
-func (c *Client) BuildSnapshot(ctx context.Context, req dto.BuildSnapshotRequestDTO) error {
-	c.logger.Warn("build snapshot not yet implemented in BoxLite", "snapshot", req.Snapshot)
-	return errdefs.ErrNotImplemented.WithMessage("snapshot build is not supported by the BoxLite Go SDK")
+func (c *Client) BuildArtifact(ctx context.Context, req dto.BuildArtifactRequestDTO) error {
+	c.logger.Warn("build artifact not yet implemented in BoxLite", "artifactRef", req.ArtifactRef)
+	return errdefs.ErrNotImplemented.WithMessage("artifact build is not supported by the BoxLite Go SDK")
 }
 
 // GetImageInfo returns metadata about a cached image.

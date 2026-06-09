@@ -10,7 +10,7 @@ Demonstrates:
 Environment variables:
     BOXLITE_REST_URL          Server URL (required)
     BOXLITE_API_KEY           Long-lived API key
-    BOXLITE_REST_PREFIX       API version prefix (default: v1)
+    BOXLITE_REST_PATH_PREFIX  Routing prefix for multi-tenant deployments
 
 Usage:
     BOXLITE_REST_URL=http://localhost:8100 \

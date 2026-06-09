@@ -38,8 +38,8 @@ export function TierComparisonTable({
         'Memory (GiB)',
         'Storage (GiB)',
         'API Requests/min',
-        'Sandbox Creation/min',
-        'Sandbox Lifecycle/min',
+        'Box Creation/min',
+        'Box Lifecycle/min',
       ]}
       currentRow={(currentTier?.tier || 1) - 1}
       data={buildTierComparisonTableData(tiers || [])}

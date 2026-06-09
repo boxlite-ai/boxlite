@@ -167,7 +167,7 @@ export function RegionTable({
                 icon={<MapPinned className="w-8 h-8" />}
                 description={
                   <div className="space-y-2">
-                    <p>Create regions for grouping runners and sandboxes.</p>
+                    <p>Create regions for grouping runners and boxes.</p>
                   </div>
                 }
               />

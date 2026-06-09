@@ -10,6 +10,6 @@ use (
 	./otel-collector/exporter
 	./proxy
 	./runner
-	./snapshot-manager
+	./artifact-registry
 	./ssh-gateway
 )

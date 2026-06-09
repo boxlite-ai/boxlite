@@ -12,13 +12,12 @@
  * Do not edit the class manually.
  */
 
-
 // May contain unused imports in some cases
 // @ts-ignore
-import type { RunnerMetrics } from './runner-metrics';
+import type { RunnerMetrics } from './runner-metrics'
 // May contain unused imports in some cases
 // @ts-ignore
-import type { RunnerServiceInfo } from './runner-service-info';
+import type { RunnerServiceInfo } from './runner-service-info'
 
 /**
  *
@@ -26,22 +25,22 @@ import type { RunnerServiceInfo } from './runner-service-info';
  * @interface RunnerInfoResponseDTO
  */
 export interface RunnerInfoResponseDTO {
-    /**
-     *
-     * @type {string}
-     * @memberof RunnerInfoResponseDTO
-     */
-    'appVersion'?: string;
-    /**
-     *
-     * @type {RunnerMetrics}
-     * @memberof RunnerInfoResponseDTO
-     */
-    'metrics'?: RunnerMetrics;
-    /**
-     *
-     * @type {Array<RunnerServiceInfo>}
-     * @memberof RunnerInfoResponseDTO
-     */
-    'serviceHealth'?: Array<RunnerServiceInfo>;
+  /**
+   *
+   * @type {string}
+   * @memberof RunnerInfoResponseDTO
+   */
+  appVersion?: string
+  /**
+   *
+   * @type {RunnerMetrics}
+   * @memberof RunnerInfoResponseDTO
+   */
+  metrics?: RunnerMetrics
+  /**
+   *
+   * @type {Array<RunnerServiceInfo>}
+   * @memberof RunnerInfoResponseDTO
+   */
+  serviceHealth?: Array<RunnerServiceInfo>
 }

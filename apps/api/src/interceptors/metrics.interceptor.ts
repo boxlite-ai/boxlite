@@ -19,8 +19,8 @@ import { SandboxDto } from '../sandbox/dto/sandbox.dto'
 import { DockerRegistryDto } from '../docker-registry/dto/docker-registry.dto'
 import { CreateSandboxDto } from '../sandbox/dto/create-sandbox.dto'
 import { Request } from 'express'
-import { CreateSnapshotDto } from '../sandbox/dto/create-snapshot.dto'
-import { SnapshotDto } from '../sandbox/dto/snapshot.dto'
+import { CreateBoxTemplateDto } from '../sandbox/dto/create-box-template.dto'
+import { BoxTemplateDto } from '../sandbox/dto/box-template.dto'
 import { CreateOrganizationDto } from '../organization/dto/create-organization.dto'
 import { UpdateOrganizationQuotaDto } from '../organization/dto/update-organization-quota.dto'
 import { OrganizationDto } from '../organization/dto/organization.dto'
@@ -38,7 +38,10 @@ import { TypedConfigService } from '../config/typed-config.service'
 import { UpdateOrganizationRegionQuotaDto } from '../organization/dto/update-organization-region-quota.dto'
 import { UpdateOrganizationDefaultRegionDto } from '../organization/dto/update-organization-default-region.dto'
 
-type RequestWithUser = Request & { user?: { userId: string; organizationId: string } }
+type RequestWithUser = Request & {
+  user?: { userId: string; organizationId: string }
+  params: Record<string, string>
+}
 type CommonCaptureProps = {
   organizationId?: string
   distinctId: string
@@ -132,14 +135,14 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
           case '/api/api-keys':
             this.captureCreateApiKey(props)
             break
-          case '/api/snapshots':
-            this.captureCreateSnapshot(props, request.body, response)
+          case '/api/templates':
+            this.captureCreateTemplate(props, request.body, response)
             break
-          case '/api/snapshots/:snapshotId/activate':
-            this.captureActivateSnapshot(props, request.params.snapshotId)
+          case '/api/templates/:id/activate':
+            this.captureActivateTemplate(props, request.params.id)
             break
-          case '/api/snapshots/:snapshotId/deactivate':
-            this.captureDeactivateSnapshot(props, request.params.snapshotId)
+          case '/api/templates/:id/deactivate':
+            this.captureDeactivateTemplate(props, request.params.id)
             break
           case '/api/docker-registry':
             this.captureCreateDockerRegistry(props, response)
@@ -152,6 +155,7 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
             break
           case '/api/sandbox/:sandboxIdOrName/start':
           case '/api/workspace/:workspaceId/start':
+          case '/api/v1/boxes/:boxId/start':
           case '/api/v1/:prefix/boxes/:boxId/start':
             this.captureStartSandbox(
               props,
@@ -160,6 +164,7 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
             break
           case '/api/sandbox/:sandboxIdOrName/stop':
           case '/api/workspace/:workspaceId/stop':
+          case '/api/v1/boxes/:boxId/stop':
           case '/api/v1/:prefix/boxes/:boxId/stop':
             this.captureStopSandbox(
               props,
@@ -169,10 +174,6 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
             break
           case '/api/sandbox/:sandboxIdOrName/resize':
             this.captureResizeSandbox(props, request.params.sandboxIdOrName, request.body)
-            break
-          case '/api/sandbox/:sandboxIdOrName/archive':
-          case '/api/workspace/:workspaceId/archive':
-            this.captureArchiveSandbox(props, request.params.sandboxIdOrName || request.params.workspaceId)
             break
           case '/api/sandbox/:sandboxIdOrName/backup':
             this.captureCreateBackup(props, request.params.sandboxIdOrName)
@@ -188,14 +189,6 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
           case '/api/sandbox/:sandboxIdOrName/autostop/:interval':
           case '/api/workspace/:workspaceId/autostop/:interval':
             this.captureSetAutostopInterval(
-              props,
-              request.params.sandboxIdOrName || request.params.workspaceId,
-              parseInt(request.params.interval),
-            )
-            break
-          case '/api/sandbox/:sandboxIdOrName/autoarchive/:interval':
-          case '/api/workspace/:workspaceId/autoarchive/:interval':
-            this.captureSetAutoArchiveInterval(
               props,
               request.params.sandboxIdOrName || request.params.workspaceId,
               parseInt(request.params.interval),
@@ -242,14 +235,15 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
         switch (request.route.path) {
           case '/api/sandbox/:sandboxIdOrName':
           case '/api/workspace/:workspaceId':
+          case '/api/v1/boxes/:boxId':
           case '/api/v1/:prefix/boxes/:boxId':
             this.captureDeleteSandbox(
               props,
               request.params.sandboxIdOrName || request.params.workspaceId || request.params.boxId,
             )
             break
-          case '/api/snapshots/:snapshotId':
-            this.captureDeleteSnapshot(props, request.params.snapshotId)
+          case '/api/templates/:id':
+            this.captureDeleteTemplate(props, request.params.id)
             break
           case '/api/organizations/:organizationId':
             this.captureDeleteOrganization(props, request.params.organizationId)
@@ -485,36 +479,36 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
     })
   }
 
-  private captureCreateSnapshot(props: CommonCaptureProps, request: CreateSnapshotDto, response: SnapshotDto) {
-    this.capture('api_snapshot_created', props, 'api_snapshot_creation_failed', {
-      snapshot_id: response.id,
-      snapshot_name: request.name,
-      snapshot_image_name: request.imageName,
-      snapshot_entrypoint: request.entrypoint,
-      snapshot_cpu: request.cpu,
-      snapshot_gpu: request.gpu,
-      snapshot_memory: request.memory,
-      snapshot_disk: request.disk,
-      snapshot_is_build: request.buildInfo ? true : false,
-      snapshot_build_info_context_hashes_length: request.buildInfo?.contextHashes?.length,
+  private captureCreateTemplate(props: CommonCaptureProps, request: CreateBoxTemplateDto, response: BoxTemplateDto) {
+    this.capture('api_template_created', props, 'api_template_creation_failed', {
+      template_id: response.id,
+      template_name: request.name,
+      template_image_name: request.imageName,
+      template_entrypoint: request.entrypoint,
+      template_cpu: request.cpu,
+      template_gpu: request.gpu,
+      template_memory: request.memory,
+      template_disk: request.disk,
+      template_is_build: request.buildInfo ? true : false,
+      template_build_info_context_hashes_length: request.buildInfo?.contextHashes?.length,
     })
   }
 
-  private captureActivateSnapshot(props: CommonCaptureProps, snapshotId: string) {
-    this.capture('api_snapshot_activated', props, 'api_snapshot_activation_failed', {
-      snapshot_id: snapshotId,
+  private captureActivateTemplate(props: CommonCaptureProps, templateId: string) {
+    this.capture('api_template_activated', props, 'api_template_activation_failed', {
+      template_id: templateId,
     })
   }
 
-  private captureDeactivateSnapshot(props: CommonCaptureProps, snapshotId: string) {
-    this.capture('api_snapshot_deactivated', props, 'api_snapshot_deactivation_failed', {
-      snapshot_id: snapshotId,
+  private captureDeactivateTemplate(props: CommonCaptureProps, templateId: string) {
+    this.capture('api_template_deactivated', props, 'api_template_deactivation_failed', {
+      template_id: templateId,
     })
   }
 
-  private captureDeleteSnapshot(props: CommonCaptureProps, snapshotId: string) {
-    this.capture('api_snapshot_deleted', props, 'api_snapshot_deletion_failed', {
-      snapshot_id: snapshotId,
+  private captureDeleteTemplate(props: CommonCaptureProps, templateId: string) {
+    this.capture('api_template_deleted', props, 'api_template_deletion_failed', {
+      template_id: templateId,
     })
   }
 
@@ -525,8 +519,8 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
       sandbox_id: response.id,
       sandbox_name_request: request.name,
       sandbox_name: response.name,
-      sandbox_snapshot_request: request.snapshot,
-      sandbox_snapshot: response.snapshot,
+      sandbox_template_request: request.templateId,
+      sandbox_template: response.template,
       sandbox_user_request: request.user,
       sandbox_user: response.user,
       sandbox_cpu_request: request.cpu,
@@ -541,8 +535,6 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
       sandbox_target: response.target,
       sandbox_auto_stop_interval_min_request: request.autoStopInterval,
       sandbox_auto_stop_interval_min: response.autoStopInterval,
-      sandbox_auto_archive_interval_min_request: request.autoArchiveInterval,
-      sandbox_auto_archive_interval_min: response.autoArchiveInterval,
       sandbox_auto_delete_interval_min_request: request.autoDeleteInterval,
       sandbox_auto_delete_interval_min: response.autoDeleteInterval,
       sandbox_public_request: request.public,
@@ -575,8 +567,8 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
 
     const records = {
       sandbox_id: response.id,
-      sandbox_snapshot_request: request.image,
-      sandbox_snapshot: response.snapshot,
+      sandbox_template_request: request.image,
+      sandbox_template: response.template,
       sandbox_user_request: request.user,
       sandbox_user: response.user,
       sandbox_cpu_request: request.cpu,
@@ -591,8 +583,6 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
       sandbox_target: response.target,
       sandbox_auto_stop_interval_min_request: request.autoStopInterval,
       sandbox_auto_stop_interval_min: response.autoStopInterval,
-      sandbox_auto_archive_interval_min_request: request.autoArchiveInterval,
-      sandbox_auto_archive_interval_min: response.autoArchiveInterval,
       sandbox_public_request: request.public,
       sandbox_public: response.public,
       sandbox_labels_request: request.labels,
@@ -642,12 +632,6 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
     })
   }
 
-  private captureArchiveSandbox(props: CommonCaptureProps, sandboxId: string) {
-    this.capture('api_sandbox_archived', props, 'api_sandbox_archive_failed', {
-      sandbox_id: sandboxId,
-    })
-  }
-
   private captureCreateBackup(props: CommonCaptureProps, sandboxId: string) {
     this.capture('api_sandbox_backup_created', props, 'api_sandbox_backup_creation_failed', {
       sandbox_id: sandboxId,
@@ -665,13 +649,6 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
     this.capture('api_sandbox_autostop_interval_updated', props, 'api_sandbox_autostop_interval_update_failed', {
       sandbox_id: sandboxId,
       sandbox_autostop_interval: interval,
-    })
-  }
-
-  private captureSetAutoArchiveInterval(props: CommonCaptureProps, sandboxId: string, interval: number) {
-    this.capture('api_sandbox_autoarchive_interval_updated', props, 'api_sandbox_autoarchive_interval_update_failed', {
-      sandbox_id: sandboxId,
-      sandbox_autoarchive_interval: interval,
     })
   }
 
@@ -755,8 +732,8 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
       organization_max_cpu_per_sandbox: request.maxCpuPerSandbox,
       organization_max_memory_per_sandbox_mb: request.maxMemoryPerSandbox ? request.maxMemoryPerSandbox * 1024 : null,
       organization_max_disk_per_sandbox_gb: request.maxDiskPerSandbox,
-      organization_snapshot_quota: request.snapshotQuota,
-      organization_max_snapshot_size_mb: request.maxSnapshotSize ? request.maxSnapshotSize * 1024 : null,
+      organization_template_quota: request.templateQuota,
+      organization_max_template_size_mb: request.maxTemplateSize ? request.maxTemplateSize * 1024 : null,
       organization_volume_quota: request.volumeQuota,
     })
   }

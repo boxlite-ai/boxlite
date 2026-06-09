@@ -12,18 +12,16 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  *
  * @export
  * @interface IsRecoverableResponse
  */
 export interface IsRecoverableResponse {
-    /**
-     *
-     * @type {boolean}
-     * @memberof IsRecoverableResponse
-     */
-    'recoverable'?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof IsRecoverableResponse
+   */
+  recoverable?: boolean
 }

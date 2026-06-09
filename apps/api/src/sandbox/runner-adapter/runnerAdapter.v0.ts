@@ -13,25 +13,25 @@ import {
   RunnerAdapter,
   RunnerInfo,
   RunnerSandboxInfo,
-  RunnerSnapshotInfo,
+  RunnerArtifactInfo,
   StartSandboxResponse,
-  SnapshotDigestResponse,
+  ArtifactDigestResponse,
 } from './runnerAdapter'
-import { SnapshotStateError } from '../errors/snapshot-state-error'
+import { RuntimeArtifactStateError } from '../errors/runtime-artifact-state-error'
 import { Runner } from '../entities/runner.entity'
 import {
   Configuration,
   SandboxApi,
   EnumsSandboxState,
-  SnapshotsApi,
+  ArtifactsApi,
   EnumsBackupState,
   DefaultApi,
   CreateSandboxDTO,
-  BuildSnapshotRequestDTO,
+  BuildArtifactRequestDTO,
   CreateBackupDTO,
-  PullSnapshotRequestDTO,
-  ToolboxApi,
+  PullArtifactRequestDTO,
   UpdateNetworkSettingsDTO,
+  InspectArtifactInRegistryRequest,
   RecoverSandboxDTO,
 } from '@boxlite-ai/runner-api-client'
 import { Sandbox } from '../entities/sandbox.entity'
@@ -50,9 +50,8 @@ const RETRYABLE_NETWORK_ERROR_CODES = ['ECONNRESET', 'ETIMEDOUT']
 export class RunnerAdapterV0 implements RunnerAdapter {
   private readonly logger = new Logger(RunnerAdapterV0.name)
   private sandboxApiClient: SandboxApi
-  private snapshotApiClient: SnapshotsApi
+  private artifactApiClient: ArtifactsApi
   private runnerApiClient: DefaultApi
-  private toolboxApiClient: ToolboxApi
 
   private convertSandboxState(state: EnumsSandboxState): SandboxState {
     switch (state) {
@@ -74,8 +73,8 @@ export class RunnerAdapterV0 implements RunnerAdapter {
         return SandboxState.STOPPING
       case EnumsSandboxState.SandboxStateError:
         return SandboxState.ERROR
-      case EnumsSandboxState.SandboxStatePullingSnapshot:
-        return SandboxState.PULLING_SNAPSHOT
+      case EnumsSandboxState.SandboxStatePullingArtifact:
+        return SandboxState.PULLING_ARTIFACT
       default:
         return SandboxState.UNKNOWN
     }
@@ -154,9 +153,8 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     }
 
     this.sandboxApiClient = new SandboxApi(new Configuration(), '', axiosInstance)
-    this.snapshotApiClient = new SnapshotsApi(new Configuration(), '', axiosInstance)
+    this.artifactApiClient = new ArtifactsApi(new Configuration(), '', axiosInstance)
     this.runnerApiClient = new DefaultApi(new Configuration(), '', axiosInstance)
-    this.toolboxApiClient = new ToolboxApi(new Configuration(), '', axiosInstance)
   }
 
   async healthCheck(signal?: AbortSignal): Promise<void> {
@@ -188,7 +186,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
 
   async createSandbox(
     sandbox: Sandbox,
-    snapshotRef: string,
+    artifactRef: string,
     registry?: DockerRegistry,
     entrypoint?: string[],
     metadata?: { [key: string]: string },
@@ -197,8 +195,9 @@ export class RunnerAdapterV0 implements RunnerAdapter {
   ): Promise<StartSandboxResponse | undefined> {
     const createSandboxDto: CreateSandboxDTO = {
       id: sandbox.id,
+      boxId: sandbox.boxId,
       userId: sandbox.organizationId,
-      snapshot: snapshotRef,
+      artifactRef,
       osUser: sandbox.osUser,
       cpuQuota: sandbox.cpu,
       gpuQuota: sandbox.gpu,
@@ -208,7 +207,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       registry: registry
         ? {
             project: registry.project,
-            url: registry.url.replace(/^(https?:\/\/)/, ''),
+            url: registry.url,
             username: registry.username,
             password: registry.password,
           }
@@ -221,7 +220,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       })),
       networkBlockAll: sandbox.networkBlockAll,
       networkAllowList: sandbox.networkAllowList,
-      metadata: metadata,
+      metadata: { ...(metadata ?? {}), boxId: sandbox.boxId },
       authToken: sandbox.authToken,
       otelEndpoint,
       skipStart: skipStart,
@@ -273,7 +272,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     if (registry) {
       request.registry = {
         project: registry.project,
-        url: registry.url.replace(/^(https?:\/\/)/, ''),
+        url: registry.url,
         username: registry.username,
         password: registry.password,
       }
@@ -282,15 +281,15 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     await this.sandboxApiClient.createBackup(sandbox.id, request)
   }
 
-  async buildSnapshot(
+  async buildArtifact(
     buildInfo: BuildInfo,
     organizationId?: string,
     sourceRegistries?: DockerRegistry[],
     registry?: DockerRegistry,
     pushToInternalRegistry?: boolean,
   ): Promise<void> {
-    const request: BuildSnapshotRequestDTO = {
-      snapshot: buildInfo.snapshotRef,
+    const request: BuildArtifactRequestDTO = {
+      artifactRef: buildInfo.artifactRef,
       dockerfile: buildInfo.dockerfileContent,
       organizationId: organizationId,
       context: buildInfo.contextHashes,
@@ -300,7 +299,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     if (sourceRegistries) {
       request.sourceRegistries = sourceRegistries.map((sourceRegistry) => ({
         project: sourceRegistry.project,
-        url: sourceRegistry.url.replace(/^(https?:\/\/)/, ''),
+        url: sourceRegistry.url,
         username: sourceRegistry.username,
         password: sourceRegistry.password,
       }))
@@ -309,35 +308,35 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     if (registry) {
       request.registry = {
         project: registry.project,
-        url: registry.url.replace(/^(https?:\/\/)/, ''),
+        url: registry.url,
         username: registry.username,
         password: registry.password,
       }
     }
 
-    await this.snapshotApiClient.buildSnapshot(request)
+    await this.artifactApiClient.buildArtifact(request)
   }
 
-  async removeSnapshot(snapshotName: string): Promise<void> {
-    await this.snapshotApiClient.removeSnapshot(snapshotName)
+  async removeArtifact(artifactRef: string): Promise<void> {
+    await this.artifactApiClient.removeArtifact(artifactRef)
   }
 
-  async pullSnapshot(
-    snapshotName: string,
+  async pullArtifact(
+    artifactRef: string,
     registry?: DockerRegistry,
     destinationRegistry?: DockerRegistry,
     destinationRef?: string,
     newTag?: string,
   ): Promise<void> {
-    const request: PullSnapshotRequestDTO = {
-      snapshot: snapshotName,
+    const request: PullArtifactRequestDTO = {
+      artifactRef,
       newTag,
     }
 
     if (registry) {
       request.registry = {
         project: registry.project,
-        url: registry.url.replace(/^(https?:\/\/)/, ''),
+        url: registry.url,
         username: registry.username,
         password: registry.password,
       }
@@ -346,7 +345,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     if (destinationRegistry) {
       request.destinationRegistry = {
         project: destinationRegistry.project,
-        url: destinationRegistry.url.replace(/^(https?:\/\/)/, ''),
+        url: destinationRegistry.url,
         username: destinationRegistry.username,
         password: destinationRegistry.password,
       }
@@ -356,17 +355,17 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       request.destinationRef = destinationRef
     }
 
-    await this.snapshotApiClient.pullSnapshot(request)
+    await this.artifactApiClient.pullArtifact(request)
   }
 
-  async snapshotExists(snapshotName: string): Promise<boolean> {
-    const response = await this.snapshotApiClient.snapshotExists(snapshotName)
+  async artifactExists(artifactRef: string): Promise<boolean> {
+    const response = await this.artifactApiClient.artifactExists(artifactRef)
     return response.data.exists
   }
 
-  async getSnapshotInfo(snapshotName: string): Promise<RunnerSnapshotInfo> {
+  async getArtifactInfo(artifactRef: string): Promise<RunnerArtifactInfo> {
     try {
-      const response = await this.snapshotApiClient.getSnapshotInfo(snapshotName)
+      const response = await this.artifactApiClient.getArtifactInfo(artifactRef)
 
       return {
         name: response.data.name || '',
@@ -377,24 +376,26 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       }
     } catch (err) {
       if (err instanceof RunnerApiError && err.statusCode === 422) {
-        throw new SnapshotStateError(err.message)
+        throw new RuntimeArtifactStateError(err.message)
       }
       throw err
     }
   }
 
-  async inspectSnapshotInRegistry(snapshotName: string, registry?: DockerRegistry): Promise<SnapshotDigestResponse> {
-    const response = await this.snapshotApiClient.inspectSnapshotInRegistry({
-      snapshot: snapshotName,
+  async inspectArtifactInRegistry(artifactRef: string, registry?: DockerRegistry): Promise<ArtifactDigestResponse> {
+    const request: InspectArtifactInRegistryRequest = {
+      artifactRef,
       registry: registry
         ? {
             project: registry.project,
-            url: registry.url.replace(/^(https?:\/\/)/, ''),
+            url: registry.url,
             username: registry.username,
             password: registry.password,
           }
         : undefined,
-    })
+    }
+
+    const response = await this.artifactApiClient.inspectArtifactInRegistry(request)
 
     return {
       hash: response.data.hash,
@@ -420,7 +421,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
   async recoverSandbox(sandbox: Sandbox): Promise<void> {
     const recoverSandboxDTO: RecoverSandboxDTO = {
       userId: sandbox.organizationId,
-      snapshot: sandbox.snapshot,
+      snapshot: sandbox.template,
       osUser: sandbox.osUser,
       cpuQuota: sandbox.cpu,
       gpuQuota: sandbox.gpu,

@@ -20,7 +20,7 @@ import (
 type RunnerInstanceConfig struct {
 	Logger             *slog.Logger
 	BackupInfoCache    *cache.BackupInfoCache
-	SnapshotErrorCache *cache.SnapshotErrorCache
+	ArtifactErrorCache *cache.ArtifactErrorCache
 	Boxlite            *blclient.Client
 	MetricsCollector   *metrics.Collector
 	SandboxService     *services.SandboxService
@@ -29,7 +29,7 @@ type RunnerInstanceConfig struct {
 type Runner struct {
 	Logger             *slog.Logger
 	BackupInfoCache    *cache.BackupInfoCache
-	SnapshotErrorCache *cache.SnapshotErrorCache
+	ArtifactErrorCache *cache.ArtifactErrorCache
 	Boxlite            *blclient.Client
 	MetricsCollector   *metrics.Collector
 	SandboxService     *services.SandboxService
@@ -55,7 +55,7 @@ func GetInstance(config *RunnerInstanceConfig) (*Runner, error) {
 		runner = &Runner{
 			Logger:             logger.With(slog.String("component", "runner")),
 			BackupInfoCache:    config.BackupInfoCache,
-			SnapshotErrorCache: config.SnapshotErrorCache,
+			ArtifactErrorCache: config.ArtifactErrorCache,
 			Boxlite:            config.Boxlite,
 			SandboxService:     config.SandboxService,
 			MetricsCollector:   config.MetricsCollector,

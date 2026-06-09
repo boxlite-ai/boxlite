@@ -21,14 +21,16 @@ var _ MappedNullable = &Sandbox{}
 
 // Sandbox struct for Sandbox
 type Sandbox struct {
-	// The ID of the sandbox
+	// The internal UUID of the sandbox
 	Id string `json:"id"`
+	// The public Box ID shown to users and SDK clients
+	BoxId string `json:"boxId"`
 	// The organization ID of the sandbox
 	OrganizationId string `json:"organizationId"`
 	// The name of the sandbox
 	Name string `json:"name"`
-	// The snapshot used for the sandbox
-	Snapshot *string `json:"snapshot,omitempty"`
+	// The template used for the sandbox
+	Template *string `json:"template,omitempty"`
 	// The user associated with the project
 	User string `json:"user"`
 	// Environment variables for the sandbox
@@ -65,8 +67,6 @@ type Sandbox struct {
 	BackupCreatedAt *string `json:"backupCreatedAt,omitempty"`
 	// Auto-stop interval in minutes (0 means disabled)
 	AutoStopInterval *float32 `json:"autoStopInterval,omitempty"`
-	// Auto-archive interval in minutes
-	AutoArchiveInterval *float32 `json:"autoArchiveInterval,omitempty"`
 	// Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping)
 	AutoDeleteInterval *float32 `json:"autoDeleteInterval,omitempty"`
 	// Array of volumes attached to the sandbox
@@ -85,7 +85,7 @@ type Sandbox struct {
 	// The runner ID of the sandbox
 	RunnerId *string `json:"runnerId,omitempty"`
 	// The toolbox proxy URL for the sandbox
-	ToolboxProxyUrl string `json:"toolboxProxyUrl"`
+	ToolboxProxyUrl      string `json:"toolboxProxyUrl"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -95,9 +95,10 @@ type _Sandbox Sandbox
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewSandbox(id string, organizationId string, name string, user string, env map[string]string, labels map[string]string, public bool, networkBlockAll bool, target string, cpu float32, gpu float32, memory float32, disk float32, toolboxProxyUrl string) *Sandbox {
+func NewSandbox(id string, boxId string, organizationId string, name string, user string, env map[string]string, labels map[string]string, public bool, networkBlockAll bool, target string, cpu float32, gpu float32, memory float32, disk float32, toolboxProxyUrl string) *Sandbox {
 	this := Sandbox{}
 	this.Id = id
+	this.BoxId = boxId
 	this.OrganizationId = organizationId
 	this.Name = name
 	this.User = user
@@ -144,6 +145,30 @@ func (o *Sandbox) GetIdOk() (*string, bool) {
 // SetId sets field value
 func (o *Sandbox) SetId(v string) {
 	o.Id = v
+}
+
+// GetBoxId returns the BoxId field value
+func (o *Sandbox) GetBoxId() string {
+	if o == nil {
+		var ret string
+		return ret
+	}
+
+	return o.BoxId
+}
+
+// GetBoxIdOk returns a tuple with the BoxId field value
+// and a boolean to check if the value has been set.
+func (o *Sandbox) GetBoxIdOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.BoxId, true
+}
+
+// SetBoxId sets field value
+func (o *Sandbox) SetBoxId(v string) {
+	o.BoxId = v
 }
 
 // GetOrganizationId returns the OrganizationId field value
@@ -194,36 +219,36 @@ func (o *Sandbox) SetName(v string) {
 	o.Name = v
 }
 
-// GetSnapshot returns the Snapshot field value if set, zero value otherwise.
-func (o *Sandbox) GetSnapshot() string {
-	if o == nil || IsNil(o.Snapshot) {
+// GetTemplate returns the Template field value if set, zero value otherwise.
+func (o *Sandbox) GetTemplate() string {
+	if o == nil || IsNil(o.Template) {
 		var ret string
 		return ret
 	}
-	return *o.Snapshot
+	return *o.Template
 }
 
-// GetSnapshotOk returns a tuple with the Snapshot field value if set, nil otherwise
+// GetTemplateOk returns a tuple with the Template field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *Sandbox) GetSnapshotOk() (*string, bool) {
-	if o == nil || IsNil(o.Snapshot) {
+func (o *Sandbox) GetTemplateOk() (*string, bool) {
+	if o == nil || IsNil(o.Template) {
 		return nil, false
 	}
-	return o.Snapshot, true
+	return o.Template, true
 }
 
-// HasSnapshot returns a boolean if a field has been set.
-func (o *Sandbox) HasSnapshot() bool {
-	if o != nil && !IsNil(o.Snapshot) {
+// HasTemplate returns a boolean if a field has been set.
+func (o *Sandbox) HasTemplate() bool {
+	if o != nil && !IsNil(o.Template) {
 		return true
 	}
 
 	return false
 }
 
-// SetSnapshot gets a reference to the given string and assigns it to the Snapshot field.
-func (o *Sandbox) SetSnapshot(v string) {
-	o.Snapshot = &v
+// SetTemplate gets a reference to the given string and assigns it to the Template field.
+func (o *Sandbox) SetTemplate(v string) {
+	o.Template = &v
 }
 
 // GetUser returns the User field value
@@ -722,38 +747,6 @@ func (o *Sandbox) SetAutoStopInterval(v float32) {
 	o.AutoStopInterval = &v
 }
 
-// GetAutoArchiveInterval returns the AutoArchiveInterval field value if set, zero value otherwise.
-func (o *Sandbox) GetAutoArchiveInterval() float32 {
-	if o == nil || IsNil(o.AutoArchiveInterval) {
-		var ret float32
-		return ret
-	}
-	return *o.AutoArchiveInterval
-}
-
-// GetAutoArchiveIntervalOk returns a tuple with the AutoArchiveInterval field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *Sandbox) GetAutoArchiveIntervalOk() (*float32, bool) {
-	if o == nil || IsNil(o.AutoArchiveInterval) {
-		return nil, false
-	}
-	return o.AutoArchiveInterval, true
-}
-
-// HasAutoArchiveInterval returns a boolean if a field has been set.
-func (o *Sandbox) HasAutoArchiveInterval() bool {
-	if o != nil && !IsNil(o.AutoArchiveInterval) {
-		return true
-	}
-
-	return false
-}
-
-// SetAutoArchiveInterval gets a reference to the given float32 and assigns it to the AutoArchiveInterval field.
-func (o *Sandbox) SetAutoArchiveInterval(v float32) {
-	o.AutoArchiveInterval = &v
-}
-
 // GetAutoDeleteInterval returns the AutoDeleteInterval field value if set, zero value otherwise.
 func (o *Sandbox) GetAutoDeleteInterval() float32 {
 	if o == nil || IsNil(o.AutoDeleteInterval) {
@@ -1038,7 +1031,7 @@ func (o *Sandbox) SetToolboxProxyUrl(v string) {
 }
 
 func (o Sandbox) MarshalJSON() ([]byte, error) {
-	toSerialize,err := o.ToMap()
+	toSerialize, err := o.ToMap()
 	if err != nil {
 		return []byte{}, err
 	}
@@ -1048,10 +1041,11 @@ func (o Sandbox) MarshalJSON() ([]byte, error) {
 func (o Sandbox) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["id"] = o.Id
+	toSerialize["boxId"] = o.BoxId
 	toSerialize["organizationId"] = o.OrganizationId
 	toSerialize["name"] = o.Name
-	if !IsNil(o.Snapshot) {
-		toSerialize["snapshot"] = o.Snapshot
+	if !IsNil(o.Template) {
+		toSerialize["template"] = o.Template
 	}
 	toSerialize["user"] = o.User
 	toSerialize["env"] = o.Env
@@ -1086,9 +1080,6 @@ func (o Sandbox) ToMap() (map[string]interface{}, error) {
 	}
 	if !IsNil(o.AutoStopInterval) {
 		toSerialize["autoStopInterval"] = o.AutoStopInterval
-	}
-	if !IsNil(o.AutoArchiveInterval) {
-		toSerialize["autoArchiveInterval"] = o.AutoArchiveInterval
 	}
 	if !IsNil(o.AutoDeleteInterval) {
 		toSerialize["autoDeleteInterval"] = o.AutoDeleteInterval
@@ -1129,6 +1120,7 @@ func (o *Sandbox) UnmarshalJSON(data []byte) (err error) {
 	// that every required field exists as a key in the generic map.
 	requiredProperties := []string{
 		"id",
+		"boxId",
 		"organizationId",
 		"name",
 		"user",
@@ -1149,10 +1141,10 @@ func (o *Sandbox) UnmarshalJSON(data []byte) (err error) {
 	err = json.Unmarshal(data, &allProperties)
 
 	if err != nil {
-		return err;
+		return err
 	}
 
-	for _, requiredProperty := range(requiredProperties) {
+	for _, requiredProperty := range requiredProperties {
 		if _, exists := allProperties[requiredProperty]; !exists {
 			return fmt.Errorf("no value given for required property %v", requiredProperty)
 		}
@@ -1172,9 +1164,10 @@ func (o *Sandbox) UnmarshalJSON(data []byte) (err error) {
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "id")
+		delete(additionalProperties, "boxId")
 		delete(additionalProperties, "organizationId")
 		delete(additionalProperties, "name")
-		delete(additionalProperties, "snapshot")
+		delete(additionalProperties, "template")
 		delete(additionalProperties, "user")
 		delete(additionalProperties, "env")
 		delete(additionalProperties, "labels")
@@ -1193,7 +1186,6 @@ func (o *Sandbox) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "backupState")
 		delete(additionalProperties, "backupCreatedAt")
 		delete(additionalProperties, "autoStopInterval")
-		delete(additionalProperties, "autoArchiveInterval")
 		delete(additionalProperties, "autoDeleteInterval")
 		delete(additionalProperties, "volumes")
 		delete(additionalProperties, "buildInfo")

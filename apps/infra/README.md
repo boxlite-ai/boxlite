@@ -185,7 +185,7 @@ For Auth0 specifically:
 | **Api**             | REST API + WebSocket `/attach`       | `https://api.<STACK_DOMAIN>` (direct ALB)    |
 | **Proxy**           | `<port>-<id>.proxy.<domain>` previews | `https://*.proxy.<STACK_DOMAIN>` (direct ALB) |
 | **SshGateway**      | `ssh <token>@ssh.<domain>:2222`      | `ssh.<STACK_DOMAIN>:2222` (NLB, raw TCP)     |
-| **SnapshotManager** | S3-backed docker registry            | internal only                                |
+| **ArtifactRegistry** | S3-backed docker registry            | internal only                                |
 | **Jaeger**          | Trace viewer                         | public ALB                                   |
 | **OtelCollector**   | OTLP ingest                          | internal + public health                     |
 | **PgAdmin**         | Postgres admin UI                    | internal ALB (set `PGADMIN_PUBLIC=true` to expose) |

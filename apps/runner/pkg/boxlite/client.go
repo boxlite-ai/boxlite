@@ -24,20 +24,23 @@ import (
 // Client wraps the BoxLite Go SDK to provide the same interface as the Docker client.
 // It manages VMs instead of containers, providing hardware-level isolation.
 type Client struct {
-	runtime            *boxlite.Runtime
-	logger             *slog.Logger
-	insecureRegistries []string
-	mu                 sync.RWMutex
-	boxes              map[string]*boxlite.Box
-	awsRegion          string
-	awsEndpointUrl     string
-	awsAccessKeyId     string
-	awsSecretAccessKey string
-	volumeMutexes      map[string]*sync.Mutex
-	volumeMutexesMutex sync.Mutex
-	volumeCleanupMutex sync.Mutex
-	lastVolumeCleanup  time.Time
-	volumeCleanup      volumeCleanupConfig
+	runtime             *boxlite.Runtime
+	logger              *slog.Logger
+	homeDir             string
+	insecureRegistries  []string
+	mu                  sync.RWMutex
+	boxes               map[string]*boxlite.Box
+	awsRegion           string
+	awsEndpointUrl      string
+	awsAccessKeyId      string
+	awsSecretAccessKey  string
+	volumeMutexes       map[string]*sync.Mutex
+	volumeMutexesMutex  sync.Mutex
+	volumeCleanupMutex  sync.Mutex
+	toolboxPortMutex    sync.Mutex
+	toolboxReadyTimeout time.Duration
+	lastVolumeCleanup   time.Time
+	volumeCleanup       volumeCleanupConfig
 }
 
 // ClientConfig holds configuration for the BoxLite client.
@@ -52,6 +55,7 @@ type ClientConfig struct {
 	VolumeCleanupInterval        time.Duration
 	VolumeCleanupDryRun          bool
 	VolumeCleanupExclusionPeriod time.Duration
+	ToolboxReadyTimeout          time.Duration
 }
 
 func networkSpec(blockAll *bool, allowList *string) boxlite.NetworkSpec {
@@ -73,8 +77,29 @@ func networkSpec(blockAll *bool, allowList *string) boxlite.NetworkSpec {
 	return spec
 }
 
+func daemonSandboxEnv(sandboxDto dto.CreateSandboxDTO) map[string]string {
+	env := map[string]string{
+		"BOXLITE_SANDBOX_ID": sandboxDto.Id,
+	}
+	if sandboxDto.OtelEndpoint != nil && *sandboxDto.OtelEndpoint != "" {
+		env["BOXLITE_OTEL_ENDPOINT"] = *sandboxDto.OtelEndpoint
+	}
+	if sandboxDto.OrganizationId != nil && *sandboxDto.OrganizationId != "" {
+		env["BOXLITE_ORGANIZATION_ID"] = *sandboxDto.OrganizationId
+	}
+	if sandboxDto.RegionId != nil && *sandboxDto.RegionId != "" {
+		env["BOXLITE_REGION_ID"] = *sandboxDto.RegionId
+	}
+	return env
+}
+
 // NewClient creates a new BoxLite client backed by the BoxLite VM runtime.
 func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
+	toolboxReadyTimeout := config.ToolboxReadyTimeout
+	if toolboxReadyTimeout <= 0 {
+		toolboxReadyTimeout = 30 * time.Second
+	}
+
 	var opts []boxlite.RuntimeOption
 	if config.HomeDir != "" {
 		opts = append(opts, boxlite.WithHomeDir(config.HomeDir))
@@ -103,15 +128,17 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	}
 
 	return &Client{
-		runtime:            rt,
-		logger:             logger,
-		insecureRegistries: insecureRegistries,
-		boxes:              make(map[string]*boxlite.Box),
-		awsRegion:          config.AWSRegion,
-		awsEndpointUrl:     config.AWSEndpointUrl,
-		awsAccessKeyId:     config.AWSAccessKeyId,
-		awsSecretAccessKey: config.AWSSecretAccessKey,
-		volumeMutexes:      make(map[string]*sync.Mutex),
+		runtime:             rt,
+		logger:              logger,
+		homeDir:             config.HomeDir,
+		insecureRegistries:  insecureRegistries,
+		boxes:               make(map[string]*boxlite.Box),
+		awsRegion:           config.AWSRegion,
+		awsEndpointUrl:      config.AWSEndpointUrl,
+		awsAccessKeyId:      config.AWSAccessKeyId,
+		awsSecretAccessKey:  config.AWSSecretAccessKey,
+		volumeMutexes:       make(map[string]*sync.Mutex),
+		toolboxReadyTimeout: toolboxReadyTimeout,
 		volumeCleanup: volumeCleanupConfig{
 			interval:        config.VolumeCleanupInterval,
 			dryRun:          config.VolumeCleanupDryRun,
@@ -151,6 +178,11 @@ func (c *Client) Close() error {
 // Create creates a new sandbox (VM) from the given image and configuration.
 // Returns the box ID and daemon version.
 func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (string, string, error) {
+	publicBoxId := sandboxDto.BoxId
+	if publicBoxId == "" {
+		publicBoxId = sandboxDto.Id
+	}
+
 	// API sends cores / GB / GB as small integers (see apps/api Sandbox entity).
 	cpus := int(sandboxDto.CpuQuota)
 	if cpus < 1 {
@@ -174,6 +206,9 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 	for k, v := range sandboxDto.Env {
 		opts = append(opts, boxlite.WithEnv(k, v))
 	}
+	for k, v := range daemonSandboxEnv(sandboxDto) {
+		opts = append(opts, boxlite.WithEnv(k, v))
+	}
 
 	if len(sandboxDto.Entrypoint) > 0 {
 		opts = append(opts, boxlite.WithEntrypoint(sandboxDto.Entrypoint...))
@@ -193,14 +228,23 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 		}
 	}
 
+	toolboxHostPort, err := c.reserveToolboxHostPort(ctx, sandboxDto.Id)
+	if err != nil {
+		return "", "", err
+	}
+	opts = append(opts, boxlite.WithPort(ToolboxGuestPort, toolboxHostPort))
+
 	opts = append(opts, boxlite.WithNetwork(networkSpec(sandboxDto.NetworkBlockAll, sandboxDto.NetworkAllowList)))
 
-	bx, err := c.runtime.Create(ctx, sandboxDto.Snapshot, opts...)
+	bx, err := c.runtime.Create(ctx, sandboxDto.ArtifactRef, opts...)
 	if err != nil {
 		if len(volumeMounts) > 0 {
 			if cleanupErr := c.removeSandboxVolumeMountRecord(ctx, sandboxDto.Id); cleanupErr != nil {
 				c.logger.WarnContext(ctx, "failed to remove sandbox volume mount record after create failure", "sandbox", sandboxDto.Id, "error", cleanupErr)
 			}
+		}
+		if cleanupErr := c.removeToolboxPortRecord(ctx, sandboxDto.Id); cleanupErr != nil {
+			c.logger.WarnContext(ctx, "failed to remove toolbox port record after create failure", "sandbox", sandboxDto.Id, "error", cleanupErr)
 		}
 		return "", "", fmt.Errorf("failed to create box: %w", err)
 	}
@@ -209,12 +253,27 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 	c.boxes[sandboxDto.Id] = bx
 	c.mu.Unlock()
 
-	c.logger.Info("created box", "id", bx.ID(), "name", bx.Name(), "image", sandboxDto.Snapshot)
+	c.logger.Info(
+		"created box",
+		"id",
+		bx.ID(),
+		"sandboxId",
+		sandboxDto.Id,
+		"boxId",
+		publicBoxId,
+		"name",
+		bx.Name(),
+		"artifactRef",
+		sandboxDto.ArtifactRef,
+	)
 
 	skipStart := sandboxDto.SkipStart != nil && *sandboxDto.SkipStart
 	if !skipStart {
 		if err := bx.Start(ctx); err != nil {
 			return bx.ID(), "", fmt.Errorf("failed to start box: %w", err)
+		}
+		if err := c.waitForToolboxReady(ctx, sandboxDto.Id); err != nil {
+			return bx.ID(), "", err
 		}
 	}
 
@@ -232,6 +291,9 @@ func (c *Client) Start(ctx context.Context, sandboxId string, authToken *string,
 		return "", err
 	}
 	if err := bx.Start(ctx); err != nil {
+		return "", err
+	}
+	if err := c.waitForToolboxReady(ctx, sandboxId); err != nil {
 		return "", err
 	}
 	return "boxlite", nil
@@ -267,6 +329,9 @@ func (c *Client) Destroy(ctx context.Context, sandboxId string) error {
 
 	if err := c.removeSandboxVolumeMountRecord(ctx, sandboxId); err != nil {
 		c.logger.WarnContext(ctx, "failed to remove sandbox volume mount record", "sandbox", sandboxId, "error", err)
+	}
+	if err := c.removeToolboxPortRecord(ctx, sandboxId); err != nil {
+		c.logger.WarnContext(ctx, "failed to remove toolbox port record", "sandbox", sandboxId, "error", err)
 	}
 	c.CleanupOrphanedVolumeMounts(ctx)
 

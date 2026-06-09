@@ -12,18 +12,16 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  *
  * @export
  * @interface StartSandboxResponse
  */
 export interface StartSandboxResponse {
-    /**
-     *
-     * @type {string}
-     * @memberof StartSandboxResponse
-     */
-    'daemonVersion'?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof StartSandboxResponse
+   */
+  daemonVersion?: string
 }

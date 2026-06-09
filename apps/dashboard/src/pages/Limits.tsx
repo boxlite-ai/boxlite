@@ -147,7 +147,7 @@ export default function Limits() {
                 </div>
                 <CardDescription>
                   Limits help us mitigate misuse and manage infrastructure resources. <br /> Ensuring fair and stable
-                  access to sandboxes and compute capacity across all users.
+                  access to boxes and compute capacity across all users.
                 </CardDescription>
               </CardHeader>
               <CardContent className="p-0 flex flex-col">
@@ -170,8 +170,8 @@ export default function Limits() {
                   )
                 )}
                 <RateLimits
-                  title="Sandbox Limits"
-                  description="Resources limit per sandbox."
+                  title="Box Limits"
+                  description="Resources limit per box."
                   className="border-t border-border"
                   rateLimits={[
                     { label: 'Compute', value: selectedOrganization?.maxCpuPerSandbox, unit: 'vCPU' },
@@ -193,14 +193,14 @@ export default function Limits() {
                     },
                     {
                       value: selectedOrganization?.sandboxCreateRateLimit || config?.rateLimit?.sandboxCreate?.limit,
-                      label: 'Sandbox Creation',
+                      label: 'Box Creation',
                       ttlSeconds:
                         selectedOrganization?.sandboxCreateRateLimitTtlSeconds ?? config?.rateLimit?.sandboxCreate?.ttl,
                     },
                     {
                       value:
                         selectedOrganization?.sandboxLifecycleRateLimit || config?.rateLimit?.sandboxLifecycle?.limit,
-                      label: 'Sandbox Lifecycle',
+                      label: 'Box Lifecycle',
                       ttlSeconds:
                         selectedOrganization?.sandboxLifecycleRateLimitTtlSeconds ??
                         config?.rateLimit?.sandboxLifecycle?.ttl,

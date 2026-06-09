@@ -26,6 +26,453 @@
         }
       }
     },
+    "/artifacts/build": {
+      "post": {
+        "description": "Build an artifact from a Dockerfile and context hashes. The operation runs asynchronously and returns 202 immediately.",
+        "tags": ["artifacts"],
+        "summary": "Build an artifact",
+        "operationId": "BuildArtifact",
+        "parameters": [
+          {
+            "description": "Build artifact request",
+            "name": "request",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/BuildArtifactRequestDTO"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Artifact build started",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "/artifacts/exists": {
+      "get": {
+        "description": "Check if a specified artifact exists locally",
+        "produces": ["application/json"],
+        "tags": ["artifacts"],
+        "summary": "Check if an artifact exists",
+        "operationId": "ArtifactExists",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Artifact ref",
+            "name": "artifactRef",
+            "in": "query",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/ArtifactExistsResponse"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "/artifacts/info": {
+      "get": {
+        "description": "Get information about a specified artifact including size and entrypoint. Returns 422 if the last pull/build operation failed, with the error reason in the message.",
+        "produces": ["application/json"],
+        "tags": ["artifacts"],
+        "summary": "Get artifact information",
+        "operationId": "GetArtifactInfo",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Artifact ref",
+            "name": "artifactRef",
+            "in": "query",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/ArtifactInfoResponse"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "/artifacts/inspect": {
+      "post": {
+        "description": "Inspect a specified artifact in a registry",
+        "produces": ["application/json"],
+        "tags": ["artifacts"],
+        "summary": "Inspect an artifact in a registry",
+        "operationId": "InspectArtifactInRegistry",
+        "parameters": [
+          {
+            "description": "Inspect artifact in registry request",
+            "name": "request",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/InspectArtifactInRegistryRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/ArtifactDigestResponse"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "/artifacts/logs": {
+      "get": {
+        "description": "Stream build logs",
+        "tags": ["artifacts"],
+        "summary": "Get build logs",
+        "operationId": "GetBuildLogs",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Runtime artifact ref",
+            "name": "artifactRef",
+            "in": "query",
+            "required": true
+          },
+          {
+            "type": "boolean",
+            "description": "Whether to follow the log output",
+            "name": "follow",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Build logs stream",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "/artifacts/pull": {
+      "post": {
+        "description": "Pull an artifact from a registry and optionally push to another registry. The operation runs asynchronously and returns 202 immediately.",
+        "tags": ["artifacts"],
+        "summary": "Pull an artifact",
+        "operationId": "PullArtifact",
+        "parameters": [
+          {
+            "description": "Pull artifact",
+            "name": "request",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/PullArtifactRequestDTO"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Artifact pull started",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "/artifacts/remove": {
+      "post": {
+        "description": "Remove a specified artifact from the local system",
+        "produces": ["application/json"],
+        "tags": ["artifacts"],
+        "summary": "Remove an artifact",
+        "operationId": "RemoveArtifact",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Artifact ref",
+            "name": "artifactRef",
+            "in": "query",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Artifact successfully removed",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "/artifacts/tag": {
+      "post": {
+        "description": "Tag an existing local image with a new target reference",
+        "tags": ["artifacts"],
+        "summary": "Tag an image",
+        "operationId": "TagImage",
+        "deprecated": true,
+        "parameters": [
+          {
+            "description": "Tag image request",
+            "name": "request",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/TagImageRequestDTO"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Image successfully tagged",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
     "/info": {
       "get": {
         "description": "Runner info with system metrics",
@@ -703,621 +1150,46 @@
         }
       }
     },
-    "/sandboxes/{sandboxId}/toolbox/{path}": {
+    "/v1/boxes/{boxId}/executions/{execId}/attach": {
       "get": {
-        "description": "Forwards the request to the specified sandbox's container",
-        "tags": ["toolbox"],
-        "summary": "Proxy requests to the sandbox toolbox",
+        "tags": ["boxlite"],
+        "summary": "Attach to an execution via WebSocket",
         "parameters": [
           {
             "type": "string",
-            "description": "Sandbox ID",
-            "name": "sandboxId",
+            "description": "Box ID",
+            "name": "boxId",
             "in": "path",
             "required": true
           },
           {
             "type": "string",
-            "description": "Path to forward",
-            "name": "path",
+            "description": "Execution ID",
+            "name": "execId",
             "in": "path",
             "required": true
           }
         ],
         "responses": {
-          "200": {
-            "description": "Proxied response",
-            "schema": {}
-          },
-          "400": {
-            "description": "Bad request",
-            "schema": {
-              "type": "string"
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "schema": {
-              "type": "string"
-            }
+          "101": {
+            "description": "Switching Protocols"
           },
           "404": {
-            "description": "Sandbox container not found",
+            "description": "execution not found",
             "schema": {
-              "type": "string"
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
             }
           },
           "409": {
-            "description": "Sandbox container conflict",
+            "description": "already attached",
             "schema": {
-              "type": "string"
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "schema": {
-              "type": "string"
-            }
-          }
-        }
-      },
-      "post": {
-        "description": "Forwards the request to the specified sandbox's container",
-        "tags": ["toolbox"],
-        "summary": "Proxy requests to the sandbox toolbox",
-        "parameters": [
-          {
-            "type": "string",
-            "description": "Sandbox ID",
-            "name": "sandboxId",
-            "in": "path",
-            "required": true
-          },
-          {
-            "type": "string",
-            "description": "Path to forward",
-            "name": "path",
-            "in": "path",
-            "required": true
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Proxied response",
-            "schema": {}
-          },
-          "400": {
-            "description": "Bad request",
-            "schema": {
-              "type": "string"
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "schema": {
-              "type": "string"
-            }
-          },
-          "404": {
-            "description": "Sandbox container not found",
-            "schema": {
-              "type": "string"
-            }
-          },
-          "409": {
-            "description": "Sandbox container conflict",
-            "schema": {
-              "type": "string"
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "schema": {
-              "type": "string"
-            }
-          }
-        }
-      },
-      "delete": {
-        "description": "Forwards the request to the specified sandbox's container",
-        "tags": ["toolbox"],
-        "summary": "Proxy requests to the sandbox toolbox",
-        "parameters": [
-          {
-            "type": "string",
-            "description": "Sandbox ID",
-            "name": "sandboxId",
-            "in": "path",
-            "required": true
-          },
-          {
-            "type": "string",
-            "description": "Path to forward",
-            "name": "path",
-            "in": "path",
-            "required": true
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Proxied response",
-            "schema": {}
-          },
-          "400": {
-            "description": "Bad request",
-            "schema": {
-              "type": "string"
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "schema": {
-              "type": "string"
-            }
-          },
-          "404": {
-            "description": "Sandbox container not found",
-            "schema": {
-              "type": "string"
-            }
-          },
-          "409": {
-            "description": "Sandbox container conflict",
-            "schema": {
-              "type": "string"
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "schema": {
-              "type": "string"
-            }
-          }
-        }
-      }
-    },
-    "/snapshots/build": {
-      "post": {
-        "description": "Build a snapshot from a Dockerfile and context hashes. The operation runs asynchronously and returns 202 immediately.",
-        "tags": ["snapshots"],
-        "summary": "Build a snapshot",
-        "operationId": "BuildSnapshot",
-        "parameters": [
-          {
-            "description": "Build snapshot request",
-            "name": "request",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/BuildSnapshotRequestDTO"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "description": "Snapshot build started",
-            "schema": {
-              "type": "string"
-            }
-          },
-          "400": {
-            "description": "Bad Request",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "404": {
-            "description": "Not Found",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          }
-        }
-      }
-    },
-    "/snapshots/exists": {
-      "get": {
-        "description": "Check if a specified snapshot exists locally",
-        "produces": ["application/json"],
-        "tags": ["snapshots"],
-        "summary": "Check if a snapshot exists",
-        "operationId": "SnapshotExists",
-        "parameters": [
-          {
-            "type": "string",
-            "description": "Snapshot name and tag",
-            "name": "snapshot",
-            "in": "query",
-            "required": true
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "schema": {
-              "$ref": "#/definitions/SnapshotExistsResponse"
-            }
-          },
-          "400": {
-            "description": "Bad Request",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "404": {
-            "description": "Not Found",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          }
-        }
-      }
-    },
-    "/snapshots/info": {
-      "get": {
-        "description": "Get information about a specified snapshot including size and entrypoint. Returns 422 if the last pull/build operation failed, with the error reason in the message.",
-        "produces": ["application/json"],
-        "tags": ["snapshots"],
-        "summary": "Get snapshot information",
-        "operationId": "GetSnapshotInfo",
-        "parameters": [
-          {
-            "type": "string",
-            "description": "Snapshot name and tag",
-            "name": "snapshot",
-            "in": "query",
-            "required": true
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "schema": {
-              "$ref": "#/definitions/SnapshotInfoResponse"
-            }
-          },
-          "400": {
-            "description": "Bad Request",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "404": {
-            "description": "Not Found",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "422": {
-            "description": "Unprocessable Entity",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          }
-        }
-      }
-    },
-    "/snapshots/inspect": {
-      "post": {
-        "description": "Inspect a specified snapshot in a registry",
-        "produces": ["application/json"],
-        "tags": ["snapshots"],
-        "summary": "Inspect a snapshot in a registry",
-        "operationId": "InspectSnapshotInRegistry",
-        "parameters": [
-          {
-            "description": "Inspect snapshot in registry request",
-            "name": "request",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/InspectSnapshotInRegistryRequest"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "schema": {
-              "$ref": "#/definitions/SnapshotDigestResponse"
-            }
-          },
-          "400": {
-            "description": "Bad Request",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "404": {
-            "description": "Not Found",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          }
-        }
-      }
-    },
-    "/snapshots/logs": {
-      "get": {
-        "description": "Stream build logs",
-        "tags": ["snapshots"],
-        "summary": "Get build logs",
-        "operationId": "GetBuildLogs",
-        "parameters": [
-          {
-            "type": "string",
-            "description": "Snapshot ref",
-            "name": "snapshotRef",
-            "in": "query",
-            "required": true
-          },
-          {
-            "type": "boolean",
-            "description": "Whether to follow the log output",
-            "name": "follow",
-            "in": "query"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Build logs stream",
-            "schema": {
-              "type": "string"
-            }
-          },
-          "400": {
-            "description": "Bad Request",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "404": {
-            "description": "Not Found",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          }
-        }
-      }
-    },
-    "/snapshots/pull": {
-      "post": {
-        "description": "Pull a snapshot from a registry and optionally push to another registry. The operation runs asynchronously and returns 202 immediately.",
-        "tags": ["snapshots"],
-        "summary": "Pull a snapshot",
-        "operationId": "PullSnapshot",
-        "parameters": [
-          {
-            "description": "Pull snapshot",
-            "name": "request",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/PullSnapshotRequestDTO"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "description": "Snapshot pull started",
-            "schema": {
-              "type": "string"
-            }
-          },
-          "400": {
-            "description": "Bad Request",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "404": {
-            "description": "Not Found",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          }
-        }
-      }
-    },
-    "/snapshots/remove": {
-      "post": {
-        "description": "Remove a specified snapshot from the local system",
-        "produces": ["application/json"],
-        "tags": ["snapshots"],
-        "summary": "Remove a snapshot",
-        "operationId": "RemoveSnapshot",
-        "parameters": [
-          {
-            "type": "string",
-            "description": "Snapshot name and tag",
-            "name": "snapshot",
-            "in": "query",
-            "required": true
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Snapshot successfully removed",
-            "schema": {
-              "type": "string"
-            }
-          },
-          "400": {
-            "description": "Bad Request",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "404": {
-            "description": "Not Found",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          }
-        }
-      }
-    },
-    "/snapshots/tag": {
-      "post": {
-        "description": "Tag an existing local image with a new target reference",
-        "tags": ["snapshots"],
-        "summary": "Tag an image",
-        "operationId": "TagImage",
-        "deprecated": true,
-        "parameters": [
-          {
-            "description": "Tag image request",
-            "name": "request",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/TagImageRequestDTO"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Image successfully tagged",
-            "schema": {
-              "type": "string"
-            }
-          },
-          "400": {
-            "description": "Bad Request",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "404": {
-            "description": "Not Found",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
             }
           }
         }
@@ -1325,10 +1197,67 @@
     }
   },
   "definitions": {
-    "BuildSnapshotRequestDTO": {
+    "ArtifactDigestResponse": {
+      "type": "object",
+      "properties": {
+        "hash": {
+          "type": "string",
+          "example": "a7be6198544f09a75b26e6376459b47c5b9972e7351d440e092c4faa9ea064ff"
+        },
+        "sizeGB": {
+          "type": "number",
+          "example": 0.13
+        }
+      }
+    },
+    "ArtifactExistsResponse": {
+      "type": "object",
+      "properties": {
+        "exists": {
+          "type": "boolean",
+          "example": true
+        }
+      }
+    },
+    "ArtifactInfoResponse": {
+      "type": "object",
+      "properties": {
+        "cmd": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "example": ["[\"nginx\"", "\"-g\"", "\"daemon off;\"]"]
+        },
+        "entrypoint": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "example": ["[\"nginx\"", "\"-g\"", "\"daemon off;\"]"]
+        },
+        "hash": {
+          "type": "string",
+          "example": "a7be6198544f09a75b26e6376459b47c5b9972e7351d440e092c4faa9ea064ff"
+        },
+        "name": {
+          "type": "string",
+          "example": "nginx:latest"
+        },
+        "sizeGB": {
+          "type": "number",
+          "example": 0.13
+        }
+      }
+    },
+    "BuildArtifactRequestDTO": {
       "type": "object",
       "required": ["dockerfile", "organizationId"],
       "properties": {
+        "artifactRef": {
+          "description": "Artifact ref or the build's hash",
+          "type": "string"
+        },
         "context": {
           "type": "array",
           "items": {
@@ -1346,10 +1275,6 @@
         },
         "registry": {
           "$ref": "#/definitions/RegistryDTO"
-        },
-        "snapshot": {
-          "description": "Snapshot ID and tag or the build's hash",
-          "type": "string"
         },
         "sourceRegistries": {
           "type": "array",
@@ -1373,8 +1298,11 @@
     },
     "CreateSandboxDTO": {
       "type": "object",
-      "required": ["id", "osUser", "snapshot", "userId"],
+      "required": ["artifactRef", "id", "osUser", "userId"],
       "properties": {
+        "artifactRef": {
+          "type": "string"
+        },
         "authToken": {
           "type": "string"
         },
@@ -1439,9 +1367,6 @@
         "skipStart": {
           "type": "boolean"
         },
-        "snapshot": {
-          "type": "string"
-        },
         "storageQuota": {
           "type": "integer",
           "minimum": 1
@@ -1488,16 +1413,16 @@
         }
       }
     },
-    "InspectSnapshotInRegistryRequest": {
+    "InspectArtifactInRegistryRequest": {
       "type": "object",
-      "required": ["snapshot"],
+      "required": ["artifactRef"],
       "properties": {
-        "registry": {
-          "$ref": "#/definitions/RegistryDTO"
-        },
-        "snapshot": {
+        "artifactRef": {
           "type": "string",
           "example": "nginx:latest"
+        },
+        "registry": {
+          "$ref": "#/definitions/RegistryDTO"
         }
       }
     },
@@ -1518,10 +1443,13 @@
         }
       }
     },
-    "PullSnapshotRequestDTO": {
+    "PullArtifactRequestDTO": {
       "type": "object",
-      "required": ["snapshot"],
+      "required": ["artifactRef"],
       "properties": {
+        "artifactRef": {
+          "type": "string"
+        },
         "destinationRef": {
           "type": "string"
         },
@@ -1533,9 +1461,6 @@
         },
         "registry": {
           "$ref": "#/definitions/RegistryDTO"
-        },
-        "snapshot": {
-          "type": "string"
         }
       }
     },
@@ -1665,6 +1590,9 @@
         "currentAllocatedMemoryGiB": {
           "type": "number"
         },
+        "currentArtifactCount": {
+          "type": "integer"
+        },
         "currentCpuLoadAverage": {
           "type": "number"
         },
@@ -1676,9 +1604,6 @@
         },
         "currentMemoryUsagePercentage": {
           "type": "number"
-        },
-        "currentSnapshotCount": {
-          "type": "integer"
         },
         "currentStartedSandboxes": {
           "type": "integer"
@@ -1717,59 +1642,6 @@
         },
         "state": {
           "$ref": "#/definitions/enums.SandboxState"
-        }
-      }
-    },
-    "SnapshotDigestResponse": {
-      "type": "object",
-      "properties": {
-        "hash": {
-          "type": "string",
-          "example": "a7be6198544f09a75b26e6376459b47c5b9972e7351d440e092c4faa9ea064ff"
-        },
-        "sizeGB": {
-          "type": "number",
-          "example": 0.13
-        }
-      }
-    },
-    "SnapshotExistsResponse": {
-      "type": "object",
-      "properties": {
-        "exists": {
-          "type": "boolean",
-          "example": true
-        }
-      }
-    },
-    "SnapshotInfoResponse": {
-      "type": "object",
-      "properties": {
-        "cmd": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "example": ["[\"nginx\"", "\"-g\"", "\"daemon off;\"]"]
-        },
-        "entrypoint": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "example": ["[\"nginx\"", "\"-g\"", "\"daemon off;\"]"]
-        },
-        "hash": {
-          "type": "string",
-          "example": "a7be6198544f09a75b26e6376459b47c5b9972e7351d440e092c4faa9ea064ff"
-        },
-        "name": {
-          "type": "string",
-          "example": "nginx:latest"
-        },
-        "sizeGB": {
-          "type": "number",
-          "example": 0.13
         }
       }
     },
@@ -1854,7 +1726,7 @@
         "resizing",
         "error",
         "unknown",
-        "pulling_snapshot"
+        "pulling_artifact"
       ],
       "x-enum-varnames": [
         "SandboxStateCreating",
@@ -1868,7 +1740,7 @@
         "SandboxStateResizing",
         "SandboxStateError",
         "SandboxStateUnknown",
-        "SandboxStatePullingSnapshot"
+        "SandboxStatePullingArtifact"
       ]
     }
   },

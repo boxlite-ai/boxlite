@@ -8,7 +8,7 @@ import {
   DEFAULT_CPU_RESOURCES,
   DEFAULT_DISK_RESOURCES,
   DEFAULT_MEMORY_RESOURCES,
-  SANDBOX_SNAPSHOT_DEFAULT_VALUE,
+  SANDBOX_TEMPLATE_DEFAULT_VALUE,
 } from '@/constants/Playground'
 import {
   ActionRuntimeError,
@@ -36,7 +36,7 @@ import { getLanguageCodeToRun, objectHasAnyValue } from '@/lib/playground'
 import {
   CreateSandboxBaseParams,
   CreateSandboxFromImageParams,
-  CreateSandboxFromSnapshotParams,
+  CreateSandboxFromTemplateParams,
   Image,
 } from '@boxlite-ai/sdk'
 import { useCallback, useState } from 'react'
@@ -75,7 +75,7 @@ export const PlaygroundProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const clearPendingScrollSection = useCallback(() => setPendingScrollSection(null), [])
 
   const [sandboxParametersState, setSandboxParametersState] = useState<SandboxParams>({
-    snapshotName: SANDBOX_SNAPSHOT_DEFAULT_VALUE,
+    templateName: SANDBOX_TEMPLATE_DEFAULT_VALUE,
     resources: {
       cpu: DEFAULT_CPU_RESOURCES,
       memory: DEFAULT_MEMORY_RESOURCES,
@@ -83,7 +83,6 @@ export const PlaygroundProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     },
     createSandboxBaseParams: {
       autoStopInterval: 5,
-      autoArchiveInterval: 5,
       autoDeleteInterval: 0,
     },
     listFilesParams: {
@@ -310,30 +309,28 @@ export const PlaygroundProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     const createSandboxParamsExist = objectHasAnyValue(sandboxParametersState['createSandboxBaseParams'])
     const useAutoStopInterval =
       createSandboxParamsExist && sandboxParametersState['createSandboxBaseParams']['autoStopInterval'] !== undefined
-    const useAutoArchiveInterval =
-      createSandboxParamsExist && sandboxParametersState['createSandboxBaseParams']['autoArchiveInterval'] !== undefined
     const useAutoDeleteInterval =
       createSandboxParamsExist && sandboxParametersState['createSandboxBaseParams']['autoDeleteInterval'] !== undefined
 
     const createSandboxFromImageParams: CreateSandboxFromImageParams = { image: Image.debianSlim('3.13') } // Default and fixed image if CreateSandboxFromImageParams are used
-    const snapshotName = sandboxParametersState['snapshotName']
-    const useCustomSandboxSnapshotName = snapshotName !== undefined && snapshotName !== SANDBOX_SNAPSHOT_DEFAULT_VALUE
-    const createSandboxFromSnapshotParams: CreateSandboxFromSnapshotParams = {
-      snapshot: useCustomSandboxSnapshotName ? snapshotName : undefined,
+    const templateName = sandboxParametersState['templateName']
+    const useCustomSandboxTemplateName = templateName !== undefined && templateName !== SANDBOX_TEMPLATE_DEFAULT_VALUE
+    const createSandboxFromTemplateParams: CreateSandboxFromTemplateParams = {
+      templateId: useCustomSandboxTemplateName ? templateName : undefined,
     }
-    const createSandboxFromSnapshot = useCustomSandboxSnapshotName || useDefaultResourceValues
+    const createSandboxFromTemplate = useCustomSandboxTemplateName || useDefaultResourceValues
 
-    // Create from base image if default resource values are not used
-    // Snapshot parameter has precedence over resources and createSandboxFromImage
-    const createSandboxFromImage = !useDefaultResourceValues && !useCustomSandboxSnapshotName
+    // SDK/API still use templateId for persisted dashboard Images. That
+    // template-backed path takes precedence over ad-hoc image/resource params.
+    const createSandboxFromImage = !useDefaultResourceValues && !useCustomSandboxTemplateName
 
-    // We specify resources for sandbox creation if there is any specified resource value which has value different from the default one and useCustomSandboxSnapshotName is false
-    const useResources = !useCustomSandboxSnapshotName && resourceValuesExist && !useDefaultResourceValues
+    // We specify resources for sandbox creation if there is any specified resource value which has value different from the default one and useCustomSandboxTemplateName is false
+    const useResources = !useCustomSandboxTemplateName && resourceValuesExist && !useDefaultResourceValues
     const useSandboxCreateParams =
       useLanguageParam ||
       useResources ||
       createSandboxParamsExist ||
-      useCustomSandboxSnapshotName ||
+      useCustomSandboxTemplateName ||
       createSandboxFromImage
 
     if (createSandboxFromImage) {
@@ -346,16 +343,14 @@ export const PlaygroundProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         if (useResourcesDisk) createSandboxFromImageParams.resources.disk = sandboxParametersState['resources']['disk']
       }
     }
-    let createSandboxParams: CreateSandboxBaseParams | CreateSandboxFromImageParams | CreateSandboxFromSnapshotParams =
+    let createSandboxParams: CreateSandboxBaseParams | CreateSandboxFromImageParams | CreateSandboxFromTemplateParams =
       {}
-    if (createSandboxFromSnapshot) createSandboxParams = createSandboxFromSnapshotParams
+    if (createSandboxFromTemplate) createSandboxParams = createSandboxFromTemplateParams
     else if (createSandboxFromImage) createSandboxParams = createSandboxFromImageParams
     // Set CreateSandboxBaseParams params which are common for both params types
     if (useLanguageParam) createSandboxParams.language = sandboxParametersState['language']
     if (useAutoStopInterval)
       createSandboxParams.autoStopInterval = sandboxParametersState['createSandboxBaseParams']['autoStopInterval']
-    if (useAutoArchiveInterval)
-      createSandboxParams.autoArchiveInterval = sandboxParametersState['createSandboxBaseParams']['autoArchiveInterval']
     if (useAutoDeleteInterval)
       createSandboxParams.autoDeleteInterval = sandboxParametersState['createSandboxBaseParams']['autoDeleteInterval']
     createSandboxParams.labels = { 'boxlite-playground': 'true' }
@@ -369,12 +364,11 @@ export const PlaygroundProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       useResourcesDisk,
       createSandboxParamsExist,
       useAutoStopInterval,
-      useAutoArchiveInterval,
       useAutoDeleteInterval,
       useSandboxCreateParams,
-      useCustomSandboxSnapshotName,
+      useCustomSandboxTemplateName,
       createSandboxFromImage,
-      createSandboxFromSnapshot,
+      createSandboxFromTemplate,
       createSandboxParams,
     }
   }, [sandboxParametersState])

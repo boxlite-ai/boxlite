@@ -29,7 +29,7 @@ type Job struct {
 	Status JobStatus `json:"status"`
 	// The type of resource this job operates on
 	ResourceType string `json:"resourceType"`
-	// The ID of the resource this job operates on (sandboxId, snapshotRef, etc.)
+	// The ID of the resource this job operates on (sandboxId, artifactRef, etc.)
 	ResourceId string `json:"resourceId"`
 	// Job-specific JSON-encoded payload data (operational metadata)
 	Payload *string `json:"payload,omitempty"`
@@ -40,7 +40,7 @@ type Job struct {
 	// The creation timestamp of the job
 	CreatedAt string `json:"createdAt"`
 	// The last update timestamp of the job
-	UpdatedAt *string `json:"updatedAt,omitempty"`
+	UpdatedAt            *string `json:"updatedAt,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -342,7 +342,7 @@ func (o *Job) SetUpdatedAt(v string) {
 }
 
 func (o Job) MarshalJSON() ([]byte, error) {
-	toSerialize,err := o.ToMap()
+	toSerialize, err := o.ToMap()
 	if err != nil {
 		return []byte{}, err
 	}
@@ -395,10 +395,10 @@ func (o *Job) UnmarshalJSON(data []byte) (err error) {
 	err = json.Unmarshal(data, &allProperties)
 
 	if err != nil {
-		return err;
+		return err
 	}
 
-	for _, requiredProperty := range(requiredProperties) {
+	for _, requiredProperty := range requiredProperties {
 		if _, exists := allProperties[requiredProperty]; !exists {
 			return fmt.Errorf("no value given for required property %v", requiredProperty)
 		}

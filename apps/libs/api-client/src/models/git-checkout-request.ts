@@ -12,24 +12,22 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  *
  * @export
  * @interface GitCheckoutRequest
  */
 export interface GitCheckoutRequest {
-    /**
-     *
-     * @type {string}
-     * @memberof GitCheckoutRequest
-     */
-    'path': string;
-    /**
-     *
-     * @type {string}
-     * @memberof GitCheckoutRequest
-     */
-    'branch': string;
+  /**
+   *
+   * @type {string}
+   * @memberof GitCheckoutRequest
+   */
+  path: string
+  /**
+   *
+   * @type {string}
+   * @memberof GitCheckoutRequest
+   */
+  branch: string
 }

@@ -32,8 +32,8 @@ export class BuildInfoDto {
   updatedAt: Date
 
   @ApiProperty({
-    description: 'The snapshot reference',
+    description: 'The artifact reference',
     example: 'boxlite-ai/sandbox:latest',
   })
-  snapshotRef: string
+  artifactRef: string
 }

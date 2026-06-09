@@ -27,9 +27,9 @@ import (
 )
 
 var PushCmd = &cobra.Command{
-	Use:   "push [SNAPSHOT]",
-	Short: "Push local snapshot",
-	Long:  "Push a local Docker image to BoxLite. To securely build it on our infrastructure, use 'boxlite snapshot build'",
+	Use:   "push [IMAGE]",
+	Short: "Push a local image as a template",
+	Long:  "Push a local Docker image to BoxLite and register it as a template.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
@@ -117,12 +117,12 @@ var PushCmd = &cobra.Command{
 			return err
 		}
 
-		createSnapshot := apiclient.NewCreateSnapshot(nameFlag)
+		createTemplate := apiclient.NewCreateBoxTemplate(nameFlag)
 
-		createSnapshot.SetImageName(targetImage)
+		createTemplate.SetImageName(targetImage)
 
 		if entrypointFlag != "" {
-			createSnapshot.SetEntrypoint(strings.Split(entrypointFlag, " "))
+			createTemplate.SetEntrypoint(strings.Split(entrypointFlag, " "))
 		}
 
 		// Poll until the image is really available on the registry
@@ -137,33 +137,33 @@ var PushCmd = &cobra.Command{
 		}
 
 		if cpuFlag != 0 {
-			createSnapshot.SetCpu(cpuFlag)
+			createTemplate.SetCpu(cpuFlag)
 		}
 		if memoryFlag != 0 {
-			createSnapshot.SetMemory(memoryFlag)
+			createTemplate.SetMemory(memoryFlag)
 		}
 		if diskFlag != 0 {
-			createSnapshot.SetDisk(diskFlag)
+			createTemplate.SetDisk(diskFlag)
 		}
 		if regionIdFlag != "" {
-			createSnapshot.SetRegionId(regionIdFlag)
+			createTemplate.SetRegionId(regionIdFlag)
 		}
 
-		_, res, err = apiClient.SnapshotsAPI.CreateSnapshot(ctx).CreateSnapshot(*createSnapshot).Execute()
+		_, res, err = apiClient.TemplatesAPI.CreateBoxTemplate(ctx).CreateBoxTemplate(*createTemplate).Execute()
 		if err != nil {
 			return apiclient_cli.HandleErrorResponse(res, err)
 		}
 
 		views_common.RenderInfoMessageBold(fmt.Sprintf("Successfully pushed %s to BoxLite", sourceImage))
 
-		err = views_util.WithInlineSpinner("Waiting for the snapshot to be validated", func() error {
-			return common.AwaitSnapshotState(ctx, apiClient, nameFlag, apiclient.SNAPSHOTSTATE_ACTIVE)
+		err = views_util.WithInlineSpinner("Waiting for the template to be validated", func() error {
+			return common.AwaitBoxTemplateState(ctx, apiClient, nameFlag, apiclient.BOXTEMPLATESTATE_ACTIVE)
 		})
 		if err != nil {
 			return err
 		}
 
-		views_common.RenderInfoMessage(fmt.Sprintf("%s  Use '%s' to create a new sandbox using this snapshot", views_common.Checkmark, nameFlag))
+		views_common.RenderInfoMessage(fmt.Sprintf("%s  Use 'boxlite sandbox create --template %s' to create a new sandbox using this template", views_common.Checkmark, nameFlag))
 		return nil
 	},
 }
@@ -174,11 +174,11 @@ var (
 
 func init() {
 	PushCmd.Flags().StringVarP(&entrypointFlag, "entrypoint", "e", "", "The entrypoint command for the image")
-	PushCmd.Flags().StringVarP(&nameFlag, "name", "n", "", "Specify the Snapshot name")
+	PushCmd.Flags().StringVarP(&nameFlag, "name", "n", "", "Specify the template name")
 	PushCmd.Flags().Int32Var(&cpuFlag, "cpu", 0, "CPU cores that will be allocated to the underlying sandboxes (default: 1)")
 	PushCmd.Flags().Int32Var(&memoryFlag, "memory", 0, "Memory that will be allocated to the underlying sandboxes in GB (default: 1)")
 	PushCmd.Flags().Int32Var(&diskFlag, "disk", 0, "Disk space that will be allocated to the underlying sandboxes in GB (default: 3)")
-	PushCmd.Flags().StringVar(&regionIdFlag, "region", "", "ID of the region where the snapshot will be available (defaults to organization default region)")
+	PushCmd.Flags().StringVar(&regionIdFlag, "region", "", "ID of the region where the template will be available (defaults to organization default region)")
 
 	_ = PushCmd.MarkFlagRequired("name")
 }

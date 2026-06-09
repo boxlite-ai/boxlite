@@ -12,13 +12,12 @@
  * Do not edit the class manually.
  */
 
-
 // May contain unused imports in some cases
 // @ts-ignore
-import type { CompletionContext } from './completion-context';
+import type { CompletionContext } from './completion-context'
 // May contain unused imports in some cases
 // @ts-ignore
-import type { Position } from './position';
+import type { Position } from './position'
 
 /**
  *
@@ -26,34 +25,34 @@ import type { Position } from './position';
  * @interface LspCompletionParams
  */
 export interface LspCompletionParams {
-    /**
-     * Language identifier
-     * @type {string}
-     * @memberof LspCompletionParams
-     */
-    'languageId': string;
-    /**
-     * Path to the project
-     * @type {string}
-     * @memberof LspCompletionParams
-     */
-    'pathToProject': string;
-    /**
-     * Document URI
-     * @type {string}
-     * @memberof LspCompletionParams
-     */
-    'uri': string;
-    /**
-     *
-     * @type {Position}
-     * @memberof LspCompletionParams
-     */
-    'position': Position;
-    /**
-     *
-     * @type {CompletionContext}
-     * @memberof LspCompletionParams
-     */
-    'context'?: CompletionContext;
+  /**
+   * Language identifier
+   * @type {string}
+   * @memberof LspCompletionParams
+   */
+  languageId: string
+  /**
+   * Path to the project
+   * @type {string}
+   * @memberof LspCompletionParams
+   */
+  pathToProject: string
+  /**
+   * Document URI
+   * @type {string}
+   * @memberof LspCompletionParams
+   */
+  uri: string
+  /**
+   *
+   * @type {Position}
+   * @memberof LspCompletionParams
+   */
+  position: Position
+  /**
+   *
+   * @type {CompletionContext}
+   * @memberof LspCompletionParams
+   */
+  context?: CompletionContext
 }

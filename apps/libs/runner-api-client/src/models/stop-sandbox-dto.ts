@@ -12,18 +12,16 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  *
  * @export
  * @interface StopSandboxDTO
  */
 export interface StopSandboxDTO {
-    /**
-     *
-     * @type {boolean}
-     * @memberof StopSandboxDTO
-     */
-    'force'?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof StopSandboxDTO
+   */
+  force?: boolean
 }

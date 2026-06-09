@@ -52,13 +52,14 @@ import { LogoutController } from './logout.controller'
         const internalIssuer = configService.getOrThrow('oidc.issuer')
         const publicIssuer = configService.get('oidc.publicIssuer')
         if (publicIssuer) {
-          // Replace localhost URLs with Docker network URLs for internal API use
+          // Keep JWKS reachable from the API container, while validating the
+          // token issuer that browser clients actually receive.
           jwksUri = metadata.jwks_uri.replace(publicIssuer, internalIssuer)
         }
         return new JwtStrategy(
           {
             audience: configService.get('oidc.audience'),
-            issuer: metadata.issuer,
+            issuer: toPublicJwtIssuer(metadata.issuer, internalIssuer, publicIssuer),
             jwksUri: jwksUri,
           },
           userService,
@@ -72,3 +73,28 @@ import { LogoutController } from './logout.controller'
   exports: [PassportModule, JwtStrategy, ApiKeyStrategy, FailedAuthTrackerService],
 })
 export class AuthModule {}
+
+function toPublicJwtIssuer(metadataIssuer: string, internalIssuer: string, publicIssuer?: string): string {
+  if (!publicIssuer) {
+    return metadataIssuer
+  }
+
+  const internalBase = stripTrailingSlashes(internalIssuer)
+  const publicBase = stripTrailingSlashes(publicIssuer)
+
+  if (metadataIssuer === internalBase) {
+    return publicBase
+  }
+  if (metadataIssuer.startsWith(`${internalBase}/`)) {
+    return `${publicBase}${metadataIssuer.substring(internalBase.length)}`
+  }
+  if (metadataIssuer === publicBase || metadataIssuer.startsWith(`${publicBase}/`)) {
+    return metadataIssuer
+  }
+
+  return publicIssuer
+}
+
+function stripTrailingSlashes(value: string): string {
+  return value.replace(/\/+$/, '')
+}

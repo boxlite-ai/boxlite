@@ -39,7 +39,7 @@ import { FeatureFlags } from '../../common/constants/feature-flags'
 import { CustomHeaders } from '../../common/constants/header.constants'
 import { AuthContext } from '../../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../../common/interfaces/auth-context.interface'
-import { SnapshotManagerCredentialsDto } from '../../region/dto/snapshot-manager-credentials.dto'
+import { ArtifactRegistryCredentialsDto } from '../../region/dto/artifact-registry-credentials.dto'
 import { UpdateRegionDto } from '../../region/dto/update-region.dto'
 
 @ApiTags('organizations')
@@ -248,17 +248,17 @@ export class OrganizationRegionController {
     return new RegenerateApiKeyResponseDto(apiKey)
   }
 
-  @Post(':id/regenerate-snapshot-manager-credentials')
+  @Post(':id/regenerate-artifact-registry-credentials')
   @HttpCode(200)
   @UseInterceptors(ContentTypeInterceptor)
   @ApiOperation({
-    summary: 'Regenerate snapshot manager credentials for a region',
-    operationId: 'regenerateSnapshotManagerCredentials',
+    summary: 'Regenerate artifact registry credentials for a region',
+    operationId: 'regenerateArtifactRegistryCredentials',
   })
   @ApiResponse({
     status: 200,
-    description: 'The snapshot manager credentials have been successfully regenerated.',
-    type: SnapshotManagerCredentialsDto,
+    description: 'The artifact registry credentials have been successfully regenerated.',
+    type: ArtifactRegistryCredentialsDto,
   })
   @ApiParam({
     name: 'id',
@@ -266,14 +266,14 @@ export class OrganizationRegionController {
     type: String,
   })
   @Audit({
-    action: AuditAction.REGENERATE_SNAPSHOT_MANAGER_CREDENTIALS,
+    action: AuditAction.REGENERATE_ARTIFACT_REGISTRY_CREDENTIALS,
     targetType: AuditTarget.REGION,
     targetIdFromRequest: (req) => req.params.id,
   })
   @UseGuards(RegionAccessGuard)
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_REGIONS])
   @RequireFlagsEnabled({ flags: [{ flagKey: FeatureFlags.ORGANIZATION_INFRASTRUCTURE, defaultValue: false }] })
-  async regenerateSnapshotManagerCredentials(@Param('id') id: string): Promise<SnapshotManagerCredentialsDto> {
-    return await this.regionService.regenerateSnapshotManagerCredentials(id)
+  async regenerateArtifactRegistryCredentials(@Param('id') id: string): Promise<ArtifactRegistryCredentialsDto> {
+    return await this.regionService.regenerateArtifactRegistryCredentials(id)
   }
 }

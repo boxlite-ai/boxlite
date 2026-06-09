@@ -21,14 +21,16 @@ var _ MappedNullable = &Workspace{}
 
 // Workspace struct for Workspace
 type Workspace struct {
-	// The ID of the sandbox
+	// The internal UUID of the sandbox
 	Id string `json:"id"`
+	// The public Box ID shown to users and SDK clients
+	BoxId string `json:"boxId"`
 	// The organization ID of the sandbox
 	OrganizationId string `json:"organizationId"`
 	// The name of the sandbox
 	Name string `json:"name"`
-	// The snapshot used for the sandbox
-	Snapshot *string `json:"snapshot,omitempty"`
+	// The template used for the sandbox
+	Template *string `json:"template,omitempty"`
 	// The user associated with the project
 	User string `json:"user"`
 	// Environment variables for the sandbox
@@ -65,8 +67,6 @@ type Workspace struct {
 	BackupCreatedAt *string `json:"backupCreatedAt,omitempty"`
 	// Auto-stop interval in minutes (0 means disabled)
 	AutoStopInterval *float32 `json:"autoStopInterval,omitempty"`
-	// Auto-archive interval in minutes
-	AutoArchiveInterval *float32 `json:"autoArchiveInterval,omitempty"`
 	// Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping)
 	AutoDeleteInterval *float32 `json:"autoDeleteInterval,omitempty"`
 	// Array of volumes attached to the sandbox
@@ -93,7 +93,7 @@ type Workspace struct {
 	// The creation timestamp of the last snapshot
 	SnapshotCreatedAt *string `json:"snapshotCreatedAt,omitempty"`
 	// Additional information about the sandbox
-	Info *SandboxInfo `json:"info,omitempty"`
+	Info                 *SandboxInfo `json:"info,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -103,9 +103,10 @@ type _Workspace Workspace
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewWorkspace(id string, organizationId string, name string, user string, env map[string]string, labels map[string]string, public bool, networkBlockAll bool, target string, cpu float32, gpu float32, memory float32, disk float32, toolboxProxyUrl string) *Workspace {
+func NewWorkspace(id string, boxId string, organizationId string, name string, user string, env map[string]string, labels map[string]string, public bool, networkBlockAll bool, target string, cpu float32, gpu float32, memory float32, disk float32, toolboxProxyUrl string) *Workspace {
 	this := Workspace{}
 	this.Id = id
+	this.BoxId = boxId
 	this.OrganizationId = organizationId
 	this.Name = name
 	this.User = user
@@ -152,6 +153,30 @@ func (o *Workspace) GetIdOk() (*string, bool) {
 // SetId sets field value
 func (o *Workspace) SetId(v string) {
 	o.Id = v
+}
+
+// GetBoxId returns the BoxId field value
+func (o *Workspace) GetBoxId() string {
+	if o == nil {
+		var ret string
+		return ret
+	}
+
+	return o.BoxId
+}
+
+// GetBoxIdOk returns a tuple with the BoxId field value
+// and a boolean to check if the value has been set.
+func (o *Workspace) GetBoxIdOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.BoxId, true
+}
+
+// SetBoxId sets field value
+func (o *Workspace) SetBoxId(v string) {
+	o.BoxId = v
 }
 
 // GetOrganizationId returns the OrganizationId field value
@@ -202,36 +227,36 @@ func (o *Workspace) SetName(v string) {
 	o.Name = v
 }
 
-// GetSnapshot returns the Snapshot field value if set, zero value otherwise.
-func (o *Workspace) GetSnapshot() string {
-	if o == nil || IsNil(o.Snapshot) {
+// GetTemplate returns the Template field value if set, zero value otherwise.
+func (o *Workspace) GetTemplate() string {
+	if o == nil || IsNil(o.Template) {
 		var ret string
 		return ret
 	}
-	return *o.Snapshot
+	return *o.Template
 }
 
-// GetSnapshotOk returns a tuple with the Snapshot field value if set, nil otherwise
+// GetTemplateOk returns a tuple with the Template field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *Workspace) GetSnapshotOk() (*string, bool) {
-	if o == nil || IsNil(o.Snapshot) {
+func (o *Workspace) GetTemplateOk() (*string, bool) {
+	if o == nil || IsNil(o.Template) {
 		return nil, false
 	}
-	return o.Snapshot, true
+	return o.Template, true
 }
 
-// HasSnapshot returns a boolean if a field has been set.
-func (o *Workspace) HasSnapshot() bool {
-	if o != nil && !IsNil(o.Snapshot) {
+// HasTemplate returns a boolean if a field has been set.
+func (o *Workspace) HasTemplate() bool {
+	if o != nil && !IsNil(o.Template) {
 		return true
 	}
 
 	return false
 }
 
-// SetSnapshot gets a reference to the given string and assigns it to the Snapshot field.
-func (o *Workspace) SetSnapshot(v string) {
-	o.Snapshot = &v
+// SetTemplate gets a reference to the given string and assigns it to the Template field.
+func (o *Workspace) SetTemplate(v string) {
+	o.Template = &v
 }
 
 // GetUser returns the User field value
@@ -730,38 +755,6 @@ func (o *Workspace) SetAutoStopInterval(v float32) {
 	o.AutoStopInterval = &v
 }
 
-// GetAutoArchiveInterval returns the AutoArchiveInterval field value if set, zero value otherwise.
-func (o *Workspace) GetAutoArchiveInterval() float32 {
-	if o == nil || IsNil(o.AutoArchiveInterval) {
-		var ret float32
-		return ret
-	}
-	return *o.AutoArchiveInterval
-}
-
-// GetAutoArchiveIntervalOk returns a tuple with the AutoArchiveInterval field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *Workspace) GetAutoArchiveIntervalOk() (*float32, bool) {
-	if o == nil || IsNil(o.AutoArchiveInterval) {
-		return nil, false
-	}
-	return o.AutoArchiveInterval, true
-}
-
-// HasAutoArchiveInterval returns a boolean if a field has been set.
-func (o *Workspace) HasAutoArchiveInterval() bool {
-	if o != nil && !IsNil(o.AutoArchiveInterval) {
-		return true
-	}
-
-	return false
-}
-
-// SetAutoArchiveInterval gets a reference to the given float32 and assigns it to the AutoArchiveInterval field.
-func (o *Workspace) SetAutoArchiveInterval(v float32) {
-	o.AutoArchiveInterval = &v
-}
-
 // GetAutoDeleteInterval returns the AutoDeleteInterval field value if set, zero value otherwise.
 func (o *Workspace) GetAutoDeleteInterval() float32 {
 	if o == nil || IsNil(o.AutoDeleteInterval) {
@@ -1174,7 +1167,7 @@ func (o *Workspace) SetInfo(v SandboxInfo) {
 }
 
 func (o Workspace) MarshalJSON() ([]byte, error) {
-	toSerialize,err := o.ToMap()
+	toSerialize, err := o.ToMap()
 	if err != nil {
 		return []byte{}, err
 	}
@@ -1184,10 +1177,11 @@ func (o Workspace) MarshalJSON() ([]byte, error) {
 func (o Workspace) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["id"] = o.Id
+	toSerialize["boxId"] = o.BoxId
 	toSerialize["organizationId"] = o.OrganizationId
 	toSerialize["name"] = o.Name
-	if !IsNil(o.Snapshot) {
-		toSerialize["snapshot"] = o.Snapshot
+	if !IsNil(o.Template) {
+		toSerialize["template"] = o.Template
 	}
 	toSerialize["user"] = o.User
 	toSerialize["env"] = o.Env
@@ -1222,9 +1216,6 @@ func (o Workspace) ToMap() (map[string]interface{}, error) {
 	}
 	if !IsNil(o.AutoStopInterval) {
 		toSerialize["autoStopInterval"] = o.AutoStopInterval
-	}
-	if !IsNil(o.AutoArchiveInterval) {
-		toSerialize["autoArchiveInterval"] = o.AutoArchiveInterval
 	}
 	if !IsNil(o.AutoDeleteInterval) {
 		toSerialize["autoDeleteInterval"] = o.AutoDeleteInterval
@@ -1277,6 +1268,7 @@ func (o *Workspace) UnmarshalJSON(data []byte) (err error) {
 	// that every required field exists as a key in the generic map.
 	requiredProperties := []string{
 		"id",
+		"boxId",
 		"organizationId",
 		"name",
 		"user",
@@ -1297,10 +1289,10 @@ func (o *Workspace) UnmarshalJSON(data []byte) (err error) {
 	err = json.Unmarshal(data, &allProperties)
 
 	if err != nil {
-		return err;
+		return err
 	}
 
-	for _, requiredProperty := range(requiredProperties) {
+	for _, requiredProperty := range requiredProperties {
 		if _, exists := allProperties[requiredProperty]; !exists {
 			return fmt.Errorf("no value given for required property %v", requiredProperty)
 		}
@@ -1320,9 +1312,10 @@ func (o *Workspace) UnmarshalJSON(data []byte) (err error) {
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "id")
+		delete(additionalProperties, "boxId")
 		delete(additionalProperties, "organizationId")
 		delete(additionalProperties, "name")
-		delete(additionalProperties, "snapshot")
+		delete(additionalProperties, "template")
 		delete(additionalProperties, "user")
 		delete(additionalProperties, "env")
 		delete(additionalProperties, "labels")
@@ -1341,7 +1334,6 @@ func (o *Workspace) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "backupState")
 		delete(additionalProperties, "backupCreatedAt")
 		delete(additionalProperties, "autoStopInterval")
-		delete(additionalProperties, "autoArchiveInterval")
 		delete(additionalProperties, "autoDeleteInterval")
 		delete(additionalProperties, "volumes")
 		delete(additionalProperties, "buildInfo")

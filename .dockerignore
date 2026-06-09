@@ -10,6 +10,9 @@ apps/node_modules
 .nx
 apps/.nx
 
+# Local runtime caches
+.boxlite-home
+
 # Build outputs
 target
 

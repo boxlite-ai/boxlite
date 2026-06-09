@@ -5,17 +5,18 @@
  */
 
 import { Sandbox, SandboxState } from '@boxlite-ai/api-client'
+import { getSandboxDisplayName, getSandboxPublicId } from '../sandbox-identity'
 
 export function isStartable(sandbox: Sandbox): boolean {
-  return sandbox.state === SandboxState.STOPPED || sandbox.state === SandboxState.ARCHIVED
+  return sandbox.state === SandboxState.STOPPED
 }
 
 export function isStoppable(sandbox: Sandbox): boolean {
   return sandbox.state === SandboxState.STARTED
 }
 
-export function isArchivable(sandbox: Sandbox): boolean {
-  return sandbox.state === SandboxState.STOPPED
+export function isSshAccessible(sandbox: Sandbox): boolean {
+  return sandbox.state === SandboxState.STARTED
 }
 
 export function isRecoverable(sandbox: Sandbox): boolean {
@@ -32,15 +33,16 @@ export function isTransitioning(sandbox: Sandbox): boolean {
     sandbox.state === SandboxState.STARTING ||
     sandbox.state === SandboxState.STOPPING ||
     sandbox.state === SandboxState.DESTROYING ||
-    sandbox.state === SandboxState.ARCHIVING ||
     sandbox.state === SandboxState.RESTORING ||
-    sandbox.state === SandboxState.BUILDING_SNAPSHOT ||
-    sandbox.state === SandboxState.PULLING_SNAPSHOT
+    sandbox.state === SandboxState.BUILDING_ARTIFACT ||
+    sandbox.state === SandboxState.PULLING_ARTIFACT
   )
 }
 
 export function getSandboxDisplayLabel(sandbox: Sandbox): string {
-  return sandbox.name ? `${sandbox.name} (${sandbox.id})` : sandbox.id
+  const displayName = getSandboxDisplayName(sandbox)
+  const publicId = getSandboxPublicId(sandbox)
+  return publicId ? `${displayName} (${publicId})` : displayName
 }
 
 export function filterStartable<T extends Sandbox>(sandboxes: T[]): T[] {
@@ -51,10 +53,6 @@ export function filterStoppable<T extends Sandbox>(sandboxes: T[]): T[] {
   return sandboxes.filter(isStoppable)
 }
 
-export function filterArchivable<T extends Sandbox>(sandboxes: T[]): T[] {
-  return sandboxes.filter(isArchivable)
-}
-
 export function filterDeletable<T extends Sandbox>(sandboxes: T[]): T[] {
   return sandboxes.filter(isDeletable)
 }
@@ -62,7 +60,6 @@ export function filterDeletable<T extends Sandbox>(sandboxes: T[]): T[] {
 export interface BulkActionCounts {
   startable: number
   stoppable: number
-  archivable: number
   deletable: number
 }
 
@@ -70,7 +67,6 @@ export function getBulkActionCounts(sandboxes: Sandbox[]): BulkActionCounts {
   return {
     startable: filterStartable(sandboxes).length,
     stoppable: filterStoppable(sandboxes).length,
-    archivable: filterArchivable(sandboxes).length,
     deletable: filterDeletable(sandboxes).length,
   }
 }

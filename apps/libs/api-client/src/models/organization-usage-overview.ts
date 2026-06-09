@@ -12,10 +12,9 @@
  * Do not edit the class manually.
  */
 
-
 // May contain unused imports in some cases
 // @ts-ignore
-import type { RegionUsageOverview } from './region-usage-overview';
+import type { RegionUsageOverview } from './region-usage-overview'
 
 /**
  *
@@ -23,34 +22,34 @@ import type { RegionUsageOverview } from './region-usage-overview';
  * @interface OrganizationUsageOverview
  */
 export interface OrganizationUsageOverview {
-    /**
-     *
-     * @type {Array<RegionUsageOverview>}
-     * @memberof OrganizationUsageOverview
-     */
-    'regionUsage': Array<RegionUsageOverview>;
-    /**
-     *
-     * @type {number}
-     * @memberof OrganizationUsageOverview
-     */
-    'totalSnapshotQuota': number;
-    /**
-     *
-     * @type {number}
-     * @memberof OrganizationUsageOverview
-     */
-    'currentSnapshotUsage': number;
-    /**
-     *
-     * @type {number}
-     * @memberof OrganizationUsageOverview
-     */
-    'totalVolumeQuota': number;
-    /**
-     *
-     * @type {number}
-     * @memberof OrganizationUsageOverview
-     */
-    'currentVolumeUsage': number;
+  /**
+   *
+   * @type {Array<RegionUsageOverview>}
+   * @memberof OrganizationUsageOverview
+   */
+  regionUsage: Array<RegionUsageOverview>
+  /**
+   *
+   * @type {number}
+   * @memberof OrganizationUsageOverview
+   */
+  totalTemplateQuota: number
+  /**
+   *
+   * @type {number}
+   * @memberof OrganizationUsageOverview
+   */
+  currentTemplateUsage: number
+  /**
+   *
+   * @type {number}
+   * @memberof OrganizationUsageOverview
+   */
+  totalVolumeQuota: number
+  /**
+   *
+   * @type {number}
+   * @memberof OrganizationUsageOverview
+   */
+  currentVolumeUsage: number
 }

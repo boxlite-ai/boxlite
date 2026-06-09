@@ -25,14 +25,14 @@ const SandboxProcessCodeExecution: React.FC = () => {
   const codeRunLanguageCodeFormData: ParameterFormItem & { key: 'languageCode' } = {
     label: 'Code to execute',
     key: 'languageCode',
-    placeholder: 'Write the code you want to execute inside the sandbox',
+    placeholder: 'Write the code you want to execute inside the box',
     required: true,
   }
 
   const shellCommandFormData: ParameterFormItem & { key: 'shellCommand' } = {
     label: 'Shell command',
     key: 'shellCommand',
-    placeholder: 'Enter a shell command to run inside the sandbox',
+    placeholder: 'Enter a shell command to run inside the box',
     required: true,
   }
 
@@ -42,14 +42,14 @@ const SandboxProcessCodeExecution: React.FC = () => {
     {
       methodName: ProcessCodeExecutionActions.CODE_RUN,
       label: 'codeRun()',
-      description: 'Executes code in the Sandbox using the appropriate language runtime',
+      description: 'Executes code in the Box using the appropriate language runtime',
       parametersFormItems: [codeRunLanguageCodeFormData],
       parametersState: codeRunParams,
     },
     {
       methodName: ProcessCodeExecutionActions.SHELL_COMMANDS_RUN,
       label: 'executeCommand()',
-      description: 'Executes a shell command in the Sandbox',
+      description: 'Executes a shell command in the Box',
       parametersFormItems: [shellCommandFormData],
       parametersState: shellCommandRunParams,
     },

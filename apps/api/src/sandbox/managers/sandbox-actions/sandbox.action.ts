@@ -59,7 +59,7 @@ export abstract class SandboxAction {
       return
     }
 
-    if (state !== SandboxState.ARCHIVED && !sandbox.pending) {
+    if (!sandbox.pending) {
       const err = new Error(`sandbox ${sandbox.id} is not in a pending state`)
       this.logger.error(err)
       return

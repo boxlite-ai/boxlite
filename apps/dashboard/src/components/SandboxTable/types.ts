@@ -5,28 +5,24 @@
  */
 
 import { DEFAULT_SANDBOX_SORTING, SandboxFilters, SandboxSorting } from '@/hooks/useSandboxes'
+import type { BoxTemplate } from '@/hooks/queries/useTemplatesQuery'
 import {
   ListSandboxesPaginatedOrderEnum,
   ListSandboxesPaginatedSortEnum,
   ListSandboxesPaginatedStatesEnum,
-  Region,
   Sandbox,
   SandboxState,
-  SnapshotDto,
 } from '@boxlite-ai/api-client'
 import { ColumnFiltersState, SortingState, Table } from '@tanstack/react-table'
+import type { ReactNode } from 'react'
 
 export interface SandboxTableProps {
   data: Sandbox[]
   sandboxIsLoading: Record<string, boolean>
   sandboxStateIsTransitioning: Record<string, boolean>
   loading: boolean
-  snapshots: SnapshotDto[]
-  snapshotsDataIsLoading: boolean
-  snapshotsDataHasMore?: boolean
-  onChangeSnapshotSearchValue: (name?: string) => void
-  regionsData: Region[]
-  regionsDataIsLoading: boolean
+  templates: BoxTemplate[]
+  templatesDataIsLoading: boolean
   getRegionName: (regionId: string) => string | undefined
   handleStart: (id: string) => void
   handleStop: (id: string) => void
@@ -34,8 +30,6 @@ export interface SandboxTableProps {
   handleBulkDelete: (ids: string[]) => void
   handleBulkStart: (ids: string[]) => void
   handleBulkStop: (ids: string[]) => void
-  handleBulkArchive: (ids: string[]) => void
-  handleArchive: (id: string) => void
   handleVnc: (id: string) => void
   getWebTerminalUrl: (id: string) => Promise<string | null>
   handleCreateSshAccess: (id: string) => void
@@ -56,6 +50,7 @@ export interface SandboxTableProps {
   onFiltersChange: (filters: SandboxFilters) => void
   handleRecover: (id: string) => void
   handleScreenRecordings: (id: string) => void
+  headerAction?: ReactNode
 }
 
 export interface SandboxTableActionsProps {
@@ -67,7 +62,6 @@ export interface SandboxTableActionsProps {
   onStart: (id: string) => void
   onStop: (id: string) => void
   onDelete: (id: string) => void
-  onArchive: (id: string) => void
   onVnc: (id: string) => void
   onOpenWebTerminal: (id: string) => void
   onCreateSshAccess: (id: string) => void
@@ -78,14 +72,11 @@ export interface SandboxTableActionsProps {
 
 export interface SandboxTableHeaderProps {
   table: Table<Sandbox>
-  regionOptions: FacetedFilterOption[]
-  regionsDataIsLoading: boolean
-  snapshots: SnapshotDto[]
-  snapshotsDataIsLoading: boolean
-  snapshotsDataHasMore?: boolean
-  onChangeSnapshotSearchValue: (name?: string) => void
+  templates: BoxTemplate[]
+  templatesDataIsLoading: boolean
   onRefresh: () => void
   isRefreshing?: boolean
+  headerAction?: ReactNode
 }
 
 export interface FacetedFilterOption {
@@ -103,14 +94,20 @@ export const convertTableSortingToApiSorting = (sorting: SortingState): SandboxS
   let field: ListSandboxesPaginatedSortEnum
 
   switch (sort.id) {
+    case 'boxId':
+      field = ListSandboxesPaginatedSortEnum.BOX_ID
+      break
+    case 'id':
+      field = ListSandboxesPaginatedSortEnum.ID
+      break
     case 'name':
       field = ListSandboxesPaginatedSortEnum.NAME
       break
     case 'state':
       field = ListSandboxesPaginatedSortEnum.STATE
       break
-    case 'snapshot':
-      field = ListSandboxesPaginatedSortEnum.SNAPSHOT
+    case 'template':
+      field = ListSandboxesPaginatedSortEnum.TEMPLATE
       break
     case 'region':
     case 'target':
@@ -147,9 +144,9 @@ export const convertTableFiltersToApiFilters = (columnFilters: ColumnFiltersStat
           filters.states = filter.value as ListSandboxesPaginatedStatesEnum[]
         }
         break
-      case 'snapshot':
+      case 'template':
         if (Array.isArray(filter.value) && filter.value.length > 0) {
-          filters.snapshots = filter.value as string[]
+          filters.templates = filter.value as string[]
         }
         break
       case 'region':
@@ -224,14 +221,20 @@ export const convertApiSortingToTableSorting = (sorting: SandboxSorting): Sortin
 
   let id: string
   switch (sorting.field) {
+    case ListSandboxesPaginatedSortEnum.BOX_ID:
+      id = 'boxId'
+      break
+    case ListSandboxesPaginatedSortEnum.ID:
+      id = 'id'
+      break
     case ListSandboxesPaginatedSortEnum.NAME:
       id = 'name'
       break
     case ListSandboxesPaginatedSortEnum.STATE:
       id = 'state'
       break
-    case ListSandboxesPaginatedSortEnum.SNAPSHOT:
-      id = 'snapshot'
+    case ListSandboxesPaginatedSortEnum.TEMPLATE:
+      id = 'template'
       break
     case ListSandboxesPaginatedSortEnum.REGION:
       id = 'region'
@@ -259,8 +262,8 @@ export const convertApiFiltersToTableFilters = (filters: SandboxFilters): Column
     columnFilters.push({ id: 'state', value: filters.states })
   }
 
-  if (filters.snapshots && filters.snapshots.length > 0) {
-    columnFilters.push({ id: 'snapshot', value: filters.snapshots })
+  if (filters.templates && filters.templates.length > 0) {
+    columnFilters.push({ id: 'template', value: filters.templates })
   }
 
   if (filters.regions && filters.regions.length > 0) {

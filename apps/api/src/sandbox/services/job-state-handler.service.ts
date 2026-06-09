@@ -7,11 +7,11 @@
 import { Injectable, Logger } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository } from 'typeorm'
-import { Snapshot } from '../entities/snapshot.entity'
-import { SnapshotRunner } from '../entities/snapshot-runner.entity'
+import { BoxTemplate } from '../entities/box-template.entity'
+import { RunnerArtifactCache } from '../entities/runner-artifact-cache.entity'
 import { SandboxState } from '../enums/sandbox-state.enum'
-import { SnapshotState } from '../enums/snapshot-state.enum'
-import { SnapshotRunnerState } from '../enums/snapshot-runner-state.enum'
+import { BoxTemplateState } from '../enums/box-template-state.enum'
+import { RunnerArtifactCacheState } from '../enums/runner-artifact-cache-state.enum'
 import { JobStatus } from '../enums/job-status.enum'
 import { JobType } from '../enums/job-type.enum'
 import { Job } from '../entities/job.entity'
@@ -35,10 +35,10 @@ export class JobStateHandlerService {
 
   constructor(
     private readonly sandboxRepository: SandboxRepository,
-    @InjectRepository(Snapshot)
-    private readonly snapshotRepository: Repository<Snapshot>,
-    @InjectRepository(SnapshotRunner)
-    private readonly snapshotRunnerRepository: Repository<SnapshotRunner>,
+    @InjectRepository(BoxTemplate)
+    private readonly boxTemplateRepository: Repository<BoxTemplate>,
+    @InjectRepository(RunnerArtifactCache)
+    private readonly runnerArtifactCacheRepository: Repository<RunnerArtifactCache>,
     private readonly organizationUsageService: OrganizationUsageService,
     private readonly redisLockProvider: RedisLockProvider,
   ) {}
@@ -72,14 +72,14 @@ export class JobStateHandlerService {
       case JobType.RESIZE_SANDBOX:
         await this.handleResizeSandboxJobCompletion(job)
         break
-      case JobType.PULL_SNAPSHOT:
-        await this.handlePullSnapshotJobCompletion(job)
+      case JobType.PULL_ARTIFACT:
+        await this.handlePullArtifactJobCompletion(job)
         break
-      case JobType.BUILD_SNAPSHOT:
-        await this.handleBuildSnapshotJobCompletion(job)
+      case JobType.BUILD_ARTIFACT:
+        await this.handleBuildArtifactJobCompletion(job)
         break
-      case JobType.REMOVE_SNAPSHOT:
-        await this.handleRemoveSnapshotJobCompletion(job)
+      case JobType.REMOVE_ARTIFACT:
+        await this.handleRemoveArtifactJobCompletion(job)
         break
       case JobType.CREATE_BACKUP:
         await this.handleCreateBackupJobCompletion(job)
@@ -255,21 +255,6 @@ export class JobStateHandlerService {
           updateData.errorReason = errorReason || 'Failed to destroy sandbox'
           updateData.recoverable = recoverable
         }
-      } else if (
-        sandbox.desiredState === SandboxDesiredState.ARCHIVED &&
-        sandbox.backupState === BackupState.COMPLETED
-      ) {
-        if (job.status === JobStatus.COMPLETED) {
-          this.logger.debug(
-            `DESTROY_SANDBOX job ${job.id} completed during archiving, marking sandbox ${sandboxId} as ARCHIVED`,
-          )
-        } else if (job.status === JobStatus.FAILED) {
-          this.logger.warn(
-            `DESTROY_SANDBOX job ${job.id} failed during archiving for sandbox ${sandboxId}: ${job.errorMessage}. Marking as ARCHIVED since backup is complete.`,
-          )
-        }
-        updateData.state = SandboxState.ARCHIVED
-        updateData.errorReason = null
       } else {
         return
       }
@@ -280,140 +265,140 @@ export class JobStateHandlerService {
     }
   }
 
-  private async handlePullSnapshotJobCompletion(job: Job): Promise<void> {
-    const snapshotRef = job.resourceId
+  private async handlePullArtifactJobCompletion(job: Job): Promise<void> {
+    const artifactRef = job.resourceId
     const runnerId = job.runnerId
-    if (!snapshotRef || !runnerId) return
+    if (!artifactRef || !runnerId) return
 
     try {
-      const snapshotRunner = await this.snapshotRunnerRepository.findOne({
-        where: { snapshotRef, runnerId },
+      const runnerArtifactCache = await this.runnerArtifactCacheRepository.findOne({
+        where: { artifactRef, runnerId },
       })
 
-      if (!snapshotRunner) {
-        this.logger.warn(`SnapshotRunner not found for snapshot ${snapshotRef} on runner ${runnerId}`)
+      if (!runnerArtifactCache) {
+        this.logger.warn(`RunnerArtifactCache not found for artifact ${artifactRef} on runner ${runnerId}`)
         return
       }
 
       if (job.status === JobStatus.COMPLETED) {
         this.logger.debug(
-          `PULL_SNAPSHOT job ${job.id} completed successfully, marking SnapshotRunner ${snapshotRunner.id} as READY`,
+          `PULL_ARTIFACT job ${job.id} completed successfully, marking RunnerArtifactCache ${runnerArtifactCache.id} as READY`,
         )
-        snapshotRunner.state = SnapshotRunnerState.READY
-        snapshotRunner.errorReason = null
+        runnerArtifactCache.state = RunnerArtifactCacheState.READY
+        runnerArtifactCache.errorReason = null
 
-        // Check if this is the initial runner for a snapshot and update the snapshot state
-        const snapshot = await this.snapshotRepository.findOne({
-          where: { initialRunnerId: runnerId, ref: snapshotRef },
+        // Check if this is the initial runner for a template and update the template state.
+        const template = await this.boxTemplateRepository.findOne({
+          where: { initialRunnerId: runnerId, artifactRef: artifactRef },
         })
-        if (snapshot && (snapshot.state === SnapshotState.PULLING || snapshot.state === SnapshotState.BUILDING)) {
-          this.logger.debug(`Marking snapshot ${snapshot.id} as ACTIVE after initial pull completed`)
-          snapshot.state = SnapshotState.ACTIVE
-          snapshot.errorReason = null
-          snapshot.lastUsedAt = new Date()
-          await this.snapshotRepository.save(snapshot)
+        if (template && (template.state === BoxTemplateState.PULLING || template.state === BoxTemplateState.BUILDING)) {
+          this.logger.debug(`Marking template ${template.id} as ACTIVE after initial pull completed`)
+          template.state = BoxTemplateState.ACTIVE
+          template.errorReason = null
+          template.lastUsedAt = new Date()
+          await this.boxTemplateRepository.save(template)
         }
       } else if (job.status === JobStatus.FAILED) {
-        this.logger.error(`PULL_SNAPSHOT job ${job.id} failed for snapshot ${snapshotRef}: ${job.errorMessage}`)
-        snapshotRunner.state = SnapshotRunnerState.ERROR
-        snapshotRunner.errorReason = job.errorMessage || 'Failed to pull snapshot'
+        this.logger.error(`PULL_ARTIFACT job ${job.id} failed for artifact ${artifactRef}: ${job.errorMessage}`)
+        runnerArtifactCache.state = RunnerArtifactCacheState.ERROR
+        runnerArtifactCache.errorReason = job.errorMessage || 'Failed to pull artifact'
 
-        // Check if this is the initial runner for a snapshot and update the snapshot state
-        const snapshot = await this.snapshotRepository.findOne({
-          where: { initialRunnerId: runnerId, ref: snapshotRef },
+        // Check if this is the initial runner for a template and update the template state.
+        const template = await this.boxTemplateRepository.findOne({
+          where: { initialRunnerId: runnerId, artifactRef: artifactRef },
         })
-        if (snapshot && snapshot.state === SnapshotState.PULLING) {
-          this.logger.error(`Marking snapshot ${snapshot.id} as ERROR after initial pull failed`)
-          snapshot.state = SnapshotState.ERROR
-          snapshot.errorReason = job.errorMessage || 'Failed to pull snapshot on initial runner'
-          await this.snapshotRepository.save(snapshot)
+        if (template && template.state === BoxTemplateState.PULLING) {
+          this.logger.error(`Marking template ${template.id} as ERROR after initial pull failed`)
+          template.state = BoxTemplateState.ERROR
+          template.errorReason = job.errorMessage || 'Failed to pull artifact on initial runner'
+          await this.boxTemplateRepository.save(template)
         }
       }
 
-      await this.snapshotRunnerRepository.save(snapshotRunner)
+      await this.runnerArtifactCacheRepository.save(runnerArtifactCache)
     } catch (error) {
-      this.logger.error(`Error handling PULL_SNAPSHOT job completion for snapshot ${snapshotRef}:`, error)
+      this.logger.error(`Error handling PULL_ARTIFACT job completion for artifact ${artifactRef}:`, error)
     }
   }
 
-  private async handleBuildSnapshotJobCompletion(job: Job): Promise<void> {
-    const snapshotRef = job.resourceId
+  private async handleBuildArtifactJobCompletion(job: Job): Promise<void> {
+    const artifactRef = job.resourceId
     const runnerId = job.runnerId
-    if (!snapshotRef || !runnerId) return
+    if (!artifactRef || !runnerId) return
 
     try {
-      // For BUILD_SNAPSHOT, find snapshot by buildInfo.snapshotRef
-      const snapshot = await this.snapshotRepository
-        .createQueryBuilder('snapshot')
-        .leftJoinAndSelect('snapshot.buildInfo', 'buildInfo')
-        .where('snapshot.initialRunnerId = :runnerId', { runnerId })
-        .andWhere('buildInfo.snapshotRef = :snapshotRef', { snapshotRef })
+      // For BUILD_ARTIFACT, find the template by buildInfo.artifactRef.
+      const template = await this.boxTemplateRepository
+        .createQueryBuilder('template')
+        .leftJoinAndSelect('template.buildInfo', 'buildInfo')
+        .where('template.initialRunnerId = :runnerId', { runnerId })
+        .andWhere('buildInfo.artifactRef = :artifactRef', { artifactRef })
         .getOne()
 
-      // Update SnapshotRunner state
-      const snapshotRunner = await this.snapshotRunnerRepository.findOne({
-        where: { snapshotRef, runnerId },
+      // Update RunnerArtifactCache state
+      const runnerArtifactCache = await this.runnerArtifactCacheRepository.findOne({
+        where: { artifactRef, runnerId },
       })
 
       if (job.status === JobStatus.COMPLETED) {
-        this.logger.debug(`BUILD_SNAPSHOT job ${job.id} completed successfully for snapshot ref ${snapshotRef}`)
+        this.logger.debug(`BUILD_ARTIFACT job ${job.id} completed successfully for artifact ref ${artifactRef}`)
 
-        if (snapshot?.state === SnapshotState.BUILDING) {
-          snapshot.state = SnapshotState.ACTIVE
-          snapshot.errorReason = null
-          snapshot.lastUsedAt = new Date()
-          await this.snapshotRepository.save(snapshot)
-          this.logger.debug(`Marked snapshot ${snapshot.id} as ACTIVE after build completed`)
+        if (template?.state === BoxTemplateState.BUILDING) {
+          template.state = BoxTemplateState.ACTIVE
+          template.errorReason = null
+          template.lastUsedAt = new Date()
+          await this.boxTemplateRepository.save(template)
+          this.logger.debug(`Marked template ${template.id} as ACTIVE after build completed`)
         }
 
-        if (snapshotRunner) {
-          snapshotRunner.state = SnapshotRunnerState.READY
-          snapshotRunner.errorReason = null
-          await this.snapshotRunnerRepository.save(snapshotRunner)
+        if (runnerArtifactCache) {
+          runnerArtifactCache.state = RunnerArtifactCacheState.READY
+          runnerArtifactCache.errorReason = null
+          await this.runnerArtifactCacheRepository.save(runnerArtifactCache)
         }
       } else if (job.status === JobStatus.FAILED) {
-        this.logger.error(`BUILD_SNAPSHOT job ${job.id} failed for snapshot ref ${snapshotRef}: ${job.errorMessage}`)
+        this.logger.error(`BUILD_ARTIFACT job ${job.id} failed for artifact ref ${artifactRef}: ${job.errorMessage}`)
 
-        if (snapshot?.state === SnapshotState.BUILDING) {
-          snapshot.state = SnapshotState.ERROR
-          snapshot.errorReason = job.errorMessage || 'Failed to build snapshot'
-          await this.snapshotRepository.save(snapshot)
+        if (template?.state === BoxTemplateState.BUILDING) {
+          template.state = BoxTemplateState.ERROR
+          template.errorReason = job.errorMessage || 'Failed to build artifact'
+          await this.boxTemplateRepository.save(template)
         }
 
-        if (snapshotRunner) {
-          snapshotRunner.state = SnapshotRunnerState.ERROR
-          snapshotRunner.errorReason = job.errorMessage || 'Failed to build snapshot'
-          await this.snapshotRunnerRepository.save(snapshotRunner)
+        if (runnerArtifactCache) {
+          runnerArtifactCache.state = RunnerArtifactCacheState.ERROR
+          runnerArtifactCache.errorReason = job.errorMessage || 'Failed to build artifact'
+          await this.runnerArtifactCacheRepository.save(runnerArtifactCache)
         }
       }
     } catch (error) {
-      this.logger.error(`Error handling BUILD_SNAPSHOT job completion for snapshot ref ${snapshotRef}:`, error)
+      this.logger.error(`Error handling BUILD_ARTIFACT job completion for artifact ref ${artifactRef}:`, error)
     }
   }
 
-  private async handleRemoveSnapshotJobCompletion(job: Job): Promise<void> {
-    const snapshotRef = job.resourceId
+  private async handleRemoveArtifactJobCompletion(job: Job): Promise<void> {
+    const artifactRef = job.resourceId
     const runnerId = job.runnerId
-    if (!snapshotRef || !runnerId) return
+    if (!artifactRef || !runnerId) return
 
     try {
       if (job.status === JobStatus.COMPLETED) {
         this.logger.debug(
-          `REMOVE_SNAPSHOT job ${job.id} completed successfully for snapshot ${snapshotRef} on runner ${runnerId}`,
+          `REMOVE_ARTIFACT job ${job.id} completed successfully for artifact ${artifactRef} on runner ${runnerId}`,
         )
-        const affected = await this.snapshotRunnerRepository.delete({ snapshotRef, runnerId })
+        const affected = await this.runnerArtifactCacheRepository.delete({ artifactRef, runnerId })
         if (affected.affected && affected.affected > 0) {
           this.logger.debug(
-            `Removed ${affected.affected} snapshot runners for snapshot ${snapshotRef} on runner ${runnerId}`,
+            `Removed ${affected.affected} runner artifact caches for artifact ${artifactRef} on runner ${runnerId}`,
           )
         }
       } else if (job.status === JobStatus.FAILED) {
         this.logger.error(
-          `REMOVE_SNAPSHOT job ${job.id} failed for snapshot ${snapshotRef} on runner ${runnerId}: ${job.errorMessage}`,
+          `REMOVE_ARTIFACT job ${job.id} failed for artifact ${artifactRef} on runner ${runnerId}: ${job.errorMessage}`,
         )
       }
     } catch (error) {
-      this.logger.error(`Error handling REMOVE_SNAPSHOT job completion for snapshot ${snapshotRef}:`, error)
+      this.logger.error(`Error handling REMOVE_ARTIFACT job completion for artifact ${artifactRef}:`, error)
     }
   }
 

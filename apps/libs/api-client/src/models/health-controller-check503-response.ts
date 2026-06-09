@@ -12,10 +12,9 @@
  * Do not edit the class manually.
  */
 
-
 // May contain unused imports in some cases
 // @ts-ignore
-import type { HealthControllerCheck200ResponseInfoValue } from './health-controller-check200-response-info-value';
+import type { HealthControllerCheck200ResponseInfoValue } from './health-controller-check200-response-info-value'
 
 /**
  *
@@ -23,28 +22,28 @@ import type { HealthControllerCheck200ResponseInfoValue } from './health-control
  * @interface HealthControllerCheck503Response
  */
 export interface HealthControllerCheck503Response {
-    /**
-     *
-     * @type {string}
-     * @memberof HealthControllerCheck503Response
-     */
-    'status'?: string;
-    /**
-     *
-     * @type {{ [key: string]: HealthControllerCheck200ResponseInfoValue; }}
-     * @memberof HealthControllerCheck503Response
-     */
-    'info'?: { [key: string]: HealthControllerCheck200ResponseInfoValue; } | null;
-    /**
-     *
-     * @type {{ [key: string]: HealthControllerCheck200ResponseInfoValue; }}
-     * @memberof HealthControllerCheck503Response
-     */
-    'error'?: { [key: string]: HealthControllerCheck200ResponseInfoValue; } | null;
-    /**
-     *
-     * @type {{ [key: string]: HealthControllerCheck200ResponseInfoValue; }}
-     * @memberof HealthControllerCheck503Response
-     */
-    'details'?: { [key: string]: HealthControllerCheck200ResponseInfoValue; };
+  /**
+   *
+   * @type {string}
+   * @memberof HealthControllerCheck503Response
+   */
+  status?: string
+  /**
+   *
+   * @type {{ [key: string]: HealthControllerCheck200ResponseInfoValue; }}
+   * @memberof HealthControllerCheck503Response
+   */
+  info?: { [key: string]: HealthControllerCheck200ResponseInfoValue } | null
+  /**
+   *
+   * @type {{ [key: string]: HealthControllerCheck200ResponseInfoValue; }}
+   * @memberof HealthControllerCheck503Response
+   */
+  error?: { [key: string]: HealthControllerCheck200ResponseInfoValue } | null
+  /**
+   *
+   * @type {{ [key: string]: HealthControllerCheck200ResponseInfoValue; }}
+   * @memberof HealthControllerCheck503Response
+   */
+  details?: { [key: string]: HealthControllerCheck200ResponseInfoValue }
 }

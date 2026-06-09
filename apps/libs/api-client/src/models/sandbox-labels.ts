@@ -12,18 +12,16 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  *
  * @export
  * @interface SandboxLabels
  */
 export interface SandboxLabels {
-    /**
-     * Key-value pairs of labels
-     * @type {{ [key: string]: string; }}
-     * @memberof SandboxLabels
-     */
-    'labels': { [key: string]: string; };
+  /**
+   * Key-value pairs of labels
+   * @type {{ [key: string]: string; }}
+   * @memberof SandboxLabels
+   */
+  labels: { [key: string]: string }
 }

@@ -14,6 +14,7 @@ export default [
     ignores: [
       '**/dist',
       '**/node_modules/**',
+      '**/.sst/**',
       '**/vite.config.*.timestamp*',
       '**/vitest.config.*.timestamp*',
       'docs/**',

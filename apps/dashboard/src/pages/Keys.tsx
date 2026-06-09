@@ -6,6 +6,7 @@
 
 import { CreateApiKeyDialog } from '@/components/CreateApiKeyDialog'
 import { PageContent, PageHeader, PageLayout, PageTitle } from '@/components/PageLayout'
+import { CREATE_API_KEY_PERMISSIONS_GROUPS } from '@/constants/CreateApiKeyPermissionsGroups'
 import { useRevokeApiKeyMutation } from '@/hooks/mutations/useRevokeApiKeyMutation'
 import { useApiKeysQuery } from '@/hooks/queries/useApiKeysQuery'
 import { useConfig } from '@/hooks/useConfig'
@@ -15,6 +16,8 @@ import { ApiKeyList, CreateApiKeyPermissionsEnum, OrganizationUserRoleEnum } fro
 import { useCallback, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { ApiKeyTable } from '../components/ApiKeyTable'
+
+const DEFAULT_API_KEY_PERMISSIONS = CREATE_API_KEY_PERMISSIONS_GROUPS.flatMap((group) => group.permissions)
 
 const Keys: React.FC = () => {
   const { apiUrl } = useConfig()
@@ -29,9 +32,12 @@ const Keys: React.FC = () => {
       return []
     }
     if (authenticatedUserOrganizationMember.role === OrganizationUserRoleEnum.OWNER) {
-      return Object.values(CreateApiKeyPermissionsEnum)
+      return DEFAULT_API_KEY_PERMISSIONS
     }
-    return Array.from(new Set(authenticatedUserOrganizationMember.assignedRoles.flatMap((role) => role.permissions)))
+    const assignedPermissions = new Set(
+      authenticatedUserOrganizationMember.assignedRoles.flatMap((role) => role.permissions),
+    )
+    return DEFAULT_API_KEY_PERMISSIONS.filter((permission) => assignedPermissions.has(permission))
   }, [authenticatedUserOrganizationMember])
 
   const handleRevoke = async (key: ApiKeyList) => {

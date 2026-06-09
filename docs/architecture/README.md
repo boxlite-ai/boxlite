@@ -1,5 +1,11 @@
 # Architecture
 
+## Cloud Control Plane
+
+- [Cloud control-plane architecture](./cloud-control-plane.md) covers the hosted API, Dashboard, Runner, artifact registry, template, artifact, and cache relationships.
+- [Naming glossary](./naming-glossary.md) defines where to use Box, BoxTemplate, RuntimeArtifact, RunnerArtifactCache, and Snapshot.
+- [ADR: Template, artifact, and snapshot naming](./decisions/2026-05-31-template-artifact-snapshot.md) records the naming boundary for the pre-launch control-plane refactor.
+
 ## Overview
 
 BoxLite is an embeddable virtual machine runtime that follows the SQLite philosophy: a library that

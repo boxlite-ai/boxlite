@@ -38,8 +38,15 @@ var CreateCmd = &cobra.Command{
 		createSandbox := apiclient.NewCreateSandbox()
 
 		// Add non-zero values to the request
-		if snapshotFlag != "" {
-			createSandbox.SetSnapshot(snapshotFlag)
+		if templateFlag != "" && legacySnapshotFlag != "" {
+			return fmt.Errorf("cannot specify both --template and --snapshot")
+		}
+		templateId := templateFlag
+		if legacySnapshotFlag != "" {
+			templateId = legacySnapshotFlag
+		}
+		if templateId != "" {
+			createSandbox.SetTemplateId(templateId)
 		}
 		if nameFlag != "" {
 			createSandbox.SetName(nameFlag)
@@ -90,9 +97,6 @@ var CreateCmd = &cobra.Command{
 		}
 		if autoStopFlag >= 0 {
 			createSandbox.SetAutoStopInterval(autoStopFlag)
-		}
-		if autoArchiveFlag >= 0 {
-			createSandbox.SetAutoArchiveInterval(autoArchiveFlag)
 		}
 		createSandbox.SetAutoDeleteInterval(autoDeleteFlag)
 
@@ -146,7 +150,7 @@ var CreateCmd = &cobra.Command{
 				return err
 			}
 
-			err = common.AwaitSandboxState(ctx, apiClient, sandbox.Id, apiclient.SANDBOXSTATE_BUILDING_SNAPSHOT)
+			err = common.AwaitSandboxState(ctx, apiClient, sandbox.Id, apiclient.SANDBOXSTATE_BUILDING_ARTIFACT)
 			if err != nil {
 				return err
 			}
@@ -188,7 +192,8 @@ var CreateCmd = &cobra.Command{
 }
 
 var (
-	snapshotFlag         string
+	templateFlag         string
+	legacySnapshotFlag   string
 	nameFlag             string
 	userFlag             string
 	envFlag              []string
@@ -201,7 +206,6 @@ var (
 	memoryFlag           int32
 	diskFlag             int32
 	autoStopFlag         int32
-	autoArchiveFlag      int32
 	autoDeleteFlag       int32
 	volumesFlag          []string
 	dockerfileFlag       string
@@ -211,7 +215,8 @@ var (
 )
 
 func init() {
-	CreateCmd.Flags().StringVar(&snapshotFlag, "snapshot", "", "Snapshot to use for the sandbox")
+	CreateCmd.Flags().StringVar(&templateFlag, "template", "", "Template to use for the sandbox")
+	CreateCmd.Flags().StringVar(&legacySnapshotFlag, "snapshot", "", "Deprecated: use --template")
 	CreateCmd.Flags().StringVar(&nameFlag, "name", "", "Name of the sandbox")
 	CreateCmd.Flags().StringVar(&userFlag, "user", "", "User associated with the sandbox")
 	CreateCmd.Flags().StringArrayVarP(&envFlag, "env", "e", []string{}, "Environment variables (format: KEY=VALUE)")
@@ -224,14 +229,17 @@ func init() {
 	CreateCmd.Flags().Int32Var(&memoryFlag, "memory", 0, "Memory allocated to the sandbox in MB")
 	CreateCmd.Flags().Int32Var(&diskFlag, "disk", 0, "Disk space allocated to the sandbox in GB")
 	CreateCmd.Flags().Int32Var(&autoStopFlag, "auto-stop", 15, "Auto-stop interval in minutes (0 means disabled)")
-	CreateCmd.Flags().Int32Var(&autoArchiveFlag, "auto-archive", 10080, "Auto-archive interval in minutes (0 means the maximum interval will be used)")
 	CreateCmd.Flags().Int32Var(&autoDeleteFlag, "auto-delete", -1, "Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping)")
 	CreateCmd.Flags().StringArrayVarP(&volumesFlag, "volume", "v", []string{}, "Volumes to mount (format: VOLUME_NAME:MOUNT_PATH)")
-	CreateCmd.Flags().StringVarP(&dockerfileFlag, "dockerfile", "f", "", "Path to Dockerfile for Sandbox snapshot")
+	CreateCmd.Flags().StringVarP(&dockerfileFlag, "dockerfile", "f", "", "Path to Dockerfile for sandbox build")
 	CreateCmd.Flags().StringArrayVarP(&contextFlag, "context", "c", []string{}, "Files or directories to include in the build context (can be specified multiple times)")
 	CreateCmd.Flags().BoolVar(&networkBlockAllFlag, "network-block-all", false, "Whether to block all network access for the sandbox")
 	CreateCmd.Flags().StringVar(&networkAllowListFlag, "network-allow-list", "", "Comma-separated list of allowed CIDR network addresses for the sandbox")
 
+	CreateCmd.MarkFlagsMutuallyExclusive("template", "snapshot")
+	CreateCmd.MarkFlagsMutuallyExclusive("template", "dockerfile")
+	CreateCmd.MarkFlagsMutuallyExclusive("template", "context")
 	CreateCmd.MarkFlagsMutuallyExclusive("snapshot", "dockerfile")
 	CreateCmd.MarkFlagsMutuallyExclusive("snapshot", "context")
+	_ = CreateCmd.Flags().MarkHidden("snapshot")
 }

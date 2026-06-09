@@ -12,18 +12,16 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  *
  * @export
  * @interface UpdateOrganizationDefaultRegion
  */
 export interface UpdateOrganizationDefaultRegion {
-    /**
-     * The ID of the default region for the organization
-     * @type {string}
-     * @memberof UpdateOrganizationDefaultRegion
-     */
-    'defaultRegionId': string;
+  /**
+   * The ID of the default region for the organization
+   * @type {string}
+   * @memberof UpdateOrganizationDefaultRegion
+   */
+  defaultRegionId: string
 }

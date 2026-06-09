@@ -222,7 +222,7 @@ function MetricsEmptyState() {
         </EmptyMedia>
         <EmptyTitle>No metrics available</EmptyTitle>
         <EmptyDescription>
-          Metrics may take a moment to appear after the sandbox starts.{' '}
+          Metrics may take a moment to appear after the box starts.{' '}
           <a href={`${BOXLITE_DOCS_URL}/en/experimental/otel-collection`} target="_blank" rel="noopener noreferrer">
             Learn more about observability
           </a>

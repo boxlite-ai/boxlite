@@ -12,8 +12,6 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  *
  * @export
@@ -21,11 +19,11 @@
  */
 
 export const EnumsBackupState = {
-    BackupStateNone: 'NONE',
-    BackupStatePending: 'PENDING',
-    BackupStateInProgress: 'IN_PROGRESS',
-    BackupStateCompleted: 'COMPLETED',
-    BackupStateFailed: 'FAILED'
-} as const;
+  BackupStateNone: 'NONE',
+  BackupStatePending: 'PENDING',
+  BackupStateInProgress: 'IN_PROGRESS',
+  BackupStateCompleted: 'COMPLETED',
+  BackupStateFailed: 'FAILED',
+} as const
 
-export type EnumsBackupState = typeof EnumsBackupState[keyof typeof EnumsBackupState];
+export type EnumsBackupState = (typeof EnumsBackupState)[keyof typeof EnumsBackupState]

@@ -15,7 +15,7 @@
 //   2. platform (VPC/DB/Redis/S3)   8. observability (Jaeger, OtelCollector)
 //   3. IAM                          9. admin UIs (PgAdmin/RegistryUI/MailDev)
 //   4. auth (Dex)                  10. CDN (CloudFront)
-//   5. registry (SnapshotManager)  11. runner (EC2 + nested KVM)
+//   5. registry (ArtifactRegistry)  11. runner (EC2 + nested KVM)
 //   6. API
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -27,7 +27,7 @@ const PORTS = {
   PROXY: 4000,
   SSH_GATEWAY: 2222,
   DEX: 5556,
-  SNAPSHOT_MANAGER: 5000,
+  ARTIFACT_REGISTRY: 5000,
   RUNNER: 3003,
   JAEGER_UI: 16686,
   OTLP_HTTP: 4318,
@@ -100,7 +100,7 @@ export default $config({
       home: "aws",
       providers: {
         aws: { region: REGION, profile: envOr("AWS_PROFILE", "default") },
-        cloudflare: "6.14.0",
+        cloudflare: "6.15.0",
         random: "4.16.6",
         // Post-deploy runner registration (see RegisterExtraRunners in run()).
         command: "1.0.1",
@@ -197,27 +197,27 @@ export default $config({
       },
     });
 
-    // ─── 5. REGISTRY (S3-backed snapshot store) ──────────────────────────────
-    // Replaces upstream registry:2.8.2 — snapshots persist in S3, not on an
-    // ephemeral container disk.
-    const snapshotManager = new sst.aws.Service("SnapshotManager", {
+    // ─── 5. ARTIFACT REGISTRY (S3-backed OCI registry) ──────────────────────
+    // Replaces upstream registry:2.8.2 — runtime artifacts persist in S3,
+    // not on an ephemeral container disk.
+    const artifactRegistry = new sst.aws.Service("ArtifactRegistry", {
       cluster,
-      image: { context: "../..", dockerfile: "apps/snapshot-manager/Dockerfile", cache: false },
+      image: { context: "../..", dockerfile: "apps/artifact-registry/Dockerfile", cache: false },
       loadBalancer: {
-        rules: [{ listen: "80/http", forward: `${PORTS.SNAPSHOT_MANAGER}/http` }],
-        health: { [`${PORTS.SNAPSHOT_MANAGER}/http`]: httpHealth("/healthz") },
+        rules: [{ listen: "80/http", forward: `${PORTS.ARTIFACT_REGISTRY}/http` }],
+        health: { [`${PORTS.ARTIFACT_REGISTRY}/http`]: httpHealth("/healthz") },
       },
       environment: {
-        SNAPSHOT_MANAGER_STORAGE_DRIVER: "s3",
-        SNAPSHOT_MANAGER_STORAGE_S3_REGION: REGION,
-        SNAPSHOT_MANAGER_STORAGE_S3_BUCKET: storage.name,
-        SNAPSHOT_MANAGER_STORAGE_S3_ACCESSKEY: s3AccessKey.id,
-        SNAPSHOT_MANAGER_STORAGE_S3_SECRETKEY: s3AccessKey.secret,
-        SNAPSHOT_MANAGER_STORAGE_DELETE_ENABLED: "true",
-        SNAPSHOT_MANAGER_AUTH_TYPE: "none",
+        ARTIFACT_REGISTRY_STORAGE_DRIVER: "s3",
+        ARTIFACT_REGISTRY_STORAGE_S3_REGION: REGION,
+        ARTIFACT_REGISTRY_STORAGE_S3_BUCKET: storage.name,
+        ARTIFACT_REGISTRY_STORAGE_S3_ACCESSKEY: s3AccessKey.id,
+        ARTIFACT_REGISTRY_STORAGE_S3_SECRETKEY: s3AccessKey.secret,
+        ARTIFACT_REGISTRY_STORAGE_DELETE_ENABLED: "true",
+        ARTIFACT_REGISTRY_AUTH_TYPE: "none",
       },
     });
-    const registry = snapshotManager; // API uses this URL for both transient + internal registries
+    const registry = artifactRegistry; // API uses this URL for both transient + internal registries
 
     // ─── 6. API (NestJS control plane) ───────────────────────────────────────
     const api = new sst.aws.Service("Api", {
@@ -253,7 +253,30 @@ export default $config({
         RUN_MIGRATIONS: "true",
         VERSION: "0.1.0",
         DEFAULT_REGION_ENFORCE_QUOTAS: "false",
-        DEFAULT_SNAPSHOT: envOr("DEFAULT_SNAPSHOT", "ubuntu:latest"),
+        DEFAULT_TEMPLATE: envOr("DEFAULT_TEMPLATE", "boxlite/base"),
+        BOXLITE_SYSTEM_IMAGE_TAG: envOr("BOXLITE_SYSTEM_IMAGE_TAG", "20260605-p0-r3"),
+        BOXLITE_SYSTEM_BASE_IMAGE: envOr(
+          "BOXLITE_SYSTEM_BASE_IMAGE",
+          "ghcr.io/boxlite-ai/boxlite-agent-base@sha256:834dcb65465985fc2f648451d76c81d166bc7672391c9064a0a115ce6306c85f",
+        ),
+        BOXLITE_SYSTEM_PYTHON_IMAGE: envOr(
+          "BOXLITE_SYSTEM_PYTHON_IMAGE",
+          "ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6",
+        ),
+        BOXLITE_SYSTEM_NODE_IMAGE: envOr(
+          "BOXLITE_SYSTEM_NODE_IMAGE",
+          "ghcr.io/boxlite-ai/boxlite-agent-node@sha256:fcb8b840ab68567975853666c82fb6c59a3c1d14a0cdc31d7cbf3a01e6c6d247",
+        ),
+        ...(process.env.BOXLITE_SYSTEM_SOURCE_REGISTRY_URL && {
+          BOXLITE_SYSTEM_SOURCE_REGISTRY_NAME: envOr(
+            "BOXLITE_SYSTEM_SOURCE_REGISTRY_NAME",
+            "BoxLite System Source Registry",
+          ),
+          BOXLITE_SYSTEM_SOURCE_REGISTRY_URL: process.env.BOXLITE_SYSTEM_SOURCE_REGISTRY_URL,
+          BOXLITE_SYSTEM_SOURCE_REGISTRY_USERNAME: envOr("BOXLITE_SYSTEM_SOURCE_REGISTRY_USERNAME", ""),
+          BOXLITE_SYSTEM_SOURCE_REGISTRY_PASSWORD: envOr("BOXLITE_SYSTEM_SOURCE_REGISTRY_PASSWORD", ""),
+          BOXLITE_SYSTEM_SOURCE_REGISTRY_PROJECT_ID: envOr("BOXLITE_SYSTEM_SOURCE_REGISTRY_PROJECT_ID", ""),
+        }),
 
         // Database (SST-linked)
         DB_HOST: db.host,
@@ -276,6 +299,9 @@ export default $config({
         OIDC_CLIENT_ID: envOr("OIDC_CLIENT_ID", "boxlite"),
         OIDC_AUDIENCE: envOr("OIDC_AUDIENCE", "boxlite"),
         OIDC_ISSUER_BASE_URL: requireOidcIssuer(),
+        ...(process.env.PUBLIC_OIDC_DOMAIN && {
+          PUBLIC_OIDC_DOMAIN: process.env.PUBLIC_OIDC_DOMAIN,
+        }),
         // Optional: Auth0 Management API (enables account linking etc.)
         ...(process.env.OIDC_MANAGEMENT_API_ENABLED === "true" && {
           OIDC_MANAGEMENT_API_ENABLED: "true",
@@ -331,7 +357,7 @@ export default $config({
         APP_URL: envOr("APP_URL", ""),
         DASHBOARD_BASE_API_URL: envOr("DASHBOARD_BASE_API_URL", `https://api.${stackDomain}`),
 
-        // Docker registries (both default to the in-cluster SnapshotManager)
+        // Docker registries (both default to the in-cluster ArtifactRegistry)
         ...registryEnv("TRANSIENT", registry.url),
         ...registryEnv("INTERNAL", registry.url),
 
@@ -400,7 +426,10 @@ export default $config({
       image: { context: "../..", dockerfile: "apps/ssh-gateway/Dockerfile", cache: false },
       loadBalancer: { rules: [{ listen: `${PORTS.SSH_GATEWAY}/tcp`, forward: `${PORTS.SSH_GATEWAY}/tcp` }] },
       environment: {
-        API_URL: api.url,
+        // api-client-go composes paths like "/sandbox/ssh-access/validate" directly.
+        // The Nest control plane is globally mounted under /api, so the gateway
+        // must use the API base path rather than the raw ALB root.
+        API_URL: $interpolate`${stripTrailingSlash(api.url)}/api`,
         API_KEY: envOr("SSH_GATEWAY_API_KEY", sshGatewayApiKey.result), // NB: not SSH_GATEWAY_API_KEY
         SSH_PRIVATE_KEY: envOr("SSH_PRIVATE_KEY_B64", ""),
         SSH_HOST_KEY: envOr("SSH_HOST_KEY_B64", ""),
@@ -503,7 +532,7 @@ export default $config({
         REGISTRY_TITLE: "BoxLite Registry",
         DELETE_IMAGES: "true",
         SHOW_CONTENT_DIGEST: "true",
-        NGINX_PROXY_PASS_URL: snapshotManager.url,
+        NGINX_PROXY_PASS_URL: artifactRegistry.url,
         SHOW_CATALOG_NB_TAGS: "true",
         REGISTRY_SECURED: "false",
         CATALOG_ELEMENTS_LIMIT: "1000",

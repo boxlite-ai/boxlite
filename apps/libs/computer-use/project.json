@@ -24,11 +24,11 @@
     "build-amd64": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "./hack/computer-use/build-computer-use-amd64.sh"
+        "command": "SCRIPT=./hack/computer-use/build-computer-use-amd64.sh; if [ ! -x \"$SCRIPT\" ]; then SCRIPT=../hack/computer-use/build-computer-use-amd64.sh; fi; if [ -n \"$SKIP_COMPUTER_USE_BUILD\" ]; then echo 'Skipping computer-use amd64 build'; elif [ -x \"$SCRIPT\" ]; then \"$SCRIPT\"; else GOOS=linux GOARCH=amd64 go build -o dist/libs/computer-use-amd64 {projectRoot}/main.go; fi"
       },
       "configurations": {
         "production": {
-          "command": "if [ -n \"$SKIP_COMPUTER_USE_BUILD\" ]; then echo 'Skipping computer-use build'; else ./hack/computer-use/build-computer-use-amd64.sh; fi"
+          "command": "SCRIPT=./hack/computer-use/build-computer-use-amd64.sh; if [ ! -x \"$SCRIPT\" ]; then SCRIPT=../hack/computer-use/build-computer-use-amd64.sh; fi; if [ -n \"$SKIP_COMPUTER_USE_BUILD\" ]; then echo 'Skipping computer-use build'; else \"$SCRIPT\"; fi"
         }
       },
       "inputs": [
@@ -37,6 +37,8 @@
         "{projectRoot}/go.sum",
         "{workspaceRoot}/hack/computer-use/build-computer-use-amd64.sh",
         "{workspaceRoot}/hack/computer-use/Dockerfile",
+        "{workspaceRoot}/../hack/computer-use/build-computer-use-amd64.sh",
+        "{workspaceRoot}/../hack/computer-use/Dockerfile",
         "sharedGlobals"
       ],
       "outputs": ["{workspaceRoot}/dist/libs/computer-use-amd64"],

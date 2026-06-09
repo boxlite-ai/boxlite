@@ -19,6 +19,12 @@ export function sandboxLookupCacheKeyById(args: SandboxLookupCacheKeyArgs & { sa
   return `sandbox:lookup:by-id:org:${organizationId}:returnDestroyed:${returnDestroyed}:value:${args.sandboxId}`
 }
 
+export function sandboxLookupCacheKeyByBoxId(args: SandboxLookupCacheKeyArgs & { boxId: string }): string {
+  const organizationId = args.organizationId ?? 'none'
+  const returnDestroyed = args.returnDestroyed ? 1 : 0
+  return `sandbox:lookup:by-box-id:org:${organizationId}:returnDestroyed:${returnDestroyed}:value:${args.boxId}`
+}
+
 export function sandboxLookupCacheKeyByName(args: SandboxLookupCacheKeyArgs & { sandboxName: string }): string {
   const organizationId = args.organizationId ?? 'none'
   const returnDestroyed = args.returnDestroyed ? 1 : 0
@@ -36,6 +42,11 @@ type SandboxOrgIdCacheKeyArgs = {
 export function sandboxOrgIdCacheKeyById(args: SandboxOrgIdCacheKeyArgs & { sandboxId: string }): string {
   const organizationId = args.organizationId ?? 'none'
   return `sandbox:orgId:by-id:org:${organizationId}:value:${args.sandboxId}`
+}
+
+export function sandboxOrgIdCacheKeyByBoxId(args: SandboxOrgIdCacheKeyArgs & { boxId: string }): string {
+  const organizationId = args.organizationId ?? 'none'
+  return `sandbox:orgId:by-box-id:org:${organizationId}:value:${args.boxId}`
 }
 
 export function sandboxOrgIdCacheKeyByName(args: SandboxOrgIdCacheKeyArgs & { sandboxName: string }): string {

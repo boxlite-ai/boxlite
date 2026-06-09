@@ -121,10 +121,10 @@ export class RunnerDto {
   currentAllocatedDiskGiB: number
 
   @ApiPropertyOptional({
-    description: 'Current snapshot count',
+    description: 'Current artifact count',
     example: 12,
   })
-  currentSnapshotCount: number
+  currentArtifactCount: number
 
   @ApiPropertyOptional({
     description: 'Current number of started sandboxes',
@@ -225,7 +225,7 @@ export class RunnerDto {
       currentAllocatedCpu: runner.currentAllocatedCpu,
       currentAllocatedMemoryGiB: runner.currentAllocatedMemoryGiB,
       currentAllocatedDiskGiB: runner.currentAllocatedDiskGiB,
-      currentSnapshotCount: runner.currentSnapshotCount,
+      currentArtifactCount: runner.currentArtifactCount,
       currentStartedSandboxes: runner.currentStartedSandboxes,
       availabilityScore: runner.availabilityScore,
       region: runner.region,

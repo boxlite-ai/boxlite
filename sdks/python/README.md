@@ -56,9 +56,9 @@ import boxlite
 
 async def main():
     # Create a box and run a command
-    async with boxlite.SimpleBox(image="python:slim") as box:
-        result = await box.exec("python", "-c", "print('Hello from BoxLite!')")
-        print(result.stdout)
+    async with boxlite.SimpleBox(image="busybox:1.36.1") as box:
+        result = await box.exec("echo", "Hello from BoxLite!")
+        print(result.stdout, end="")
         # Output: Hello from BoxLite!
 
 asyncio.run(main())
@@ -135,7 +135,7 @@ runtime = boxlite.Boxlite(boxlite.Options(
 ))
 
 # Create a box
-box = runtime.create(boxlite.BoxOptions(image="alpine:latest"))
+box = runtime.create(boxlite.BoxOptions(image="busybox:1.36.1"))
 
 # Reattach to existing box
 box = runtime.get("01JJNH8...")
@@ -151,7 +151,7 @@ for info in boxes:
 ```python
 runtime = boxlite.Boxlite.default()
 
-pull = await runtime.images.pull("alpine:latest")
+pull = await runtime.images.pull("busybox:1.36.1")
 print(pull.reference, pull.config_digest, pull.layer_count)
 
 for image in await runtime.images.list():
@@ -303,7 +303,7 @@ Handle to a running or stopped box.
 **Example:**
 
 ```python
-box = runtime.create(boxlite.BoxOptions(image="alpine:latest"))
+box = runtime.create(boxlite.BoxOptions(image="busybox:1.36.1"))
 
 # Execute commands
 execution = await box.exec("echo", "Hello")
@@ -399,8 +399,8 @@ Context manager for basic execution with automatic cleanup.
 **Example:**
 
 ```python
-async with boxlite.SimpleBox(image="python:slim") as box:
-    result = await box.exec("python", "-c", "print('Hello')")
+async with boxlite.SimpleBox(image="busybox:1.36.1") as box:
+    result = await box.exec("echo", "Hello")
     print(result.stdout)  # "Hello\n"
     print(result.exit_code)  # 0
 
@@ -486,7 +486,7 @@ Box for interactive shell sessions.
 **Example:**
 
 ```python
-async with boxlite.InteractiveBox(image="alpine:latest") as itbox:
+async with boxlite.InteractiveBox(image="busybox:1.36.1") as itbox:
     # Drop into interactive shell
     await itbox.wait()
 ```
@@ -567,7 +567,7 @@ Any OCI-compatible image from Docker Hub, GHCR, ECR, or other registries:
 ```python
 # Docker Hub (default registry)
 boxlite.BoxOptions(image="python:3.11-slim")
-boxlite.BoxOptions(image="alpine:latest")
+boxlite.BoxOptions(image="busybox:1.36.1")
 boxlite.BoxOptions(image="ubuntu:22.04")
 
 # GitHub Container Registry

@@ -22,7 +22,6 @@ import { SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/sandbox.
 import { SandboxEvents } from '../constants/sandbox-events.constants'
 import { SandboxStoppedEvent } from '../events/sandbox-stopped.event'
 import { SandboxStartedEvent } from '../events/sandbox-started.event'
-import { SandboxArchivedEvent } from '../events/sandbox-archived.event'
 import { SandboxDestroyedEvent } from '../events/sandbox-destroyed.event'
 import { SandboxCreatedEvent } from '../events/sandbox-create.event'
 
@@ -31,7 +30,6 @@ import { WithInstrumentation, WithSpan } from '../../common/decorators/otel.deco
 import { SandboxStartAction } from './sandbox-actions/sandbox-start.action'
 import { SandboxStopAction } from './sandbox-actions/sandbox-stop.action'
 import { SandboxDestroyAction } from './sandbox-actions/sandbox-destroy.action'
-import { SandboxArchiveAction } from './sandbox-actions/sandbox-archive.action'
 import { SYNC_AGAIN, DONT_SYNC_AGAIN } from './sandbox-actions/sandbox.action'
 
 import { TrackJobExecution } from '../../common/decorators/track-job-execution.decorator'
@@ -67,7 +65,6 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
     private readonly sandboxStartAction: SandboxStartAction,
     private readonly sandboxStopAction: SandboxStopAction,
     private readonly sandboxDestroyAction: SandboxDestroyAction,
-    private readonly sandboxArchiveAction: SandboxArchiveAction,
     private readonly configService: TypedConfigService,
     private readonly dockerRegistryService: DockerRegistryService,
     private readonly organizationService: OrganizationService,
@@ -157,67 +154,6 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
               }
             }),
           )
-        }),
-      )
-    } finally {
-      await this.redisLockProvider.unlock(lockKey)
-    }
-  }
-
-  @Cron(CronExpression.EVERY_10_SECONDS, { name: 'auto-archive-check' })
-  @TrackJobExecution()
-  @LogExecution('auto-archive-check')
-  @WithInstrumentation()
-  async autoArchiveCheck(): Promise<void> {
-    const lockKey = 'auto-archive-check-worker-selected'
-    //  lock the sync to only run one instance at a time
-    if (!(await this.redisLockProvider.lock(lockKey, 60))) {
-      return
-    }
-
-    try {
-      const sandboxes = await this.sandboxRepository
-        .createQueryBuilder('sandbox')
-        .innerJoin('sandbox_last_activity', 'activity', 'activity."sandboxId" = sandbox.id')
-        .where('sandbox."organizationId" != :warmPoolOrg', {
-          warmPoolOrg: SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
-        })
-        .andWhere('sandbox.state = :state', { state: SandboxState.STOPPED })
-        .andWhere('sandbox."desiredState" = :desiredState', {
-          desiredState: SandboxDesiredState.STOPPED,
-        })
-        .andWhere('sandbox.pending != true')
-        .andWhere('sandbox."autoArchiveInterval" != 0')
-        .andWhere('activity."lastActivityAt" < NOW() - INTERVAL \'1 minute\' * sandbox."autoArchiveInterval"')
-        .orderBy('sandbox."lastBackupAt"', 'ASC')
-        .limit(100)
-        .getMany()
-
-      await Promise.all(
-        sandboxes.map(async (sandbox) => {
-          const lockKey = getStateChangeLockKey(sandbox.id)
-          const acquired = await this.redisLockProvider.lock(lockKey, 30)
-          if (!acquired) {
-            return
-          }
-
-          this.logger.log(`Auto-archiving sandbox ${sandbox.id}: autoArchiveInterval=${sandbox.autoArchiveInterval}min`)
-
-          try {
-            const updateData: Partial<Sandbox> = {
-              desiredState: SandboxDesiredState.ARCHIVED,
-            }
-            await this.sandboxRepository.updateWhere(sandbox.id, {
-              updateData,
-              whereCondition: { pending: false, state: sandbox.state },
-            })
-
-            this.syncInstanceState(sandbox.id).catch(this.logger.error)
-          } catch (error) {
-            this.logger.error(`Error processing auto-archive state for sandbox ${sandbox.id}:`, error)
-          } finally {
-            await this.redisLockProvider.unlock(lockKey)
-          }
         }),
       )
     } finally {
@@ -348,7 +284,7 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
                 try {
                   const startScoreThreshold = this.configService.get('runnerScore.thresholds.start') || 0
                   const targetRunner = await this.runnerService.getRandomAvailableRunner({
-                    snapshotRef: sandbox.backupSnapshot,
+                    artifactRef: sandbox.backupSnapshot,
                     excludedRunnerIds: [runner.id],
                     availabilityScoreThreshold: startScoreThreshold,
                   })
@@ -361,9 +297,6 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
                 }
               }),
             )
-
-            // Archive ERROR sandboxes that have completed backups on this draining runner
-            await this.archiveErroredSandboxesOnDrainingRunner(runner.id)
 
             // Recover recoverable ERROR sandboxes in-place (expand disk) so they become STOPPED
             await this.recoverRecoverableSandboxesOnDrainingRunner(runner.id)
@@ -378,58 +311,6 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
     } finally {
       await this.redisLockProvider.unlock(lockKey)
     }
-  }
-
-  private async archiveErroredSandboxesOnDrainingRunner(runnerId: string): Promise<void> {
-    const erroredSandboxes = await this.sandboxRepository.find({
-      where: {
-        runnerId,
-        state: SandboxState.ERROR,
-        recoverable: false,
-        desiredState: Not(In([SandboxDesiredState.DESTROYED, SandboxDesiredState.ARCHIVED])),
-        backupState: BackupState.COMPLETED,
-        backupSnapshot: Not(IsNull()),
-      },
-      take: 100,
-    })
-
-    if (erroredSandboxes.length === 0) {
-      return
-    }
-
-    this.logger.debug(
-      `Found ${erroredSandboxes.length} errored sandboxes with completed backups on draining runner ${runnerId}`,
-    )
-
-    await Promise.allSettled(
-      erroredSandboxes.map(async (sandbox) => {
-        const sandboxLockKey = getStateChangeLockKey(sandbox.id)
-        const acquired = await this.redisLockProvider.lock(sandboxLockKey, 30)
-        if (!acquired) {
-          return
-        }
-
-        try {
-          this.logger.warn(
-            `Setting desired state to ARCHIVED for errored sandbox ${sandbox.id} on draining runner ${runnerId} (previous desired state: ${sandbox.desiredState})`,
-          )
-          const updateData: Partial<Sandbox> = {
-            desiredState: SandboxDesiredState.ARCHIVED,
-          }
-          await this.sandboxRepository.updateWhere(sandbox.id, {
-            updateData,
-            whereCondition: { state: SandboxState.ERROR },
-          })
-        } catch (e) {
-          this.logger.error(
-            `Failed to set desired state to ARCHIVED for errored sandbox ${sandbox.id} on draining runner ${runnerId}`,
-            e,
-          )
-        } finally {
-          await this.redisLockProvider.unlock(sandboxLockKey)
-        }
-      }),
-    )
   }
 
   private static readonly DRAINING_BACKUP_RETRY_TTL_SECONDS = 12 * 60 * 60 // 12 hours
@@ -698,7 +579,13 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
           ],
         })
         .andWhere('sandbox."desiredState"::text != sandbox.state::text')
-        .andWhere('sandbox."desiredState"::text != :archived', { archived: SandboxDesiredState.ARCHIVED })
+        .andWhere('sandbox."desiredState"::text IN (:...supportedDesiredStates)', {
+          supportedDesiredStates: [
+            SandboxDesiredState.STARTED,
+            SandboxDesiredState.STOPPED,
+            SandboxDesiredState.DESTROYED,
+          ],
+        })
         .orderBy('activity."lastActivityAt"', 'DESC', 'NULLS LAST')
 
       const stream = await queryBuilder.stream()
@@ -756,64 +643,6 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
     }
   }
 
-  @Cron(CronExpression.EVERY_10_SECONDS, { name: 'sync-archived-desired-states' })
-  @TrackJobExecution()
-  @LogExecution('sync-archived-desired-states')
-  @WithInstrumentation()
-  async syncArchivedDesiredStates(): Promise<void> {
-    const lockKey = 'sync-archived-desired-states'
-    if (!(await this.redisLockProvider.lock(lockKey, 30))) {
-      return
-    }
-
-    const sandboxes = await this.sandboxRepository.find({
-      where: {
-        state: In([SandboxState.ARCHIVING, SandboxState.STOPPED, SandboxState.ERROR]),
-        desiredState: SandboxDesiredState.ARCHIVED,
-      },
-      take: 100,
-      order: {
-        updatedAt: 'ASC',
-      },
-    })
-
-    await Promise.all(
-      sandboxes.map(async (sandbox) => {
-        this.syncInstanceState(sandbox.id)
-      }),
-    )
-    await this.redisLockProvider.unlock(lockKey)
-  }
-
-  @Cron(CronExpression.EVERY_10_SECONDS, { name: 'sync-archived-completed-states' })
-  @TrackJobExecution()
-  @LogExecution('sync-archived-completed-states')
-  async syncArchivedCompletedStates(): Promise<void> {
-    const lockKey = 'sync-archived-completed-states'
-    if (!(await this.redisLockProvider.lock(lockKey, 30))) {
-      return
-    }
-
-    const sandboxes = await this.sandboxRepository.find({
-      where: {
-        state: In([SandboxState.ARCHIVING, SandboxState.STOPPED, SandboxState.ERROR]),
-        desiredState: SandboxDesiredState.ARCHIVED,
-        backupState: BackupState.COMPLETED,
-      },
-      take: 100,
-      order: {
-        updatedAt: 'ASC',
-      },
-    })
-
-    await Promise.allSettled(
-      sandboxes.map(async (sandbox) => {
-        await this.syncInstanceState(sandbox.id)
-      }),
-    )
-    await this.redisLockProvider.unlock(lockKey)
-  }
-
   /**
    * Sync the state of a sandbox.
    *
@@ -843,10 +672,9 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
       while (new Date().getTime() - startedAt.getTime() <= 10000) {
         if (
           [SandboxState.DESTROYED, SandboxState.BUILD_FAILED, SandboxState.RESIZING].includes(sandbox.state) ||
-          (sandbox.state === SandboxState.ERROR && sandbox.desiredState !== SandboxDesiredState.ARCHIVED)
+          sandbox.state === SandboxState.ERROR
         ) {
           // Break sync loop if sandbox reaches a terminal state.
-          // However, should allow ERROR → ARCHIVED transition (e.g., during runner draining).
           break
         }
 
@@ -873,10 +701,6 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
             }
             case SandboxDesiredState.DESTROYED: {
               syncState = await this.sandboxDestroyAction.run(sandbox, lockCode)
-              break
-            }
-            case SandboxDesiredState.ARCHIVED: {
-              syncState = await this.sandboxArchiveAction.run(sandbox, lockCode)
               break
             }
           }
@@ -924,15 +748,6 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
     } finally {
       await this.redisLockProvider.unlock(lockKey)
     }
-  }
-
-  @OnAsyncEvent({
-    event: SandboxEvents.ARCHIVED,
-  })
-  @TrackJobExecution()
-  @WithSpan()
-  private async handleSandboxArchivedEvent(event: SandboxArchivedEvent) {
-    await this.syncInstanceState(event.sandbox.id)
   }
 
   @OnAsyncEvent({

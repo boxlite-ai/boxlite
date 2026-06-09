@@ -90,6 +90,7 @@ type boxConfig struct {
 	rootfsPath string
 	env        [][2]string
 	volumes    []volumeEntry
+	ports      []portEntry
 	workDir    string
 	entrypoint []string
 	cmd        []string
@@ -103,6 +104,11 @@ type volumeEntry struct {
 	hostPath  string
 	guestPath string
 	readOnly  bool
+}
+
+type portEntry struct {
+	guestPort int
+	hostPort  int
 }
 
 // WithName sets a human-readable name for the box.
@@ -158,6 +164,14 @@ func WithVolume(hostPath, containerPath string) BoxOption {
 func WithVolumeReadOnly(hostPath, containerPath string) BoxOption {
 	return func(c *boxConfig) {
 		c.volumes = append(c.volumes, volumeEntry{hostPath, containerPath, true})
+	}
+}
+
+// WithPort forwards hostPort on the host to guestPort inside the box.
+// Pass hostPort <= 0 to use the runtime default for that guest port.
+func WithPort(guestPort, hostPort int) BoxOption {
+	return func(c *boxConfig) {
+		c.ports = append(c.ports, portEntry{guestPort: guestPort, hostPort: hostPort})
 	}
 }
 
@@ -269,6 +283,17 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 		C.boxlite_options_add_volume(cOpts, cHost, cGuest, readOnly)
 		C.free(unsafe.Pointer(cHost))
 		C.free(unsafe.Pointer(cGuest))
+	}
+	for _, port := range cfg.ports {
+		if port.guestPort < 1 || port.guestPort > 65535 {
+			C.boxlite_options_free(cOpts)
+			return nil, fmt.Errorf("invalid guest port %d", port.guestPort)
+		}
+		if port.hostPort > 65535 {
+			C.boxlite_options_free(cOpts)
+			return nil, fmt.Errorf("invalid host port %d", port.hostPort)
+		}
+		C.boxlite_options_add_port(cOpts, C.int(port.guestPort), C.int(port.hostPort))
 	}
 	if cfg.network != nil {
 		switch cfg.network.Mode {

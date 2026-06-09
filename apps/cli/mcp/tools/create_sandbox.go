@@ -18,25 +18,25 @@ import (
 )
 
 type CreateSandboxArgs struct {
-	Id                  *string                    `json:"id,omitempty"`
-	Name                *string                    `json:"name,omitempty"`
-	Target              *string                    `json:"target,omitempty"`
-	Snapshot            *string                    `json:"snapshot,omitempty"`
-	User                *string                    `json:"user,omitempty"`
-	Env                 *map[string]string         `json:"env,omitempty"`
-	Labels              *map[string]string         `json:"labels,omitempty"`
-	Public              *bool                      `json:"public,omitempty"`
-	Cpu                 *int32                     `json:"cpu,omitempty"`
-	Gpu                 *int32                     `json:"gpu,omitempty"`
-	Memory              *int32                     `json:"memory,omitempty"`
-	Disk                *int32                     `json:"disk,omitempty"`
-	AutoStopInterval    *int32                     `json:"autoStopInterval,omitempty"`
-	AutoArchiveInterval *int32                     `json:"autoArchiveInterval,omitempty"`
-	AutoDeleteInterval  *int32                     `json:"autoDeleteInterval,omitempty"`
-	Volumes             *[]apiclient.SandboxVolume `json:"volumes,omitempty"`
-	BuildInfo           *apiclient.CreateBuildInfo `json:"buildInfo,omitempty"`
-	NetworkBlockAll     *bool                      `json:"networkBlockAll,omitempty"`
-	NetworkAllowList    *string                    `json:"networkAllowList,omitempty"`
+	Id                 *string                    `json:"id,omitempty"`
+	Name               *string                    `json:"name,omitempty"`
+	Target             *string                    `json:"target,omitempty"`
+	TemplateId         *string                    `json:"templateId,omitempty"`
+	Snapshot           *string                    `json:"snapshot,omitempty"`
+	User               *string                    `json:"user,omitempty"`
+	Env                *map[string]string         `json:"env,omitempty"`
+	Labels             *map[string]string         `json:"labels,omitempty"`
+	Public             *bool                      `json:"public,omitempty"`
+	Cpu                *int32                     `json:"cpu,omitempty"`
+	Gpu                *int32                     `json:"gpu,omitempty"`
+	Memory             *int32                     `json:"memory,omitempty"`
+	Disk               *int32                     `json:"disk,omitempty"`
+	AutoStopInterval   *int32                     `json:"autoStopInterval,omitempty"`
+	AutoDeleteInterval *int32                     `json:"autoDeleteInterval,omitempty"`
+	Volumes            *[]apiclient.SandboxVolume `json:"volumes,omitempty"`
+	BuildInfo          *apiclient.CreateBuildInfo `json:"buildInfo,omitempty"`
+	NetworkBlockAll    *bool                      `json:"networkBlockAll,omitempty"`
+	NetworkAllowList   *string                    `json:"networkAllowList,omitempty"`
 }
 
 func GetCreateSandboxTool() mcp.Tool {
@@ -45,17 +45,16 @@ func GetCreateSandboxTool() mcp.Tool {
 		mcp.WithString("id", mcp.Description("If a sandbox ID is provided it is first checked if it exists and is running, if so, the existing sandbox will be used. However, a model is not able to provide custom sandbox ID but only the ones BoxLite commands return and should always leave ID field empty if the intention is to create a new sandbox.")),
 		mcp.WithString("name", mcp.Description("Name of the sandbox. If not provided, the sandbox ID will be used as the name.")),
 		mcp.WithString("target", mcp.DefaultString("us"), mcp.Description("Target region of the sandbox.")),
-		mcp.WithString("snapshot", mcp.Description("Snapshot of the sandbox (don't specify any if not explicitly instructed from user). Cannot be specified when using a build info entry.")),
+		mcp.WithString("templateId", mcp.Description("Template ID or name for the sandbox. Cannot be specified when using a build info entry.")),
 		mcp.WithString("user", mcp.Description("User associated with the sandbox.")),
 		mcp.WithObject("env", mcp.Description("Environment variables for the sandbox. Format: {\"key\": \"value\", \"key2\": \"value2\"}"), mcp.AdditionalProperties(map[string]any{"type": "string"})),
 		mcp.WithObject("labels", mcp.Description("Labels for the sandbox. Format: {\"key\": \"value\", \"key2\": \"value2\"}"), mcp.AdditionalProperties(map[string]any{"type": "string"})),
 		mcp.WithBoolean("public", mcp.Description("Whether the sandbox http preview is publicly accessible.")),
-		mcp.WithNumber("cpu", mcp.Description("CPU cores allocated to the sandbox. Cannot specify sandbox resources when using a snapshot."), mcp.Max(4)),
-		mcp.WithNumber("gpu", mcp.Description("GPU units allocated to the sandbox. Cannot specify sandbox resources when using a snapshot."), mcp.Max(1)),
-		mcp.WithNumber("memory", mcp.Description("Memory allocated to the sandbox in GB. Cannot specify sandbox resources when using a snapshot."), mcp.Max(8)),
-		mcp.WithNumber("disk", mcp.Description("Disk space allocated to the sandbox in GB. Cannot specify sandbox resources when using a snapshot."), mcp.Max(10)),
+		mcp.WithNumber("cpu", mcp.Description("CPU cores allocated to the sandbox."), mcp.Max(4)),
+		mcp.WithNumber("gpu", mcp.Description("GPU units allocated to the sandbox."), mcp.Max(1)),
+		mcp.WithNumber("memory", mcp.Description("Memory allocated to the sandbox in GB."), mcp.Max(8)),
+		mcp.WithNumber("disk", mcp.Description("Disk space allocated to the sandbox in GB."), mcp.Max(10)),
 		mcp.WithNumber("autoStopInterval", mcp.DefaultNumber(15), mcp.Min(0), mcp.Description("Auto-stop interval in minutes (0 means disabled) for the sandbox.")),
-		mcp.WithNumber("autoArchiveInterval", mcp.DefaultNumber(10080), mcp.Min(0), mcp.Description("Auto-archive interval in minutes (0 means the maximum interval will be used) for the sandbox.")),
 		mcp.WithNumber("autoDeleteInterval", mcp.DefaultNumber(-1), mcp.Description("Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping) for the sandbox.")),
 		mcp.WithArray("volumes", mcp.Description("Volumes to attach to the sandbox."), mcp.Items(map[string]any{"type": "object", "properties": map[string]any{"volumeId": map[string]any{"type": "string"}, "mountPath": map[string]any{"type": "string"}}})),
 		mcp.WithObject("buildInfo", mcp.Description("Build information for the sandbox."), mcp.Properties(map[string]any{"dockerfileContent": map[string]any{"type": "string"}, "contextHashes": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}})),
@@ -127,17 +126,22 @@ func createSandboxRequest(args CreateSandboxArgs) (*apiclient.CreateSandbox, err
 	}
 
 	if args.BuildInfo != nil {
+		if args.TemplateId != nil && *args.TemplateId != "" {
+			return nil, fmt.Errorf("cannot specify a template when using a build info entry")
+		}
 		if args.Snapshot != nil && *args.Snapshot != "" {
 			return nil, fmt.Errorf("cannot specify a snapshot when using a build info entry")
 		}
-	} else {
-		if args.Cpu != nil || args.Gpu != nil || args.Memory != nil || args.Disk != nil {
-			return nil, fmt.Errorf("cannot specify sandbox resources when using a snapshot")
-		}
 	}
 
-	if args.Snapshot != nil && *args.Snapshot != "" {
-		createSandbox.SetSnapshot(*args.Snapshot)
+	if args.TemplateId != nil && args.Snapshot != nil && *args.TemplateId != "" && *args.Snapshot != "" {
+		return nil, fmt.Errorf("cannot specify both templateId and snapshot")
+	}
+
+	if args.TemplateId != nil && *args.TemplateId != "" {
+		createSandbox.SetTemplateId(*args.TemplateId)
+	} else if args.Snapshot != nil && *args.Snapshot != "" {
+		createSandbox.SetTemplateId(*args.Snapshot)
 	}
 
 	if args.Target != nil && *args.Target != "" {
@@ -146,10 +150,6 @@ func createSandboxRequest(args CreateSandboxArgs) (*apiclient.CreateSandbox, err
 
 	if args.AutoStopInterval != nil {
 		createSandbox.SetAutoStopInterval(*args.AutoStopInterval)
-	}
-
-	if args.AutoArchiveInterval != nil {
-		createSandbox.SetAutoArchiveInterval(*args.AutoArchiveInterval)
 	}
 
 	if args.AutoDeleteInterval != nil {

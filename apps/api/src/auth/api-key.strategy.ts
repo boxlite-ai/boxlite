@@ -50,15 +50,20 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
     this.logger.debug('Validate method called')
     this.logger.debug(`Validating API key: ${token.substring(0, 8)}...`)
 
-    const sshGatewayApiKey = this.configService.getOrThrow('sshGateway.apiKey')
-    if (sshGatewayApiKey === token) {
+    // Tokens matching JWT structure are not API keys. Return null so Passport can continue with the JWT strategy.
+    if (JWT_REGEX.test(token)) {
+      return null
+    }
+
+    const sshGatewayApiKey = this.configService.get('sshGateway.apiKey')
+    if (sshGatewayApiKey && sshGatewayApiKey === token) {
       return {
         role: 'ssh-gateway',
       }
     }
 
-    const proxyApiKey = this.configService.getOrThrow('proxy.apiKey')
-    if (proxyApiKey === token) {
+    const proxyApiKey = this.configService.get('proxy.apiKey')
+    if (proxyApiKey && proxyApiKey === token) {
       return {
         role: 'proxy',
       }
@@ -76,11 +81,6 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
       return {
         role: 'health-check',
       }
-    }
-
-    // Tokens matching JWT structure are not API keys — skip DB lookups and delegate to the JWT strategy.
-    if (JWT_REGEX.test(token)) {
-      return null
     }
 
     try {

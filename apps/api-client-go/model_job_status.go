@@ -21,10 +21,10 @@ type JobStatus string
 
 // List of JobStatus
 const (
-	JOBSTATUS_PENDING JobStatus = "PENDING"
+	JOBSTATUS_PENDING     JobStatus = "PENDING"
 	JOBSTATUS_IN_PROGRESS JobStatus = "IN_PROGRESS"
-	JOBSTATUS_COMPLETED JobStatus = "COMPLETED"
-	JOBSTATUS_FAILED JobStatus = "FAILED"
+	JOBSTATUS_COMPLETED   JobStatus = "COMPLETED"
+	JOBSTATUS_FAILED      JobStatus = "FAILED"
 )
 
 // All allowed values of JobStatus enum

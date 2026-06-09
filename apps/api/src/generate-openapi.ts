@@ -9,9 +9,9 @@ import { addWebhookDocumentation } from './openapi-webhooks'
 import {
   SandboxCreatedWebhookDto,
   SandboxStateUpdatedWebhookDto,
-  SnapshotCreatedWebhookDto,
-  SnapshotStateUpdatedWebhookDto,
-  SnapshotRemovedWebhookDto,
+  BoxTemplateCreatedWebhookDto,
+  BoxTemplateStateUpdatedWebhookDto,
+  BoxTemplateRemovedWebhookDto,
   VolumeCreatedWebhookDto,
   VolumeStateUpdatedWebhookDto,
 } from './webhook/dto/webhook-event-payloads.dto'
@@ -38,9 +38,9 @@ async function generateOpenAPI() {
         extraModels: [
           SandboxCreatedWebhookDto,
           SandboxStateUpdatedWebhookDto,
-          SnapshotCreatedWebhookDto,
-          SnapshotStateUpdatedWebhookDto,
-          SnapshotRemovedWebhookDto,
+          BoxTemplateCreatedWebhookDto,
+          BoxTemplateStateUpdatedWebhookDto,
+          BoxTemplateRemovedWebhookDto,
           VolumeCreatedWebhookDto,
           VolumeStateUpdatedWebhookDto,
         ],

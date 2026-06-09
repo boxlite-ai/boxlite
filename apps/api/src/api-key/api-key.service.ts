@@ -75,6 +75,28 @@ export class ApiKeyService {
     return { apiKey, value }
   }
 
+  async ensureApiKeyValue(
+    organizationId: string,
+    userId: string,
+    name: string,
+    permissions: OrganizationResourcePermission[],
+    value: string,
+    expiresAt?: Date,
+  ): Promise<{ apiKey: ApiKey; value: string }> {
+    const keyHash = generateApiKeyHash(value)
+    const existingKey = await this.apiKeyRepository.findOne({ where: { organizationId, userId, name } })
+
+    if (existingKey) {
+      if (existingKey.keyHash === keyHash) {
+        return { apiKey: existingKey, value }
+      }
+
+      await this.deleteWithEntityManager(this.apiKeyRepository.manager, existingKey)
+    }
+
+    return this.createApiKey(organizationId, userId, name, permissions, expiresAt, value)
+  }
+
   async getApiKeys(organizationId: string, userId?: string): Promise<ApiKey[]> {
     const apiKeys = await this.apiKeyRepository.find({
       where: { organizationId, userId },

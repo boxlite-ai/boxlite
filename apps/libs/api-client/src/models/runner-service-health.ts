@@ -12,30 +12,28 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  *
  * @export
  * @interface RunnerServiceHealth
  */
 export interface RunnerServiceHealth {
-    /**
-     * Name of the service being checked
-     * @type {string}
-     * @memberof RunnerServiceHealth
-     */
-    'serviceName': string;
-    /**
-     * Whether the service is healthy
-     * @type {boolean}
-     * @memberof RunnerServiceHealth
-     */
-    'healthy': boolean;
-    /**
-     * Error reason if the service is unhealthy
-     * @type {string}
-     * @memberof RunnerServiceHealth
-     */
-    'errorReason'?: string;
+  /**
+   * Name of the service being checked
+   * @type {string}
+   * @memberof RunnerServiceHealth
+   */
+  serviceName: string
+  /**
+   * Whether the service is healthy
+   * @type {boolean}
+   * @memberof RunnerServiceHealth
+   */
+  healthy: boolean
+  /**
+   * Error reason if the service is unhealthy
+   * @type {string}
+   * @memberof RunnerServiceHealth
+   */
+  errorReason?: string
 }

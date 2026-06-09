@@ -12,30 +12,28 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  *
  * @export
  * @interface DtoVolumeDTO
  */
 export interface DtoVolumeDTO {
-    /**
-     *
-     * @type {string}
-     * @memberof DtoVolumeDTO
-     */
-    'mountPath'?: string;
-    /**
-     *
-     * @type {string}
-     * @memberof DtoVolumeDTO
-     */
-    'subpath'?: string;
-    /**
-     *
-     * @type {string}
-     * @memberof DtoVolumeDTO
-     */
-    'volumeId'?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof DtoVolumeDTO
+   */
+  mountPath?: string
+  /**
+   *
+   * @type {string}
+   * @memberof DtoVolumeDTO
+   */
+  subpath?: string
+  /**
+   *
+   * @type {string}
+   * @memberof DtoVolumeDTO
+   */
+  volumeId?: string
 }

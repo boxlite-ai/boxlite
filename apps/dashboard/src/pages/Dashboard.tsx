@@ -16,7 +16,6 @@ import { VerifyEmailDialog } from '@/components/VerifyEmailDialog'
 import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from '@/constants/ExternalLinks'
 import { useTheme } from '@/contexts/ThemeContext'
 import { LocalStorageKey } from '@/enums/LocalStorageKey'
-import { RoutePath } from '@/enums/RoutePath'
 import { useOwnerWalletQuery } from '@/hooks/queries/billingQueries'
 import { useConfig } from '@/hooks/useConfig'
 import { useDocsSearchCommands } from '@/hooks/useDocsSearchCommands'
@@ -24,8 +23,6 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useSuspensionBanner } from '@/hooks/useSuspensionBanner'
 import { cn } from '@/lib/utils'
 import { BookOpen, BookSearchIcon, MessageCircle, SunMoon } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
-import { PrivacyBanner } from '@/components/PrivacyBanner'
 
 function useDashboardCommands() {
   const { theme, setTheme } = useTheme()
@@ -63,9 +60,9 @@ function useDashboardCommands() {
     () => [
       {
         id: 'toggle-theme',
-        label: 'Toggle Theme',
+        label: 'Cycle Theme',
         icon: <SunMoon className="w-4 h-4" />,
-        onSelect: () => setTheme(theme === 'dark' ? 'light' : 'dark'),
+        onSelect: () => setTheme(theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system'),
       },
     ],
     [theme, setTheme],
@@ -86,8 +83,6 @@ const Dashboard: React.FC = () => {
   useDashboardCommands()
   useDocsSearchCommands()
 
-  const navigate = useNavigate()
-
   useSuspensionBanner(selectedOrganization)
 
   useEffect(() => {
@@ -98,21 +93,6 @@ const Dashboard: React.FC = () => {
       setShowVerifyEmailDialog(true)
     }
   }, [selectedOrganization])
-
-  useEffect(() => {
-    if (!config.billingApiUrl) {
-      return
-    }
-
-    if (!selectedOrganization) {
-      return
-    }
-
-    if (!selectedOrganization.defaultRegionId) {
-      navigate(RoutePath.SETTINGS)
-      return
-    }
-  }, [config.billingApiUrl, selectedOrganization]) // Do not depend on navigate to avoid infinite loops
 
   const [bannerText, bannerLearnMoreUrl] = useMemo(() => {
     if (!config.announcements || Object.entries(config.announcements).length === 0) {
@@ -165,7 +145,6 @@ const Dashboard: React.FC = () => {
         </SidebarInset>
         <Toaster />
         <VerifyEmailDialog open={showVerifyEmailDialog} onOpenChange={setShowVerifyEmailDialog} />
-        <PrivacyBanner />
       </SidebarProvider>
     </div>
   )

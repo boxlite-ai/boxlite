@@ -12,36 +12,34 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  *
  * @export
  * @interface FileStatus
  */
 export interface FileStatus {
-    /**
-     *
-     * @type {string}
-     * @memberof FileStatus
-     */
-    'name': string;
-    /**
-     *
-     * @type {string}
-     * @memberof FileStatus
-     */
-    'staging': string;
-    /**
-     *
-     * @type {string}
-     * @memberof FileStatus
-     */
-    'worktree': string;
-    /**
-     *
-     * @type {string}
-     * @memberof FileStatus
-     */
-    'extra': string;
+  /**
+   *
+   * @type {string}
+   * @memberof FileStatus
+   */
+  name: string
+  /**
+   *
+   * @type {string}
+   * @memberof FileStatus
+   */
+  staging: string
+  /**
+   *
+   * @type {string}
+   * @memberof FileStatus
+   */
+  worktree: string
+  /**
+   *
+   * @type {string}
+   * @memberof FileStatus
+   */
+  extra: string
 }

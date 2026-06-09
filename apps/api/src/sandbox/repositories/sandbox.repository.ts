@@ -194,6 +194,7 @@ export class SandboxRepository extends BaseRepository<Sandbox> {
     try {
       this.sandboxLookupCacheInvalidationService.invalidateOrgId({
         sandboxId: sandbox.id,
+        boxId: sandbox.boxId,
         organizationId: sandbox.organizationId,
         name: sandbox.name,
       })
@@ -209,13 +210,15 @@ export class SandboxRepository extends BaseRepository<Sandbox> {
    */
   private invalidateLookupCacheOnUpdate(
     updatedSandbox: Sandbox,
-    previousSandbox: Pick<Sandbox, 'organizationId' | 'name' | 'authToken'>,
+    previousSandbox: Pick<Sandbox, 'organizationId' | 'boxId' | 'name' | 'authToken'>,
   ): void {
     try {
       this.sandboxLookupCacheInvalidationService.invalidate({
         sandboxId: updatedSandbox.id,
+        boxId: updatedSandbox.boxId,
         organizationId: updatedSandbox.organizationId,
         previousOrganizationId: previousSandbox.organizationId,
+        previousBoxId: previousSandbox.boxId,
         name: updatedSandbox.name,
         previousName: previousSandbox.name,
       })

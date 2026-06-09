@@ -12,8 +12,6 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  *
  * @export
@@ -21,18 +19,18 @@
  */
 
 export const EnumsSandboxState = {
-    SandboxStateCreating: 'creating',
-    SandboxStateRestoring: 'restoring',
-    SandboxStateDestroyed: 'destroyed',
-    SandboxStateDestroying: 'destroying',
-    SandboxStateStarted: 'started',
-    SandboxStateStopped: 'stopped',
-    SandboxStateStarting: 'starting',
-    SandboxStateStopping: 'stopping',
-    SandboxStateResizing: 'resizing',
-    SandboxStateError: 'error',
-    SandboxStateUnknown: 'unknown',
-    SandboxStatePullingSnapshot: 'pulling_snapshot'
-} as const;
+  SandboxStateCreating: 'creating',
+  SandboxStateRestoring: 'restoring',
+  SandboxStateDestroyed: 'destroyed',
+  SandboxStateDestroying: 'destroying',
+  SandboxStateStarted: 'started',
+  SandboxStateStopped: 'stopped',
+  SandboxStateStarting: 'starting',
+  SandboxStateStopping: 'stopping',
+  SandboxStateResizing: 'resizing',
+  SandboxStateError: 'error',
+  SandboxStateUnknown: 'unknown',
+  SandboxStatePullingArtifact: 'pulling_artifact',
+} as const
 
-export type EnumsSandboxState = typeof EnumsSandboxState[keyof typeof EnumsSandboxState];
+export type EnumsSandboxState = (typeof EnumsSandboxState)[keyof typeof EnumsSandboxState]

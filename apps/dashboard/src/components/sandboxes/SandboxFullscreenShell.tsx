@@ -21,7 +21,7 @@ export function SandboxFullscreenShell({ sandboxId, title, copyValue, children }
   const navigate = useNavigate()
 
   const handleBack = () => {
-    navigate(sandboxId ? RoutePath.SANDBOX_DETAILS.replace(':sandboxId', sandboxId) : RoutePath.SANDBOXES)
+    navigate(sandboxId ? RoutePath.BOX_DETAILS.replace(':sandboxId', sandboxId) : RoutePath.BOXES)
   }
 
   return (
@@ -30,7 +30,7 @@ export function SandboxFullscreenShell({ sandboxId, title, copyValue, children }
         <Button variant="ghost" size="icon-sm" className="shrink-0" onClick={handleBack} aria-label="Back">
           <ArrowLeft className="size-4" />
         </Button>
-        <h1 className="min-w-0 truncate text-sm font-medium">{title || sandboxId || 'Sandbox'}</h1>
+        <h1 className="min-w-0 truncate text-sm font-medium">{title || sandboxId || 'Box'}</h1>
         {copyValue && <CopyButton value={copyValue} tooltipText="Copy" size="icon-xs" />}
       </div>
       <div className="flex min-h-0 flex-1 flex-col">{children}</div>

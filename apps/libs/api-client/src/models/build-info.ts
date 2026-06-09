@@ -12,42 +12,40 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  *
  * @export
  * @interface BuildInfo
  */
 export interface BuildInfo {
-    /**
-     * The Dockerfile content used for the build
-     * @type {string}
-     * @memberof BuildInfo
-     */
-    'dockerfileContent'?: string;
-    /**
-     * The context hashes used for the build
-     * @type {Array<string>}
-     * @memberof BuildInfo
-     */
-    'contextHashes'?: Array<string>;
-    /**
-     * The creation timestamp
-     * @type {Date}
-     * @memberof BuildInfo
-     */
-    'createdAt': Date;
-    /**
-     * The last update timestamp
-     * @type {Date}
-     * @memberof BuildInfo
-     */
-    'updatedAt': Date;
-    /**
-     * The snapshot reference
-     * @type {string}
-     * @memberof BuildInfo
-     */
-    'snapshotRef': string;
+  /**
+   * The Dockerfile content used for the build
+   * @type {string}
+   * @memberof BuildInfo
+   */
+  dockerfileContent?: string
+  /**
+   * The context hashes used for the build
+   * @type {Array<string>}
+   * @memberof BuildInfo
+   */
+  contextHashes?: Array<string>
+  /**
+   * The creation timestamp
+   * @type {Date}
+   * @memberof BuildInfo
+   */
+  createdAt: Date
+  /**
+   * The last update timestamp
+   * @type {Date}
+   * @memberof BuildInfo
+   */
+  updatedAt: Date
+  /**
+   * The artifact reference
+   * @type {string}
+   * @memberof BuildInfo
+   */
+  artifactRef: string
 }

@@ -11,7 +11,7 @@ import {
   OrganizationRolePermissionsEnum,
   CreateRegion,
   CreateRegionResponse,
-  SnapshotManagerCredentials,
+  ArtifactRegistryCredentials,
   UpdateRegion,
 } from '@boxlite-ai/api-client'
 import { RegionTable } from '@/components/RegionTable'
@@ -63,13 +63,13 @@ const Regions: React.FC = () => {
   // Regenerate API Key state
   const [showRegenerateProxyApiKeyDialog, setShowRegenerateProxyApiKeyDialog] = useState(false)
   const [showRegenerateSshGatewayApiKeyDialog, setShowRegenerateSshGatewayApiKeyDialog] = useState(false)
-  const [showRegenerateSnapshotManagerCredsDialog, setShowRegenerateSnapshotManagerCredsDialog] = useState(false)
+  const [showRegenerateArtifactRegistryCredsDialog, setShowRegenerateArtifactRegistryCredsDialog] = useState(false)
   const [regeneratedApiKey, setRegeneratedApiKey] = useState<string | null>(null)
-  const [regeneratedSnapshotManagerCreds, setRegeneratedSnapshotManagerCreds] =
-    useState<SnapshotManagerCredentials | null>(null)
+  const [regeneratedArtifactRegistryCreds, setRegeneratedArtifactRegistryCreds] =
+    useState<ArtifactRegistryCredentials | null>(null)
   const [regionForRegenerate, setRegionForRegenerate] = useState<Region | null>(null)
   const [isApiKeyRevealed, setIsApiKeyRevealed] = useState(false)
-  const [isSnapshotManagerPasswordRevealed, setIsSnapshotManagerPasswordRevealed] = useState(false)
+  const [isArtifactRegistryPasswordRevealed, setIsArtifactRegistryPasswordRevealed] = useState(false)
 
   // Region Details Sheet state
   const [selectedRegion, setSelectedRegion] = useState<Region | null>(null)
@@ -137,10 +137,10 @@ const Regions: React.FC = () => {
     setShowRegenerateSshGatewayApiKeyDialog(true)
   }
 
-  const handleRegenerateSnapshotManagerCredentials = async (region: Region) => {
+  const handleRegenerateArtifactRegistryCredentials = async (region: Region) => {
     setRegionForRegenerate(region)
-    setRegeneratedSnapshotManagerCreds(null)
-    setShowRegenerateSnapshotManagerCredsDialog(true)
+    setRegeneratedArtifactRegistryCreds(null)
+    setShowRegenerateArtifactRegistryCredsDialog(true)
   }
 
   const handleOpenRegionDetails = (region: Region) => {
@@ -216,7 +216,7 @@ const Regions: React.FC = () => {
     }
   }
 
-  const confirmRegenerateSnapshotManagerCredentials = async () => {
+  const confirmRegenerateArtifactRegistryCredentials = async () => {
     if (!regionForRegenerate || !selectedOrganization) {
       return
     }
@@ -224,16 +224,16 @@ const Regions: React.FC = () => {
     setRegionIsLoading((prev) => ({ ...prev, [regionForRegenerate.id]: true }))
 
     try {
-      const response = await organizationsApi.regenerateSnapshotManagerCredentials(
+      const response = await organizationsApi.regenerateArtifactRegistryCredentials(
         regionForRegenerate.id,
         selectedOrganization.id,
       )
-      setRegeneratedSnapshotManagerCreds(response.data)
-      setShowRegenerateSnapshotManagerCredsDialog(true)
-      toast.success('Snapshot Manager credentials regenerated successfully')
+      setRegeneratedArtifactRegistryCreds(response.data)
+      setShowRegenerateArtifactRegistryCredsDialog(true)
+      toast.success('Artifact Registry credentials regenerated successfully')
     } catch (error) {
-      handleApiError(error, 'Failed to regenerate Snapshot Manager credentials')
-      setShowRegenerateSnapshotManagerCredsDialog(false)
+      handleApiError(error, 'Failed to regenerate Artifact Registry credentials')
+      setShowRegenerateArtifactRegistryCredsDialog(false)
       setRegionForRegenerate(null)
     } finally {
       setRegionIsLoading((prev) => ({ ...prev, [regionForRegenerate.id]: false }))
@@ -296,7 +296,7 @@ const Regions: React.FC = () => {
         onUpdate={handleOpenUpdateDialog}
         onRegenerateProxyApiKey={handleRegenerateProxyApiKey}
         onRegenerateSshGatewayApiKey={handleRegenerateSshGatewayApiKey}
-        onRegenerateSnapshotManagerCredentials={handleRegenerateSnapshotManagerCredentials}
+        onRegenerateArtifactRegistryCredentials={handleRegenerateArtifactRegistryCredentials}
       />
 
       {regionToUpdate && (
@@ -491,42 +491,42 @@ const Regions: React.FC = () => {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Regenerate Snapshot Manager Credentials Dialog */}
+      {/* Regenerate Artifact Registry Credentials Dialog */}
       <AlertDialog
-        open={showRegenerateSnapshotManagerCredsDialog}
+        open={showRegenerateArtifactRegistryCredsDialog}
         onOpenChange={(isOpen) => {
-          setShowRegenerateSnapshotManagerCredsDialog(isOpen)
+          setShowRegenerateArtifactRegistryCredsDialog(isOpen)
           if (!isOpen) {
             setRegionForRegenerate(null)
-            setRegeneratedSnapshotManagerCreds(null)
-            setIsSnapshotManagerPasswordRevealed(false)
+            setRegeneratedArtifactRegistryCreds(null)
+            setIsArtifactRegistryPasswordRevealed(false)
           }
         }}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {regeneratedSnapshotManagerCreds
-                ? 'Snapshot Manager Credentials Regenerated'
-                : 'Regenerate Snapshot Manager Credentials'}
+              {regeneratedArtifactRegistryCreds
+                ? 'Artifact Registry Credentials Regenerated'
+                : 'Regenerate Artifact Registry Credentials'}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {regeneratedSnapshotManagerCreds ? (
+              {regeneratedArtifactRegistryCreds ? (
                 'The new credentials have been generated. Copy them now as they will not be shown again.'
               ) : (
                 <>
-                  <strong>Warning:</strong> This will immediately invalidate the current Snapshot Manager credentials.
-                  The Snapshot Manager will need to be reconfigured with the new credentials.
+                  <strong>Warning:</strong> This will immediately invalidate the current Artifact Registry credentials.
+                  The Artifact Registry will need to be reconfigured with the new credentials.
                 </>
               )}
-              {regeneratedSnapshotManagerCreds && (
+              {regeneratedArtifactRegistryCreds && (
                 <div className="space-y-4 mt-4">
                   <div>
                     <span className="text-xs text-muted-foreground">Username</span>
                     <CopyableValue
-                      displayValue={regeneratedSnapshotManagerCreds.username}
-                      copyValue={regeneratedSnapshotManagerCreds.username}
-                      copyLabel="snapshot manager username"
+                      displayValue={regeneratedArtifactRegistryCreds.username}
+                      copyValue={regeneratedArtifactRegistryCreds.username}
+                      copyLabel="artifact registry username"
                       onCopy={copyToClipboard}
                     />
                   </div>
@@ -534,16 +534,16 @@ const Regions: React.FC = () => {
                     <span className="text-xs text-muted-foreground">Password</span>
                     <CopyableValue
                       displayValue={
-                        isSnapshotManagerPasswordRevealed
-                          ? regeneratedSnapshotManagerCreds.password
-                          : getMaskedToken(regeneratedSnapshotManagerCreds.password)
+                        isArtifactRegistryPasswordRevealed
+                          ? regeneratedArtifactRegistryCreds.password
+                          : getMaskedToken(regeneratedArtifactRegistryCreds.password)
                       }
-                      copyValue={regeneratedSnapshotManagerCreds.password}
-                      copyLabel="snapshot manager password"
+                      copyValue={regeneratedArtifactRegistryCreds.password}
+                      copyLabel="artifact registry password"
                       onCopy={copyToClipboard}
                       valueProps={{
-                        onMouseEnter: () => setIsSnapshotManagerPasswordRevealed(true),
-                        onMouseLeave: () => setIsSnapshotManagerPasswordRevealed(false),
+                        onMouseEnter: () => setIsArtifactRegistryPasswordRevealed(true),
+                        onMouseLeave: () => setIsArtifactRegistryPasswordRevealed(false),
                       }}
                     />
                   </div>
@@ -553,11 +553,11 @@ const Regions: React.FC = () => {
           </AlertDialogHeader>
 
           <AlertDialogFooter>
-            {!regeneratedSnapshotManagerCreds ? (
+            {!regeneratedArtifactRegistryCreds ? (
               <>
                 <AlertDialogCancel>Cancel</AlertDialogCancel>
                 <AlertDialogAction
-                  onClick={confirmRegenerateSnapshotManagerCredentials}
+                  onClick={confirmRegenerateArtifactRegistryCredentials}
                   disabled={!regionForRegenerate || regionIsLoading[regionForRegenerate?.id || '']}
                   className="bg-secondary text-secondary-foreground hover:bg-secondary/80"
                 >
@@ -567,10 +567,10 @@ const Regions: React.FC = () => {
             ) : (
               <AlertDialogAction
                 onClick={() => {
-                  setShowRegenerateSnapshotManagerCredsDialog(false)
+                  setShowRegenerateArtifactRegistryCredsDialog(false)
                   setRegionForRegenerate(null)
-                  setRegeneratedSnapshotManagerCreds(null)
-                  setIsSnapshotManagerPasswordRevealed(false)
+                  setRegeneratedArtifactRegistryCreds(null)
+                  setIsArtifactRegistryPasswordRevealed(false)
                 }}
                 className="bg-secondary text-secondary-foreground hover:bg-secondary/80"
               >

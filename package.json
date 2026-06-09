@@ -8,6 +8,16 @@
     "example": "examples"
   },
   "scripts": {
+    "start": "node apps/scripts/start-dashboard.mjs",
+    "start:dev": "node apps/scripts/start-dashboard.mjs --target=dev",
+    "start:mock": "node apps/scripts/start-dashboard.mjs --target=mock",
+    "start:local": "node apps/scripts/start-dashboard.mjs --target=local",
+    "start:dex": "node apps/scripts/start-dashboard.mjs --target=dex",
+    "start:help": "node apps/scripts/start-dashboard.mjs --help",
+    "start:storybook": "npm --prefix apps run start:storybook",
+    "dev:dex": "node apps/scripts/dev-dex.mjs",
+    "e2e:local": "node apps/scripts/e2e-local.mjs",
+    "e2e:dev": "node apps/scripts/e2e-dev-smoke.mjs",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {

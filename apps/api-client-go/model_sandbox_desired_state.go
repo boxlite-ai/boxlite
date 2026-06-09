@@ -22,10 +22,9 @@ type SandboxDesiredState string
 // List of SandboxDesiredState
 const (
 	SANDBOXDESIREDSTATE_DESTROYED SandboxDesiredState = "destroyed"
-	SANDBOXDESIREDSTATE_STARTED SandboxDesiredState = "started"
-	SANDBOXDESIREDSTATE_STOPPED SandboxDesiredState = "stopped"
-	SANDBOXDESIREDSTATE_RESIZED SandboxDesiredState = "resized"
-	SANDBOXDESIREDSTATE_ARCHIVED SandboxDesiredState = "archived"
+	SANDBOXDESIREDSTATE_STARTED   SandboxDesiredState = "started"
+	SANDBOXDESIREDSTATE_STOPPED   SandboxDesiredState = "stopped"
+	SANDBOXDESIREDSTATE_RESIZED   SandboxDesiredState = "resized"
 )
 
 // All allowed values of SandboxDesiredState enum
@@ -34,7 +33,6 @@ var AllowedSandboxDesiredStateEnumValues = []SandboxDesiredState{
 	"started",
 	"stopped",
 	"resized",
-	"archived",
 }
 
 func (v *SandboxDesiredState) UnmarshalJSON(src []byte) error {

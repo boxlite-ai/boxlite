@@ -26,9 +26,9 @@ Create a file `hello.js`:
 import { SimpleBox } from '@boxlite-ai/boxlite';
 
 async function main() {
-  const box = new SimpleBox({ image: 'python:slim' });
+  const box = new SimpleBox({ image: 'busybox:1.36.1' });
   try {
-    const result = await box.exec('python', '-c', "print('Hello from BoxLite!')");
+    const result = await box.exec('echo', 'Hello from BoxLite!');
     console.log(result.stdout);
   } finally {
     await box.stop();
@@ -44,9 +44,9 @@ node hello.js
 ```
 
 **What's happening:**
-1. BoxLite pulls the `python:slim` OCI image (first run only)
+1. BoxLite pulls the `busybox:1.36.1` OCI image (first run only)
 2. Creates a lightweight VM with the image
-3. Executes the Python command inside the VM
+3. Executes the command inside the VM
 4. Streams output back to your application
 5. Cleans up when `stop()` is called
 
@@ -56,7 +56,7 @@ node hello.js
 import { SimpleBox } from '@boxlite-ai/boxlite';
 
 async function main() {
-  await using box = new SimpleBox({ image: 'alpine:latest' });
+  await using box = new SimpleBox({ image: 'busybox:1.36.1' });
   const result = await box.exec('echo', 'Hello!');
   console.log(result.stdout);
   // Box automatically stopped when leaving scope

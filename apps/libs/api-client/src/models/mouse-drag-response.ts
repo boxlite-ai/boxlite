@@ -12,24 +12,22 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  *
  * @export
  * @interface MouseDragResponse
  */
 export interface MouseDragResponse {
-    /**
-     * The actual X coordinate where the drag ended
-     * @type {number}
-     * @memberof MouseDragResponse
-     */
-    'x': number;
-    /**
-     * The actual Y coordinate where the drag ended
-     * @type {number}
-     * @memberof MouseDragResponse
-     */
-    'y': number;
+  /**
+   * The actual X coordinate where the drag ended
+   * @type {number}
+   * @memberof MouseDragResponse
+   */
+  x: number
+  /**
+   * The actual Y coordinate where the drag ended
+   * @type {number}
+   * @memberof MouseDragResponse
+   */
+  y: number
 }

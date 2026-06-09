@@ -9,5 +9,4 @@ export enum SandboxDesiredState {
   STARTED = 'started',
   STOPPED = 'stopped',
   RESIZED = 'resized',
-  ARCHIVED = 'archived',
 }

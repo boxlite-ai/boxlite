@@ -163,17 +163,17 @@ int main() {
     CBoxliteSimple* box;
     CBoxliteError error = {0};
 
-    if (boxlite_simple_new("python:slim", 0, 0, &box, &error) != Ok) {
+    if (boxlite_simple_new("busybox:1.36.1", 0, 0, &box, &error) != Ok) {
         fprintf(stderr, "Error %d: %s\n", error.code, error.message);
         boxlite_error_free(&error);
         return 1;
     }
 
     // Run a command
-    const char* args[] = {"-c", "print('Hello!')", NULL};
+    const char* args[] = {"Hello!", NULL};
     CBoxliteExecResult* result;
 
-    if (boxlite_simple_run(box, "python", args, 2, &result, &error) == Ok) {
+    if (boxlite_simple_run(box, "echo", args, 1, &result, &error) == Ok) {
         printf("Output: %s\n", result->stdout_text);
         printf("Exit code: %d\n", result->exit_code);
         boxlite_result_free(result);
@@ -261,7 +261,7 @@ CBoxliteImageHandle* images = NULL;
 
 if (boxlite_runtime_images(runtime, &images, &error) == Ok) {
     CImagePullResult* pull = NULL;
-    if (boxlite_image_pull(images, "alpine:latest", &pull, &error) == Ok) {
+    if (boxlite_image_pull(images, "busybox:1.36.1", &pull, &error) == Ok) {
         printf("Pulled: %s (%d layers)\n", pull->reference, pull->layer_count);
         boxlite_free_image_pull_result(pull);
     }

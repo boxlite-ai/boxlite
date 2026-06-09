@@ -24,7 +24,7 @@ const WebTerminal: React.FC<{ className?: string }> = ({ className }) => {
 
   return (
     <Window className={className}>
-      <WindowTitleBar>Sandbox Terminal</WindowTitleBar>
+      <WindowTitleBar>Box Terminal</WindowTitleBar>
       <WindowContent>
         <div className="w-full bg-muted/40 dark:bg-muted/10 min-h-[500px] flex flex-col [&>*]:flex-1">
           {loadingTerminalUrl || !terminal.url ? (
@@ -54,7 +54,7 @@ const WebTerminal: React.FC<{ className?: string }> = ({ className }) => {
               </AnimatePresence>
             </div>
           ) : (
-            <iframe title="Interactive web terminal for sandbox" src={terminal.url} width={'100%'} height={'100%'} />
+            <iframe title="Interactive web terminal for box" src={terminal.url} width={'100%'} height={'100%'} />
           )}
         </div>
       </WindowContent>

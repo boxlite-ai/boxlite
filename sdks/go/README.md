@@ -25,44 +25,30 @@ import (
 )
 
 func main() {
-	rt, err := boxlite.NewRuntime(
-		boxlite.WithImageRegistry(boxlite.ImageRegistry{
-			Host: "registry.example.com",
-			Auth: boxlite.ImageRegistryAuth{
-				Username: "user",
-				Password: "password",
-			},
-		}),
-	)
+	rt, err := boxlite.NewRuntime()
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer rt.Close()
 
 	ctx := context.Background()
-	box, err := rt.Create(ctx, "alpine:latest",
-		boxlite.WithName("my-box"),
-		boxlite.WithCPUs(1),
-		boxlite.WithMemory(512),
-		boxlite.WithNetwork(boxlite.NetworkSpec{
-			Mode:     boxlite.NetworkModeEnabled,
-			AllowNet: []string{"api.openai.com"},
-		}),
-		boxlite.WithSecret(boxlite.Secret{
-			Name:  "openai",
-			Value: "sk-...",
-			Hosts: []string{"api.openai.com"},
-		}),
-	)
+	box, err := rt.Create(ctx, "busybox:1.36.1", boxlite.WithName("my-box"))
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer func() {
+		_ = rt.ForceRemove(ctx, box.ID())
+	}()
 
 	if err := box.Start(ctx); err != nil {
 		log.Fatal(err)
 	}
 
-	fmt.Println("Box started successfully!")
+	result, err := box.Exec(ctx, "echo", "Hello from BoxLite!")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Print(result.Stdout)
 }
 ```
 
@@ -76,7 +62,7 @@ if err != nil {
 }
 defer images.Close()
 
-pull, err := images.Pull(ctx, "alpine:latest")
+pull, err := images.Pull(ctx, "busybox:1.36.1")
 if err != nil {
 	log.Fatal(err)
 }

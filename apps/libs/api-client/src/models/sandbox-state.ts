@@ -12,8 +12,6 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  * The state of the sandbox
  * @export
@@ -21,23 +19,23 @@
  */
 
 export const SandboxState = {
-    CREATING: 'creating',
-    RESTORING: 'restoring',
-    DESTROYED: 'destroyed',
-    DESTROYING: 'destroying',
-    STARTED: 'started',
-    STOPPED: 'stopped',
-    STARTING: 'starting',
-    STOPPING: 'stopping',
-    ERROR: 'error',
-    BUILD_FAILED: 'build_failed',
-    PENDING_BUILD: 'pending_build',
-    BUILDING_SNAPSHOT: 'building_snapshot',
-    UNKNOWN: 'unknown',
-    PULLING_SNAPSHOT: 'pulling_snapshot',
-    ARCHIVED: 'archived',
-    ARCHIVING: 'archiving',
-    RESIZING: 'resizing'
-} as const;
+  CREATING: 'creating',
+  RESTORING: 'restoring',
+  DESTROYED: 'destroyed',
+  DESTROYING: 'destroying',
+  STARTED: 'started',
+  STOPPED: 'stopped',
+  STARTING: 'starting',
+  STOPPING: 'stopping',
+  ERROR: 'error',
+  BUILD_FAILED: 'build_failed',
+  PENDING_BUILD: 'pending_build',
+  BUILDING_ARTIFACT: 'building_artifact',
+  UNKNOWN: 'unknown',
+  PULLING_ARTIFACT: 'pulling_artifact',
+  ARCHIVED: 'archived',
+  ARCHIVING: 'archiving',
+  RESIZING: 'resizing',
+} as const
 
-export type SandboxState = typeof SandboxState[keyof typeof SandboxState];
+export type SandboxState = (typeof SandboxState)[keyof typeof SandboxState]

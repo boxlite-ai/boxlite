@@ -20,13 +20,13 @@ const LandingPage: React.FC = () => {
 
   if (isAuthenticated) {
     return <Navigate to={`${RoutePath.DASHBOARD}${location.search}`} replace />
-  } else {
-    void signinRedirect({
-      state: {
-        returnTo: location.pathname + location.search,
-      },
-    })
   }
+
+  void signinRedirect({
+    state: {
+      returnTo: location.pathname + location.search,
+    },
+  })
 }
 
 export default LandingPage

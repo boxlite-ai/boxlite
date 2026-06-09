@@ -5,11 +5,12 @@
 
 import { queryKeys } from '@/hooks/queries/queryKeys'
 import { useApi } from '@/hooks/useApi'
+import { useConfig } from '@/hooks/useConfig'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import {
   CreateSandboxBaseParams,
   CreateSandboxFromImageParams,
-  CreateSandboxFromSnapshotParams,
+  CreateSandboxFromTemplateParams,
   BoxLite,
   Sandbox,
 } from '@boxlite-ai/sdk'
@@ -18,7 +19,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { toast } from 'sonner'
 
-type CreateSandboxParams = CreateSandboxBaseParams | CreateSandboxFromImageParams | CreateSandboxFromSnapshotParams
+type CreateSandboxParams = CreateSandboxBaseParams | CreateSandboxFromImageParams | CreateSandboxFromTemplateParams
 
 const TERMINAL_PORT = 22222
 const VNC_PORT = 6080
@@ -89,16 +90,17 @@ export function useSandboxSession(options?: UseSandboxSessionOptions): UseSandbo
   const { user } = useAuth()
   const { selectedOrganization } = useSelectedOrganization()
   const { sandboxApi, toolboxApi } = useApi()
+  const { apiUrl } = useConfig()
   const queryClient = useQueryClient()
 
   const client = useMemo(() => {
     if (!user?.access_token || !selectedOrganization?.id) return null
     return new BoxLite({
       jwtToken: user.access_token,
-      apiUrl: import.meta.env.VITE_API_URL,
+      apiUrl,
       organizationId: selectedOrganization.id,
     })
-  }, [user?.access_token, selectedOrganization?.id])
+  }, [apiUrl, user?.access_token, selectedOrganization?.id])
 
   const createMutation = useMutation<Sandbox, Error, CreateSandboxParams | undefined>({
     mutationKey: ['create-sandbox', scope ?? 'default'],

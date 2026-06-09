@@ -151,7 +151,6 @@ export class WorkspaceController {
         memory: req.body?.memory,
         disk: req.body?.disk,
         autoStopInterval: req.body?.autoStopInterval,
-        autoArchiveInterval: req.body?.autoArchiveInterval,
         volumes: req.body?.volumes,
         buildInfo: req.body?.buildInfo,
       }),
@@ -168,13 +167,12 @@ export class WorkspaceController {
     const organization = authContext.organization
 
     const workspace = WorkspaceDto.fromSandboxDto(
-      await this.workspaceService.createFromSnapshot(
+      await this.workspaceService.createFromTemplate(
         {
           ...createWorkspaceDto,
-          snapshot: createWorkspaceDto.image,
+          templateId: createWorkspaceDto.image,
         },
         organization,
-        true,
       ),
     )
 
@@ -447,67 +445,6 @@ export class WorkspaceController {
     await this.workspaceService.setAutostopInterval(workspaceId, interval)
   }
 
-  @Post(':workspaceId/autoarchive/:interval')
-  @ApiOperation({
-    summary: '[DEPRECATED] Set workspace auto-archive interval',
-    operationId: 'setAutoArchiveIntervalWorkspace_deprecated',
-    deprecated: true,
-  })
-  @ApiParam({
-    name: 'workspaceId',
-    description: 'ID of the workspace',
-    type: 'string',
-  })
-  @ApiParam({
-    name: 'interval',
-    description: 'Auto-archive interval in minutes (0 means the maximum interval will be used)',
-    type: 'number',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Auto-archive interval has been set',
-  })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
-  @UseGuards(WorkspaceAccessGuard)
-  @Audit({
-    action: AuditAction.SET_AUTO_ARCHIVE_INTERVAL,
-    targetType: AuditTarget.SANDBOX,
-    targetIdFromRequest: (req) => req.params.workspaceId,
-    requestMetadata: {
-      params: (req) => ({
-        interval: req.params.interval,
-      }),
-    },
-  })
-  async setAutoArchiveInterval(
-    @Param('workspaceId') workspaceId: string,
-    @Param('interval') interval: number,
-  ): Promise<void> {
-    await this.workspaceService.setAutoArchiveInterval(workspaceId, interval)
-  }
-
-  @Post(':workspaceId/archive')
-  @HttpCode(200)
-  @ApiOperation({
-    summary: '[DEPRECATED] Archive workspace',
-    operationId: 'archiveWorkspace_deprecated',
-    deprecated: true,
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Workspace has been archived',
-  })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
-  @UseGuards(WorkspaceAccessGuard)
-  @Audit({
-    action: AuditAction.ARCHIVE,
-    targetType: AuditTarget.SANDBOX,
-    targetIdFromRequest: (req) => req.params.workspaceId,
-  })
-  async archiveWorkspace(@Param('workspaceId') workspaceId: string): Promise<void> {
-    await this.workspaceService.archive(workspaceId)
-  }
-
   @Get(':workspaceId/ports/:port/preview-url')
   @ApiOperation({
     summary: '[DEPRECATED] Get preview URL for a workspace port',
@@ -597,7 +534,7 @@ export class WorkspaceController {
 
     const logProxy = new LogProxy(
       runner.apiUrl,
-      workspace.buildInfo.snapshotRef.split(':')[0],
+      workspace.buildInfo.artifactRef.split(':')[0],
       runner.apiKey,
       follow === true,
       req,

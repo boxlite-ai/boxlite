@@ -34,11 +34,11 @@ export class OrganizationUsageOverviewDto {
   })
   regionUsage: RegionUsageOverviewDto[]
 
-  // Snapshot usage
+  // Template usage
   @ApiProperty()
-  totalSnapshotQuota: number
+  totalTemplateQuota: number
   @ApiProperty()
-  currentSnapshotUsage: number
+  currentTemplateUsage: number
 
   // Volume usage
   @ApiProperty()

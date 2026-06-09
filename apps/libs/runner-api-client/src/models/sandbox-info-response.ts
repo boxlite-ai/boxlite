@@ -12,13 +12,12 @@
  * Do not edit the class manually.
  */
 
-
 // May contain unused imports in some cases
 // @ts-ignore
-import type { EnumsBackupState } from './enums-backup-state';
+import type { EnumsBackupState } from './enums-backup-state'
 // May contain unused imports in some cases
 // @ts-ignore
-import type { EnumsSandboxState } from './enums-sandbox-state';
+import type { EnumsSandboxState } from './enums-sandbox-state'
 
 /**
  *
@@ -26,34 +25,34 @@ import type { EnumsSandboxState } from './enums-sandbox-state';
  * @interface SandboxInfoResponse
  */
 export interface SandboxInfoResponse {
-    /**
-     *
-     * @type {string}
-     * @memberof SandboxInfoResponse
-     */
-    'backupError'?: string;
-    /**
-     *
-     * @type {string}
-     * @memberof SandboxInfoResponse
-     */
-    'backupSnapshot'?: string;
-    /**
-     *
-     * @type {EnumsBackupState}
-     * @memberof SandboxInfoResponse
-     */
-    'backupState'?: EnumsBackupState;
-    /**
-     *
-     * @type {string}
-     * @memberof SandboxInfoResponse
-     */
-    'daemonVersion'?: string;
-    /**
-     *
-     * @type {EnumsSandboxState}
-     * @memberof SandboxInfoResponse
-     */
-    'state'?: EnumsSandboxState;
+  /**
+   *
+   * @type {string}
+   * @memberof SandboxInfoResponse
+   */
+  backupError?: string
+  /**
+   *
+   * @type {string}
+   * @memberof SandboxInfoResponse
+   */
+  backupSnapshot?: string
+  /**
+   *
+   * @type {EnumsBackupState}
+   * @memberof SandboxInfoResponse
+   */
+  backupState?: EnumsBackupState
+  /**
+   *
+   * @type {string}
+   * @memberof SandboxInfoResponse
+   */
+  daemonVersion?: string
+  /**
+   *
+   * @type {EnumsSandboxState}
+   * @memberof SandboxInfoResponse
+   */
+  state?: EnumsSandboxState
 }

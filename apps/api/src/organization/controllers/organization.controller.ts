@@ -49,6 +49,7 @@ import { TypedConfigService } from '../../config/typed-config.service'
 import { AuthenticatedRateLimitGuard } from '../../common/guards/authenticated-rate-limit.guard'
 import { UpdateOrganizationRegionQuotaDto } from '../dto/update-organization-region-quota.dto'
 import { UpdateOrganizationDefaultRegionDto } from '../dto/update-organization-default-region.dto'
+import { UpdateOrganizationNameDto } from '../dto/update-organization-name.dto'
 import { RegionQuotaDto } from '../dto/region-quota.dto'
 import { RequireFlagsEnabled } from '@openfeature/nestjs-sdk'
 import { OrGuard } from '../../auth/or.guard'
@@ -211,6 +212,45 @@ export class OrganizationController {
     return OrganizationDto.fromOrganization(organization)
   }
 
+  @Patch('/:organizationId/name')
+  @ApiOperation({
+    summary: 'Update organization name',
+    operationId: 'updateOrganizationName',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Organization name updated successfully',
+    type: OrganizationDto,
+  })
+  @ApiParam({
+    name: 'organizationId',
+    description: 'Organization ID',
+    type: 'string',
+  })
+  @ApiBody({
+    type: UpdateOrganizationNameDto,
+    required: true,
+  })
+  @UseGuards(AuthGuard('jwt'), AuthenticatedRateLimitGuard, OrganizationActionGuard)
+  @RequiredOrganizationMemberRole(OrganizationMemberRole.OWNER)
+  @Audit({
+    action: AuditAction.UPDATE,
+    targetType: AuditTarget.ORGANIZATION,
+    targetIdFromRequest: (req) => String(req.params.organizationId),
+    requestMetadata: {
+      body: (req: TypedRequest<UpdateOrganizationNameDto>) => ({
+        name: req.body?.name,
+      }),
+    },
+  })
+  async updateName(
+    @Param('organizationId') organizationId: string,
+    @Body() updateOrganizationNameDto: UpdateOrganizationNameDto,
+  ): Promise<OrganizationDto> {
+    const organization = await this.organizationService.updateName(organizationId, updateOrganizationNameDto.name)
+    return OrganizationDto.fromOrganization(organization)
+  }
+
   @Patch('/:organizationId/default-region')
   @HttpCode(204)
   @ApiOperation({
@@ -361,8 +401,8 @@ export class OrganizationController {
         maxCpuPerSandbox: req.body?.maxCpuPerSandbox,
         maxMemoryPerSandbox: req.body?.maxMemoryPerSandbox,
         maxDiskPerSandbox: req.body?.maxDiskPerSandbox,
-        snapshotQuota: req.body?.snapshotQuota,
-        maxSnapshotSize: req.body?.maxSnapshotSize,
+        templateQuota: req.body?.templateQuota,
+        maxTemplateSize: req.body?.maxTemplateSize,
         volumeQuota: req.body?.volumeQuota,
       }),
     },

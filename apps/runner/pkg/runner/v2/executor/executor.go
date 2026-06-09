@@ -141,16 +141,16 @@ func (e *Executor) executeJob(ctx context.Context, job *apiclient.Job) (any, err
 		resultMetadata, err = e.resizeSandbox(ctx, job)
 	case apiclient.JOBTYPE_CREATE_BACKUP:
 		resultMetadata, err = e.createBackup(ctx, job)
-	case apiclient.JOBTYPE_BUILD_SNAPSHOT:
-		resultMetadata, err = e.buildSnapshot(ctx, job)
-	case apiclient.JOBTYPE_PULL_SNAPSHOT:
-		resultMetadata, err = e.pullSnapshot(ctx, job)
-	case apiclient.JOBTYPE_REMOVE_SNAPSHOT:
-		resultMetadata, err = e.removeSnapshot(ctx, job)
+	case apiclient.JOBTYPE_BUILD_ARTIFACT:
+		resultMetadata, err = e.buildArtifact(ctx, job)
+	case apiclient.JOBTYPE_PULL_ARTIFACT:
+		resultMetadata, err = e.pullArtifact(ctx, job)
+	case apiclient.JOBTYPE_REMOVE_ARTIFACT:
+		resultMetadata, err = e.removeArtifact(ctx, job)
 	case apiclient.JOBTYPE_UPDATE_SANDBOX_NETWORK_SETTINGS:
 		resultMetadata, err = e.updateNetworkSettings(ctx, job)
-	case apiclient.JOBTYPE_INSPECT_SNAPSHOT_IN_REGISTRY:
-		resultMetadata, err = e.inspectSnapshotInRegistry(ctx, job)
+	case apiclient.JOBTYPE_INSPECT_ARTIFACT_IN_REGISTRY:
+		resultMetadata, err = e.inspectArtifactInRegistry(ctx, job)
 	case apiclient.JOBTYPE_RECOVER_SANDBOX:
 		resultMetadata, err = e.recoverSandbox(ctx, job)
 	default:

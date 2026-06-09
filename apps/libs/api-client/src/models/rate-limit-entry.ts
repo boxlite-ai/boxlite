@@ -12,24 +12,22 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  *
  * @export
  * @interface RateLimitEntry
  */
 export interface RateLimitEntry {
-    /**
-     * Rate limit TTL in seconds
-     * @type {number}
-     * @memberof RateLimitEntry
-     */
-    'ttl'?: number;
-    /**
-     * Rate limit max requests
-     * @type {number}
-     * @memberof RateLimitEntry
-     */
-    'limit'?: number;
+  /**
+   * Rate limit TTL in seconds
+   * @type {number}
+   * @memberof RateLimitEntry
+   */
+  ttl?: number
+  /**
+   * Rate limit max requests
+   * @type {number}
+   * @memberof RateLimitEntry
+   */
+  limit?: number
 }

@@ -64,7 +64,7 @@ const SandboxFileSystem: React.FC = () => {
       {
         methodName: FileSystemActions.CREATE_FOLDER,
         label: 'createFolder()',
-        description: 'Creates a new directory in the Sandbox at the specified path with the given permissions',
+        description: 'Creates a new directory in the Box at the specified path with the given permissions',
         parametersFormItems: createFolderParamsFormData,
         parametersState: createFolderParams,
       },
@@ -78,7 +78,7 @@ const SandboxFileSystem: React.FC = () => {
       {
         methodName: FileSystemActions.DELETE_FILE,
         label: 'deleteFile()',
-        description: 'Deletes a file from the Sandbox',
+        description: 'Deletes a file from the Box',
         parametersFormItems: [deleteFileLocationFormData, deleteFileRecursiveFormData],
         parametersState: deleteFileParams,
       },

@@ -88,7 +88,6 @@ Note: if you are running BoxLite MCP Server on Windows OS, add the following to 
     - `target` (optional): Target region of the sandbox (if not provided, default region of the organization is used)
     - `image`: Image of the sandbox (optional)
     - `auto_stop_interval` (default: "15"): Auto-stop interval in minutes (0 means disabled)
-    - `auto_archive_interval` (default: "10080"): Auto-archive interval in minutes (0 means the maximum interval will be used)
     - `auto_delete_interval` (default: "-1"): Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping)
 
 - `destroy_sandbox`: Destroy a sandbox with BoxLite

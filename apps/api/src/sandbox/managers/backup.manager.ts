@@ -23,7 +23,6 @@ import { OnEvent } from '@nestjs/event-emitter'
 import { SandboxEvents } from '../constants/sandbox-events.constants'
 import { SandboxDestroyedEvent } from '../events/sandbox-destroyed.event'
 import { SandboxBackupCreatedEvent } from '../events/sandbox-backup-created.event'
-import { SandboxArchivedEvent } from '../events/sandbox-archived.event'
 import { RunnerAdapterFactory } from '../runner-adapter/runnerAdapter'
 import { TypedConfigService } from '../../config/typed-config.service'
 
@@ -110,13 +109,7 @@ export class BackupManager implements TrackableJobExecutions, OnApplicationShutd
               }
 
               try {
-                //  todo: remove the catch handler asap
-                await this.setBackupPending(sandbox).catch((error) => {
-                  if (error instanceof BadRequestError && error.message === 'A backup is already in progress') {
-                    return
-                  }
-                  this.logger.error(`Failed to create backup for sandbox ${sandbox.id}:`, fromAxiosError(error))
-                })
+                await this.setBackupPending(sandbox)
               } catch (error) {
                 this.logger.error(`Error processing stop state for sandbox ${sandbox.id}:`, fromAxiosError(error))
               } finally {
@@ -150,26 +143,24 @@ export class BackupManager implements TrackableJobExecutions, OnApplicationShutd
         .createQueryBuilder('sandbox')
         .innerJoin('runner', 'r', 'r.id = sandbox.runnerId')
         .where('sandbox.state IN (:...states)', {
-          states: [SandboxState.ARCHIVING, SandboxState.STARTED, SandboxState.STOPPED],
+          states: [SandboxState.STARTED, SandboxState.STOPPED],
         })
         .andWhere('sandbox.backupState IN (:...backupStates)', {
           backupStates: [BackupState.PENDING, BackupState.IN_PROGRESS],
         })
         .andWhere('r.state = :ready', { ready: RunnerState.READY })
-        // Prioritize manual archival action, then auto-archive poller, then ad-hoc backup poller
+        // Prioritize manual stopped backups before regular started sandbox backups.
         .addSelect(
           `
           CASE sandbox.state
-            WHEN :archiving THEN 1
-            WHEN :stopped   THEN 2
-            WHEN :started   THEN 3
+            WHEN :stopped   THEN 1
+            WHEN :started   THEN 2
             ELSE 999
           END
           `,
           'state_priority',
         )
         .setParameters({
-          archiving: SandboxState.ARCHIVING,
           stopped: SandboxState.STOPPED,
           started: SandboxState.STARTED,
         })
@@ -322,63 +313,15 @@ export class BackupManager implements TrackableJobExecutions, OnApplicationShutd
     }
   }
 
-  @Cron(CronExpression.EVERY_10_SECONDS, { name: 'sync-stop-state-create-backups' })
-  @TrackJobExecution()
-  @LogExecution('sync-stop-state-create-backups')
-  @WithInstrumentation()
-  async syncStopStateCreateBackups(): Promise<void> {
-    const lockKey = 'sync-stop-state-create-backups'
-    const hasLock = await this.redisLockProvider.lock(lockKey, 10)
-    if (!hasLock) {
-      return
-    }
-
-    try {
-      const sandboxes = await this.sandboxRepository
-        .createQueryBuilder('sandbox')
-        .innerJoin('runner', 'r', 'r.id = sandbox.runnerId')
-        .where('sandbox.state IN (:...states)', { states: [SandboxState.ARCHIVING, SandboxState.STOPPED] })
-        .andWhere('sandbox.backupState = :none', { none: BackupState.NONE })
-        .andWhere('r.state = :ready', { ready: RunnerState.READY })
-        .take(100)
-        .getMany()
-
-      await Promise.allSettled(
-        sandboxes
-          .filter((sandbox) => sandbox.runnerId !== null)
-          .map(async (sandbox) => {
-            const lockKey = `sandbox-backup-${sandbox.id}`
-            const hasLock = await this.redisLockProvider.lock(lockKey, 30)
-            if (!hasLock) {
-              return
-            }
-
-            try {
-              await this.setBackupPending(sandbox)
-            } catch (error) {
-              this.logger.error(`Error processing backup for sandbox ${sandbox.id}:`, error)
-            } finally {
-              await this.redisLockProvider.unlock(lockKey)
-            }
-          }),
-      )
-    } catch (error) {
-      this.logger.error(`Error processing backups: `, error)
-    } finally {
-      await this.redisLockProvider.unlock(lockKey)
-    }
-  }
-
   async setBackupPending(sandbox: Sandbox): Promise<void> {
     if (sandbox.backupState === BackupState.COMPLETED) {
       return
     }
 
-    // Allow backups for STARTED sandboxes, STOPPED/ERROR sandboxes with runnerId, or ARCHIVING sandboxes
+    // Allow backups for STARTED sandboxes or STOPPED/ERROR sandboxes with runnerId.
     if (
       !(
         sandbox.state === SandboxState.STARTED ||
-        sandbox.state === SandboxState.ARCHIVING ||
         (sandbox.state === SandboxState.STOPPED && sandbox.runnerId) ||
         (sandbox.state === SandboxState.ERROR && sandbox.runnerId)
       )
@@ -528,12 +471,6 @@ export class BackupManager implements TrackableJobExecutions, OnApplicationShutd
     } finally {
       await this.redisLockProvider.unlock(lockKey)
     }
-  }
-
-  @OnEvent(SandboxEvents.ARCHIVED)
-  @TrackJobExecution()
-  private async handleSandboxArchivedEvent(event: SandboxArchivedEvent) {
-    this.setBackupPending(event.sandbox)
   }
 
   @OnEvent(SandboxEvents.DESTROYED)

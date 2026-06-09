@@ -12,10 +12,9 @@
  * Do not edit the class manually.
  */
 
-
 // May contain unused imports in some cases
 // @ts-ignore
-import type { CreateOrganizationQuota } from './create-organization-quota';
+import type { CreateOrganizationQuota } from './create-organization-quota'
 
 /**
  *
@@ -23,53 +22,53 @@ import type { CreateOrganizationQuota } from './create-organization-quota';
  * @interface CreateUser
  */
 export interface CreateUser {
-    /**
-     *
-     * @type {string}
-     * @memberof CreateUser
-     */
-    'id': string;
-    /**
-     *
-     * @type {string}
-     * @memberof CreateUser
-     */
-    'name': string;
-    /**
-     *
-     * @type {string}
-     * @memberof CreateUser
-     */
-    'email'?: string;
-    /**
-     *
-     * @type {CreateOrganizationQuota}
-     * @memberof CreateUser
-     */
-    'personalOrganizationQuota'?: CreateOrganizationQuota;
-    /**
-     *
-     * @type {string}
-     * @memberof CreateUser
-     */
-    'personalOrganizationDefaultRegionId'?: string;
-    /**
-     *
-     * @type {string}
-     * @memberof CreateUser
-     */
-    'role'?: CreateUserRoleEnum;
-    /**
-     *
-     * @type {boolean}
-     * @memberof CreateUser
-     */
-    'emailVerified'?: boolean;
+  /**
+   *
+   * @type {string}
+   * @memberof CreateUser
+   */
+  id: string
+  /**
+   *
+   * @type {string}
+   * @memberof CreateUser
+   */
+  name: string
+  /**
+   *
+   * @type {string}
+   * @memberof CreateUser
+   */
+  email?: string
+  /**
+   *
+   * @type {CreateOrganizationQuota}
+   * @memberof CreateUser
+   */
+  personalOrganizationQuota?: CreateOrganizationQuota
+  /**
+   *
+   * @type {string}
+   * @memberof CreateUser
+   */
+  personalOrganizationDefaultRegionId?: string
+  /**
+   *
+   * @type {string}
+   * @memberof CreateUser
+   */
+  role?: CreateUserRoleEnum
+  /**
+   *
+   * @type {boolean}
+   * @memberof CreateUser
+   */
+  emailVerified?: boolean
 }
 
 export const CreateUserRoleEnum = {
-    ADMIN: 'admin',
-    USER: 'user'
-} as const;
+  ADMIN: 'admin',
+  USER: 'user',
+} as const
 
-export type CreateUserRoleEnum = typeof CreateUserRoleEnum[keyof typeof CreateUserRoleEnum];
+export type CreateUserRoleEnum = (typeof CreateUserRoleEnum)[keyof typeof CreateUserRoleEnum]

@@ -20,15 +20,15 @@ var _ MappedNullable = &CreateOrganizationQuota{}
 
 // CreateOrganizationQuota struct for CreateOrganizationQuota
 type CreateOrganizationQuota struct {
-	TotalCpuQuota *float32 `json:"totalCpuQuota,omitempty"`
-	TotalMemoryQuota *float32 `json:"totalMemoryQuota,omitempty"`
-	TotalDiskQuota *float32 `json:"totalDiskQuota,omitempty"`
-	MaxCpuPerSandbox *float32 `json:"maxCpuPerSandbox,omitempty"`
-	MaxMemoryPerSandbox *float32 `json:"maxMemoryPerSandbox,omitempty"`
-	MaxDiskPerSandbox *float32 `json:"maxDiskPerSandbox,omitempty"`
-	SnapshotQuota *float32 `json:"snapshotQuota,omitempty"`
-	MaxSnapshotSize *float32 `json:"maxSnapshotSize,omitempty"`
-	VolumeQuota *float32 `json:"volumeQuota,omitempty"`
+	TotalCpuQuota        *float32 `json:"totalCpuQuota,omitempty"`
+	TotalMemoryQuota     *float32 `json:"totalMemoryQuota,omitempty"`
+	TotalDiskQuota       *float32 `json:"totalDiskQuota,omitempty"`
+	MaxCpuPerSandbox     *float32 `json:"maxCpuPerSandbox,omitempty"`
+	MaxMemoryPerSandbox  *float32 `json:"maxMemoryPerSandbox,omitempty"`
+	MaxDiskPerSandbox    *float32 `json:"maxDiskPerSandbox,omitempty"`
+	TemplateQuota        *float32 `json:"templateQuota,omitempty"`
+	MaxTemplateSize      *float32 `json:"maxTemplateSize,omitempty"`
+	VolumeQuota          *float32 `json:"volumeQuota,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -243,68 +243,68 @@ func (o *CreateOrganizationQuota) SetMaxDiskPerSandbox(v float32) {
 	o.MaxDiskPerSandbox = &v
 }
 
-// GetSnapshotQuota returns the SnapshotQuota field value if set, zero value otherwise.
-func (o *CreateOrganizationQuota) GetSnapshotQuota() float32 {
-	if o == nil || IsNil(o.SnapshotQuota) {
+// GetTemplateQuota returns the TemplateQuota field value if set, zero value otherwise.
+func (o *CreateOrganizationQuota) GetTemplateQuota() float32 {
+	if o == nil || IsNil(o.TemplateQuota) {
 		var ret float32
 		return ret
 	}
-	return *o.SnapshotQuota
+	return *o.TemplateQuota
 }
 
-// GetSnapshotQuotaOk returns a tuple with the SnapshotQuota field value if set, nil otherwise
+// GetTemplateQuotaOk returns a tuple with the TemplateQuota field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *CreateOrganizationQuota) GetSnapshotQuotaOk() (*float32, bool) {
-	if o == nil || IsNil(o.SnapshotQuota) {
+func (o *CreateOrganizationQuota) GetTemplateQuotaOk() (*float32, bool) {
+	if o == nil || IsNil(o.TemplateQuota) {
 		return nil, false
 	}
-	return o.SnapshotQuota, true
+	return o.TemplateQuota, true
 }
 
-// HasSnapshotQuota returns a boolean if a field has been set.
-func (o *CreateOrganizationQuota) HasSnapshotQuota() bool {
-	if o != nil && !IsNil(o.SnapshotQuota) {
+// HasTemplateQuota returns a boolean if a field has been set.
+func (o *CreateOrganizationQuota) HasTemplateQuota() bool {
+	if o != nil && !IsNil(o.TemplateQuota) {
 		return true
 	}
 
 	return false
 }
 
-// SetSnapshotQuota gets a reference to the given float32 and assigns it to the SnapshotQuota field.
-func (o *CreateOrganizationQuota) SetSnapshotQuota(v float32) {
-	o.SnapshotQuota = &v
+// SetTemplateQuota gets a reference to the given float32 and assigns it to the TemplateQuota field.
+func (o *CreateOrganizationQuota) SetTemplateQuota(v float32) {
+	o.TemplateQuota = &v
 }
 
-// GetMaxSnapshotSize returns the MaxSnapshotSize field value if set, zero value otherwise.
-func (o *CreateOrganizationQuota) GetMaxSnapshotSize() float32 {
-	if o == nil || IsNil(o.MaxSnapshotSize) {
+// GetMaxTemplateSize returns the MaxTemplateSize field value if set, zero value otherwise.
+func (o *CreateOrganizationQuota) GetMaxTemplateSize() float32 {
+	if o == nil || IsNil(o.MaxTemplateSize) {
 		var ret float32
 		return ret
 	}
-	return *o.MaxSnapshotSize
+	return *o.MaxTemplateSize
 }
 
-// GetMaxSnapshotSizeOk returns a tuple with the MaxSnapshotSize field value if set, nil otherwise
+// GetMaxTemplateSizeOk returns a tuple with the MaxTemplateSize field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *CreateOrganizationQuota) GetMaxSnapshotSizeOk() (*float32, bool) {
-	if o == nil || IsNil(o.MaxSnapshotSize) {
+func (o *CreateOrganizationQuota) GetMaxTemplateSizeOk() (*float32, bool) {
+	if o == nil || IsNil(o.MaxTemplateSize) {
 		return nil, false
 	}
-	return o.MaxSnapshotSize, true
+	return o.MaxTemplateSize, true
 }
 
-// HasMaxSnapshotSize returns a boolean if a field has been set.
-func (o *CreateOrganizationQuota) HasMaxSnapshotSize() bool {
-	if o != nil && !IsNil(o.MaxSnapshotSize) {
+// HasMaxTemplateSize returns a boolean if a field has been set.
+func (o *CreateOrganizationQuota) HasMaxTemplateSize() bool {
+	if o != nil && !IsNil(o.MaxTemplateSize) {
 		return true
 	}
 
 	return false
 }
 
-// SetMaxSnapshotSize gets a reference to the given float32 and assigns it to the MaxSnapshotSize field.
-func (o *CreateOrganizationQuota) SetMaxSnapshotSize(v float32) {
-	o.MaxSnapshotSize = &v
+// SetMaxTemplateSize gets a reference to the given float32 and assigns it to the MaxTemplateSize field.
+func (o *CreateOrganizationQuota) SetMaxTemplateSize(v float32) {
+	o.MaxTemplateSize = &v
 }
 
 // GetVolumeQuota returns the VolumeQuota field value if set, zero value otherwise.
@@ -340,7 +340,7 @@ func (o *CreateOrganizationQuota) SetVolumeQuota(v float32) {
 }
 
 func (o CreateOrganizationQuota) MarshalJSON() ([]byte, error) {
-	toSerialize,err := o.ToMap()
+	toSerialize, err := o.ToMap()
 	if err != nil {
 		return []byte{}, err
 	}
@@ -367,11 +367,11 @@ func (o CreateOrganizationQuota) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.MaxDiskPerSandbox) {
 		toSerialize["maxDiskPerSandbox"] = o.MaxDiskPerSandbox
 	}
-	if !IsNil(o.SnapshotQuota) {
-		toSerialize["snapshotQuota"] = o.SnapshotQuota
+	if !IsNil(o.TemplateQuota) {
+		toSerialize["templateQuota"] = o.TemplateQuota
 	}
-	if !IsNil(o.MaxSnapshotSize) {
-		toSerialize["maxSnapshotSize"] = o.MaxSnapshotSize
+	if !IsNil(o.MaxTemplateSize) {
+		toSerialize["maxTemplateSize"] = o.MaxTemplateSize
 	}
 	if !IsNil(o.VolumeQuota) {
 		toSerialize["volumeQuota"] = o.VolumeQuota
@@ -404,8 +404,8 @@ func (o *CreateOrganizationQuota) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "maxCpuPerSandbox")
 		delete(additionalProperties, "maxMemoryPerSandbox")
 		delete(additionalProperties, "maxDiskPerSandbox")
-		delete(additionalProperties, "snapshotQuota")
-		delete(additionalProperties, "maxSnapshotSize")
+		delete(additionalProperties, "templateQuota")
+		delete(additionalProperties, "maxTemplateSize")
 		delete(additionalProperties, "volumeQuota")
 		o.AdditionalProperties = additionalProperties
 	}

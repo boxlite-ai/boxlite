@@ -9,7 +9,7 @@ import { analyzer } from 'vite-bundle-analyzer'
 import checker from 'vite-plugin-checker'
 import { nodePolyfills } from 'vite-plugin-node-polyfills'
 
-const outDir = '../../dist/apps/dashboard'
+const outDir = '../dist/apps/dashboard'
 
 export default defineConfig((mode) => ({
   root: __dirname,
@@ -74,7 +74,7 @@ export default defineConfig((mode) => ({
       // Resolve @boxlite-ai/sdk to the local source
       {
         find: '@boxlite-ai/sdk',
-        replacement: path.resolve(__dirname, '../../libs/sdk-typescript/src'),
+        replacement: path.resolve(__dirname, '../libs/sdk-typescript/src'),
       },
       // Target @ but not @boxlite-ai,
       {

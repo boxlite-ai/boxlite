@@ -21,13 +21,13 @@ import (
 )
 
 var CreateCmd = &cobra.Command{
-	Use:     "create [SNAPSHOT]",
-	Short:   "Create a snapshot",
+	Use:     "create [TEMPLATE]",
+	Short:   "Create a template",
 	Args:    cobra.ExactArgs(1),
 	Aliases: common.GetAliases("create"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
-		snapshotName := args[0]
+		templateName := args[0]
 
 		usingDockerfile := dockerfilePathFlag != ""
 		usingImage := imageNameFlag != ""
@@ -41,19 +41,19 @@ var CreateCmd = &cobra.Command{
 			return err
 		}
 
-		createSnapshot := apiclient.NewCreateSnapshot(snapshotName)
+		createTemplate := apiclient.NewCreateBoxTemplate(templateName)
 
 		if cpuFlag != 0 {
-			createSnapshot.SetCpu(cpuFlag)
+			createTemplate.SetCpu(cpuFlag)
 		}
 		if memoryFlag != 0 {
-			createSnapshot.SetMemory(memoryFlag)
+			createTemplate.SetMemory(memoryFlag)
 		}
 		if diskFlag != 0 {
-			createSnapshot.SetDisk(diskFlag)
+			createTemplate.SetDisk(diskFlag)
 		}
 		if regionIdFlag != "" {
-			createSnapshot.SetRegionId(regionIdFlag)
+			createTemplate.SetRegionId(regionIdFlag)
 		}
 
 		if usingDockerfile {
@@ -61,22 +61,22 @@ var CreateCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
-			createSnapshot.SetBuildInfo(*createBuildInfoDto)
+			createTemplate.SetBuildInfo(*createBuildInfoDto)
 		} else if usingImage {
 			err := common.ValidateImageName(imageNameFlag)
 			if err != nil {
 				return err
 			}
-			createSnapshot.SetImageName(imageNameFlag)
+			createTemplate.SetImageName(imageNameFlag)
 			if entrypointFlag != "" {
-				createSnapshot.SetEntrypoint(strings.Split(entrypointFlag, " "))
+				createTemplate.SetEntrypoint(strings.Split(entrypointFlag, " "))
 			}
 		} else if entrypointFlag != "" {
-			createSnapshot.SetEntrypoint(strings.Split(entrypointFlag, " "))
+			createTemplate.SetEntrypoint(strings.Split(entrypointFlag, " "))
 		}
 
 		// Send create request
-		snapshot, res, err := apiClient.SnapshotsAPI.CreateSnapshot(ctx).CreateSnapshot(*createSnapshot).Execute()
+		template, res, err := apiClient.TemplatesAPI.CreateBoxTemplate(ctx).CreateBoxTemplate(*createTemplate).Execute()
 		if err != nil {
 			return apiclient_cli.HandleErrorResponse(res, err)
 		}
@@ -97,15 +97,15 @@ var CreateCmd = &cobra.Command{
 			defer stopLogs()
 
 			go common.ReadBuildLogs(logsContext, common.ReadLogParams{
-				Id:                   snapshot.Id,
+				Id:                   template.Id,
 				ServerUrl:            activeProfile.Api.Url,
 				ServerApi:            activeProfile.Api,
 				ActiveOrganizationId: activeProfile.ActiveOrganizationId,
 				Follow:               util.Pointer(true),
-				ResourceType:         common.ResourceTypeSnapshot,
+				ResourceType:         common.ResourceTypeTemplate,
 			})
 
-			err = common.AwaitSnapshotState(ctx, apiClient, snapshotName, apiclient.SNAPSHOTSTATE_PENDING)
+			err = common.AwaitBoxTemplateState(ctx, apiClient, templateName, apiclient.BOXTEMPLATESTATE_PENDING)
 			if err != nil {
 				return err
 			}
@@ -115,15 +115,15 @@ var CreateCmd = &cobra.Command{
 			stopLogs()
 		}
 
-		err = views_util.WithInlineSpinner("Waiting for the snapshot to be validated", func() error {
-			return common.AwaitSnapshotState(ctx, apiClient, snapshotName, apiclient.SNAPSHOTSTATE_ACTIVE)
+		err = views_util.WithInlineSpinner("Waiting for the template to be validated", func() error {
+			return common.AwaitBoxTemplateState(ctx, apiClient, templateName, apiclient.BOXTEMPLATESTATE_ACTIVE)
 		})
 		if err != nil {
 			return err
 		}
 
-		view_common.RenderInfoMessageBold(fmt.Sprintf("Snapshot %s successfully created", snapshotName))
-		view_common.RenderInfoMessage(fmt.Sprintf("%s Run 'boxlite sandbox create --snapshot %s' to create a new sandbox using this snapshot", view_common.Checkmark, snapshotName))
+		view_common.RenderInfoMessageBold(fmt.Sprintf("Template %s successfully created", templateName))
+		view_common.RenderInfoMessage(fmt.Sprintf("%s Run 'boxlite sandbox create --template %s' to create a new sandbox using this template", view_common.Checkmark, templateName))
 		return nil
 	},
 }
@@ -140,14 +140,14 @@ var (
 )
 
 func init() {
-	CreateCmd.Flags().StringVarP(&entrypointFlag, "entrypoint", "e", "", "The entrypoint command for the snapshot")
-	CreateCmd.Flags().StringVarP(&imageNameFlag, "image", "i", "", "The image name for the snapshot")
+	CreateCmd.Flags().StringVarP(&entrypointFlag, "entrypoint", "e", "", "The entrypoint command for the template")
+	CreateCmd.Flags().StringVarP(&imageNameFlag, "image", "i", "", "The image name for the template")
 	CreateCmd.Flags().StringVarP(&dockerfilePathFlag, "dockerfile", "f", "", "Path to Dockerfile to build")
 	CreateCmd.Flags().StringArrayVarP(&contextFlag, "context", "c", []string{}, "Files or directories to include in the build context (can be specified multiple times). If not provided, context will be automatically determined from COPY/ADD commands in the Dockerfile")
 	CreateCmd.Flags().Int32Var(&cpuFlag, "cpu", 0, "CPU cores that will be allocated to the underlying sandboxes (default: 1)")
 	CreateCmd.Flags().Int32Var(&memoryFlag, "memory", 0, "Memory that will be allocated to the underlying sandboxes in GB (default: 1)")
 	CreateCmd.Flags().Int32Var(&diskFlag, "disk", 0, "Disk space that will be allocated to the underlying sandboxes in GB (default: 3)")
-	CreateCmd.Flags().StringVar(&regionIdFlag, "region", "", "ID of the region where the snapshot will be available (defaults to organization default region)")
+	CreateCmd.Flags().StringVar(&regionIdFlag, "region", "", "ID of the region where the template will be available (defaults to organization default region)")
 
 	CreateCmd.MarkFlagsMutuallyExclusive("image", "dockerfile")
 	CreateCmd.MarkFlagsMutuallyExclusive("image", "context")

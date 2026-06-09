@@ -64,17 +64,17 @@ int main() {
     CBoxliteError error = {0};
 
     // Create box and auto-start it
-    if (boxlite_simple_new("python:slim", 0, 0, &box, &error) != Ok) {
+    if (boxlite_simple_new("busybox:1.36.1", 0, 0, &box, &error) != Ok) {
         fprintf(stderr, "Error %d: %s\n", error.code, error.message);
         boxlite_error_free(&error);
         return 1;
     }
 
     // Run command and get buffered result
-    const char* args[] = {"-c", "print('Hello from BoxLite!')", NULL};
+    const char* args[] = {"Hello from BoxLite!", NULL};
     CBoxliteExecResult* result = NULL;
 
-    if (boxlite_simple_run(box, "python", args, 2, &result, &error) == Ok) {
+    if (boxlite_simple_run(box, "echo", args, 1, &result, &error) == Ok) {
         printf("Output: %s\n", result->stdout_text);
         printf("Exit code: %d\n", result->exit_code);
         boxlite_result_free(result);

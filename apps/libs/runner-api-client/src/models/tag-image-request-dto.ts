@@ -12,24 +12,22 @@
  * Do not edit the class manually.
  */
 
-
-
 /**
  *
  * @export
  * @interface TagImageRequestDTO
  */
 export interface TagImageRequestDTO {
-    /**
-     *
-     * @type {string}
-     * @memberof TagImageRequestDTO
-     */
-    'sourceImage': string;
-    /**
-     *
-     * @type {string}
-     * @memberof TagImageRequestDTO
-     */
-    'targetImage': string;
+  /**
+   *
+   * @type {string}
+   * @memberof TagImageRequestDTO
+   */
+  sourceImage: string
+  /**
+   *
+   * @type {string}
+   * @memberof TagImageRequestDTO
+   */
+  targetImage: string
 }

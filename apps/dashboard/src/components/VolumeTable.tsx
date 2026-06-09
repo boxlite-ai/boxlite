@@ -210,7 +210,7 @@ export function VolumeTable({
                   <div className="space-y-2">
                     <p>
                       Volumes are shared, persistent directories backed by S3-compatible storage, perfect for reusing
-                      datasets, caching dependencies, or passing files across sandboxes.
+                      datasets, caching dependencies, or passing files across boxes.
                     </p>
                     <p>
                       Create one via the SDK or CLI. <br />

@@ -181,8 +181,7 @@ const Spending = () => {
                   </EmptyMedia>
                   <EmptyTitle>No resource usage data</EmptyTitle>
                   <EmptyDescription>
-                    Usage data will appear here once your sandboxes start consuming resources in the selected time
-                    range.
+                    Usage data will appear here once your boxes start consuming resources in the selected time range.
                   </EmptyDescription>
                 </EmptyHeader>
               </Empty>
@@ -206,10 +205,8 @@ const Spending = () => {
             )}
             <Separator />
             <div className="p-4">
-              <p className="text-xl font-semibold leading-none tracking-tight">Per-Sandbox Usage</p>
-              <p className="text-sm text-muted-foreground mt-2">
-                Resource consumption broken down by individual sandbox.
-              </p>
+              <p className="text-xl font-semibold leading-none tracking-tight">Per-Box Usage</p>
+              <p className="text-sm text-muted-foreground mt-2">Resource consumption broken down by individual box.</p>
             </div>
             {sandboxesError ? (
               <Empty className="py-12">
@@ -217,9 +214,9 @@ const Spending = () => {
                   <EmptyMedia variant="icon" className="bg-destructive-background text-destructive">
                     <AlertCircle />
                   </EmptyMedia>
-                  <EmptyTitle className="text-destructive">Failed to load sandbox usage</EmptyTitle>
+                  <EmptyTitle className="text-destructive">Failed to load box usage</EmptyTitle>
                   <EmptyDescription>
-                    Something went wrong while fetching per-sandbox data. Please try again.
+                    Something went wrong while fetching per-box data. Please try again.
                   </EmptyDescription>
                 </EmptyHeader>
                 <EmptyContent>
@@ -235,9 +232,9 @@ const Spending = () => {
                   <EmptyMedia variant="icon">
                     <BarChart3 />
                   </EmptyMedia>
-                  <EmptyTitle>No sandbox usage yet</EmptyTitle>
+                  <EmptyTitle>No box usage yet</EmptyTitle>
                   <EmptyDescription>
-                    Once you create and run a sandbox, its resource consumption will appear here.
+                    Once you create and run a box, its resource consumption will appear here.
                   </EmptyDescription>
                 </EmptyHeader>
               </Empty>

@@ -12,10 +12,9 @@
  * Do not edit the class manually.
  */
 
-
 // May contain unused imports in some cases
 // @ts-ignore
-import type { Range } from './range';
+import type { Range } from './range'
 
 /**
  *
@@ -23,16 +22,16 @@ import type { Range } from './range';
  * @interface LspLocation
  */
 export interface LspLocation {
-    /**
-     *
-     * @type {Range}
-     * @memberof LspLocation
-     */
-    'range': Range;
-    /**
-     *
-     * @type {string}
-     * @memberof LspLocation
-     */
-    'uri': string;
+  /**
+   *
+   * @type {Range}
+   * @memberof LspLocation
+   */
+  range: Range
+  /**
+   *
+   * @type {string}
+   * @memberof LspLocation
+   */
+  uri: string
 }

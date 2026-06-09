@@ -26,7 +26,7 @@ type RunnerServiceHealth struct {
 	// Whether the service is healthy
 	Healthy bool `json:"healthy"`
 	// Error reason if the service is unhealthy
-	ErrorReason *string `json:"errorReason,omitempty"`
+	ErrorReason          *string `json:"errorReason,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -132,7 +132,7 @@ func (o *RunnerServiceHealth) SetErrorReason(v string) {
 }
 
 func (o RunnerServiceHealth) MarshalJSON() ([]byte, error) {
-	toSerialize,err := o.ToMap()
+	toSerialize, err := o.ToMap()
 	if err != nil {
 		return []byte{}, err
 	}
@@ -168,10 +168,10 @@ func (o *RunnerServiceHealth) UnmarshalJSON(data []byte) (err error) {
 	err = json.Unmarshal(data, &allProperties)
 
 	if err != nil {
-		return err;
+		return err
 	}
 
-	for _, requiredProperty := range(requiredProperties) {
+	for _, requiredProperty := range requiredProperties {
 		if _, exists := allProperties[requiredProperty]; !exists {
 			return fmt.Errorf("no value given for required property %v", requiredProperty)
 		}

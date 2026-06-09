@@ -56,17 +56,17 @@ int main() {
     CBoxliteError error = {0};
 
     // Create box and auto-start it
-    if (boxlite_simple_new("python:slim", 0, 0, &box, &error) != Ok) {
+    if (boxlite_simple_new("busybox:1.36.1", 0, 0, &box, &error) != Ok) {
         fprintf(stderr, "Error %d: %s\n", error.code, error.message);
         boxlite_error_free(&error);
         return 1;
     }
 
     // Run command and get buffered result
-    const char* args[] = {"-c", "print('Hello from BoxLite!')", NULL};
+    const char* args[] = {"Hello from BoxLite!", NULL};
     CBoxliteExecResult* result = NULL;
 
-    if (boxlite_simple_run(box, "python", args, 2, &result, &error) == Ok) {
+    if (boxlite_simple_run(box, "echo", args, 1, &result, &error) == Ok) {
         printf("Output: %s", result->stdout_text);
         printf("Exit code: %d\n", result->exit_code);
         boxlite_result_free(result);
@@ -103,9 +103,9 @@ export LD_LIBRARY_PATH=/path/to/boxlite/target/release:$LD_LIBRARY_PATH
 ```
 
 **What's happening:**
-1. BoxLite pulls the `python:slim` OCI image (first run only)
+1. BoxLite pulls the `busybox:1.36.1` OCI image (first run only)
 2. Creates a lightweight VM with the image
-3. Executes the Python command inside the VM
+3. Executes the command inside the VM
 4. Buffers stdout/stderr and returns the result
 5. Automatically cleans up when `boxlite_simple_free()` is called
 

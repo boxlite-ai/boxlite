@@ -29,6 +29,7 @@ export function useSandboxWsSync({ sandboxId, refetchOnCreate = false }: UseSand
     const updateStateInListCache = (targetId: string, state: SandboxState) => {
       queryClient.setQueriesData<PaginatedSandboxes>({ queryKey: getSandboxesQueryKey(orgId) }, (oldData) => {
         if (!oldData) return oldData
+        if (!Array.isArray(oldData.items)) return oldData
         return {
           ...oldData,
           items: oldData.items.map((s) => (s.id === targetId ? { ...s, state } : s)),
@@ -43,10 +44,17 @@ export function useSandboxWsSync({ sandboxId, refetchOnCreate = false }: UseSand
       })
     }
 
-    const optimisticUpdate = (targetId: string, state: SandboxState) => {
-      updateStateInListCache(targetId, state)
+    const matchesActiveSandbox = (sandbox: Sandbox) =>
+      !sandboxId || sandbox.id === sandboxId || sandbox.boxId === sandboxId
+
+    const optimisticUpdate = (sandbox: Sandbox, state: SandboxState) => {
+      updateStateInListCache(sandbox.id, state)
       if (sandboxId) {
-        updateStateInDetailCache(targetId, state)
+        updateStateInDetailCache(sandboxId, state)
+        updateStateInDetailCache(sandbox.id, state)
+        if (sandbox.boxId) {
+          updateStateInDetailCache(sandbox.boxId, state)
+        }
       }
     }
 
@@ -73,7 +81,7 @@ export function useSandboxWsSync({ sandboxId, refetchOnCreate = false }: UseSand
     }
 
     const handleStateUpdated = (data: { sandbox: Sandbox; oldState: SandboxState; newState: SandboxState }) => {
-      if (sandboxId && data.sandbox.id !== sandboxId) return
+      if (!matchesActiveSandbox(data.sandbox)) return
 
       // warm pool sandboxes — treat as created
       if (data.oldState === data.newState && data.newState === SandboxState.STARTED) {
@@ -91,7 +99,7 @@ export function useSandboxWsSync({ sandboxId, refetchOnCreate = false }: UseSand
         updatedState = SandboxState.DESTROYED
       }
 
-      optimisticUpdate(data.sandbox.id, updatedState)
+      optimisticUpdate(data.sandbox, updatedState)
       invalidate()
     }
 
@@ -100,12 +108,12 @@ export function useSandboxWsSync({ sandboxId, refetchOnCreate = false }: UseSand
       oldDesiredState: SandboxDesiredState
       newDesiredState: SandboxDesiredState
     }) => {
-      if (sandboxId && data.sandbox.id !== sandboxId) return
+      if (!matchesActiveSandbox(data.sandbox)) return
 
       if (data.newDesiredState !== SandboxDesiredState.DESTROYED) return
       if (data.sandbox.state !== SandboxState.ERROR && data.sandbox.state !== SandboxState.BUILD_FAILED) return
 
-      optimisticUpdate(data.sandbox.id, SandboxState.DESTROYED)
+      optimisticUpdate(data.sandbox, SandboxState.DESTROYED)
       invalidate()
     }
 

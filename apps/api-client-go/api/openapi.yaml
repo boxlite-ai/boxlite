@@ -19,7 +19,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/BoxLiteConfiguration'
+                $ref: '#/components/schemas/BoxliteConfiguration'
           description: BoxLite configuration
       summary: Get config
       tags:
@@ -359,6 +359,40 @@ paths:
         - profile
         - email
       summary: Create organization
+      tags:
+      - organizations
+  /organizations/{organizationId}/name:
+    patch:
+      operationId: updateOrganizationName
+      parameters:
+      - description: Organization ID
+        explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateOrganizationName'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+          description: Organization name updated successfully
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Update organization name
       tags:
       - organizations
   /organizations/{organizationId}/default-region:
@@ -1384,9 +1418,9 @@ paths:
       summary: Regenerate SSH gateway API key for a region
       tags:
       - organizations
-  /regions/{id}/regenerate-snapshot-manager-credentials:
+  /regions/{id}/regenerate-artifact-registry-credentials:
     post:
-      operationId: regenerateSnapshotManagerCredentials
+      operationId: regenerateArtifactRegistryCredentials
       parameters:
       - description: Use with JWT to specify the organization ID
         explode: false
@@ -1409,15 +1443,15 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SnapshotManagerCredentials'
-          description: The snapshot manager credentials have been successfully regenerated.
+                $ref: '#/components/schemas/ArtifactRegistryCredentials'
+          description: The artifact registry credentials have been successfully regenerated.
       security:
       - bearer: []
       - oauth2:
         - openid
         - profile
         - email
-      summary: Regenerate snapshot manager credentials for a region
+      summary: Regenerate artifact registry credentials for a region
       tags:
       - organizations
   /users/me:
@@ -1643,6 +1677,43 @@ paths:
       summary: List all shared regions
       tags:
       - regions
+  /auth/end-session:
+    get:
+      description: "Implements OpenID Connect RP-Initiated Logout 1.0 for IdPs (e.g.\
+        \ Dex) that do not natively advertise end_session_endpoint. Validates the\
+        \ post-logout redirect target, then 302-redirects the browser back to the\
+        \ SPA."
+      operationId: LogoutController_endSession
+      parameters:
+      - explode: true
+        in: query
+        name: post_logout_redirect_uri
+        required: false
+        schema:
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: id_token_hint
+        required: false
+        schema:
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: state
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "302":
+          description: Redirect to post_logout_redirect_uri
+        "400":
+          description: post_logout_redirect_uri not allowed
+      summary: OIDC RP-initiated logout endpoint
+      tags:
+      - auth
   /sandbox:
     get:
       operationId: listSandboxes
@@ -1764,7 +1835,7 @@ paths:
           minimum: 1
           type: number
         style: form
-      - description: Filter by partial ID match
+      - description: "Filter by partial Box ID, internal UUID, or name match"
         explode: true
         in: query
         name: id
@@ -1818,19 +1889,19 @@ paths:
             - error
             - build_failed
             - pending_build
-            - building_snapshot
+            - building_artifact
             - unknown
-            - pulling_snapshot
+            - pulling_artifact
             - archived
             - archiving
             - resizing
             type: string
           type: array
         style: form
-      - description: List of snapshot names to filter by
+      - description: List of template names to filter by
         explode: true
         in: query
-        name: snapshots
+        name: templates
         required: false
         schema:
           items:
@@ -1930,9 +2001,10 @@ paths:
           default: createdAt
           enum:
           - id
+          - boxId
           - name
           - state
-          - snapshot
+          - template
           - region
           - updatedAt
           - createdAt
@@ -2153,8 +2225,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Sandbox'
-          description: Sandbox has been started or is being restored from archived
-            state
+          description: Sandbox has been started
       security:
       - bearer: []
       - oauth2:
@@ -2486,51 +2557,6 @@ paths:
       summary: Set sandbox auto-stop interval
       tags:
       - sandbox
-  /sandbox/{sandboxIdOrName}/autoarchive/{interval}:
-    post:
-      operationId: setAutoArchiveInterval
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID or name of the sandbox
-        explode: false
-        in: path
-        name: sandboxIdOrName
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Auto-archive interval in minutes (0 means the maximum interval
-          will be used)
-        explode: false
-        in: path
-        name: interval
-        required: true
-        schema:
-          type: number
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Sandbox'
-          description: Auto-archive interval has been set
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Set sandbox auto-archive interval
-      tags:
-      - sandbox
   /sandbox/{sandboxIdOrName}/autodelete/{interval}:
     post:
       operationId: setAutoDeleteInterval
@@ -2574,41 +2600,6 @@ paths:
         - profile
         - email
       summary: Set sandbox auto-delete interval
-      tags:
-      - sandbox
-  /sandbox/{sandboxIdOrName}/archive:
-    post:
-      operationId: archiveSandbox
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - explode: false
-        in: path
-        name: sandboxIdOrName
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Sandbox'
-          description: Sandbox has been archived
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Archive sandbox
       tags:
       - sandbox
   /sandbox/{sandboxIdOrName}/ports/{port}/preview-url:
@@ -3103,14 +3094,14 @@ paths:
       summary: Get runner by sandbox ID
       tags:
       - runners
-  /runners/by-snapshot-ref:
+  /runners/by-artifact-ref:
     get:
-      operationId: getRunnersBySnapshotRef
+      operationId: getRunnersByArtifactRef
       parameters:
-      - description: Snapshot ref
+      - description: Artifact ref
         explode: true
         in: query
-        name: ref
+        name: artifactRef
         required: true
         schema:
           type: string
@@ -3121,7 +3112,7 @@ paths:
             application/json:
               schema:
                 items:
-                  $ref: '#/components/schemas/RunnerSnapshotDto'
+                  $ref: '#/components/schemas/RunnerArtifactCacheDto'
                 type: array
           description: ""
       security:
@@ -3130,7 +3121,7 @@ paths:
         - openid
         - profile
         - email
-      summary: Get runners by snapshot ref
+      summary: Get runners by artifact ref
       tags:
       - runners
   /runners/{id}:
@@ -6360,9 +6351,9 @@ paths:
       summary: "[DEPRECATED] Get windows"
       tags:
       - toolbox
-  /snapshots:
+  /templates:
     get:
-      operationId: getAllSnapshots
+      operationId: listBoxTemplates
       parameters:
       - description: Use with JWT to specify the organization ID
         explode: false
@@ -6399,7 +6390,7 @@ paths:
         name: name
         required: false
         schema:
-          example: abc123
+          example: ubuntu
           type: string
         style: form
       - description: Field to sort by
@@ -6433,19 +6424,21 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PaginatedSnapshots'
-          description: Paginated list of all snapshots
+                items:
+                  $ref: '#/components/schemas/BoxTemplateDto'
+                type: array
+          description: Box templates available to the organization
       security:
       - bearer: []
       - oauth2:
         - openid
         - profile
         - email
-      summary: List all snapshots
+      summary: List box templates
       tags:
-      - snapshots
+      - templates
     post:
-      operationId: createSnapshot
+      operationId: createBoxTemplate
       parameters:
       - description: Use with JWT to specify the organization ID
         explode: false
@@ -6459,65 +6452,27 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateSnapshot'
+              $ref: '#/components/schemas/CreateBoxTemplate'
         required: true
       responses:
         "200":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SnapshotDto'
-          description: The snapshot has been successfully created.
-        "400":
-          description: Bad request - Snapshots with tag ":latest" are not allowed
+                $ref: '#/components/schemas/BoxTemplateDto'
+          description: The box template has been successfully created.
       security:
       - bearer: []
       - oauth2:
         - openid
         - profile
         - email
-      summary: Create a new snapshot
+      summary: Create a new box template
       tags:
-      - snapshots
-  /snapshots/can-cleanup-image:
-    get:
-      operationId: canCleanupImage
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: Image name with tag to check
-        explode: true
-        in: query
-        name: imageName
-        required: true
-        schema:
-          type: string
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                type: boolean
-          description: Boolean indicating if image can be cleaned up
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Check if an image can be cleaned up
-      tags:
-      - snapshots
-  /snapshots/{id}:
+      - templates
+  /templates/{id}:
     delete:
-      operationId: removeSnapshot
+      operationId: removeBoxTemplate
       parameters:
       - description: Use with JWT to specify the organization ID
         explode: false
@@ -6527,7 +6482,7 @@ paths:
         schema:
           type: string
         style: simple
-      - description: Snapshot ID
+      - description: Template ID
         explode: false
         in: path
         name: id
@@ -6537,18 +6492,18 @@ paths:
         style: simple
       responses:
         "200":
-          description: Snapshot has been deleted
+          description: Template has been deleted
       security:
       - bearer: []
       - oauth2:
         - openid
         - profile
         - email
-      summary: Delete snapshot
+      summary: Delete box template
       tags:
-      - snapshots
+      - templates
     get:
-      operationId: getSnapshot
+      operationId: getBoxTemplate
       parameters:
       - description: Use with JWT to specify the organization ID
         explode: false
@@ -6558,7 +6513,7 @@ paths:
         schema:
           type: string
         style: simple
-      - description: Snapshot ID or name
+      - description: Template ID or name
         explode: false
         in: path
         name: id
@@ -6571,22 +6526,22 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SnapshotDto'
-          description: The snapshot
+                $ref: '#/components/schemas/BoxTemplateDto'
+          description: The box template
         "404":
-          description: Snapshot not found
+          description: Template not found
       security:
       - bearer: []
       - oauth2:
         - openid
         - profile
         - email
-      summary: Get snapshot by ID or name
+      summary: Get box template by ID or name
       tags:
-      - snapshots
-  /snapshots/{id}/general:
+      - templates
+  /templates/{id}/general:
     patch:
-      operationId: setSnapshotGeneralStatus
+      operationId: setBoxTemplateGeneralStatus
       parameters:
       - description: Use with JWT to specify the organization ID
         explode: false
@@ -6596,7 +6551,7 @@ paths:
         schema:
           type: string
         style: simple
-      - description: Snapshot ID
+      - description: Template ID
         explode: false
         in: path
         name: id
@@ -6608,29 +6563,29 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SetSnapshotGeneralStatusDto'
+              $ref: '#/components/schemas/SetBoxTemplateGeneralStatus'
         required: true
       responses:
         "200":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SnapshotDto'
-          description: Snapshot general status has been set
+                $ref: '#/components/schemas/BoxTemplateDto'
+          description: Template general status has been set
       security:
       - bearer: []
       - oauth2:
         - openid
         - profile
         - email
-      summary: Set snapshot general status
+      summary: Set box template general status
       tags:
-      - snapshots
-  /snapshots/{id}/build-logs:
+      - templates
+  /templates/{id}/build-logs:
     get:
       deprecated: true
-      description: This endpoint is deprecated. Use `getSnapshotBuildLogsUrl` instead.
-      operationId: getSnapshotBuildLogs
+      description: This endpoint is deprecated. Use `getBoxTemplateBuildLogsUrl` instead.
+      operationId: getBoxTemplateBuildLogs
       parameters:
       - description: Use with JWT to specify the organization ID
         explode: false
@@ -6640,7 +6595,7 @@ paths:
         schema:
           type: string
         style: simple
-      - description: Snapshot ID
+      - description: Template ID
         explode: false
         in: path
         name: id
@@ -6665,12 +6620,12 @@ paths:
         - openid
         - profile
         - email
-      summary: Get snapshot build logs
+      summary: Get box template build logs
       tags:
-      - snapshots
-  /snapshots/{id}/build-logs-url:
+      - templates
+  /templates/{id}/build-logs-url:
     get:
-      operationId: getSnapshotBuildLogsUrl
+      operationId: getBoxTemplateBuildLogsUrl
       parameters:
       - description: Use with JWT to specify the organization ID
         explode: false
@@ -6680,7 +6635,7 @@ paths:
         schema:
           type: string
         style: simple
-      - description: Snapshot ID
+      - description: Template ID
         explode: false
         in: path
         name: id
@@ -6694,19 +6649,19 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Url'
-          description: The snapshot build logs URL
+          description: The template build logs URL
       security:
       - bearer: []
       - oauth2:
         - openid
         - profile
         - email
-      summary: Get snapshot build logs URL
+      summary: Get box template build logs URL
       tags:
-      - snapshots
-  /snapshots/{id}/activate:
+      - templates
+  /templates/{id}/activate:
     post:
-      operationId: activateSnapshot
+      operationId: activateBoxTemplate
       parameters:
       - description: Use with JWT to specify the organization ID
         explode: false
@@ -6716,7 +6671,7 @@ paths:
         schema:
           type: string
         style: simple
-      - description: Snapshot ID
+      - description: Template ID
         explode: false
         in: path
         name: id
@@ -6729,25 +6684,20 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SnapshotDto'
-          description: The snapshot has been successfully activated.
-        "400":
-          description: "Bad request - Snapshot is already active, not in inactive\
-            \ state, or has associated snapshot runners"
-        "404":
-          description: Snapshot not found
+                $ref: '#/components/schemas/BoxTemplateDto'
+          description: The template has been successfully activated.
       security:
       - bearer: []
       - oauth2:
         - openid
         - profile
         - email
-      summary: Activate a snapshot
+      summary: Activate a box template
       tags:
-      - snapshots
-  /snapshots/{id}/deactivate:
+      - templates
+  /templates/{id}/deactivate:
     post:
-      operationId: deactivateSnapshot
+      operationId: deactivateBoxTemplate
       parameters:
       - description: Use with JWT to specify the organization ID
         explode: false
@@ -6757,7 +6707,7 @@ paths:
         schema:
           type: string
         style: simple
-      - description: Snapshot ID
+      - description: Template ID
         explode: false
         in: path
         name: id
@@ -6767,16 +6717,16 @@ paths:
         style: simple
       responses:
         "204":
-          description: The snapshot has been successfully deactivated.
+          description: The template has been successfully deactivated.
       security:
       - bearer: []
       - oauth2:
         - openid
         - profile
         - email
-      summary: Deactivate a snapshot
+      summary: Deactivate a box template
       tags:
-      - snapshots
+      - templates
   /workspace:
     get:
       deprecated: true
@@ -7169,80 +7119,6 @@ paths:
         - profile
         - email
       summary: "[DEPRECATED] Set workspace auto-stop interval"
-      tags:
-      - workspace
-  /workspace/{workspaceId}/autoarchive/{interval}:
-    post:
-      deprecated: true
-      operationId: setAutoArchiveIntervalWorkspace_deprecated
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID of the workspace
-        explode: false
-        in: path
-        name: workspaceId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Auto-archive interval in minutes (0 means the maximum interval
-          will be used)
-        explode: false
-        in: path
-        name: interval
-        required: true
-        schema:
-          type: number
-        style: simple
-      responses:
-        "200":
-          description: Auto-archive interval has been set
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: "[DEPRECATED] Set workspace auto-archive interval"
-      tags:
-      - workspace
-  /workspace/{workspaceId}/archive:
-    post:
-      deprecated: true
-      operationId: archiveWorkspace_deprecated
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - explode: false
-        in: path
-        name: workspaceId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: Workspace has been archived
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: "[DEPRECATED] Archive workspace"
       tags:
       - workspace
   /workspace/{workspaceId}/ports/{port}/preview-url:
@@ -8844,6 +8720,1804 @@ paths:
       summary: Get sandbox metrics
       tags:
       - sandbox
+  /v1/me:
+    get:
+      operationId: BoxliteMeController_getMe
+      parameters: []
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/config:
+    get:
+      operationId: BoxliteConfigController_getConfig
+      parameters: []
+      responses:
+        "200":
+          description: ""
+      tags:
+      - BoxLite REST
+  /v1/boxes:
+    get:
+      operationId: "BoxliteBoxController_listBoxes[0]"
+      parameters:
+      - explode: true
+        in: query
+        name: pageSize
+        required: true
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListBoxesResponse'
+          description: List boxes
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    post:
+      operationId: "BoxliteBoxController_createBox[0]"
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBoxDto'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Box'
+          description: Box created
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes:
+    get:
+      operationId: "BoxliteBoxController_listBoxes[1]"
+      parameters:
+      - explode: true
+        in: query
+        name: pageSize
+        required: true
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListBoxesResponse'
+          description: List boxes
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    post:
+      operationId: "BoxliteBoxController_createBox[1]"
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBoxDto'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Box'
+          description: Box created
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/boxes/{boxId}:
+    delete:
+      operationId: "BoxliteBoxController_removeBox[0]"
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "204":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    get:
+      operationId: "BoxliteBoxController_getBox[0]"
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Box'
+          description: Box details
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    head:
+      operationId: "BoxliteBoxController_headBox[0]"
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}:
+    delete:
+      operationId: "BoxliteBoxController_removeBox[1]"
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "204":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    get:
+      operationId: "BoxliteBoxController_getBox[1]"
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Box'
+          description: Box details
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    head:
+      operationId: "BoxliteBoxController_headBox[1]"
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/boxes/{boxId}/start:
+    post:
+      operationId: "BoxliteBoxController_startBox[0]"
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Box'
+          description: Box start requested
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}/start:
+    post:
+      operationId: "BoxliteBoxController_startBox[1]"
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Box'
+          description: Box start requested
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/boxes/{boxId}/stop:
+    post:
+      operationId: "BoxliteBoxController_stopBox[0]"
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Box'
+          description: Box stop requested
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}/stop:
+    post:
+      operationId: "BoxliteBoxController_stopBox[1]"
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Box'
+          description: Box stop requested
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/boxes/{boxId}/exec:
+    delete:
+      operationId: BoxliteProxyController_proxyExec_delete
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    get:
+      operationId: BoxliteProxyController_proxyExec_get
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    head:
+      operationId: BoxliteProxyController_proxyExec_head
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    options:
+      operationId: BoxliteProxyController_proxyExec_options
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    patch:
+      operationId: BoxliteProxyController_proxyExec_patch
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    post:
+      operationId: BoxliteProxyController_proxyExec_post
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    put:
+      operationId: BoxliteProxyController_proxyExec_put
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}/exec:
+    delete:
+      operationId: BoxliteProxyController_proxyExec_delete
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    get:
+      operationId: BoxliteProxyController_proxyExec_get
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    head:
+      operationId: BoxliteProxyController_proxyExec_head
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    options:
+      operationId: BoxliteProxyController_proxyExec_options
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    patch:
+      operationId: BoxliteProxyController_proxyExec_patch
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    post:
+      operationId: BoxliteProxyController_proxyExec_post
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    put:
+      operationId: BoxliteProxyController_proxyExec_put
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/boxes/{boxId}/executions/{execId}/signal:
+    delete:
+      operationId: BoxliteProxyController_proxyExecSignal_delete
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    get:
+      operationId: BoxliteProxyController_proxyExecSignal_get
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    head:
+      operationId: BoxliteProxyController_proxyExecSignal_head
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    options:
+      operationId: BoxliteProxyController_proxyExecSignal_options
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    patch:
+      operationId: BoxliteProxyController_proxyExecSignal_patch
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    post:
+      operationId: BoxliteProxyController_proxyExecSignal_post
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    put:
+      operationId: BoxliteProxyController_proxyExecSignal_put
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}/executions/{execId}/signal:
+    delete:
+      operationId: BoxliteProxyController_proxyExecSignal_delete
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    get:
+      operationId: BoxliteProxyController_proxyExecSignal_get
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    head:
+      operationId: BoxliteProxyController_proxyExecSignal_head
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    options:
+      operationId: BoxliteProxyController_proxyExecSignal_options
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    patch:
+      operationId: BoxliteProxyController_proxyExecSignal_patch
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    post:
+      operationId: BoxliteProxyController_proxyExecSignal_post
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    put:
+      operationId: BoxliteProxyController_proxyExecSignal_put
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/boxes/{boxId}/executions/{execId}/resize:
+    delete:
+      operationId: BoxliteProxyController_proxyExecResize_delete
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    get:
+      operationId: BoxliteProxyController_proxyExecResize_get
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    head:
+      operationId: BoxliteProxyController_proxyExecResize_head
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    options:
+      operationId: BoxliteProxyController_proxyExecResize_options
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    patch:
+      operationId: BoxliteProxyController_proxyExecResize_patch
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    post:
+      operationId: BoxliteProxyController_proxyExecResize_post
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    put:
+      operationId: BoxliteProxyController_proxyExecResize_put
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}/executions/{execId}/resize:
+    delete:
+      operationId: BoxliteProxyController_proxyExecResize_delete
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    get:
+      operationId: BoxliteProxyController_proxyExecResize_get
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    head:
+      operationId: BoxliteProxyController_proxyExecResize_head
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    options:
+      operationId: BoxliteProxyController_proxyExecResize_options
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    patch:
+      operationId: BoxliteProxyController_proxyExecResize_patch
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    post:
+      operationId: BoxliteProxyController_proxyExecResize_post
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    put:
+      operationId: BoxliteProxyController_proxyExecResize_put
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/boxes/{boxId}/executions/{execId}:
+    delete:
+      operationId: "BoxliteProxyController_proxyExecKill[0]"
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    get:
+      operationId: "BoxliteProxyController_proxyExecStatus[0]"
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}/executions/{execId}:
+    delete:
+      operationId: "BoxliteProxyController_proxyExecKill[1]"
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    get:
+      operationId: "BoxliteProxyController_proxyExecStatus[1]"
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/boxes/{boxId}/files:
+    delete:
+      operationId: BoxliteProxyController_proxyFiles_delete
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    get:
+      operationId: BoxliteProxyController_proxyFiles_get
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    head:
+      operationId: BoxliteProxyController_proxyFiles_head
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    options:
+      operationId: BoxliteProxyController_proxyFiles_options
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    patch:
+      operationId: BoxliteProxyController_proxyFiles_patch
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    post:
+      operationId: BoxliteProxyController_proxyFiles_post
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    put:
+      operationId: BoxliteProxyController_proxyFiles_put
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}/files:
+    delete:
+      operationId: BoxliteProxyController_proxyFiles_delete
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    get:
+      operationId: BoxliteProxyController_proxyFiles_get
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    head:
+      operationId: BoxliteProxyController_proxyFiles_head
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    options:
+      operationId: BoxliteProxyController_proxyFiles_options
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    patch:
+      operationId: BoxliteProxyController_proxyFiles_patch
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    post:
+      operationId: BoxliteProxyController_proxyFiles_post
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    put:
+      operationId: BoxliteProxyController_proxyFiles_put
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/boxes/{boxId}/metrics:
+    delete:
+      operationId: BoxliteProxyController_proxyMetrics_delete
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    get:
+      operationId: BoxliteProxyController_proxyMetrics_get
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    head:
+      operationId: BoxliteProxyController_proxyMetrics_head
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    options:
+      operationId: BoxliteProxyController_proxyMetrics_options
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    patch:
+      operationId: BoxliteProxyController_proxyMetrics_patch
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    post:
+      operationId: BoxliteProxyController_proxyMetrics_post
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    put:
+      operationId: BoxliteProxyController_proxyMetrics_put
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}/metrics:
+    delete:
+      operationId: BoxliteProxyController_proxyMetrics_delete
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    get:
+      operationId: BoxliteProxyController_proxyMetrics_get
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    head:
+      operationId: BoxliteProxyController_proxyMetrics_head
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    options:
+      operationId: BoxliteProxyController_proxyMetrics_options
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    patch:
+      operationId: BoxliteProxyController_proxyMetrics_patch
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    post:
+      operationId: BoxliteProxyController_proxyMetrics_post
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    put:
+      operationId: BoxliteProxyController_proxyMetrics_put
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
 components:
   schemas:
     Announcement:
@@ -8887,6 +10561,11 @@ components:
           description: OIDC audience
           example: boxlite-api
           type: string
+        endSessionEndpoint:
+          description: OIDC end-session endpoint. Set when the IdP does not advertise
+            one via discovery (e.g. Dex) and BoxLite hosts a compatible logout endpoint.
+          example: https://api.example.com/api/auth/end-session
+          type: string
       required:
       - audience
       - clientId
@@ -8922,7 +10601,7 @@ components:
           - $ref: '#/components/schemas/RateLimitEntry'
           description: Sandbox lifecycle rate limit
       type: object
-    BoxLiteConfiguration:
+    BoxliteConfiguration:
       example:
         dashboardUrl: https://dashboard.example.com
         rateLimit: ""
@@ -8930,16 +10609,15 @@ components:
         sshGatewayPublicKey: ssh-gateway-public-key
         billingApiUrl: https://billing.example.com
         linkedAccountsEnabled: true
+        defaultTemplate: ubuntu:22.04
         version: 0.0.1
         oidc: ""
         proxyToolboxUrl: https://proxy.example.com/toolbox
         posthog: ""
-        maxAutoArchiveInterval: 43200
         pylonAppId: pylon-app-123
         proxyTemplateUrl: "https://{{PORT}}-{{sandboxId}}.proxy.example.com"
         maintananceMode: false
         environment: production
-        defaultSnapshot: ubuntu:22.04
         sshGatewayCommand: "ssh -p 2222 {{TOKEN}}@localhost"
         announcements:
           feature-update:
@@ -8983,18 +10661,14 @@ components:
           description: Toolbox template URL
           example: https://proxy.example.com/toolbox
           type: string
-        defaultSnapshot:
-          description: Default snapshot for sandboxes
+        defaultTemplate:
+          description: Default template for sandboxes
           example: ubuntu:22.04
           type: string
         dashboardUrl:
           description: Dashboard URL
           example: https://dashboard.example.com
           type: string
-        maxAutoArchiveInterval:
-          description: Maximum auto-archive interval in minutes
-          example: 43200
-          type: number
         maintananceMode:
           description: Whether maintenance mode is enabled
           example: false
@@ -9026,11 +10700,10 @@ components:
       required:
       - announcements
       - dashboardUrl
-      - defaultSnapshot
+      - defaultTemplate
       - environment
       - linkedAccountsEnabled
       - maintananceMode
-      - maxAutoArchiveInterval
       - oidc
       - proxyTemplateUrl
       - proxyToolboxUrl
@@ -9055,8 +10728,8 @@ components:
             enum:
             - write:registries
             - delete:registries
-            - write:snapshots
-            - delete:snapshots
+            - write:templates
+            - delete:templates
             - write:sandboxes
             - delete:sandboxes
             - read:volumes
@@ -9110,8 +10783,8 @@ components:
             enum:
             - write:registries
             - delete:registries
-            - write:snapshots
-            - delete:snapshots
+            - write:templates
+            - delete:templates
             - write:sandboxes
             - delete:sandboxes
             - read:volumes
@@ -9170,8 +10843,8 @@ components:
             enum:
             - write:registries
             - delete:registries
-            - write:snapshots
-            - delete:snapshots
+            - write:templates
+            - delete:templates
             - write:sandboxes
             - delete:sandboxes
             - read:volumes
@@ -9237,8 +10910,8 @@ components:
             enum:
             - write:registries
             - delete:registries
-            - write:snapshots
-            - delete:snapshots
+            - write:templates
+            - delete:templates
             - write:sandboxes
             - delete:sandboxes
             - read:volumes
@@ -9387,6 +11060,7 @@ components:
         suspensionReason: suspensionReason
         sandboxLifecycleRateLimit: 9.301444243932576
         suspendedAt: 2000-01-23T04:56:07.000+00:00
+        templateDeactivationTimeoutMinutes: 5.637376656633329
         personal: true
         suspensionCleanupGracePeriodHours: 0.8008281904610115
         authenticatedRateLimit: 2.3021358869347655
@@ -9399,7 +11073,6 @@ components:
         suspendedUntil: 2000-01-23T04:56:07.000+00:00
         maxDiskPerSandbox: 5.962133916683182
         createdBy: createdBy
-        snapshotDeactivationTimeoutMinutes: 5.637376656633329
         name: name
         maxMemoryPerSandbox: 1.4658129805029452
         authenticatedRateLimitTtlSeconds: 3.616076749251911
@@ -9453,9 +11126,9 @@ components:
         maxDiskPerSandbox:
           description: Max disk per sandbox
           type: number
-        snapshotDeactivationTimeoutMinutes:
+        templateDeactivationTimeoutMinutes:
           default: 20160
-          description: Time in minutes before an unused snapshot is deactivated
+          description: Time in minutes before an unused template is deactivated
           type: number
         sandboxLimitedNetworkEgress:
           description: Sandbox default network block all
@@ -9507,13 +11180,24 @@ components:
       - sandboxLifecycleRateLimit
       - sandboxLifecycleRateLimitTtlSeconds
       - sandboxLimitedNetworkEgress
-      - snapshotDeactivationTimeoutMinutes
       - suspended
       - suspendedAt
       - suspendedUntil
       - suspensionCleanupGracePeriodHours
       - suspensionReason
+      - templateDeactivationTimeoutMinutes
       - updatedAt
+      type: object
+    UpdateOrganizationName:
+      example:
+        name: Default Organization
+      properties:
+        name:
+          description: The public name of the organization
+          example: Default Organization
+          type: string
+      required:
+      - name
       type: object
     UpdateOrganizationDefaultRegion:
       example:
@@ -9561,10 +11245,10 @@ components:
       type: object
     OrganizationUsageOverview:
       example:
-        totalSnapshotQuota: 7.061401241503109
+        totalTemplateQuota: 7.061401241503109
+        currentTemplateUsage: 9.301444243932576
         currentVolumeUsage: 2.027123023002322
         totalVolumeQuota: 3.616076749251911
-        currentSnapshotUsage: 9.301444243932576
         regionUsage:
         - totalCpuQuota: 0.8008281904610115
           regionId: regionId
@@ -9585,36 +11269,36 @@ components:
           items:
             $ref: '#/components/schemas/RegionUsageOverview'
           type: array
-        totalSnapshotQuota:
+        totalTemplateQuota:
           type: number
-        currentSnapshotUsage:
+        currentTemplateUsage:
           type: number
         totalVolumeQuota:
           type: number
         currentVolumeUsage:
           type: number
       required:
-      - currentSnapshotUsage
+      - currentTemplateUsage
       - currentVolumeUsage
       - regionUsage
-      - totalSnapshotQuota
+      - totalTemplateQuota
       - totalVolumeQuota
       type: object
     UpdateOrganizationQuota:
       example:
+        maxTemplateSize: 5.637376656633329
         sandboxCreateRateLimitTtlSeconds: 4.145608029883936
         sandboxLifecycleRateLimit: 3.616076749251911
+        templateDeactivationTimeoutMinutes: 1.2315135367772556
         volumeQuota: 2.3021358869347655
-        maxSnapshotSize: 5.637376656633329
         authenticatedRateLimit: 7.061401241503109
         sandboxCreateRateLimit: 9.301444243932576
-        snapshotQuota: 5.962133916683182
         sandboxLifecycleRateLimitTtlSeconds: 7.386281948385884
         maxCpuPerSandbox: 0.8008281904610115
         maxDiskPerSandbox: 1.4658129805029452
-        snapshotDeactivationTimeoutMinutes: 1.2315135367772556
         maxMemoryPerSandbox: 6.027456183070403
         authenticatedRateLimitTtlSeconds: 2.027123023002322
+        templateQuota: 5.962133916683182
       properties:
         maxCpuPerSandbox:
           nullable: true
@@ -9625,10 +11309,10 @@ components:
         maxDiskPerSandbox:
           nullable: true
           type: number
-        snapshotQuota:
+        templateQuota:
           nullable: true
           type: number
-        maxSnapshotSize:
+        maxTemplateSize:
           nullable: true
           type: number
         volumeQuota:
@@ -9652,8 +11336,8 @@ components:
         sandboxLifecycleRateLimitTtlSeconds:
           nullable: true
           type: number
-        snapshotDeactivationTimeoutMinutes:
-          description: Time in minutes before an unused snapshot is deactivated
+        templateDeactivationTimeoutMinutes:
+          description: Time in minutes before an unused template is deactivated
           nullable: true
           type: number
       required:
@@ -9662,13 +11346,13 @@ components:
       - maxCpuPerSandbox
       - maxDiskPerSandbox
       - maxMemoryPerSandbox
-      - maxSnapshotSize
+      - maxTemplateSize
       - sandboxCreateRateLimit
       - sandboxCreateRateLimitTtlSeconds
       - sandboxLifecycleRateLimit
       - sandboxLifecycleRateLimitTtlSeconds
-      - snapshotDeactivationTimeoutMinutes
-      - snapshotQuota
+      - templateDeactivationTimeoutMinutes
+      - templateQuota
       - volumeQuota
       type: object
     UpdateOrganizationRegionQuota:
@@ -9789,8 +11473,8 @@ components:
             enum:
             - write:registries
             - delete:registries
-            - write:snapshots
-            - delete:snapshots
+            - write:templates
+            - delete:templates
             - write:sandboxes
             - delete:sandboxes
             - read:volumes
@@ -9831,8 +11515,8 @@ components:
             enum:
             - write:registries
             - delete:registries
-            - write:snapshots
-            - delete:snapshots
+            - write:templates
+            - delete:templates
             - write:sandboxes
             - delete:sandboxes
             - read:volumes
@@ -10022,13 +11706,13 @@ components:
       example:
         organizationId: 123e4567-e89b-12d3-a456-426614174000
         createdAt: 2023-01-01T00:00:00.000Z
-        snapshotManagerUrl: http://snapshot-manager.example.com
         regionType: shared
         proxyUrl: https://proxy.example.com
         name: us-east-1
         sshGatewayUrl: http://ssh-gateway.example.com
         id: "123456789012"
         updatedAt: 2023-01-01T00:00:00.000Z
+        artifactRegistryUrl: http://artifact-registry.example.com
       properties:
         id:
           description: Region ID
@@ -10066,9 +11750,9 @@ components:
           example: http://ssh-gateway.example.com
           nullable: true
           type: string
-        snapshotManagerUrl:
-          description: Snapshot Manager URL for the region
-          example: http://snapshot-manager.example.com
+        artifactRegistryUrl:
+          description: Artifact Registry URL for the region
+          example: http://artifact-registry.example.com
           nullable: true
           type: string
       required:
@@ -10080,10 +11764,10 @@ components:
       type: object
     CreateRegion:
       example:
-        snapshotManagerUrl: https://snapshot-manager.example.com
         proxyUrl: https://proxy.example.com
         name: us-east-1
         sshGatewayUrl: ssh://ssh-gateway.example.com
+        artifactRegistryUrl: https://artifact-registry.example.com
       properties:
         name:
           description: Region name
@@ -10099,9 +11783,9 @@ components:
           example: ssh://ssh-gateway.example.com
           nullable: true
           type: string
-        snapshotManagerUrl:
-          description: Snapshot Manager URL for the region
-          example: https://snapshot-manager.example.com
+        artifactRegistryUrl:
+          description: Artifact Registry URL for the region
+          example: https://artifact-registry.example.com
           nullable: true
           type: string
       required:
@@ -10110,8 +11794,8 @@ components:
     CreateRegionResponse:
       example:
         proxyApiKey: proxy-api-key-xyz
-        snapshotManagerUsername: boxlite
-        snapshotManagerPassword: snapshotManagerPassword
+        artifactRegistryUsername: boxlite
+        artifactRegistryPassword: artifactRegistryPassword
         id: region_12345
         sshGatewayApiKey: ssh-gateway-api-key-abc
       properties:
@@ -10129,13 +11813,13 @@ components:
           example: ssh-gateway-api-key-abc
           nullable: true
           type: string
-        snapshotManagerUsername:
-          description: Snapshot Manager username for the region
+        artifactRegistryUsername:
+          description: Artifact Registry username for the region
           example: boxlite
           nullable: true
           type: string
-        snapshotManagerPassword:
-          description: Snapshot Manager password for the region
+        artifactRegistryPassword:
+          description: Artifact Registry password for the region
           nullable: true
           type: string
       required:
@@ -10154,9 +11838,9 @@ components:
       type: object
     UpdateRegion:
       example:
-        snapshotManagerUrl: https://snapshot-manager.example.com
         proxyUrl: https://proxy.example.com
         sshGatewayUrl: ssh://ssh-gateway.example.com
+        artifactRegistryUrl: https://artifact-registry.example.com
       properties:
         proxyUrl:
           description: Proxy URL for the region
@@ -10168,23 +11852,23 @@ components:
           example: ssh://ssh-gateway.example.com
           nullable: true
           type: string
-        snapshotManagerUrl:
-          description: Snapshot Manager URL for the region
-          example: https://snapshot-manager.example.com
+        artifactRegistryUrl:
+          description: Artifact Registry URL for the region
+          example: https://artifact-registry.example.com
           nullable: true
           type: string
       type: object
-    SnapshotManagerCredentials:
+    ArtifactRegistryCredentials:
       example:
         password: password
         username: boxlite
       properties:
         username:
-          description: Snapshot Manager username for the region
+          description: Artifact Registry username for the region
           example: boxlite
           type: string
         password:
-          description: Snapshot Manager password for the region
+          description: Artifact Registry password for the region
           type: string
       required:
       - password
@@ -10244,15 +11928,15 @@ components:
       type: object
     CreateOrganizationQuota:
       example:
-        snapshotQuota: 7.061401241503109
+        maxTemplateSize: 9.301444243932576
         totalCpuQuota: 0.8008281904610115
         maxCpuPerSandbox: 5.962133916683182
         maxDiskPerSandbox: 2.3021358869347655
         maxMemoryPerSandbox: 5.637376656633329
         volumeQuota: 3.616076749251911
         totalMemoryQuota: 6.027456183070403
-        maxSnapshotSize: 9.301444243932576
         totalDiskQuota: 1.4658129805029452
+        templateQuota: 7.061401241503109
       properties:
         totalCpuQuota:
           type: number
@@ -10266,9 +11950,9 @@ components:
           type: number
         maxDiskPerSandbox:
           type: number
-        snapshotQuota:
+        templateQuota:
           type: number
-        maxSnapshotSize:
+        maxTemplateSize:
           type: number
         volumeQuota:
           type: number
@@ -10281,15 +11965,15 @@ components:
         personalOrganizationDefaultRegionId: personalOrganizationDefaultRegionId
         id: id
         personalOrganizationQuota:
-          snapshotQuota: 7.061401241503109
+          maxTemplateSize: 9.301444243932576
           totalCpuQuota: 0.8008281904610115
           maxCpuPerSandbox: 5.962133916683182
           maxDiskPerSandbox: 2.3021358869347655
           maxMemoryPerSandbox: 5.637376656633329
           volumeQuota: 3.616076749251911
           totalMemoryQuota: 6.027456183070403
-          maxSnapshotSize: 9.301444243932576
           totalDiskQuota: 1.4658129805029452
+          templateQuota: 7.061401241503109
         email: email
       properties:
         id:
@@ -10355,9 +12039,9 @@ components:
       - error
       - build_failed
       - pending_build
-      - building_snapshot
+      - building_artifact
       - unknown
-      - pulling_snapshot
+      - pulling_artifact
       - archived
       - archiving
       - resizing
@@ -10369,7 +12053,6 @@ components:
       - started
       - stopped
       - resized
-      - archived
       type: string
     SandboxVolume:
       example:
@@ -10422,17 +12105,18 @@ components:
           description: The last update timestamp
           format: date-time
           type: string
-        snapshotRef:
-          description: The snapshot reference
+        artifactRef:
+          description: The artifact reference
           example: boxlite-ai/sandbox:latest
           type: string
       required:
+      - artifactRef
       - createdAt
-      - snapshotRef
       - updatedAt
       type: object
     Sandbox:
       example:
+        template: boxlite/base
         memory: 4
         buildInfo: ""
         toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
@@ -10444,9 +12128,10 @@ components:
         public: false
         errorReason: The sandbox is not running
         runnerId: runner123
-        id: sandbox123
+        id: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
         state: creating
         class: small
+        boxId: aB3cD4eF5gH6
         updatedAt: 2024-10-01T12:00:00Z
         desiredState: destroyed
         networkAllowList: "192.168.1.0/16,10.0.0.0/24"
@@ -10471,12 +12156,14 @@ components:
         name: MySandbox
         backupState: None
         user: boxlite
-        autoArchiveInterval: 10080
-        snapshot: boxlite-ai/sandbox:latest
       properties:
         id:
-          description: The ID of the sandbox
-          example: sandbox123
+          description: The internal UUID of the sandbox
+          example: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
+          type: string
+        boxId:
+          description: The public Box ID shown to users and SDK clients
+          example: aB3cD4eF5gH6
           type: string
         organizationId:
           description: The organization ID of the sandbox
@@ -10486,9 +12173,9 @@ components:
           description: The name of the sandbox
           example: MySandbox
           type: string
-        snapshot:
-          description: The snapshot used for the sandbox
-          example: boxlite-ai/sandbox:latest
+        template:
+          description: The template used for the sandbox
+          example: boxlite/base
           type: string
         user:
           description: The user associated with the project
@@ -10577,10 +12264,6 @@ components:
           description: Auto-stop interval in minutes (0 means disabled)
           example: 30
           type: number
-        autoArchiveInterval:
-          description: Auto-archive interval in minutes
-          example: 10080
-          type: number
         autoDeleteInterval:
           description: "Auto-delete interval in minutes (negative value means disabled,\
             \ 0 means delete immediately upon stopping)"
@@ -10625,6 +12308,7 @@ components:
           example: https://proxy.app.boxlite.io/toolbox
           type: string
       required:
+      - boxId
       - cpu
       - disk
       - env
@@ -10646,7 +12330,8 @@ components:
         totalPages: 1.4658129805029452
         page: 6.027456183070403
         items:
-        - memory: 4
+        - template: boxlite/base
+          memory: 4
           buildInfo: ""
           toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
           autoStopInterval: 30
@@ -10657,9 +12342,10 @@ components:
           public: false
           errorReason: The sandbox is not running
           runnerId: runner123
-          id: sandbox123
+          id: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
           state: creating
           class: small
+          boxId: aB3cD4eF5gH6
           updatedAt: 2024-10-01T12:00:00Z
           desiredState: destroyed
           networkAllowList: "192.168.1.0/16,10.0.0.0/24"
@@ -10684,9 +12370,8 @@ components:
           name: MySandbox
           backupState: None
           user: boxlite
-          autoArchiveInterval: 10080
-          snapshot: boxlite-ai/sandbox:latest
-        - memory: 4
+        - template: boxlite/base
+          memory: 4
           buildInfo: ""
           toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
           autoStopInterval: 30
@@ -10697,9 +12382,10 @@ components:
           public: false
           errorReason: The sandbox is not running
           runnerId: runner123
-          id: sandbox123
+          id: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
           state: creating
           class: small
+          boxId: aB3cD4eF5gH6
           updatedAt: 2024-10-01T12:00:00Z
           desiredState: destroyed
           networkAllowList: "192.168.1.0/16,10.0.0.0/24"
@@ -10724,8 +12410,6 @@ components:
           name: MySandbox
           backupState: None
           user: boxlite
-          autoArchiveInterval: 10080
-          snapshot: boxlite-ai/sandbox:latest
       properties:
         items:
           items:
@@ -10778,6 +12462,7 @@ components:
           volumeId: volume123
           subpath: users/alice
         cpu: 2
+        templateId: ubuntu-template-id
         env:
           NODE_ENV: production
         gpu: 1
@@ -10792,17 +12477,15 @@ components:
         name: MySandbox
         user: boxlite
         class: small
-        autoArchiveInterval: 10080
-        snapshot: ubuntu-4vcpu-8ram-100gb
       properties:
         name:
           description: "The name of the sandbox. If not provided, the sandbox ID will\
             \ be used as the name"
           example: MySandbox
           type: string
-        snapshot:
-          description: The ID or name of the snapshot used for the sandbox
-          example: ubuntu-4vcpu-8ram-100gb
+        templateId:
+          description: The ID or name of the template used for the box
+          example: ubuntu-template-id
           type: string
         user:
           description: The user associated with the project
@@ -10867,11 +12550,6 @@ components:
           description: Auto-stop interval in minutes (0 means disabled)
           example: 30
           type: integer
-        autoArchiveInterval:
-          description: Auto-archive interval in minutes (0 means the maximum interval
-            will be used)
-          example: 10080
-          type: integer
         autoDeleteInterval:
           description: "Auto-delete interval in minutes (negative value means disabled,\
             \ 0 means delete immediately upon stopping)"
@@ -10928,7 +12606,7 @@ components:
       type: object
     UpdateSandboxStateDto:
       example:
-        errorReason: Failed to pull snapshot image
+        errorReason: Failed to pull artifact image
         recoverable: true
         state: started
       properties:
@@ -10946,9 +12624,9 @@ components:
           - error
           - build_failed
           - pending_build
-          - building_snapshot
+          - building_artifact
           - unknown
-          - pulling_snapshot
+          - pulling_artifact
           - archived
           - archiving
           - resizing
@@ -10956,7 +12634,7 @@ components:
           type: string
         errorReason:
           description: Optional error message when reporting an error state
-          example: Failed to pull snapshot image
+          example: Failed to pull artifact image
           type: string
         recoverable:
           description: Whether the sandbox is recoverable
@@ -11120,7 +12798,7 @@ components:
       type: object
     CreateRunnerResponse:
       example:
-        apiKey: dtn_1234567890
+        apiKey: blk_svc_1234567890
         id: runner123
       properties:
         id:
@@ -11129,7 +12807,7 @@ components:
           type: string
         apiKey:
           description: The API key for the runner
-          example: dtn_1234567890
+          example: blk_svc_1234567890
           type: string
       required:
       - apiKey
@@ -11157,7 +12835,7 @@ components:
         appVersion: v0.0.0-dev
         memory: 16
         currentMemoryUsagePercentage: 68.2
-        apiKey: dtn_1234567890
+        apiKey: blk_svc_1234567890
         availabilityScore: 85
         currentDiskUsagePercentage: 33.8
         currentCpuUsagePercentage: 45.6
@@ -11171,13 +12849,13 @@ components:
         class: small
         currentAllocatedDiskGiB: 50000
         currentAllocatedMemoryGiB: 8000
+        currentArtifactCount: 12
         gpuType: gpuType
         currentAllocatedCpu: 4000
         updatedAt: 2023-10-01T12:00:00Z
         proxyUrl: https://proxy.runner1.example.com
         cpu: 8
         gpu: 1
-        currentSnapshotCount: 12
         version: "0"
         disk: 100
         domain: runner1.example.com
@@ -11249,8 +12927,8 @@ components:
           description: Current allocated disk in GiB
           example: 50000
           type: number
-        currentSnapshotCount:
-          description: Current snapshot count
+        currentArtifactCount:
+          description: Current artifact count
           example: 12
           type: number
         currentStartedSandboxes:
@@ -11307,7 +12985,7 @@ components:
           type: string
         apiKey:
           description: The API key for the runner
-          example: dtn_1234567890
+          example: blk_svc_1234567890
           type: string
         regionType:
           allOf:
@@ -11330,14 +13008,14 @@ components:
       - updatedAt
       - version
       type: object
-    RunnerSnapshotDto:
+    RunnerArtifactCacheDto:
       example:
         runnerDomain: runner.example.com
         runnerId: 123e4567-e89b-12d3-a456-426614174000
-        runnerSnapshotId: 123e4567-e89b-12d3-a456-426614174000
+        runnerArtifactCacheId: 123e4567-e89b-12d3-a456-426614174000
       properties:
-        runnerSnapshotId:
-          description: Runner snapshot ID
+        runnerArtifactCacheId:
+          description: Runner artifact cache ID
           example: 123e4567-e89b-12d3-a456-426614174000
           type: string
         runnerId:
@@ -11349,8 +13027,8 @@ components:
           example: runner.example.com
           type: string
       required:
+      - runnerArtifactCacheId
       - runnerId
-      - runnerSnapshotId
       type: object
     Runner:
       example:
@@ -11370,13 +13048,13 @@ components:
         class: small
         currentAllocatedDiskGiB: 50000
         currentAllocatedMemoryGiB: 8000
+        currentArtifactCount: 12
         gpuType: gpuType
         currentAllocatedCpu: 4000
         updatedAt: 2023-10-01T12:00:00Z
         proxyUrl: https://proxy.runner1.example.com
         cpu: 8
         gpu: 1
-        currentSnapshotCount: 12
         version: "0"
         disk: 100
         domain: runner1.example.com
@@ -11448,8 +13126,8 @@ components:
           description: Current allocated disk in GiB
           example: 50000
           type: number
-        currentSnapshotCount:
-          description: Current snapshot count
+        currentArtifactCount:
+          description: Current artifact count
           example: 12
           type: number
         currentStartedSandboxes:
@@ -11549,8 +13227,14 @@ components:
           description: Currently allocated disk in GiB
           example: 100
           type: number
+        currentArtifactCount:
+          description: Number of artifacts currently stored. Old runners may send
+            currentSnapshotCount instead.
+          example: 5
+          type: number
         currentSnapshotCount:
-          description: Number of snapshots currently stored
+          deprecated: true
+          description: Deprecated alias for currentArtifactCount used by old runners
           example: 5
           type: number
         currentStartedSandboxes:
@@ -11578,7 +13262,6 @@ components:
       - currentCpuUsagePercentage
       - currentDiskUsagePercentage
       - currentMemoryUsagePercentage
-      - currentSnapshotCount
       - currentStartedSandboxes
       - diskGiB
       - memoryGiB
@@ -13082,7 +14765,7 @@ components:
       - count
       - windows
       type: object
-    CreateSnapshot:
+    CreateBoxTemplate:
       example:
         general: true
         disk: 3
@@ -13096,50 +14779,52 @@ components:
         gpu: 0
       properties:
         name:
-          description: The name of the snapshot
+          description: The template name
           example: ubuntu-4vcpu-8ram-100gb
           type: string
         imageName:
-          description: The image name of the snapshot
+          description: The source image used to create the template artifact
           example: ubuntu:22.04
           type: string
         entrypoint:
-          description: The entrypoint command for the snapshot
+          description: The entrypoint command for boxes created from the template
           example: sleep infinity
           items:
             type: string
           type: array
         general:
-          description: Whether the snapshot is general
+          description: Whether the template is available to all organizations
           type: boolean
         cpu:
-          description: CPU cores allocated to the resulting sandbox
+          description: Default CPU cores allocated to boxes created from the template
           example: 1
           type: integer
         gpu:
-          description: GPU units allocated to the resulting sandbox
+          description: Default GPU units allocated to boxes created from the template
           example: 0
           type: integer
         memory:
-          description: Memory allocated to the resulting sandbox in GB
+          description: Default memory allocated to boxes created from the template
+            in GB
           example: 1
           type: integer
         disk:
-          description: Disk space allocated to the sandbox in GB
+          description: Default disk allocated to boxes created from the template in
+            GB
           example: 3
           type: integer
         buildInfo:
           allOf:
           - $ref: '#/components/schemas/CreateBuildInfo'
-          description: Build information for the snapshot
+          description: Build information for the template artifact
         regionId:
-          description: ID of the region where the snapshot will be available. Defaults
+          description: ID of the region where the template will be available. Defaults
             to organization default region if not specified.
           type: string
       required:
       - name
       type: object
-    SnapshotState:
+    BoxTemplateState:
       enum:
       - building
       - pending
@@ -13150,26 +14835,48 @@ components:
       - build_failed
       - removing
       type: string
-    SnapshotDto:
+    BoxTemplateDefaultResourcesDto:
       example:
-        imageName: imageName
+        disk: 5.962133916683182
+        memory: 1.4658129805029452
+        cpu: 0.8008281904610115
+        gpu: 6.027456183070403
+      properties:
+        cpu:
+          type: number
+        gpu:
+          type: number
+        memory:
+          type: number
+        disk:
+          type: number
+      required:
+      - cpu
+      - disk
+      - gpu
+      - memory
+      type: object
+    BoxTemplateDto:
+      example:
+        capabilities:
+        - capabilities
+        - capabilities
+        artifactRef: artifactRef
+        defaultResources:
+          disk: 5.962133916683182
+          memory: 1.4658129805029452
+          cpu: 0.8008281904610115
+          gpu: 6.027456183070403
         buildInfo: ""
-        cpu: 6.027456183070403
+        displayName: displayName
+        description: description
         regionIds:
         - regionIds
         - regionIds
-        gpu: 1.4658129805029452
         organizationId: organizationId
         general: true
         createdAt: 2000-01-23T04:56:07.000+00:00
-        disk: 5.637376656633329
-        ref: boxlite-ai/sandbox:latest
-        size: 0.8008281904610115
-        mem: 5.962133916683182
         lastUsedAt: 2000-01-23T04:56:07.000+00:00
-        entrypoint:
-        - entrypoint
-        - entrypoint
         errorReason: errorReason
         name: name
         id: id
@@ -13185,30 +14892,24 @@ components:
           type: boolean
         name:
           type: string
-        imageName:
+        displayName:
+          type: string
+        description:
+          type: string
+        capabilities:
+          description: Agent/runtime capabilities included in this official image
+          items:
+            type: string
+          type: array
+        artifactRef:
           type: string
         state:
           allOf:
-          - $ref: '#/components/schemas/SnapshotState'
-        size:
-          nullable: true
-          type: number
-        entrypoint:
-          items:
-            type: string
-          nullable: true
-          type: array
-        cpu:
-          type: number
-        gpu:
-          type: number
-        mem:
-          type: number
-        disk:
-          type: number
+          - $ref: '#/components/schemas/BoxTemplateState'
         errorReason:
-          nullable: true
           type: string
+        defaultResources:
+          $ref: '#/components/schemas/BoxTemplateDefaultResourcesDto'
         createdAt:
           format: date-time
           type: string
@@ -13217,118 +14918,36 @@ components:
           type: string
         lastUsedAt:
           format: date-time
-          nullable: true
           type: string
         buildInfo:
           allOf:
           - $ref: '#/components/schemas/BuildInfo'
-          description: Build information for the snapshot
+          description: Build information for this template
+        initialRunnerId:
+          description: The initial runner ID of the template
+          example: runner123
+          type: string
         regionIds:
-          description: IDs of regions where the snapshot is available
+          description: IDs of regions where the template is available to this organization
           items:
             type: string
           type: array
-        initialRunnerId:
-          description: The initial runner ID of the snapshot
-          example: runner123
-          type: string
-        ref:
-          description: The snapshot reference
-          example: boxlite-ai/sandbox:latest
-          type: string
       required:
-      - cpu
       - createdAt
-      - disk
-      - entrypoint
-      - errorReason
+      - defaultResources
+      - displayName
       - general
-      - gpu
       - id
-      - lastUsedAt
-      - mem
       - name
-      - size
       - state
       - updatedAt
       type: object
-    PaginatedSnapshots:
-      example:
-        total: 2.3021358869347655
-        totalPages: 9.301444243932576
-        page: 7.061401241503109
-        items:
-        - imageName: imageName
-          buildInfo: ""
-          cpu: 6.027456183070403
-          regionIds:
-          - regionIds
-          - regionIds
-          gpu: 1.4658129805029452
-          organizationId: organizationId
-          general: true
-          createdAt: 2000-01-23T04:56:07.000+00:00
-          disk: 5.637376656633329
-          ref: boxlite-ai/sandbox:latest
-          size: 0.8008281904610115
-          mem: 5.962133916683182
-          lastUsedAt: 2000-01-23T04:56:07.000+00:00
-          entrypoint:
-          - entrypoint
-          - entrypoint
-          errorReason: errorReason
-          name: name
-          id: id
-          state: ""
-          initialRunnerId: runner123
-          updatedAt: 2000-01-23T04:56:07.000+00:00
-        - imageName: imageName
-          buildInfo: ""
-          cpu: 6.027456183070403
-          regionIds:
-          - regionIds
-          - regionIds
-          gpu: 1.4658129805029452
-          organizationId: organizationId
-          general: true
-          createdAt: 2000-01-23T04:56:07.000+00:00
-          disk: 5.637376656633329
-          ref: boxlite-ai/sandbox:latest
-          size: 0.8008281904610115
-          mem: 5.962133916683182
-          lastUsedAt: 2000-01-23T04:56:07.000+00:00
-          entrypoint:
-          - entrypoint
-          - entrypoint
-          errorReason: errorReason
-          name: name
-          id: id
-          state: ""
-          initialRunnerId: runner123
-          updatedAt: 2000-01-23T04:56:07.000+00:00
-      properties:
-        items:
-          items:
-            $ref: '#/components/schemas/SnapshotDto'
-          type: array
-        total:
-          type: number
-        page:
-          type: number
-        totalPages:
-          type: number
-      required:
-      - items
-      - page
-      - total
-      - totalPages
-      type: object
-    SetSnapshotGeneralStatusDto:
+    SetBoxTemplateGeneralStatus:
       example:
         general: true
       properties:
         general:
-          description: Whether the snapshot is general
+          description: Whether the template is general
           example: true
           type: boolean
       required:
@@ -13356,6 +14975,7 @@ components:
       type: object
     Workspace:
       example:
+        template: boxlite/base
         memory: 4
         buildInfo: ""
         toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
@@ -13368,9 +14988,10 @@ components:
         public: false
         errorReason: The sandbox is not running
         runnerId: runner123
-        id: sandbox123
+        id: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
         state: creating
         class: small
+        boxId: aB3cD4eF5gH6
         updatedAt: 2024-10-01T12:00:00Z
         info: ""
         desiredState: destroyed
@@ -13398,12 +15019,14 @@ components:
         name: MySandbox
         backupState: None
         user: boxlite
-        autoArchiveInterval: 10080
-        snapshot: boxlite-ai/sandbox:latest
       properties:
         id:
-          description: The ID of the sandbox
-          example: sandbox123
+          description: The internal UUID of the sandbox
+          example: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
+          type: string
+        boxId:
+          description: The public Box ID shown to users and SDK clients
+          example: aB3cD4eF5gH6
           type: string
         organizationId:
           description: The organization ID of the sandbox
@@ -13413,9 +15036,9 @@ components:
           description: The name of the sandbox
           example: MySandbox
           type: string
-        snapshot:
-          description: The snapshot used for the sandbox
-          example: boxlite-ai/sandbox:latest
+        template:
+          description: The template used for the sandbox
+          example: boxlite/base
           type: string
         user:
           description: The user associated with the project
@@ -13504,10 +15127,6 @@ components:
           description: Auto-stop interval in minutes (0 means disabled)
           example: 30
           type: number
-        autoArchiveInterval:
-          description: Auto-archive interval in minutes
-          example: 10080
-          type: number
         autoDeleteInterval:
           description: "Auto-delete interval in minutes (negative value means disabled,\
             \ 0 means delete immediately upon stopping)"
@@ -13574,6 +15193,7 @@ components:
           - $ref: '#/components/schemas/SandboxInfo'
           description: Additional information about the sandbox
       required:
+      - boxId
       - cpu
       - disk
       - env
@@ -13613,7 +15233,6 @@ components:
         public: false
         user: boxlite
         class: small
-        autoArchiveInterval: 10080
       properties:
         image:
           description: The image used for the workspace
@@ -13676,11 +15295,6 @@ components:
         autoStopInterval:
           description: Auto-stop interval in minutes (0 means disabled)
           example: 30
-          type: integer
-        autoArchiveInterval:
-          description: Auto-archive interval in minutes (0 means the maximum interval
-            will be used)
-          example: 10080
           type: integer
         volumes:
           description: Array of volumes to attach to the workspace
@@ -13800,11 +15414,11 @@ components:
       - DESTROY_SANDBOX
       - RESIZE_SANDBOX
       - CREATE_BACKUP
-      - BUILD_SNAPSHOT
-      - PULL_SNAPSHOT
+      - BUILD_ARTIFACT
+      - PULL_ARTIFACT
       - RECOVER_SANDBOX
-      - INSPECT_SNAPSHOT_IN_REGISTRY
-      - REMOVE_SNAPSHOT
+      - INSPECT_ARTIFACT_IN_REGISTRY
+      - REMOVE_ARTIFACT
       - UPDATE_SANDBOX_NETWORK_SETTINGS
       type: string
     Job:
@@ -13839,12 +15453,12 @@ components:
           description: The type of resource this job operates on
           enum:
           - SANDBOX
-          - SNAPSHOT
+          - ARTIFACT
           - BACKUP
           example: SANDBOX
           type: string
         resourceId:
-          description: "The ID of the resource this job operates on (sandboxId, snapshotRef,\
+          description: "The ID of the resource this job operates on (sandboxId, artifactRef,\
             \ etc.)"
           example: sandbox123
           type: string
@@ -14227,9 +15841,9 @@ components:
       enum:
       - sandbox.created
       - sandbox.state.updated
-      - snapshot.created
-      - snapshot.state.updated
-      - snapshot.removed
+      - template.created
+      - template.state.updated
+      - template.removed
       - volume.created
       - volume.state.updated
       type: string
@@ -14747,6 +16361,114 @@ components:
           type: array
       required:
       - series
+      type: object
+    CreateBoxDto:
+      properties: {}
+      type: object
+    Box:
+      example:
+        box_id: aB3cD4eF5gH6
+        image: boxlite/base
+        updated_at: 2026-06-04T12:05:00.000Z
+        cpus: 2
+        name: notebook-worker
+        created_at: 2026-06-04T12:00:00.000Z
+        pid: 12345
+        status: running
+        memory_mib: 4096
+        labels:
+          boxlite.io/public: "true"
+      properties:
+        box_id:
+          description: The public 12-character Box ID shown to users and SDK clients
+          example: aB3cD4eF5gH6
+          type: string
+        name:
+          description: User-provided box name
+          example: notebook-worker
+          type: string
+        status:
+          description: Box runtime status
+          example: running
+          type: string
+        created_at:
+          description: Creation timestamp
+          example: 2026-06-04T12:00:00.000Z
+          type: string
+        updated_at:
+          description: Last update timestamp
+          example: 2026-06-04T12:05:00.000Z
+          type: string
+        pid:
+          description: Runtime process ID when available
+          example: 12345
+          type: number
+        image:
+          description: Approved image/template used for the box
+          example: boxlite/base
+          type: string
+        cpus:
+          description: Allocated CPU count
+          example: 2
+          type: number
+        memory_mib:
+          description: Allocated memory in MiB
+          example: 4096
+          type: number
+        labels:
+          additionalProperties:
+            type: string
+          description: Labels attached to the box
+          example:
+            boxlite.io/public: "true"
+          type: object
+      required:
+      - box_id
+      - cpus
+      - created_at
+      - image
+      - labels
+      - memory_mib
+      - status
+      - updated_at
+      type: object
+    ListBoxesResponse:
+      example:
+        boxes:
+        - box_id: aB3cD4eF5gH6
+          image: boxlite/base
+          updated_at: 2026-06-04T12:05:00.000Z
+          cpus: 2
+          name: notebook-worker
+          created_at: 2026-06-04T12:00:00.000Z
+          pid: 12345
+          status: running
+          memory_mib: 4096
+          labels:
+            boxlite.io/public: "true"
+        - box_id: aB3cD4eF5gH6
+          image: boxlite/base
+          updated_at: 2026-06-04T12:05:00.000Z
+          cpus: 2
+          name: notebook-worker
+          created_at: 2026-06-04T12:00:00.000Z
+          pid: 12345
+          status: running
+          memory_mib: 4096
+          labels:
+            boxlite.io/public: "true"
+        next_page_token: eyJwYWdlIjoyfQ
+      properties:
+        boxes:
+          items:
+            $ref: '#/components/schemas/Box'
+          type: array
+        next_page_token:
+          description: Token for the next page when pagination is available
+          example: eyJwYWdlIjoyfQ
+          type: string
+      required:
+      - boxes
       type: object
     uploadFile_deprecated_request:
       properties:

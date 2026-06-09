@@ -81,6 +81,7 @@ import { SANDBOX_EVENT_CHANNEL } from '../../common/constants/constants'
 import { RequireFlagsEnabled } from '@openfeature/nestjs-sdk'
 import { FeatureFlags } from '../../common/constants/feature-flags'
 import { RegionSandboxAccessGuard } from '../guards/region-sandbox-access.guard'
+import { SystemRole } from '../../user/enums/system-role.enum'
 
 @ApiTags('sandbox')
 @Controller('sandbox')
@@ -181,7 +182,7 @@ export class SandboxController {
       labels,
       includeErroredDeleted: includeErroredDestroyed,
       states,
-      snapshots,
+      templates,
       regions,
       minCpu,
       maxCpu,
@@ -205,7 +206,7 @@ export class SandboxController {
         labels: labels ? JSON.parse(labels) : undefined,
         includeErroredDestroyed,
         states,
-        snapshots,
+        templates,
         regionIds: regions,
         minCpu,
         maxCpu,
@@ -252,7 +253,7 @@ export class SandboxController {
     requestMetadata: {
       body: (req: TypedRequest<CreateSandboxDto>) => ({
         name: req.body?.name,
-        snapshot: req.body?.snapshot,
+        templateId: req.body?.templateId,
         user: req.body?.user,
         env: req.body?.env
           ? Object.fromEntries(Object.keys(req.body?.env).map((key) => [key, MASKED_AUDIT_VALUE]))
@@ -266,7 +267,6 @@ export class SandboxController {
         memory: req.body?.memory,
         disk: req.body?.disk,
         autoStopInterval: req.body?.autoStopInterval,
-        autoArchiveInterval: req.body?.autoArchiveInterval,
         autoDeleteInterval: req.body?.autoDeleteInterval,
         volumes: req.body?.volumes,
         buildInfo: req.body?.buildInfo,
@@ -281,17 +281,28 @@ export class SandboxController {
   ): Promise<SandboxDto> {
     const organization = authContext.organization
     let sandbox: SandboxDto
+    const canUseBuildInfoSource = authContext.role === SystemRole.ADMIN
 
-    if (createSandboxDto.buildInfo) {
-      if (createSandboxDto.snapshot) {
-        throw new BadRequestError('Cannot specify a snapshot when using a build info entry')
+    if (createSandboxDto.templateId) {
+      if (createSandboxDto.buildInfo) {
+        throw new BadRequestError('Cannot specify build info when using a template')
+      }
+      if (createSandboxDto.gpu !== undefined) {
+        throw new BadRequestError('Cannot specify GPU resources when using a template')
+      }
+      sandbox = await this.sandboxService.createFromTemplate(createSandboxDto, organization)
+      if (sandbox.state === SandboxState.STARTED) {
+        return sandbox
+      }
+
+      await this.waitForSandboxStarted(sandbox, 30)
+    } else if (createSandboxDto.buildInfo) {
+      if (!canUseBuildInfoSource) {
+        throw new BadRequestError('Choose one of the approved templates to create a box')
       }
       sandbox = await this.sandboxService.createFromBuildInfo(createSandboxDto, organization)
     } else {
-      if (createSandboxDto.cpu || createSandboxDto.gpu || createSandboxDto.memory || createSandboxDto.disk) {
-        throw new BadRequestError('Cannot specify Sandbox resources when using a snapshot')
-      }
-      sandbox = await this.sandboxService.createFromSnapshot(createSandboxDto, organization)
+      sandbox = await this.sandboxService.createFromTemplate(createSandboxDto, organization)
       if (sandbox.state === SandboxState.STARTED) {
         return sandbox
       }
@@ -466,7 +477,7 @@ export class SandboxController {
   })
   @ApiResponse({
     status: 200,
-    description: 'Sandbox has been started or is being restored from archived state',
+    description: 'Sandbox has been started',
     type: SandboxDto,
   })
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
@@ -484,7 +495,7 @@ export class SandboxController {
     const sbx = await this.sandboxService.start(sandboxIdOrName, authContext.organization)
     let sandbox = await this.sandboxService.toSandboxDto(sbx)
 
-    if (![SandboxState.ARCHIVED, SandboxState.RESTORING, SandboxState.STARTED].includes(sandbox.state)) {
+    if (![SandboxState.RESTORING, SandboxState.STARTED].includes(sandbox.state)) {
       sandbox = await this.waitForSandboxStarted(sandbox, 30)
     }
 
@@ -786,52 +797,6 @@ export class SandboxController {
     return this.sandboxService.toSandboxDto(sandbox)
   }
 
-  @Post(':sandboxIdOrName/autoarchive/:interval')
-  @ApiOperation({
-    summary: 'Set sandbox auto-archive interval',
-    operationId: 'setAutoArchiveInterval',
-  })
-  @ApiParam({
-    name: 'sandboxIdOrName',
-    description: 'ID or name of the sandbox',
-    type: 'string',
-  })
-  @ApiParam({
-    name: 'interval',
-    description: 'Auto-archive interval in minutes (0 means the maximum interval will be used)',
-    type: 'number',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Auto-archive interval has been set',
-    type: SandboxDto,
-  })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
-  @UseGuards(SandboxAccessGuard)
-  @Audit({
-    action: AuditAction.SET_AUTO_ARCHIVE_INTERVAL,
-    targetType: AuditTarget.SANDBOX,
-    targetIdFromRequest: (req) => req.params.sandboxIdOrName,
-    targetIdFromResult: (result: SandboxDto) => result?.id,
-    requestMetadata: {
-      params: (req) => ({
-        interval: req.params.interval,
-      }),
-    },
-  })
-  async setAutoArchiveInterval(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('sandboxIdOrName') sandboxIdOrName: string,
-    @Param('interval') interval: number,
-  ): Promise<SandboxDto> {
-    const sandbox = await this.sandboxService.setAutoArchiveInterval(
-      sandboxIdOrName,
-      interval,
-      authContext.organizationId,
-    )
-    return this.sandboxService.toSandboxDto(sandbox)
-  }
-
   @Post(':sandboxIdOrName/autodelete/:interval')
   @ApiOperation({
     summary: 'Set sandbox auto-delete interval',
@@ -922,35 +887,6 @@ export class SandboxController {
   //   )
   //   return SandboxDto.fromSandbox(sandbox, '')
   // }
-
-  @Post(':sandboxIdOrName/archive')
-  @HttpCode(200)
-  @SkipThrottle({ authenticated: true })
-  @ThrottlerScope('sandbox-lifecycle')
-  @ApiOperation({
-    summary: 'Archive sandbox',
-    operationId: 'archiveSandbox',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Sandbox has been archived',
-    type: SandboxDto,
-  })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
-  @UseGuards(SandboxAccessGuard)
-  @Audit({
-    action: AuditAction.ARCHIVE,
-    targetType: AuditTarget.SANDBOX,
-    targetIdFromRequest: (req) => req.params.sandboxIdOrName,
-    targetIdFromResult: (result: SandboxDto) => result?.id,
-  })
-  async archiveSandbox(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('sandboxIdOrName') sandboxIdOrName: string,
-  ): Promise<SandboxDto> {
-    const sandbox = await this.sandboxService.archive(sandboxIdOrName, authContext.organizationId)
-    return this.sandboxService.toSandboxDto(sandbox)
-  }
 
   @Get(':sandboxIdOrName/ports/:port/preview-url')
   @ApiOperation({
@@ -1104,7 +1040,7 @@ export class SandboxController {
 
     const logProxy = new LogProxy(
       runner.apiUrl,
-      sandbox.buildInfo.snapshotRef.split(':')[0],
+      sandbox.buildInfo.artifactRef.split(':')[0],
       runner.apiKey,
       follow === true,
       req,

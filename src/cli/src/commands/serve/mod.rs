@@ -837,89 +837,81 @@ async fn get_or_fetch_box(state: &AppState, box_id: &str) -> Result<Arc<LiteBox>
 // Router
 // ============================================================================
 
-fn build_router(state: Arc<AppState>) -> Router {
-    use handlers::{advanced, boxes, config, executions, files, me, metrics, snapshots};
+fn box_scoped_routes() -> Router<Arc<AppState>> {
+    use handlers::{advanced, boxes, executions, files, metrics, snapshots};
 
     Router::new()
-        // Identity (no tenant prefix)
-        .route("/v1/me", get(me::get_me))
-        .route("/v1/config", get(config::get_config))
         // Runtime metrics
-        .route("/v1/metrics", get(metrics::runtime_metrics))
+        .route("/metrics", get(metrics::runtime_metrics))
         // Box CRUD (import first — static path before param path)
-        .route("/v1/boxes/import", post(advanced::import_box))
+        .route("/boxes/import", post(advanced::import_box))
         .route(
-            "/v1/boxes",
+            "/boxes",
             post(boxes::create_box).get(boxes::list_boxes),
         )
         .route(
-            "/v1/boxes/{box_id}",
+            "/boxes/{box_id}",
             get(boxes::get_box)
                 .delete(boxes::remove_box)
                 .head(boxes::head_box),
         )
         // Box lifecycle
-        .route(
-            "/v1/boxes/{box_id}/start",
-            post(boxes::start_box),
-        )
-        .route(
-            "/v1/boxes/{box_id}/stop",
-            post(boxes::stop_box),
-        )
+        .route("/boxes/{box_id}/start", post(boxes::start_box))
+        .route("/boxes/{box_id}/stop", post(boxes::stop_box))
         // Box metrics
-        .route(
-            "/v1/boxes/{box_id}/metrics",
-            get(metrics::box_metrics),
-        )
+        .route("/boxes/{box_id}/metrics", get(metrics::box_metrics))
         // Execution
+        .route("/boxes/{box_id}/exec", post(executions::start_execution))
         .route(
-            "/v1/boxes/{box_id}/exec",
-            post(executions::start_execution),
-        )
-        .route(
-            "/v1/boxes/{box_id}/executions/{exec_id}",
+            "/boxes/{box_id}/executions/{exec_id}",
             get(executions::get_execution).delete(executions::kill_execution),
         )
         .route(
-            "/v1/boxes/{box_id}/executions/{exec_id}/attach",
+            "/boxes/{box_id}/executions/{exec_id}/attach",
             get(executions::attach_execution),
         )
         .route(
-            "/v1/boxes/{box_id}/executions/{exec_id}/signal",
+            "/boxes/{box_id}/executions/{exec_id}/signal",
             post(executions::send_signal),
         )
         .route(
-            "/v1/boxes/{box_id}/executions/{exec_id}/resize",
+            "/boxes/{box_id}/executions/{exec_id}/resize",
             post(executions::resize_tty),
         )
         // Files
         .route(
-            "/v1/boxes/{box_id}/files",
+            "/boxes/{box_id}/files",
             put(files::upload_files).get(files::download_files),
         )
         // Snapshots
         .route(
-            "/v1/boxes/{box_id}/snapshots",
+            "/boxes/{box_id}/snapshots",
             post(snapshots::create_snapshot).get(snapshots::list_snapshots),
         )
         .route(
-            "/v1/boxes/{box_id}/snapshots/{name}",
+            "/boxes/{box_id}/snapshots/{name}",
             get(snapshots::get_snapshot).delete(snapshots::delete_snapshot),
         )
         .route(
-            "/v1/boxes/{box_id}/snapshots/{name}/restore",
+            "/boxes/{box_id}/snapshots/{name}/restore",
             post(snapshots::restore_snapshot),
         )
         // Clone & export
-        .route(
-            "/v1/boxes/{box_id}/clone",
-            post(advanced::clone_box),
-        )
-        .route(
-            "/v1/boxes/{box_id}/export",
-            post(advanced::export_box),
-        )
+        .route("/boxes/{box_id}/clone", post(advanced::clone_box))
+        .route("/boxes/{box_id}/export", post(advanced::export_box))
+}
+
+fn build_router(state: Arc<AppState>) -> Router {
+    use handlers::{config, me};
+
+    Router::new()
+        // Identity (no tenant prefix)
+        .route("/v1/me", get(me::get_me))
+        .route("/v1/config", get(config::get_config))
+        // Canonical empty-prefix routes plus legacy `/default` routes used by
+        // SDKs released before `path_prefix` support.
+        .nest("/v1", box_scoped_routes())
+        .nest("/v1/default", box_scoped_routes())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_api_key,
@@ -1015,6 +1007,37 @@ mod tests {
         assert!(!constant_time_eq(b"abc", b"abd"));
         assert!(!constant_time_eq(b"abc", b"abcd"));
         assert!(constant_time_eq(b"", b""));
+    }
+
+    #[tokio::test]
+    async fn router_accepts_canonical_and_legacy_default_prefix_for_box_routes() {
+        let temp = tempfile::tempdir().unwrap();
+        let runtime = BoxliteRuntime::new(boxlite::BoxliteOptions {
+            home_dir: temp.path().to_path_buf(),
+            ..Default::default()
+        })
+        .unwrap();
+        let state = Arc::new(AppState {
+            runtime,
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+        });
+        let app = build_router(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        for path in ["/v1/boxes", "/v1/default/boxes"] {
+            let resp = reqwest::get(format!("http://{addr}{path}")).await.unwrap();
+
+            assert_eq!(resp.status(), reqwest::StatusCode::OK);
+            let body: serde_json::Value = resp.json().await.unwrap();
+            assert_eq!(body, serde_json::json!({ "boxes": [] }));
+        }
+        server.abort();
     }
 
     /// Build an `ActiveExecution` backed by a stub `Execution` whose

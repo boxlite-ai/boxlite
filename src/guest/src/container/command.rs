@@ -386,6 +386,7 @@ impl ContainerCommand {
             args: container_args.clone(),
             uid,
             gid,
+            terminal: self.console_socket.is_some(),
         };
 
         // Blocking IPC to zygote — use spawn_blocking to not block tokio.
