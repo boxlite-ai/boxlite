@@ -104,7 +104,7 @@ func CreateBox(ctx context.Context, request mcp.CallToolRequest, args CreateBoxA
 				return &mcp.CallToolResult{IsError: true}, fmt.Errorf("failed to create box after %d retries: %v", maxRetries, err)
 			}
 
-			log.Infof("Box creation failed, retrying: %v", err)
+			log.Infof("Box creation failed, retrying")
 
 			time.Sleep(retryDelay)
 			retryDelay = retryDelay * 3 / 2 // Exponential backoff
