@@ -22,11 +22,11 @@ var proxyTransport = &http.Transport{
 	}).DialContext,
 }
 
-// ProxyRequest handles proxying requests to a sandbox's container
+// ProxyRequest handles proxying requests to a box's container
 //
 //	@Tags			toolbox
 //	@Summary		Proxy requests to the box toolbox
-//	@Description	Forwards the request to the specified sandbox's container
+//	@Description	Forwards the request to the specified box's container
 //	@Param			workspaceId	path		string	true	"Box ID"
 //	@Param			projectId	path		string	true	"Project ID"
 //	@Param			path		path		string	true	"Path to forward"

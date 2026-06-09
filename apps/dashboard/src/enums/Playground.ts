@@ -5,13 +5,13 @@
  */
 
 export enum PlaygroundCategories {
-  SANDBOX = 'sandbox',
+  BOX = 'box',
   TERMINAL = 'terminal',
   VNC = 'vnc',
 }
 
 export enum BoxParametersSections {
-  SANDBOX_MANAGEMENT = 'sandbox_management',
+  BOX_MANAGEMENT = 'box_management',
   FILE_SYSTEM = 'file_system',
   GIT_OPERATIONS = 'git_operations',
   PROCESS_CODE_EXECUTION = 'process_code_execution',

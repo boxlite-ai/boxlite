@@ -53,11 +53,11 @@ const Onboarding: React.FC = () => {
   // User must have permission to create boxes to use the onboarding snippet
   useEffect(() => {
     const ensureOnboardingPermissions = async () => {
-      if (authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_SANDBOXES)) {
+      if (authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)) {
         setHasSufficientPermissions(true)
-        const permissions: CreateApiKeyPermissionsEnum[] = [CreateApiKeyPermissionsEnum.WRITE_SANDBOXES]
-        if (authenticatedUserHasPermission(OrganizationRolePermissionsEnum.DELETE_SANDBOXES)) {
-          permissions.push(CreateApiKeyPermissionsEnum.DELETE_SANDBOXES)
+        const permissions: CreateApiKeyPermissionsEnum[] = [CreateApiKeyPermissionsEnum.WRITE_BOXES]
+        if (authenticatedUserHasPermission(OrganizationRolePermissionsEnum.DELETE_BOXES)) {
+          permissions.push(CreateApiKeyPermissionsEnum.DELETE_BOXES)
         }
         setApiKeyPermissions(permissions)
       } else {
@@ -175,8 +175,8 @@ const Onboarding: React.FC = () => {
                   <h2 className="text-xl font-semibold mb-4">Create an API Key</h2>
                   <p className="mb-4">
                     This API key will have permissions to only{' '}
-                    {apiKeyPermissions.includes(CreateApiKeyPermissionsEnum.DELETE_SANDBOXES) ? 'manage' : 'create'}{' '}
-                    Boxes. For full API permissions, head to the{' '}
+                    {apiKeyPermissions.includes(CreateApiKeyPermissionsEnum.DELETE_BOXES) ? 'manage' : 'create'} Boxes.
+                    For full API permissions, head to the{' '}
                     <button
                       onClick={() => navigate(RoutePath.KEYS)}
                       className="underline cursor-pointer hover:text-muted-foreground"
@@ -352,7 +352,7 @@ const rt = JsBoxlite.rest(new BoxliteRestOptions({
 // }))
 
 // Create a box
-const box = await rt.create({ image: 'alpine:latest' }, 'my-sandbox')
+const box = await rt.create({ image: 'alpine:latest' }, 'my-box')
 await box.start()
 
 // Run a command securely inside the box
@@ -382,7 +382,7 @@ async def main():
     # rt = Boxlite.rest(BoxliteRestOptions.from_env())
 
     # Create a box
-    box = await rt.create(BoxOptions(image="alpine:latest"), name="my-sandbox")
+    box = await rt.create(BoxOptions(image="alpine:latest"), name="my-box")
     await box.start()
 
     # Run a command securely inside the box

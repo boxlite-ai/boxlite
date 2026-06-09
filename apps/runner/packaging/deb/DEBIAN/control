@@ -5,6 +5,6 @@ Priority: optional
 Architecture: amd64
 Maintainer: BoxLite <support@boxlite.io>
 Description: BoxLite Runner
- The BoxLite Runner manages execution of jobs and sandboxes
+ The BoxLite Runner manages execution of jobs and boxes
  for the BoxLite development environment platform.
 Homepage: https://github.com/boxlite-ai/boxlite

@@ -25,14 +25,14 @@ const BoxProcessCodeExecution: React.FC = () => {
   const codeRunLanguageCodeFormData: ParameterFormItem & { key: 'languageCode' } = {
     label: 'Code to execute',
     key: 'languageCode',
-    placeholder: 'Write the code you want to execute inside the sandbox',
+    placeholder: 'Write the code you want to execute inside the box',
     required: true,
   }
 
   const shellCommandFormData: ParameterFormItem & { key: 'shellCommand' } = {
     label: 'Shell command',
     key: 'shellCommand',
-    placeholder: 'Enter a shell command to run inside the sandbox',
+    placeholder: 'Enter a shell command to run inside the box',
     required: true,
   }
 

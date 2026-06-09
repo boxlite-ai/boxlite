@@ -17,8 +17,8 @@ import (
 
 var ExecCmd = &cobra.Command{
 	Use:   "exec [BOX_ID | BOX_NAME] -- [COMMAND] [ARGS...]",
-	Short: "Execute a command in a sandbox",
-	Long:  "Execute a command in a running sandbox",
+	Short: "Execute a command in a box",
+	Long:  "Execute a command in a running box",
 	Args:  cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()

@@ -26,29 +26,29 @@ import { BuildInfo } from './build-info.entity'
 import { nanoid } from 'nanoid'
 import { BoxLastActivity } from './box-last-activity.entity'
 
-@Entity('sandbox')
+@Entity('box')
 @Unique(['organizationId', 'name'])
-@Index('sandbox_state_idx', ['state'])
-@Index('sandbox_desiredstate_idx', ['desiredState'])
-@Index('sandbox_snapshot_idx', ['snapshot'])
-@Index('sandbox_runnerid_idx', ['runnerId'])
-@Index('sandbox_runner_state_idx', ['runnerId', 'state'])
-@Index('sandbox_organizationid_idx', ['organizationId'])
-@Index('sandbox_region_idx', ['region'])
-@Index('sandbox_resources_idx', ['cpu', 'mem', 'disk', 'gpu'])
-@Index('sandbox_backupstate_idx', ['backupState'])
-@Index('sandbox_runner_state_desired_idx', ['runnerId', 'state', 'desiredState'], {
+@Index('box_state_idx', ['state'])
+@Index('box_desiredstate_idx', ['desiredState'])
+@Index('box_snapshot_idx', ['snapshot'])
+@Index('box_runnerid_idx', ['runnerId'])
+@Index('box_runner_state_idx', ['runnerId', 'state'])
+@Index('box_organizationid_idx', ['organizationId'])
+@Index('box_region_idx', ['region'])
+@Index('box_resources_idx', ['cpu', 'mem', 'disk', 'gpu'])
+@Index('box_backupstate_idx', ['backupState'])
+@Index('box_runner_state_desired_idx', ['runnerId', 'state', 'desiredState'], {
   where: '"pending" = false',
 })
-@Index('sandbox_active_only_idx', ['id'], {
-  where: `"state" <> ALL (ARRAY['destroyed'::sandbox_state_enum, 'archived'::sandbox_state_enum])`,
+@Index('box_active_only_idx', ['id'], {
+  where: `"state" <> ALL (ARRAY['destroyed'::box_state_enum, 'archived'::box_state_enum])`,
 })
-@Index('sandbox_pending_idx', ['id'], {
+@Index('box_pending_idx', ['id'], {
   where: `"pending" = true`,
 })
-@Index('idx_sandbox_authtoken', ['authToken'])
-@Index('sandbox_labels_gin_full_idx', { synchronize: false })
-@Index('idx_sandbox_volumes_gin', { synchronize: false })
+@Index('idx_box_authtoken', ['authToken'])
+@Index('box_labels_gin_full_idx', { synchronize: false })
+@Index('idx_box_volumes_gin', { synchronize: false })
 export class Box {
   @PrimaryColumn({ default: () => 'uuid_generate_v4()' })
   id: string

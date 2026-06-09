@@ -20,7 +20,7 @@ export default function BoxVncFullscreen() {
   useBoxWsSync({ boxId })
 
   const label = box?.name || box?.id || boxId
-  const backPath = boxId ? RoutePath.SANDBOX_DETAILS.replace(':boxId', boxId) : RoutePath.SANDBOXES
+  const backPath = boxId ? RoutePath.BOX_DETAILS.replace(':boxId', boxId) : RoutePath.BOXES
 
   return (
     <BoxFullscreenShell boxId={boxId} title={label} copyValue={box ? box.name || box.id : undefined}>

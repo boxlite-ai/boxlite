@@ -214,7 +214,7 @@ func (e *Exporter[T]) extractBoxToken(ctx context.Context) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("sandbox token header '%s' not found in metadata", e.config.BoxAuthTokenHeader)
+	return "", fmt.Errorf("box token header '%s' not found in metadata", e.config.BoxAuthTokenHeader)
 }
 
 //lint:ignore U1000 Used by the built collector

@@ -115,7 +115,7 @@ export function BoxTerminalTab({ box }: { box: Box }) {
   }
 
   // Active session
-  const fullscreenHref = RoutePath.SANDBOX_TERMINAL.replace(':boxId', box.id)
+  const fullscreenHref = RoutePath.BOX_TERMINAL.replace(':boxId', box.id)
   return (
     <div className="flex-1 flex flex-col p-2 sm:p-4">
       <div className="relative flex-1 min-h-0 rounded-md border border-border bg-black overflow-hidden p-1">

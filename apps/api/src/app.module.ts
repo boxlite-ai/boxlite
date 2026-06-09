@@ -145,8 +145,8 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
           { name: 'anonymous', config: rateLimit.anonymous },
           { name: 'failed-auth', config: rateLimit.failedAuth },
           { name: 'authenticated', config: rateLimit.authenticated },
-          { name: 'sandbox-create', config: rateLimit.boxCreate },
-          { name: 'sandbox-lifecycle', config: rateLimit.boxLifecycle },
+          { name: 'box-create', config: rateLimit.boxCreate },
+          { name: 'box-lifecycle', config: rateLimit.boxLifecycle },
         ]
           .filter(({ config }) => config.ttl !== undefined && config.limit !== undefined)
           .map(({ name, config }) => ({

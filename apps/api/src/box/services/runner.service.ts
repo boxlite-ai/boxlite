@@ -813,11 +813,11 @@ export class RunnerService {
 
   async getRunnersWithMultipleSnapshotsBuilding(maxSnapshotCount = 6): Promise<string[]> {
     const runners = await this.boxRepository
-      .createQueryBuilder('sandbox')
-      .select('sandbox.runnerId', 'runnerId')
-      .where('sandbox.state = :state', { state: BoxState.BUILDING_SNAPSHOT })
-      .andWhere('sandbox.buildInfoSnapshotRef IS NOT NULL')
-      .groupBy('sandbox.runnerId')
+      .createQueryBuilder('box')
+      .select('box.runnerId', 'runnerId')
+      .where('box.state = :state', { state: BoxState.BUILDING_SNAPSHOT })
+      .andWhere('box.buildInfoSnapshotRef IS NOT NULL')
+      .groupBy('box.runnerId')
       .having('COUNT(DISTINCT box.buildInfoSnapshotRef) > :maxSnapshotCount', { maxSnapshotCount })
       .getRawMany()
 

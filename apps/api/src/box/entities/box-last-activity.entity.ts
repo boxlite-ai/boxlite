@@ -6,15 +6,15 @@
 import { Column, Entity, JoinColumn, OneToOne, PrimaryColumn } from 'typeorm'
 import { Box } from './box.entity'
 
-@Entity('sandbox_last_activity')
+@Entity('box_last_activity')
 export class BoxLastActivity {
-  @PrimaryColumn({ name: 'sandboxId' })
+  @PrimaryColumn({ name: 'boxId' })
   boxId: string
 
   @Column({ nullable: true, type: 'timestamp with time zone' })
   lastActivityAt?: Date
 
   @OneToOne(() => Box, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'sandboxId' })
+  @JoinColumn({ name: 'boxId' })
   box?: Box
 }

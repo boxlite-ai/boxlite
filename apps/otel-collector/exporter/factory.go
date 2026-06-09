@@ -38,7 +38,7 @@ func NewFactory() exporter.Factory {
 // createDefaultConfig creates the default configuration for the exporter.
 func createDefaultConfig() component.Config {
 	return &Config{
-		BoxAuthTokenHeader: "sandbox-auth-token",
+		BoxAuthTokenHeader: "box-auth-token",
 		CacheTTL:           5 * time.Minute,
 		DefaultTimeout:     30 * time.Second,
 		RetrySettings:      configretry.NewDefaultBackOffConfig(),

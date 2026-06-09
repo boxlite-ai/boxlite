@@ -52,7 +52,7 @@ export class JobDto {
 
   @ApiProperty({
     description: 'The ID of the resource this job operates on (boxId, snapshotRef, etc.)',
-    example: 'sandbox123',
+    example: 'box123',
   })
   @IsString()
   resourceId: string
@@ -75,7 +75,7 @@ export class JobDto {
 
   @ApiPropertyOptional({
     description: 'Error message if the job failed',
-    example: 'Failed to create sandbox',
+    example: 'Failed to create box',
   })
   @IsOptional()
   @IsString()
@@ -181,7 +181,7 @@ export class UpdateJobStatusDto {
 
   @ApiPropertyOptional({
     description: 'Error message if the job failed',
-    example: 'Failed to create sandbox',
+    example: 'Failed to create box',
   })
   @IsOptional()
   @IsString()

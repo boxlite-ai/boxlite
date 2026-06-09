@@ -106,10 +106,10 @@ export class BoxStartAction extends BoxAction {
    */
   private async loadBuildInfo(box: Box): Promise<void> {
     const [result] = await this.boxRepository
-      .createQueryBuilder('sandbox')
-      .leftJoinAndSelect('sandbox.buildInfo', 'buildInfo')
-      .where('sandbox.id = :id', { id: box.id })
-      .cache(`sandbox:buildInfo:${box.id}`, BOX_BUILD_INFO_CACHE_TTL_MS)
+      .createQueryBuilder('box')
+      .leftJoinAndSelect('box.buildInfo', 'buildInfo')
+      .where('box.id = :id', { id: box.id })
+      .cache(`box:buildInfo:${box.id}`, BOX_BUILD_INFO_CACHE_TTL_MS)
       .getMany()
     box.buildInfo = result?.buildInfo ?? null
   }
@@ -568,17 +568,17 @@ export class BoxStartAction extends BoxAction {
         }
       }
       case BoxState.STARTING:
-        if (await this.checkTimeoutError(box, 5, 'Timeout while starting sandbox')) {
+        if (await this.checkTimeoutError(box, 5, 'Timeout while starting box')) {
           return DONT_SYNC_AGAIN
         }
         break
       case BoxState.RESTORING:
-        if (await this.checkTimeoutError(box, 30, 'Timeout while starting sandbox')) {
+        if (await this.checkTimeoutError(box, 30, 'Timeout while starting box')) {
           return DONT_SYNC_AGAIN
         }
         break
       case BoxState.CREATING: {
-        if (await this.checkTimeoutError(box, 15, 'Timeout while creating sandbox')) {
+        if (await this.checkTimeoutError(box, 15, 'Timeout while creating box')) {
           return DONT_SYNC_AGAIN
         }
         break
@@ -653,7 +653,7 @@ export class BoxStartAction extends BoxAction {
 
     // Recovery lock to prevent frequent automatic restore attempts
     if (isRecovery) {
-      lockKey = `sandbox-${box.id}-restored-cooldown`
+      lockKey = `box-${box.id}-restored-cooldown`
       const sixHoursInSeconds = 6 * 60 * 60
       const acquired = await this.redisLockProvider.lock(lockKey, sixHoursInSeconds)
       if (!acquired) {

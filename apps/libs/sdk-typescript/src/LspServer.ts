@@ -173,7 +173,7 @@ export class LspServer {
    *                                 - kind: The symbol's kind (function, class, variable, etc.)
    *                                 - location: The location of the symbol in the file
    *
-   * @deprecated Use `sandboxSymbols` instead. This method will be removed in a future version.
+   * @deprecated Use `boxSymbols` instead. This method will be removed in a future version.
    */
   @WithInstrumentation()
   public async workspaceSymbols(query: string): Promise<LspSymbol[]> {

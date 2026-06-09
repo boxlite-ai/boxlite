@@ -63,7 +63,7 @@ export function useBoxWsSync({ boxId, refetchOnCreate = false }: UseBoxWsSyncOpt
       }
     }
 
-    const handleCreated = (_sandbox: Box) => {
+    const handleCreated = (_box: Box) => {
       if (boxId) return
 
       queryClient.invalidateQueries({
@@ -109,14 +109,14 @@ export function useBoxWsSync({ boxId, refetchOnCreate = false }: UseBoxWsSyncOpt
       invalidate()
     }
 
-    notificationSocket.on('sandbox.created', handleCreated)
-    notificationSocket.on('sandbox.state.updated', handleStateUpdated)
-    notificationSocket.on('sandbox.desired-state.updated', handleDesiredStateUpdated)
+    notificationSocket.on('box.created', handleCreated)
+    notificationSocket.on('box.state.updated', handleStateUpdated)
+    notificationSocket.on('box.desired-state.updated', handleDesiredStateUpdated)
 
     return () => {
-      notificationSocket.off('sandbox.created', handleCreated)
-      notificationSocket.off('sandbox.state.updated', handleStateUpdated)
-      notificationSocket.off('sandbox.desired-state.updated', handleDesiredStateUpdated)
+      notificationSocket.off('box.created', handleCreated)
+      notificationSocket.off('box.state.updated', handleStateUpdated)
+      notificationSocket.off('box.desired-state.updated', handleDesiredStateUpdated)
     }
   }, [notificationSocket, selectedOrganization?.id, boxId, refetchOnCreate, queryClient])
 }

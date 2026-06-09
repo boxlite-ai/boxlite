@@ -16,17 +16,17 @@ type BoxLookupCacheKeyArgs = {
 export function boxLookupCacheKeyById(args: BoxLookupCacheKeyArgs & { boxId: string }): string {
   const organizationId = args.organizationId ?? 'none'
   const returnDestroyed = args.returnDestroyed ? 1 : 0
-  return `sandbox:lookup:by-id:org:${organizationId}:returnDestroyed:${returnDestroyed}:value:${args.boxId}`
+  return `box:lookup:by-id:org:${organizationId}:returnDestroyed:${returnDestroyed}:value:${args.boxId}`
 }
 
 export function boxLookupCacheKeyByName(args: BoxLookupCacheKeyArgs & { boxName: string }): string {
   const organizationId = args.organizationId ?? 'none'
   const returnDestroyed = args.returnDestroyed ? 1 : 0
-  return `sandbox:lookup:by-name:org:${organizationId}:returnDestroyed:${returnDestroyed}:value:${args.boxName}`
+  return `box:lookup:by-name:org:${organizationId}:returnDestroyed:${returnDestroyed}:value:${args.boxName}`
 }
 
 export function boxLookupCacheKeyByAuthToken(args: { authToken: string }): string {
-  return `sandbox:lookup:by-authToken:${args.authToken}`
+  return `box:lookup:by-authToken:${args.authToken}`
 }
 
 type BoxOrgIdCacheKeyArgs = {
@@ -35,12 +35,12 @@ type BoxOrgIdCacheKeyArgs = {
 
 export function boxOrgIdCacheKeyById(args: BoxOrgIdCacheKeyArgs & { boxId: string }): string {
   const organizationId = args.organizationId ?? 'none'
-  return `sandbox:orgId:by-id:org:${organizationId}:value:${args.boxId}`
+  return `box:orgId:by-id:org:${organizationId}:value:${args.boxId}`
 }
 
 export function boxOrgIdCacheKeyByName(args: BoxOrgIdCacheKeyArgs & { boxName: string }): string {
   const organizationId = args.organizationId ?? 'none'
-  return `sandbox:orgId:by-name:org:${organizationId}:value:${args.boxName}`
+  return `box:orgId:by-name:org:${organizationId}:value:${args.boxName}`
 }
 
 export function toolboxProxyUrlCacheKey(regionId: string): string {

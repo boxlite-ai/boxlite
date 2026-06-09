@@ -5,5 +5,5 @@
  */
 
 export function getStateChangeLockKey(id: string): string {
-  return `sandbox:${id}:state-change`
+  return `box:${id}:state-change`
 }

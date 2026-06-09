@@ -104,20 +104,20 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
       await Promise.all(
         readyRunners.map(async (runner) => {
           const boxes = await this.boxRepository
-            .createQueryBuilder('sandbox')
-            .innerJoin('sandbox_last_activity', 'activity', 'activity."sandboxId" = box.id')
-            .where('sandbox."runnerId" = :runnerId', { runnerId: runner.id })
-            .andWhere('sandbox."organizationId" != :warmPoolOrg', {
+            .createQueryBuilder('box')
+            .innerJoin('box_last_activity', 'activity', 'activity."boxId" = box.id')
+            .where('box."runnerId" = :runnerId', { runnerId: runner.id })
+            .andWhere('box."organizationId" != :warmPoolOrg', {
               warmPoolOrg: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
             })
-            .andWhere('sandbox.state = :state', { state: BoxState.STARTED })
-            .andWhere('sandbox."desiredState" = :desiredState', {
+            .andWhere('box.state = :state', { state: BoxState.STARTED })
+            .andWhere('box."desiredState" = :desiredState', {
               desiredState: BoxDesiredState.STARTED,
             })
-            .andWhere('sandbox.pending != true')
-            .andWhere('sandbox."autoStopInterval" != 0')
+            .andWhere('box.pending != true')
+            .andWhere('box."autoStopInterval" != 0')
             .andWhere('activity."lastActivityAt" < NOW() - INTERVAL \'1 minute\' * box."autoStopInterval"')
-            .orderBy('sandbox."lastBackupAt"', 'ASC')
+            .orderBy('box."lastBackupAt"', 'ASC')
             .limit(100)
             .getMany()
 
@@ -177,19 +177,19 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
 
     try {
       const boxes = await this.boxRepository
-        .createQueryBuilder('sandbox')
-        .innerJoin('sandbox_last_activity', 'activity', 'activity."sandboxId" = box.id')
-        .where('sandbox."organizationId" != :warmPoolOrg', {
+        .createQueryBuilder('box')
+        .innerJoin('box_last_activity', 'activity', 'activity."boxId" = box.id')
+        .where('box."organizationId" != :warmPoolOrg', {
           warmPoolOrg: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
         })
-        .andWhere('sandbox.state = :state', { state: BoxState.STOPPED })
-        .andWhere('sandbox."desiredState" = :desiredState', {
+        .andWhere('box.state = :state', { state: BoxState.STOPPED })
+        .andWhere('box."desiredState" = :desiredState', {
           desiredState: BoxDesiredState.STOPPED,
         })
-        .andWhere('sandbox.pending != true')
-        .andWhere('sandbox."autoArchiveInterval" != 0')
+        .andWhere('box.pending != true')
+        .andWhere('box."autoArchiveInterval" != 0')
         .andWhere('activity."lastActivityAt" < NOW() - INTERVAL \'1 minute\' * box."autoArchiveInterval"')
-        .orderBy('sandbox."lastBackupAt"', 'ASC')
+        .orderBy('box."lastBackupAt"', 'ASC')
         .limit(100)
         .getMany()
 
@@ -243,18 +243,18 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
       await Promise.all(
         readyRunners.map(async (runner) => {
           const boxes = await this.boxRepository
-            .createQueryBuilder('sandbox')
-            .innerJoin('sandbox_last_activity', 'activity', 'activity."sandboxId" = box.id')
-            .where('sandbox."runnerId" = :runnerId', { runnerId: runner.id })
-            .andWhere('sandbox."organizationId" != :warmPoolOrg', {
+            .createQueryBuilder('box')
+            .innerJoin('box_last_activity', 'activity', 'activity."boxId" = box.id')
+            .where('box."runnerId" = :runnerId', { runnerId: runner.id })
+            .andWhere('box."organizationId" != :warmPoolOrg', {
               warmPoolOrg: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
             })
-            .andWhere('sandbox.state = :state', { state: BoxState.STOPPED })
-            .andWhere('sandbox."desiredState" = :desiredState', {
+            .andWhere('box.state = :state', { state: BoxState.STOPPED })
+            .andWhere('box."desiredState" = :desiredState', {
               desiredState: BoxDesiredState.STOPPED,
             })
-            .andWhere('sandbox.pending != true')
-            .andWhere('sandbox."autoDeleteInterval" >= 0')
+            .andWhere('box.pending != true')
+            .andWhere('box."autoDeleteInterval" >= 0')
             .andWhere('activity."lastActivityAt" < NOW() - INTERVAL \'1 minute\' * box."autoDeleteInterval"')
             .orderBy('activity."lastActivityAt"', 'ASC')
             .limit(100)
@@ -670,14 +670,14 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
 
     try {
       const queryBuilder = this.boxRepository
-        .createQueryBuilder('sandbox')
-        .select(['sandbox.id'])
-        .leftJoin('sandbox_last_activity', 'activity', 'activity."sandboxId" = box.id')
-        .where('sandbox.state NOT IN (:...excludedStates)', {
+        .createQueryBuilder('box')
+        .select(['box.id'])
+        .leftJoin('box_last_activity', 'activity', 'activity."boxId" = box.id')
+        .where('box.state NOT IN (:...excludedStates)', {
           excludedStates: [BoxState.DESTROYED, BoxState.ERROR, BoxState.BUILD_FAILED, BoxState.RESIZING],
         })
-        .andWhere('sandbox."desiredState"::text != box.state::text')
-        .andWhere('sandbox."desiredState"::text != :archived', { archived: BoxDesiredState.ARCHIVED })
+        .andWhere('box."desiredState"::text != box.state::text')
+        .andWhere('box."desiredState"::text != :archived', { archived: BoxDesiredState.ARCHIVED })
         .orderBy('activity."lastActivityAt"', 'DESC', 'NULLS LAST')
 
       const stream = await queryBuilder.stream()
@@ -693,15 +693,15 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
               return
             }
 
-            const lockKey = getStateChangeLockKey(row.sandbox_id)
+            const lockKey = getStateChangeLockKey(row.box_id)
             if (await this.redisLockProvider.isLocked(lockKey)) {
               // Box is already being processed, skip it
               return
             }
 
             // Process box asynchronously but track the promise
-            const processPromise = this.syncInstanceState(row.sandbox_id).catch((err) => {
-              this.logger.error(`Error syncing box state for ${row.sandbox_id}`, err)
+            const processPromise = this.syncInstanceState(row.box_id).catch((err) => {
+              this.logger.error(`Error syncing box state for ${row.box_id}`, err)
             })
             pendingProcesses.push(processPromise)
             processedCount++

@@ -92,8 +92,8 @@ export default function BoxDetails() {
   const recoverMutation = useRecoverBoxMutation()
   const deleteMutation = useDeleteBoxMutation()
 
-  const writePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_SANDBOXES)
-  const deletePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.DELETE_SANDBOXES)
+  const writePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
+  const deletePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.DELETE_BOXES)
   const transitioning = box ? isTransitioning(box) : false
   const anyMutating =
     startMutation.isPending ||
@@ -109,7 +109,7 @@ export default function BoxDetails() {
       await startMutation.mutateAsync({ boxId: box.id })
       toast.success('Box started')
     } catch (error) {
-      handleApiError(error, 'Failed to start sandbox', {
+      handleApiError(error, 'Failed to start box', {
         action:
           error instanceof OrganizationSuspendedError &&
           config.billingApiUrl &&
@@ -128,7 +128,7 @@ export default function BoxDetails() {
       await stopMutation.mutateAsync({ boxId: box.id })
       toast.success('Box stopped')
     } catch (error) {
-      handleApiError(error, 'Failed to stop sandbox')
+      handleApiError(error, 'Failed to stop box')
     }
   }
 
@@ -138,7 +138,7 @@ export default function BoxDetails() {
       await archiveMutation.mutateAsync({ boxId: box.id })
       toast.success('Box archived')
     } catch (error) {
-      handleApiError(error, 'Failed to archive sandbox')
+      handleApiError(error, 'Failed to archive box')
     }
   }
 
@@ -148,7 +148,7 @@ export default function BoxDetails() {
       await recoverMutation.mutateAsync({ boxId: box.id })
       toast.success('Box recovery started')
     } catch (error) {
-      handleApiError(error, 'Failed to recover sandbox')
+      handleApiError(error, 'Failed to recover box')
     }
   }
 
@@ -158,9 +158,9 @@ export default function BoxDetails() {
       await deleteMutation.mutateAsync({ boxId: box.id })
       toast.success('Box deleted')
       setDeleteDialogOpen(false)
-      navigate(RoutePath.SANDBOXES)
+      navigate(RoutePath.BOXES)
     } catch (error) {
-      handleApiError(error, 'Failed to delete sandbox')
+      handleApiError(error, 'Failed to delete box')
     }
   }
 
@@ -197,7 +197,7 @@ export default function BoxDetails() {
         onRecover={handleRecover}
         onDelete={() => setDeleteDialogOpen(true)}
         onRefresh={() => refetch()}
-        onBack={() => navigate(RoutePath.SANDBOXES)}
+        onBack={() => navigate(RoutePath.BOXES)}
         onCreateSshAccess={() => setCreateSshDialogOpen(true)}
         onRevokeSshAccess={() => setRevokeSshDialogOpen(true)}
         onScreenRecordings={handleScreenRecordings}
@@ -219,7 +219,7 @@ export default function BoxDetails() {
               <EmptyTitle>Box not found</EmptyTitle>
               <EmptyDescription>Are you sure you're in the right organization?</EmptyDescription>
             </EmptyHeader>
-            <Button variant="outline" size="sm" onClick={() => navigate(RoutePath.SANDBOXES)}>
+            <Button variant="outline" size="sm" onClick={() => navigate(RoutePath.BOXES)}>
               Back to Boxes
             </Button>
           </Empty>

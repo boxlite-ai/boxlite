@@ -10,12 +10,12 @@ import { BoxUsagePeriod } from './box-usage-period.entity'
 // Duplicate of BoxUsagePeriod
 // Used to archive usage periods and keep the original table lightweight
 // Will only contain closed usage periods
-@Entity('sandbox_usage_periods_archive')
+@Entity('box_usage_periods_archive')
 export class BoxUsagePeriodArchive {
   @PrimaryGeneratedColumn('uuid')
   id: string
 
-  @Column({ name: 'sandboxId' })
+  @Column({ name: 'boxId' })
   boxId: string
 
   @Column()

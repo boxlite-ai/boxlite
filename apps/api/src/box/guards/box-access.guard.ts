@@ -33,7 +33,7 @@ export class BoxAccessGuard implements CanActivate {
     try {
       switch (true) {
         case isRunnerContext(authContext): {
-          // For runner authentication, verify that the runner ID matches the sandbox's runner ID
+          // For runner authentication, verify that the runner ID matches the box's runner ID
           const runnerContext = authContext as RunnerContext
           const boxRunnerId = await this.boxService.getRunnerId(boxIdOrName)
           if (boxRunnerId !== runnerContext.runnerId) {

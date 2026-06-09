@@ -36,7 +36,7 @@ export class BoxTelemetryController {
   })
   @ApiParam({
     name: 'boxId',
-    description: 'ID of the sandbox',
+    description: 'ID of the box',
     type: 'string',
   })
   @ApiResponse({
@@ -66,7 +66,7 @@ export class BoxTelemetryController {
   })
   @ApiParam({
     name: 'boxId',
-    description: 'ID of the sandbox',
+    description: 'ID of the box',
     type: 'string',
   })
   @ApiResponse({
@@ -97,7 +97,7 @@ export class BoxTelemetryController {
   })
   @ApiParam({
     name: 'boxId',
-    description: 'ID of the sandbox',
+    description: 'ID of the box',
     type: 'string',
   })
   @ApiParam({
@@ -124,7 +124,7 @@ export class BoxTelemetryController {
   })
   @ApiParam({
     name: 'boxId',
-    description: 'ID of the sandbox',
+    description: 'ID of the box',
     type: 'string',
   })
   @ApiResponse({

@@ -22,7 +22,7 @@ export class SshAccess {
   @Generated('uuid')
   id: string
 
-  @Column({ name: 'sandboxId' })
+  @Column({ name: 'boxId' })
   boxId: string
 
   @Column({
@@ -42,6 +42,6 @@ export class SshAccess {
   updatedAt: Date
 
   @ManyToOne(() => Box, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'sandboxId' })
+  @JoinColumn({ name: 'boxId' })
   box: Box
 }

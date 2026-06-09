@@ -14,8 +14,8 @@ import (
 
 var SSHCmd = &cobra.Command{
 	Use:   "ssh [BOX_ID] | [BOX_NAME]",
-	Short: "SSH into a sandbox",
-	Long:  "Establish an SSH connection to a running sandbox",
+	Short: "SSH into a box",
+	Long:  "Establish an SSH connection to a running box",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()

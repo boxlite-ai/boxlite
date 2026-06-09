@@ -23,7 +23,7 @@ export async function createBoxWebSocket(
     const previewToken = await getPreviewToken()
     const separator = url.includes('?') ? '&' : '?'
     return new WebSocket(
-      `${url}${separator}BOXLITE_SANDBOX_AUTH_KEY=${previewToken}`,
+      `${url}${separator}BOXLITE_BOX_AUTH_KEY=${previewToken}`,
       `X-BoxLite-SDK-Version~${String(headers['X-BoxLite-SDK-Version'] ?? '')}`,
     )
   }

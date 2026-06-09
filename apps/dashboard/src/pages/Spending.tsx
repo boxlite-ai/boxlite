@@ -37,7 +37,7 @@ const analyticsQuickRanges: QuickRangesConfig = {
 const Spending = () => {
   const { selectedOrganization } = useSelectedOrganization()
   const config = useConfig()
-  const spendingEnabled = useFeatureFlagEnabled(FeatureFlags.SANDBOX_SPENDING)
+  const spendingEnabled = useFeatureFlagEnabled(FeatureFlags.BOX_SPENDING)
   const analyticsAvailable = spendingEnabled && !!config.analyticsApiUrl
 
   const [analyticsDateRange, setAnalyticsDateRange] = useState<DateRange>(() => {

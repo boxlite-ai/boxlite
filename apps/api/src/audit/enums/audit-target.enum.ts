@@ -12,7 +12,7 @@ export enum AuditTarget {
   ORGANIZATION_USER = 'organization_user',
   DOCKER_REGISTRY = 'docker_registry',
   RUNNER = 'runner',
-  BOX = 'sandbox',
+  BOX = 'box',
   SNAPSHOT = 'snapshot',
   USER = 'user',
   VOLUME = 'volume',

@@ -115,7 +115,7 @@ func (p *Proxy) AuthCallback(ctx *gin.Context) {
 		return
 	}
 	if !hasAccess {
-		ctx.Error(common_errors.NewNotFoundError(errors.New("sandbox not found")))
+		ctx.Error(common_errors.NewNotFoundError(errors.New("box not found")))
 		return
 	}
 

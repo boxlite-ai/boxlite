@@ -10,7 +10,7 @@ import (
 )
 
 var BoxCmd = &cobra.Command{
-	Use:     "sandbox",
+	Use:     "box",
 	Short:   "Manage BoxLite boxes",
 	Long:    "Commands for managing BoxLite boxes",
 	Aliases: []string{"boxes"},

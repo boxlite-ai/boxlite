@@ -30,7 +30,7 @@ interface BulkActionData {
 }
 
 function getBulkActionData(action: BulkAction, count: number): BulkActionData {
-  const countText = count === 1 ? 'this sandbox' : `these ${count} selected boxes`
+  const countText = count === 1 ? 'this box' : `these ${count} selected boxes`
 
   switch (action) {
     case BulkAction.Delete:

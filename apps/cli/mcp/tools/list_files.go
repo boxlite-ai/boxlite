@@ -35,7 +35,7 @@ func ListFiles(ctx context.Context, request mcp.CallToolRequest, args ListFilesA
 	}
 
 	if args.Id == nil || *args.Id == "" {
-		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("sandbox ID is required")
+		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("box ID is required")
 	}
 
 	// Get directory path from request arguments (optional)

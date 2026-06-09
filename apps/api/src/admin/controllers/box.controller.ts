@@ -36,7 +36,7 @@ export class AdminBoxController {
   })
   @ApiParam({
     name: 'boxId',
-    description: 'ID of the sandbox',
+    description: 'ID of the box',
     type: 'string',
   })
   @ApiResponse({

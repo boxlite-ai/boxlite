@@ -151,17 +151,17 @@ export class VolumeService {
 
     // Check if any non-destroyed boxes are using this volume
     const boxUsingVolume = await this.boxRepository
-      .createQueryBuilder('sandbox')
-      .where('sandbox.organizationId = :organizationId', {
+      .createQueryBuilder('box')
+      .where('box.organizationId = :organizationId', {
         organizationId: volume.organizationId,
       })
-      .andWhere('sandbox.volumes @> :volFilter::jsonb', {
+      .andWhere('box.volumes @> :volFilter::jsonb', {
         volFilter: JSON.stringify([{ volumeId }]),
       })
-      .andWhere('sandbox.desiredState != :destroyed', {
+      .andWhere('box.desiredState != :destroyed', {
         destroyed: BoxDesiredState.DESTROYED,
       })
-      .select(['sandbox.id', 'sandbox.name'])
+      .select(['box.id', 'box.name'])
       .getOne()
 
     if (boxUsingVolume) {

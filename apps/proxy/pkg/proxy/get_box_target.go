@@ -52,8 +52,8 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, e
 	}
 
 	if boxIdOrSignedToken == "" {
-		ctx.Error(common_errors.NewBadRequestError(errors.New("sandbox ID or signed token is required")))
-		return nil, nil, errors.New("sandbox ID or signed token is required")
+		ctx.Error(common_errors.NewBadRequestError(errors.New("box ID or signed token is required")))
+		return nil, nil, errors.New("box ID or signed token is required")
 	}
 
 	boxId := boxIdOrSignedToken

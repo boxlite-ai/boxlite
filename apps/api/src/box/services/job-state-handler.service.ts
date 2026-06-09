@@ -136,7 +136,7 @@ export class JobStateHandlerService {
         this.logger.error(`CREATE_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
         updateData.state = BoxState.ERROR
         const { recoverable, errorReason } = sanitizeBoxError(job.errorMessage)
-        updateData.errorReason = errorReason || 'Failed to create sandbox'
+        updateData.errorReason = errorReason || 'Failed to create box'
         updateData.recoverable = recoverable
       }
 
@@ -178,7 +178,7 @@ export class JobStateHandlerService {
         this.logger.error(`START_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
         updateData.state = BoxState.ERROR
         const { recoverable, errorReason } = sanitizeBoxError(job.errorMessage)
-        updateData.errorReason = errorReason || 'Failed to start sandbox'
+        updateData.errorReason = errorReason || 'Failed to start box'
         updateData.recoverable = recoverable
       }
 
@@ -217,7 +217,7 @@ export class JobStateHandlerService {
         this.logger.error(`STOP_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
         updateData.state = BoxState.ERROR
         const { recoverable, errorReason } = sanitizeBoxError(job.errorMessage)
-        updateData.errorReason = errorReason || 'Failed to stop sandbox'
+        updateData.errorReason = errorReason || 'Failed to stop box'
         updateData.recoverable = recoverable
       }
 
@@ -248,7 +248,7 @@ export class JobStateHandlerService {
           this.logger.error(`DESTROY_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
           updateData.state = BoxState.ERROR
           const { recoverable, errorReason } = sanitizeBoxError(job.errorMessage)
-          updateData.errorReason = errorReason || 'Failed to destroy sandbox'
+          updateData.errorReason = errorReason || 'Failed to destroy box'
           updateData.recoverable = recoverable
         }
       } else if (box.desiredState === BoxDesiredState.ARCHIVED && box.backupState === BackupState.COMPLETED) {
@@ -481,7 +481,7 @@ export class JobStateHandlerService {
       } else if (job.status === JobStatus.FAILED) {
         this.logger.error(`RECOVER_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
         updateData.state = BoxState.ERROR
-        updateData.errorReason = job.errorMessage || 'Failed to recover sandbox'
+        updateData.errorReason = job.errorMessage || 'Failed to recover box'
       }
 
       await this.boxRepository.update(boxId, { updateData, entity: box })

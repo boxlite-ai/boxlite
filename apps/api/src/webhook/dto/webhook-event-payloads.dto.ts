@@ -23,7 +23,7 @@ export abstract class BaseWebhookEventDto {
     description: 'Event type identifier',
     enum: WebhookEvent,
     enumName: 'WebhookEvent',
-    example: 'sandbox.created',
+    example: 'box.created',
   })
   event: string
 
@@ -39,7 +39,7 @@ export abstract class BaseWebhookEventDto {
 export class BoxCreatedWebhookDto extends BaseWebhookEventDto {
   @ApiProperty({
     description: 'Box ID',
-    example: 'sandbox123',
+    example: 'box123',
   })
   id: string
 
@@ -87,7 +87,7 @@ export class BoxCreatedWebhookDto extends BaseWebhookEventDto {
 export class BoxStateUpdatedWebhookDto extends BaseWebhookEventDto {
   @ApiProperty({
     description: 'Box ID',
-    example: 'sandbox123',
+    example: 'box123',
   })
   id: string
 

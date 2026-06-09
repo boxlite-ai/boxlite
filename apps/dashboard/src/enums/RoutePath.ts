@@ -18,7 +18,7 @@ export enum RoutePath {
 
   // Dashboard sub-routes
   KEYS = '/dashboard/keys',
-  SANDBOXES = '/dashboard/boxes',
+  BOXES = '/dashboard/boxes',
   SNAPSHOTS = '/dashboard/snapshots',
   REGISTRIES = '/dashboard/registries',
   VOLUMES = '/dashboard/volumes',
@@ -43,9 +43,9 @@ export enum RoutePath {
   WEBHOOKS = '/dashboard/webhooks',
   WEBHOOK_ENDPOINT_DETAILS = '/dashboard/webhooks/:endpointId',
   // Boxes
-  SANDBOX_DETAILS = '/dashboard/boxes/:boxId',
-  SANDBOX_TERMINAL = '/dashboard/boxes/:boxId/terminal',
-  SANDBOX_VNC = '/dashboard/boxes/:boxId/vnc',
+  BOX_DETAILS = '/dashboard/boxes/:boxId',
+  BOX_TERMINAL = '/dashboard/boxes/:boxId/terminal',
+  BOX_VNC = '/dashboard/boxes/:boxId/vnc',
 
   // Email verification
   EMAIL_VERIFY = '/dashboard/organization/:organizationId/verify-email/:email/:token',

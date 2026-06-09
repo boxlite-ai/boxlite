@@ -10,7 +10,7 @@ import { IsNumber, IsString } from 'class-validator'
 @ApiSchema({ name: 'PortPreviewUrl' })
 export class PortPreviewUrlDto {
   @ApiProperty({
-    description: 'ID of the sandbox',
+    description: 'ID of the box',
     example: '123456',
   })
   @IsString()
@@ -34,7 +34,7 @@ export class PortPreviewUrlDto {
 @ApiSchema({ name: 'SignedPortPreviewUrl' })
 export class SignedPortPreviewUrlDto {
   @ApiProperty({
-    description: 'ID of the sandbox',
+    description: 'ID of the box',
     example: '123456',
   })
   @IsString()

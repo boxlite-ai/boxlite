@@ -72,11 +72,11 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
     }
 
     // Check authenticated throttlers
-    const authenticatedThrottlers = ['authenticated', 'sandbox-create', 'sandbox-lifecycle']
+    const authenticatedThrottlers = ['authenticated', 'box-create', 'box-lifecycle']
     if (authenticatedThrottlers.includes(throttler.name)) {
       if (isAuthenticated) {
         // Only 'authenticated' applies to all routes by default
-        // 'sandbox-create' and 'sandbox-lifecycle' only apply if explicitly configured via @SkipThrottle or @Throttle
+        // 'box-create' and 'box-lifecycle' only apply if explicitly configured via @SkipThrottle or @Throttle
         const isDefaultThrottler = throttler.name === 'authenticated'
 
         if (!isDefaultThrottler) {
@@ -101,18 +101,18 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
             const customLimit =
               throttler.name === 'authenticated'
                 ? orgLimits.authenticated
-                : throttler.name === 'sandbox-create'
+                : throttler.name === 'box-create'
                   ? orgLimits.boxCreate
-                  : throttler.name === 'sandbox-lifecycle'
+                  : throttler.name === 'box-lifecycle'
                     ? orgLimits.boxLifecycle
                     : undefined
 
             const customTtlSeconds =
               throttler.name === 'authenticated'
                 ? orgLimits.authenticatedTtlSeconds
-                : throttler.name === 'sandbox-create'
+                : throttler.name === 'box-create'
                   ? orgLimits.boxCreateTtlSeconds
-                  : throttler.name === 'sandbox-lifecycle'
+                  : throttler.name === 'box-lifecycle'
                     ? orgLimits.boxLifecycleTtlSeconds
                     : undefined
 

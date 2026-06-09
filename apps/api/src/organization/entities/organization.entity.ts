@@ -37,21 +37,21 @@ export class Organization {
   @Column({
     type: 'int',
     default: 4,
-    name: 'max_cpu_per_sandbox',
+    name: 'max_cpu_per_box',
   })
   maxCpuPerBox: number
 
   @Column({
     type: 'int',
     default: 8,
-    name: 'max_memory_per_sandbox',
+    name: 'max_memory_per_box',
   })
   maxMemoryPerBox: number
 
   @Column({
     type: 'int',
     default: 10,
-    name: 'max_disk_per_sandbox',
+    name: 'max_disk_per_box',
   })
   maxDiskPerBox: number
 
@@ -86,14 +86,14 @@ export class Organization {
   @Column({
     type: 'int',
     nullable: true,
-    name: 'sandbox_create_rate_limit',
+    name: 'box_create_rate_limit',
   })
   boxCreateRateLimit: number | null
 
   @Column({
     type: 'int',
     nullable: true,
-    name: 'sandbox_lifecycle_rate_limit',
+    name: 'box_lifecycle_rate_limit',
   })
   boxLifecycleRateLimit: number | null
 
@@ -107,14 +107,14 @@ export class Organization {
   @Column({
     type: 'int',
     nullable: true,
-    name: 'sandbox_create_rate_limit_ttl_seconds',
+    name: 'box_create_rate_limit_ttl_seconds',
   })
   boxCreateRateLimitTtlSeconds: number | null
 
   @Column({
     type: 'int',
     nullable: true,
-    name: 'sandbox_lifecycle_rate_limit_ttl_seconds',
+    name: 'box_lifecycle_rate_limit_ttl_seconds',
   })
   boxLifecycleRateLimitTtlSeconds: number | null
 

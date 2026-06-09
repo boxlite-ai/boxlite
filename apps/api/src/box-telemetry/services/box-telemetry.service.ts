@@ -63,7 +63,7 @@ export class BoxTelemetryService {
   constructor(private readonly clickhouseService: ClickHouseService) {}
 
   private getServiceName(boxId: string): string {
-    return `sandbox-${boxId}`
+    return `box-${boxId}`
   }
 
   isConfigured(): boolean {

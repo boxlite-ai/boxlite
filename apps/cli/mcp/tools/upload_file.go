@@ -43,7 +43,7 @@ func FileUpload(ctx context.Context, request mcp.CallToolRequest, args FileUploa
 	}
 
 	if args.Id == nil || *args.Id == "" {
-		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("sandbox ID is required")
+		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("box ID is required")
 	}
 
 	if args.FilePath == nil || *args.FilePath == "" {

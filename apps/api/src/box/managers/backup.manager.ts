@@ -103,7 +103,7 @@ export class BackupManager implements TrackableJobExecutions, OnApplicationShutd
 
           await Promise.all(
             boxes.map(async (box) => {
-              const lockKey = `sandbox-backup-${box.id}`
+              const lockKey = `box-backup-${box.id}`
               const hasLock = await this.redisLockProvider.lock(lockKey, 60)
               if (!hasLock) {
                 return
@@ -147,12 +147,12 @@ export class BackupManager implements TrackableJobExecutions, OnApplicationShutd
 
     try {
       const boxes = await this.boxRepository
-        .createQueryBuilder('sandbox')
+        .createQueryBuilder('box')
         .innerJoin('runner', 'r', 'r.id = box.runnerId')
-        .where('sandbox.state IN (:...states)', {
+        .where('box.state IN (:...states)', {
           states: [BoxState.ARCHIVING, BoxState.STARTED, BoxState.STOPPED],
         })
-        .andWhere('sandbox.backupState IN (:...backupStates)', {
+        .andWhere('box.backupState IN (:...backupStates)', {
           backupStates: [BackupState.PENDING, BackupState.IN_PROGRESS],
         })
         .andWhere('r.state = :ready', { ready: RunnerState.READY })
@@ -174,14 +174,14 @@ export class BackupManager implements TrackableJobExecutions, OnApplicationShutd
           started: BoxState.STARTED,
         })
         .orderBy('state_priority', 'ASC')
-        .addOrderBy('sandbox.lastBackupAt', 'ASC', 'NULLS FIRST') // Process boxes with no backups first
-        .addOrderBy('sandbox.createdAt', 'ASC') // For equal lastBackupAt, process older boxes first
+        .addOrderBy('box.lastBackupAt', 'ASC', 'NULLS FIRST') // Process boxes with no backups first
+        .addOrderBy('box.createdAt', 'ASC') // For equal lastBackupAt, process older boxes first
         .take(100)
         .getMany()
 
       await Promise.allSettled(
         boxes.map(async (s) => {
-          const lockKey = `sandbox-backup-${s.id}`
+          const lockKey = `box-backup-${s.id}`
           const hasLock = await this.redisLockProvider.lock(lockKey, 60)
           if (!hasLock) {
             return
@@ -250,22 +250,22 @@ export class BackupManager implements TrackableJobExecutions, OnApplicationShutd
 
     try {
       const boxes = await this.boxRepository
-        .createQueryBuilder('sandbox')
+        .createQueryBuilder('box')
         .innerJoin('runner', 'r', 'r.id = box.runnerId')
-        .where('sandbox.state = :error', { error: BoxState.ERROR })
-        .andWhere('sandbox.backupState IN (:...backupStates)', {
+        .where('box.state = :error', { error: BoxState.ERROR })
+        .andWhere('box.backupState IN (:...backupStates)', {
           backupStates: [BackupState.PENDING, BackupState.IN_PROGRESS],
         })
         .andWhere('r.state = :ready', { ready: RunnerState.READY })
         .andWhere('r."draining" = true')
-        .addOrderBy('sandbox.lastBackupAt', 'ASC', 'NULLS FIRST')
-        .addOrderBy('sandbox.createdAt', 'ASC')
+        .addOrderBy('box.lastBackupAt', 'ASC', 'NULLS FIRST')
+        .addOrderBy('box.createdAt', 'ASC')
         .take(100)
         .getMany()
 
       await Promise.allSettled(
         boxes.map(async (s) => {
-          const lockKey = `sandbox-backup-${s.id}`
+          const lockKey = `box-backup-${s.id}`
           const hasLock = await this.redisLockProvider.lock(lockKey, 60)
           if (!hasLock) {
             return
@@ -335,10 +335,10 @@ export class BackupManager implements TrackableJobExecutions, OnApplicationShutd
 
     try {
       const boxes = await this.boxRepository
-        .createQueryBuilder('sandbox')
+        .createQueryBuilder('box')
         .innerJoin('runner', 'r', 'r.id = box.runnerId')
-        .where('sandbox.state IN (:...states)', { states: [BoxState.ARCHIVING, BoxState.STOPPED] })
-        .andWhere('sandbox.backupState = :none', { none: BackupState.NONE })
+        .where('box.state IN (:...states)', { states: [BoxState.ARCHIVING, BoxState.STOPPED] })
+        .andWhere('box.backupState = :none', { none: BackupState.NONE })
         .andWhere('r.state = :ready', { ready: RunnerState.READY })
         .take(100)
         .getMany()
@@ -347,7 +347,7 @@ export class BackupManager implements TrackableJobExecutions, OnApplicationShutd
         boxes
           .filter((box) => box.runnerId !== null)
           .map(async (box) => {
-            const lockKey = `sandbox-backup-${box.id}`
+            const lockKey = `box-backup-${box.id}`
             const hasLock = await this.redisLockProvider.lock(lockKey, 30)
             if (!hasLock) {
               return

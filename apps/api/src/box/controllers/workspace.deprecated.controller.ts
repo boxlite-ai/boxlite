@@ -130,7 +130,7 @@ export class WorkspaceController {
     description: 'The workspace has been successfully created.',
     type: WorkspaceDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @Audit({
     action: AuditAction.CREATE,
     targetType: AuditTarget.BOX,
@@ -237,7 +237,7 @@ export class WorkspaceController {
     status: 200,
     description: 'Workspace has been deleted',
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.DELETE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.DELETE_BOXES])
   @UseGuards(WorkspaceAccessGuard)
   @Audit({
     action: AuditAction.DELETE,
@@ -268,7 +268,7 @@ export class WorkspaceController {
     status: 200,
     description: 'Workspace has been started',
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(WorkspaceAccessGuard)
   @Audit({
     action: AuditAction.START,
@@ -298,7 +298,7 @@ export class WorkspaceController {
     status: 200,
     description: 'Workspace has been stopped',
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(WorkspaceAccessGuard)
   @Audit({
     action: AuditAction.STOP,
@@ -326,7 +326,7 @@ export class WorkspaceController {
     description: 'Labels have been successfully replaced',
     type: WorkspaceLabelsDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(WorkspaceAccessGuard)
   @Audit({
     action: AuditAction.REPLACE_LABELS,
@@ -362,7 +362,7 @@ export class WorkspaceController {
     description: 'Workspace backup has been initiated',
     type: WorkspaceDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(WorkspaceAccessGuard)
   @Audit({
     action: AuditAction.CREATE_BACKUP,
@@ -389,7 +389,7 @@ export class WorkspaceController {
     description: 'Public status to set',
     type: 'boolean',
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(WorkspaceAccessGuard)
   @Audit({
     action: AuditAction.UPDATE_PUBLIC_STATUS,
@@ -428,7 +428,7 @@ export class WorkspaceController {
     status: 200,
     description: 'Auto-stop interval has been set',
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(WorkspaceAccessGuard)
   @Audit({
     action: AuditAction.SET_AUTO_STOP_INTERVAL,
@@ -467,7 +467,7 @@ export class WorkspaceController {
     status: 200,
     description: 'Auto-archive interval has been set',
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(WorkspaceAccessGuard)
   @Audit({
     action: AuditAction.SET_AUTO_ARCHIVE_INTERVAL,
@@ -497,7 +497,7 @@ export class WorkspaceController {
     status: 200,
     description: 'Workspace has been archived',
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(WorkspaceAccessGuard)
   @Audit({
     action: AuditAction.ARCHIVE,

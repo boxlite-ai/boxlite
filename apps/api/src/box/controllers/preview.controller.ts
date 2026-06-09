@@ -30,12 +30,12 @@ export class PreviewController {
   })
   @ApiParam({
     name: 'boxId',
-    description: 'ID of the sandbox',
+    description: 'ID of the box',
     type: 'string',
   })
   @ApiResponse({
     status: 200,
-    description: 'Public status of the sandbox',
+    description: 'Public status of the box',
     type: Boolean,
   })
   async isBoxPublic(@Param('boxId') boxId: string): Promise<boolean> {
@@ -78,12 +78,12 @@ export class PreviewController {
   })
   @ApiParam({
     name: 'boxId',
-    description: 'ID of the sandbox',
+    description: 'ID of the box',
     type: 'string',
   })
   @ApiParam({
     name: 'authToken',
-    description: 'Auth token of the sandbox',
+    description: 'Auth token of the box',
     type: 'string',
   })
   @ApiResponse({
@@ -114,12 +114,12 @@ export class PreviewController {
 
   @Get(':boxId/access')
   @ApiOperation({
-    summary: 'Check if user has access to the sandbox',
+    summary: 'Check if user has access to the box',
     operationId: 'hasBoxAccess',
   })
   @ApiResponse({
     status: 200,
-    description: 'User access status to the sandbox',
+    description: 'User access status to the box',
     type: Boolean,
   })
   @UseGuards(CombinedAuthGuard)

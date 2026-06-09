@@ -15,13 +15,13 @@ export const THROTTLER_SCOPE_KEY = 'throttler:scope'
  *
  * @example
  * // Apply box-create throttler
- * @ThrottlerScope('sandbox-create')
+ * @ThrottlerScope('box-create')
  * @Post()
  * createBox() {}
  *
  * @example
  * // Apply multiple throttlers
- * @ThrottlerScope('sandbox-create', 'sandbox-lifecycle')
+ * @ThrottlerScope('box-create', 'box-lifecycle')
  * @Post()
  * createAndStart() {}
  */

@@ -176,7 +176,7 @@ export function BoxVncTab({ box, variant = 'tab' }: { box: Box; variant?: 'tab' 
 
   // Active session
   if (session) {
-    const fullscreenHref = RoutePath.SANDBOX_VNC.replace(':boxId', box.id)
+    const fullscreenHref = RoutePath.BOX_VNC.replace(':boxId', box.id)
     return renderPanel(
       <>
         <iframe

@@ -22,7 +22,7 @@ export function isRecoverable(box: Box): boolean {
   return box.state === BoxState.ERROR && box.recoverable === true
 }
 
-export function isDeletable(_sandbox: Box): boolean {
+export function isDeletable(_box: Box): boolean {
   return true
 }
 

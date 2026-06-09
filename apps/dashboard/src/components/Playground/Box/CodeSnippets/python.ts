@@ -87,7 +87,7 @@ export const PythonSnippetGenerator: CodeSnippetGenerator = {
   getBoxCreate(p) {
     return [
       '\n# Create the Box instance',
-      `sandbox = boxlite.create(${p.config.useBoxCreateParams ? 'params' : ''})`,
+      `box = boxlite.create(${p.config.useBoxCreateParams ? 'params' : ''})`,
       'print(f"Box created:{box.id}")',
     ].join('\n')
   },
@@ -124,7 +124,7 @@ export const PythonSnippetGenerator: CodeSnippetGenerator = {
       sections.push(
         [
           '# Create folder with specific permissions',
-          `sandbox.fs.create_folder("${p.state['createFolderParams'].folderDestinationPath}", "${p.state['createFolderParams'].permissions}")`,
+          `box.fs.create_folder("${p.state['createFolderParams'].folderDestinationPath}", "${p.state['createFolderParams'].permissions}")`,
         ].join('\n'),
       )
     }
@@ -147,7 +147,7 @@ export const PythonSnippetGenerator: CodeSnippetGenerator = {
       sections.push(
         [
           `# Delete ${p.actions.useFileSystemDeleteFileRecursive ? 'directory' : 'file'}`,
-          `sandbox.fs.delete_file("${p.state['deleteFileParams'].filePath}"${p.actions.useFileSystemDeleteFileRecursive ? ', True' : ''})`,
+          `box.fs.delete_file("${p.state['deleteFileParams'].filePath}"${p.actions.useFileSystemDeleteFileRecursive ? ', True' : ''})`,
         ].join('\n'),
       )
     }
@@ -163,7 +163,7 @@ export const PythonSnippetGenerator: CodeSnippetGenerator = {
       sections.push(
         [
           '# Clone git repository',
-          'sandbox.git.clone(',
+          'box.git.clone(',
           `${ind}url="${p.state['gitCloneParams'].repositoryURL}",`,
           `${ind}path="${p.state['gitCloneParams'].cloneDestinationPath}",`,
           p.actions.useGitCloneBranch ? `${ind}branch="${p.state['gitCloneParams'].branchToClone}",` : '',

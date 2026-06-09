@@ -22,7 +22,7 @@ type BoxService struct {
 
 func NewBoxService(logger *slog.Logger, backupInfoCache *cache.BackupInfoCache, boxlite *blclient.Client) *BoxService {
 	return &BoxService{
-		log:             logger.With(slog.String("component", "sandbox_service")),
+		log:             logger.With(slog.String("component", "box_service")),
 		backupInfoCache: backupInfoCache,
 		boxlite:         boxlite,
 	}

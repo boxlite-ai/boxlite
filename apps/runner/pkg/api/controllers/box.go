@@ -22,7 +22,7 @@ import (
 //	@Tags			box
 //	@Summary		Create a box
 //	@Description	Create a box
-//	@Param			box	body	dto.CreateBoxDTO	true	"Create sandbox"
+//	@Param			box	body	dto.CreateBoxDTO	true	"Create box"
 //	@Produce		json
 //	@Success		201	{object}	dto.StartBoxResponse
 //	@Failure		400	{object}	common_errors.ErrorResponse
@@ -154,7 +154,7 @@ func CreateBackup(logger *slog.Logger) gin.HandlerFunc {
 //	@Description	Resize box
 //	@Produce		json
 //	@Param			boxId	path		string				true	"Box ID"
-//	@Param			box		body		dto.ResizeBoxDTO	true	"Resize sandbox"
+//	@Param			box		body		dto.ResizeBoxDTO	true	"Resize box"
 //	@Success		200		{string}	string				"Box resized"
 //	@Failure		400		{object}	common_errors.ErrorResponse
 //	@Failure		401		{object}	common_errors.ErrorResponse
@@ -326,7 +326,7 @@ func Start(ctx *gin.Context) {
 //	@Description	Stop box
 //	@Produce		json
 //	@Param			boxId	path		string			true	"Box ID"
-//	@Param			box		body		dto.StopBoxDTO	false	"Stop sandbox"
+//	@Param			box		body		dto.StopBoxDTO	false	"Stop box"
 //	@Success		200		{string}	string			"Box stopped"
 //	@Failure		400		{object}	common_errors.ErrorResponse
 //	@Failure		401		{object}	common_errors.ErrorResponse
@@ -459,7 +459,7 @@ func Recover(ctx *gin.Context) {
 // IsRecoverable godoc
 //
 //	@Summary		Check if box error is recoverable
-//	@Description	Check if the sandbox's error reason indicates a recoverable error
+//	@Description	Check if the box's error reason indicates a recoverable error
 //	@Tags			box
 //	@Accept			json
 //	@Produce		json

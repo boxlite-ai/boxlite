@@ -285,7 +285,7 @@ func (c *Client) recordBoxVolumeMounts(ctx context.Context, boxID string, mounts
 		return fmt.Errorf("failed to write volume mount record %s: %w", path, err)
 	}
 
-	c.logger.DebugContext(ctx, "recorded box volume mounts", "sandbox", boxID, "paths", paths)
+	c.logger.DebugContext(ctx, "recorded box volume mounts", "box", boxID, "paths", paths)
 	return nil
 }
 
@@ -300,7 +300,7 @@ func (c *Client) removeBoxVolumeMountRecord(ctx context.Context, boxID string) e
 		return err
 	}
 
-	c.logger.DebugContext(ctx, "removed box volume mount record", "sandbox", boxID)
+	c.logger.DebugContext(ctx, "removed box volume mount record", "box", boxID)
 	return nil
 }
 

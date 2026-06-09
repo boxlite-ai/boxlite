@@ -865,7 +865,7 @@ export class PtyCreateRequestDto {
   id: string
 
   @ApiPropertyOptional({
-    description: "Starting directory for the PTY session, defaults to the sandbox's working directory",
+    description: "Starting directory for the PTY session, defaults to the box's working directory",
     example: '/home/user',
   })
   cwd?: string
@@ -915,7 +915,7 @@ export class PtySessionInfoDto {
   id: string
 
   @ApiProperty({
-    description: "Starting directory for the PTY session, defaults to the sandbox's working directory",
+    description: "Starting directory for the PTY session, defaults to the box's working directory",
     example: '/home/user',
   })
   cwd: string

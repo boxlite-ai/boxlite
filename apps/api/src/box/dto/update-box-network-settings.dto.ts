@@ -10,7 +10,7 @@ import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 @ApiSchema({ name: 'UpdateBoxNetworkSettings' })
 export class UpdateBoxNetworkSettingsDto {
   @ApiPropertyOptional({
-    description: 'Whether to block all network access for the sandbox',
+    description: 'Whether to block all network access for the box',
     example: false,
   })
   @IsOptional()
@@ -18,7 +18,7 @@ export class UpdateBoxNetworkSettingsDto {
   networkBlockAll?: boolean
 
   @ApiPropertyOptional({
-    description: 'Comma-separated list of allowed CIDR network addresses for the sandbox',
+    description: 'Comma-separated list of allowed CIDR network addresses for the box',
     example: '192.168.1.0/16,10.0.0.0/24',
   })
   @IsOptional()

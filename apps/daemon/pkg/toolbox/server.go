@@ -120,7 +120,7 @@ func (s *server) Start() error {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	otelServiceName := fmt.Sprintf("sandbox-%s", s.BoxId)
+	otelServiceName := fmt.Sprintf("box-%s", s.BoxId)
 
 	r := gin.New()
 	r.Use(common_errors.Recovery())

@@ -87,8 +87,8 @@ export function BoxTable({
   const isCompactScreen = useIsCompactScreen()
   const useCompactList = isCompactScreen
   const { authenticatedUserHasPermission } = useSelectedOrganization()
-  const writePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_SANDBOXES)
-  const deletePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.DELETE_SANDBOXES)
+  const writePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
+  const deletePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.DELETE_BOXES)
 
   const { table, regionOptions } = useBoxTable({
     data,
@@ -178,7 +178,7 @@ export function BoxTable({
   const { setIsOpen } = useCommandPaletteActions()
   const { trackOpened } = useCommandPaletteAnalytics()
   const handleOpenCommandPalette = () => {
-    trackOpened('sandbox_selection_toast')
+    trackOpened('box_selection_toast')
     setIsOpen(true)
   }
 

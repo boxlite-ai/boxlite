@@ -102,7 +102,7 @@ export class ToolboxService {
 
       return runner
     } finally {
-      const lockKey = `sandbox-last-activity-${boxId}`
+      const lockKey = `box-last-activity-${boxId}`
       const acquired = await this.redisLockProvider.lock(lockKey, 10)
 
       // redis for cooldown period - 10 seconds

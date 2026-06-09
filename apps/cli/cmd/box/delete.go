@@ -22,7 +22,7 @@ const spinnerThreshold = 10
 
 var DeleteCmd = &cobra.Command{
 	Use:     "delete [BOX_ID] | [BOX_NAME]",
-	Short:   "Delete a sandbox",
+	Short:   "Delete a box",
 	Args:    cobra.MaximumNArgs(1),
 	Aliases: common.GetAliases("delete"),
 	RunE: func(cmd *cobra.Command, args []string) error {

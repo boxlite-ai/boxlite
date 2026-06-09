@@ -16,7 +16,7 @@ import (
 // Resize changes the CPU/memory/disk allocation of a box.
 // BoxLite VMs don't support hot-resize, so this stops, removes, and recreates.
 func (c *Client) Resize(ctx context.Context, boxId string, resizeDto dto.ResizeBoxDTO) error {
-	c.logger.Info("resize box (stop/recreate)", "sandbox", boxId)
+	c.logger.Info("resize box (stop/recreate)", "box", boxId)
 
 	bx, err := c.getOrFetchBox(ctx, boxId)
 	if err != nil {
@@ -77,7 +77,7 @@ func (c *Client) Resize(ctx context.Context, boxId string, resizeDto dto.ResizeB
 
 // RecoverBox destroys and recreates a box from its snapshot.
 func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.RecoverBoxDTO) error {
-	c.logger.Info("recover sandbox", "sandbox", boxId)
+	c.logger.Info("recover box", "box", boxId)
 
 	if err := c.Destroy(ctx, boxId); err != nil {
 		c.logger.Warn("failed to destroy during recover", "error", err)
@@ -110,7 +110,7 @@ func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.Re
 // CreateBackup creates a backup/snapshot of a running box.
 // TODO: Implement when BoxLite Go SDK exposes snapshot operations.
 func (c *Client) CreateBackup(ctx context.Context, boxId string, backupDto dto.CreateBackupDTO) error {
-	c.logger.Warn("create backup not yet implemented in BoxLite", "sandbox", boxId)
+	c.logger.Warn("create backup not yet implemented in BoxLite", "box", boxId)
 	return errdefs.ErrNotImplemented.WithMessage("backup is not supported by the BoxLite Go SDK")
 }
 
@@ -140,7 +140,7 @@ func (c *Client) GetImageInfo(ctx context.Context, imageName string) (*ImageInfo
 // UpdateNetworkSettings updates the network allowlist/blocklist for a box.
 // TODO: Implement when BoxLite Go SDK exposes network configuration.
 func (c *Client) UpdateNetworkSettings(ctx context.Context, boxId string, settings dto.UpdateNetworkSettingsDTO) error {
-	c.logger.Warn("update network settings not yet implemented in BoxLite", "sandbox", boxId)
+	c.logger.Warn("update network settings not yet implemented in BoxLite", "box", boxId)
 	return errdefs.ErrNotImplemented.WithMessage("live network settings update is not supported by the BoxLite Go SDK")
 }
 

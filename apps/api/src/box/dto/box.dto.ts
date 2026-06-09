@@ -38,25 +38,25 @@ export class BoxVolume {
 @ApiSchema({ name: 'Box' })
 export class BoxDto {
   @ApiProperty({
-    description: 'The ID of the sandbox',
-    example: 'sandbox123',
+    description: 'The ID of the box',
+    example: 'box123',
   })
   id: string
 
   @ApiProperty({
-    description: 'The organization ID of the sandbox',
+    description: 'The organization ID of the box',
     example: 'organization123',
   })
   organizationId: string
 
   @ApiProperty({
-    description: 'The name of the sandbox',
+    description: 'The name of the box',
     example: 'MyBox',
   })
   name: string
 
   @ApiPropertyOptional({
-    description: 'The snapshot used for the sandbox',
+    description: 'The snapshot used for the box',
     example: 'boxlite-ai/box:latest',
   })
   snapshot: string
@@ -68,7 +68,7 @@ export class BoxDto {
   user: string
 
   @ApiProperty({
-    description: 'Environment variables for the sandbox',
+    description: 'Environment variables for the box',
     type: 'object',
     additionalProperties: { type: 'string' },
     example: { NODE_ENV: 'production' },
@@ -76,7 +76,7 @@ export class BoxDto {
   env: Record<string, string>
 
   @ApiProperty({
-    description: 'Labels for the sandbox',
+    description: 'Labels for the box',
     type: 'object',
     additionalProperties: { type: 'string' },
     example: { 'boxlite.io/public': 'true' },
@@ -90,49 +90,49 @@ export class BoxDto {
   public: boolean
 
   @ApiProperty({
-    description: 'Whether to block all network access for the sandbox',
+    description: 'Whether to block all network access for the box',
     example: false,
   })
   networkBlockAll: boolean
 
   @ApiPropertyOptional({
-    description: 'Comma-separated list of allowed CIDR network addresses for the sandbox',
+    description: 'Comma-separated list of allowed CIDR network addresses for the box',
     example: '192.168.1.0/16,10.0.0.0/24',
   })
   networkAllowList?: string
 
   @ApiProperty({
-    description: 'The target environment for the sandbox',
+    description: 'The target environment for the box',
     example: 'local',
   })
   target: string
 
   @ApiProperty({
-    description: 'The CPU quota for the sandbox',
+    description: 'The CPU quota for the box',
     example: 2,
   })
   cpu: number
 
   @ApiProperty({
-    description: 'The GPU quota for the sandbox',
+    description: 'The GPU quota for the box',
     example: 0,
   })
   gpu: number
 
   @ApiProperty({
-    description: 'The memory quota for the sandbox',
+    description: 'The memory quota for the box',
     example: 4,
   })
   memory: number
 
   @ApiProperty({
-    description: 'The disk quota for the sandbox',
+    description: 'The disk quota for the box',
     example: 10,
   })
   disk: number
 
   @ApiPropertyOptional({
-    description: 'The state of the sandbox',
+    description: 'The state of the box',
     enum: BoxState,
     enumName: 'BoxState',
     example: Object.values(BoxState)[0],
@@ -143,7 +143,7 @@ export class BoxDto {
   state?: BoxState
 
   @ApiPropertyOptional({
-    description: 'The desired state of the sandbox',
+    description: 'The desired state of the box',
     enum: BoxDesiredState,
     enumName: 'BoxDesiredState',
     example: Object.values(BoxDesiredState)[0],
@@ -154,7 +154,7 @@ export class BoxDto {
   desiredState?: BoxDesiredState
 
   @ApiPropertyOptional({
-    description: 'The error reason of the sandbox',
+    description: 'The error reason of the box',
     example: 'The box is not running',
     required: false,
   })
@@ -213,7 +213,7 @@ export class BoxDto {
   autoDeleteInterval?: number
 
   @ApiPropertyOptional({
-    description: 'Array of volumes attached to the sandbox',
+    description: 'Array of volumes attached to the box',
     type: [BoxVolume],
     required: false,
   })
@@ -221,7 +221,7 @@ export class BoxDto {
   volumes?: BoxVolume[]
 
   @ApiPropertyOptional({
-    description: 'Build information for the sandbox',
+    description: 'Build information for the box',
     type: BuildInfoDto,
     required: false,
   })
@@ -229,7 +229,7 @@ export class BoxDto {
   buildInfo?: BuildInfoDto
 
   @ApiPropertyOptional({
-    description: 'The creation timestamp of the sandbox',
+    description: 'The creation timestamp of the box',
     example: '2024-10-01T12:00:00Z',
     required: false,
   })
@@ -237,7 +237,7 @@ export class BoxDto {
   createdAt?: string
 
   @ApiPropertyOptional({
-    description: 'The last update timestamp of the sandbox',
+    description: 'The last update timestamp of the box',
     example: '2024-10-01T12:00:00Z',
     required: false,
   })
@@ -245,7 +245,7 @@ export class BoxDto {
   updatedAt?: string
 
   @ApiPropertyOptional({
-    description: 'The class of the sandbox',
+    description: 'The class of the box',
     enum: BoxClass,
     example: Object.values(BoxClass)[0],
     required: false,
@@ -256,7 +256,7 @@ export class BoxDto {
   class?: BoxClass
 
   @ApiPropertyOptional({
-    description: 'The version of the daemon running in the sandbox',
+    description: 'The version of the daemon running in the box',
     example: '1.0.0',
     required: false,
   })
@@ -264,7 +264,7 @@ export class BoxDto {
   daemonVersion?: string
 
   @ApiPropertyOptional({
-    description: 'The runner ID of the sandbox',
+    description: 'The runner ID of the box',
     example: 'runner123',
     required: false,
   })
@@ -272,7 +272,7 @@ export class BoxDto {
   runnerId?: string
 
   @ApiProperty({
-    description: 'The toolbox proxy URL for the sandbox',
+    description: 'The toolbox proxy URL for the box',
     example: 'https://proxy.app.boxlite.io/toolbox',
   })
   toolboxProxyUrl: string

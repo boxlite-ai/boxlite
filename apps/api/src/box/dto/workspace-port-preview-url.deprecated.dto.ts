@@ -11,7 +11,7 @@ import { IsString } from 'class-validator'
 export class WorkspacePortPreviewUrlDto {
   @ApiProperty({
     description: 'Preview url',
-    example: 'https://123456-mysandbox.runner.com',
+    example: 'https://123456-mybox.runner.com',
   })
   @IsString()
   url: string

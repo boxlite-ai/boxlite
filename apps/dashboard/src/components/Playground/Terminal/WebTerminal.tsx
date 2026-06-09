@@ -54,7 +54,7 @@ const WebTerminal: React.FC<{ className?: string }> = ({ className }) => {
               </AnimatePresence>
             </div>
           ) : (
-            <iframe title="Interactive web terminal for sandbox" src={terminal.url} width={'100%'} height={'100%'} />
+            <iframe title="Interactive web terminal for box" src={terminal.url} width={'100%'} height={'100%'} />
           )}
         </div>
       </WindowContent>

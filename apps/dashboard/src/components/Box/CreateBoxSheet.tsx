@@ -149,7 +149,7 @@ const InfoTooltipButton = ({ className, ...props }: ComponentProps<'button'>) =>
 export const CreateBoxSheet = ({ className, triggerClassName }: { className?: string; triggerClassName?: string }) => {
   const navigate = useNavigate()
   const isCompactScreen = useIsCompactScreen()
-  const createBoxEnabled = useFeatureFlagEnabled(FeatureFlags.DASHBOARD_CREATE_SANDBOX)
+  const createBoxEnabled = useFeatureFlagEnabled(FeatureFlags.DASHBOARD_CREATE_BOX)
   const [open, setOpen] = useState(false)
 
   const config = useConfig()
@@ -238,14 +238,14 @@ export const CreateBoxSheet = ({ className, triggerClassName }: { className?: st
 
         if (box?.id) {
           navigate({
-            pathname: generatePath(RoutePath.SANDBOX_DETAILS, { boxId: box.id }),
+            pathname: generatePath(RoutePath.BOX_DETAILS, { boxId: box.id }),
             search: `${createSearchParams({
               tab: 'terminal',
             })}`,
           })
         }
       } catch (error) {
-        handleApiError(error, 'Failed to create sandbox')
+        handleApiError(error, 'Failed to create box')
       }
     },
   })
@@ -361,7 +361,7 @@ export const CreateBoxSheet = ({ className, triggerClassName }: { className?: st
                       value={field.state.value}
                       onBlur={field.handleBlur}
                       onChange={(e) => field.handleChange(e.target.value)}
-                      placeholder="my-sandbox"
+                      placeholder="my-box"
                     />
                     <FieldDescription>
                       Optional. If not provided, the box ID will be used as the name. Names are reusable once a box is

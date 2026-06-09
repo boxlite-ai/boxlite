@@ -11,7 +11,7 @@ import (
 
 func RequireStartedState(box *apiclient.Box) error {
 	if box.State == nil {
-		return fmt.Errorf("sandbox state is unknown")
+		return fmt.Errorf("box state is unknown")
 	}
 
 	state := *box.State
@@ -26,26 +26,26 @@ func RequireStartedState(box *apiclient.Box) error {
 
 	switch state {
 	case apiclient.BOXSTATE_STOPPED:
-		return fmt.Errorf("sandbox is stopped. Start it with: boxlite box start %s", boxRef)
+		return fmt.Errorf("box is stopped. Start it with: boxlite box start %s", boxRef)
 	case apiclient.BOXSTATE_ARCHIVED:
-		return fmt.Errorf("sandbox is archived. Start it with: boxlite box start %s", boxRef)
+		return fmt.Errorf("box is archived. Start it with: boxlite box start %s", boxRef)
 	case apiclient.BOXSTATE_ARCHIVING:
-		return fmt.Errorf("sandbox is archiving. Start it with: boxlite box start %s", boxRef)
+		return fmt.Errorf("box is archiving. Start it with: boxlite box start %s", boxRef)
 	case apiclient.BOXSTATE_STARTING:
-		return fmt.Errorf("sandbox is starting. Please wait for it to be ready")
+		return fmt.Errorf("box is starting. Please wait for it to be ready")
 	case apiclient.BOXSTATE_STOPPING:
-		return fmt.Errorf("sandbox is stopping. Please wait for it to complete")
+		return fmt.Errorf("box is stopping. Please wait for it to complete")
 	case apiclient.BOXSTATE_CREATING:
-		return fmt.Errorf("sandbox is being created. Please wait for it to be ready")
+		return fmt.Errorf("box is being created. Please wait for it to be ready")
 	case apiclient.BOXSTATE_DESTROYING:
-		return fmt.Errorf("sandbox is being destroyed")
+		return fmt.Errorf("box is being destroyed")
 	case apiclient.BOXSTATE_DESTROYED:
-		return fmt.Errorf("sandbox has been destroyed")
+		return fmt.Errorf("box has been destroyed")
 	case apiclient.BOXSTATE_ERROR:
-		return fmt.Errorf("sandbox is in an error state")
+		return fmt.Errorf("box is in an error state")
 	case apiclient.BOXSTATE_BUILD_FAILED:
-		return fmt.Errorf("sandbox build failed")
+		return fmt.Errorf("box build failed")
 	default:
-		return fmt.Errorf("sandbox is not running (state: %s)", state)
+		return fmt.Errorf("box is not running (state: %s)", state)
 	}
 }

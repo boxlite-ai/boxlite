@@ -46,7 +46,7 @@ export default function BoxTerminalFullscreen() {
     setActivated(true)
   }
 
-  const backPath = boxId ? RoutePath.SANDBOX_DETAILS.replace(':boxId', boxId) : RoutePath.SANDBOXES
+  const backPath = boxId ? RoutePath.BOX_DETAILS.replace(':boxId', boxId) : RoutePath.BOXES
 
   let body: ReactNode
   if (boxLoading) {

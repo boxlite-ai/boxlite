@@ -11,7 +11,7 @@ import { BoxState } from '../enums/box-state.enum'
 export class UpdateBoxStateDto {
   @IsEnum(BoxState)
   @ApiProperty({
-    description: 'The new state for the sandbox',
+    description: 'The new state for the box',
     enum: BoxState,
     example: BoxState.STARTED,
   })

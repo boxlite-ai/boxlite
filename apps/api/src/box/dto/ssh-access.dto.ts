@@ -45,7 +45,7 @@ export class SshAccessDto {
   updatedAt: Date
 
   @ApiProperty({
-    description: 'SSH command to connect to the sandbox',
+    description: 'SSH command to connect to the box',
     example: 'ssh -p 2222 token@localhost',
   })
   sshCommand: string
@@ -112,7 +112,7 @@ export class SshAccessValidationDto {
 
 export class RevokeSshAccessDto {
   @ApiProperty({
-    description: 'ID of the sandbox',
+    description: 'ID of the box',
     example: '123e4567-e89b-12d3-a456-426614174000',
   })
   boxId: string

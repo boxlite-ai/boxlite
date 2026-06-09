@@ -45,9 +45,9 @@ func AwaitBoxState(ctx context.Context, apiClient *apiclient.APIClient, targetBo
 			return nil
 		} else if box.State != nil && (*box.State == apiclient.BOXSTATE_ERROR || *box.State == apiclient.BOXSTATE_BUILD_FAILED) {
 			if box.ErrorReason == nil {
-				return fmt.Errorf("sandbox processing failed")
+				return fmt.Errorf("box processing failed")
 			}
-			return fmt.Errorf("sandbox processing failed: %s", *box.ErrorReason)
+			return fmt.Errorf("box processing failed: %s", *box.ErrorReason)
 		}
 
 		time.Sleep(time.Second)

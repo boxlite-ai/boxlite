@@ -137,10 +137,10 @@ func (c *ComputerUse) initializeProcesses(homeDir string) {
 		display = ":0"
 	}
 
-	// Get user from environment, fallback to BOXLITE_SANDBOX_USER or default to "root" (just in case, but should not happen)
+	// Get user from environment, fallback to BOXLITE_BOX_USER or default to "root" (just in case, but should not happen)
 	user := os.Getenv("VNC_USER")
 	if user == "" {
-		user = os.Getenv("BOXLITE_SANDBOX_USER")
+		user = os.Getenv("BOXLITE_BOX_USER")
 		if user == "" {
 			user = "root"
 		}

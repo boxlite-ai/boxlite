@@ -60,7 +60,7 @@ export type UseBoxSessionResult = {
 export function removeBoxSessionQueries(queryClient: QueryClient, scope: string): void {
   queryClient
     .getMutationCache()
-    .findAll({ mutationKey: ['create-sandbox', scope] })
+    .findAll({ mutationKey: ['create-box', scope] })
     .forEach((m) => queryClient.getMutationCache().remove(m))
   queryClient.removeQueries({ queryKey: queryKeys.box.session(scope) })
 }
@@ -101,7 +101,7 @@ export function useBoxSession(options?: UseBoxSessionOptions): UseBoxSessionResu
   }, [user?.access_token, selectedOrganization?.id])
 
   const createMutation = useMutation<Box, Error, CreateBoxParams | undefined>({
-    mutationKey: ['create-sandbox', scope ?? 'default'],
+    mutationKey: ['create-box', scope ?? 'default'],
     mutationFn: async (params) => {
       if (!client) throw new Error('Unable to create BoxLite client: missing access token or organization ID.')
       return await client.create(params ?? createParams)
@@ -111,7 +111,7 @@ export function useBoxSession(options?: UseBoxSessionOptions): UseBoxSessionResu
     },
     onError: (error) => {
       if (notifyRef.current.box) {
-        toast.error('Failed to create sandbox', {
+        toast.error('Failed to create box', {
           description: error.message,
           action: { label: 'Try again', onClick: () => createMutation.mutate(createParams) },
         })

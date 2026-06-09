@@ -171,9 +171,9 @@ function App() {
           </Suspense>
         }
       >
-        <Route index element={<Navigate to={`${getRouteSubPath(RoutePath.SANDBOXES)}${location.search}`} replace />} />
+        <Route index element={<Navigate to={`${getRouteSubPath(RoutePath.BOXES)}${location.search}`} replace />} />
         <Route path={getRouteSubPath(RoutePath.KEYS)} element={<Keys />} />
-        <Route path={getRouteSubPath(RoutePath.SANDBOXES)} element={<Boxes />} />
+        <Route path={getRouteSubPath(RoutePath.BOXES)} element={<Boxes />} />
         {/* Pathless layout route: a single BoxSessionProvider fiber
             persists across the three box routes, so activation state
             (e.g. "terminal connected") survives navigation between the
@@ -186,9 +186,9 @@ function App() {
             </BoxSessionProvider>
           }
         >
-          <Route path={getRouteSubPath(RoutePath.SANDBOX_TERMINAL)} element={<BoxTerminalFullscreen />} />
-          <Route path={getRouteSubPath(RoutePath.SANDBOX_VNC)} element={<BoxVncFullscreen />} />
-          <Route path={getRouteSubPath(RoutePath.SANDBOX_DETAILS)} element={<BoxDetails />} />
+          <Route path={getRouteSubPath(RoutePath.BOX_TERMINAL)} element={<BoxTerminalFullscreen />} />
+          <Route path={getRouteSubPath(RoutePath.BOX_VNC)} element={<BoxVncFullscreen />} />
+          <Route path={getRouteSubPath(RoutePath.BOX_DETAILS)} element={<BoxDetails />} />
         </Route>
         <Route path={getRouteSubPath(RoutePath.SNAPSHOTS)} element={<Snapshots />} />
         <Route path={getRouteSubPath(RoutePath.REGISTRIES)} element={<Registries />} />

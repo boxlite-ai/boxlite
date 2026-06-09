@@ -44,7 +44,7 @@ export class CreateSnapshotDto {
   general?: boolean
 
   @ApiPropertyOptional({
-    description: 'CPU cores allocated to the resulting sandbox',
+    description: 'CPU cores allocated to the resulting box',
     example: 1,
     type: 'integer',
   })
@@ -53,7 +53,7 @@ export class CreateSnapshotDto {
   cpu?: number
 
   @ApiPropertyOptional({
-    description: 'GPU units allocated to the resulting sandbox',
+    description: 'GPU units allocated to the resulting box',
     example: 0,
     type: 'integer',
   })

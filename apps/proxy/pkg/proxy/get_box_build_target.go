@@ -20,8 +20,8 @@ func (p *Proxy) getBoxBuildTarget(ctx *gin.Context) (*url.URL, map[string]string
 	// Extract box ID from the path
 	match := regexp.MustCompile(`^/boxes/([\w-]+)/build-logs$`).FindStringSubmatch(ctx.Request.URL.Path)
 	if len(match) != 2 {
-		ctx.Error(common_errors.NewBadRequestError(errors.New("sandbox ID is required")))
-		return nil, nil, errors.New("sandbox ID is required")
+		ctx.Error(common_errors.NewBadRequestError(errors.New("box ID is required")))
+		return nil, nil, errors.New("box ID is required")
 	}
 
 	boxId := match[1]
@@ -33,8 +33,8 @@ func (p *Proxy) getBoxBuildTarget(ctx *gin.Context) (*url.URL, map[string]string
 	}
 
 	if box.BuildInfo == nil {
-		ctx.Error(common_errors.NewBadRequestError(errors.New("sandbox has no build info")))
-		return nil, nil, errors.New("sandbox has no build info")
+		ctx.Error(common_errors.NewBadRequestError(errors.New("box has no build info")))
+		return nil, nil, errors.New("box has no build info")
 	}
 
 	runnerInfo, err := p.getRunnerInfo(ctx, *box.RunnerId)

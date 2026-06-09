@@ -33,7 +33,7 @@ import { useConfig } from '@/hooks/useConfig'
 import { useNotificationSocket } from '@/hooks/useNotificationSocket'
 import { useRegions } from '@/hooks/useRegions'
 import {
-  DEFAULT_SANDBOX_SORTING,
+  DEFAULT_BOX_SORTING,
   getBoxesQueryKey,
   BoxFilters,
   BoxQueryParams,
@@ -84,7 +84,7 @@ const Boxes: React.FC = () => {
 
   // Sorting
 
-  const [sorting, setSorting] = useState<BoxSorting>(DEFAULT_SANDBOX_SORTING)
+  const [sorting, setSorting] = useState<BoxSorting>(DEFAULT_BOX_SORTING)
 
   const handleSortingChange = useCallback((sorting: BoxSorting) => {
     setSorting(sorting)
@@ -306,7 +306,7 @@ const Boxes: React.FC = () => {
       const isFirstPage = paginationParams.pageIndex === 0
       const isDefaultFilters = Object.keys(filters).length === 0
       const isDefaultSorting =
-        sorting.field === DEFAULT_SANDBOX_SORTING.field && sorting.direction === DEFAULT_SANDBOX_SORTING.direction
+        sorting.field === DEFAULT_BOX_SORTING.field && sorting.direction === DEFAULT_BOX_SORTING.direction
 
       const shouldRefetchActiveQueries = isFirstPage && isDefaultFilters && isDefaultSorting
 
@@ -359,14 +359,14 @@ const Boxes: React.FC = () => {
       return
     }
 
-    notificationSocket.on('sandbox.created', handleBoxCreatedEvent)
-    notificationSocket.on('sandbox.state.updated', handleBoxStateUpdatedEvent)
-    notificationSocket.on('sandbox.desired-state.updated', handleBoxDesiredStateUpdatedEvent)
+    notificationSocket.on('box.created', handleBoxCreatedEvent)
+    notificationSocket.on('box.state.updated', handleBoxStateUpdatedEvent)
+    notificationSocket.on('box.desired-state.updated', handleBoxDesiredStateUpdatedEvent)
 
     return () => {
-      notificationSocket.off('sandbox.created', handleBoxCreatedEvent)
-      notificationSocket.off('sandbox.state.updated', handleBoxStateUpdatedEvent)
-      notificationSocket.off('sandbox.desired-state.updated', handleBoxDesiredStateUpdatedEvent)
+      notificationSocket.off('box.created', handleBoxCreatedEvent)
+      notificationSocket.off('box.state.updated', handleBoxStateUpdatedEvent)
+      notificationSocket.off('box.desired-state.updated', handleBoxDesiredStateUpdatedEvent)
     }
   }, [
     filters,
@@ -395,7 +395,7 @@ const Boxes: React.FC = () => {
       toast.success(`Starting box with ID: ${id}`)
       await markAllBoxQueriesAsStale()
     } catch (error) {
-      handleApiError(error, 'Failed to start sandbox', {
+      handleApiError(error, 'Failed to start box', {
         action:
           error instanceof OrganizationSuspendedError &&
           config.billingApiUrl &&
@@ -429,7 +429,7 @@ const Boxes: React.FC = () => {
       toast.success('Box recovered. Restarting...')
       await markAllBoxQueriesAsStale()
     } catch (error) {
-      handleApiError(error, 'Failed to recover sandbox')
+      handleApiError(error, 'Failed to recover box')
       revertBoxStateOptimisticUpdate(id, previousState)
     } finally {
       setBoxIsLoading((prev) => ({ ...prev, [id]: false }))
@@ -461,7 +461,7 @@ const Boxes: React.FC = () => {
       )
       await markAllBoxQueriesAsStale()
     } catch (error) {
-      handleApiError(error, 'Failed to stop sandbox')
+      handleApiError(error, 'Failed to stop box')
       revertBoxStateOptimisticUpdate(id, previousState)
     } finally {
       setBoxIsLoading((prev) => ({ ...prev, [id]: false }))
@@ -495,7 +495,7 @@ const Boxes: React.FC = () => {
 
       await markAllBoxQueriesAsStale()
     } catch (error) {
-      handleApiError(error, 'Failed to delete sandbox')
+      handleApiError(error, 'Failed to delete box')
       revertBoxStateOptimisticUpdate(id, previousState)
     } finally {
       setBoxIsLoading((prev) => ({ ...prev, [id]: false }))
@@ -520,7 +520,7 @@ const Boxes: React.FC = () => {
       toast.success(`Archiving box with ID: ${id}`)
       await markAllBoxQueriesAsStale()
     } catch (error) {
-      handleApiError(error, 'Failed to archive sandbox')
+      handleApiError(error, 'Failed to archive box')
       revertBoxStateOptimisticUpdate(id, previousState)
     } finally {
       setBoxIsLoading((prev) => ({ ...prev, [id]: false }))
@@ -559,7 +559,7 @@ const Boxes: React.FC = () => {
       let successCount = 0
       let failureCount = 0
 
-      const totalLabel = pluralize(ids.length, 'sandbox', 'boxes')
+      const totalLabel = pluralize(ids.length, 'box', 'boxes')
       const onCancel = () => {
         isCancelled = true
       }
@@ -622,8 +622,8 @@ const Boxes: React.FC = () => {
       optimisticState: BoxState.STARTING,
       apiCall: (id) => boxApi.startBox(id, selectedOrganization?.id),
       toastMessages: {
-        successTitle: `${pluralize(ids.length, 'sandbox', 'boxes')} started.`,
-        errorTitle: `Failed to start ${pluralize(ids.length, 'sandbox', 'boxes')}.`,
+        successTitle: `${pluralize(ids.length, 'box', 'boxes')} started.`,
+        errorTitle: `Failed to start ${pluralize(ids.length, 'box', 'boxes')}.`,
         warningTitle: 'Failed to start some boxes.',
         canceledTitle: 'Start canceled.',
       },
@@ -636,8 +636,8 @@ const Boxes: React.FC = () => {
       optimisticState: BoxState.STOPPING,
       apiCall: (id) => boxApi.stopBox(id, selectedOrganization?.id),
       toastMessages: {
-        successTitle: `${pluralize(ids.length, 'sandbox', 'boxes')} stopped.`,
-        errorTitle: `Failed to stop ${pluralize(ids.length, 'sandbox', 'boxes')}.`,
+        successTitle: `${pluralize(ids.length, 'box', 'boxes')} stopped.`,
+        errorTitle: `Failed to stop ${pluralize(ids.length, 'box', 'boxes')}.`,
         warningTitle: 'Failed to stop some boxes.',
         canceledTitle: 'Stop canceled.',
       },
@@ -650,8 +650,8 @@ const Boxes: React.FC = () => {
       optimisticState: BoxState.ARCHIVING,
       apiCall: (id) => boxApi.archiveBox(id, selectedOrganization?.id),
       toastMessages: {
-        successTitle: `${pluralize(ids.length, 'sandbox', 'boxes')} archived.`,
-        errorTitle: `Failed to archive ${pluralize(ids.length, 'sandbox', 'boxes')}.`,
+        successTitle: `${pluralize(ids.length, 'box', 'boxes')} archived.`,
+        errorTitle: `Failed to archive ${pluralize(ids.length, 'box', 'boxes')}.`,
         warningTitle: 'Failed to archive some boxes.',
         canceledTitle: 'Archive canceled.',
       },
@@ -666,8 +666,8 @@ const Boxes: React.FC = () => {
       optimisticState: BoxState.DESTROYING,
       apiCall: (id) => boxApi.deleteBox(id, selectedOrganization?.id),
       toastMessages: {
-        successTitle: `${pluralize(ids.length, 'sandbox', 'boxes')} deleted.`,
-        errorTitle: `Failed to delete ${pluralize(ids.length, 'sandbox', 'boxes')}.`,
+        successTitle: `${pluralize(ids.length, 'box', 'boxes')} deleted.`,
+        errorTitle: `Failed to delete ${pluralize(ids.length, 'box', 'boxes')}.`,
         warningTitle: 'Failed to delete some boxes.',
         canceledTitle: 'Delete canceled.',
       },
@@ -921,7 +921,7 @@ const Boxes: React.FC = () => {
               </Button>
             </>
           )}
-          {authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_SANDBOXES) && (
+          {authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES) && (
             <CreateBoxSheet triggerClassName="w-auto" />
           )}
         </div>

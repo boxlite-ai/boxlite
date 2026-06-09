@@ -21,7 +21,7 @@ export function BoxFullscreenShell({ boxId, title, copyValue, children }: BoxFul
   const navigate = useNavigate()
 
   const handleBack = () => {
-    navigate(boxId ? RoutePath.SANDBOX_DETAILS.replace(':boxId', boxId) : RoutePath.SANDBOXES)
+    navigate(boxId ? RoutePath.BOX_DETAILS.replace(':boxId', boxId) : RoutePath.BOXES)
   }
 
   return (

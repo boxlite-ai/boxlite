@@ -17,7 +17,7 @@ var forceFlag bool
 
 var StopCmd = &cobra.Command{
 	Use:   "stop [BOX_ID] | [BOX_NAME]",
-	Short: "Stop a sandbox",
+	Short: "Stop a box",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()

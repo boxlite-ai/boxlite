@@ -113,7 +113,7 @@ export const queryKeys = {
     traceSpans: (boxId: string, traceId: string) => [...queryKeys.telemetry.all, boxId, 'traces', traceId] as const,
   },
   box: {
-    all: ['sandbox'] as const,
+    all: ['box'] as const,
     session: (scope: string) => [...queryKeys.box.all, scope] as const,
     currentId: (scope: string) => [...queryKeys.box.all, scope, 'current-id'] as const,
     instance: (scope: string, id: string) => [...queryKeys.box.all, scope, id] as const,

@@ -15,7 +15,7 @@ import (
 
 var StartCmd = &cobra.Command{
 	Use:   "start [BOX_ID] | [BOX_NAME]",
-	Short: "Start a sandbox",
+	Short: "Start a box",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()

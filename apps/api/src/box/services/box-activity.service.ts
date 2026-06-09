@@ -15,7 +15,7 @@ import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 import { TypedConfigService } from '../../config/typed-config.service'
 
-const REDIS_ACTIVITY_KEY = 'sandbox:activity'
+const REDIS_ACTIVITY_KEY = 'box:activity'
 
 interface BoxActivityUpdate {
   boxId: string
@@ -39,7 +39,7 @@ export class BoxActivityService {
    * Relies on the periodic flush to the database.
    */
   async updateLastActivityAt(boxId: string, lastActivityAt: Date): Promise<void> {
-    const lockKey = `sandbox:update-last-activity:${boxId}`
+    const lockKey = `box:update-last-activity:${boxId}`
     const acquired = await this.redisLockProvider.lock(
       lockKey,
       this.configService.getOrThrow('boxActivity.throttleTtlSeconds'),

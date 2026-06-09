@@ -6,13 +6,13 @@
 
 import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm'
 
-@Entity('sandbox_usage_periods')
-@Index('idx_sandbox_usage_periods_sandbox_end', ['boxId', 'endAt'])
+@Entity('box_usage_periods')
+@Index('idx_box_usage_periods_box_end', ['boxId', 'endAt'])
 export class BoxUsagePeriod {
   @PrimaryGeneratedColumn('uuid')
   id: string
 
-  @Column({ name: 'sandboxId' })
+  @Column({ name: 'boxId' })
   boxId: string
 
   @Column()

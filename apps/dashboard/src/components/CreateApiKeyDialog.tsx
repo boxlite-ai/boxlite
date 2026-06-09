@@ -204,10 +204,10 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
                 onValueChange={(value) => {
                   if (value === 'full-access') {
                     form.setFieldValue('permissions', availablePermissions)
-                  } else if (value === 'sandbox-access') {
+                  } else if (value === 'box-access') {
                     form.setFieldValue('permissions', [
-                      CreateApiKeyPermissionsEnum.WRITE_SANDBOXES,
-                      CreateApiKeyPermissionsEnum.DELETE_SANDBOXES,
+                      CreateApiKeyPermissionsEnum.WRITE_BOXES,
+                      CreateApiKeyPermissionsEnum.DELETE_BOXES,
                     ])
                   } else {
                     form.setFieldValue('permissions', [])
@@ -218,10 +218,10 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
 
                 <TabsList className="bg-muted w-full [&>*]:flex-1">
                   <TabsTrigger value="full-access">Full Access</TabsTrigger>
-                  <TabsTrigger value="sandbox-access">Boxes</TabsTrigger>
+                  <TabsTrigger value="box-access">Boxes</TabsTrigger>
                   <TabsTrigger value="restricted-access">Restricted </TabsTrigger>
                 </TabsList>
-                <TabsContent value="sandbox-access" className="w-full">
+                <TabsContent value="box-access" className="w-full">
                   <Alert variant="info">
                     <InfoIcon />
                     <AlertTitle>Boxes Access</AlertTitle>

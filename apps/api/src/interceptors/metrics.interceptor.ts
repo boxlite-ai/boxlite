@@ -144,7 +144,7 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
           case '/api/docker-registry':
             this.captureCreateDockerRegistry(props, response)
             break
-          case '/api/sandbox':
+          case '/api/box':
             this.captureCreateBox(props, request.body, response)
             break
           case '/api/workspace':
@@ -465,7 +465,7 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
         })
         break
       case '/lsp/box-symbols':
-        this.captureToolboxCommand(props, request.params.boxId, 'lsp_sandbox_symbols', {
+        this.captureToolboxCommand(props, request.params.boxId, 'lsp_box_symbols', {
           language_id: request.query.languageId,
           path_to_project: request.query.pathToProject,
           query: request.query.query,
@@ -522,48 +522,48 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
     const envVarsLength = request.env ? Object.keys(request.env).length : 0
 
     const records = {
-      sandbox_id: response.id,
-      sandbox_name_request: request.name,
-      sandbox_name: response.name,
-      sandbox_snapshot_request: request.snapshot,
-      sandbox_snapshot: response.snapshot,
-      sandbox_user_request: request.user,
-      sandbox_user: response.user,
-      sandbox_cpu_request: request.cpu,
-      sandbox_cpu: response.cpu,
-      sandbox_gpu_request: request.gpu,
-      sandbox_gpu: response.gpu,
-      sandbox_memory_mb_request: request.memory * 1024,
-      sandbox_memory_mb: response.memory * 1024,
-      sandbox_disk_gb_request: request.disk,
-      sandbox_disk_gb: response.disk,
-      sandbox_target_request: request.target,
-      sandbox_target: response.target,
-      sandbox_auto_stop_interval_min_request: request.autoStopInterval,
-      sandbox_auto_stop_interval_min: response.autoStopInterval,
-      sandbox_auto_archive_interval_min_request: request.autoArchiveInterval,
-      sandbox_auto_archive_interval_min: response.autoArchiveInterval,
-      sandbox_auto_delete_interval_min_request: request.autoDeleteInterval,
-      sandbox_auto_delete_interval_min: response.autoDeleteInterval,
-      sandbox_public_request: request.public,
-      sandbox_public: response.public,
-      sandbox_labels_request: request.labels,
-      sandbox_labels: response.labels,
-      sandbox_env_vars_length_request: envVarsLength,
-      sandbox_volumes_length_request: request.volumes?.length,
-      sandbox_daemon_version: response.daemonVersion,
-      sandbox_network_block_all_request: request.networkBlockAll,
-      sandbox_network_block_all: response.networkBlockAll,
-      sandbox_network_allow_list_set_request: !!request.networkAllowList,
-      sandbox_network_allow_list_set: !!response.networkAllowList,
+      box_id: response.id,
+      box_name_request: request.name,
+      box_name: response.name,
+      box_snapshot_request: request.snapshot,
+      box_snapshot: response.snapshot,
+      box_user_request: request.user,
+      box_user: response.user,
+      box_cpu_request: request.cpu,
+      box_cpu: response.cpu,
+      box_gpu_request: request.gpu,
+      box_gpu: response.gpu,
+      box_memory_mb_request: request.memory * 1024,
+      box_memory_mb: response.memory * 1024,
+      box_disk_gb_request: request.disk,
+      box_disk_gb: response.disk,
+      box_target_request: request.target,
+      box_target: response.target,
+      box_auto_stop_interval_min_request: request.autoStopInterval,
+      box_auto_stop_interval_min: response.autoStopInterval,
+      box_auto_archive_interval_min_request: request.autoArchiveInterval,
+      box_auto_archive_interval_min: response.autoArchiveInterval,
+      box_auto_delete_interval_min_request: request.autoDeleteInterval,
+      box_auto_delete_interval_min: response.autoDeleteInterval,
+      box_public_request: request.public,
+      box_public: response.public,
+      box_labels_request: request.labels,
+      box_labels: response.labels,
+      box_env_vars_length_request: envVarsLength,
+      box_volumes_length_request: request.volumes?.length,
+      box_daemon_version: response.daemonVersion,
+      box_network_block_all_request: request.networkBlockAll,
+      box_network_block_all: response.networkBlockAll,
+      box_network_allow_list_set_request: !!request.networkAllowList,
+      box_network_allow_list_set: !!response.networkAllowList,
     }
 
     if (request.buildInfo) {
-      records['sandbox_is_dynamic_build'] = true
-      records['sandbox_build_info_context_hashes_length'] = request.buildInfo.contextHashes?.length
+      records['box_is_dynamic_build'] = true
+      records['box_build_info_context_hashes_length'] = request.buildInfo.contextHashes?.length
     }
 
-    this.capture('api_sandbox_created', props, 'api_sandbox_creation_failed', records)
+    this.capture('api_box_created', props, 'api_box_creation_failed', records)
   }
 
   private captureCreateWorkspace_deprecated(
@@ -574,57 +574,57 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
     const envVarsLength = request.env ? Object.keys(request.env).length : 0
 
     const records = {
-      sandbox_id: response.id,
-      sandbox_snapshot_request: request.image,
-      sandbox_snapshot: response.snapshot,
-      sandbox_user_request: request.user,
-      sandbox_user: response.user,
-      sandbox_cpu_request: request.cpu,
-      sandbox_cpu: response.cpu,
-      sandbox_gpu_request: request.gpu,
-      sandbox_gpu: response.gpu,
-      sandbox_memory_mb_request: request.memory * 1024,
-      sandbox_memory_mb: response.memory * 1024,
-      sandbox_disk_gb_request: request.disk,
-      sandbox_disk_gb: response.disk,
-      sandbox_target_request: request.target,
-      sandbox_target: response.target,
-      sandbox_auto_stop_interval_min_request: request.autoStopInterval,
-      sandbox_auto_stop_interval_min: response.autoStopInterval,
-      sandbox_auto_archive_interval_min_request: request.autoArchiveInterval,
-      sandbox_auto_archive_interval_min: response.autoArchiveInterval,
-      sandbox_public_request: request.public,
-      sandbox_public: response.public,
-      sandbox_labels_request: request.labels,
-      sandbox_labels: response.labels,
-      sandbox_env_vars_length_request: envVarsLength,
-      sandbox_volumes_length_request: request.volumes?.length,
-      sandbox_daemon_version: response.daemonVersion,
+      box_id: response.id,
+      box_snapshot_request: request.image,
+      box_snapshot: response.snapshot,
+      box_user_request: request.user,
+      box_user: response.user,
+      box_cpu_request: request.cpu,
+      box_cpu: response.cpu,
+      box_gpu_request: request.gpu,
+      box_gpu: response.gpu,
+      box_memory_mb_request: request.memory * 1024,
+      box_memory_mb: response.memory * 1024,
+      box_disk_gb_request: request.disk,
+      box_disk_gb: response.disk,
+      box_target_request: request.target,
+      box_target: response.target,
+      box_auto_stop_interval_min_request: request.autoStopInterval,
+      box_auto_stop_interval_min: response.autoStopInterval,
+      box_auto_archive_interval_min_request: request.autoArchiveInterval,
+      box_auto_archive_interval_min: response.autoArchiveInterval,
+      box_public_request: request.public,
+      box_public: response.public,
+      box_labels_request: request.labels,
+      box_labels: response.labels,
+      box_env_vars_length_request: envVarsLength,
+      box_volumes_length_request: request.volumes?.length,
+      box_daemon_version: response.daemonVersion,
     }
 
     if (request.buildInfo) {
-      records['sandbox_is_dynamic_build'] = true
-      records['sandbox_build_info_context_hashes_length'] = request.buildInfo.contextHashes?.length
+      records['box_is_dynamic_build'] = true
+      records['box_build_info_context_hashes_length'] = request.buildInfo.contextHashes?.length
     }
 
-    this.capture('api_sandbox_created', props, 'api_sandbox_creation_failed', records)
+    this.capture('api_box_created', props, 'api_box_creation_failed', records)
   }
 
   private captureDeleteBox(props: CommonCaptureProps, boxId: string) {
-    this.capture('api_sandbox_deleted', props, 'api_sandbox_deletion_failed', {
-      sandbox_id: boxId,
+    this.capture('api_box_deleted', props, 'api_box_deletion_failed', {
+      box_id: boxId,
     })
   }
 
   private captureStartBox(props: CommonCaptureProps, boxId: string) {
-    this.capture('api_sandbox_started', props, 'api_sandbox_start_failed', {
-      sandbox_id: boxId,
+    this.capture('api_box_started', props, 'api_box_start_failed', {
+      box_id: boxId,
     })
   }
 
   private captureStopBox(props: CommonCaptureProps, boxId: string, force: boolean) {
-    this.capture('api_sandbox_stopped', props, 'api_sandbox_stop_failed', {
-      sandbox_id: boxId,
+    this.capture('api_box_stopped', props, 'api_box_stop_failed', {
+      box_id: boxId,
       force,
     })
   }
@@ -634,8 +634,8 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
     boxId: string,
     body: { cpu?: number; memory?: number; disk?: number },
   ) {
-    this.capture('api_sandbox_resized', props, 'api_sandbox_resize_failed', {
-      sandbox_id: boxId,
+    this.capture('api_box_resized', props, 'api_box_resize_failed', {
+      box_id: boxId,
       cpu: body?.cpu,
       memory: body?.memory,
       disk: body?.disk,
@@ -643,48 +643,48 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
   }
 
   private captureArchiveBox(props: CommonCaptureProps, boxId: string) {
-    this.capture('api_sandbox_archived', props, 'api_sandbox_archive_failed', {
-      sandbox_id: boxId,
+    this.capture('api_box_archived', props, 'api_box_archive_failed', {
+      box_id: boxId,
     })
   }
 
   private captureCreateBackup(props: CommonCaptureProps, boxId: string) {
-    this.capture('api_sandbox_backup_created', props, 'api_sandbox_backup_creation_failed', {
-      sandbox_id: boxId,
+    this.capture('api_box_backup_created', props, 'api_box_backup_creation_failed', {
+      box_id: boxId,
     })
   }
 
   private captureUpdatePublicStatus(props: CommonCaptureProps, boxId: string, isPublic: boolean) {
-    this.capture('api_sandbox_public_status_updated', props, 'api_sandbox_public_status_update_failed', {
-      sandbox_id: boxId,
-      sandbox_public: isPublic,
+    this.capture('api_box_public_status_updated', props, 'api_box_public_status_update_failed', {
+      box_id: boxId,
+      box_public: isPublic,
     })
   }
 
   private captureSetAutostopInterval(props: CommonCaptureProps, boxId: string, interval: number) {
-    this.capture('api_sandbox_autostop_interval_updated', props, 'api_sandbox_autostop_interval_update_failed', {
-      sandbox_id: boxId,
-      sandbox_autostop_interval: interval,
+    this.capture('api_box_autostop_interval_updated', props, 'api_box_autostop_interval_update_failed', {
+      box_id: boxId,
+      box_autostop_interval: interval,
     })
   }
 
   private captureSetAutoArchiveInterval(props: CommonCaptureProps, boxId: string, interval: number) {
-    this.capture('api_sandbox_autoarchive_interval_updated', props, 'api_sandbox_autoarchive_interval_update_failed', {
-      sandbox_id: boxId,
-      sandbox_autoarchive_interval: interval,
+    this.capture('api_box_autoarchive_interval_updated', props, 'api_box_autoarchive_interval_update_failed', {
+      box_id: boxId,
+      box_autoarchive_interval: interval,
     })
   }
 
   private captureSetAutoDeleteInterval(props: CommonCaptureProps, boxId: string, interval: number) {
-    this.capture('api_sandbox_autodelete_interval_updated', props, 'api_sandbox_autodelete_interval_update_failed', {
-      sandbox_id: boxId,
-      sandbox_autodelete_interval: interval,
+    this.capture('api_box_autodelete_interval_updated', props, 'api_box_autodelete_interval_update_failed', {
+      box_id: boxId,
+      box_autodelete_interval: interval,
     })
   }
 
   private captureUpdateBoxLabels(props: CommonCaptureProps, boxId: string) {
-    this.capture('api_sandbox_labels_update', props, 'api_sandbox_labels_update_failed', {
-      sandbox_id: boxId,
+    this.capture('api_box_labels_update', props, 'api_box_labels_update_failed', {
+      box_id: boxId,
     })
   }
 
@@ -752,9 +752,9 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
   ) {
     this.capture('api_organization_quota_updated', props, 'api_organization_quota_update_failed', {
       organization_id: organizationId,
-      organization_max_cpu_per_sandbox: request.maxCpuPerBox,
-      organization_max_memory_per_sandbox_mb: request.maxMemoryPerBox ? request.maxMemoryPerBox * 1024 : null,
-      organization_max_disk_per_sandbox_gb: request.maxDiskPerBox,
+      organization_max_cpu_per_box: request.maxCpuPerBox,
+      organization_max_memory_per_box_mb: request.maxMemoryPerBox ? request.maxMemoryPerBox * 1024 : null,
+      organization_max_disk_per_box_gb: request.maxDiskPerBox,
       organization_snapshot_quota: request.snapshotQuota,
       organization_max_snapshot_size_mb: request.maxSnapshotSize ? request.maxSnapshotSize * 1024 : null,
       organization_volume_quota: request.volumeQuota,
@@ -909,7 +909,7 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
     extraProps?: Record<string, any>,
   ) {
     this.capture('api_toolbox_command', props, 'api_toolbox_command_failed', {
-      sandbox_id: boxId,
+      box_id: boxId,
       toolbox_command: command,
       ...extraProps,
     })

@@ -40,7 +40,7 @@ type CreateBoxArgs struct {
 }
 
 func GetCreateBoxTool() mcp.Tool {
-	return mcp.NewTool("create_sandbox",
+	return mcp.NewTool("create_box",
 		mcp.WithDescription("Create a new box with BoxLite"),
 		mcp.WithString("id", mcp.Description("If a box ID is provided it is first checked if it exists and is running, if so, the existing box will be used. However, a model is not able to provide custom box ID but only the ones BoxLite commands return and should always leave ID field empty if the intention is to create a new box.")),
 		mcp.WithString("name", mcp.Description("Name of the box. If not provided, the box ID will be used as the name.")),
@@ -81,7 +81,7 @@ func CreateBox(ctx context.Context, request mcp.CallToolRequest, args CreateBoxA
 			return mcp.NewToolResultText(fmt.Sprintf("Reusing existing box %s", boxId)), nil
 		}
 
-		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("sandbox %s not found or not running", boxId)
+		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("box %s not found or not running", boxId)
 	}
 
 	createBoxReq, err := createBoxRequest(args)

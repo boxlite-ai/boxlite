@@ -199,7 +199,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	if err != nil {
 		if len(volumeMounts) > 0 {
 			if cleanupErr := c.removeBoxVolumeMountRecord(ctx, boxDto.Id); cleanupErr != nil {
-				c.logger.WarnContext(ctx, "failed to remove box volume mount record after create failure", "sandbox", boxDto.Id, "error", cleanupErr)
+				c.logger.WarnContext(ctx, "failed to remove box volume mount record after create failure", "box", boxDto.Id, "error", cleanupErr)
 			}
 		}
 		return "", "", fmt.Errorf("failed to create box: %w", err)
@@ -266,7 +266,7 @@ func (c *Client) Destroy(ctx context.Context, boxId string) error {
 	}
 
 	if err := c.removeBoxVolumeMountRecord(ctx, boxId); err != nil {
-		c.logger.WarnContext(ctx, "failed to remove box volume mount record", "sandbox", boxId, "error", err)
+		c.logger.WarnContext(ctx, "failed to remove box volume mount record", "box", boxId, "error", err)
 	}
 	c.CleanupOrphanedVolumeMounts(ctx)
 

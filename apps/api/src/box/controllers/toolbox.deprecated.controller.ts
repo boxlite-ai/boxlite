@@ -134,7 +134,7 @@ const RUNNER_INFO_CACHE_TTL = 2 * 60 // 2 minutes
 @ApiHeader(CustomHeaders.ORGANIZATION_ID)
 @SkipThrottle({ anonymous: true, authenticated: true })
 @UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard, BoxAccessGuard)
-@RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+@RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
 @ApiOAuth2(['openid', 'profile', 'email'])
 @ApiBearerAuth()
 export class ToolboxController {
@@ -343,7 +343,7 @@ export class ToolboxController {
   @Delete(':boxId/toolbox/files')
   @ApiOperation({
     summary: '[DEPRECATED] Delete file',
-    description: 'Delete file inside sandbox',
+    description: 'Delete file inside box',
     operationId: 'deleteFile_deprecated',
     deprecated: true,
   })
@@ -375,7 +375,7 @@ export class ToolboxController {
   @Get(':boxId/toolbox/files/download')
   @ApiOperation({
     summary: '[DEPRECATED] Download file',
-    description: 'Download file from sandbox',
+    description: 'Download file from box',
     operationId: 'downloadFile_deprecated',
     deprecated: true,
   })
@@ -462,7 +462,7 @@ export class ToolboxController {
   @UseInterceptors(ContentTypeInterceptor)
   @ApiOperation({
     summary: '[DEPRECATED] Create folder',
-    description: 'Create folder inside sandbox',
+    description: 'Create folder inside box',
     operationId: 'createFolder_deprecated',
     deprecated: true,
   })
@@ -495,7 +495,7 @@ export class ToolboxController {
   @Get(':boxId/toolbox/files/info')
   @ApiOperation({
     summary: '[DEPRECATED] Get file info',
-    description: 'Get file info inside sandbox',
+    description: 'Get file info inside box',
     operationId: 'getFileInfo_deprecated',
     deprecated: true,
   })
@@ -519,7 +519,7 @@ export class ToolboxController {
   @UseInterceptors(ContentTypeInterceptor)
   @ApiOperation({
     summary: '[DEPRECATED] Move file',
-    description: 'Move file inside sandbox',
+    description: 'Move file inside box',
     operationId: 'moveFile_deprecated',
     deprecated: true,
   })
@@ -554,7 +554,7 @@ export class ToolboxController {
   @UseInterceptors(ContentTypeInterceptor)
   @ApiOperation({
     summary: '[DEPRECATED] Set file permissions',
-    description: 'Set file owner/group/permissions inside sandbox',
+    description: 'Set file owner/group/permissions inside box',
     operationId: 'setFilePermissions_deprecated',
     deprecated: true,
   })
@@ -593,7 +593,7 @@ export class ToolboxController {
   @UseInterceptors(ContentTypeInterceptor)
   @ApiOperation({
     summary: '[DEPRECATED] Replace in files',
-    description: 'Replace text/pattern in multiple files inside sandbox',
+    description: 'Replace text/pattern in multiple files inside box',
     operationId: 'replaceInFiles_deprecated',
     deprecated: true,
   })
@@ -629,7 +629,7 @@ export class ToolboxController {
   @Get(':boxId/toolbox/files/search')
   @ApiOperation({
     summary: '[DEPRECATED] Search files',
-    description: 'Search for files inside sandbox',
+    description: 'Search for files inside box',
     operationId: 'searchFiles_deprecated',
     deprecated: true,
   })
@@ -653,7 +653,7 @@ export class ToolboxController {
   @Post(':boxId/toolbox/files/upload')
   @ApiOperation({
     summary: '[DEPRECATED] Upload file',
-    description: 'Upload file inside sandbox',
+    description: 'Upload file inside box',
     operationId: 'uploadFile_deprecated',
     deprecated: true,
   })
@@ -697,7 +697,7 @@ export class ToolboxController {
   @Post(':boxId/toolbox/files/bulk-upload')
   @ApiOperation({
     summary: '[DEPRECATED] Upload multiple files',
-    description: 'Upload multiple files inside sandbox',
+    description: 'Upload multiple files inside box',
     operationId: 'uploadFiles_deprecated',
     deprecated: true,
   })
@@ -1091,7 +1091,7 @@ export class ToolboxController {
   @UseInterceptors(ContentTypeInterceptor)
   @ApiOperation({
     summary: '[DEPRECATED] Execute command',
-    description: 'Execute command synchronously inside sandbox',
+    description: 'Execute command synchronously inside box',
     operationId: 'executeCommand_deprecated',
     deprecated: true,
   })
@@ -1134,7 +1134,7 @@ export class ToolboxController {
   @Get(':boxId/toolbox/process/session')
   @ApiOperation({
     summary: '[DEPRECATED] List sessions',
-    description: 'List all active sessions in the sandbox',
+    description: 'List all active sessions in the box',
     operationId: 'listSessions_deprecated',
     deprecated: true,
   })
@@ -1179,7 +1179,7 @@ export class ToolboxController {
   @UseInterceptors(ContentTypeInterceptor)
   @ApiOperation({
     summary: '[DEPRECATED] Create session',
-    description: 'Create a new session in the sandbox',
+    description: 'Create a new session in the box',
     operationId: 'createSession_deprecated',
     deprecated: true,
   })
@@ -1344,7 +1344,7 @@ export class ToolboxController {
   @Get(':boxId/toolbox/process/pty')
   @ApiOperation({
     summary: '[DEPRECATED] List PTY sessions',
-    description: 'List all active PTY sessions in the sandbox',
+    description: 'List all active PTY sessions in the box',
     operationId: 'listPTYSessions_deprecated',
     deprecated: true,
   })
@@ -1367,7 +1367,7 @@ export class ToolboxController {
   @UseInterceptors(ContentTypeInterceptor)
   @ApiOperation({
     summary: '[DEPRECATED] Create PTY session',
-    description: 'Create a new PTY session in the sandbox',
+    description: 'Create a new PTY session in the box',
     operationId: 'createPTYSession_deprecated',
     deprecated: true,
   })

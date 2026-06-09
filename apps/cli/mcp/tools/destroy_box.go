@@ -20,7 +20,7 @@ type DestroyBoxArgs struct {
 }
 
 func GetDestroyBoxTool() mcp.Tool {
-	return mcp.NewTool("destroy_sandbox",
+	return mcp.NewTool("destroy_box",
 		mcp.WithDescription("Destroy a box with BoxLite"),
 		mcp.WithString("id", mcp.Required(), mcp.Description("ID of the box to destroy.")),
 	)
@@ -33,7 +33,7 @@ func DestroyBox(ctx context.Context, request mcp.CallToolRequest, args DestroyBo
 	}
 
 	if args.Id == nil || *args.Id == "" {
-		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("sandbox ID is required")
+		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("box ID is required")
 	}
 
 	// Destroy box with retries

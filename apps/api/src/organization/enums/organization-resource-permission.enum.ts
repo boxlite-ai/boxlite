@@ -17,8 +17,8 @@ export enum OrganizationResourcePermission {
   DELETE_SNAPSHOTS = 'delete:snapshots',
 
   // boxes
-  WRITE_SANDBOXES = 'write:boxes',
-  DELETE_SANDBOXES = 'delete:boxes',
+  WRITE_BOXES = 'write:boxes',
+  DELETE_BOXES = 'delete:boxes',
 
   // volumes
   READ_VOLUMES = 'read:volumes',

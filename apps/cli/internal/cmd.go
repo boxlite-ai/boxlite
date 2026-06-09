@@ -6,7 +6,7 @@ package internal
 
 const (
 	USER_GROUP = "user"
-	BOX_GROUP  = "sandbox"
+	BOX_GROUP  = "box"
 )
 
 var (

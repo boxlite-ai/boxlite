@@ -8,7 +8,7 @@ import {
   DEFAULT_CPU_RESOURCES,
   DEFAULT_DISK_RESOURCES,
   DEFAULT_MEMORY_RESOURCES,
-  SANDBOX_SNAPSHOT_DEFAULT_VALUE,
+  BOX_SNAPSHOT_DEFAULT_VALUE,
 } from '@/constants/Playground'
 import {
   ActionRuntimeError,
@@ -44,10 +44,10 @@ const PARAM_SECTION_MAP: Partial<Record<keyof BoxParams, BoxParametersSections>>
 
 export const PlaygroundProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [openedParametersSections, setOpenedParametersSections] = useState<BoxParametersSections[]>([
-    BoxParametersSections.SANDBOX_MANAGEMENT,
+    BoxParametersSections.BOX_MANAGEMENT,
   ])
   const [enabledSections, setEnabledSections] = useState<BoxParametersSections[]>([
-    BoxParametersSections.SANDBOX_MANAGEMENT,
+    BoxParametersSections.BOX_MANAGEMENT,
   ])
   const [pendingScrollSection, setPendingScrollSection] = useState<BoxParametersSections | null>(null)
 
@@ -65,7 +65,7 @@ export const PlaygroundProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const clearPendingScrollSection = useCallback(() => setPendingScrollSection(null), [])
 
   const [boxParametersState, setBoxParametersState] = useState<BoxParams>({
-    snapshotName: SANDBOX_SNAPSHOT_DEFAULT_VALUE,
+    snapshotName: BOX_SNAPSHOT_DEFAULT_VALUE,
     resources: {
       cpu: DEFAULT_CPU_RESOURCES,
       memory: DEFAULT_MEMORY_RESOURCES,
@@ -302,7 +302,7 @@ export const PlaygroundProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
     const createBoxFromImageParams: CreateBoxFromImageParams = { image: Image.debianSlim('3.13') } // Default and fixed image if CreateBoxFromImageParams are used
     const snapshotName = boxParametersState['snapshotName']
-    const useCustomBoxSnapshotName = snapshotName !== undefined && snapshotName !== SANDBOX_SNAPSHOT_DEFAULT_VALUE
+    const useCustomBoxSnapshotName = snapshotName !== undefined && snapshotName !== BOX_SNAPSHOT_DEFAULT_VALUE
     const createBoxFromSnapshotParams: CreateBoxFromSnapshotParams = {
       snapshot: useCustomBoxSnapshotName ? snapshotName : undefined,
     }

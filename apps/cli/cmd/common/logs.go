@@ -29,7 +29,7 @@ type ReadLogParams struct {
 type ResourceType string
 
 const (
-	ResourceTypeBox      ResourceType = "sandbox"
+	ResourceTypeBox      ResourceType = "box"
 	ResourceTypeSnapshot ResourceType = "snapshots"
 )
 

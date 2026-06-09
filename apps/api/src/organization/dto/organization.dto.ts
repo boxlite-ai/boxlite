@@ -65,17 +65,17 @@ export class OrganizationDto {
   suspensionCleanupGracePeriodHours?: number
 
   @ApiProperty({
-    description: 'Max CPU per sandbox',
+    description: 'Max CPU per box',
   })
   maxCpuPerBox: number
 
   @ApiProperty({
-    description: 'Max memory per sandbox',
+    description: 'Max memory per box',
   })
   maxMemoryPerBox: number
 
   @ApiProperty({
-    description: 'Max disk per sandbox',
+    description: 'Max disk per box',
   })
   maxDiskPerBox: number
 

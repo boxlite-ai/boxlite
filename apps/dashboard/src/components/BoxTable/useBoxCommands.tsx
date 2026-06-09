@@ -110,5 +110,5 @@ export function useBoxCommands({
     onArchive,
   ])
 
-  useRegisterCommands(rootCommands, { groupId: 'sandbox-actions', groupLabel: 'Box actions', groupOrder: 0 })
+  useRegisterCommands(rootCommands, { groupId: 'box-actions', groupLabel: 'Box actions', groupOrder: 0 })
 }

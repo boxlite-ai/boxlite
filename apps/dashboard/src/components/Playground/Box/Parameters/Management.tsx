@@ -6,7 +6,7 @@
 
 import { Tooltip } from '@/components/Tooltip'
 import { Label } from '@/components/ui/label'
-import { SANDBOX_SNAPSHOT_DEFAULT_VALUE } from '@/constants/Playground'
+import { BOX_SNAPSHOT_DEFAULT_VALUE } from '@/constants/Playground'
 import { NumberParameterFormItem, ParameterFormItem } from '@/contexts/PlaygroundContext'
 import { usePlayground } from '@/hooks/usePlayground'
 import { getLanguageCodeToRun } from '@/lib/playground'
@@ -80,7 +80,7 @@ const BoxManagementParameters: React.FC<BoxManagementParametersProps> = ({ snaps
     })
   }, [boxParametersState.language, setBoxParameterValue])
 
-  const nonDefaultSnapshotSelected = boxSnapshotName && boxSnapshotName !== SANDBOX_SNAPSHOT_DEFAULT_VALUE
+  const nonDefaultSnapshotSelected = boxSnapshotName && boxSnapshotName !== BOX_SNAPSHOT_DEFAULT_VALUE
 
   return (
     <>
@@ -97,7 +97,7 @@ const BoxManagementParameters: React.FC<BoxManagementParametersProps> = ({ snaps
       {/* <StackedInputFormControl formItem={boxSnapshotFormData}>
         <FormSelectInput
           selectOptions={[
-            { value: SANDBOX_SNAPSHOT_DEFAULT_VALUE, label: 'Default' },
+            { value: BOX_SNAPSHOT_DEFAULT_VALUE, label: 'Default' },
             ...snapshotsData.map((snapshot) => ({
               value: snapshot.name,
               label: snapshot.name,

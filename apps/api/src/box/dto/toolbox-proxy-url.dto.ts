@@ -9,7 +9,7 @@ import { ApiProperty, ApiSchema } from '@nestjs/swagger'
 @ApiSchema({ name: 'ToolboxProxyUrl' })
 export class ToolboxProxyUrlDto {
   @ApiProperty({
-    description: 'The toolbox proxy URL for the sandbox',
+    description: 'The toolbox proxy URL for the box',
     example: 'https://proxy.app.boxlite.io/toolbox',
   })
   url: string

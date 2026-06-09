@@ -126,7 +126,7 @@ export class BoxService {
   ) {}
 
   protected getLockKey(id: string): string {
-    return `sandbox:${id}:state-change`
+    return `box:${id}:state-change`
   }
 
   private assertBoxNotErrored(box: Box): void {
@@ -325,7 +325,7 @@ export class BoxService {
       ],
     })
     if (!snapshot) {
-      throw new BadRequestError(`Snapshot ${box.snapshot} not found while creating warm pool sandbox`)
+      throw new BadRequestError(`Snapshot ${box.snapshot} not found while creating warm pool box`)
     }
 
     const runner = await this.runnerService.getRandomAvailableRunner({
@@ -578,7 +578,7 @@ export class BoxService {
     }
 
     if (!warmPoolBox.runnerId) {
-      throw new BoxError('Runner not found for warm pool sandbox')
+      throw new BoxError('Runner not found for warm pool box')
     }
 
     if (
@@ -1109,7 +1109,7 @@ export class BoxService {
         },
       ],
       cache: {
-        id: `sandbox:${boxIdOrName}:organization:${organizationId}`,
+        id: `box:${boxIdOrName}:organization:${organizationId}`,
         milliseconds: 1000,
       },
     })
@@ -1167,7 +1167,7 @@ export class BoxService {
         },
       ],
       cache: {
-        id: `sandbox:${boxIdOrName}:organization:${organizationId}`,
+        id: `box:${boxIdOrName}:organization:${organizationId}`,
         milliseconds: 1000,
       },
     })
@@ -1178,7 +1178,7 @@ export class BoxService {
 
     const token = customNanoid(urlAlphabet.replace('_', '').replace('-', ''))(16).toLocaleLowerCase()
 
-    const lockKey = `sandbox:signed-preview-url-token:${port}:${token}`
+    const lockKey = `box:signed-preview-url-token:${port}:${token}`
     await this.redis.setex(lockKey, expiresInSeconds, box.id)
 
     let url = `${proxyProtocol}://${port}-${token}.${proxyDomain}`
@@ -1198,7 +1198,7 @@ export class BoxService {
   }
 
   async getBoxIdFromSignedPreviewUrlToken(token: string, port: number): Promise<string> {
-    const lockKey = `sandbox:signed-preview-url-token:${port}:${token}`
+    const lockKey = `box:signed-preview-url-token:${port}:${token}`
     const boxId = await this.redis.get(lockKey)
     if (!boxId) {
       throw new ForbiddenException('Invalid or expired token')
@@ -1217,7 +1217,7 @@ export class BoxService {
       throw new NotFoundException(`Box with ID or name ${boxIdOrName} not found`)
     }
 
-    const lockKey = `sandbox:signed-preview-url-token:${port}:${token}`
+    const lockKey = `box:signed-preview-url-token:${port}:${token}`
     await this.redis.del(lockKey)
   }
 
@@ -1448,7 +1448,7 @@ export class BoxService {
 
       // Disk resize requires stopped box (cold resize only)
       if (resizeDto.disk !== undefined && box.state !== BoxState.STOPPED) {
-        throw new BadRequestError('Disk resize can only be performed on a stopped sandbox')
+        throw new BadRequestError('Disk resize can only be performed on a stopped box')
       }
 
       // Hot resize (box is running): only CPU and memory can be increased
@@ -2118,7 +2118,7 @@ export class BoxService {
       where: {
         token,
       },
-      relations: ['sandbox'],
+      relations: ['box'],
     })
 
     if (!sshAccess) {

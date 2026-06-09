@@ -37,7 +37,7 @@ export interface BoxSorting {
   direction?: ListBoxesPaginatedOrderEnum
 }
 
-export const DEFAULT_SANDBOX_SORTING: BoxSorting = {
+export const DEFAULT_BOX_SORTING: BoxSorting = {
   field: ListBoxesPaginatedSortEnum.UPDATED_AT,
   direction: ListBoxesPaginatedOrderEnum.DESC,
 }

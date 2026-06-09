@@ -230,9 +230,9 @@ export class BoxController {
   @HttpCode(200) //  for BoxLite Api compatibility
   @UseInterceptors(ContentTypeInterceptor)
   @SkipThrottle({ authenticated: true })
-  @ThrottlerScope('sandbox-create')
+  @ThrottlerScope('box-create')
   @ApiOperation({
-    summary: 'Create a new sandbox',
+    summary: 'Create a new box',
     operationId: 'createBox',
   })
   @ApiResponse({
@@ -240,7 +240,7 @@ export class BoxController {
     description: 'The box has been successfully created.',
     type: BoxDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @Audit({
     action: AuditAction.CREATE,
     targetType: AuditTarget.BOX,
@@ -348,7 +348,7 @@ export class BoxController {
   })
   @ApiParam({
     name: 'boxIdOrName',
-    description: 'ID or name of the sandbox',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiQuery({
@@ -376,14 +376,14 @@ export class BoxController {
 
   @Delete(':boxIdOrName')
   @SkipThrottle({ authenticated: true })
-  @ThrottlerScope('sandbox-lifecycle')
+  @ThrottlerScope('box-lifecycle')
   @ApiOperation({
-    summary: 'Delete sandbox',
+    summary: 'Delete box',
     operationId: 'deleteBox',
   })
   @ApiParam({
     name: 'boxIdOrName',
-    description: 'ID or name of the sandbox',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiResponse({
@@ -391,7 +391,7 @@ export class BoxController {
     description: 'Box has been deleted',
     type: BoxDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.DELETE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.DELETE_BOXES])
   @UseGuards(BoxAccessGuard)
   @Audit({
     action: AuditAction.DELETE,
@@ -410,14 +410,14 @@ export class BoxController {
   @Post(':boxIdOrName/recover')
   @HttpCode(200)
   @SkipThrottle({ authenticated: true })
-  @ThrottlerScope('sandbox-lifecycle')
+  @ThrottlerScope('box-lifecycle')
   @ApiOperation({
     summary: 'Recover box from error state',
     operationId: 'recoverBox',
   })
   @ApiParam({
     name: 'boxIdOrName',
-    description: 'ID or name of the sandbox',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiResponse({
@@ -425,7 +425,7 @@ export class BoxController {
     description: 'Recovery initiated',
     type: BoxDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
   @Audit({
     action: AuditAction.RECOVER,
@@ -450,14 +450,14 @@ export class BoxController {
   @Post(':boxIdOrName/start')
   @HttpCode(200)
   @SkipThrottle({ authenticated: true })
-  @ThrottlerScope('sandbox-lifecycle')
+  @ThrottlerScope('box-lifecycle')
   @ApiOperation({
-    summary: 'Start sandbox',
+    summary: 'Start box',
     operationId: 'startBox',
   })
   @ApiParam({
     name: 'boxIdOrName',
-    description: 'ID or name of the sandbox',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiResponse({
@@ -465,7 +465,7 @@ export class BoxController {
     description: 'Box has been started or is being restored from archived state',
     type: BoxDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
   @Audit({
     action: AuditAction.START,
@@ -490,14 +490,14 @@ export class BoxController {
   @Post(':boxIdOrName/stop')
   @HttpCode(200) //  for BoxLite Api compatibility
   @SkipThrottle({ authenticated: true })
-  @ThrottlerScope('sandbox-lifecycle')
+  @ThrottlerScope('box-lifecycle')
   @ApiOperation({
-    summary: 'Stop sandbox',
+    summary: 'Stop box',
     operationId: 'stopBox',
   })
   @ApiParam({
     name: 'boxIdOrName',
-    description: 'ID or name of the sandbox',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiQuery({
@@ -511,7 +511,7 @@ export class BoxController {
     description: 'Box has been stopped',
     type: BoxDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
   @Audit({
     action: AuditAction.STOP,
@@ -537,14 +537,14 @@ export class BoxController {
   @HttpCode(200)
   @UseInterceptors(ContentTypeInterceptor)
   @SkipThrottle({ authenticated: true })
-  @ThrottlerScope('sandbox-lifecycle')
+  @ThrottlerScope('box-lifecycle')
   @ApiOperation({
     summary: 'Resize box resources',
     operationId: 'resizeBox',
   })
   @ApiParam({
     name: 'boxIdOrName',
-    description: 'ID or name of the sandbox',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiResponse({
@@ -552,7 +552,7 @@ export class BoxController {
     description: 'Box has been resized',
     type: BoxDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
   @RequireFlagsEnabled({ flags: [{ flagKey: FeatureFlags.BOX_RESIZE, defaultValue: false }] })
   @Audit({
@@ -585,7 +585,7 @@ export class BoxController {
   })
   @ApiParam({
     name: 'boxIdOrName',
-    description: 'ID or name of the sandbox',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiResponse({
@@ -593,7 +593,7 @@ export class BoxController {
     description: 'Labels have been successfully replaced',
     type: BoxLabelsDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
   @Audit({
     action: AuditAction.REPLACE_LABELS,
@@ -623,7 +623,7 @@ export class BoxController {
   })
   @ApiParam({
     name: 'boxId',
-    description: 'ID of the sandbox',
+    description: 'ID of the box',
     type: 'string',
   })
   @ApiResponse({
@@ -648,7 +648,7 @@ export class BoxController {
   })
   @ApiParam({
     name: 'boxIdOrName',
-    description: 'ID or name of the sandbox',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiResponse({
@@ -656,7 +656,7 @@ export class BoxController {
     description: 'Box backup has been initiated',
     type: BoxDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
   @Audit({
     action: AuditAction.CREATE_BACKUP,
@@ -679,7 +679,7 @@ export class BoxController {
   })
   @ApiParam({
     name: 'boxIdOrName',
-    description: 'ID or name of the sandbox',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiParam({
@@ -692,7 +692,7 @@ export class BoxController {
     description: 'Public status has been successfully updated',
     type: BoxDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
   @Audit({
     action: AuditAction.UPDATE_PUBLIC_STATUS,
@@ -721,7 +721,7 @@ export class BoxController {
   })
   @ApiParam({
     name: 'boxId',
-    description: 'ID of the sandbox',
+    description: 'ID of the box',
     type: 'string',
   })
   @ApiResponse({
@@ -740,7 +740,7 @@ export class BoxController {
   })
   @ApiParam({
     name: 'boxIdOrName',
-    description: 'ID or name of the sandbox',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiParam({
@@ -753,7 +753,7 @@ export class BoxController {
     description: 'Auto-stop interval has been set',
     type: BoxDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
   @Audit({
     action: AuditAction.SET_AUTO_STOP_INTERVAL,
@@ -782,7 +782,7 @@ export class BoxController {
   })
   @ApiParam({
     name: 'boxIdOrName',
-    description: 'ID or name of the sandbox',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiParam({
@@ -795,7 +795,7 @@ export class BoxController {
     description: 'Auto-archive interval has been set',
     type: BoxDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
   @Audit({
     action: AuditAction.SET_AUTO_ARCHIVE_INTERVAL,
@@ -824,7 +824,7 @@ export class BoxController {
   })
   @ApiParam({
     name: 'boxIdOrName',
-    description: 'ID or name of the sandbox',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiParam({
@@ -838,7 +838,7 @@ export class BoxController {
     description: 'Auto-delete interval has been set',
     type: BoxDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
   @Audit({
     action: AuditAction.SET_AUTO_DELETE_INTERVAL,
@@ -868,7 +868,7 @@ export class BoxController {
   // })
   // @ApiParam({
   //   name: 'boxIdOrName',
-  //   description: 'ID or name of the sandbox',
+  //   description: 'ID or name of the box',
   //   type: 'string',
   // })
   // @ApiResponse({
@@ -876,7 +876,7 @@ export class BoxController {
   //   description: 'Network settings have been updated',
   //   type: BoxDto,
   // })
-  // @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  // @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   // @UseGuards(BoxAccessGuard)
   // @Audit({
   //   action: AuditAction.UPDATE_NETWORK_SETTINGS,
@@ -907,9 +907,9 @@ export class BoxController {
   @Post(':boxIdOrName/archive')
   @HttpCode(200)
   @SkipThrottle({ authenticated: true })
-  @ThrottlerScope('sandbox-lifecycle')
+  @ThrottlerScope('box-lifecycle')
   @ApiOperation({
-    summary: 'Archive sandbox',
+    summary: 'Archive box',
     operationId: 'archiveBox',
   })
   @ApiResponse({
@@ -917,7 +917,7 @@ export class BoxController {
     description: 'Box has been archived',
     type: BoxDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
   @Audit({
     action: AuditAction.ARCHIVE,
@@ -940,7 +940,7 @@ export class BoxController {
   })
   @ApiParam({
     name: 'boxIdOrName',
-    description: 'ID or name of the sandbox',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiParam({
@@ -969,7 +969,7 @@ export class BoxController {
   })
   @ApiParam({
     name: 'boxIdOrName',
-    description: 'ID or name of the sandbox',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiParam({
@@ -1005,7 +1005,7 @@ export class BoxController {
   })
   @ApiParam({
     name: 'boxIdOrName',
-    description: 'ID or name of the sandbox',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiParam({
@@ -1041,7 +1041,7 @@ export class BoxController {
   })
   @ApiParam({
     name: 'boxIdOrName',
-    description: 'ID or name of the sandbox',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiResponse({
@@ -1097,7 +1097,7 @@ export class BoxController {
   })
   @ApiParam({
     name: 'boxIdOrName',
-    description: 'ID or name of the sandbox',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiResponse({
@@ -1118,12 +1118,12 @@ export class BoxController {
   @Post(':boxIdOrName/ssh-access')
   @HttpCode(200)
   @ApiOperation({
-    summary: 'Create SSH access for sandbox',
+    summary: 'Create SSH access for box',
     operationId: 'createSshAccess',
   })
   @ApiParam({
     name: 'boxIdOrName',
-    description: 'ID or name of the sandbox',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiQuery({
@@ -1137,7 +1137,7 @@ export class BoxController {
     description: 'SSH access has been created',
     type: SshAccessDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
   @Audit({
     action: AuditAction.CREATE_SSH_ACCESS,
@@ -1161,12 +1161,12 @@ export class BoxController {
   @Delete(':boxIdOrName/ssh-access')
   @HttpCode(200)
   @ApiOperation({
-    summary: 'Revoke SSH access for sandbox',
+    summary: 'Revoke SSH access for box',
     operationId: 'revokeSshAccess',
   })
   @ApiParam({
     name: 'boxIdOrName',
-    description: 'ID or name of the sandbox',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiQuery({
@@ -1180,7 +1180,7 @@ export class BoxController {
     description: 'SSH access has been revoked',
     type: BoxDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
   @Audit({
     action: AuditAction.REVOKE_SSH_ACCESS,
@@ -1204,7 +1204,7 @@ export class BoxController {
 
   @Get('ssh-access/validate')
   @ApiOperation({
-    summary: 'Validate SSH access for sandbox',
+    summary: 'Validate SSH access for box',
     operationId: 'validateSshAccess',
   })
   @ApiQuery({
@@ -1225,17 +1225,17 @@ export class BoxController {
 
   @Get(':boxId/toolbox-proxy-url')
   @ApiOperation({
-    summary: 'Get toolbox proxy URL for a sandbox',
+    summary: 'Get toolbox proxy URL for a box',
     operationId: 'getToolboxProxyUrl',
   })
   @ApiParam({
     name: 'boxId',
-    description: 'ID of the sandbox',
+    description: 'ID of the box',
     type: 'string',
   })
   @ApiResponse({
     status: 200,
-    description: 'Toolbox proxy URL for the specified sandbox',
+    description: 'Toolbox proxy URL for the specified box',
     type: ToolboxProxyUrlDto,
   })
   @UseGuards(BoxAccessGuard)
