@@ -11,8 +11,8 @@
 /sdks/                     @boxlite-ai/maintainers
 /.github/                  @boxlite-ai/maintainers
 
-# Docs can be owned by the broader contributor team.
-/docs/                     @boxlite-ai/builder
+# Docs can be owned by the broader reviewers team.
+/docs/                     @boxlite-ai/reviewers
 
 # Legal and contributor policy changes require project owner review.
 /CONTRIBUTING.md           @DorianZheng
