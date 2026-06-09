@@ -129,6 +129,24 @@ Runs code quality checks.
 4. `node` - Run Node lint and format checks via `make lint:node` and `make fmt:check:node`
 5. `c` - Run C SDK lint and format checks via `make lint:c` and `make fmt:check:c`
 
+### `codeql.yml`
+
+Runs CodeQL code scanning (advanced setup) across all analyzed languages.
+
+**Why advanced setup:** CodeQL *default setup* does not analyze pull requests
+from forks, so the `code_scanning` ruleset rule ("Require code scanning
+results") permanently blocks fork PRs. Advanced setup runs on `pull_request`,
+so fork PRs in this public repo are scanned and the gate is satisfiable without
+an admin bypass.
+
+**Triggers:**
+- Push to `main`
+- Pull requests against `main` (including fork PRs)
+- Weekly schedule (Mondays 03:31 UTC)
+
+**Jobs:**
+1. `analyze` - Matrix over `actions`, `c-cpp`, `go`, `javascript-typescript`, `python`, `rust`, each with `build-mode: none` (source-only analysis, no compile step)
+
 ### `e2e-test.yml`
 
 Runs VM-based E2E integration tests on an ephemeral AWS EC2 self-hosted runner.
