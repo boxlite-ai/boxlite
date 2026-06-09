@@ -332,6 +332,75 @@ func (c *Client) Exec(ctx context.Context, sandboxId string, command string, arg
 	}, nil
 }
 
+// SnapshotCreate creates a snapshot of the given sandbox's disk state.
+func (c *Client) SnapshotCreate(ctx context.Context, sandboxId string, name string) (*boxlite.SnapshotInfo, error) {
+	bx, err := c.getOrFetchBox(ctx, sandboxId)
+	if err != nil {
+		return nil, err
+	}
+	return bx.SnapshotCreate(ctx, name)
+}
+
+// SnapshotList lists snapshots for the given sandbox.
+func (c *Client) SnapshotList(ctx context.Context, sandboxId string) ([]boxlite.SnapshotInfo, error) {
+	bx, err := c.getOrFetchBox(ctx, sandboxId)
+	if err != nil {
+		return nil, err
+	}
+	return bx.SnapshotList(ctx)
+}
+
+// SnapshotGet retrieves a snapshot by name; (nil, nil) if missing.
+func (c *Client) SnapshotGet(ctx context.Context, sandboxId string, name string) (*boxlite.SnapshotInfo, error) {
+	bx, err := c.getOrFetchBox(ctx, sandboxId)
+	if err != nil {
+		return nil, err
+	}
+	return bx.SnapshotGet(ctx, name)
+}
+
+// SnapshotRemove deletes a snapshot by name.
+func (c *Client) SnapshotRemove(ctx context.Context, sandboxId string, name string) error {
+	bx, err := c.getOrFetchBox(ctx, sandboxId)
+	if err != nil {
+		return err
+	}
+	return bx.SnapshotRemove(ctx, name)
+}
+
+// SnapshotRestore reverts the sandbox's disks to the named snapshot.
+func (c *Client) SnapshotRestore(ctx context.Context, sandboxId string, name string) error {
+	bx, err := c.getOrFetchBox(ctx, sandboxId)
+	if err != nil {
+		return err
+	}
+	return bx.SnapshotRestore(ctx, name)
+}
+
+// CloneBox clones a sandbox's disk state into a new (anonymous-runner-side) box.
+// Returns the cloned box's id.
+func (c *Client) CloneBox(ctx context.Context, sandboxId string, name string) (*boxlite.Box, error) {
+	bx, err := c.getOrFetchBox(ctx, sandboxId)
+	if err != nil {
+		return nil, err
+	}
+	return bx.CloneBox(ctx, name)
+}
+
+// ExportBox writes a sandbox's disks to a portable `.boxlite` archive at `dest`.
+func (c *Client) ExportBox(ctx context.Context, sandboxId string, dest string) error {
+	bx, err := c.getOrFetchBox(ctx, sandboxId)
+	if err != nil {
+		return err
+	}
+	return bx.Export(ctx, dest)
+}
+
+// ImportBox reads a `.boxlite` archive and creates a new box from it.
+func (c *Client) ImportBox(ctx context.Context, archivePath, name string) (*boxlite.Box, error) {
+	return c.runtime.ImportBox(ctx, archivePath, name)
+}
+
 // CopyInto copies a file from host into a sandbox.
 func (c *Client) CopyInto(ctx context.Context, sandboxId string, hostSrc, guestDst string) error {
 	bx, err := c.getOrFetchBox(ctx, sandboxId)

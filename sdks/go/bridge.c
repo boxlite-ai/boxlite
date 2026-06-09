@@ -35,6 +35,14 @@ extern void goBoxliteOnExecutionKill(CBoxliteError *err, void *ud);
 extern void goBoxliteOnExecutionSignal(CBoxliteError *err, void *ud);
 extern void goBoxliteOnExecutionResize(CBoxliteError *err, void *ud);
 
+extern void goBoxliteOnSnapshotCreate(CSnapshotInfo *info, CBoxliteError *err, void *ud);
+extern void goBoxliteOnSnapshotList(CSnapshotInfoList *list, CBoxliteError *err, void *ud);
+extern void goBoxliteOnSnapshotRemove(CBoxliteError *err, void *ud);
+extern void goBoxliteOnSnapshotRestore(CBoxliteError *err, void *ud);
+
+extern void goBoxliteOnCloneBox(CBoxHandle *box, CBoxliteError *err, void *ud);
+extern void goBoxliteOnExportBox(CBoxliteError *err, void *ud);
+
 CBoxStdoutCb cbStdout(void) { return (CBoxStdoutCb)goBoxliteOnStdout; }
 CBoxStderrCb cbStderr(void) { return (CBoxStderrCb)goBoxliteOnStderr; }
 CBoxExitCb cbExit(void) { return (CBoxExitCb)goBoxliteOnExit; }
@@ -61,3 +69,11 @@ CExecutionWaitCb cbExecutionWait(void) { return (CExecutionWaitCb)goBoxliteOnExe
 CExecutionKillCb cbExecutionKill(void) { return (CExecutionKillCb)goBoxliteOnExecutionKill; }
 CExecutionSignalCb cbExecutionSignal(void) { return (CExecutionSignalCb)goBoxliteOnExecutionSignal; }
 CExecutionResizeCb cbExecutionResize(void) { return (CExecutionResizeCb)goBoxliteOnExecutionResize; }
+
+CBoxSnapshotCreateCb cbSnapshotCreate(void) { return (CBoxSnapshotCreateCb)goBoxliteOnSnapshotCreate; }
+CBoxSnapshotListCb cbSnapshotList(void) { return (CBoxSnapshotListCb)goBoxliteOnSnapshotList; }
+CBoxSnapshotRemoveCb cbSnapshotRemove(void) { return (CBoxSnapshotRemoveCb)goBoxliteOnSnapshotRemove; }
+CBoxSnapshotRestoreCb cbSnapshotRestore(void) { return (CBoxSnapshotRestoreCb)goBoxliteOnSnapshotRestore; }
+
+CBoxCloneCb cbCloneBox(void) { return (CBoxCloneCb)goBoxliteOnCloneBox; }
+CBoxExportCb cbExportBox(void) { return (CBoxExportCb)goBoxliteOnExportBox; }
