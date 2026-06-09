@@ -145,7 +145,7 @@ an admin bypass.
 - Weekly schedule (Mondays 03:31 UTC)
 
 **Jobs:**
-1. `analyze` - Matrix over `actions`, `c-cpp`, `go`, `javascript-typescript`, `python`, `rust`, each with `build-mode: none` (source-only analysis, no compile step)
+1. `analyze` - Matrix over `actions`, `c-cpp`, `go`, `javascript-typescript`, `python`, `rust`. All use `build-mode: none` (source-only, no compile) except `go`, which requires `autobuild` (Go's extractor must observe a build)
 
 ### `e2e-test.yml`
 

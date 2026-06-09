@@ -5,9 +5,10 @@
 # "Require code scanning results" ruleset rule can be satisfied without an admin
 # bypass.
 #
-# All languages use `build-mode: none` (source-only analysis, no compile step)
-# so the workflow cannot fail to build. Switch a language to `autobuild`/manual
-# later if deeper, build-aware analysis is needed.
+# Languages use `build-mode: none` (source-only analysis, no compile step) where
+# CodeQL supports it. Go does not support `none` — its extractor must observe a
+# build — so Go uses `autobuild` (the same mode default setup used successfully
+# for this repo).
 name: CodeQL
 
 on:
@@ -37,13 +38,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language:
-          - actions
-          - c-cpp
-          - go
-          - javascript-typescript
-          - python
-          - rust
+        include:
+          - language: actions
+            build-mode: none
+          - language: c-cpp
+            build-mode: none
+          - language: go
+            build-mode: autobuild
+          - language: javascript-typescript
+            build-mode: none
+          - language: python
+            build-mode: none
+          - language: rust
+            build-mode: none
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -52,7 +59,7 @@ jobs:
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
-          build-mode: none
+          build-mode: ${{ matrix.build-mode }}
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v3
