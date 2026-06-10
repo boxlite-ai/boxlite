@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useCallback } from 'react'
-import { useSandboxMetrics, MetricsQueryParams } from '@/hooks/useSandboxMetrics'
+import { useBoxMetrics, MetricsQueryParams } from '@/hooks/useBoxMetrics'
 import { TimeRangeSelector } from './TimeRangeSelector'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -18,7 +18,7 @@ import { MetricSeries } from '@boxlite-ai/api-client'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 
 interface MetricsTabProps {
-  sandboxId: string
+  boxId: string
 }
 
 const CHART_COLORS = [
@@ -73,7 +73,7 @@ function buildChartConfig(series: MetricSeries[]): ChartConfig {
   const config: ChartConfig = {}
   series.forEach((s, index) => {
     config[s.metricName] = {
-      label: s.metricName.replace(/^boxlite\.sandbox\./, ''),
+      label: s.metricName.replace(/^boxlite\.box\./, ''),
       color: CHART_COLORS[index % CHART_COLORS.length],
     }
   })
@@ -179,7 +179,7 @@ const MetricGroupChart: React.FC<MetricGroupChartProps> = ({
   )
 }
 
-export const MetricsTab: React.FC<MetricsTabProps> = ({ sandboxId }) => {
+export const MetricsTab: React.FC<MetricsTabProps> = ({ boxId }) => {
   const [timeRange, setTimeRange] = useState(() => {
     const now = new Date()
     return { from: subHours(now, 1), to: now }
@@ -190,7 +190,7 @@ export const MetricsTab: React.FC<MetricsTabProps> = ({ sandboxId }) => {
     to: timeRange.to,
   }
 
-  const { data, isLoading, refetch } = useSandboxMetrics(sandboxId, queryParams)
+  const { data, isLoading, refetch } = useBoxMetrics(boxId, queryParams)
 
   const [viewModes, setViewModes] = useState<Record<string, ViewMode>>({
     memory: '%',

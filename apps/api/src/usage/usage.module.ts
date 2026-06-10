@@ -8,28 +8,28 @@ import { Module } from '@nestjs/common'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { DataSource } from 'typeorm'
 import { EventEmitter2 } from '@nestjs/event-emitter'
-import { SandboxUsagePeriod } from './entities/sandbox-usage-period.entity'
+import { BoxUsagePeriod } from './entities/box-usage-period.entity'
 import { UsageService } from './services/usage.service'
-import { RedisLockProvider } from '../sandbox/common/redis-lock.provider'
-import { SandboxUsagePeriodArchive } from './entities/sandbox-usage-period-archive.entity'
-import { SandboxRepository } from '../sandbox/repositories/sandbox.repository'
-import { SandboxLookupCacheInvalidationService } from '../sandbox/services/sandbox-lookup-cache-invalidation.service'
-import { Sandbox } from '../sandbox/entities/sandbox.entity'
+import { RedisLockProvider } from '../box/common/redis-lock.provider'
+import { BoxUsagePeriodArchive } from './entities/box-usage-period-archive.entity'
+import { BoxRepository } from '../box/repositories/box.repository'
+import { BoxLookupCacheInvalidationService } from '../box/services/box-lookup-cache-invalidation.service'
+import { Box } from '../box/entities/box.entity'
 
 @Module({
-  imports: [TypeOrmModule.forFeature([SandboxUsagePeriod, Sandbox, SandboxUsagePeriodArchive])],
+  imports: [TypeOrmModule.forFeature([BoxUsagePeriod, Box, BoxUsagePeriodArchive])],
   providers: [
     UsageService,
     RedisLockProvider,
-    SandboxLookupCacheInvalidationService,
+    BoxLookupCacheInvalidationService,
     {
-      provide: SandboxRepository,
-      inject: [DataSource, EventEmitter2, SandboxLookupCacheInvalidationService],
+      provide: BoxRepository,
+      inject: [DataSource, EventEmitter2, BoxLookupCacheInvalidationService],
       useFactory: (
         dataSource: DataSource,
         eventEmitter: EventEmitter2,
-        sandboxLookupCacheInvalidationService: SandboxLookupCacheInvalidationService,
-      ) => new SandboxRepository(dataSource, eventEmitter, sandboxLookupCacheInvalidationService),
+        boxLookupCacheInvalidationService: BoxLookupCacheInvalidationService,
+      ) => new BoxRepository(dataSource, eventEmitter, boxLookupCacheInvalidationService),
     },
   ],
   exports: [UsageService],

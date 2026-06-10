@@ -13,9 +13,9 @@ import (
 
 // Config defines the configuration for the custom exporter.
 type Config struct {
-	// SandboxAuthTokenHeader is the HTTP header name that contains the sandbox auth token.
-	// Default: "sandbox-auth-token"
-	SandboxAuthTokenHeader string `mapstructure:"sandbox_auth_token_header"`
+	// BoxAuthTokenHeader is the HTTP header name that contains the box auth token.
+	// Default: "box-auth-token"
+	BoxAuthTokenHeader string `mapstructure:"box_auth_token_header"`
 
 	// CacheTTL is the duration to cache endpoint configurations.
 	// Default: 5m

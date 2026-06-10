@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useCallback } from 'react'
-import { useSandboxLogs, LogsQueryParams } from '@/hooks/useSandboxLogs'
+import { useBoxLogs, LogsQueryParams } from '@/hooks/useBoxLogs'
 import { TimeRangeSelector } from './TimeRangeSelector'
 import { SeverityBadge } from './SeverityBadge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -19,12 +19,12 @@ import { subHours } from 'date-fns'
 import { LogEntry } from '@boxlite-ai/api-client'
 
 interface LogsTabProps {
-  sandboxId: string
+  boxId: string
 }
 
 const SEVERITY_OPTIONS = ['DEBUG', 'INFO', 'WARN', 'ERROR']
 
-export const LogsTab: React.FC<LogsTabProps> = ({ sandboxId }) => {
+export const LogsTab: React.FC<LogsTabProps> = ({ boxId }) => {
   const [timeRange, setTimeRange] = useState(() => {
     const now = new Date()
     return { from: subHours(now, 1), to: now }
@@ -45,7 +45,7 @@ export const LogsTab: React.FC<LogsTabProps> = ({ sandboxId }) => {
     search: search || undefined,
   }
 
-  const { data, isLoading, refetch } = useSandboxLogs(sandboxId, queryParams)
+  const { data, isLoading, refetch } = useBoxLogs(boxId, queryParams)
 
   const handleTimeRangeChange = useCallback((from: Date, to: Date) => {
     setTimeRange({ from, to })

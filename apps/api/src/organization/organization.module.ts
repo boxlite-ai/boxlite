@@ -19,16 +19,16 @@ import { OrganizationRoleService } from './services/organization-role.service'
 import { OrganizationUserService } from './services/organization-user.service'
 import { OrganizationInvitationService } from './services/organization-invitation.service'
 import { UserModule } from '../user/user.module'
-import { Sandbox } from '../sandbox/entities/sandbox.entity'
-import { Snapshot } from '../sandbox/entities/snapshot.entity'
-import { Volume } from '../sandbox/entities/volume.entity'
-import { RedisLockProvider } from '../sandbox/common/redis-lock.provider'
-import { SnapshotRunner } from '../sandbox/entities/snapshot-runner.entity'
+import { Box } from '../box/entities/box.entity'
+import { Snapshot } from '../box/entities/snapshot.entity'
+import { Volume } from '../box/entities/volume.entity'
+import { RedisLockProvider } from '../box/common/redis-lock.provider'
+import { SnapshotRunner } from '../box/entities/snapshot-runner.entity'
 import { OrganizationUsageService } from './services/organization-usage.service'
 import { DataSource } from 'typeorm'
 import { EventEmitter2 } from '@nestjs/event-emitter'
-import { SandboxRepository } from '../sandbox/repositories/sandbox.repository'
-import { SandboxLookupCacheInvalidationService } from '../sandbox/services/sandbox-lookup-cache-invalidation.service'
+import { BoxRepository } from '../box/repositories/box.repository'
+import { BoxLookupCacheInvalidationService } from '../box/services/box-lookup-cache-invalidation.service'
 import { RegionQuota } from './entities/region-quota.entity'
 import { RegionModule } from '../region/region.module'
 import { OrganizationRegionController } from './controllers/organization-region.controller'
@@ -44,7 +44,7 @@ import { EncryptionModule } from '../encryption/encryption.module'
       OrganizationRole,
       OrganizationUser,
       OrganizationInvitation,
-      Sandbox,
+      Box,
       Snapshot,
       Volume,
       SnapshotRunner,
@@ -67,15 +67,15 @@ import { EncryptionModule } from '../encryption/encryption.module'
     OrganizationInvitationService,
     OrganizationUsageService,
     RedisLockProvider,
-    SandboxLookupCacheInvalidationService,
+    BoxLookupCacheInvalidationService,
     {
-      provide: SandboxRepository,
-      inject: [DataSource, EventEmitter2, SandboxLookupCacheInvalidationService],
+      provide: BoxRepository,
+      inject: [DataSource, EventEmitter2, BoxLookupCacheInvalidationService],
       useFactory: (
         dataSource: DataSource,
         eventEmitter: EventEmitter2,
-        sandboxLookupCacheInvalidationService: SandboxLookupCacheInvalidationService,
-      ) => new SandboxRepository(dataSource, eventEmitter, sandboxLookupCacheInvalidationService),
+        boxLookupCacheInvalidationService: BoxLookupCacheInvalidationService,
+      ) => new BoxRepository(dataSource, eventEmitter, boxLookupCacheInvalidationService),
     },
   ],
   exports: [

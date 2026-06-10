@@ -39,7 +39,7 @@ func (r *Resolver) GetOrganizationOtelConfig(ctx context.Context, authToken stri
 		return otelConfig, nil
 	}
 
-	otelConfig, res, err := r.apiclient.OrganizationsAPI.GetOrganizationOtelConfigBySandboxAuthToken(context.Background(), authToken).Execute()
+	otelConfig, res, err := r.apiclient.OrganizationsAPI.GetOrganizationOtelConfigByBoxAuthToken(context.Background(), authToken).Execute()
 	if err != nil && res != nil && res.StatusCode != 404 {
 		return nil, err
 	}
@@ -67,7 +67,7 @@ func (r *Resolver) GetOrganizationOtelConfig(ctx context.Context, authToken stri
 	return config, nil
 }
 
-// InvalidateCache removes a specific sandbox configuration from the cache.
-func (r *Resolver) InvalidateCache(ctx context.Context, sandboxID string) error {
-	return r.cache.Delete(ctx, sandboxID)
+// InvalidateCache removes a specific box configuration from the cache.
+func (r *Resolver) InvalidateCache(ctx context.Context, boxID string) error {
+	return r.cache.Delete(ctx, boxID)
 }

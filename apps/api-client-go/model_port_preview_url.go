@@ -21,8 +21,8 @@ var _ MappedNullable = &PortPreviewUrl{}
 
 // PortPreviewUrl struct for PortPreviewUrl
 type PortPreviewUrl struct {
-	// ID of the sandbox
-	SandboxId string `json:"sandboxId"`
+	// ID of the box
+	BoxId string `json:"boxId"`
 	// Preview url
 	Url string `json:"url"`
 	// Access token
@@ -36,9 +36,9 @@ type _PortPreviewUrl PortPreviewUrl
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewPortPreviewUrl(sandboxId string, url string, token string) *PortPreviewUrl {
+func NewPortPreviewUrl(boxId string, url string, token string) *PortPreviewUrl {
 	this := PortPreviewUrl{}
-	this.SandboxId = sandboxId
+	this.BoxId = boxId
 	this.Url = url
 	this.Token = token
 	return &this
@@ -52,28 +52,28 @@ func NewPortPreviewUrlWithDefaults() *PortPreviewUrl {
 	return &this
 }
 
-// GetSandboxId returns the SandboxId field value
-func (o *PortPreviewUrl) GetSandboxId() string {
+// GetBoxId returns the BoxId field value
+func (o *PortPreviewUrl) GetBoxId() string {
 	if o == nil {
 		var ret string
 		return ret
 	}
 
-	return o.SandboxId
+	return o.BoxId
 }
 
-// GetSandboxIdOk returns a tuple with the SandboxId field value
+// GetBoxIdOk returns a tuple with the BoxId field value
 // and a boolean to check if the value has been set.
-func (o *PortPreviewUrl) GetSandboxIdOk() (*string, bool) {
+func (o *PortPreviewUrl) GetBoxIdOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return &o.SandboxId, true
+	return &o.BoxId, true
 }
 
-// SetSandboxId sets field value
-func (o *PortPreviewUrl) SetSandboxId(v string) {
-	o.SandboxId = v
+// SetBoxId sets field value
+func (o *PortPreviewUrl) SetBoxId(v string) {
+	o.BoxId = v
 }
 
 // GetUrl returns the Url field value
@@ -134,7 +134,7 @@ func (o PortPreviewUrl) MarshalJSON() ([]byte, error) {
 
 func (o PortPreviewUrl) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
-	toSerialize["sandboxId"] = o.SandboxId
+	toSerialize["boxId"] = o.BoxId
 	toSerialize["url"] = o.Url
 	toSerialize["token"] = o.Token
 
@@ -150,7 +150,7 @@ func (o *PortPreviewUrl) UnmarshalJSON(data []byte) (err error) {
 	// by unmarshalling the object into a generic map with string keys and checking
 	// that every required field exists as a key in the generic map.
 	requiredProperties := []string{
-		"sandboxId",
+		"boxId",
 		"url",
 		"token",
 	}
@@ -182,7 +182,7 @@ func (o *PortPreviewUrl) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
-		delete(additionalProperties, "sandboxId")
+		delete(additionalProperties, "boxId")
 		delete(additionalProperties, "url")
 		delete(additionalProperties, "token")
 		o.AdditionalProperties = additionalProperties
@@ -226,3 +226,5 @@ func (v *NullablePortPreviewUrl) UnmarshalJSON(src []byte) error {
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }
+
+

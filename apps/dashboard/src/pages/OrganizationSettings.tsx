@@ -139,7 +139,7 @@ const OrganizationSettings: React.FC = () => {
             <Field className="grid sm:grid-cols-2 items-center">
               <FieldContent className="flex-1">
                 <FieldLabel htmlFor="organization-default-region">Default Region</FieldLabel>
-                <FieldDescription>The default target for creating sandboxes in this organization.</FieldDescription>
+                <FieldDescription>The default target for creating boxes in this organization.</FieldDescription>
               </FieldContent>
               {selectedOrganization.defaultRegionId ? (
                 <Input

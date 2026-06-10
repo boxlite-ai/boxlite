@@ -192,10 +192,10 @@ export function useDocsSearchCommands() {
           chainable: true,
         },
         {
-          id: 'suggestion-sandboxes',
-          label: 'Sandboxes',
+          id: 'suggestion-boxes',
+          label: 'Boxes',
           icon: <Container className="w-4 h-4" />,
-          onSelect: () => openDocs('/en/sandboxes'),
+          onSelect: () => openDocs('/en/boxes'),
         },
         {
           id: 'suggestion-snapshots',

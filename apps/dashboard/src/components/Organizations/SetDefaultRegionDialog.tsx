@@ -65,7 +65,7 @@ export const SetDefaultRegionDialog: React.FC<SetDefaultRegionDialogProps> = ({
         <DialogHeader>
           <DialogTitle>Set Default Region</DialogTitle>
           <DialogDescription>
-            Your organization needs a default region to create sandboxes and manage resources.
+            Your organization needs a default region to create boxes and manage resources.
           </DialogDescription>
         </DialogHeader>
         {!loadingRegions && regions.length === 0 ? (

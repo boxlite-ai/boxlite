@@ -4,7 +4,7 @@
  */
 
 import React, { useMemo } from 'react'
-import { useSandboxTraceSpans } from '@/hooks/useSandboxTraceSpans'
+import { useBoxTraceSpans } from '@/hooks/useBoxTraceSpans'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Spinner } from '@/components/ui/spinner'
@@ -12,7 +12,7 @@ import { CopyButton } from '@/components/CopyButton'
 import { TraceSpan } from '@boxlite-ai/api-client'
 
 interface TraceDetailsSheetProps {
-  sandboxId: string
+  boxId: string
   traceId: string | null
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -23,8 +23,8 @@ interface SpanWithDepth extends TraceSpan {
   children: SpanWithDepth[]
 }
 
-export const TraceDetailsSheet: React.FC<TraceDetailsSheetProps> = ({ sandboxId, traceId, open, onOpenChange }) => {
-  const { data: spans, isLoading } = useSandboxTraceSpans(sandboxId, traceId ?? undefined, {
+export const TraceDetailsSheet: React.FC<TraceDetailsSheetProps> = ({ boxId, traceId, open, onOpenChange }) => {
+  const { data: spans, isLoading } = useBoxTraceSpans(boxId, traceId ?? undefined, {
     enabled: !!traceId && open,
   })
 

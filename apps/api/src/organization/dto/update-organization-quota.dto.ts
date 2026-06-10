@@ -9,13 +9,13 @@ import { ApiProperty, ApiSchema } from '@nestjs/swagger'
 @ApiSchema({ name: 'UpdateOrganizationQuota' })
 export class UpdateOrganizationQuotaDto {
   @ApiProperty({ nullable: true })
-  maxCpuPerSandbox?: number
+  maxCpuPerBox?: number
 
   @ApiProperty({ nullable: true })
-  maxMemoryPerSandbox?: number
+  maxMemoryPerBox?: number
 
   @ApiProperty({ nullable: true })
-  maxDiskPerSandbox?: number
+  maxDiskPerBox?: number
 
   @ApiProperty({ nullable: true })
   snapshotQuota?: number
@@ -30,19 +30,19 @@ export class UpdateOrganizationQuotaDto {
   authenticatedRateLimit?: number
 
   @ApiProperty({ nullable: true })
-  sandboxCreateRateLimit?: number
+  boxCreateRateLimit?: number
 
   @ApiProperty({ nullable: true })
-  sandboxLifecycleRateLimit?: number
+  boxLifecycleRateLimit?: number
 
   @ApiProperty({ nullable: true })
   authenticatedRateLimitTtlSeconds?: number
 
   @ApiProperty({ nullable: true })
-  sandboxCreateRateLimitTtlSeconds?: number
+  boxCreateRateLimitTtlSeconds?: number
 
   @ApiProperty({ nullable: true })
-  sandboxLifecycleRateLimitTtlSeconds?: number
+  boxLifecycleRateLimitTtlSeconds?: number
 
   @ApiProperty({ nullable: true, description: 'Time in minutes before an unused snapshot is deactivated' })
   snapshotDeactivationTimeoutMinutes?: number

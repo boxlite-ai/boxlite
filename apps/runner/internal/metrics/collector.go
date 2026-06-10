@@ -36,11 +36,11 @@ type Collector struct {
 	cpuRing  *ring.Ring
 	cpuMutex sync.RWMutex
 
-	resourcesMutex      sync.RWMutex
-	allocatedCPU        float32
-	allocatedMemoryGiB  float32
-	allocatedDiskGiB    float32
-	startedSandboxCount float32
+	resourcesMutex     sync.RWMutex
+	allocatedCPU       float32
+	allocatedMemoryGiB float32
+	allocatedDiskGiB   float32
+	startedBoxCount    float32
 
 	cpuUsageSnapshotInterval           time.Duration
 	allocatedResourcesSnapshotInterval time.Duration
@@ -63,7 +63,7 @@ type Metrics struct {
 	TotalCPU              float32
 	TotalRAMGiB           float32
 	TotalDiskGiB          float32
-	StartedSandboxCount   float32
+	StartedBoxCount       float32
 }
 
 func NewCollector(cfg CollectorConfig) *Collector {
@@ -152,7 +152,7 @@ func (c *Collector) collect(ctx context.Context) (*Metrics, error) {
 	metrics.AllocatedCPU = c.allocatedCPU
 	metrics.AllocatedMemoryGiB = c.allocatedMemoryGiB
 	metrics.AllocatedDiskGiB = c.allocatedDiskGiB
-	metrics.StartedSandboxCount = c.startedSandboxCount
+	metrics.StartedBoxCount = c.startedBoxCount
 	c.resourcesMutex.RUnlock()
 
 	return metrics, nil
@@ -242,7 +242,7 @@ func (c *Collector) snapshotAllocatedResources(ctx context.Context) {
 			c.resourcesMutex.Lock()
 			c.allocatedCPU = totalCPU
 			c.allocatedMemoryGiB = totalMemoryMiB / 1024
-			c.startedSandboxCount = startedCount
+			c.startedBoxCount = startedCount
 			c.resourcesMutex.Unlock()
 		}
 	}

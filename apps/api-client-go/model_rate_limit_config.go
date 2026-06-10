@@ -24,10 +24,10 @@ type RateLimitConfig struct {
 	FailedAuth *RateLimitEntry `json:"failedAuth,omitempty"`
 	// Authenticated rate limit
 	Authenticated *RateLimitEntry `json:"authenticated,omitempty"`
-	// Sandbox create rate limit
-	SandboxCreate *RateLimitEntry `json:"sandboxCreate,omitempty"`
-	// Sandbox lifecycle rate limit
-	SandboxLifecycle *RateLimitEntry `json:"sandboxLifecycle,omitempty"`
+	// Box create rate limit
+	BoxCreate *RateLimitEntry `json:"boxCreate,omitempty"`
+	// Box lifecycle rate limit
+	BoxLifecycle *RateLimitEntry `json:"boxLifecycle,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -114,68 +114,68 @@ func (o *RateLimitConfig) SetAuthenticated(v RateLimitEntry) {
 	o.Authenticated = &v
 }
 
-// GetSandboxCreate returns the SandboxCreate field value if set, zero value otherwise.
-func (o *RateLimitConfig) GetSandboxCreate() RateLimitEntry {
-	if o == nil || IsNil(o.SandboxCreate) {
+// GetBoxCreate returns the BoxCreate field value if set, zero value otherwise.
+func (o *RateLimitConfig) GetBoxCreate() RateLimitEntry {
+	if o == nil || IsNil(o.BoxCreate) {
 		var ret RateLimitEntry
 		return ret
 	}
-	return *o.SandboxCreate
+	return *o.BoxCreate
 }
 
-// GetSandboxCreateOk returns a tuple with the SandboxCreate field value if set, nil otherwise
+// GetBoxCreateOk returns a tuple with the BoxCreate field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *RateLimitConfig) GetSandboxCreateOk() (*RateLimitEntry, bool) {
-	if o == nil || IsNil(o.SandboxCreate) {
+func (o *RateLimitConfig) GetBoxCreateOk() (*RateLimitEntry, bool) {
+	if o == nil || IsNil(o.BoxCreate) {
 		return nil, false
 	}
-	return o.SandboxCreate, true
+	return o.BoxCreate, true
 }
 
-// HasSandboxCreate returns a boolean if a field has been set.
-func (o *RateLimitConfig) HasSandboxCreate() bool {
-	if o != nil && !IsNil(o.SandboxCreate) {
+// HasBoxCreate returns a boolean if a field has been set.
+func (o *RateLimitConfig) HasBoxCreate() bool {
+	if o != nil && !IsNil(o.BoxCreate) {
 		return true
 	}
 
 	return false
 }
 
-// SetSandboxCreate gets a reference to the given RateLimitEntry and assigns it to the SandboxCreate field.
-func (o *RateLimitConfig) SetSandboxCreate(v RateLimitEntry) {
-	o.SandboxCreate = &v
+// SetBoxCreate gets a reference to the given RateLimitEntry and assigns it to the BoxCreate field.
+func (o *RateLimitConfig) SetBoxCreate(v RateLimitEntry) {
+	o.BoxCreate = &v
 }
 
-// GetSandboxLifecycle returns the SandboxLifecycle field value if set, zero value otherwise.
-func (o *RateLimitConfig) GetSandboxLifecycle() RateLimitEntry {
-	if o == nil || IsNil(o.SandboxLifecycle) {
+// GetBoxLifecycle returns the BoxLifecycle field value if set, zero value otherwise.
+func (o *RateLimitConfig) GetBoxLifecycle() RateLimitEntry {
+	if o == nil || IsNil(o.BoxLifecycle) {
 		var ret RateLimitEntry
 		return ret
 	}
-	return *o.SandboxLifecycle
+	return *o.BoxLifecycle
 }
 
-// GetSandboxLifecycleOk returns a tuple with the SandboxLifecycle field value if set, nil otherwise
+// GetBoxLifecycleOk returns a tuple with the BoxLifecycle field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *RateLimitConfig) GetSandboxLifecycleOk() (*RateLimitEntry, bool) {
-	if o == nil || IsNil(o.SandboxLifecycle) {
+func (o *RateLimitConfig) GetBoxLifecycleOk() (*RateLimitEntry, bool) {
+	if o == nil || IsNil(o.BoxLifecycle) {
 		return nil, false
 	}
-	return o.SandboxLifecycle, true
+	return o.BoxLifecycle, true
 }
 
-// HasSandboxLifecycle returns a boolean if a field has been set.
-func (o *RateLimitConfig) HasSandboxLifecycle() bool {
-	if o != nil && !IsNil(o.SandboxLifecycle) {
+// HasBoxLifecycle returns a boolean if a field has been set.
+func (o *RateLimitConfig) HasBoxLifecycle() bool {
+	if o != nil && !IsNil(o.BoxLifecycle) {
 		return true
 	}
 
 	return false
 }
 
-// SetSandboxLifecycle gets a reference to the given RateLimitEntry and assigns it to the SandboxLifecycle field.
-func (o *RateLimitConfig) SetSandboxLifecycle(v RateLimitEntry) {
-	o.SandboxLifecycle = &v
+// SetBoxLifecycle gets a reference to the given RateLimitEntry and assigns it to the BoxLifecycle field.
+func (o *RateLimitConfig) SetBoxLifecycle(v RateLimitEntry) {
+	o.BoxLifecycle = &v
 }
 
 func (o RateLimitConfig) MarshalJSON() ([]byte, error) {
@@ -194,11 +194,11 @@ func (o RateLimitConfig) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.Authenticated) {
 		toSerialize["authenticated"] = o.Authenticated
 	}
-	if !IsNil(o.SandboxCreate) {
-		toSerialize["sandboxCreate"] = o.SandboxCreate
+	if !IsNil(o.BoxCreate) {
+		toSerialize["boxCreate"] = o.BoxCreate
 	}
-	if !IsNil(o.SandboxLifecycle) {
-		toSerialize["sandboxLifecycle"] = o.SandboxLifecycle
+	if !IsNil(o.BoxLifecycle) {
+		toSerialize["boxLifecycle"] = o.BoxLifecycle
 	}
 
 	for key, value := range o.AdditionalProperties {
@@ -224,8 +224,8 @@ func (o *RateLimitConfig) UnmarshalJSON(data []byte) (err error) {
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "failedAuth")
 		delete(additionalProperties, "authenticated")
-		delete(additionalProperties, "sandboxCreate")
-		delete(additionalProperties, "sandboxLifecycle")
+		delete(additionalProperties, "boxCreate")
+		delete(additionalProperties, "boxLifecycle")
 		o.AdditionalProperties = additionalProperties
 	}
 
@@ -267,3 +267,5 @@ func (v *NullableRateLimitConfig) UnmarshalJSON(src []byte) error {
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }
+
+

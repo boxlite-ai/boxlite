@@ -21,9 +21,11 @@ const options = [
   { label: 'Pending', value: 'pending' },
 ]
 
+function DefaultFacetFilter() {
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  return <FacetFilter title="Status" options={options} selectedValues={selected} setSelectedValues={setSelected} />
+}
+
 export const Default: Story = {
-  render: () => {
-    const [selected, setSelected] = useState<Set<string>>(new Set())
-    return <FacetFilter title="Status" options={options} selectedValues={selected} setSelectedValues={setSelected} />
-  },
+  render: () => <DefaultFacetFilter />,
 }

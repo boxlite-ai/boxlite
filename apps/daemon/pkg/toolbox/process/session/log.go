@@ -58,7 +58,7 @@ func (s *SessionController) GetSessionCommandLogs(c *gin.Context) {
 // GetEntrypointLogs godoc
 //
 //	@Summary		Get entrypoint logs
-//	@Description	Get logs for a sandbox entrypoint session. Supports both HTTP and WebSocket streaming.
+//	@Description	Get logs for a box entrypoint session. Supports both HTTP and WebSocket streaming.
 //	@Tags			process
 //	@Produce		text/plain
 //	@Param			follow	query		boolean	false	"Follow logs in real-time (WebSocket only)"

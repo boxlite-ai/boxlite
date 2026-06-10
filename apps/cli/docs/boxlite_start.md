@@ -1,9 +1,9 @@
 ## boxlite start
 
-Start a sandbox
+Start a box
 
 ```
-boxlite start [SANDBOX_ID] | [SANDBOX_NAME] [flags]
+boxlite start [BOX_ID] | [BOX_NAME] [flags]
 ```
 
 ### Options inherited from parent commands
@@ -14,4 +14,5 @@ boxlite start [SANDBOX_ID] | [SANDBOX_NAME] [flags]
 
 ### SEE ALSO
 
-* [boxlite](boxlite.md)  - BoxLite CLI
+* [boxlite](boxlite.md)	 - BoxLite CLI
+

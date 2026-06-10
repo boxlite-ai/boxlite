@@ -5,7 +5,7 @@
  */
 
 import { Module } from '@nestjs/common'
-import { SandboxModule } from '../sandbox/sandbox.module'
+import { BoxModule } from '../box/box.module'
 import { AuthModule } from '../auth/auth.module'
 import { ApiKeyModule } from '../api-key/api-key.module'
 import { OrganizationModule } from '../organization/organization.module'
@@ -16,7 +16,7 @@ import { BoxliteProxyController } from './boxlite-proxy.controller'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 
 @Module({
-  imports: [SandboxModule, AuthModule, ApiKeyModule, OrganizationModule],
+  imports: [BoxModule, AuthModule, ApiKeyModule, OrganizationModule],
   controllers: [BoxliteMeController, BoxliteConfigController, BoxliteBoxController, BoxliteProxyController],
   providers: [BoxliteWsProxyService],
   exports: [BoxliteWsProxyService],

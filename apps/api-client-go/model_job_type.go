@@ -13,7 +13,6 @@ package apiclient
 
 import (
 	"encoding/json"
-	"fmt"
 )
 
 // JobType The type of the job
@@ -21,34 +20,36 @@ type JobType string
 
 // List of JobType
 const (
-	JOBTYPE_CREATE_SANDBOX JobType = "CREATE_SANDBOX"
-	JOBTYPE_START_SANDBOX JobType = "START_SANDBOX"
-	JOBTYPE_STOP_SANDBOX JobType = "STOP_SANDBOX"
-	JOBTYPE_DESTROY_SANDBOX JobType = "DESTROY_SANDBOX"
-	JOBTYPE_RESIZE_SANDBOX JobType = "RESIZE_SANDBOX"
+	JOBTYPE_CREATE_BOX JobType = "CREATE_BOX"
+	JOBTYPE_START_BOX JobType = "START_BOX"
+	JOBTYPE_STOP_BOX JobType = "STOP_BOX"
+	JOBTYPE_DESTROY_BOX JobType = "DESTROY_BOX"
+	JOBTYPE_RESIZE_BOX JobType = "RESIZE_BOX"
 	JOBTYPE_CREATE_BACKUP JobType = "CREATE_BACKUP"
 	JOBTYPE_BUILD_SNAPSHOT JobType = "BUILD_SNAPSHOT"
 	JOBTYPE_PULL_SNAPSHOT JobType = "PULL_SNAPSHOT"
-	JOBTYPE_RECOVER_SANDBOX JobType = "RECOVER_SANDBOX"
+	JOBTYPE_RECOVER_BOX JobType = "RECOVER_BOX"
 	JOBTYPE_INSPECT_SNAPSHOT_IN_REGISTRY JobType = "INSPECT_SNAPSHOT_IN_REGISTRY"
 	JOBTYPE_REMOVE_SNAPSHOT JobType = "REMOVE_SNAPSHOT"
-	JOBTYPE_UPDATE_SANDBOX_NETWORK_SETTINGS JobType = "UPDATE_SANDBOX_NETWORK_SETTINGS"
+	JOBTYPE_UPDATE_BOX_NETWORK_SETTINGS JobType = "UPDATE_BOX_NETWORK_SETTINGS"
+	JOBTYPE_UNKNOWN_DEFAULT_OPEN_API JobType = "unknown_default_open_api"
 )
 
 // All allowed values of JobType enum
 var AllowedJobTypeEnumValues = []JobType{
-	"CREATE_SANDBOX",
-	"START_SANDBOX",
-	"STOP_SANDBOX",
-	"DESTROY_SANDBOX",
-	"RESIZE_SANDBOX",
+	"CREATE_BOX",
+	"START_BOX",
+	"STOP_BOX",
+	"DESTROY_BOX",
+	"RESIZE_BOX",
 	"CREATE_BACKUP",
 	"BUILD_SNAPSHOT",
 	"PULL_SNAPSHOT",
-	"RECOVER_SANDBOX",
+	"RECOVER_BOX",
 	"INSPECT_SNAPSHOT_IN_REGISTRY",
 	"REMOVE_SNAPSHOT",
-	"UPDATE_SANDBOX_NETWORK_SETTINGS",
+	"UPDATE_BOX_NETWORK_SETTINGS",
+	"unknown_default_open_api",
 }
 
 func (v *JobType) UnmarshalJSON(src []byte) error {
@@ -65,7 +66,8 @@ func (v *JobType) UnmarshalJSON(src []byte) error {
 		}
 	}
 
-	return fmt.Errorf("%+v is not a valid JobType", value)
+	*v = JOBTYPE_UNKNOWN_DEFAULT_OPEN_API
+	return nil
 }
 
 // NewJobTypeFromValue returns a pointer to a valid JobType
@@ -75,7 +77,8 @@ func NewJobTypeFromValue(v string) (*JobType, error) {
 	if ev.IsValid() {
 		return &ev, nil
 	} else {
-		return nil, fmt.Errorf("invalid value '%v' for JobType: valid values are %v", v, AllowedJobTypeEnumValues)
+		enumValue := JOBTYPE_UNKNOWN_DEFAULT_OPEN_API
+		return &enumValue, nil
 	}
 }
 
@@ -129,3 +132,4 @@ func (v *NullableJobType) UnmarshalJSON(src []byte) error {
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }
+

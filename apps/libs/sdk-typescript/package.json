@@ -1,7 +1,7 @@
 {
   "name": "@boxlite-ai/sdk",
   "version": "0.0.0-dev",
-  "description": "BoxLite TypeScript SDK for sandbox management and code execution",
+  "description": "BoxLite TypeScript SDK for box management and code execution",
   "main": "./src/index.js",
   "types": "./src/index.d.ts",
   "repository": {
@@ -22,7 +22,7 @@
   },
   "keywords": [
     "boxlite",
-    "sandbox",
+    "box",
     "typescript",
     "sdk"
   ]

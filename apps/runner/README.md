@@ -20,7 +20,7 @@ the request path), see [`docs/architecture/README.md`](../../docs/architecture/R
 - The runner's overall process model — what the HTTP server handles, what the
   background goroutines do, and how they share the embedded BoxLite runtime.
 - Every major workflow the runner exposes:
-  - **Sandbox lifecycle** — create / start / stop / destroy / resize /
+  - **Box lifecycle** — create / start / stop / destroy / resize /
     recover / network-settings / info / backup
   - **Snapshot management** — async pull, async build, log streaming,
     info-or-error, removal, tag, registry inspect
@@ -31,7 +31,7 @@ the request path), see [`docs/architecture/README.md`](../../docs/architecture/R
   - **Runner info** — host CPU / memory / disk + service health
   - **Toolbox proxy** — browser xterm.js over WebSocket
   - **SSH gateway** — public-key SSH on a separate TCP port
-- The background services spawned at startup — sandbox state sync,
+- The background services spawned at startup — box state sync,
   metrics collector, v2 job poller, v2 healthcheck.
 - The complete REST surface (one consolidated table).
 
@@ -62,14 +62,14 @@ If you want the formal API schema, see
 │                                                                          │
 │  cmd/runner/main.go boots:                                               │
 │    • api.ApiServer            HTTP/WS listener on :3003                  │
-│    • SandboxSyncService       every 10s, reconcile local→remote state    │
+│    • BoxSyncService       every 10s, reconcile local→remote state    │
 │    • metrics.Collector        rolling CPU + allocation snapshots         │
 │    • sshgateway.Service       SSH listener (if SSH_GATEWAY_ENABLE=true)  │
 │    • v2.poller / executor     long-poll API for jobs (if ApiVersion==2)  │
 │    • v2.healthcheck           push health+metrics (if ApiVersion==2)     │
 │                                                                          │
 │  pkg/api/controllers/ (HTTP layer)                                       │
-│    sandbox.go    Create, Start, Stop, Destroy, Resize, Recover, ...      │
+│    box.go    Create, Start, Stop, Destroy, Resize, Recover, ...      │
 │    snapshot.go   PullSnapshot, BuildSnapshot, RemoveSnapshot, ...        │
 │    boxlite_exec.go         POST /exec, GET /executions/:id, ...          │
 │    boxlite_exec_attach.go  GET /attach (WebSocket)                       │
@@ -78,7 +78,7 @@ If you want the formal API schema, see
 │    proxy.go                /toolbox/*path (xterm.js + WS)                │
 │    info.go, health.go      /info, /                                      │
 │                                                                          │
-│  pkg/services/           SandboxService, SandboxSyncService              │
+│  pkg/services/           BoxService, BoxSyncService              │
 │  pkg/boxlite/            Client (FFI wrapper), ExecManager, registry     │
 │  pkg/cache/              BackupInfoCache, SnapshotErrorCache             │
 │  pkg/runner/v2/          poller, executor, healthcheck                   │
@@ -114,13 +114,13 @@ the in-process TTL caches under `pkg/cache/`.
    loads the Rust core, opens `~/.boxlite/`, and is the single shared
    handle to the VM hypervisor.
 2. **Service singletons** are constructed and stashed on the
-   `runner.GetInstance(...)` global: `SandboxService`, `BackupInfoCache`,
+   `runner.GetInstance(...)` global: `BoxService`, `BackupInfoCache`,
    `SnapshotErrorCache`, `metrics.Collector`. Controllers later read them
    via `runner.GetInstance(nil)`.
 3. **Background goroutines** are spawned (each one inherits the root
    context, so SIGTERM unwinds them cleanly):
-   - `SandboxSyncService.StartSyncProcess` — every 10 s, list local
-     boxes, ask the API for sandboxes still marked STARTED upstream,
+   - `BoxSyncService.StartSyncProcess` — every 10 s, list local
+     boxes, ask the API for boxes still marked STARTED upstream,
      and push any state mismatch to the API. One-way: **local state is
      authoritative**, the API is the replica being corrected.
    - `metrics.Collector.Start` — periodic CPU and allocation sampling
@@ -140,29 +140,29 @@ tears down the Rust runtime.
 
 ## Workflows
 
-### 1. Sandbox lifecycle
+### 1. Box lifecycle
 
-Path prefix: `/sandboxes`. Every endpoint here is a thin controller that
+Path prefix: `/boxes`. Every endpoint here is a thin controller that
 calls into `r.Boxlite` (the Go SDK / Rust core). State transitions and
 crash handling live in the runtime, not the runner.
 
 | Method | Path | Controller | Purpose |
 | --- | --- | --- | --- |
-| `POST` | `/sandboxes` | `Create` | Allocate box, pull/use snapshot, return daemon version |
-| `POST` | `/sandboxes/:id/start` | `Start` | Boot a stopped box (optional auth token + metadata) |
-| `POST` | `/sandboxes/:id/stop` | `Stop` | Graceful or `force` shutdown |
-| `POST` | `/sandboxes/:id/destroy` | `Destroy` | Tear down completely |
-| `POST` | `/sandboxes/:id/resize` | `Resize` | Adjust CPU / memory / disk |
-| `POST` | `/sandboxes/:id/recover` | `Recover` | Bring an `error` sandbox back via a named strategy |
-| `POST` | `/sandboxes/:id/is-recoverable` | `IsRecoverable` | Static check against `common.IsRecoverable(reason)` |
-| `POST` | `/sandboxes/:id/network-settings` | `UpdateNetworkSettings` | Set block-all / allow-list |
-| `POST` | `/sandboxes/:id/backup` | `CreateBackup` | Kick off async backup; updates `BackupInfoCache` |
-| `GET` | `/sandboxes/:id` | `Info` | Combined state + backup state + daemon version |
+| `POST` | `/boxes` | `Create` | Allocate box, pull/use snapshot, return daemon version |
+| `POST` | `/boxes/:id/start` | `Start` | Boot a stopped box (optional auth token + metadata) |
+| `POST` | `/boxes/:id/stop` | `Stop` | Graceful or `force` shutdown |
+| `POST` | `/boxes/:id/destroy` | `Destroy` | Tear down completely |
+| `POST` | `/boxes/:id/resize` | `Resize` | Adjust CPU / memory / disk |
+| `POST` | `/boxes/:id/recover` | `Recover` | Bring an `error` box back via a named strategy |
+| `POST` | `/boxes/:id/is-recoverable` | `IsRecoverable` | Static check against `common.IsRecoverable(reason)` |
+| `POST` | `/boxes/:id/network-settings` | `UpdateNetworkSettings` | Set block-all / allow-list |
+| `POST` | `/boxes/:id/backup` | `CreateBackup` | Kick off async backup; updates `BackupInfoCache` |
+| `GET` | `/boxes/:id` | `Info` | Combined state + backup state + daemon version |
 
 `Info` is the only endpoint that fans out: it pulls live state from the
 runtime _and_ backup state from `BackupInfoCache`, then fetches the guest
-daemon version only when the sandbox is `STARTED`. See
-[`pkg/services/sandbox.go`](pkg/services/sandbox.go).
+daemon version only when the box is `STARTED`. See
+[`pkg/services/box.go`](pkg/services/box.go).
 
 `CreateBackup` is fire-and-forget — the runtime starts the snapshot
 upload asynchronously and the controller returns `201`. Failures detected
@@ -432,7 +432,7 @@ durations, and network counters. All values come from
 
 - A snapshot from `metrics.Collector.Collect(ctx)` — host CPU load
   average, CPU/mem/disk %, summed allocated CPU/RAM/disk across running
-  sandboxes, snapshot count, started sandbox count.
+  boxes, snapshot count, started box count.
 - `runner.InspectRunnerServices(ctx)` — pings the BoxLite runtime with
   a 2 s timeout and reports `boxlite: healthy|<err>`.
 
@@ -441,7 +441,7 @@ the counters maintained in `pkg/common/` (operation counts, etc.).
 
 ### 7. Toolbox proxy (browser terminal)
 
-`Any /sandboxes/:sandboxId/toolbox/*path` — same controller serves two
+`Any /boxes/:boxId/toolbox/*path` — same controller serves two
 modes:
 
 - **HTTP GET** — returns the embedded xterm.js page (HTML + CDN links
@@ -460,8 +460,8 @@ When `SSH_GATEWAY_ENABLE=true`, the runner also listens on a configurable
 TCP port (`pkg/sshgateway/config.go::GetSSHGatewayPort`). Clients
 authenticate with a single shared public key configured on the runner
 (`GetSSHPublicKey`), and the **SSH username is interpreted as the
-sandbox ID**. Once authenticated, the handler opens an SSH client
-connection from the runner to `<sandboxId>:22220` (the toolbox SSH
+box ID**. Once authenticated, the handler opens an SSH client
+connection from the runner to `<boxId>:22220` (the toolbox SSH
 endpoint inside the box) and copies channels + requests bidirectionally.
 
 Caveat: the inner client→box connection currently uses a hardcoded
@@ -473,17 +473,17 @@ gateway port directly to untrusted clients without auditing this path.
 
 ## Background services
 
-### Sandbox state sync
+### Box state sync
 
-[`pkg/services/sandbox_sync.go`](pkg/services/sandbox_sync.go). Runs every
+[`pkg/services/box_sync.go`](pkg/services/box_sync.go). Runs every
 10 s (configurable in `main.go`). For each local box, fetches the
 authoritative state from BoxLite, then asks the control-plane API for
-all sandboxes currently `STARTED` and not under reconciliation, and
-calls `UpdateSandboxState` whenever the two disagree. One-way: local
+all boxes currently `STARTED` and not under reconciliation, and
+calls `UpdateBoxState` whenever the two disagree. One-way: local
 state wins.
 
 Boxes that don't appear in the remote `STARTED` list are skipped — the
-runner does not push state for sandboxes the API isn't tracking.
+runner does not push state for boxes the API isn't tracking.
 
 ### Metrics collector
 
@@ -495,7 +495,7 @@ independent loops:
   smoothed CPU % without re-sampling on each request.
 - **Allocated resources snapshot** every
   `AllocatedResourcesSnapshotInterval` — queries `Boxlite.ListInfo()`
-  and sums the CPU/RAM/disk allocations across running sandboxes.
+  and sums the CPU/RAM/disk allocations across running boxes.
 
 `Collect(ctx)` reads the current values with a short timeout and is
 called from both `/info` and the v2 healthcheck.
@@ -514,8 +514,8 @@ Each job is dispatched to a goroutine and handled in
 Supported job types:
 
 ```
-CREATE_SANDBOX, START_SANDBOX, STOP_SANDBOX, DESTROY_SANDBOX,
-RESIZE_SANDBOX, RECOVER_SANDBOX, UPDATE_SANDBOX_NETWORK_SETTINGS,
+CREATE_BOX, START_BOX, STOP_BOX, DESTROY_BOX,
+RESIZE_BOX, RECOVER_BOX, UPDATE_BOX_NETWORK_SETTINGS,
 CREATE_BACKUP,
 BUILD_SNAPSHOT, PULL_SNAPSHOT, REMOVE_SNAPSHOT, INSPECT_SNAPSHOT_IN_REGISTRY
 ```
@@ -525,7 +525,7 @@ After the handler returns, `updateJobStatus` reports `COMPLETED` or
 extracted from the job's `traceContext` map so the runner's spans chain
 under the API-side trace.
 
-This is the production path. The HTTP routes under `/sandboxes/` and
+This is the production path. The HTTP routes under `/boxes/` and
 `/snapshots/` exist for direct/SDK use; v2 turns those into pull-based
 job execution.
 
@@ -549,17 +549,17 @@ the Swagger UI (development only).
 | `GET` | `/` | Health check (public) |
 | `GET` | `/info` | Runner metrics + service health |
 | `GET` | `/metrics` | Prometheus scrape |
-| `POST` | `/sandboxes` | Create sandbox |
-| `GET` | `/sandboxes/:id` | Sandbox info (state + backup state + daemon version) |
-| `POST` | `/sandboxes/:id/start` | Start |
-| `POST` | `/sandboxes/:id/stop` | Stop (graceful or `force`) |
-| `POST` | `/sandboxes/:id/destroy` | Destroy |
-| `POST` | `/sandboxes/:id/resize` | Resize CPU / memory / disk |
-| `POST` | `/sandboxes/:id/backup` | Async backup |
-| `POST` | `/sandboxes/:id/recover` | Recover from error state |
-| `POST` | `/sandboxes/:id/is-recoverable` | Check whether an error reason is recoverable |
-| `POST` | `/sandboxes/:id/network-settings` | Update block-all / allow-list |
-| `Any` | `/sandboxes/:id/toolbox/*path` | xterm.js page + WS terminal |
+| `POST` | `/boxes` | Create box |
+| `GET` | `/boxes/:id` | Box info (state + backup state + daemon version) |
+| `POST` | `/boxes/:id/start` | Start |
+| `POST` | `/boxes/:id/stop` | Stop (graceful or `force`) |
+| `POST` | `/boxes/:id/destroy` | Destroy |
+| `POST` | `/boxes/:id/resize` | Resize CPU / memory / disk |
+| `POST` | `/boxes/:id/backup` | Async backup |
+| `POST` | `/boxes/:id/recover` | Recover from error state |
+| `POST` | `/boxes/:id/is-recoverable` | Check whether an error reason is recoverable |
+| `POST` | `/boxes/:id/network-settings` | Update block-all / allow-list |
+| `Any` | `/boxes/:id/toolbox/*path` | xterm.js page + WS terminal |
 | `POST` | `/snapshots/pull` | Async pull (mirror + optional push) |
 | `POST` | `/snapshots/build` | Async build |
 | `GET` | `/snapshots/exists` | Local existence check |
@@ -642,14 +642,14 @@ scripts/build/fix-go-symbols.sh target/debug/libboxlite.a
 
 - **HTTP layer**:
   - [`pkg/api/server.go`](pkg/api/server.go) — route registration, middleware
-  - [`pkg/api/controllers/sandbox.go`](pkg/api/controllers/sandbox.go) — lifecycle
+  - [`pkg/api/controllers/box.go`](pkg/api/controllers/box.go) — lifecycle
   - [`pkg/api/controllers/snapshot.go`](pkg/api/controllers/snapshot.go) — pull/build/inspect
   - [`pkg/api/controllers/boxlite_exec.go`](pkg/api/controllers/boxlite_exec.go) — exec create / signal / resize / status / legacy I/O
   - [`pkg/api/controllers/boxlite_exec_attach.go`](pkg/api/controllers/boxlite_exec_attach.go) — `/attach` WebSocket
   - [`pkg/api/controllers/boxlite_files.go`](pkg/api/controllers/boxlite_files.go), [`boxlite_metrics.go`](pkg/api/controllers/boxlite_metrics.go), [`proxy.go`](pkg/api/controllers/proxy.go), [`info.go`](pkg/api/controllers/info.go)
 
 - **Services / state**:
-  - [`pkg/services/sandbox.go`](pkg/services/sandbox.go), [`sandbox_sync.go`](pkg/services/sandbox_sync.go)
+  - [`pkg/services/box.go`](pkg/services/box.go), [`box_sync.go`](pkg/services/box_sync.go)
   - [`pkg/boxlite/client.go`](pkg/boxlite/client.go) — Go SDK wrapper
   - [`pkg/boxlite/exec_manager.go`](pkg/boxlite/exec_manager.go) — `ManagedExec`, reaping
   - [`pkg/cache/`](pkg/cache/) — backup info and snapshot error caches

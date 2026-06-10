@@ -11,7 +11,7 @@ import { DockerRegistry } from '../entities/docker-registry.entity'
 import { CreateDockerRegistryInternalDto } from '../dto/create-docker-registry-internal.dto'
 import { UpdateDockerRegistryDto } from '../dto/update-docker-registry.dto'
 import { ApiOAuth2 } from '@nestjs/swagger'
-import { RegistryPushAccessDto } from '../../sandbox/dto/registry-push-access-dto'
+import { RegistryPushAccessDto } from '../../box/dto/registry-push-access-dto'
 import {
   DOCKER_REGISTRY_PROVIDER,
   IDockerRegistryProvider,
@@ -697,7 +697,7 @@ export class DockerRegistryService {
     }
   }
 
-  async deleteSandboxRepository(repository: string, registry: DockerRegistry): Promise<void> {
+  async deleteBoxRepository(repository: string, registry: DockerRegistry): Promise<void> {
     try {
       // Delete both backup and snapshot repositories - necessary due to renaming
       await this.deleteRepositoryWithPrefix(repository, 'backup-', registry)

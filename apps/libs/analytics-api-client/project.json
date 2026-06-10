@@ -17,12 +17,12 @@
     },
     "generate:api-client": {
       "executor": "nx:run-commands",
-      "inputs": ["apiClient"],
+      "inputs": ["{projectRoot}/swagger.json", { "env": "DEFAULT_PACKAGE_VERSION" }],
       "outputs": ["{projectRoot}/src"],
       "options": {
         "commands": [
           "rm -rf {projectRoot}/src",
-          "yarn run openapi-generator-cli generate --git-repo-id=boxlite --git-user-id=boxlite-ai -i tmp/swagger.json -g typescript-axios --additional-properties=supportsES6=true,typescriptThreePlus=true,withSeparateModelsAndApi=true,apiPackage=api,modelPackage=models,useTags=true,enumPropertyNaming=UPPERCASE --type-mappings=DateTime=Date -o libs/analytics-api-client/src"
+          "yarn run openapi-generator-cli generate --git-repo-id=boxlite --git-user-id=boxlite-ai -i libs/analytics-api-client/swagger.json -g typescript-axios --additional-properties=supportsES6=true,typescriptThreePlus=true,withSeparateModelsAndApi=true,apiPackage=api,modelPackage=models,useTags=true,enumPropertyNaming=UPPERCASE --type-mappings=DateTime=Date -o libs/analytics-api-client/src"
         ],
         "parallel": false
       }

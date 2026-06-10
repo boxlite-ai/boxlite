@@ -7,58 +7,58 @@
 import { Injectable } from '@nestjs/common'
 import { OnEvent } from '@nestjs/event-emitter'
 import { NotificationEmitter } from '../gateways/notification-emitter.abstract'
-import { SandboxEvents } from '../../sandbox/constants/sandbox-events.constants'
-import { SandboxCreatedEvent } from '../../sandbox/events/sandbox-create.event'
-import { SandboxStateUpdatedEvent } from '../../sandbox/events/sandbox-state-updated.event'
-import { SnapshotCreatedEvent } from '../../sandbox/events/snapshot-created.event'
-import { SnapshotEvents } from '../../sandbox/constants/snapshot-events'
-import { SnapshotDto } from '../../sandbox/dto/snapshot.dto'
-import { SnapshotStateUpdatedEvent } from '../../sandbox/events/snapshot-state-updated.event'
-import { SnapshotRemovedEvent } from '../../sandbox/events/snapshot-removed.event'
-import { VolumeEvents } from '../../sandbox/constants/volume-events'
-import { VolumeCreatedEvent } from '../../sandbox/events/volume-created.event'
-import { VolumeDto } from '../../sandbox/dto/volume.dto'
-import { VolumeStateUpdatedEvent } from '../../sandbox/events/volume-state-updated.event'
-import { VolumeLastUsedAtUpdatedEvent } from '../../sandbox/events/volume-last-used-at-updated.event'
-import { SandboxDesiredStateUpdatedEvent } from '../../sandbox/events/sandbox-desired-state-updated.event'
-import { RunnerEvents } from '../../sandbox/constants/runner-events'
-import { RunnerDto } from '../../sandbox/dto/runner.dto'
-import { RunnerCreatedEvent } from '../../sandbox/events/runner-created.event'
-import { RunnerStateUpdatedEvent } from '../../sandbox/events/runner-state-updated.event'
-import { RunnerUnschedulableUpdatedEvent } from '../../sandbox/events/runner-unschedulable-updated.event'
+import { BoxEvents } from '../../box/constants/box-events.constants'
+import { BoxCreatedEvent } from '../../box/events/box-create.event'
+import { BoxStateUpdatedEvent } from '../../box/events/box-state-updated.event'
+import { SnapshotCreatedEvent } from '../../box/events/snapshot-created.event'
+import { SnapshotEvents } from '../../box/constants/snapshot-events'
+import { SnapshotDto } from '../../box/dto/snapshot.dto'
+import { SnapshotStateUpdatedEvent } from '../../box/events/snapshot-state-updated.event'
+import { SnapshotRemovedEvent } from '../../box/events/snapshot-removed.event'
+import { VolumeEvents } from '../../box/constants/volume-events'
+import { VolumeCreatedEvent } from '../../box/events/volume-created.event'
+import { VolumeDto } from '../../box/dto/volume.dto'
+import { VolumeStateUpdatedEvent } from '../../box/events/volume-state-updated.event'
+import { VolumeLastUsedAtUpdatedEvent } from '../../box/events/volume-last-used-at-updated.event'
+import { BoxDesiredStateUpdatedEvent } from '../../box/events/box-desired-state-updated.event'
+import { RunnerEvents } from '../../box/constants/runner-events'
+import { RunnerDto } from '../../box/dto/runner.dto'
+import { RunnerCreatedEvent } from '../../box/events/runner-created.event'
+import { RunnerStateUpdatedEvent } from '../../box/events/runner-state-updated.event'
+import { RunnerUnschedulableUpdatedEvent } from '../../box/events/runner-unschedulable-updated.event'
 import { RegionService } from '../../region/services/region.service'
-import { SandboxService } from '../../sandbox/services/sandbox.service'
+import { BoxService } from '../../box/services/box.service'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
-import { SANDBOX_EVENT_CHANNEL } from '../../common/constants/constants'
+import { BOX_EVENT_CHANNEL } from '../../common/constants/constants'
 
 @Injectable()
 export class NotificationService {
   constructor(
     private readonly notificationEmitter: NotificationEmitter,
     private readonly regionService: RegionService,
-    private readonly sandboxService: SandboxService,
+    private readonly boxService: BoxService,
     @InjectRedis() private readonly redis: Redis,
   ) {}
 
-  @OnEvent(SandboxEvents.CREATED)
-  async handleSandboxCreated(event: SandboxCreatedEvent) {
-    const dto = await this.sandboxService.toSandboxDto(event.sandbox)
-    this.notificationEmitter.emitSandboxCreated(dto)
+  @OnEvent(BoxEvents.CREATED)
+  async handleBoxCreated(event: BoxCreatedEvent) {
+    const dto = await this.boxService.toBoxDto(event.box)
+    this.notificationEmitter.emitBoxCreated(dto)
   }
 
-  @OnEvent(SandboxEvents.STATE_UPDATED)
-  async handleSandboxStateUpdated(event: SandboxStateUpdatedEvent) {
-    const dto = await this.sandboxService.toSandboxDto(event.sandbox)
-    this.notificationEmitter.emitSandboxStateUpdated(dto, event.oldState, event.newState)
-    this.redis.publish(SANDBOX_EVENT_CHANNEL, JSON.stringify(event))
+  @OnEvent(BoxEvents.STATE_UPDATED)
+  async handleBoxStateUpdated(event: BoxStateUpdatedEvent) {
+    const dto = await this.boxService.toBoxDto(event.box)
+    this.notificationEmitter.emitBoxStateUpdated(dto, event.oldState, event.newState)
+    this.redis.publish(BOX_EVENT_CHANNEL, JSON.stringify(event))
   }
 
-  @OnEvent(SandboxEvents.DESIRED_STATE_UPDATED)
-  async handleSandboxDesiredStateUpdated(event: SandboxDesiredStateUpdatedEvent) {
-    const dto = await this.sandboxService.toSandboxDto(event.sandbox)
-    this.notificationEmitter.emitSandboxDesiredStateUpdated(dto, event.oldDesiredState, event.newDesiredState)
-    this.redis.publish(SANDBOX_EVENT_CHANNEL, JSON.stringify(event))
+  @OnEvent(BoxEvents.DESIRED_STATE_UPDATED)
+  async handleBoxDesiredStateUpdated(event: BoxDesiredStateUpdatedEvent) {
+    const dto = await this.boxService.toBoxDto(event.box)
+    this.notificationEmitter.emitBoxDesiredStateUpdated(dto, event.oldDesiredState, event.newDesiredState)
+    this.redis.publish(BOX_EVENT_CHANNEL, JSON.stringify(event))
   }
 
   @OnEvent(SnapshotEvents.CREATED)

@@ -36,9 +36,9 @@ type RunnerInfo struct {
 	ApiKey string `json:"apiKey"`
 }
 
-const SANDBOX_AUTH_KEY_HEADER = "X-BoxLite-Preview-Token"
-const SANDBOX_AUTH_KEY_QUERY_PARAM = "BOXLITE_SANDBOX_AUTH_KEY"
-const SANDBOX_AUTH_COOKIE_NAME = "boxlite-sandbox-auth-"
+const BOX_AUTH_KEY_HEADER = "X-BoxLite-Preview-Token"
+const BOX_AUTH_KEY_QUERY_PARAM = "BOXLITE_BOX_AUTH_KEY"
+const BOX_AUTH_COOKIE_NAME = "boxlite-box-auth-"
 const SKIP_LAST_ACTIVITY_UPDATE_HEADER = "X-BoxLite-Skip-Last-Activity-Update"
 const ACTIVITY_POLL_STOP_KEY = "boxlite-activity-poll-stop"
 const TERMINAL_PORT = "22222"
@@ -61,12 +61,12 @@ type Proxy struct {
 	secureCookie *securecookie.SecureCookie
 	cookieDomain *string
 
-	apiclient                      *apiclient.APIClient
-	runnerCache                    common_cache.ICache[RunnerInfo]
-	sandboxRunnerCache             common_cache.ICache[RunnerInfo]
-	sandboxPublicCache             common_cache.ICache[bool]
-	sandboxAuthKeyValidCache       common_cache.ICache[bool]
-	sandboxLastActivityUpdateCache common_cache.ICache[bool]
+	apiclient                  *apiclient.APIClient
+	runnerCache                common_cache.ICache[RunnerInfo]
+	boxRunnerCache             common_cache.ICache[RunnerInfo]
+	boxPublicCache             common_cache.ICache[bool]
+	boxAuthKeyValidCache       common_cache.ICache[bool]
+	boxLastActivityUpdateCache common_cache.ICache[bool]
 }
 
 func StartProxy(ctx context.Context, config *config.Config) error {
@@ -84,7 +84,7 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 
 	if config.Redis != nil {
 		var err error
-		proxy.sandboxRunnerCache, err = common_cache.NewRedisCache[RunnerInfo](config.Redis, "proxy:sandbox-runner-info:")
+		proxy.boxRunnerCache, err = common_cache.NewRedisCache[RunnerInfo](config.Redis, "proxy:box-runner-info:")
 		if err != nil {
 			return err
 		}
@@ -92,24 +92,24 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 		if err != nil {
 			return err
 		}
-		proxy.sandboxPublicCache, err = common_cache.NewRedisCache[bool](config.Redis, "proxy:sandbox-public:")
+		proxy.boxPublicCache, err = common_cache.NewRedisCache[bool](config.Redis, "proxy:box-public:")
 		if err != nil {
 			return err
 		}
-		proxy.sandboxAuthKeyValidCache, err = common_cache.NewRedisCache[bool](config.Redis, "proxy:sandbox-auth-key-valid:")
+		proxy.boxAuthKeyValidCache, err = common_cache.NewRedisCache[bool](config.Redis, "proxy:box-auth-key-valid:")
 		if err != nil {
 			return err
 		}
-		proxy.sandboxLastActivityUpdateCache, err = common_cache.NewRedisCache[bool](config.Redis, "proxy:sandbox-last-activity-update:")
+		proxy.boxLastActivityUpdateCache, err = common_cache.NewRedisCache[bool](config.Redis, "proxy:box-last-activity-update:")
 		if err != nil {
 			return err
 		}
 	} else {
-		proxy.sandboxRunnerCache = common_cache.NewMapCache[RunnerInfo](ctx)
+		proxy.boxRunnerCache = common_cache.NewMapCache[RunnerInfo](ctx)
 		proxy.runnerCache = common_cache.NewMapCache[RunnerInfo](ctx)
-		proxy.sandboxPublicCache = common_cache.NewMapCache[bool](ctx)
-		proxy.sandboxAuthKeyValidCache = common_cache.NewMapCache[bool](ctx)
-		proxy.sandboxLastActivityUpdateCache = common_cache.NewMapCache[bool](ctx)
+		proxy.boxPublicCache = common_cache.NewMapCache[bool](ctx)
+		proxy.boxAuthKeyValidCache = common_cache.NewMapCache[bool](ctx)
+		proxy.boxLastActivityUpdateCache = common_cache.NewMapCache[bool](ctx)
 	}
 
 	shutdownWg := &sync.WaitGroup{}
@@ -193,8 +193,8 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 						return
 					}
 
-					if regexp.MustCompile(`^/sandboxes/[\w-]+/build-logs$`).MatchString(ctx.Request.URL.Path) {
-						common_proxy.NewProxyRequestHandler(proxy.getSandboxBuildTarget, nil)(ctx)
+					if regexp.MustCompile(`^/boxes/[\w-]+/build-logs$`).MatchString(ctx.Request.URL.Path) {
+						common_proxy.NewProxyRequestHandler(proxy.getBoxBuildTarget, nil)(ctx)
 						return
 					}
 				}
@@ -202,13 +202,13 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 
 			if strings.HasPrefix(ctx.Request.URL.Path, "/toolbox/") {
 				ctx.Set(IS_TOOLBOX_REQUEST_KEY, true)
-				_, sandboxID, _, err := proxy.parseToolboxSubpath(ctx.Request.URL.Path)
+				_, boxID, _, err := proxy.parseToolboxSubpath(ctx.Request.URL.Path)
 				if err != nil {
 					ctx.Error(common_errors.NewNotFoundError(errors.New("not found")))
 					return
 				}
 
-				prefix := fmt.Sprintf("/toolbox/%s", sandboxID)
+				prefix := fmt.Sprintf("/toolbox/%s", boxID)
 
 				modifyResponse := func(res *http.Response) error {
 					if res.StatusCode >= 300 && res.StatusCode < 400 {

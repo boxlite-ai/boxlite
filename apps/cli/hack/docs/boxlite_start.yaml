@@ -1,6 +1,6 @@
 name: boxlite start
-synopsis: Start a sandbox
-usage: boxlite start [SANDBOX_ID] | [SANDBOX_NAME] [flags]
+synopsis: Start a box
+usage: boxlite start [BOX_ID] | [BOX_NAME] [flags]
 inherited_options:
   - name: help
     default_value: 'false'

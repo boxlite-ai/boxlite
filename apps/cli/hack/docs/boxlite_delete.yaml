@@ -1,11 +1,11 @@
 name: boxlite delete
-synopsis: Delete a sandbox
-usage: boxlite delete [SANDBOX_ID] | [SANDBOX_NAME] [flags]
+synopsis: Delete a box
+usage: boxlite delete [BOX_ID] | [BOX_NAME] [flags]
 options:
   - name: all
     shorthand: a
     default_value: 'false'
-    usage: Delete all sandboxes
+    usage: Delete all boxes
 inherited_options:
   - name: help
     default_value: 'false'

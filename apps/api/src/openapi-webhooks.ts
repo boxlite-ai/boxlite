@@ -7,8 +7,8 @@
 import { OpenAPIObject, getSchemaPath } from '@nestjs/swagger'
 import { WebhookEvent } from './webhook/constants/webhook-events.constants'
 import {
-  SandboxCreatedWebhookDto,
-  SandboxStateUpdatedWebhookDto,
+  BoxCreatedWebhookDto,
+  BoxStateUpdatedWebhookDto,
   SnapshotCreatedWebhookDto,
   SnapshotStateUpdatedWebhookDto,
   SnapshotRemovedWebhookDto,
@@ -42,13 +42,13 @@ export function addWebhookDocumentation(document: OpenAPIObject): OpenAPIObjectW
   return {
     ...document,
     webhooks: {
-      [WebhookEvent.SANDBOX_CREATED]: {
+      [WebhookEvent.BOX_CREATED]: {
         post: {
           requestBody: {
-            description: 'Sandbox created event',
+            description: 'Box created event',
             content: {
               'application/json': {
-                schema: { $ref: getSchemaPath(SandboxCreatedWebhookDto) },
+                schema: { $ref: getSchemaPath(BoxCreatedWebhookDto) },
               },
             },
           },
@@ -59,13 +59,13 @@ export function addWebhookDocumentation(document: OpenAPIObject): OpenAPIObjectW
           },
         },
       },
-      [WebhookEvent.SANDBOX_STATE_UPDATED]: {
+      [WebhookEvent.BOX_STATE_UPDATED]: {
         post: {
           requestBody: {
-            description: 'Sandbox state updated event',
+            description: 'Box state updated event',
             content: {
               'application/json': {
-                schema: { $ref: getSchemaPath(SandboxStateUpdatedWebhookDto) },
+                schema: { $ref: getSchemaPath(BoxStateUpdatedWebhookDto) },
               },
             },
           },

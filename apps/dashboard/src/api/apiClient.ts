@@ -19,7 +19,7 @@ import {
   OrganizationsApi,
   RegionsApi,
   RunnersApi,
-  SandboxApi,
+  BoxApi,
   SnapshotsApi,
   ToolboxApi,
   UsersApi,
@@ -32,7 +32,7 @@ import { BoxliteError } from './errors'
 export class ApiClient {
   private config: Configuration
   private _snapshotApi: SnapshotsApi
-  private _sandboxApi: SandboxApi
+  private _boxApi: BoxApi
   private _userApi: UsersApi
   private _apiKeyApi: ApiKeysApi
   private _dockerRegistryApi: DockerRegistryApi
@@ -73,7 +73,7 @@ export class ApiClient {
 
     // Initialize APIs
     this._snapshotApi = new SnapshotsApi(this.config, undefined, axiosInstance)
-    this._sandboxApi = new SandboxApi(this.config, undefined, axiosInstance)
+    this._boxApi = new BoxApi(this.config, undefined, axiosInstance)
     this._userApi = new UsersApi(this.config, undefined, axiosInstance)
     this._apiKeyApi = new ApiKeysApi(this.config, undefined, axiosInstance)
     this._dockerRegistryApi = new DockerRegistryApi(this.config, undefined, axiosInstance)
@@ -112,8 +112,8 @@ export class ApiClient {
     return this._snapshotApi
   }
 
-  public get sandboxApi() {
-    return this._sandboxApi
+  public get boxApi() {
+    return this._boxApi
   }
 
   public get userApi() {

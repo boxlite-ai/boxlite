@@ -1,6 +1,6 @@
 ## boxlite list
 
-List sandboxes
+List boxes
 
 ```
 boxlite list [flags]
@@ -22,4 +22,5 @@ boxlite list [flags]
 
 ### SEE ALSO
 
-* [boxlite](boxlite.md)  - BoxLite CLI
+* [boxlite](boxlite.md)	 - BoxLite CLI
+

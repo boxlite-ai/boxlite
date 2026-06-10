@@ -23,7 +23,7 @@ var _ MappedNullable = &PtySessionInfo{}
 type PtySessionInfo struct {
 	// The unique identifier for the PTY session
 	Id string `json:"id"`
-	// Starting directory for the PTY session, defaults to the sandbox's working directory
+	// Starting directory for the PTY session, defaults to the box's working directory
 	Cwd string `json:"cwd"`
 	// Environment variables for the PTY session
 	Envs map[string]interface{} `json:"envs"`
@@ -378,3 +378,5 @@ func (v *NullablePtySessionInfo) UnmarshalJSON(src []byte) error {
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }
+
+

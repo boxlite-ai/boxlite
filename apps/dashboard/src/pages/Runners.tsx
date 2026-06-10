@@ -171,7 +171,7 @@ const Runners: React.FC = () => {
         data: { unschedulable: !runnerToToggleScheduling.unschedulable },
       })
       toast.success(
-        `Runner is now ${runnerToToggleScheduling.unschedulable ? 'available' : 'unavailable'} for scheduling new sandboxes`,
+        `Runner is now ${runnerToToggleScheduling.unschedulable ? 'available' : 'unavailable'} for scheduling new boxes`,
       )
     } catch (error) {
       handleApiError(error, 'Failed to update runner scheduling status')
@@ -250,7 +250,7 @@ const Runners: React.FC = () => {
               <DialogTitle>Update Runner</DialogTitle>
               <DialogDescription>
                 Are you sure you want to update the scheduling status of this runner? This will make the runner{' '}
-                {runnerToToggleScheduling.unschedulable ? 'available' : 'unavailable'} for scheduling new sandboxes.
+                {runnerToToggleScheduling.unschedulable ? 'available' : 'unavailable'} for scheduling new boxes.
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>

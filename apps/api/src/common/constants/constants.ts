@@ -4,4 +4,4 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-export const SANDBOX_EVENT_CHANNEL = 'sandbox.event.channel'
+export const BOX_EVENT_CHANNEL = 'box.event.channel'

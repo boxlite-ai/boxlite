@@ -44,32 +44,32 @@ type Organization struct {
 	SuspendedUntil time.Time `json:"suspendedUntil"`
 	// Suspension cleanup grace period hours
 	SuspensionCleanupGracePeriodHours float32 `json:"suspensionCleanupGracePeriodHours"`
-	// Max CPU per sandbox
-	MaxCpuPerSandbox float32 `json:"maxCpuPerSandbox"`
-	// Max memory per sandbox
-	MaxMemoryPerSandbox float32 `json:"maxMemoryPerSandbox"`
-	// Max disk per sandbox
-	MaxDiskPerSandbox float32 `json:"maxDiskPerSandbox"`
+	// Max CPU per box
+	MaxCpuPerBox float32 `json:"maxCpuPerBox"`
+	// Max memory per box
+	MaxMemoryPerBox float32 `json:"maxMemoryPerBox"`
+	// Max disk per box
+	MaxDiskPerBox float32 `json:"maxDiskPerBox"`
 	// Time in minutes before an unused snapshot is deactivated
 	SnapshotDeactivationTimeoutMinutes float32 `json:"snapshotDeactivationTimeoutMinutes"`
-	// Sandbox default network block all
-	SandboxLimitedNetworkEgress bool `json:"sandboxLimitedNetworkEgress"`
+	// Box default network block all
+	BoxLimitedNetworkEgress bool `json:"boxLimitedNetworkEgress"`
 	// Default region ID
 	DefaultRegionId *string `json:"defaultRegionId,omitempty"`
 	// Authenticated rate limit per minute
 	AuthenticatedRateLimit NullableFloat32 `json:"authenticatedRateLimit"`
-	// Sandbox create rate limit per minute
-	SandboxCreateRateLimit NullableFloat32 `json:"sandboxCreateRateLimit"`
-	// Sandbox lifecycle rate limit per minute
-	SandboxLifecycleRateLimit NullableFloat32 `json:"sandboxLifecycleRateLimit"`
+	// Box create rate limit per minute
+	BoxCreateRateLimit NullableFloat32 `json:"boxCreateRateLimit"`
+	// Box lifecycle rate limit per minute
+	BoxLifecycleRateLimit NullableFloat32 `json:"boxLifecycleRateLimit"`
 	// Experimental configuration
 	ExperimentalConfig map[string]interface{} `json:"experimentalConfig"`
 	// Authenticated rate limit TTL in seconds
 	AuthenticatedRateLimitTtlSeconds NullableFloat32 `json:"authenticatedRateLimitTtlSeconds"`
-	// Sandbox create rate limit TTL in seconds
-	SandboxCreateRateLimitTtlSeconds NullableFloat32 `json:"sandboxCreateRateLimitTtlSeconds"`
-	// Sandbox lifecycle rate limit TTL in seconds
-	SandboxLifecycleRateLimitTtlSeconds NullableFloat32 `json:"sandboxLifecycleRateLimitTtlSeconds"`
+	// Box create rate limit TTL in seconds
+	BoxCreateRateLimitTtlSeconds NullableFloat32 `json:"boxCreateRateLimitTtlSeconds"`
+	// Box lifecycle rate limit TTL in seconds
+	BoxLifecycleRateLimitTtlSeconds NullableFloat32 `json:"boxLifecycleRateLimitTtlSeconds"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -79,7 +79,7 @@ type _Organization Organization
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewOrganization(id string, name string, createdBy string, personal bool, createdAt time.Time, updatedAt time.Time, suspended bool, suspendedAt time.Time, suspensionReason string, suspendedUntil time.Time, suspensionCleanupGracePeriodHours float32, maxCpuPerSandbox float32, maxMemoryPerSandbox float32, maxDiskPerSandbox float32, snapshotDeactivationTimeoutMinutes float32, sandboxLimitedNetworkEgress bool, authenticatedRateLimit NullableFloat32, sandboxCreateRateLimit NullableFloat32, sandboxLifecycleRateLimit NullableFloat32, experimentalConfig map[string]interface{}, authenticatedRateLimitTtlSeconds NullableFloat32, sandboxCreateRateLimitTtlSeconds NullableFloat32, sandboxLifecycleRateLimitTtlSeconds NullableFloat32) *Organization {
+func NewOrganization(id string, name string, createdBy string, personal bool, createdAt time.Time, updatedAt time.Time, suspended bool, suspendedAt time.Time, suspensionReason string, suspendedUntil time.Time, suspensionCleanupGracePeriodHours float32, maxCpuPerBox float32, maxMemoryPerBox float32, maxDiskPerBox float32, snapshotDeactivationTimeoutMinutes float32, boxLimitedNetworkEgress bool, authenticatedRateLimit NullableFloat32, boxCreateRateLimit NullableFloat32, boxLifecycleRateLimit NullableFloat32, experimentalConfig map[string]interface{}, authenticatedRateLimitTtlSeconds NullableFloat32, boxCreateRateLimitTtlSeconds NullableFloat32, boxLifecycleRateLimitTtlSeconds NullableFloat32) *Organization {
 	this := Organization{}
 	this.Id = id
 	this.Name = name
@@ -92,18 +92,18 @@ func NewOrganization(id string, name string, createdBy string, personal bool, cr
 	this.SuspensionReason = suspensionReason
 	this.SuspendedUntil = suspendedUntil
 	this.SuspensionCleanupGracePeriodHours = suspensionCleanupGracePeriodHours
-	this.MaxCpuPerSandbox = maxCpuPerSandbox
-	this.MaxMemoryPerSandbox = maxMemoryPerSandbox
-	this.MaxDiskPerSandbox = maxDiskPerSandbox
+	this.MaxCpuPerBox = maxCpuPerBox
+	this.MaxMemoryPerBox = maxMemoryPerBox
+	this.MaxDiskPerBox = maxDiskPerBox
 	this.SnapshotDeactivationTimeoutMinutes = snapshotDeactivationTimeoutMinutes
-	this.SandboxLimitedNetworkEgress = sandboxLimitedNetworkEgress
+	this.BoxLimitedNetworkEgress = boxLimitedNetworkEgress
 	this.AuthenticatedRateLimit = authenticatedRateLimit
-	this.SandboxCreateRateLimit = sandboxCreateRateLimit
-	this.SandboxLifecycleRateLimit = sandboxLifecycleRateLimit
+	this.BoxCreateRateLimit = boxCreateRateLimit
+	this.BoxLifecycleRateLimit = boxLifecycleRateLimit
 	this.ExperimentalConfig = experimentalConfig
 	this.AuthenticatedRateLimitTtlSeconds = authenticatedRateLimitTtlSeconds
-	this.SandboxCreateRateLimitTtlSeconds = sandboxCreateRateLimitTtlSeconds
-	this.SandboxLifecycleRateLimitTtlSeconds = sandboxLifecycleRateLimitTtlSeconds
+	this.BoxCreateRateLimitTtlSeconds = boxCreateRateLimitTtlSeconds
+	this.BoxLifecycleRateLimitTtlSeconds = boxLifecycleRateLimitTtlSeconds
 	return &this
 }
 
@@ -381,76 +381,76 @@ func (o *Organization) SetSuspensionCleanupGracePeriodHours(v float32) {
 	o.SuspensionCleanupGracePeriodHours = v
 }
 
-// GetMaxCpuPerSandbox returns the MaxCpuPerSandbox field value
-func (o *Organization) GetMaxCpuPerSandbox() float32 {
+// GetMaxCpuPerBox returns the MaxCpuPerBox field value
+func (o *Organization) GetMaxCpuPerBox() float32 {
 	if o == nil {
 		var ret float32
 		return ret
 	}
 
-	return o.MaxCpuPerSandbox
+	return o.MaxCpuPerBox
 }
 
-// GetMaxCpuPerSandboxOk returns a tuple with the MaxCpuPerSandbox field value
+// GetMaxCpuPerBoxOk returns a tuple with the MaxCpuPerBox field value
 // and a boolean to check if the value has been set.
-func (o *Organization) GetMaxCpuPerSandboxOk() (*float32, bool) {
+func (o *Organization) GetMaxCpuPerBoxOk() (*float32, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return &o.MaxCpuPerSandbox, true
+	return &o.MaxCpuPerBox, true
 }
 
-// SetMaxCpuPerSandbox sets field value
-func (o *Organization) SetMaxCpuPerSandbox(v float32) {
-	o.MaxCpuPerSandbox = v
+// SetMaxCpuPerBox sets field value
+func (o *Organization) SetMaxCpuPerBox(v float32) {
+	o.MaxCpuPerBox = v
 }
 
-// GetMaxMemoryPerSandbox returns the MaxMemoryPerSandbox field value
-func (o *Organization) GetMaxMemoryPerSandbox() float32 {
+// GetMaxMemoryPerBox returns the MaxMemoryPerBox field value
+func (o *Organization) GetMaxMemoryPerBox() float32 {
 	if o == nil {
 		var ret float32
 		return ret
 	}
 
-	return o.MaxMemoryPerSandbox
+	return o.MaxMemoryPerBox
 }
 
-// GetMaxMemoryPerSandboxOk returns a tuple with the MaxMemoryPerSandbox field value
+// GetMaxMemoryPerBoxOk returns a tuple with the MaxMemoryPerBox field value
 // and a boolean to check if the value has been set.
-func (o *Organization) GetMaxMemoryPerSandboxOk() (*float32, bool) {
+func (o *Organization) GetMaxMemoryPerBoxOk() (*float32, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return &o.MaxMemoryPerSandbox, true
+	return &o.MaxMemoryPerBox, true
 }
 
-// SetMaxMemoryPerSandbox sets field value
-func (o *Organization) SetMaxMemoryPerSandbox(v float32) {
-	o.MaxMemoryPerSandbox = v
+// SetMaxMemoryPerBox sets field value
+func (o *Organization) SetMaxMemoryPerBox(v float32) {
+	o.MaxMemoryPerBox = v
 }
 
-// GetMaxDiskPerSandbox returns the MaxDiskPerSandbox field value
-func (o *Organization) GetMaxDiskPerSandbox() float32 {
+// GetMaxDiskPerBox returns the MaxDiskPerBox field value
+func (o *Organization) GetMaxDiskPerBox() float32 {
 	if o == nil {
 		var ret float32
 		return ret
 	}
 
-	return o.MaxDiskPerSandbox
+	return o.MaxDiskPerBox
 }
 
-// GetMaxDiskPerSandboxOk returns a tuple with the MaxDiskPerSandbox field value
+// GetMaxDiskPerBoxOk returns a tuple with the MaxDiskPerBox field value
 // and a boolean to check if the value has been set.
-func (o *Organization) GetMaxDiskPerSandboxOk() (*float32, bool) {
+func (o *Organization) GetMaxDiskPerBoxOk() (*float32, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return &o.MaxDiskPerSandbox, true
+	return &o.MaxDiskPerBox, true
 }
 
-// SetMaxDiskPerSandbox sets field value
-func (o *Organization) SetMaxDiskPerSandbox(v float32) {
-	o.MaxDiskPerSandbox = v
+// SetMaxDiskPerBox sets field value
+func (o *Organization) SetMaxDiskPerBox(v float32) {
+	o.MaxDiskPerBox = v
 }
 
 // GetSnapshotDeactivationTimeoutMinutes returns the SnapshotDeactivationTimeoutMinutes field value
@@ -477,28 +477,28 @@ func (o *Organization) SetSnapshotDeactivationTimeoutMinutes(v float32) {
 	o.SnapshotDeactivationTimeoutMinutes = v
 }
 
-// GetSandboxLimitedNetworkEgress returns the SandboxLimitedNetworkEgress field value
-func (o *Organization) GetSandboxLimitedNetworkEgress() bool {
+// GetBoxLimitedNetworkEgress returns the BoxLimitedNetworkEgress field value
+func (o *Organization) GetBoxLimitedNetworkEgress() bool {
 	if o == nil {
 		var ret bool
 		return ret
 	}
 
-	return o.SandboxLimitedNetworkEgress
+	return o.BoxLimitedNetworkEgress
 }
 
-// GetSandboxLimitedNetworkEgressOk returns a tuple with the SandboxLimitedNetworkEgress field value
+// GetBoxLimitedNetworkEgressOk returns a tuple with the BoxLimitedNetworkEgress field value
 // and a boolean to check if the value has been set.
-func (o *Organization) GetSandboxLimitedNetworkEgressOk() (*bool, bool) {
+func (o *Organization) GetBoxLimitedNetworkEgressOk() (*bool, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return &o.SandboxLimitedNetworkEgress, true
+	return &o.BoxLimitedNetworkEgress, true
 }
 
-// SetSandboxLimitedNetworkEgress sets field value
-func (o *Organization) SetSandboxLimitedNetworkEgress(v bool) {
-	o.SandboxLimitedNetworkEgress = v
+// SetBoxLimitedNetworkEgress sets field value
+func (o *Organization) SetBoxLimitedNetworkEgress(v bool) {
+	o.BoxLimitedNetworkEgress = v
 }
 
 // GetDefaultRegionId returns the DefaultRegionId field value if set, zero value otherwise.
@@ -559,56 +559,56 @@ func (o *Organization) SetAuthenticatedRateLimit(v float32) {
 	o.AuthenticatedRateLimit.Set(&v)
 }
 
-// GetSandboxCreateRateLimit returns the SandboxCreateRateLimit field value
+// GetBoxCreateRateLimit returns the BoxCreateRateLimit field value
 // If the value is explicit nil, the zero value for float32 will be returned
-func (o *Organization) GetSandboxCreateRateLimit() float32 {
-	if o == nil || o.SandboxCreateRateLimit.Get() == nil {
+func (o *Organization) GetBoxCreateRateLimit() float32 {
+	if o == nil || o.BoxCreateRateLimit.Get() == nil {
 		var ret float32
 		return ret
 	}
 
-	return *o.SandboxCreateRateLimit.Get()
+	return *o.BoxCreateRateLimit.Get()
 }
 
-// GetSandboxCreateRateLimitOk returns a tuple with the SandboxCreateRateLimit field value
+// GetBoxCreateRateLimitOk returns a tuple with the BoxCreateRateLimit field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *Organization) GetSandboxCreateRateLimitOk() (*float32, bool) {
+func (o *Organization) GetBoxCreateRateLimitOk() (*float32, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return o.SandboxCreateRateLimit.Get(), o.SandboxCreateRateLimit.IsSet()
+	return o.BoxCreateRateLimit.Get(), o.BoxCreateRateLimit.IsSet()
 }
 
-// SetSandboxCreateRateLimit sets field value
-func (o *Organization) SetSandboxCreateRateLimit(v float32) {
-	o.SandboxCreateRateLimit.Set(&v)
+// SetBoxCreateRateLimit sets field value
+func (o *Organization) SetBoxCreateRateLimit(v float32) {
+	o.BoxCreateRateLimit.Set(&v)
 }
 
-// GetSandboxLifecycleRateLimit returns the SandboxLifecycleRateLimit field value
+// GetBoxLifecycleRateLimit returns the BoxLifecycleRateLimit field value
 // If the value is explicit nil, the zero value for float32 will be returned
-func (o *Organization) GetSandboxLifecycleRateLimit() float32 {
-	if o == nil || o.SandboxLifecycleRateLimit.Get() == nil {
+func (o *Organization) GetBoxLifecycleRateLimit() float32 {
+	if o == nil || o.BoxLifecycleRateLimit.Get() == nil {
 		var ret float32
 		return ret
 	}
 
-	return *o.SandboxLifecycleRateLimit.Get()
+	return *o.BoxLifecycleRateLimit.Get()
 }
 
-// GetSandboxLifecycleRateLimitOk returns a tuple with the SandboxLifecycleRateLimit field value
+// GetBoxLifecycleRateLimitOk returns a tuple with the BoxLifecycleRateLimit field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *Organization) GetSandboxLifecycleRateLimitOk() (*float32, bool) {
+func (o *Organization) GetBoxLifecycleRateLimitOk() (*float32, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return o.SandboxLifecycleRateLimit.Get(), o.SandboxLifecycleRateLimit.IsSet()
+	return o.BoxLifecycleRateLimit.Get(), o.BoxLifecycleRateLimit.IsSet()
 }
 
-// SetSandboxLifecycleRateLimit sets field value
-func (o *Organization) SetSandboxLifecycleRateLimit(v float32) {
-	o.SandboxLifecycleRateLimit.Set(&v)
+// SetBoxLifecycleRateLimit sets field value
+func (o *Organization) SetBoxLifecycleRateLimit(v float32) {
+	o.BoxLifecycleRateLimit.Set(&v)
 }
 
 // GetExperimentalConfig returns the ExperimentalConfig field value
@@ -661,56 +661,56 @@ func (o *Organization) SetAuthenticatedRateLimitTtlSeconds(v float32) {
 	o.AuthenticatedRateLimitTtlSeconds.Set(&v)
 }
 
-// GetSandboxCreateRateLimitTtlSeconds returns the SandboxCreateRateLimitTtlSeconds field value
+// GetBoxCreateRateLimitTtlSeconds returns the BoxCreateRateLimitTtlSeconds field value
 // If the value is explicit nil, the zero value for float32 will be returned
-func (o *Organization) GetSandboxCreateRateLimitTtlSeconds() float32 {
-	if o == nil || o.SandboxCreateRateLimitTtlSeconds.Get() == nil {
+func (o *Organization) GetBoxCreateRateLimitTtlSeconds() float32 {
+	if o == nil || o.BoxCreateRateLimitTtlSeconds.Get() == nil {
 		var ret float32
 		return ret
 	}
 
-	return *o.SandboxCreateRateLimitTtlSeconds.Get()
+	return *o.BoxCreateRateLimitTtlSeconds.Get()
 }
 
-// GetSandboxCreateRateLimitTtlSecondsOk returns a tuple with the SandboxCreateRateLimitTtlSeconds field value
+// GetBoxCreateRateLimitTtlSecondsOk returns a tuple with the BoxCreateRateLimitTtlSeconds field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *Organization) GetSandboxCreateRateLimitTtlSecondsOk() (*float32, bool) {
+func (o *Organization) GetBoxCreateRateLimitTtlSecondsOk() (*float32, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return o.SandboxCreateRateLimitTtlSeconds.Get(), o.SandboxCreateRateLimitTtlSeconds.IsSet()
+	return o.BoxCreateRateLimitTtlSeconds.Get(), o.BoxCreateRateLimitTtlSeconds.IsSet()
 }
 
-// SetSandboxCreateRateLimitTtlSeconds sets field value
-func (o *Organization) SetSandboxCreateRateLimitTtlSeconds(v float32) {
-	o.SandboxCreateRateLimitTtlSeconds.Set(&v)
+// SetBoxCreateRateLimitTtlSeconds sets field value
+func (o *Organization) SetBoxCreateRateLimitTtlSeconds(v float32) {
+	o.BoxCreateRateLimitTtlSeconds.Set(&v)
 }
 
-// GetSandboxLifecycleRateLimitTtlSeconds returns the SandboxLifecycleRateLimitTtlSeconds field value
+// GetBoxLifecycleRateLimitTtlSeconds returns the BoxLifecycleRateLimitTtlSeconds field value
 // If the value is explicit nil, the zero value for float32 will be returned
-func (o *Organization) GetSandboxLifecycleRateLimitTtlSeconds() float32 {
-	if o == nil || o.SandboxLifecycleRateLimitTtlSeconds.Get() == nil {
+func (o *Organization) GetBoxLifecycleRateLimitTtlSeconds() float32 {
+	if o == nil || o.BoxLifecycleRateLimitTtlSeconds.Get() == nil {
 		var ret float32
 		return ret
 	}
 
-	return *o.SandboxLifecycleRateLimitTtlSeconds.Get()
+	return *o.BoxLifecycleRateLimitTtlSeconds.Get()
 }
 
-// GetSandboxLifecycleRateLimitTtlSecondsOk returns a tuple with the SandboxLifecycleRateLimitTtlSeconds field value
+// GetBoxLifecycleRateLimitTtlSecondsOk returns a tuple with the BoxLifecycleRateLimitTtlSeconds field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *Organization) GetSandboxLifecycleRateLimitTtlSecondsOk() (*float32, bool) {
+func (o *Organization) GetBoxLifecycleRateLimitTtlSecondsOk() (*float32, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return o.SandboxLifecycleRateLimitTtlSeconds.Get(), o.SandboxLifecycleRateLimitTtlSeconds.IsSet()
+	return o.BoxLifecycleRateLimitTtlSeconds.Get(), o.BoxLifecycleRateLimitTtlSeconds.IsSet()
 }
 
-// SetSandboxLifecycleRateLimitTtlSeconds sets field value
-func (o *Organization) SetSandboxLifecycleRateLimitTtlSeconds(v float32) {
-	o.SandboxLifecycleRateLimitTtlSeconds.Set(&v)
+// SetBoxLifecycleRateLimitTtlSeconds sets field value
+func (o *Organization) SetBoxLifecycleRateLimitTtlSeconds(v float32) {
+	o.BoxLifecycleRateLimitTtlSeconds.Set(&v)
 }
 
 func (o Organization) MarshalJSON() ([]byte, error) {
@@ -734,21 +734,21 @@ func (o Organization) ToMap() (map[string]interface{}, error) {
 	toSerialize["suspensionReason"] = o.SuspensionReason
 	toSerialize["suspendedUntil"] = o.SuspendedUntil
 	toSerialize["suspensionCleanupGracePeriodHours"] = o.SuspensionCleanupGracePeriodHours
-	toSerialize["maxCpuPerSandbox"] = o.MaxCpuPerSandbox
-	toSerialize["maxMemoryPerSandbox"] = o.MaxMemoryPerSandbox
-	toSerialize["maxDiskPerSandbox"] = o.MaxDiskPerSandbox
+	toSerialize["maxCpuPerBox"] = o.MaxCpuPerBox
+	toSerialize["maxMemoryPerBox"] = o.MaxMemoryPerBox
+	toSerialize["maxDiskPerBox"] = o.MaxDiskPerBox
 	toSerialize["snapshotDeactivationTimeoutMinutes"] = o.SnapshotDeactivationTimeoutMinutes
-	toSerialize["sandboxLimitedNetworkEgress"] = o.SandboxLimitedNetworkEgress
+	toSerialize["boxLimitedNetworkEgress"] = o.BoxLimitedNetworkEgress
 	if !IsNil(o.DefaultRegionId) {
 		toSerialize["defaultRegionId"] = o.DefaultRegionId
 	}
 	toSerialize["authenticatedRateLimit"] = o.AuthenticatedRateLimit.Get()
-	toSerialize["sandboxCreateRateLimit"] = o.SandboxCreateRateLimit.Get()
-	toSerialize["sandboxLifecycleRateLimit"] = o.SandboxLifecycleRateLimit.Get()
+	toSerialize["boxCreateRateLimit"] = o.BoxCreateRateLimit.Get()
+	toSerialize["boxLifecycleRateLimit"] = o.BoxLifecycleRateLimit.Get()
 	toSerialize["experimentalConfig"] = o.ExperimentalConfig
 	toSerialize["authenticatedRateLimitTtlSeconds"] = o.AuthenticatedRateLimitTtlSeconds.Get()
-	toSerialize["sandboxCreateRateLimitTtlSeconds"] = o.SandboxCreateRateLimitTtlSeconds.Get()
-	toSerialize["sandboxLifecycleRateLimitTtlSeconds"] = o.SandboxLifecycleRateLimitTtlSeconds.Get()
+	toSerialize["boxCreateRateLimitTtlSeconds"] = o.BoxCreateRateLimitTtlSeconds.Get()
+	toSerialize["boxLifecycleRateLimitTtlSeconds"] = o.BoxLifecycleRateLimitTtlSeconds.Get()
 
 	for key, value := range o.AdditionalProperties {
 		toSerialize[key] = value
@@ -773,18 +773,18 @@ func (o *Organization) UnmarshalJSON(data []byte) (err error) {
 		"suspensionReason",
 		"suspendedUntil",
 		"suspensionCleanupGracePeriodHours",
-		"maxCpuPerSandbox",
-		"maxMemoryPerSandbox",
-		"maxDiskPerSandbox",
+		"maxCpuPerBox",
+		"maxMemoryPerBox",
+		"maxDiskPerBox",
 		"snapshotDeactivationTimeoutMinutes",
-		"sandboxLimitedNetworkEgress",
+		"boxLimitedNetworkEgress",
 		"authenticatedRateLimit",
-		"sandboxCreateRateLimit",
-		"sandboxLifecycleRateLimit",
+		"boxCreateRateLimit",
+		"boxLifecycleRateLimit",
 		"experimentalConfig",
 		"authenticatedRateLimitTtlSeconds",
-		"sandboxCreateRateLimitTtlSeconds",
-		"sandboxLifecycleRateLimitTtlSeconds",
+		"boxCreateRateLimitTtlSeconds",
+		"boxLifecycleRateLimitTtlSeconds",
 	}
 
 	allProperties := make(map[string]interface{})
@@ -825,19 +825,19 @@ func (o *Organization) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "suspensionReason")
 		delete(additionalProperties, "suspendedUntil")
 		delete(additionalProperties, "suspensionCleanupGracePeriodHours")
-		delete(additionalProperties, "maxCpuPerSandbox")
-		delete(additionalProperties, "maxMemoryPerSandbox")
-		delete(additionalProperties, "maxDiskPerSandbox")
+		delete(additionalProperties, "maxCpuPerBox")
+		delete(additionalProperties, "maxMemoryPerBox")
+		delete(additionalProperties, "maxDiskPerBox")
 		delete(additionalProperties, "snapshotDeactivationTimeoutMinutes")
-		delete(additionalProperties, "sandboxLimitedNetworkEgress")
+		delete(additionalProperties, "boxLimitedNetworkEgress")
 		delete(additionalProperties, "defaultRegionId")
 		delete(additionalProperties, "authenticatedRateLimit")
-		delete(additionalProperties, "sandboxCreateRateLimit")
-		delete(additionalProperties, "sandboxLifecycleRateLimit")
+		delete(additionalProperties, "boxCreateRateLimit")
+		delete(additionalProperties, "boxLifecycleRateLimit")
 		delete(additionalProperties, "experimentalConfig")
 		delete(additionalProperties, "authenticatedRateLimitTtlSeconds")
-		delete(additionalProperties, "sandboxCreateRateLimitTtlSeconds")
-		delete(additionalProperties, "sandboxLifecycleRateLimitTtlSeconds")
+		delete(additionalProperties, "boxCreateRateLimitTtlSeconds")
+		delete(additionalProperties, "boxLifecycleRateLimitTtlSeconds")
 		o.AdditionalProperties = additionalProperties
 	}
 
@@ -879,3 +879,5 @@ func (v *NullableOrganization) UnmarshalJSON(src []byte) error {
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }
+
+

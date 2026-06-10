@@ -28,7 +28,7 @@ import (
 type IExporter[T any] interface {
 	push(context.Context, T) error
 	exportViaHTTP(context.Context, T, *apiclient.OtelConfig) error
-	extractSandboxToken(context.Context) (string, error)
+	extractBoxToken(context.Context) (string, error)
 	getBody(T) ([]byte, error)
 	shutdown(context.Context) error
 }
@@ -91,20 +91,20 @@ func newTracesExporter(cfg exporterConfig) IExporter[ptrace.Traces] {
 
 //lint:ignore U1000 Used by the built collector
 func (e *Exporter[T]) push(ctx context.Context, data T) error {
-	// Extract sandbox token from context metadata
-	sandboxToken, err := e.extractSandboxToken(ctx)
+	// Extract box token from context metadata
+	boxToken, err := e.extractBoxToken(ctx)
 	if err != nil {
-		return consumererror.NewPermanent(fmt.Errorf("failed to extract sandbox token: %w", err))
+		return consumererror.NewPermanent(fmt.Errorf("failed to extract box token: %w", err))
 	}
 
 	// Get endpoint configuration
-	endpointConfig, err := e.resolver.GetOrganizationOtelConfig(ctx, sandboxToken)
+	endpointConfig, err := e.resolver.GetOrganizationOtelConfig(ctx, boxToken)
 	if err != nil {
-		return fmt.Errorf("failed to get endpoint config for sandbox %w", err)
+		return fmt.Errorf("failed to get endpoint config for box %w", err)
 	}
 
 	if endpointConfig == nil {
-		e.logger.Debug("No endpoint configuration found for sandbox token, dropping data")
+		e.logger.Debug("No endpoint configuration found for box token, dropping data")
 		return nil
 	}
 
@@ -200,21 +200,21 @@ func (e *Exporter[T]) getOrCreateHTTPClient(cfg *apiclient.OtelConfig) *http.Cli
 	return client
 }
 
-func (e *Exporter[T]) extractSandboxToken(ctx context.Context) (string, error) {
+func (e *Exporter[T]) extractBoxToken(ctx context.Context) (string, error) {
 	// Try to get client info first (contains HTTP headers)
 	clientInfo := client.FromContext(ctx)
-	if token := clientInfo.Metadata.Get(e.config.SandboxAuthTokenHeader); len(token) > 0 {
+	if token := clientInfo.Metadata.Get(e.config.BoxAuthTokenHeader); len(token) > 0 {
 		return token[0], nil
 	}
 
 	// Fallback: try gRPC metadata (if using gRPC protocol)
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
-		if tokens := md.Get(e.config.SandboxAuthTokenHeader); len(tokens) > 0 {
+		if tokens := md.Get(e.config.BoxAuthTokenHeader); len(tokens) > 0 {
 			return tokens[0], nil
 		}
 	}
 
-	return "", fmt.Errorf("sandbox token header '%s' not found in metadata", e.config.SandboxAuthTokenHeader)
+	return "", fmt.Errorf("box token header '%s' not found in metadata", e.config.BoxAuthTokenHeader)
 }
 
 //lint:ignore U1000 Used by the built collector

@@ -264,7 +264,7 @@ export function SnapshotTable({
                   <div className="space-y-2">
                     <p>
                       Snapshots are reproducible, pre-configured environments based on any Docker-compatible image. Use
-                      them to define language runtimes, dependencies, and tools for your sandboxes.
+                      them to define language runtimes, dependencies, and tools for your boxes.
                     </p>
                     <p>
                       Create one from the Dashboard, CLI, or SDK to get started. <br />

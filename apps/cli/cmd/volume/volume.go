@@ -14,7 +14,7 @@ var VolumeCmd = &cobra.Command{
 	Short:   "Manage BoxLite volumes",
 	Long:    "Commands for managing BoxLite volumes",
 	Aliases: []string{"volumes"},
-	GroupID: internal.SANDBOX_GROUP,
+	GroupID: internal.BOX_GROUP,
 }
 
 func init() {

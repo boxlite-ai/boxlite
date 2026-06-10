@@ -7,20 +7,20 @@
 import { Injectable, Logger } from '@nestjs/common'
 import { OnEvent } from '@nestjs/event-emitter'
 import { WebhookService } from './webhook.service'
-import { SandboxEvents } from '../../sandbox/constants/sandbox-events.constants'
-import { SnapshotEvents } from '../../sandbox/constants/snapshot-events'
-import { VolumeEvents } from '../../sandbox/constants/volume-events'
-import { SandboxCreatedEvent } from '../../sandbox/events/sandbox-create.event'
-import { SandboxStateUpdatedEvent } from '../../sandbox/events/sandbox-state-updated.event'
-import { SnapshotCreatedEvent } from '../../sandbox/events/snapshot-created.event'
-import { SnapshotStateUpdatedEvent } from '../../sandbox/events/snapshot-state-updated.event'
-import { SnapshotRemovedEvent } from '../../sandbox/events/snapshot-removed.event'
-import { VolumeCreatedEvent } from '../../sandbox/events/volume-created.event'
-import { VolumeStateUpdatedEvent } from '../../sandbox/events/volume-state-updated.event'
+import { BoxEvents } from '../../box/constants/box-events.constants'
+import { SnapshotEvents } from '../../box/constants/snapshot-events'
+import { VolumeEvents } from '../../box/constants/volume-events'
+import { BoxCreatedEvent } from '../../box/events/box-create.event'
+import { BoxStateUpdatedEvent } from '../../box/events/box-state-updated.event'
+import { SnapshotCreatedEvent } from '../../box/events/snapshot-created.event'
+import { SnapshotStateUpdatedEvent } from '../../box/events/snapshot-state-updated.event'
+import { SnapshotRemovedEvent } from '../../box/events/snapshot-removed.event'
+import { VolumeCreatedEvent } from '../../box/events/volume-created.event'
+import { VolumeStateUpdatedEvent } from '../../box/events/volume-state-updated.event'
 import { WebhookEvent } from '../constants/webhook-events.constants'
 import {
-  SandboxCreatedWebhookDto,
-  SandboxStateUpdatedWebhookDto,
+  BoxCreatedWebhookDto,
+  BoxStateUpdatedWebhookDto,
   SnapshotCreatedWebhookDto,
   SnapshotStateUpdatedWebhookDto,
   SnapshotRemovedWebhookDto,
@@ -34,31 +34,31 @@ export class WebhookEventHandlerService {
 
   constructor(private readonly webhookService: WebhookService) {}
 
-  @OnEvent(SandboxEvents.CREATED)
-  async handleSandboxCreated(event: SandboxCreatedEvent) {
+  @OnEvent(BoxEvents.CREATED)
+  async handleBoxCreated(event: BoxCreatedEvent) {
     if (!this.webhookService.isEnabled()) {
       return
     }
 
     try {
-      const payload = SandboxCreatedWebhookDto.fromEvent(event, WebhookEvent.SANDBOX_CREATED)
-      await this.webhookService.sendWebhook(event.sandbox.organizationId, WebhookEvent.SANDBOX_CREATED, payload)
+      const payload = BoxCreatedWebhookDto.fromEvent(event, WebhookEvent.BOX_CREATED)
+      await this.webhookService.sendWebhook(event.box.organizationId, WebhookEvent.BOX_CREATED, payload)
     } catch (error) {
-      this.logger.error(`Failed to send webhook for sandbox created: ${error.message}`)
+      this.logger.error(`Failed to send webhook for box created: ${error.message}`)
     }
   }
 
-  @OnEvent(SandboxEvents.STATE_UPDATED)
-  async handleSandboxStateUpdated(event: SandboxStateUpdatedEvent) {
+  @OnEvent(BoxEvents.STATE_UPDATED)
+  async handleBoxStateUpdated(event: BoxStateUpdatedEvent) {
     if (!this.webhookService.isEnabled()) {
       return
     }
 
     try {
-      const payload = SandboxStateUpdatedWebhookDto.fromEvent(event, WebhookEvent.SANDBOX_STATE_UPDATED)
-      await this.webhookService.sendWebhook(event.sandbox.organizationId, WebhookEvent.SANDBOX_STATE_UPDATED, payload)
+      const payload = BoxStateUpdatedWebhookDto.fromEvent(event, WebhookEvent.BOX_STATE_UPDATED)
+      await this.webhookService.sendWebhook(event.box.organizationId, WebhookEvent.BOX_STATE_UPDATED, payload)
     } catch (error) {
-      this.logger.error(`Failed to send webhook for sandbox state updated: ${error.message}`)
+      this.logger.error(`Failed to send webhook for box state updated: ${error.message}`)
     }
   }
 

@@ -6,24 +6,24 @@
 
 import { ApiProperty, ApiSchema } from '@nestjs/swagger'
 import { WebhookEvent } from '../constants/webhook-events.constants'
-import { SandboxState } from '../../sandbox/enums/sandbox-state.enum'
-import { SandboxClass } from '../../sandbox/enums/sandbox-class.enum'
-import { SnapshotState } from '../../sandbox/enums/snapshot-state.enum'
-import { VolumeState } from '../../sandbox/enums/volume-state.enum'
-import { SandboxCreatedEvent } from '../../sandbox/events/sandbox-create.event'
-import { SandboxStateUpdatedEvent } from '../../sandbox/events/sandbox-state-updated.event'
-import { SnapshotCreatedEvent } from '../../sandbox/events/snapshot-created.event'
-import { SnapshotStateUpdatedEvent } from '../../sandbox/events/snapshot-state-updated.event'
-import { SnapshotRemovedEvent } from '../../sandbox/events/snapshot-removed.event'
-import { VolumeCreatedEvent } from '../../sandbox/events/volume-created.event'
-import { VolumeStateUpdatedEvent } from '../../sandbox/events/volume-state-updated.event'
+import { BoxState } from '../../box/enums/box-state.enum'
+import { BoxClass } from '../../box/enums/box-class.enum'
+import { SnapshotState } from '../../box/enums/snapshot-state.enum'
+import { VolumeState } from '../../box/enums/volume-state.enum'
+import { BoxCreatedEvent } from '../../box/events/box-create.event'
+import { BoxStateUpdatedEvent } from '../../box/events/box-state-updated.event'
+import { SnapshotCreatedEvent } from '../../box/events/snapshot-created.event'
+import { SnapshotStateUpdatedEvent } from '../../box/events/snapshot-state-updated.event'
+import { SnapshotRemovedEvent } from '../../box/events/snapshot-removed.event'
+import { VolumeCreatedEvent } from '../../box/events/volume-created.event'
+import { VolumeStateUpdatedEvent } from '../../box/events/volume-state-updated.event'
 
 export abstract class BaseWebhookEventDto {
   @ApiProperty({
     description: 'Event type identifier',
     enum: WebhookEvent,
     enumName: 'WebhookEvent',
-    example: 'sandbox.created',
+    example: 'box.created',
   })
   event: string
 
@@ -35,11 +35,11 @@ export abstract class BaseWebhookEventDto {
   timestamp: string
 }
 
-@ApiSchema({ name: 'SandboxCreatedWebhook' })
-export class SandboxCreatedWebhookDto extends BaseWebhookEventDto {
+@ApiSchema({ name: 'BoxCreatedWebhook' })
+export class BoxCreatedWebhookDto extends BaseWebhookEventDto {
   @ApiProperty({
-    description: 'Sandbox ID',
-    example: 'sandbox123',
+    description: 'Box ID',
+    example: 'box123',
   })
   id: string
 
@@ -50,44 +50,44 @@ export class SandboxCreatedWebhookDto extends BaseWebhookEventDto {
   organizationId: string
 
   @ApiProperty({
-    description: 'Sandbox state',
-    enum: SandboxState,
-    enumName: 'SandboxState',
+    description: 'Box state',
+    enum: BoxState,
+    enumName: 'BoxState',
   })
-  state: SandboxState
+  state: BoxState
 
   @ApiProperty({
-    description: 'Sandbox class',
-    enum: SandboxClass,
-    enumName: 'SandboxClass',
+    description: 'Box class',
+    enum: BoxClass,
+    enumName: 'BoxClass',
   })
-  class: SandboxClass
+  class: BoxClass
 
   @ApiProperty({
-    description: 'When the sandbox was created',
+    description: 'When the box was created',
     example: '2025-12-19T10:30:00.000Z',
     format: 'date-time',
   })
   createdAt: string
 
-  static fromEvent(event: SandboxCreatedEvent, eventType: string): SandboxCreatedWebhookDto {
+  static fromEvent(event: BoxCreatedEvent, eventType: string): BoxCreatedWebhookDto {
     return {
       event: eventType,
       timestamp: new Date().toISOString(),
-      id: event.sandbox.id,
-      organizationId: event.sandbox.organizationId,
-      state: event.sandbox.state,
-      class: event.sandbox.class,
-      createdAt: event.sandbox.createdAt.toISOString(),
+      id: event.box.id,
+      organizationId: event.box.organizationId,
+      state: event.box.state,
+      class: event.box.class,
+      createdAt: event.box.createdAt.toISOString(),
     }
   }
 }
 
-@ApiSchema({ name: 'SandboxStateUpdatedWebhook' })
-export class SandboxStateUpdatedWebhookDto extends BaseWebhookEventDto {
+@ApiSchema({ name: 'BoxStateUpdatedWebhook' })
+export class BoxStateUpdatedWebhookDto extends BaseWebhookEventDto {
   @ApiProperty({
-    description: 'Sandbox ID',
-    example: 'sandbox123',
+    description: 'Box ID',
+    example: 'box123',
   })
   id: string
 
@@ -99,34 +99,34 @@ export class SandboxStateUpdatedWebhookDto extends BaseWebhookEventDto {
 
   @ApiProperty({
     description: 'Previous state',
-    enum: SandboxState,
-    enumName: 'SandboxState',
+    enum: BoxState,
+    enumName: 'BoxState',
   })
-  oldState: SandboxState
+  oldState: BoxState
 
   @ApiProperty({
     description: 'New state',
-    enum: SandboxState,
-    enumName: 'SandboxState',
+    enum: BoxState,
+    enumName: 'BoxState',
   })
-  newState: SandboxState
+  newState: BoxState
 
   @ApiProperty({
-    description: 'When the sandbox was last updated',
+    description: 'When the box was last updated',
     example: '2025-12-19T10:30:00.000Z',
     format: 'date-time',
   })
   updatedAt: string
 
-  static fromEvent(event: SandboxStateUpdatedEvent, eventType: string): SandboxStateUpdatedWebhookDto {
+  static fromEvent(event: BoxStateUpdatedEvent, eventType: string): BoxStateUpdatedWebhookDto {
     return {
       event: eventType,
       timestamp: new Date().toISOString(),
-      id: event.sandbox.id,
-      organizationId: event.sandbox.organizationId,
+      id: event.box.id,
+      organizationId: event.box.organizationId,
       oldState: event.oldState,
       newState: event.newState,
-      updatedAt: event.sandbox.updatedAt.toISOString(),
+      updatedAt: event.box.updatedAt.toISOString(),
     }
   }
 }

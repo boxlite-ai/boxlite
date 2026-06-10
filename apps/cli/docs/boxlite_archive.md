@@ -1,9 +1,9 @@
 ## boxlite archive
 
-Archive a sandbox
+Archive a box
 
 ```
-boxlite archive [SANDBOX_ID] | [SANDBOX_NAME] [flags]
+boxlite archive [BOX_ID] | [BOX_NAME] [flags]
 ```
 
 ### Options inherited from parent commands
@@ -14,4 +14,5 @@ boxlite archive [SANDBOX_ID] | [SANDBOX_NAME] [flags]
 
 ### SEE ALSO
 
-* [boxlite](boxlite.md)  - BoxLite CLI
+* [boxlite](boxlite.md)	 - BoxLite CLI
+

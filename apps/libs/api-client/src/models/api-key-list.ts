@@ -14,52 +14,33 @@
 
 
 
-/**
- *
- * @export
- * @interface ApiKeyList
- */
 export interface ApiKeyList {
     /**
      * The name of the API key
-     * @type {string}
-     * @memberof ApiKeyList
      */
     'name': string;
     /**
      * The masked API key value
-     * @type {string}
-     * @memberof ApiKeyList
      */
     'value': string;
     /**
      * When the API key was created
-     * @type {Date}
-     * @memberof ApiKeyList
      */
     'createdAt': Date;
     /**
      * The list of organization resource permissions assigned to the API key
-     * @type {Array<string>}
-     * @memberof ApiKeyList
      */
     'permissions': Array<ApiKeyListPermissionsEnum>;
     /**
      * When the API key was last used
-     * @type {Date}
-     * @memberof ApiKeyList
      */
     'lastUsedAt': Date | null;
     /**
      * When the API key expires
-     * @type {Date}
-     * @memberof ApiKeyList
      */
     'expiresAt': Date | null;
     /**
      * The user ID of the user who created the API key
-     * @type {string}
-     * @memberof ApiKeyList
      */
     'userId': string;
 }
@@ -69,8 +50,8 @@ export const ApiKeyListPermissionsEnum = {
     DELETE_REGISTRIES: 'delete:registries',
     WRITE_SNAPSHOTS: 'write:snapshots',
     DELETE_SNAPSHOTS: 'delete:snapshots',
-    WRITE_SANDBOXES: 'write:sandboxes',
-    DELETE_SANDBOXES: 'delete:sandboxes',
+    WRITE_BOXES: 'write:boxes',
+    DELETE_BOXES: 'delete:boxes',
     READ_VOLUMES: 'read:volumes',
     WRITE_VOLUMES: 'write:volumes',
     DELETE_VOLUMES: 'delete:volumes',
@@ -79,7 +60,10 @@ export const ApiKeyListPermissionsEnum = {
     READ_RUNNERS: 'read:runners',
     WRITE_RUNNERS: 'write:runners',
     DELETE_RUNNERS: 'delete:runners',
-    READ_AUDIT_LOGS: 'read:audit_logs'
+    READ_AUDIT_LOGS: 'read:audit_logs',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 
 export type ApiKeyListPermissionsEnum = typeof ApiKeyListPermissionsEnum[keyof typeof ApiKeyListPermissionsEnum];
+
+

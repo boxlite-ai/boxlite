@@ -12,7 +12,7 @@ type ExecuteRequest struct {
 	Cwd *string `json:"cwd,omitempty" validate:"optional"`
 } // @name ExecuteRequest
 
-// TODO: Set ExitCode as required once all sandboxes migrated to the new daemon
+// TODO: Set ExitCode as required once all boxes migrated to the new daemon
 type ExecuteResponse struct {
 	ExitCode int    `json:"exitCode"`
 	Result   string `json:"result" validate:"required"`

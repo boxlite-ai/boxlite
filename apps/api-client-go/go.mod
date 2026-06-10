@@ -1,6 +1,6 @@
 module github.com/boxlite-ai/boxlite/libs/api-client-go
 
-go 1.18
+go 1.23
 
 require (
 )

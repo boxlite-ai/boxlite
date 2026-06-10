@@ -14,16 +14,10 @@
 
 
 
-/**
- *
- * @export
- * @interface UpdateOrganizationDefaultRegion
- */
 export interface UpdateOrganizationDefaultRegion {
     /**
      * The ID of the default region for the organization
-     * @type {string}
-     * @memberof UpdateOrganizationDefaultRegion
      */
     'defaultRegionId': string;
 }
+

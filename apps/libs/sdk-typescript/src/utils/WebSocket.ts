@@ -8,13 +8,13 @@ import WebSocket from 'isomorphic-ws'
 import { RUNTIME, Runtime } from './Runtime'
 
 /**
- * Creates an authenticated WebSocket connection to the sandbox toolbox.
+ * Creates an authenticated WebSocket connection to the box toolbox.
  *
  * @param url - The websocket URL (ws[s]://...)
  * @param headers - Headers to forward when running in Node environments
  * @param getPreviewToken - Lazy getter for preview tokens (required for browser/serverless runtimes)
  */
-export async function createSandboxWebSocket(
+export async function createBoxWebSocket(
   url: string,
   headers: Record<string, any>,
   getPreviewToken: () => Promise<string>,
@@ -23,7 +23,7 @@ export async function createSandboxWebSocket(
     const previewToken = await getPreviewToken()
     const separator = url.includes('?') ? '&' : '?'
     return new WebSocket(
-      `${url}${separator}BOXLITE_SANDBOX_AUTH_KEY=${previewToken}`,
+      `${url}${separator}BOXLITE_BOX_AUTH_KEY=${previewToken}`,
       `X-BoxLite-SDK-Version~${String(headers['X-BoxLite-SDK-Version'] ?? '')}`,
     )
   }

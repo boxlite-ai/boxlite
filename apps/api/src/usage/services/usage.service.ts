@@ -7,21 +7,21 @@
 import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { IsNull, LessThan, Not, Repository } from 'typeorm'
-import { SandboxUsagePeriod } from '../entities/sandbox-usage-period.entity'
+import { BoxUsagePeriod } from '../entities/box-usage-period.entity'
 import { OnEvent } from '@nestjs/event-emitter'
-import { SandboxStateUpdatedEvent } from '../../sandbox/events/sandbox-state-updated.event'
-import { SandboxState } from '../../sandbox/enums/sandbox-state.enum'
-import { SandboxEvents } from './../../sandbox/constants/sandbox-events.constants'
+import { BoxStateUpdatedEvent } from '../../box/events/box-state-updated.event'
+import { BoxState } from '../../box/enums/box-state.enum'
+import { BoxEvents } from './../../box/constants/box-events.constants'
 import { Cron, CronExpression } from '@nestjs/schedule'
-import { RedisLockProvider } from '../../sandbox/common/redis-lock.provider'
-import { SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../../sandbox/constants/sandbox.constants'
-import { SandboxUsagePeriodArchive } from '../entities/sandbox-usage-period-archive.entity'
+import { RedisLockProvider } from '../../box/common/redis-lock.provider'
+import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../../box/constants/box.constants'
+import { BoxUsagePeriodArchive } from '../entities/box-usage-period-archive.entity'
 import { TrackableJobExecutions } from '../../common/interfaces/trackable-job-executions'
 import { TrackJobExecution } from '../../common/decorators/track-job-execution.decorator'
 import { setTimeout as sleep } from 'timers/promises'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
-import { SandboxRepository } from '../../sandbox/repositories/sandbox.repository'
+import { BoxRepository } from '../../box/repositories/box.repository'
 
 @Injectable()
 export class UsageService implements TrackableJobExecutions, OnApplicationShutdown {
@@ -29,10 +29,10 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
   private readonly logger = new Logger(UsageService.name)
 
   constructor(
-    @InjectRepository(SandboxUsagePeriod)
-    private sandboxUsagePeriodRepository: Repository<SandboxUsagePeriod>,
+    @InjectRepository(BoxUsagePeriod)
+    private boxUsagePeriodRepository: Repository<BoxUsagePeriod>,
     private readonly redisLockProvider: RedisLockProvider,
-    private readonly sandboxRepository: SandboxRepository,
+    private readonly boxRepository: BoxRepository,
   ) {}
 
   async onApplicationShutdown() {
@@ -43,69 +43,69 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
     }
   }
 
-  @OnEvent(SandboxEvents.STATE_UPDATED)
+  @OnEvent(BoxEvents.STATE_UPDATED)
   @TrackJobExecution()
-  async handleSandboxStateUpdate(event: SandboxStateUpdatedEvent) {
-    await this.waitForLock(event.sandbox.id)
+  async handleBoxStateUpdate(event: BoxStateUpdatedEvent) {
+    await this.waitForLock(event.box.id)
 
     try {
       switch (event.newState) {
-        case SandboxState.STARTED: {
-          await this.closeUsagePeriod(event.sandbox.id)
+        case BoxState.STARTED: {
+          await this.closeUsagePeriod(event.box.id)
           await this.createUsagePeriod(event)
           break
         }
-        case SandboxState.STOPPING:
-          await this.closeUsagePeriod(event.sandbox.id)
+        case BoxState.STOPPING:
+          await this.closeUsagePeriod(event.box.id)
           await this.createUsagePeriod(event, true)
           break
-        case SandboxState.ERROR:
-        case SandboxState.BUILD_FAILED:
-        case SandboxState.ARCHIVED:
-        case SandboxState.DESTROYED: {
-          await this.closeUsagePeriod(event.sandbox.id)
+        case BoxState.ERROR:
+        case BoxState.BUILD_FAILED:
+        case BoxState.ARCHIVED:
+        case BoxState.DESTROYED: {
+          await this.closeUsagePeriod(event.box.id)
           break
         }
       }
     } finally {
-      this.releaseLock(event.sandbox.id).catch((error) => {
-        this.logger.error(`Error releasing lock for sandbox ${event.sandbox.id}`, error)
+      this.releaseLock(event.box.id).catch((error) => {
+        this.logger.error(`Error releasing lock for box ${event.box.id}`, error)
       })
     }
   }
 
-  private async createUsagePeriod(event: SandboxStateUpdatedEvent, diskOnly = false) {
-    const usagePeriod = new SandboxUsagePeriod()
-    usagePeriod.sandboxId = event.sandbox.id
+  private async createUsagePeriod(event: BoxStateUpdatedEvent, diskOnly = false) {
+    const usagePeriod = new BoxUsagePeriod()
+    usagePeriod.boxId = event.box.id
     usagePeriod.startAt = new Date()
     usagePeriod.endAt = null
     if (!diskOnly) {
-      usagePeriod.cpu = event.sandbox.cpu
-      usagePeriod.gpu = event.sandbox.gpu
-      usagePeriod.mem = event.sandbox.mem
+      usagePeriod.cpu = event.box.cpu
+      usagePeriod.gpu = event.box.gpu
+      usagePeriod.mem = event.box.mem
     } else {
       usagePeriod.cpu = 0
       usagePeriod.gpu = 0
       usagePeriod.mem = 0
     }
-    usagePeriod.disk = event.sandbox.disk
-    usagePeriod.organizationId = event.sandbox.organizationId
-    usagePeriod.region = event.sandbox.region
+    usagePeriod.disk = event.box.disk
+    usagePeriod.organizationId = event.box.organizationId
+    usagePeriod.region = event.box.region
 
-    await this.sandboxUsagePeriodRepository.save(usagePeriod)
+    await this.boxUsagePeriodRepository.save(usagePeriod)
   }
 
-  private async closeUsagePeriod(sandboxId: string) {
-    const lastUsagePeriod = await this.sandboxUsagePeriodRepository.findOne({
+  private async closeUsagePeriod(boxId: string) {
+    const lastUsagePeriod = await this.boxUsagePeriodRepository.findOne({
       where: {
-        sandboxId,
+        boxId,
         endAt: IsNull(),
       },
     })
 
     if (lastUsagePeriod) {
       lastUsagePeriod.endAt = new Date()
-      await this.sandboxUsagePeriodRepository.save(lastUsagePeriod)
+      await this.boxUsagePeriodRepository.save(lastUsagePeriod)
     }
   }
 
@@ -118,12 +118,12 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
       return
     }
 
-    const usagePeriods = await this.sandboxUsagePeriodRepository.find({
+    const usagePeriods = await this.boxUsagePeriodRepository.find({
       where: {
         endAt: IsNull(),
         // 1 day ago
         startAt: LessThan(new Date(Date.now() - 1000 * 60 * 60 * 24)),
-        organizationId: Not(SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION),
+        organizationId: Not(BOX_WARM_POOL_UNASSIGNED_ORGANIZATION),
       },
       order: {
         startAt: 'ASC',
@@ -132,41 +132,39 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
     })
 
     for (const usagePeriod of usagePeriods) {
-      if (!(await this.aquireLock(usagePeriod.sandboxId))) {
+      if (!(await this.aquireLock(usagePeriod.boxId))) {
         continue
       }
 
       // validate that the usage period should remain active just in case
       try {
-        const sandbox = await this.sandboxRepository.findOne({
+        const box = await this.boxRepository.findOne({
           where: {
-            id: usagePeriod.sandboxId,
+            id: usagePeriod.boxId,
           },
         })
 
-        await this.sandboxUsagePeriodRepository.manager.transaction(async (transactionalEntityManager) => {
+        await this.boxUsagePeriodRepository.manager.transaction(async (transactionalEntityManager) => {
           // Close usage period
           const closeTime = new Date()
           usagePeriod.endAt = closeTime
           await transactionalEntityManager.save(usagePeriod)
 
           if (
-            sandbox &&
-            (sandbox.state === SandboxState.STARTED ||
-              sandbox.state === SandboxState.STOPPED ||
-              sandbox.state === SandboxState.STOPPING)
+            box &&
+            (box.state === BoxState.STARTED || box.state === BoxState.STOPPED || box.state === BoxState.STOPPING)
           ) {
             // Create new usage period
-            const newUsagePeriod = SandboxUsagePeriod.fromUsagePeriod(usagePeriod)
+            const newUsagePeriod = BoxUsagePeriod.fromUsagePeriod(usagePeriod)
             newUsagePeriod.startAt = closeTime
             newUsagePeriod.endAt = null
             await transactionalEntityManager.save(newUsagePeriod)
           }
         })
       } catch (error) {
-        this.logger.error(`Error closing and reopening usage period ${usagePeriod.sandboxId}`, error)
+        this.logger.error(`Error closing and reopening usage period ${usagePeriod.boxId}`, error)
       } finally {
-        await this.releaseLock(usagePeriod.sandboxId)
+        await this.releaseLock(usagePeriod.boxId)
       }
     }
 
@@ -183,8 +181,8 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
       return
     }
 
-    await this.sandboxUsagePeriodRepository.manager.transaction(async (transactionalEntityManager) => {
-      const usagePeriods = await transactionalEntityManager.find(SandboxUsagePeriod, {
+    await this.boxUsagePeriodRepository.manager.transaction(async (transactionalEntityManager) => {
+      const usagePeriods = await transactionalEntityManager.find(BoxUsagePeriod, {
         where: {
           endAt: Not(IsNull()),
         },
@@ -201,26 +199,26 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
       this.logger.debug(`Found ${usagePeriods.length} usage periods to archive`)
 
       await transactionalEntityManager.delete(
-        SandboxUsagePeriod,
+        BoxUsagePeriod,
         usagePeriods.map((usagePeriod) => usagePeriod.id),
       )
-      await transactionalEntityManager.save(usagePeriods.map(SandboxUsagePeriodArchive.fromUsagePeriod))
+      await transactionalEntityManager.save(usagePeriods.map(BoxUsagePeriodArchive.fromUsagePeriod))
     })
 
     await this.redisLockProvider.unlock(lockKey)
   }
 
-  private async waitForLock(sandboxId: string) {
-    while (!(await this.aquireLock(sandboxId))) {
+  private async waitForLock(boxId: string) {
+    while (!(await this.aquireLock(boxId))) {
       await new Promise((resolve) => setTimeout(resolve, 500))
     }
   }
 
-  private async aquireLock(sandboxId: string): Promise<boolean> {
-    return await this.redisLockProvider.lock(`usage-period-${sandboxId}`, 60)
+  private async aquireLock(boxId: string): Promise<boolean> {
+    return await this.redisLockProvider.lock(`usage-period-${boxId}`, 60)
   }
 
-  private async releaseLock(sandboxId: string) {
-    await this.redisLockProvider.unlock(`usage-period-${sandboxId}`)
+  private async releaseLock(boxId: string) {
+    await this.redisLockProvider.unlock(`usage-period-${boxId}`)
   }
 }

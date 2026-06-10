@@ -9,8 +9,8 @@ receivers:
 
 exporters:
   boxlite_exporter:
-    # Sandbox authentication header name
-    sandbox_auth_token_header: 'sandbox-auth-token'
+    # Box authentication header name
+    box_auth_token_header: 'box-auth-token'
 
     # Cache TTL for endpoint configurations
     cache_ttl: 5m

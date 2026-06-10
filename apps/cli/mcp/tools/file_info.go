@@ -22,9 +22,9 @@ type FileInfoArgs struct {
 
 func GetFileInfoTool() mcp.Tool {
 	return mcp.NewTool("get_file_info",
-		mcp.WithDescription("Get information about a file in the BoxLite sandbox."),
+		mcp.WithDescription("Get information about a file in the BoxLite box."),
 		mcp.WithString("filePath", mcp.Required(), mcp.Description("Path to the file to get information about.")),
-		mcp.WithString("id", mcp.Required(), mcp.Description("ID of the sandbox to get the file information from.")),
+		mcp.WithString("id", mcp.Required(), mcp.Description("ID of the box to get the file information from.")),
 	)
 }
 
@@ -35,7 +35,7 @@ func FileInfo(ctx context.Context, request mcp.CallToolRequest, args FileInfoArg
 	}
 
 	if args.Id == nil || *args.Id == "" {
-		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("sandbox ID is required")
+		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("box ID is required")
 	}
 
 	if args.FilePath == nil || *args.FilePath == "" {

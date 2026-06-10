@@ -37,23 +37,23 @@ export class Organization {
   @Column({
     type: 'int',
     default: 4,
-    name: 'max_cpu_per_sandbox',
+    name: 'max_cpu_per_box',
   })
-  maxCpuPerSandbox: number
+  maxCpuPerBox: number
 
   @Column({
     type: 'int',
     default: 8,
-    name: 'max_memory_per_sandbox',
+    name: 'max_memory_per_box',
   })
-  maxMemoryPerSandbox: number
+  maxMemoryPerBox: number
 
   @Column({
     type: 'int',
     default: 10,
-    name: 'max_disk_per_sandbox',
+    name: 'max_disk_per_box',
   })
-  maxDiskPerSandbox: number
+  maxDiskPerBox: number
 
   @Column({
     type: 'int',
@@ -86,16 +86,16 @@ export class Organization {
   @Column({
     type: 'int',
     nullable: true,
-    name: 'sandbox_create_rate_limit',
+    name: 'box_create_rate_limit',
   })
-  sandboxCreateRateLimit: number | null
+  boxCreateRateLimit: number | null
 
   @Column({
     type: 'int',
     nullable: true,
-    name: 'sandbox_lifecycle_rate_limit',
+    name: 'box_lifecycle_rate_limit',
   })
-  sandboxLifecycleRateLimit: number | null
+  boxLifecycleRateLimit: number | null
 
   @Column({
     type: 'int',
@@ -107,16 +107,16 @@ export class Organization {
   @Column({
     type: 'int',
     nullable: true,
-    name: 'sandbox_create_rate_limit_ttl_seconds',
+    name: 'box_create_rate_limit_ttl_seconds',
   })
-  sandboxCreateRateLimitTtlSeconds: number | null
+  boxCreateRateLimitTtlSeconds: number | null
 
   @Column({
     type: 'int',
     nullable: true,
-    name: 'sandbox_lifecycle_rate_limit_ttl_seconds',
+    name: 'box_lifecycle_rate_limit_ttl_seconds',
   })
-  sandboxLifecycleRateLimitTtlSeconds: number | null
+  boxLifecycleRateLimitTtlSeconds: number | null
 
   @OneToMany(() => RegionQuota, (quota) => quota.organization, {
     cascade: true,
@@ -180,7 +180,7 @@ export class Organization {
   @Column({
     default: false,
   })
-  sandboxLimitedNetworkEgress: boolean
+  boxLimitedNetworkEgress: boolean
 
   @CreateDateColumn({
     type: 'timestamp with time zone',
@@ -200,11 +200,11 @@ export class Organization {
   // configuration for experimental features
   _experimentalConfig: Record<string, any> | null
 
-  get sandboxMetadata(): Record<string, string> {
+  get boxMetadata(): Record<string, string> {
     return {
       organizationId: this.id,
       organizationName: this.name,
-      limitNetworkEgress: String(this.sandboxLimitedNetworkEgress),
+      limitNetworkEgress: String(this.boxLimitedNetworkEgress),
     }
   }
 

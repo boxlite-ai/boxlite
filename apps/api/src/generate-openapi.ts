@@ -7,8 +7,8 @@ import { SwaggerModule } from '@nestjs/swagger'
 import { getOpenApiConfig } from './openapi.config'
 import { addWebhookDocumentation } from './openapi-webhooks'
 import {
-  SandboxCreatedWebhookDto,
-  SandboxStateUpdatedWebhookDto,
+  BoxCreatedWebhookDto,
+  BoxStateUpdatedWebhookDto,
   SnapshotCreatedWebhookDto,
   SnapshotStateUpdatedWebhookDto,
   SnapshotRemovedWebhookDto,
@@ -36,8 +36,8 @@ async function generateOpenAPI() {
     const document_3_1_0 = {
       ...SwaggerModule.createDocument(app, config, {
         extraModels: [
-          SandboxCreatedWebhookDto,
-          SandboxStateUpdatedWebhookDto,
+          BoxCreatedWebhookDto,
+          BoxStateUpdatedWebhookDto,
           SnapshotCreatedWebhookDto,
           SnapshotStateUpdatedWebhookDto,
           SnapshotRemovedWebhookDto,

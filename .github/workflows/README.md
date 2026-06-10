@@ -129,6 +129,36 @@ Runs code quality checks.
 4. `node` - Run Node lint and format checks via `make lint:node` and `make fmt:check:node`
 5. `c` - Run C SDK lint and format checks via `make lint:c` and `make fmt:check:c`
 
+### `codeql.yml`
+
+Runs CodeQL code scanning (advanced setup) across all analyzed languages.
+
+**Why advanced setup:** CodeQL *default setup* does not analyze pull requests
+from forks, so the `code_scanning` ruleset rule ("Require code scanning
+results") permanently blocks fork PRs. Advanced setup runs on `pull_request`,
+so fork PRs in this public repo are scanned and the gate is satisfiable without
+an admin bypass.
+
+**Bootstrap guard:** GitHub rejects advanced CodeQL uploads while default setup
+is enabled. The workflow is dormant until repository variable
+`CODEQL_ADVANCED_SETUP_ENABLED` is set to `true`.
+
+**Triggers:**
+- Push to `main`
+- Pull requests against `main` (including fork PRs)
+- Manual dispatch
+- Weekly schedule (Mondays 03:31 UTC)
+
+**Jobs:**
+1. `analyze` - Matrix over `actions`, `c-cpp`, `go`, `javascript-typescript`, `python`, `rust`. All use `build-mode: none` (source-only, no compile) except `go`, which requires `autobuild` (Go's extractor must observe a build). Uses `github/codeql-action@v4`.
+
+**Activation sequence:**
+1. Merge this workflow while `CODEQL_ADVANCED_SETUP_ENABLED` is unset or `false`, so default setup remains the active scanner.
+2. Disable CodeQL default setup.
+3. Set repository variable `CODEQL_ADVANCED_SETUP_ENABLED=true`.
+4. Trigger a new push, pull request update, or manual dispatch and verify CodeQL analysis uploads successfully.
+5. Roll back by setting `CODEQL_ADVANCED_SETUP_ENABLED=false` and re-enabling default setup.
+
 ### `e2e-test.yml`
 
 Runs VM-based E2E integration tests on an ephemeral AWS EC2 self-hosted runner.

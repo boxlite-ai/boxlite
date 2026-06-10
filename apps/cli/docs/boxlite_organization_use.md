@@ -14,4 +14,5 @@ boxlite organization use [ORGANIZATION] [flags]
 
 ### SEE ALSO
 
-* [boxlite organization](boxlite_organization.md)  - Manage BoxLite organizations
+* [boxlite organization](boxlite_organization.md)	 - Manage BoxLite organizations
+

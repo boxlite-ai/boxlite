@@ -132,7 +132,7 @@ func (a *HealthAPIService) HealthControllerCheckExecute(r HealthAPIHealthControl
 			error: localVarHTTPResponse.Status,
 		}
 		if localVarHTTPResponse.StatusCode == 503 {
-			var v HealthControllerCheck503Response
+			var v HealthControllerCheck200Response
 			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
 			if err != nil {
 				newErr.error = err.Error()

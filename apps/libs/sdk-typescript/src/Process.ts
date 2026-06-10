@@ -15,14 +15,14 @@ import {
   PtySessionInfo,
   SessionSendInputRequest,
 } from '@boxlite-ai/toolbox-api-client'
-import { SandboxCodeToolbox } from './Sandbox'
+import { BoxCodeToolbox } from './Box'
 import { ExecuteResponse } from './types/ExecuteResponse'
 import { ArtifactParser } from './utils/ArtifactParser'
 import { stdDemuxStream } from './utils/Stream'
 import { Buffer } from 'buffer'
 import { PtyHandle } from './PtyHandle'
 import { PtyCreateOptions, PtyConnectOptions } from './types/Pty'
-import { createSandboxWebSocket } from './utils/WebSocket'
+import { createBoxWebSocket } from './utils/WebSocket'
 import { WithInstrumentation } from './utils/otel.decorator'
 
 // 3-byte multiplexing markers inserted by the shell labelers
@@ -56,23 +56,23 @@ export interface SessionCommandLogsResponse {
 }
 
 /**
- * Handles process and code execution within a Sandbox.
+ * Handles process and code execution within a Box.
  *
  * @class
  */
 export class Process {
   constructor(
     private readonly clientConfig: Configuration,
-    private readonly codeToolbox: SandboxCodeToolbox,
+    private readonly codeToolbox: BoxCodeToolbox,
     private readonly apiClient: ProcessApi,
     private readonly getPreviewToken: () => Promise<string>,
   ) {}
 
   /**
-   * Executes a shell command in the Sandbox.
+   * Executes a shell command in the Box.
    *
    * @param {string} command - Shell command to execute
-   * @param {string} [cwd] - Working directory for command execution. If not specified, uses the sandbox working directory.
+   * @param {string} [cwd] - Working directory for command execution. If not specified, uses the box working directory.
    * @param {Record<string, string>} [env] - Environment variables to set for the command
    * @param {number} [timeout] - Maximum time in seconds to wait for the command to complete.
    * @returns {Promise<ExecuteResponse>} Command execution results containing:
@@ -135,7 +135,7 @@ export class Process {
   }
 
   /**
-   * Executes code in the Sandbox using the appropriate language runtime.
+   * Executes code in the Box using the appropriate language runtime.
    *
    * @param {string} code - Code to execute
    * @param {CodeRunParams} params - Parameters for code execution
@@ -199,7 +199,7 @@ export class Process {
   }
 
   /**
-   * Creates a new long-running background session in the Sandbox.
+   * Creates a new long-running background session in the Box.
    *
    * Sessions are background processes that maintain state between commands, making them ideal for
    * scenarios requiring multiple related commands or persistent environment setup. You can run
@@ -224,7 +224,7 @@ export class Process {
   }
 
   /**
-   * Get a session in the sandbox.
+   * Get a session in the box.
    *
    * @param {string} sessionId - Unique identifier of the session to retrieve
    * @returns {Promise<Session>} Session information including:
@@ -243,7 +243,7 @@ export class Process {
   }
 
   /**
-   * Get the sandbox entrypoint session
+   * Get the box entrypoint session
    *
    * @returns {Promise<Session>} Entrypoint session information including:
    *                            - sessionId: The entrypoint session's unique identifier
@@ -407,13 +407,13 @@ export class Process {
 
     const url = `${this.clientConfig.basePath.replace(/^http/, 'ws')}/process/session/${sessionId}/command/${commandId}/logs?follow=true`
 
-    const ws = await createSandboxWebSocket(url, this.clientConfig.baseOptions?.headers || {}, this.getPreviewToken)
+    const ws = await createBoxWebSocket(url, this.clientConfig.baseOptions?.headers || {}, this.getPreviewToken)
 
     await stdDemuxStream(ws, onStdout, onStderr)
   }
 
   /**
-   * Get the logs for the sandbox entrypoint session.
+   * Get the logs for the box entrypoint session.
    *
    * @returns {Promise<SessionCommandLogsResponse>} Command logs containing: output (combined stdout and stderr), stdout and stderr
    *
@@ -467,7 +467,7 @@ export class Process {
 
     const url = `${this.clientConfig.basePath.replace(/^http/, 'ws')}/process/session/entrypoint/logs?follow=true`
 
-    const ws = await createSandboxWebSocket(url, this.clientConfig.baseOptions?.headers || {}, this.getPreviewToken)
+    const ws = await createBoxWebSocket(url, this.clientConfig.baseOptions?.headers || {}, this.getPreviewToken)
 
     await stdDemuxStream(ws, onStdout, onStderr)
   }
@@ -485,7 +485,7 @@ export class Process {
   }
 
   /**
-   * Lists all active sessions in the Sandbox.
+   * Lists all active sessions in the Box.
    *
    * @returns {Promise<Session[]>} Array of active sessions
    *
@@ -505,7 +505,7 @@ export class Process {
   }
 
   /**
-   * Delete a session from the Sandbox.
+   * Delete a session from the Box.
    *
    * @param {string} sessionId - Unique identifier of the session to delete
    * @returns {Promise<void>}
@@ -520,7 +520,7 @@ export class Process {
   }
 
   /**
-   * Create a new PTY (pseudo-terminal) session in the sandbox.
+   * Create a new PTY (pseudo-terminal) session in the box.
    *
    * Creates an interactive terminal session that can execute commands and handle user input.
    * The PTY session behaves like a real terminal, supporting features like command history.
@@ -575,7 +575,7 @@ export class Process {
   }
 
   /**
-   * Connect to an existing PTY session in the sandbox.
+   * Connect to an existing PTY session in the box.
    *
    * Establishes a WebSocket connection to an existing PTY session, allowing you to
    * interact with a previously created terminal session.
@@ -613,7 +613,7 @@ export class Process {
   public async connectPty(sessionId: string, options?: PtyConnectOptions): Promise<PtyHandle> {
     const url = `${this.clientConfig.basePath.replace(/^http/, 'ws')}/process/pty/${sessionId}/connect`
 
-    const ws = await createSandboxWebSocket(url, this.clientConfig.baseOptions?.headers || {}, this.getPreviewToken)
+    const ws = await createBoxWebSocket(url, this.clientConfig.baseOptions?.headers || {}, this.getPreviewToken)
 
     const handle = new PtyHandle(
       ws,
@@ -627,10 +627,10 @@ export class Process {
   }
 
   /**
-   * List all PTY sessions in the sandbox.
+   * List all PTY sessions in the box.
    *
    * Retrieves information about all PTY sessions, both active and inactive,
-   * that have been created in this sandbox.
+   * that have been created in this box.
    *
    * @returns {Promise<PtySessionInfo[]>} Array of PTY session information
    *

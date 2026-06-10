@@ -18,7 +18,7 @@ import type { AxiosPromise, AxiosInstance, RawAxiosRequestConfig } from 'axios';
 import globalAxios from 'axios';
 // Some imports not used depending on template conditions
 // @ts-ignore
-import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObject, setBearerAuthToObject, setOAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction } from '../common';
+import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObject, setBearerAuthToObject, setOAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction, replaceWithSerializableTypeIfNeeded } from '../common';
 // @ts-ignore
 import { BASE_PATH, COLLECTION_FORMATS, type RequestArgs, BaseAPI, RequiredError, operationServerMap } from '../base';
 // @ts-ignore
@@ -35,14 +35,13 @@ import type { RunnerHealthcheck } from '../models';
 import type { RunnerSnapshotDto } from '../models';
 /**
  * RunnersApi - axios parameter creator
- * @export
  */
 export const RunnersApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         *
+         * 
          * @summary Create runner
-         * @param {CreateRunner} createRunner
+         * @param {CreateRunner} createRunner 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -68,9 +67,8 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -86,7 +84,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Delete runner
          * @param {string} id Runner ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -97,7 +95,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
             // verify required parameter 'id' is not null or undefined
             assertParamExists('deleteRunner', 'id', id)
             const localVarPath = `/runners/{id}`
-                .replace(`{${"id"}}`, encodeURIComponent(String(id)));
+                .replace('{id}', encodeURIComponent(String(id)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -116,7 +114,6 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
             // authentication oauth2 required
 
 
-
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
             }
@@ -130,7 +127,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Get info for authenticated runner
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -154,7 +151,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
@@ -166,18 +163,17 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
-         * @summary Get runner by ID
-         * @param {string} id Runner ID
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+         * 
+         * @summary Get runner by box ID
+         * @param {string} boxId 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        getRunnerById: async (id: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'id' is not null or undefined
-            assertParamExists('getRunnerById', 'id', id)
-            const localVarPath = `/runners/{id}`
-                .replace(`{${"id"}}`, encodeURIComponent(String(id)));
+        getRunnerByBoxId: async (boxId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('getRunnerByBoxId', 'boxId', boxId)
+            const localVarPath = `/runners/by-box/{boxId}`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -195,7 +191,48 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
+            localVarHeaderParameter['Accept'] = 'application/json';
 
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Get runner by ID
+         * @param {string} id Runner ID
+         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        getRunnerById: async (id: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'id' is not null or undefined
+            assertParamExists('getRunnerById', 'id', id)
+            const localVarPath = `/runners/{id}`
+                .replace('{id}', encodeURIComponent(String(id)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -210,47 +247,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
-         * @summary Get runner by sandbox ID
-         * @param {string} sandboxId
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        getRunnerBySandboxId: async (sandboxId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('getRunnerBySandboxId', 'sandboxId', sandboxId)
-            const localVarPath = `/runners/by-sandbox/{sandboxId}`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-
-
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         *
+         * 
          * @summary Get runner by ID
          * @param {string} id Runner ID
          * @param {*} [options] Override http request option.
@@ -260,7 +257,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
             // verify required parameter 'id' is not null or undefined
             assertParamExists('getRunnerFullById', 'id', id)
             const localVarPath = `/runners/{id}/full`
-                .replace(`{${"id"}}`, encodeURIComponent(String(id)));
+                .replace('{id}', encodeURIComponent(String(id)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -278,7 +275,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
@@ -290,7 +287,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Get runners by snapshot ref
          * @param {string} ref Snapshot ref
          * @param {*} [options] Override http request option.
@@ -321,7 +318,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
                 localVarQueryParameter['ref'] = ref;
             }
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
@@ -333,7 +330,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary List all runners
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -358,7 +355,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -375,7 +372,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Endpoint for version 2 runners to send healthcheck and metrics. Updates lastChecked timestamp and runner metrics.
          * @summary Runner healthcheck
-         * @param {RunnerHealthcheck} runnerHealthcheck
+         * @param {RunnerHealthcheck} runnerHealthcheck 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -400,8 +397,6 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
 
             setSearchParams(localVarUrlObj, localVarQueryParameter);
@@ -415,7 +410,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Update runner draining status
          * @param {string} id Runner ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -426,7 +421,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
             // verify required parameter 'id' is not null or undefined
             assertParamExists('updateRunnerDraining', 'id', id)
             const localVarPath = `/runners/{id}/draining`
-                .replace(`{${"id"}}`, encodeURIComponent(String(id)));
+                .replace('{id}', encodeURIComponent(String(id)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -444,7 +439,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -459,7 +454,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Update runner scheduling status
          * @param {string} id Runner ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -470,7 +465,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
             // verify required parameter 'id' is not null or undefined
             assertParamExists('updateRunnerScheduling', 'id', id)
             const localVarPath = `/runners/{id}/scheduling`
-                .replace(`{${"id"}}`, encodeURIComponent(String(id)));
+                .replace('{id}', encodeURIComponent(String(id)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -488,7 +483,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -507,15 +502,14 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
 
 /**
  * RunnersApi - functional programming interface
- * @export
  */
 export const RunnersApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = RunnersApiAxiosParamCreator(configuration)
     return {
         /**
-         *
+         * 
          * @summary Create runner
-         * @param {CreateRunner} createRunner
+         * @param {CreateRunner} createRunner 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -527,7 +521,7 @@ export const RunnersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Delete runner
          * @param {string} id Runner ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -541,7 +535,7 @@ export const RunnersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get info for authenticated runner
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -553,7 +547,20 @@ export const RunnersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
+         * @summary Get runner by box ID
+         * @param {string} boxId 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async getRunnerByBoxId(boxId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<RunnerFull>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getRunnerByBoxId(boxId, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['RunnersApi.getRunnerByBoxId']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
          * @summary Get runner by ID
          * @param {string} id Runner ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -567,20 +574,7 @@ export const RunnersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
-         * @summary Get runner by sandbox ID
-         * @param {string} sandboxId
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async getRunnerBySandboxId(sandboxId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<RunnerFull>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getRunnerBySandboxId(sandboxId, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['RunnersApi.getRunnerBySandboxId']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         *
+         * 
          * @summary Get runner by ID
          * @param {string} id Runner ID
          * @param {*} [options] Override http request option.
@@ -593,7 +587,7 @@ export const RunnersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get runners by snapshot ref
          * @param {string} ref Snapshot ref
          * @param {*} [options] Override http request option.
@@ -606,7 +600,7 @@ export const RunnersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary List all runners
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -621,7 +615,7 @@ export const RunnersApiFp = function(configuration?: Configuration) {
         /**
          * Endpoint for version 2 runners to send healthcheck and metrics. Updates lastChecked timestamp and runner metrics.
          * @summary Runner healthcheck
-         * @param {RunnerHealthcheck} runnerHealthcheck
+         * @param {RunnerHealthcheck} runnerHealthcheck 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -632,7 +626,7 @@ export const RunnersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Update runner draining status
          * @param {string} id Runner ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -646,7 +640,7 @@ export const RunnersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Update runner scheduling status
          * @param {string} id Runner ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -664,15 +658,14 @@ export const RunnersApiFp = function(configuration?: Configuration) {
 
 /**
  * RunnersApi - factory interface
- * @export
  */
 export const RunnersApiFactory = function (configuration?: Configuration, basePath?: string, axios?: AxiosInstance) {
     const localVarFp = RunnersApiFp(configuration)
     return {
         /**
-         *
+         * 
          * @summary Create runner
-         * @param {CreateRunner} createRunner
+         * @param {CreateRunner} createRunner 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -681,7 +674,7 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.createRunner(createRunner, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Delete runner
          * @param {string} id Runner ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -692,7 +685,7 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.deleteRunner(id, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get info for authenticated runner
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -701,7 +694,17 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getInfoForAuthenticatedRunner(options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
+         * @summary Get runner by box ID
+         * @param {string} boxId 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        getRunnerByBoxId(boxId: string, options?: RawAxiosRequestConfig): AxiosPromise<RunnerFull> {
+            return localVarFp.getRunnerByBoxId(boxId, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
          * @summary Get runner by ID
          * @param {string} id Runner ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -712,17 +715,7 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getRunnerById(id, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
-         * @summary Get runner by sandbox ID
-         * @param {string} sandboxId
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        getRunnerBySandboxId(sandboxId: string, options?: RawAxiosRequestConfig): AxiosPromise<RunnerFull> {
-            return localVarFp.getRunnerBySandboxId(sandboxId, options).then((request) => request(axios, basePath));
-        },
-        /**
-         *
+         * 
          * @summary Get runner by ID
          * @param {string} id Runner ID
          * @param {*} [options] Override http request option.
@@ -732,7 +725,7 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getRunnerFullById(id, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get runners by snapshot ref
          * @param {string} ref Snapshot ref
          * @param {*} [options] Override http request option.
@@ -742,7 +735,7 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getRunnersBySnapshotRef(ref, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary List all runners
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -754,7 +747,7 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
         /**
          * Endpoint for version 2 runners to send healthcheck and metrics. Updates lastChecked timestamp and runner metrics.
          * @summary Runner healthcheck
-         * @param {RunnerHealthcheck} runnerHealthcheck
+         * @param {RunnerHealthcheck} runnerHealthcheck 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -762,7 +755,7 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.runnerHealthcheck(runnerHealthcheck, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Update runner draining status
          * @param {string} id Runner ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -773,7 +766,7 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.updateRunnerDraining(id, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Update runner scheduling status
          * @param {string} id Runner ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -788,104 +781,93 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
 
 /**
  * RunnersApi - object-oriented interface
- * @export
- * @class RunnersApi
- * @extends {BaseAPI}
  */
 export class RunnersApi extends BaseAPI {
     /**
-     *
+     * 
      * @summary Create runner
-     * @param {CreateRunner} createRunner
+     * @param {CreateRunner} createRunner 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof RunnersApi
      */
     public createRunner(createRunner: CreateRunner, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return RunnersApiFp(this.configuration).createRunner(createRunner, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Delete runner
      * @param {string} id Runner ID
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof RunnersApi
      */
     public deleteRunner(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return RunnersApiFp(this.configuration).deleteRunner(id, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Get info for authenticated runner
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof RunnersApi
      */
     public getInfoForAuthenticatedRunner(options?: RawAxiosRequestConfig) {
         return RunnersApiFp(this.configuration).getInfoForAuthenticatedRunner(options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
+     * @summary Get runner by box ID
+     * @param {string} boxId 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public getRunnerByBoxId(boxId: string, options?: RawAxiosRequestConfig) {
+        return RunnersApiFp(this.configuration).getRunnerByBoxId(boxId, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
      * @summary Get runner by ID
      * @param {string} id Runner ID
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof RunnersApi
      */
     public getRunnerById(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return RunnersApiFp(this.configuration).getRunnerById(id, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
-     * @summary Get runner by sandbox ID
-     * @param {string} sandboxId
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     * @memberof RunnersApi
-     */
-    public getRunnerBySandboxId(sandboxId: string, options?: RawAxiosRequestConfig) {
-        return RunnersApiFp(this.configuration).getRunnerBySandboxId(sandboxId, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     *
+     * 
      * @summary Get runner by ID
      * @param {string} id Runner ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof RunnersApi
      */
     public getRunnerFullById(id: string, options?: RawAxiosRequestConfig) {
         return RunnersApiFp(this.configuration).getRunnerFullById(id, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Get runners by snapshot ref
      * @param {string} ref Snapshot ref
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof RunnersApi
      */
     public getRunnersBySnapshotRef(ref: string, options?: RawAxiosRequestConfig) {
         return RunnersApiFp(this.configuration).getRunnersBySnapshotRef(ref, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary List all runners
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof RunnersApi
      */
     public listRunners(xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return RunnersApiFp(this.configuration).listRunners(xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
@@ -894,38 +876,36 @@ export class RunnersApi extends BaseAPI {
     /**
      * Endpoint for version 2 runners to send healthcheck and metrics. Updates lastChecked timestamp and runner metrics.
      * @summary Runner healthcheck
-     * @param {RunnerHealthcheck} runnerHealthcheck
+     * @param {RunnerHealthcheck} runnerHealthcheck 
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof RunnersApi
      */
     public runnerHealthcheck(runnerHealthcheck: RunnerHealthcheck, options?: RawAxiosRequestConfig) {
         return RunnersApiFp(this.configuration).runnerHealthcheck(runnerHealthcheck, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Update runner draining status
      * @param {string} id Runner ID
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof RunnersApi
      */
     public updateRunnerDraining(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return RunnersApiFp(this.configuration).updateRunnerDraining(id, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Update runner scheduling status
      * @param {string} id Runner ID
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof RunnersApi
      */
     public updateRunnerScheduling(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return RunnersApiFp(this.configuration).updateRunnerScheduling(id, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 }
+

@@ -105,7 +105,7 @@ SSH Client → SSH Gateway → BoxLite API → Runner SSH Gateway
 
 ## API Endpoints Used
 
-- `GET /sandbox/ssh-access/validate?token={token}` - Validate SSH access token
+- `GET /box/ssh-access/validate?token={token}` - Validate SSH access token
 - `GET /runners/{id}/ssh-keypair` - Get runner SSH keypair
 
 ## Error Handling

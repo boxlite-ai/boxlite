@@ -9,7 +9,7 @@ import { BoxLiteNotFoundError } from './errors/BoxliteError'
 import { WithInstrumentation } from './utils/otel.decorator'
 
 /**
- * Represents a BoxLite Volume which is a shared storage volume for Sandboxes.
+ * Represents a BoxLite Volume which is a shared storage volume for Boxes.
  *
  * @property {string} id - Unique identifier for the Volume
  * @property {string} name - Name of the Volume
@@ -26,7 +26,7 @@ export type Volume = VolumeDto & { __brand: 'Volume' }
  *
  * This service provides methods to list, get, create, and delete Volumes.
  *
- * Volumes can be mounted to Sandboxes with an optional subpath parameter to mount
+ * Volumes can be mounted to Boxes with an optional subpath parameter to mount
  * only a specific S3 prefix within the volume. When no subpath is specified,
  * the entire volume is mounted.
  *

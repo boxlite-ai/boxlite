@@ -27,17 +27,17 @@ export class CreateOrganizationQuotaDto {
   @ApiPropertyOptional()
   @IsNumber()
   @IsOptional()
-  maxCpuPerSandbox?: number
+  maxCpuPerBox?: number
 
   @ApiPropertyOptional()
   @IsNumber()
   @IsOptional()
-  maxMemoryPerSandbox?: number
+  maxMemoryPerBox?: number
 
   @ApiPropertyOptional()
   @IsNumber()
   @IsOptional()
-  maxDiskPerSandbox?: number
+  maxDiskPerBox?: number
 
   @ApiPropertyOptional()
   @IsNumber()

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { RedisLockProvider } from '../../sandbox/common/redis-lock.provider'
+import { RedisLockProvider } from '../../box/common/redis-lock.provider'
 
 type DistributedLockOptions = {
   lockKey?: string

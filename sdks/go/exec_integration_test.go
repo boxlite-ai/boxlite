@@ -114,3 +114,48 @@ func TestIntegrationExecEnvWorkingDirTimeout(t *testing.T) {
 		}
 	})
 }
+
+// TestIntegrationExecStdoutRace asserts that Execution.Wait does not
+// return until every stdout chunk has been delivered to the user's sink
+// — i.e. the drain barrier introduced for #563 holds. Pre-fix, the C
+// Wait task was decoupled from the stream pumps, so a short command
+// could push its Wait queue event before the late Stdout chunks landed,
+// and Cmd.Run would return with a truncated buffer. The pre-existing
+// `TestIntegrationExecEnvWorkingDirTimeout` papers over this with a
+// `&& sleep 0.1` pad on every command (see drainPad). This test
+// deliberately does NOT pad the command — that's the whole point.
+//
+// Repeated rounds because the race is timing-sensitive: a single
+// fast/lucky run can mask it. ROUNDS=20 has caught the regression
+// reliably on this machine.
+func TestIntegrationExecStdoutRace(t *testing.T) {
+	rt := newTestRuntime(t)
+	box := createStartedBoxOrSkip(t, rt, "alpine:latest", WithAutoRemove(false))
+
+	const rounds = 20
+	const want = "marker-line\n"
+	var truncated int
+	for i := 0; i < rounds; i++ {
+		cmd := box.Command("sh", "-c", "echo marker-line")
+		var buf bytes.Buffer
+		cmd.Stdout = &buf
+		if err := cmd.Run(context.Background()); err != nil {
+			t.Fatalf("round %d: Cmd.Run: %v", i, err)
+		}
+		if buf.String() != want {
+			truncated++
+			t.Logf("round %d: stdout=%q (want %q)", i, buf.String(), want)
+		}
+	}
+	if truncated > 0 {
+		t.Fatalf(
+			"Execution.Wait returned before %d/%d stdout deliveries — "+
+				"the #563 race regressed. Either Execution.Wait's "+
+				"post-reap drain step (<-streamState.drained, the "+
+				"os/exec awaitGoroutines analog) was removed, or the "+
+				"C-side exit_pump no longer awaits the stream_done_rx "+
+				"oneshots that close that channel.",
+			truncated, rounds,
+		)
+	}
+}

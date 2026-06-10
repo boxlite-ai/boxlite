@@ -13,14 +13,14 @@ export class SendWebhookDto {
     description: 'The type of event being sent',
     enum: WebhookEvent,
     enumName: 'WebhookEvent',
-    example: 'sandbox.created',
+    example: 'box.created',
   })
   @IsEnum(WebhookEvent)
   eventType: WebhookEvent
 
   @ApiProperty({
     description: 'The payload data to send',
-    example: { id: 'sandbox-123', name: 'My Sandbox' },
+    example: { id: 'box-123', name: 'My Box' },
   })
   @IsObject()
   payload: Record<string, any>

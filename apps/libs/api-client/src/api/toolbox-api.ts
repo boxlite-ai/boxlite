@@ -18,7 +18,7 @@ import type { AxiosPromise, AxiosInstance, RawAxiosRequestConfig } from 'axios';
 import globalAxios from 'axios';
 // Some imports not used depending on template conditions
 // @ts-ignore
-import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObject, setBearerAuthToObject, setOAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction } from '../common';
+import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObject, setBearerAuthToObject, setOAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction, replaceWithSerializableTypeIfNeeded } from '../common';
 // @ts-ignore
 import { BASE_PATH, COLLECTION_FORMATS, type RequestArgs, BaseAPI, RequiredError, operationServerMap } from '../base';
 // @ts-ignore
@@ -145,27 +145,26 @@ import type { WindowsResponse } from '../models';
 import type { WorkDirResponse } from '../models';
 /**
  * ToolboxApi - axios parameter creator
- * @export
  */
 export const ToolboxApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
          * Click mouse at specified coordinates
          * @summary [DEPRECATED] Click mouse
-         * @param {string} sandboxId
-         * @param {MouseClickRequest} mouseClickRequest
+         * @param {string} boxId 
+         * @param {MouseClickRequest} mouseClickRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        clickMouseDeprecated: async (sandboxId: string, mouseClickRequest: MouseClickRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('clickMouseDeprecated', 'sandboxId', sandboxId)
+        clickMouseDeprecated: async (boxId: string, mouseClickRequest: MouseClickRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('clickMouseDeprecated', 'boxId', boxId)
             // verify required parameter 'mouseClickRequest' is not null or undefined
             assertParamExists('clickMouseDeprecated', 'mouseClickRequest', mouseClickRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/computeruse/mouse/click`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/computeruse/mouse/click`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -183,9 +182,8 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -201,25 +199,25 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Create folder inside sandbox
+         * Create folder inside box
          * @summary [DEPRECATED] Create folder
-         * @param {string} sandboxId
-         * @param {string} path
-         * @param {string} mode
+         * @param {string} boxId 
+         * @param {string} path 
+         * @param {string} mode 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        createFolderDeprecated: async (sandboxId: string, path: string, mode: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('createFolderDeprecated', 'sandboxId', sandboxId)
+        createFolderDeprecated: async (boxId: string, path: string, mode: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('createFolderDeprecated', 'boxId', boxId)
             // verify required parameter 'path' is not null or undefined
             assertParamExists('createFolderDeprecated', 'path', path)
             // verify required parameter 'mode' is not null or undefined
             assertParamExists('createFolderDeprecated', 'mode', mode)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/files/folder`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/files/folder`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -246,7 +244,6 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             }
 
 
-
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
             }
@@ -260,22 +257,22 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Create a new PTY session in the sandbox
+         * Create a new PTY session in the box
          * @summary [DEPRECATED] Create PTY session
-         * @param {string} sandboxId
-         * @param {PtyCreateRequest} ptyCreateRequest
+         * @param {string} boxId 
+         * @param {PtyCreateRequest} ptyCreateRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        createPTYSessionDeprecated: async (sandboxId: string, ptyCreateRequest: PtyCreateRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('createPTYSessionDeprecated', 'sandboxId', sandboxId)
+        createPTYSessionDeprecated: async (boxId: string, ptyCreateRequest: PtyCreateRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('createPTYSessionDeprecated', 'boxId', boxId)
             // verify required parameter 'ptyCreateRequest' is not null or undefined
             assertParamExists('createPTYSessionDeprecated', 'ptyCreateRequest', ptyCreateRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/process/pty`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/process/pty`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -293,9 +290,8 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -311,22 +307,22 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Create a new session in the sandbox
+         * Create a new session in the box
          * @summary [DEPRECATED] Create session
-         * @param {string} sandboxId
-         * @param {CreateSessionRequest} createSessionRequest
+         * @param {string} boxId 
+         * @param {CreateSessionRequest} createSessionRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        createSessionDeprecated: async (sandboxId: string, createSessionRequest: CreateSessionRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('createSessionDeprecated', 'sandboxId', sandboxId)
+        createSessionDeprecated: async (boxId: string, createSessionRequest: CreateSessionRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('createSessionDeprecated', 'boxId', boxId)
             // verify required parameter 'createSessionRequest' is not null or undefined
             assertParamExists('createSessionDeprecated', 'createSessionRequest', createSessionRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/process/session`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/process/session`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -343,8 +339,6 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
-
-
 
             localVarHeaderParameter['Content-Type'] = 'application/json';
 
@@ -362,23 +356,23 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Delete file inside sandbox
+         * Delete file inside box
          * @summary [DEPRECATED] Delete file
-         * @param {string} sandboxId
-         * @param {string} path
+         * @param {string} boxId 
+         * @param {string} path 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {boolean} [recursive]
+         * @param {boolean} [recursive] 
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        deleteFileDeprecated: async (sandboxId: string, path: string, xBoxLiteOrganizationID?: string, recursive?: boolean, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('deleteFileDeprecated', 'sandboxId', sandboxId)
+        deleteFileDeprecated: async (boxId: string, path: string, xBoxLiteOrganizationID?: string, recursive?: boolean, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('deleteFileDeprecated', 'boxId', boxId)
             // verify required parameter 'path' is not null or undefined
             assertParamExists('deleteFileDeprecated', 'path', path)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/files`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/files`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -405,7 +399,6 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             }
 
 
-
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
             }
@@ -421,21 +414,21 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Delete a PTY session and terminate the associated process
          * @summary [DEPRECATED] Delete PTY session
-         * @param {string} sandboxId
-         * @param {string} sessionId
+         * @param {string} boxId 
+         * @param {string} sessionId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        deletePTYSessionDeprecated: async (sandboxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('deletePTYSessionDeprecated', 'sandboxId', sandboxId)
+        deletePTYSessionDeprecated: async (boxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('deletePTYSessionDeprecated', 'boxId', boxId)
             // verify required parameter 'sessionId' is not null or undefined
             assertParamExists('deletePTYSessionDeprecated', 'sessionId', sessionId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/process/pty/{sessionId}`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)))
-                .replace(`{${"sessionId"}}`, encodeURIComponent(String(sessionId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/process/pty/{sessionId}`
+                .replace('{boxId}', encodeURIComponent(String(boxId)))
+                .replace('{sessionId}', encodeURIComponent(String(sessionId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -452,7 +445,6 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
-
 
 
             if (xBoxLiteOrganizationID != null) {
@@ -470,21 +462,21 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Delete a specific session
          * @summary [DEPRECATED] Delete session
-         * @param {string} sandboxId
-         * @param {string} sessionId
+         * @param {string} boxId 
+         * @param {string} sessionId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        deleteSessionDeprecated: async (sandboxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('deleteSessionDeprecated', 'sandboxId', sandboxId)
+        deleteSessionDeprecated: async (boxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('deleteSessionDeprecated', 'boxId', boxId)
             // verify required parameter 'sessionId' is not null or undefined
             assertParamExists('deleteSessionDeprecated', 'sessionId', sessionId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/process/session/{sessionId}`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)))
-                .replace(`{${"sessionId"}}`, encodeURIComponent(String(sessionId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/process/session/{sessionId}`
+                .replace('{boxId}', encodeURIComponent(String(boxId)))
+                .replace('{sessionId}', encodeURIComponent(String(sessionId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -503,7 +495,6 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             // authentication oauth2 required
 
 
-
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
             }
@@ -517,22 +508,22 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Download file from sandbox
+         * Download file from box
          * @summary [DEPRECATED] Download file
-         * @param {string} sandboxId
-         * @param {string} path
+         * @param {string} boxId 
+         * @param {string} path 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        downloadFileDeprecated: async (sandboxId: string, path: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('downloadFileDeprecated', 'sandboxId', sandboxId)
+        downloadFileDeprecated: async (boxId: string, path: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('downloadFileDeprecated', 'boxId', boxId)
             // verify required parameter 'path' is not null or undefined
             assertParamExists('downloadFileDeprecated', 'path', path)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/files/download`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/files/download`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -554,7 +545,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
                 localVarQueryParameter['path'] = path;
             }
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -571,20 +562,20 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Streams back a multipart/form-data bundle of the requested paths
          * @summary [DEPRECATED] Download multiple files
-         * @param {string} sandboxId
-         * @param {DownloadFiles} downloadFiles
+         * @param {string} boxId 
+         * @param {DownloadFiles} downloadFiles 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        downloadFilesDeprecated: async (sandboxId: string, downloadFiles: DownloadFiles, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('downloadFilesDeprecated', 'sandboxId', sandboxId)
+        downloadFilesDeprecated: async (boxId: string, downloadFiles: DownloadFiles, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('downloadFilesDeprecated', 'boxId', boxId)
             // verify required parameter 'downloadFiles' is not null or undefined
             assertParamExists('downloadFilesDeprecated', 'downloadFiles', downloadFiles)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/files/bulk-download`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/files/bulk-download`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -602,9 +593,8 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -622,20 +612,20 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Drag mouse from start to end coordinates
          * @summary [DEPRECATED] Drag mouse
-         * @param {string} sandboxId
-         * @param {MouseDragRequest} mouseDragRequest
+         * @param {string} boxId 
+         * @param {MouseDragRequest} mouseDragRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        dragMouseDeprecated: async (sandboxId: string, mouseDragRequest: MouseDragRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('dragMouseDeprecated', 'sandboxId', sandboxId)
+        dragMouseDeprecated: async (boxId: string, mouseDragRequest: MouseDragRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('dragMouseDeprecated', 'boxId', boxId)
             // verify required parameter 'mouseDragRequest' is not null or undefined
             assertParamExists('dragMouseDeprecated', 'mouseDragRequest', mouseDragRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/computeruse/mouse/drag`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/computeruse/mouse/drag`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -653,9 +643,8 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -671,22 +660,22 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Execute command synchronously inside sandbox
+         * Execute command synchronously inside box
          * @summary [DEPRECATED] Execute command
-         * @param {string} sandboxId
-         * @param {ExecuteRequest} executeRequest
+         * @param {string} boxId 
+         * @param {ExecuteRequest} executeRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        executeCommandDeprecated: async (sandboxId: string, executeRequest: ExecuteRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('executeCommandDeprecated', 'sandboxId', sandboxId)
+        executeCommandDeprecated: async (boxId: string, executeRequest: ExecuteRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('executeCommandDeprecated', 'boxId', boxId)
             // verify required parameter 'executeRequest' is not null or undefined
             assertParamExists('executeCommandDeprecated', 'executeRequest', executeRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/process/execute`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/process/execute`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -704,9 +693,8 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -724,24 +712,24 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Execute a command in a specific session
          * @summary [DEPRECATED] Execute command in session
-         * @param {string} sandboxId
-         * @param {string} sessionId
-         * @param {SessionExecuteRequest} sessionExecuteRequest
+         * @param {string} boxId 
+         * @param {string} sessionId 
+         * @param {SessionExecuteRequest} sessionExecuteRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        executeSessionCommandDeprecated: async (sandboxId: string, sessionId: string, sessionExecuteRequest: SessionExecuteRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('executeSessionCommandDeprecated', 'sandboxId', sandboxId)
+        executeSessionCommandDeprecated: async (boxId: string, sessionId: string, sessionExecuteRequest: SessionExecuteRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('executeSessionCommandDeprecated', 'boxId', boxId)
             // verify required parameter 'sessionId' is not null or undefined
             assertParamExists('executeSessionCommandDeprecated', 'sessionId', sessionId)
             // verify required parameter 'sessionExecuteRequest' is not null or undefined
             assertParamExists('executeSessionCommandDeprecated', 'sessionExecuteRequest', sessionExecuteRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/process/session/{sessionId}/exec`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)))
-                .replace(`{${"sessionId"}}`, encodeURIComponent(String(sessionId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/process/session/{sessionId}/exec`
+                .replace('{boxId}', encodeURIComponent(String(boxId)))
+                .replace('{sessionId}', encodeURIComponent(String(sessionId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -759,9 +747,8 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -777,25 +764,25 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Search for text/pattern inside sandbox files
+         * Search for text/pattern inside box files
          * @summary [DEPRECATED] Search for text/pattern in files
-         * @param {string} sandboxId
-         * @param {string} path
-         * @param {string} pattern
+         * @param {string} boxId 
+         * @param {string} path 
+         * @param {string} pattern 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        findInFilesDeprecated: async (sandboxId: string, path: string, pattern: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('findInFilesDeprecated', 'sandboxId', sandboxId)
+        findInFilesDeprecated: async (boxId: string, path: string, pattern: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('findInFilesDeprecated', 'boxId', boxId)
             // verify required parameter 'path' is not null or undefined
             assertParamExists('findInFilesDeprecated', 'path', path)
             // verify required parameter 'pattern' is not null or undefined
             assertParamExists('findInFilesDeprecated', 'pattern', pattern)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/files/find`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/files/find`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -821,7 +808,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
                 localVarQueryParameter['pattern'] = pattern;
             }
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -838,17 +825,17 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Get status of all VNC desktop processes
          * @summary [DEPRECATED] Get computer use status
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getComputerUseStatusDeprecated: async (sandboxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('getComputerUseStatusDeprecated', 'sandboxId', sandboxId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/computeruse/status`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+        getComputerUseStatusDeprecated: async (boxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('getComputerUseStatusDeprecated', 'boxId', boxId)
+            const localVarPath = `/toolbox/{boxId}/toolbox/computeruse/status`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -866,7 +853,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -883,17 +870,17 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Get information about displays
          * @summary [DEPRECATED] Get display info
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getDisplayInfoDeprecated: async (sandboxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('getDisplayInfoDeprecated', 'sandboxId', sandboxId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/computeruse/display/info`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+        getDisplayInfoDeprecated: async (boxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('getDisplayInfoDeprecated', 'boxId', boxId)
+            const localVarPath = `/toolbox/{boxId}/toolbox/computeruse/display/info`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -911,7 +898,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -926,22 +913,22 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Get file info inside sandbox
+         * Get file info inside box
          * @summary [DEPRECATED] Get file info
-         * @param {string} sandboxId
-         * @param {string} path
+         * @param {string} boxId 
+         * @param {string} path 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getFileInfoDeprecated: async (sandboxId: string, path: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('getFileInfoDeprecated', 'sandboxId', sandboxId)
+        getFileInfoDeprecated: async (boxId: string, path: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('getFileInfoDeprecated', 'boxId', boxId)
             // verify required parameter 'path' is not null or undefined
             assertParamExists('getFileInfoDeprecated', 'path', path)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/files/info`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/files/info`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -963,7 +950,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
                 localVarQueryParameter['path'] = path;
             }
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -980,17 +967,17 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Get current mouse cursor position
          * @summary [DEPRECATED] Get mouse position
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getMousePositionDeprecated: async (sandboxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('getMousePositionDeprecated', 'sandboxId', sandboxId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/computeruse/mouse/position`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+        getMousePositionDeprecated: async (boxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('getMousePositionDeprecated', 'boxId', boxId)
+            const localVarPath = `/toolbox/{boxId}/toolbox/computeruse/mouse/position`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -1008,7 +995,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -1025,21 +1012,21 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Get PTY session information by ID
          * @summary [DEPRECATED] Get PTY session
-         * @param {string} sandboxId
-         * @param {string} sessionId
+         * @param {string} boxId 
+         * @param {string} sessionId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getPTYSessionDeprecated: async (sandboxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('getPTYSessionDeprecated', 'sandboxId', sandboxId)
+        getPTYSessionDeprecated: async (boxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('getPTYSessionDeprecated', 'boxId', boxId)
             // verify required parameter 'sessionId' is not null or undefined
             assertParamExists('getPTYSessionDeprecated', 'sessionId', sessionId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/process/pty/{sessionId}`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)))
-                .replace(`{${"sessionId"}}`, encodeURIComponent(String(sessionId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/process/pty/{sessionId}`
+                .replace('{boxId}', encodeURIComponent(String(boxId)))
+                .replace('{sessionId}', encodeURIComponent(String(sessionId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -1057,7 +1044,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -1074,21 +1061,21 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Get error logs for a specific VNC process
          * @summary [DEPRECATED] Get process errors
-         * @param {string} processName
-         * @param {string} sandboxId
+         * @param {string} processName 
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getProcessErrorsDeprecated: async (processName: string, sandboxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        getProcessErrorsDeprecated: async (processName: string, boxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             // verify required parameter 'processName' is not null or undefined
             assertParamExists('getProcessErrorsDeprecated', 'processName', processName)
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('getProcessErrorsDeprecated', 'sandboxId', sandboxId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/computeruse/process/{processName}/errors`
-                .replace(`{${"processName"}}`, encodeURIComponent(String(processName)))
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('getProcessErrorsDeprecated', 'boxId', boxId)
+            const localVarPath = `/toolbox/{boxId}/toolbox/computeruse/process/{processName}/errors`
+                .replace('{processName}', encodeURIComponent(String(processName)))
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -1106,7 +1093,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -1123,21 +1110,21 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Get logs for a specific VNC process
          * @summary [DEPRECATED] Get process logs
-         * @param {string} processName
-         * @param {string} sandboxId
+         * @param {string} processName 
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getProcessLogsDeprecated: async (processName: string, sandboxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        getProcessLogsDeprecated: async (processName: string, boxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             // verify required parameter 'processName' is not null or undefined
             assertParamExists('getProcessLogsDeprecated', 'processName', processName)
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('getProcessLogsDeprecated', 'sandboxId', sandboxId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/computeruse/process/{processName}/logs`
-                .replace(`{${"processName"}}`, encodeURIComponent(String(processName)))
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('getProcessLogsDeprecated', 'boxId', boxId)
+            const localVarPath = `/toolbox/{boxId}/toolbox/computeruse/process/{processName}/logs`
+                .replace('{processName}', encodeURIComponent(String(processName)))
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -1155,7 +1142,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -1172,21 +1159,21 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Get status of a specific VNC process
          * @summary [DEPRECATED] Get process status
-         * @param {string} processName
-         * @param {string} sandboxId
+         * @param {string} processName 
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getProcessStatusDeprecated: async (processName: string, sandboxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        getProcessStatusDeprecated: async (processName: string, boxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             // verify required parameter 'processName' is not null or undefined
             assertParamExists('getProcessStatusDeprecated', 'processName', processName)
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('getProcessStatusDeprecated', 'sandboxId', sandboxId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/computeruse/process/{processName}/status`
-                .replace(`{${"processName"}}`, encodeURIComponent(String(processName)))
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('getProcessStatusDeprecated', 'boxId', boxId)
+            const localVarPath = `/toolbox/{boxId}/toolbox/computeruse/process/{processName}/status`
+                .replace('{processName}', encodeURIComponent(String(processName)))
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -1204,7 +1191,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -1219,19 +1206,19 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
-         * @summary [DEPRECATED] Get sandbox project dir
-         * @param {string} sandboxId
+         * 
+         * @summary [DEPRECATED] Get box project dir
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getProjectDirDeprecated: async (sandboxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('getProjectDirDeprecated', 'sandboxId', sandboxId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/project-dir`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+        getProjectDirDeprecated: async (boxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('getProjectDirDeprecated', 'boxId', boxId)
+            const localVarPath = `/toolbox/{boxId}/toolbox/project-dir`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -1249,7 +1236,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -1266,25 +1253,25 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Get session command by ID
          * @summary [DEPRECATED] Get session command
-         * @param {string} sandboxId
-         * @param {string} sessionId
-         * @param {string} commandId
+         * @param {string} boxId 
+         * @param {string} sessionId 
+         * @param {string} commandId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getSessionCommandDeprecated: async (sandboxId: string, sessionId: string, commandId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('getSessionCommandDeprecated', 'sandboxId', sandboxId)
+        getSessionCommandDeprecated: async (boxId: string, sessionId: string, commandId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('getSessionCommandDeprecated', 'boxId', boxId)
             // verify required parameter 'sessionId' is not null or undefined
             assertParamExists('getSessionCommandDeprecated', 'sessionId', sessionId)
             // verify required parameter 'commandId' is not null or undefined
             assertParamExists('getSessionCommandDeprecated', 'commandId', commandId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/process/session/{sessionId}/command/{commandId}`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)))
-                .replace(`{${"sessionId"}}`, encodeURIComponent(String(sessionId)))
-                .replace(`{${"commandId"}}`, encodeURIComponent(String(commandId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/process/session/{sessionId}/command/{commandId}`
+                .replace('{boxId}', encodeURIComponent(String(boxId)))
+                .replace('{sessionId}', encodeURIComponent(String(sessionId)))
+                .replace('{commandId}', encodeURIComponent(String(commandId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -1302,7 +1289,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -1319,26 +1306,26 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Get logs for a specific command in a session
          * @summary [DEPRECATED] Get command logs
-         * @param {string} sandboxId
-         * @param {string} sessionId
-         * @param {string} commandId
+         * @param {string} boxId 
+         * @param {string} sessionId 
+         * @param {string} commandId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {boolean} [follow] Whether to stream the logs
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getSessionCommandLogsDeprecated: async (sandboxId: string, sessionId: string, commandId: string, xBoxLiteOrganizationID?: string, follow?: boolean, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('getSessionCommandLogsDeprecated', 'sandboxId', sandboxId)
+        getSessionCommandLogsDeprecated: async (boxId: string, sessionId: string, commandId: string, xBoxLiteOrganizationID?: string, follow?: boolean, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('getSessionCommandLogsDeprecated', 'boxId', boxId)
             // verify required parameter 'sessionId' is not null or undefined
             assertParamExists('getSessionCommandLogsDeprecated', 'sessionId', sessionId)
             // verify required parameter 'commandId' is not null or undefined
             assertParamExists('getSessionCommandLogsDeprecated', 'commandId', commandId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/process/session/{sessionId}/command/{commandId}/logs`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)))
-                .replace(`{${"sessionId"}}`, encodeURIComponent(String(sessionId)))
-                .replace(`{${"commandId"}}`, encodeURIComponent(String(commandId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/process/session/{sessionId}/command/{commandId}/logs`
+                .replace('{boxId}', encodeURIComponent(String(boxId)))
+                .replace('{sessionId}', encodeURIComponent(String(sessionId)))
+                .replace('{commandId}', encodeURIComponent(String(commandId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -1360,7 +1347,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
                 localVarQueryParameter['follow'] = follow;
             }
 
-
+            localVarHeaderParameter['Accept'] = 'text/plain';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -1377,21 +1364,21 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Get session by ID
          * @summary [DEPRECATED] Get session
-         * @param {string} sandboxId
-         * @param {string} sessionId
+         * @param {string} boxId 
+         * @param {string} sessionId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getSessionDeprecated: async (sandboxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('getSessionDeprecated', 'sandboxId', sandboxId)
+        getSessionDeprecated: async (boxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('getSessionDeprecated', 'boxId', boxId)
             // verify required parameter 'sessionId' is not null or undefined
             assertParamExists('getSessionDeprecated', 'sessionId', sessionId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/process/session/{sessionId}`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)))
-                .replace(`{${"sessionId"}}`, encodeURIComponent(String(sessionId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/process/session/{sessionId}`
+                .replace('{boxId}', encodeURIComponent(String(boxId)))
+                .replace('{sessionId}', encodeURIComponent(String(sessionId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -1409,7 +1396,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -1424,19 +1411,19 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
-         * @summary [DEPRECATED] Get sandbox user home dir
-         * @param {string} sandboxId
+         * 
+         * @summary [DEPRECATED] Get box user home dir
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getUserHomeDirDeprecated: async (sandboxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('getUserHomeDirDeprecated', 'sandboxId', sandboxId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/user-home-dir`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+        getUserHomeDirDeprecated: async (boxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('getUserHomeDirDeprecated', 'boxId', boxId)
+            const localVarPath = `/toolbox/{boxId}/toolbox/user-home-dir`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -1454,7 +1441,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -1471,17 +1458,17 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Get list of open windows
          * @summary [DEPRECATED] Get windows
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getWindowsDeprecated: async (sandboxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('getWindowsDeprecated', 'sandboxId', sandboxId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/computeruse/display/windows`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+        getWindowsDeprecated: async (boxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('getWindowsDeprecated', 'boxId', boxId)
+            const localVarPath = `/toolbox/{boxId}/toolbox/computeruse/display/windows`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -1499,7 +1486,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -1514,19 +1501,19 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
-         * @summary [DEPRECATED] Get sandbox work-dir
-         * @param {string} sandboxId
+         * 
+         * @summary [DEPRECATED] Get box work-dir
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getWorkDirDeprecated: async (sandboxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('getWorkDirDeprecated', 'sandboxId', sandboxId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/work-dir`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+        getWorkDirDeprecated: async (boxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('getWorkDirDeprecated', 'boxId', boxId)
+            const localVarPath = `/toolbox/{boxId}/toolbox/work-dir`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -1544,7 +1531,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -1561,20 +1548,20 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Add files to git commit
          * @summary [DEPRECATED] Add files
-         * @param {string} sandboxId
-         * @param {GitAddRequest} gitAddRequest
+         * @param {string} boxId 
+         * @param {GitAddRequest} gitAddRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        gitAddFilesDeprecated: async (sandboxId: string, gitAddRequest: GitAddRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('gitAddFilesDeprecated', 'sandboxId', sandboxId)
+        gitAddFilesDeprecated: async (boxId: string, gitAddRequest: GitAddRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('gitAddFilesDeprecated', 'boxId', boxId)
             // verify required parameter 'gitAddRequest' is not null or undefined
             assertParamExists('gitAddFilesDeprecated', 'gitAddRequest', gitAddRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/git/add`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/git/add`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -1591,8 +1578,6 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
-
-
 
             localVarHeaderParameter['Content-Type'] = 'application/json';
 
@@ -1612,20 +1597,20 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Checkout branch or commit in git repository
          * @summary [DEPRECATED] Checkout branch
-         * @param {string} sandboxId
-         * @param {GitCheckoutRequest} gitCheckoutRequest
+         * @param {string} boxId 
+         * @param {GitCheckoutRequest} gitCheckoutRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        gitCheckoutBranchDeprecated: async (sandboxId: string, gitCheckoutRequest: GitCheckoutRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('gitCheckoutBranchDeprecated', 'sandboxId', sandboxId)
+        gitCheckoutBranchDeprecated: async (boxId: string, gitCheckoutRequest: GitCheckoutRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('gitCheckoutBranchDeprecated', 'boxId', boxId)
             // verify required parameter 'gitCheckoutRequest' is not null or undefined
             assertParamExists('gitCheckoutBranchDeprecated', 'gitCheckoutRequest', gitCheckoutRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/git/checkout`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/git/checkout`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -1642,8 +1627,6 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
-
-
 
             localVarHeaderParameter['Content-Type'] = 'application/json';
 
@@ -1663,20 +1646,20 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Clone git repository
          * @summary [DEPRECATED] Clone repository
-         * @param {string} sandboxId
-         * @param {GitCloneRequest} gitCloneRequest
+         * @param {string} boxId 
+         * @param {GitCloneRequest} gitCloneRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        gitCloneRepositoryDeprecated: async (sandboxId: string, gitCloneRequest: GitCloneRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('gitCloneRepositoryDeprecated', 'sandboxId', sandboxId)
+        gitCloneRepositoryDeprecated: async (boxId: string, gitCloneRequest: GitCloneRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('gitCloneRepositoryDeprecated', 'boxId', boxId)
             // verify required parameter 'gitCloneRequest' is not null or undefined
             assertParamExists('gitCloneRepositoryDeprecated', 'gitCloneRequest', gitCloneRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/git/clone`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/git/clone`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -1693,8 +1676,6 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
-
-
 
             localVarHeaderParameter['Content-Type'] = 'application/json';
 
@@ -1714,20 +1695,20 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Commit changes to git repository
          * @summary [DEPRECATED] Commit changes
-         * @param {string} sandboxId
-         * @param {GitCommitRequest} gitCommitRequest
+         * @param {string} boxId 
+         * @param {GitCommitRequest} gitCommitRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        gitCommitChangesDeprecated: async (sandboxId: string, gitCommitRequest: GitCommitRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('gitCommitChangesDeprecated', 'sandboxId', sandboxId)
+        gitCommitChangesDeprecated: async (boxId: string, gitCommitRequest: GitCommitRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('gitCommitChangesDeprecated', 'boxId', boxId)
             // verify required parameter 'gitCommitRequest' is not null or undefined
             assertParamExists('gitCommitChangesDeprecated', 'gitCommitRequest', gitCommitRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/git/commit`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/git/commit`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -1745,9 +1726,8 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -1765,20 +1745,20 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Create branch on git repository
          * @summary [DEPRECATED] Create branch
-         * @param {string} sandboxId
-         * @param {GitBranchRequest} gitBranchRequest
+         * @param {string} boxId 
+         * @param {GitBranchRequest} gitBranchRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        gitCreateBranchDeprecated: async (sandboxId: string, gitBranchRequest: GitBranchRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('gitCreateBranchDeprecated', 'sandboxId', sandboxId)
+        gitCreateBranchDeprecated: async (boxId: string, gitBranchRequest: GitBranchRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('gitCreateBranchDeprecated', 'boxId', boxId)
             // verify required parameter 'gitBranchRequest' is not null or undefined
             assertParamExists('gitCreateBranchDeprecated', 'gitBranchRequest', gitBranchRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/git/branches`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/git/branches`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -1795,8 +1775,6 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
-
-
 
             localVarHeaderParameter['Content-Type'] = 'application/json';
 
@@ -1816,20 +1794,20 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Delete branch on git repository
          * @summary [DEPRECATED] Delete branch
-         * @param {string} sandboxId
-         * @param {GitDeleteBranchRequest} gitDeleteBranchRequest
+         * @param {string} boxId 
+         * @param {GitDeleteBranchRequest} gitDeleteBranchRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        gitDeleteBranchDeprecated: async (sandboxId: string, gitDeleteBranchRequest: GitDeleteBranchRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('gitDeleteBranchDeprecated', 'sandboxId', sandboxId)
+        gitDeleteBranchDeprecated: async (boxId: string, gitDeleteBranchRequest: GitDeleteBranchRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('gitDeleteBranchDeprecated', 'boxId', boxId)
             // verify required parameter 'gitDeleteBranchRequest' is not null or undefined
             assertParamExists('gitDeleteBranchDeprecated', 'gitDeleteBranchRequest', gitDeleteBranchRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/git/branches`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/git/branches`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -1846,8 +1824,6 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
-
-
 
             localVarHeaderParameter['Content-Type'] = 'application/json';
 
@@ -1867,20 +1843,20 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Get commit history from git repository
          * @summary [DEPRECATED] Get commit history
-         * @param {string} sandboxId
-         * @param {string} path
+         * @param {string} boxId 
+         * @param {string} path 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        gitGetHistoryDeprecated: async (sandboxId: string, path: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('gitGetHistoryDeprecated', 'sandboxId', sandboxId)
+        gitGetHistoryDeprecated: async (boxId: string, path: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('gitGetHistoryDeprecated', 'boxId', boxId)
             // verify required parameter 'path' is not null or undefined
             assertParamExists('gitGetHistoryDeprecated', 'path', path)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/git/history`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/git/history`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -1902,7 +1878,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
                 localVarQueryParameter['path'] = path;
             }
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -1919,20 +1895,20 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Get status from git repository
          * @summary [DEPRECATED] Get git status
-         * @param {string} sandboxId
-         * @param {string} path
+         * @param {string} boxId 
+         * @param {string} path 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        gitGetStatusDeprecated: async (sandboxId: string, path: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('gitGetStatusDeprecated', 'sandboxId', sandboxId)
+        gitGetStatusDeprecated: async (boxId: string, path: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('gitGetStatusDeprecated', 'boxId', boxId)
             // verify required parameter 'path' is not null or undefined
             assertParamExists('gitGetStatusDeprecated', 'path', path)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/git/status`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/git/status`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -1954,7 +1930,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
                 localVarQueryParameter['path'] = path;
             }
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -1971,20 +1947,20 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Get branch list from git repository
          * @summary [DEPRECATED] Get branch list
-         * @param {string} sandboxId
-         * @param {string} path
+         * @param {string} boxId 
+         * @param {string} path 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        gitListBranchesDeprecated: async (sandboxId: string, path: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('gitListBranchesDeprecated', 'sandboxId', sandboxId)
+        gitListBranchesDeprecated: async (boxId: string, path: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('gitListBranchesDeprecated', 'boxId', boxId)
             // verify required parameter 'path' is not null or undefined
             assertParamExists('gitListBranchesDeprecated', 'path', path)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/git/branches`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/git/branches`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -2006,7 +1982,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
                 localVarQueryParameter['path'] = path;
             }
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -2023,20 +1999,20 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Pull changes from remote
          * @summary [DEPRECATED] Pull changes
-         * @param {string} sandboxId
-         * @param {GitRepoRequest} gitRepoRequest
+         * @param {string} boxId 
+         * @param {GitRepoRequest} gitRepoRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        gitPullChangesDeprecated: async (sandboxId: string, gitRepoRequest: GitRepoRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('gitPullChangesDeprecated', 'sandboxId', sandboxId)
+        gitPullChangesDeprecated: async (boxId: string, gitRepoRequest: GitRepoRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('gitPullChangesDeprecated', 'boxId', boxId)
             // verify required parameter 'gitRepoRequest' is not null or undefined
             assertParamExists('gitPullChangesDeprecated', 'gitRepoRequest', gitRepoRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/git/pull`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/git/pull`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -2053,8 +2029,6 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
-
-
 
             localVarHeaderParameter['Content-Type'] = 'application/json';
 
@@ -2074,20 +2048,20 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Push changes to remote
          * @summary [DEPRECATED] Push changes
-         * @param {string} sandboxId
-         * @param {GitRepoRequest} gitRepoRequest
+         * @param {string} boxId 
+         * @param {GitRepoRequest} gitRepoRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        gitPushChangesDeprecated: async (sandboxId: string, gitRepoRequest: GitRepoRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('gitPushChangesDeprecated', 'sandboxId', sandboxId)
+        gitPushChangesDeprecated: async (boxId: string, gitRepoRequest: GitRepoRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('gitPushChangesDeprecated', 'boxId', boxId)
             // verify required parameter 'gitRepoRequest' is not null or undefined
             assertParamExists('gitPushChangesDeprecated', 'gitRepoRequest', gitRepoRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/git/push`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/git/push`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -2105,8 +2079,6 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
@@ -2123,20 +2095,20 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] List files
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {string} [path]
+         * @param {string} [path] 
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        listFilesDeprecated: async (sandboxId: string, xBoxLiteOrganizationID?: string, path?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('listFilesDeprecated', 'sandboxId', sandboxId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/files`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+        listFilesDeprecated: async (boxId: string, xBoxLiteOrganizationID?: string, path?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('listFilesDeprecated', 'boxId', boxId)
+            const localVarPath = `/toolbox/{boxId}/toolbox/files`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -2158,7 +2130,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
                 localVarQueryParameter['path'] = path;
             }
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -2173,19 +2145,19 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * List all active PTY sessions in the sandbox
+         * List all active PTY sessions in the box
          * @summary [DEPRECATED] List PTY sessions
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        listPTYSessionsDeprecated: async (sandboxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('listPTYSessionsDeprecated', 'sandboxId', sandboxId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/process/pty`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+        listPTYSessionsDeprecated: async (boxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('listPTYSessionsDeprecated', 'boxId', boxId)
+            const localVarPath = `/toolbox/{boxId}/toolbox/process/pty`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -2203,7 +2175,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -2218,19 +2190,19 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * List all active sessions in the sandbox
+         * List all active sessions in the box
          * @summary [DEPRECATED] List sessions
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        listSessionsDeprecated: async (sandboxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('listSessionsDeprecated', 'sandboxId', sandboxId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/process/session`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+        listSessionsDeprecated: async (boxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('listSessionsDeprecated', 'boxId', boxId)
+            const localVarPath = `/toolbox/{boxId}/toolbox/process/session`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -2248,7 +2220,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -2265,20 +2237,20 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * The Completion request is sent from the client to the server to compute completion items at a given cursor position.
          * @summary [DEPRECATED] Get Lsp Completions
-         * @param {string} sandboxId
-         * @param {LspCompletionParams} lspCompletionParams
+         * @param {string} boxId 
+         * @param {LspCompletionParams} lspCompletionParams 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        lspCompletionsDeprecated: async (sandboxId: string, lspCompletionParams: LspCompletionParams, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('lspCompletionsDeprecated', 'sandboxId', sandboxId)
+        lspCompletionsDeprecated: async (boxId: string, lspCompletionParams: LspCompletionParams, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('lspCompletionsDeprecated', 'boxId', boxId)
             // verify required parameter 'lspCompletionParams' is not null or undefined
             assertParamExists('lspCompletionsDeprecated', 'lspCompletionParams', lspCompletionParams)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/lsp/completions`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/lsp/completions`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -2296,9 +2268,8 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -2316,20 +2287,20 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * The document close notification is sent from the client to the server when the document got closed in the client.
          * @summary [DEPRECATED] Call Lsp DidClose
-         * @param {string} sandboxId
-         * @param {LspDocumentRequest} lspDocumentRequest
+         * @param {string} boxId 
+         * @param {LspDocumentRequest} lspDocumentRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        lspDidCloseDeprecated: async (sandboxId: string, lspDocumentRequest: LspDocumentRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('lspDidCloseDeprecated', 'sandboxId', sandboxId)
+        lspDidCloseDeprecated: async (boxId: string, lspDocumentRequest: LspDocumentRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('lspDidCloseDeprecated', 'boxId', boxId)
             // verify required parameter 'lspDocumentRequest' is not null or undefined
             assertParamExists('lspDidCloseDeprecated', 'lspDocumentRequest', lspDocumentRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/lsp/did-close`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/lsp/did-close`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -2346,8 +2317,6 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
-
-
 
             localVarHeaderParameter['Content-Type'] = 'application/json';
 
@@ -2367,20 +2336,20 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * The document open notification is sent from the client to the server to signal newly opened text documents.
          * @summary [DEPRECATED] Call Lsp DidOpen
-         * @param {string} sandboxId
-         * @param {LspDocumentRequest} lspDocumentRequest
+         * @param {string} boxId 
+         * @param {LspDocumentRequest} lspDocumentRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        lspDidOpenDeprecated: async (sandboxId: string, lspDocumentRequest: LspDocumentRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('lspDidOpenDeprecated', 'sandboxId', sandboxId)
+        lspDidOpenDeprecated: async (boxId: string, lspDocumentRequest: LspDocumentRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('lspDidOpenDeprecated', 'boxId', boxId)
             // verify required parameter 'lspDocumentRequest' is not null or undefined
             assertParamExists('lspDidOpenDeprecated', 'lspDocumentRequest', lspDocumentRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/lsp/did-open`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/lsp/did-open`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -2397,8 +2366,6 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
-
-
 
             localVarHeaderParameter['Content-Type'] = 'application/json';
 
@@ -2418,26 +2385,26 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * The document symbol request is sent from the client to the server.
          * @summary [DEPRECATED] Call Lsp DocumentSymbols
-         * @param {string} sandboxId
-         * @param {string} languageId
-         * @param {string} pathToProject
-         * @param {string} uri
+         * @param {string} boxId 
+         * @param {string} languageId 
+         * @param {string} pathToProject 
+         * @param {string} uri 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        lspDocumentSymbolsDeprecated: async (sandboxId: string, languageId: string, pathToProject: string, uri: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('lspDocumentSymbolsDeprecated', 'sandboxId', sandboxId)
+        lspDocumentSymbolsDeprecated: async (boxId: string, languageId: string, pathToProject: string, uri: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('lspDocumentSymbolsDeprecated', 'boxId', boxId)
             // verify required parameter 'languageId' is not null or undefined
             assertParamExists('lspDocumentSymbolsDeprecated', 'languageId', languageId)
             // verify required parameter 'pathToProject' is not null or undefined
             assertParamExists('lspDocumentSymbolsDeprecated', 'pathToProject', pathToProject)
             // verify required parameter 'uri' is not null or undefined
             assertParamExists('lspDocumentSymbolsDeprecated', 'uri', uri)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/lsp/document-symbols`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/lsp/document-symbols`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -2467,7 +2434,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
                 localVarQueryParameter['uri'] = uri;
             }
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -2482,22 +2449,22 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Start Lsp server process inside sandbox project
+         * Start Lsp server process inside box project
          * @summary [DEPRECATED] Start Lsp server
-         * @param {string} sandboxId
-         * @param {LspServerRequest} lspServerRequest
+         * @param {string} boxId 
+         * @param {LspServerRequest} lspServerRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        lspStartDeprecated: async (sandboxId: string, lspServerRequest: LspServerRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('lspStartDeprecated', 'sandboxId', sandboxId)
+        lspStartDeprecated: async (boxId: string, lspServerRequest: LspServerRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('lspStartDeprecated', 'boxId', boxId)
             // verify required parameter 'lspServerRequest' is not null or undefined
             assertParamExists('lspStartDeprecated', 'lspServerRequest', lspServerRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/lsp/start`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/lsp/start`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -2514,8 +2481,6 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
-
-
 
             localVarHeaderParameter['Content-Type'] = 'application/json';
 
@@ -2533,22 +2498,22 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Stop Lsp server process inside sandbox project
+         * Stop Lsp server process inside box project
          * @summary [DEPRECATED] Stop Lsp server
-         * @param {string} sandboxId
-         * @param {LspServerRequest} lspServerRequest
+         * @param {string} boxId 
+         * @param {LspServerRequest} lspServerRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        lspStopDeprecated: async (sandboxId: string, lspServerRequest: LspServerRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('lspStopDeprecated', 'sandboxId', sandboxId)
+        lspStopDeprecated: async (boxId: string, lspServerRequest: LspServerRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('lspStopDeprecated', 'boxId', boxId)
             // verify required parameter 'lspServerRequest' is not null or undefined
             assertParamExists('lspStopDeprecated', 'lspServerRequest', lspServerRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/lsp/stop`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/lsp/stop`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -2565,8 +2530,6 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
-
-
 
             localVarHeaderParameter['Content-Type'] = 'application/json';
 
@@ -2586,26 +2549,26 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * The workspace symbol request is sent from the client to the server to list project-wide symbols matching the query string.
          * @summary [DEPRECATED] Call Lsp WorkspaceSymbols
-         * @param {string} sandboxId
-         * @param {string} languageId
-         * @param {string} pathToProject
-         * @param {string} query
+         * @param {string} boxId 
+         * @param {string} languageId 
+         * @param {string} pathToProject 
+         * @param {string} query 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        lspWorkspaceSymbolsDeprecated: async (sandboxId: string, languageId: string, pathToProject: string, query: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('lspWorkspaceSymbolsDeprecated', 'sandboxId', sandboxId)
+        lspWorkspaceSymbolsDeprecated: async (boxId: string, languageId: string, pathToProject: string, query: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('lspWorkspaceSymbolsDeprecated', 'boxId', boxId)
             // verify required parameter 'languageId' is not null or undefined
             assertParamExists('lspWorkspaceSymbolsDeprecated', 'languageId', languageId)
             // verify required parameter 'pathToProject' is not null or undefined
             assertParamExists('lspWorkspaceSymbolsDeprecated', 'pathToProject', pathToProject)
             // verify required parameter 'query' is not null or undefined
             assertParamExists('lspWorkspaceSymbolsDeprecated', 'query', query)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/lsp/workspace-symbols`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/lsp/workspace-symbols`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -2635,7 +2598,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
                 localVarQueryParameter['query'] = query;
             }
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -2650,25 +2613,25 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Move file inside sandbox
+         * Move file inside box
          * @summary [DEPRECATED] Move file
-         * @param {string} sandboxId
-         * @param {string} source
-         * @param {string} destination
+         * @param {string} boxId 
+         * @param {string} source 
+         * @param {string} destination 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        moveFileDeprecated: async (sandboxId: string, source: string, destination: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('moveFileDeprecated', 'sandboxId', sandboxId)
+        moveFileDeprecated: async (boxId: string, source: string, destination: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('moveFileDeprecated', 'boxId', boxId)
             // verify required parameter 'source' is not null or undefined
             assertParamExists('moveFileDeprecated', 'source', source)
             // verify required parameter 'destination' is not null or undefined
             assertParamExists('moveFileDeprecated', 'destination', destination)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/files/move`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/files/move`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -2695,7 +2658,6 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             }
 
 
-
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
             }
@@ -2711,20 +2673,20 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Move mouse cursor to specified coordinates
          * @summary [DEPRECATED] Move mouse
-         * @param {string} sandboxId
-         * @param {MouseMoveRequest} mouseMoveRequest
+         * @param {string} boxId 
+         * @param {MouseMoveRequest} mouseMoveRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        moveMouseDeprecated: async (sandboxId: string, mouseMoveRequest: MouseMoveRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('moveMouseDeprecated', 'sandboxId', sandboxId)
+        moveMouseDeprecated: async (boxId: string, mouseMoveRequest: MouseMoveRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('moveMouseDeprecated', 'boxId', boxId)
             // verify required parameter 'mouseMoveRequest' is not null or undefined
             assertParamExists('moveMouseDeprecated', 'mouseMoveRequest', mouseMoveRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/computeruse/mouse/move`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/computeruse/mouse/move`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -2742,9 +2704,8 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -2762,20 +2723,20 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Press a hotkey combination
          * @summary [DEPRECATED] Press hotkey
-         * @param {string} sandboxId
-         * @param {KeyboardHotkeyRequest} keyboardHotkeyRequest
+         * @param {string} boxId 
+         * @param {KeyboardHotkeyRequest} keyboardHotkeyRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        pressHotkeyDeprecated: async (sandboxId: string, keyboardHotkeyRequest: KeyboardHotkeyRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('pressHotkeyDeprecated', 'sandboxId', sandboxId)
+        pressHotkeyDeprecated: async (boxId: string, keyboardHotkeyRequest: KeyboardHotkeyRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('pressHotkeyDeprecated', 'boxId', boxId)
             // verify required parameter 'keyboardHotkeyRequest' is not null or undefined
             assertParamExists('pressHotkeyDeprecated', 'keyboardHotkeyRequest', keyboardHotkeyRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/computeruse/keyboard/hotkey`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/computeruse/keyboard/hotkey`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -2792,8 +2753,6 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
-
-
 
             localVarHeaderParameter['Content-Type'] = 'application/json';
 
@@ -2813,20 +2772,20 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Press a key with optional modifiers
          * @summary [DEPRECATED] Press key
-         * @param {string} sandboxId
-         * @param {KeyboardPressRequest} keyboardPressRequest
+         * @param {string} boxId 
+         * @param {KeyboardPressRequest} keyboardPressRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        pressKeyDeprecated: async (sandboxId: string, keyboardPressRequest: KeyboardPressRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('pressKeyDeprecated', 'sandboxId', sandboxId)
+        pressKeyDeprecated: async (boxId: string, keyboardPressRequest: KeyboardPressRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('pressKeyDeprecated', 'boxId', boxId)
             // verify required parameter 'keyboardPressRequest' is not null or undefined
             assertParamExists('pressKeyDeprecated', 'keyboardPressRequest', keyboardPressRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/computeruse/keyboard/key`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/computeruse/keyboard/key`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -2843,8 +2802,6 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
-
-
 
             localVarHeaderParameter['Content-Type'] = 'application/json';
 
@@ -2862,22 +2819,22 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Replace text/pattern in multiple files inside sandbox
+         * Replace text/pattern in multiple files inside box
          * @summary [DEPRECATED] Replace in files
-         * @param {string} sandboxId
-         * @param {ReplaceRequest} replaceRequest
+         * @param {string} boxId 
+         * @param {ReplaceRequest} replaceRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        replaceInFilesDeprecated: async (sandboxId: string, replaceRequest: ReplaceRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('replaceInFilesDeprecated', 'sandboxId', sandboxId)
+        replaceInFilesDeprecated: async (boxId: string, replaceRequest: ReplaceRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('replaceInFilesDeprecated', 'boxId', boxId)
             // verify required parameter 'replaceRequest' is not null or undefined
             assertParamExists('replaceInFilesDeprecated', 'replaceRequest', replaceRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/files/replace`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/files/replace`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -2895,9 +2852,8 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -2915,24 +2871,24 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Resize a PTY session
          * @summary [DEPRECATED] Resize PTY session
-         * @param {string} sandboxId
-         * @param {string} sessionId
-         * @param {PtyResizeRequest} ptyResizeRequest
+         * @param {string} boxId 
+         * @param {string} sessionId 
+         * @param {PtyResizeRequest} ptyResizeRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        resizePTYSessionDeprecated: async (sandboxId: string, sessionId: string, ptyResizeRequest: PtyResizeRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('resizePTYSessionDeprecated', 'sandboxId', sandboxId)
+        resizePTYSessionDeprecated: async (boxId: string, sessionId: string, ptyResizeRequest: PtyResizeRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('resizePTYSessionDeprecated', 'boxId', boxId)
             // verify required parameter 'sessionId' is not null or undefined
             assertParamExists('resizePTYSessionDeprecated', 'sessionId', sessionId)
             // verify required parameter 'ptyResizeRequest' is not null or undefined
             assertParamExists('resizePTYSessionDeprecated', 'ptyResizeRequest', ptyResizeRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/process/pty/{sessionId}/resize`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)))
-                .replace(`{${"sessionId"}}`, encodeURIComponent(String(sessionId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/process/pty/{sessionId}/resize`
+                .replace('{boxId}', encodeURIComponent(String(boxId)))
+                .replace('{sessionId}', encodeURIComponent(String(sessionId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -2950,9 +2906,8 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -2970,21 +2925,21 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Restart a specific VNC process
          * @summary [DEPRECATED] Restart process
-         * @param {string} processName
-         * @param {string} sandboxId
+         * @param {string} processName 
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        restartProcessDeprecated: async (processName: string, sandboxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        restartProcessDeprecated: async (processName: string, boxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             // verify required parameter 'processName' is not null or undefined
             assertParamExists('restartProcessDeprecated', 'processName', processName)
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('restartProcessDeprecated', 'sandboxId', sandboxId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/computeruse/process/{processName}/restart`
-                .replace(`{${"processName"}}`, encodeURIComponent(String(processName)))
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('restartProcessDeprecated', 'boxId', boxId)
+            const localVarPath = `/toolbox/{boxId}/toolbox/computeruse/process/{processName}/restart`
+                .replace('{processName}', encodeURIComponent(String(processName)))
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -3002,7 +2957,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -3019,20 +2974,20 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Scroll mouse at specified coordinates
          * @summary [DEPRECATED] Scroll mouse
-         * @param {string} sandboxId
-         * @param {MouseScrollRequest} mouseScrollRequest
+         * @param {string} boxId 
+         * @param {MouseScrollRequest} mouseScrollRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        scrollMouseDeprecated: async (sandboxId: string, mouseScrollRequest: MouseScrollRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('scrollMouseDeprecated', 'sandboxId', sandboxId)
+        scrollMouseDeprecated: async (boxId: string, mouseScrollRequest: MouseScrollRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('scrollMouseDeprecated', 'boxId', boxId)
             // verify required parameter 'mouseScrollRequest' is not null or undefined
             assertParamExists('scrollMouseDeprecated', 'mouseScrollRequest', mouseScrollRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/computeruse/mouse/scroll`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/computeruse/mouse/scroll`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -3050,9 +3005,8 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -3068,25 +3022,25 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Search for files inside sandbox
+         * Search for files inside box
          * @summary [DEPRECATED] Search files
-         * @param {string} sandboxId
-         * @param {string} path
-         * @param {string} pattern
+         * @param {string} boxId 
+         * @param {string} path 
+         * @param {string} pattern 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        searchFilesDeprecated: async (sandboxId: string, path: string, pattern: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('searchFilesDeprecated', 'sandboxId', sandboxId)
+        searchFilesDeprecated: async (boxId: string, path: string, pattern: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('searchFilesDeprecated', 'boxId', boxId)
             // verify required parameter 'path' is not null or undefined
             assertParamExists('searchFilesDeprecated', 'path', path)
             // verify required parameter 'pattern' is not null or undefined
             assertParamExists('searchFilesDeprecated', 'pattern', pattern)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/files/search`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/files/search`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -3112,7 +3066,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
                 localVarQueryParameter['pattern'] = pattern;
             }
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -3127,25 +3081,25 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Set file owner/group/permissions inside sandbox
+         * Set file owner/group/permissions inside box
          * @summary [DEPRECATED] Set file permissions
-         * @param {string} sandboxId
-         * @param {string} path
+         * @param {string} boxId 
+         * @param {string} path 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {string} [owner]
-         * @param {string} [group]
-         * @param {string} [mode]
+         * @param {string} [owner] 
+         * @param {string} [group] 
+         * @param {string} [mode] 
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        setFilePermissionsDeprecated: async (sandboxId: string, path: string, xBoxLiteOrganizationID?: string, owner?: string, group?: string, mode?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('setFilePermissionsDeprecated', 'sandboxId', sandboxId)
+        setFilePermissionsDeprecated: async (boxId: string, path: string, xBoxLiteOrganizationID?: string, owner?: string, group?: string, mode?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('setFilePermissionsDeprecated', 'boxId', boxId)
             // verify required parameter 'path' is not null or undefined
             assertParamExists('setFilePermissionsDeprecated', 'path', path)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/files/permissions`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/files/permissions`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -3180,7 +3134,6 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             }
 
 
-
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
             }
@@ -3196,17 +3149,17 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Start all VNC desktop processes (Xvfb, xfce4, x11vnc, novnc)
          * @summary [DEPRECATED] Start computer use processes
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        startComputerUseDeprecated: async (sandboxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('startComputerUseDeprecated', 'sandboxId', sandboxId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/computeruse/start`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+        startComputerUseDeprecated: async (boxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('startComputerUseDeprecated', 'boxId', boxId)
+            const localVarPath = `/toolbox/{boxId}/toolbox/computeruse/start`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -3224,7 +3177,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -3241,17 +3194,17 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Stop all VNC desktop processes (Xvfb, xfce4, x11vnc, novnc)
          * @summary [DEPRECATED] Stop computer use processes
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        stopComputerUseDeprecated: async (sandboxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('stopComputerUseDeprecated', 'sandboxId', sandboxId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/computeruse/stop`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+        stopComputerUseDeprecated: async (boxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('stopComputerUseDeprecated', 'boxId', boxId)
+            const localVarPath = `/toolbox/{boxId}/toolbox/computeruse/stop`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -3269,7 +3222,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -3286,23 +3239,23 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Take a compressed screenshot of a specific region
          * @summary [DEPRECATED] Take compressed region screenshot
-         * @param {string} sandboxId
-         * @param {number} height
-         * @param {number} width
-         * @param {number} y
-         * @param {number} x
+         * @param {string} boxId 
+         * @param {number} height 
+         * @param {number} width 
+         * @param {number} y 
+         * @param {number} x 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {number} [scale]
-         * @param {number} [quality]
-         * @param {string} [format]
-         * @param {boolean} [showCursor]
+         * @param {number} [scale] 
+         * @param {number} [quality] 
+         * @param {string} [format] 
+         * @param {boolean} [showCursor] 
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        takeCompressedRegionScreenshotDeprecated: async (sandboxId: string, height: number, width: number, y: number, x: number, xBoxLiteOrganizationID?: string, scale?: number, quality?: number, format?: string, showCursor?: boolean, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('takeCompressedRegionScreenshotDeprecated', 'sandboxId', sandboxId)
+        takeCompressedRegionScreenshotDeprecated: async (boxId: string, height: number, width: number, y: number, x: number, xBoxLiteOrganizationID?: string, scale?: number, quality?: number, format?: string, showCursor?: boolean, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('takeCompressedRegionScreenshotDeprecated', 'boxId', boxId)
             // verify required parameter 'height' is not null or undefined
             assertParamExists('takeCompressedRegionScreenshotDeprecated', 'height', height)
             // verify required parameter 'width' is not null or undefined
@@ -3311,8 +3264,8 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             assertParamExists('takeCompressedRegionScreenshotDeprecated', 'y', y)
             // verify required parameter 'x' is not null or undefined
             assertParamExists('takeCompressedRegionScreenshotDeprecated', 'x', x)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/computeruse/screenshot/region/compressed`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/computeruse/screenshot/region/compressed`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -3362,7 +3315,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
                 localVarQueryParameter['x'] = x;
             }
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -3379,21 +3332,21 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Take a compressed screenshot with format, quality, and scale options
          * @summary [DEPRECATED] Take compressed screenshot
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {number} [scale]
-         * @param {number} [quality]
-         * @param {string} [format]
-         * @param {boolean} [showCursor]
+         * @param {number} [scale] 
+         * @param {number} [quality] 
+         * @param {string} [format] 
+         * @param {boolean} [showCursor] 
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        takeCompressedScreenshotDeprecated: async (sandboxId: string, xBoxLiteOrganizationID?: string, scale?: number, quality?: number, format?: string, showCursor?: boolean, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('takeCompressedScreenshotDeprecated', 'sandboxId', sandboxId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/computeruse/screenshot/compressed`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+        takeCompressedScreenshotDeprecated: async (boxId: string, xBoxLiteOrganizationID?: string, scale?: number, quality?: number, format?: string, showCursor?: boolean, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('takeCompressedScreenshotDeprecated', 'boxId', boxId)
+            const localVarPath = `/toolbox/{boxId}/toolbox/computeruse/screenshot/compressed`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -3427,7 +3380,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
                 localVarQueryParameter['show_cursor'] = showCursor;
             }
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -3444,20 +3397,20 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Take a screenshot of a specific region
          * @summary [DEPRECATED] Take region screenshot
-         * @param {string} sandboxId
-         * @param {number} height
-         * @param {number} width
-         * @param {number} y
-         * @param {number} x
+         * @param {string} boxId 
+         * @param {number} height 
+         * @param {number} width 
+         * @param {number} y 
+         * @param {number} x 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {boolean} [showCursor]
+         * @param {boolean} [showCursor] 
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        takeRegionScreenshotDeprecated: async (sandboxId: string, height: number, width: number, y: number, x: number, xBoxLiteOrganizationID?: string, showCursor?: boolean, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('takeRegionScreenshotDeprecated', 'sandboxId', sandboxId)
+        takeRegionScreenshotDeprecated: async (boxId: string, height: number, width: number, y: number, x: number, xBoxLiteOrganizationID?: string, showCursor?: boolean, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('takeRegionScreenshotDeprecated', 'boxId', boxId)
             // verify required parameter 'height' is not null or undefined
             assertParamExists('takeRegionScreenshotDeprecated', 'height', height)
             // verify required parameter 'width' is not null or undefined
@@ -3466,8 +3419,8 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             assertParamExists('takeRegionScreenshotDeprecated', 'y', y)
             // verify required parameter 'x' is not null or undefined
             assertParamExists('takeRegionScreenshotDeprecated', 'x', x)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/computeruse/screenshot/region`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/computeruse/screenshot/region`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -3505,7 +3458,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
                 localVarQueryParameter['x'] = x;
             }
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -3522,18 +3475,18 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Take a screenshot of the entire screen
          * @summary [DEPRECATED] Take screenshot
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {boolean} [showCursor]
+         * @param {boolean} [showCursor] 
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        takeScreenshotDeprecated: async (sandboxId: string, xBoxLiteOrganizationID?: string, showCursor?: boolean, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('takeScreenshotDeprecated', 'sandboxId', sandboxId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/computeruse/screenshot`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+        takeScreenshotDeprecated: async (boxId: string, xBoxLiteOrganizationID?: string, showCursor?: boolean, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('takeScreenshotDeprecated', 'boxId', boxId)
+            const localVarPath = `/toolbox/{boxId}/toolbox/computeruse/screenshot`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -3555,7 +3508,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
                 localVarQueryParameter['show_cursor'] = showCursor;
             }
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -3572,20 +3525,20 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Type text using keyboard
          * @summary [DEPRECATED] Type text
-         * @param {string} sandboxId
-         * @param {KeyboardTypeRequest} keyboardTypeRequest
+         * @param {string} boxId 
+         * @param {KeyboardTypeRequest} keyboardTypeRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        typeTextDeprecated: async (sandboxId: string, keyboardTypeRequest: KeyboardTypeRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('typeTextDeprecated', 'sandboxId', sandboxId)
+        typeTextDeprecated: async (boxId: string, keyboardTypeRequest: KeyboardTypeRequest, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('typeTextDeprecated', 'boxId', boxId)
             // verify required parameter 'keyboardTypeRequest' is not null or undefined
             assertParamExists('typeTextDeprecated', 'keyboardTypeRequest', keyboardTypeRequest)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/computeruse/keyboard/type`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/computeruse/keyboard/type`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -3602,8 +3555,6 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
-
-
 
             localVarHeaderParameter['Content-Type'] = 'application/json';
 
@@ -3621,23 +3572,23 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Upload file inside sandbox
+         * Upload file inside box
          * @summary [DEPRECATED] Upload file
-         * @param {string} sandboxId
-         * @param {string} path
+         * @param {string} boxId 
+         * @param {string} path 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {File} [file]
+         * @param {File} [file] 
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        uploadFileDeprecated: async (sandboxId: string, path: string, xBoxLiteOrganizationID?: string, file?: File, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('uploadFileDeprecated', 'sandboxId', sandboxId)
+        uploadFileDeprecated: async (boxId: string, path: string, xBoxLiteOrganizationID?: string, file?: File, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('uploadFileDeprecated', 'boxId', boxId)
             // verify required parameter 'path' is not null or undefined
             assertParamExists('uploadFileDeprecated', 'path', path)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/files/upload`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            const localVarPath = `/toolbox/{boxId}/toolbox/files/upload`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -3661,11 +3612,9 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             }
 
 
-            if (file !== undefined) {
+            if (file !== undefined) { 
                 localVarFormParams.append('file', file as any);
             }
-
-
             localVarHeaderParameter['Content-Type'] = 'multipart/form-data';
 
             if (xBoxLiteOrganizationID != null) {
@@ -3682,19 +3631,19 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Upload multiple files inside sandbox
+         * Upload multiple files inside box
          * @summary [DEPRECATED] Upload multiple files
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        uploadFilesDeprecated: async (sandboxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('uploadFilesDeprecated', 'sandboxId', sandboxId)
-            const localVarPath = `/toolbox/{sandboxId}/toolbox/files/bulk-upload`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+        uploadFilesDeprecated: async (boxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('uploadFilesDeprecated', 'boxId', boxId)
+            const localVarPath = `/toolbox/{boxId}/toolbox/files/bulk-upload`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -3711,7 +3660,6 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
-
 
 
             if (xBoxLiteOrganizationID != null) {
@@ -3731,7 +3679,6 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
 
 /**
  * ToolboxApi - functional programming interface
- * @export
  */
 export const ToolboxApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = ToolboxApiAxiosParamCreator(configuration)
@@ -3739,81 +3686,81 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Click mouse at specified coordinates
          * @summary [DEPRECATED] Click mouse
-         * @param {string} sandboxId
-         * @param {MouseClickRequest} mouseClickRequest
+         * @param {string} boxId 
+         * @param {MouseClickRequest} mouseClickRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async clickMouseDeprecated(sandboxId: string, mouseClickRequest: MouseClickRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<MouseClickResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.clickMouseDeprecated(sandboxId, mouseClickRequest, xBoxLiteOrganizationID, options);
+        async clickMouseDeprecated(boxId: string, mouseClickRequest: MouseClickRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<MouseClickResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.clickMouseDeprecated(boxId, mouseClickRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.clickMouseDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Create folder inside sandbox
+         * Create folder inside box
          * @summary [DEPRECATED] Create folder
-         * @param {string} sandboxId
-         * @param {string} path
-         * @param {string} mode
+         * @param {string} boxId 
+         * @param {string} path 
+         * @param {string} mode 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async createFolderDeprecated(sandboxId: string, path: string, mode: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.createFolderDeprecated(sandboxId, path, mode, xBoxLiteOrganizationID, options);
+        async createFolderDeprecated(boxId: string, path: string, mode: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.createFolderDeprecated(boxId, path, mode, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.createFolderDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Create a new PTY session in the sandbox
+         * Create a new PTY session in the box
          * @summary [DEPRECATED] Create PTY session
-         * @param {string} sandboxId
-         * @param {PtyCreateRequest} ptyCreateRequest
+         * @param {string} boxId 
+         * @param {PtyCreateRequest} ptyCreateRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async createPTYSessionDeprecated(sandboxId: string, ptyCreateRequest: PtyCreateRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<PtyCreateResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.createPTYSessionDeprecated(sandboxId, ptyCreateRequest, xBoxLiteOrganizationID, options);
+        async createPTYSessionDeprecated(boxId: string, ptyCreateRequest: PtyCreateRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<PtyCreateResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.createPTYSessionDeprecated(boxId, ptyCreateRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.createPTYSessionDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Create a new session in the sandbox
+         * Create a new session in the box
          * @summary [DEPRECATED] Create session
-         * @param {string} sandboxId
-         * @param {CreateSessionRequest} createSessionRequest
+         * @param {string} boxId 
+         * @param {CreateSessionRequest} createSessionRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async createSessionDeprecated(sandboxId: string, createSessionRequest: CreateSessionRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.createSessionDeprecated(sandboxId, createSessionRequest, xBoxLiteOrganizationID, options);
+        async createSessionDeprecated(boxId: string, createSessionRequest: CreateSessionRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.createSessionDeprecated(boxId, createSessionRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.createSessionDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Delete file inside sandbox
+         * Delete file inside box
          * @summary [DEPRECATED] Delete file
-         * @param {string} sandboxId
-         * @param {string} path
+         * @param {string} boxId 
+         * @param {string} path 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {boolean} [recursive]
+         * @param {boolean} [recursive] 
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async deleteFileDeprecated(sandboxId: string, path: string, xBoxLiteOrganizationID?: string, recursive?: boolean, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.deleteFileDeprecated(sandboxId, path, xBoxLiteOrganizationID, recursive, options);
+        async deleteFileDeprecated(boxId: string, path: string, xBoxLiteOrganizationID?: string, recursive?: boolean, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.deleteFileDeprecated(boxId, path, xBoxLiteOrganizationID, recursive, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.deleteFileDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -3821,15 +3768,15 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Delete a PTY session and terminate the associated process
          * @summary [DEPRECATED] Delete PTY session
-         * @param {string} sandboxId
-         * @param {string} sessionId
+         * @param {string} boxId 
+         * @param {string} sessionId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async deletePTYSessionDeprecated(sandboxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.deletePTYSessionDeprecated(sandboxId, sessionId, xBoxLiteOrganizationID, options);
+        async deletePTYSessionDeprecated(boxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.deletePTYSessionDeprecated(boxId, sessionId, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.deletePTYSessionDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -3837,31 +3784,31 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Delete a specific session
          * @summary [DEPRECATED] Delete session
-         * @param {string} sandboxId
-         * @param {string} sessionId
+         * @param {string} boxId 
+         * @param {string} sessionId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async deleteSessionDeprecated(sandboxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.deleteSessionDeprecated(sandboxId, sessionId, xBoxLiteOrganizationID, options);
+        async deleteSessionDeprecated(boxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.deleteSessionDeprecated(boxId, sessionId, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.deleteSessionDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Download file from sandbox
+         * Download file from box
          * @summary [DEPRECATED] Download file
-         * @param {string} sandboxId
-         * @param {string} path
+         * @param {string} boxId 
+         * @param {string} path 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async downloadFileDeprecated(sandboxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<File>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.downloadFileDeprecated(sandboxId, path, xBoxLiteOrganizationID, options);
+        async downloadFileDeprecated(boxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<File>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.downloadFileDeprecated(boxId, path, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.downloadFileDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -3869,15 +3816,15 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Streams back a multipart/form-data bundle of the requested paths
          * @summary [DEPRECATED] Download multiple files
-         * @param {string} sandboxId
-         * @param {DownloadFiles} downloadFiles
+         * @param {string} boxId 
+         * @param {DownloadFiles} downloadFiles 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async downloadFilesDeprecated(sandboxId: string, downloadFiles: DownloadFiles, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<File>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.downloadFilesDeprecated(sandboxId, downloadFiles, xBoxLiteOrganizationID, options);
+        async downloadFilesDeprecated(boxId: string, downloadFiles: DownloadFiles, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<File>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.downloadFilesDeprecated(boxId, downloadFiles, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.downloadFilesDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -3885,31 +3832,31 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Drag mouse from start to end coordinates
          * @summary [DEPRECATED] Drag mouse
-         * @param {string} sandboxId
-         * @param {MouseDragRequest} mouseDragRequest
+         * @param {string} boxId 
+         * @param {MouseDragRequest} mouseDragRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async dragMouseDeprecated(sandboxId: string, mouseDragRequest: MouseDragRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<MouseDragResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.dragMouseDeprecated(sandboxId, mouseDragRequest, xBoxLiteOrganizationID, options);
+        async dragMouseDeprecated(boxId: string, mouseDragRequest: MouseDragRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<MouseDragResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.dragMouseDeprecated(boxId, mouseDragRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.dragMouseDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Execute command synchronously inside sandbox
+         * Execute command synchronously inside box
          * @summary [DEPRECATED] Execute command
-         * @param {string} sandboxId
-         * @param {ExecuteRequest} executeRequest
+         * @param {string} boxId 
+         * @param {ExecuteRequest} executeRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async executeCommandDeprecated(sandboxId: string, executeRequest: ExecuteRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ExecuteResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.executeCommandDeprecated(sandboxId, executeRequest, xBoxLiteOrganizationID, options);
+        async executeCommandDeprecated(boxId: string, executeRequest: ExecuteRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ExecuteResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.executeCommandDeprecated(boxId, executeRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.executeCommandDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -3917,33 +3864,33 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Execute a command in a specific session
          * @summary [DEPRECATED] Execute command in session
-         * @param {string} sandboxId
-         * @param {string} sessionId
-         * @param {SessionExecuteRequest} sessionExecuteRequest
+         * @param {string} boxId 
+         * @param {string} sessionId 
+         * @param {SessionExecuteRequest} sessionExecuteRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async executeSessionCommandDeprecated(sandboxId: string, sessionId: string, sessionExecuteRequest: SessionExecuteRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<SessionExecuteResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.executeSessionCommandDeprecated(sandboxId, sessionId, sessionExecuteRequest, xBoxLiteOrganizationID, options);
+        async executeSessionCommandDeprecated(boxId: string, sessionId: string, sessionExecuteRequest: SessionExecuteRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<SessionExecuteResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.executeSessionCommandDeprecated(boxId, sessionId, sessionExecuteRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.executeSessionCommandDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Search for text/pattern inside sandbox files
+         * Search for text/pattern inside box files
          * @summary [DEPRECATED] Search for text/pattern in files
-         * @param {string} sandboxId
-         * @param {string} path
-         * @param {string} pattern
+         * @param {string} boxId 
+         * @param {string} path 
+         * @param {string} pattern 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async findInFilesDeprecated(sandboxId: string, path: string, pattern: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<Match>>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.findInFilesDeprecated(sandboxId, path, pattern, xBoxLiteOrganizationID, options);
+        async findInFilesDeprecated(boxId: string, path: string, pattern: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<Match>>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.findInFilesDeprecated(boxId, path, pattern, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.findInFilesDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -3951,14 +3898,14 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Get status of all VNC desktop processes
          * @summary [DEPRECATED] Get computer use status
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async getComputerUseStatusDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ComputerUseStatusResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getComputerUseStatusDeprecated(sandboxId, xBoxLiteOrganizationID, options);
+        async getComputerUseStatusDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ComputerUseStatusResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getComputerUseStatusDeprecated(boxId, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.getComputerUseStatusDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -3966,30 +3913,30 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Get information about displays
          * @summary [DEPRECATED] Get display info
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async getDisplayInfoDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<DisplayInfoResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getDisplayInfoDeprecated(sandboxId, xBoxLiteOrganizationID, options);
+        async getDisplayInfoDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<DisplayInfoResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getDisplayInfoDeprecated(boxId, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.getDisplayInfoDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Get file info inside sandbox
+         * Get file info inside box
          * @summary [DEPRECATED] Get file info
-         * @param {string} sandboxId
-         * @param {string} path
+         * @param {string} boxId 
+         * @param {string} path 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async getFileInfoDeprecated(sandboxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<FileInfo>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getFileInfoDeprecated(sandboxId, path, xBoxLiteOrganizationID, options);
+        async getFileInfoDeprecated(boxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<FileInfo>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getFileInfoDeprecated(boxId, path, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.getFileInfoDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -3997,14 +3944,14 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Get current mouse cursor position
          * @summary [DEPRECATED] Get mouse position
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async getMousePositionDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<MousePosition>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getMousePositionDeprecated(sandboxId, xBoxLiteOrganizationID, options);
+        async getMousePositionDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<MousePosition>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getMousePositionDeprecated(boxId, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.getMousePositionDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4012,15 +3959,15 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Get PTY session information by ID
          * @summary [DEPRECATED] Get PTY session
-         * @param {string} sandboxId
-         * @param {string} sessionId
+         * @param {string} boxId 
+         * @param {string} sessionId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async getPTYSessionDeprecated(sandboxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<PtySessionInfo>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getPTYSessionDeprecated(sandboxId, sessionId, xBoxLiteOrganizationID, options);
+        async getPTYSessionDeprecated(boxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<PtySessionInfo>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getPTYSessionDeprecated(boxId, sessionId, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.getPTYSessionDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4028,15 +3975,15 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Get error logs for a specific VNC process
          * @summary [DEPRECATED] Get process errors
-         * @param {string} processName
-         * @param {string} sandboxId
+         * @param {string} processName 
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async getProcessErrorsDeprecated(processName: string, sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ProcessErrorsResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getProcessErrorsDeprecated(processName, sandboxId, xBoxLiteOrganizationID, options);
+        async getProcessErrorsDeprecated(processName: string, boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ProcessErrorsResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getProcessErrorsDeprecated(processName, boxId, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.getProcessErrorsDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4044,15 +3991,15 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Get logs for a specific VNC process
          * @summary [DEPRECATED] Get process logs
-         * @param {string} processName
-         * @param {string} sandboxId
+         * @param {string} processName 
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async getProcessLogsDeprecated(processName: string, sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ProcessLogsResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getProcessLogsDeprecated(processName, sandboxId, xBoxLiteOrganizationID, options);
+        async getProcessLogsDeprecated(processName: string, boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ProcessLogsResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getProcessLogsDeprecated(processName, boxId, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.getProcessLogsDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4060,30 +4007,30 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Get status of a specific VNC process
          * @summary [DEPRECATED] Get process status
-         * @param {string} processName
-         * @param {string} sandboxId
+         * @param {string} processName 
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async getProcessStatusDeprecated(processName: string, sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ProcessStatusResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getProcessStatusDeprecated(processName, sandboxId, xBoxLiteOrganizationID, options);
+        async getProcessStatusDeprecated(processName: string, boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ProcessStatusResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getProcessStatusDeprecated(processName, boxId, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.getProcessStatusDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
-         * @summary [DEPRECATED] Get sandbox project dir
-         * @param {string} sandboxId
+         * 
+         * @summary [DEPRECATED] Get box project dir
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async getProjectDirDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ProjectDirResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getProjectDirDeprecated(sandboxId, xBoxLiteOrganizationID, options);
+        async getProjectDirDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ProjectDirResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getProjectDirDeprecated(boxId, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.getProjectDirDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4091,16 +4038,16 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Get session command by ID
          * @summary [DEPRECATED] Get session command
-         * @param {string} sandboxId
-         * @param {string} sessionId
-         * @param {string} commandId
+         * @param {string} boxId 
+         * @param {string} sessionId 
+         * @param {string} commandId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async getSessionCommandDeprecated(sandboxId: string, sessionId: string, commandId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Command>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getSessionCommandDeprecated(sandboxId, sessionId, commandId, xBoxLiteOrganizationID, options);
+        async getSessionCommandDeprecated(boxId: string, sessionId: string, commandId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Command>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getSessionCommandDeprecated(boxId, sessionId, commandId, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.getSessionCommandDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4108,17 +4055,17 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Get logs for a specific command in a session
          * @summary [DEPRECATED] Get command logs
-         * @param {string} sandboxId
-         * @param {string} sessionId
-         * @param {string} commandId
+         * @param {string} boxId 
+         * @param {string} sessionId 
+         * @param {string} commandId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {boolean} [follow] Whether to stream the logs
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async getSessionCommandLogsDeprecated(sandboxId: string, sessionId: string, commandId: string, xBoxLiteOrganizationID?: string, follow?: boolean, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<string>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getSessionCommandLogsDeprecated(sandboxId, sessionId, commandId, xBoxLiteOrganizationID, follow, options);
+        async getSessionCommandLogsDeprecated(boxId: string, sessionId: string, commandId: string, xBoxLiteOrganizationID?: string, follow?: boolean, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<string>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getSessionCommandLogsDeprecated(boxId, sessionId, commandId, xBoxLiteOrganizationID, follow, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.getSessionCommandLogsDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4126,30 +4073,30 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Get session by ID
          * @summary [DEPRECATED] Get session
-         * @param {string} sandboxId
-         * @param {string} sessionId
+         * @param {string} boxId 
+         * @param {string} sessionId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async getSessionDeprecated(sandboxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Session>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getSessionDeprecated(sandboxId, sessionId, xBoxLiteOrganizationID, options);
+        async getSessionDeprecated(boxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Session>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getSessionDeprecated(boxId, sessionId, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.getSessionDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
-         * @summary [DEPRECATED] Get sandbox user home dir
-         * @param {string} sandboxId
+         * 
+         * @summary [DEPRECATED] Get box user home dir
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async getUserHomeDirDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<UserHomeDirResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getUserHomeDirDeprecated(sandboxId, xBoxLiteOrganizationID, options);
+        async getUserHomeDirDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<UserHomeDirResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getUserHomeDirDeprecated(boxId, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.getUserHomeDirDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4157,29 +4104,29 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Get list of open windows
          * @summary [DEPRECATED] Get windows
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async getWindowsDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WindowsResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getWindowsDeprecated(sandboxId, xBoxLiteOrganizationID, options);
+        async getWindowsDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WindowsResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getWindowsDeprecated(boxId, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.getWindowsDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
-         * @summary [DEPRECATED] Get sandbox work-dir
-         * @param {string} sandboxId
+         * 
+         * @summary [DEPRECATED] Get box work-dir
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async getWorkDirDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkDirResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getWorkDirDeprecated(sandboxId, xBoxLiteOrganizationID, options);
+        async getWorkDirDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkDirResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getWorkDirDeprecated(boxId, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.getWorkDirDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4187,15 +4134,15 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Add files to git commit
          * @summary [DEPRECATED] Add files
-         * @param {string} sandboxId
-         * @param {GitAddRequest} gitAddRequest
+         * @param {string} boxId 
+         * @param {GitAddRequest} gitAddRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async gitAddFilesDeprecated(sandboxId: string, gitAddRequest: GitAddRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.gitAddFilesDeprecated(sandboxId, gitAddRequest, xBoxLiteOrganizationID, options);
+        async gitAddFilesDeprecated(boxId: string, gitAddRequest: GitAddRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.gitAddFilesDeprecated(boxId, gitAddRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.gitAddFilesDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4203,15 +4150,15 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Checkout branch or commit in git repository
          * @summary [DEPRECATED] Checkout branch
-         * @param {string} sandboxId
-         * @param {GitCheckoutRequest} gitCheckoutRequest
+         * @param {string} boxId 
+         * @param {GitCheckoutRequest} gitCheckoutRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async gitCheckoutBranchDeprecated(sandboxId: string, gitCheckoutRequest: GitCheckoutRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.gitCheckoutBranchDeprecated(sandboxId, gitCheckoutRequest, xBoxLiteOrganizationID, options);
+        async gitCheckoutBranchDeprecated(boxId: string, gitCheckoutRequest: GitCheckoutRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.gitCheckoutBranchDeprecated(boxId, gitCheckoutRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.gitCheckoutBranchDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4219,15 +4166,15 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Clone git repository
          * @summary [DEPRECATED] Clone repository
-         * @param {string} sandboxId
-         * @param {GitCloneRequest} gitCloneRequest
+         * @param {string} boxId 
+         * @param {GitCloneRequest} gitCloneRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async gitCloneRepositoryDeprecated(sandboxId: string, gitCloneRequest: GitCloneRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.gitCloneRepositoryDeprecated(sandboxId, gitCloneRequest, xBoxLiteOrganizationID, options);
+        async gitCloneRepositoryDeprecated(boxId: string, gitCloneRequest: GitCloneRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.gitCloneRepositoryDeprecated(boxId, gitCloneRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.gitCloneRepositoryDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4235,15 +4182,15 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Commit changes to git repository
          * @summary [DEPRECATED] Commit changes
-         * @param {string} sandboxId
-         * @param {GitCommitRequest} gitCommitRequest
+         * @param {string} boxId 
+         * @param {GitCommitRequest} gitCommitRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async gitCommitChangesDeprecated(sandboxId: string, gitCommitRequest: GitCommitRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<GitCommitResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.gitCommitChangesDeprecated(sandboxId, gitCommitRequest, xBoxLiteOrganizationID, options);
+        async gitCommitChangesDeprecated(boxId: string, gitCommitRequest: GitCommitRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<GitCommitResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.gitCommitChangesDeprecated(boxId, gitCommitRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.gitCommitChangesDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4251,15 +4198,15 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Create branch on git repository
          * @summary [DEPRECATED] Create branch
-         * @param {string} sandboxId
-         * @param {GitBranchRequest} gitBranchRequest
+         * @param {string} boxId 
+         * @param {GitBranchRequest} gitBranchRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async gitCreateBranchDeprecated(sandboxId: string, gitBranchRequest: GitBranchRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.gitCreateBranchDeprecated(sandboxId, gitBranchRequest, xBoxLiteOrganizationID, options);
+        async gitCreateBranchDeprecated(boxId: string, gitBranchRequest: GitBranchRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.gitCreateBranchDeprecated(boxId, gitBranchRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.gitCreateBranchDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4267,15 +4214,15 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Delete branch on git repository
          * @summary [DEPRECATED] Delete branch
-         * @param {string} sandboxId
-         * @param {GitDeleteBranchRequest} gitDeleteBranchRequest
+         * @param {string} boxId 
+         * @param {GitDeleteBranchRequest} gitDeleteBranchRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async gitDeleteBranchDeprecated(sandboxId: string, gitDeleteBranchRequest: GitDeleteBranchRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.gitDeleteBranchDeprecated(sandboxId, gitDeleteBranchRequest, xBoxLiteOrganizationID, options);
+        async gitDeleteBranchDeprecated(boxId: string, gitDeleteBranchRequest: GitDeleteBranchRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.gitDeleteBranchDeprecated(boxId, gitDeleteBranchRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.gitDeleteBranchDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4283,15 +4230,15 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Get commit history from git repository
          * @summary [DEPRECATED] Get commit history
-         * @param {string} sandboxId
-         * @param {string} path
+         * @param {string} boxId 
+         * @param {string} path 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async gitGetHistoryDeprecated(sandboxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<GitCommitInfo>>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.gitGetHistoryDeprecated(sandboxId, path, xBoxLiteOrganizationID, options);
+        async gitGetHistoryDeprecated(boxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<GitCommitInfo>>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.gitGetHistoryDeprecated(boxId, path, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.gitGetHistoryDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4299,15 +4246,15 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Get status from git repository
          * @summary [DEPRECATED] Get git status
-         * @param {string} sandboxId
-         * @param {string} path
+         * @param {string} boxId 
+         * @param {string} path 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async gitGetStatusDeprecated(sandboxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<GitStatus>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.gitGetStatusDeprecated(sandboxId, path, xBoxLiteOrganizationID, options);
+        async gitGetStatusDeprecated(boxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<GitStatus>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.gitGetStatusDeprecated(boxId, path, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.gitGetStatusDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4315,15 +4262,15 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Get branch list from git repository
          * @summary [DEPRECATED] Get branch list
-         * @param {string} sandboxId
-         * @param {string} path
+         * @param {string} boxId 
+         * @param {string} path 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async gitListBranchesDeprecated(sandboxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ListBranchResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.gitListBranchesDeprecated(sandboxId, path, xBoxLiteOrganizationID, options);
+        async gitListBranchesDeprecated(boxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ListBranchResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.gitListBranchesDeprecated(boxId, path, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.gitListBranchesDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4331,15 +4278,15 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Pull changes from remote
          * @summary [DEPRECATED] Pull changes
-         * @param {string} sandboxId
-         * @param {GitRepoRequest} gitRepoRequest
+         * @param {string} boxId 
+         * @param {GitRepoRequest} gitRepoRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async gitPullChangesDeprecated(sandboxId: string, gitRepoRequest: GitRepoRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.gitPullChangesDeprecated(sandboxId, gitRepoRequest, xBoxLiteOrganizationID, options);
+        async gitPullChangesDeprecated(boxId: string, gitRepoRequest: GitRepoRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.gitPullChangesDeprecated(boxId, gitRepoRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.gitPullChangesDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4347,61 +4294,61 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Push changes to remote
          * @summary [DEPRECATED] Push changes
-         * @param {string} sandboxId
-         * @param {GitRepoRequest} gitRepoRequest
+         * @param {string} boxId 
+         * @param {GitRepoRequest} gitRepoRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async gitPushChangesDeprecated(sandboxId: string, gitRepoRequest: GitRepoRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.gitPushChangesDeprecated(sandboxId, gitRepoRequest, xBoxLiteOrganizationID, options);
+        async gitPushChangesDeprecated(boxId: string, gitRepoRequest: GitRepoRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.gitPushChangesDeprecated(boxId, gitRepoRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.gitPushChangesDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] List files
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {string} [path]
+         * @param {string} [path] 
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async listFilesDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, path?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<FileInfo>>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.listFilesDeprecated(sandboxId, xBoxLiteOrganizationID, path, options);
+        async listFilesDeprecated(boxId: string, xBoxLiteOrganizationID?: string, path?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<FileInfo>>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.listFilesDeprecated(boxId, xBoxLiteOrganizationID, path, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.listFilesDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * List all active PTY sessions in the sandbox
+         * List all active PTY sessions in the box
          * @summary [DEPRECATED] List PTY sessions
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async listPTYSessionsDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<PtyListResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.listPTYSessionsDeprecated(sandboxId, xBoxLiteOrganizationID, options);
+        async listPTYSessionsDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<PtyListResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.listPTYSessionsDeprecated(boxId, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.listPTYSessionsDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * List all active sessions in the sandbox
+         * List all active sessions in the box
          * @summary [DEPRECATED] List sessions
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async listSessionsDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<Session>>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.listSessionsDeprecated(sandboxId, xBoxLiteOrganizationID, options);
+        async listSessionsDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<Session>>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.listSessionsDeprecated(boxId, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.listSessionsDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4409,15 +4356,15 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * The Completion request is sent from the client to the server to compute completion items at a given cursor position.
          * @summary [DEPRECATED] Get Lsp Completions
-         * @param {string} sandboxId
-         * @param {LspCompletionParams} lspCompletionParams
+         * @param {string} boxId 
+         * @param {LspCompletionParams} lspCompletionParams 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async lspCompletionsDeprecated(sandboxId: string, lspCompletionParams: LspCompletionParams, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<CompletionList>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.lspCompletionsDeprecated(sandboxId, lspCompletionParams, xBoxLiteOrganizationID, options);
+        async lspCompletionsDeprecated(boxId: string, lspCompletionParams: LspCompletionParams, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<CompletionList>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.lspCompletionsDeprecated(boxId, lspCompletionParams, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.lspCompletionsDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4425,15 +4372,15 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * The document close notification is sent from the client to the server when the document got closed in the client.
          * @summary [DEPRECATED] Call Lsp DidClose
-         * @param {string} sandboxId
-         * @param {LspDocumentRequest} lspDocumentRequest
+         * @param {string} boxId 
+         * @param {LspDocumentRequest} lspDocumentRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async lspDidCloseDeprecated(sandboxId: string, lspDocumentRequest: LspDocumentRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.lspDidCloseDeprecated(sandboxId, lspDocumentRequest, xBoxLiteOrganizationID, options);
+        async lspDidCloseDeprecated(boxId: string, lspDocumentRequest: LspDocumentRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.lspDidCloseDeprecated(boxId, lspDocumentRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.lspDidCloseDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4441,15 +4388,15 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * The document open notification is sent from the client to the server to signal newly opened text documents.
          * @summary [DEPRECATED] Call Lsp DidOpen
-         * @param {string} sandboxId
-         * @param {LspDocumentRequest} lspDocumentRequest
+         * @param {string} boxId 
+         * @param {LspDocumentRequest} lspDocumentRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async lspDidOpenDeprecated(sandboxId: string, lspDocumentRequest: LspDocumentRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.lspDidOpenDeprecated(sandboxId, lspDocumentRequest, xBoxLiteOrganizationID, options);
+        async lspDidOpenDeprecated(boxId: string, lspDocumentRequest: LspDocumentRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.lspDidOpenDeprecated(boxId, lspDocumentRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.lspDidOpenDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4457,49 +4404,49 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * The document symbol request is sent from the client to the server.
          * @summary [DEPRECATED] Call Lsp DocumentSymbols
-         * @param {string} sandboxId
-         * @param {string} languageId
-         * @param {string} pathToProject
-         * @param {string} uri
+         * @param {string} boxId 
+         * @param {string} languageId 
+         * @param {string} pathToProject 
+         * @param {string} uri 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async lspDocumentSymbolsDeprecated(sandboxId: string, languageId: string, pathToProject: string, uri: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<LspSymbol>>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.lspDocumentSymbolsDeprecated(sandboxId, languageId, pathToProject, uri, xBoxLiteOrganizationID, options);
+        async lspDocumentSymbolsDeprecated(boxId: string, languageId: string, pathToProject: string, uri: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<LspSymbol>>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.lspDocumentSymbolsDeprecated(boxId, languageId, pathToProject, uri, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.lspDocumentSymbolsDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Start Lsp server process inside sandbox project
+         * Start Lsp server process inside box project
          * @summary [DEPRECATED] Start Lsp server
-         * @param {string} sandboxId
-         * @param {LspServerRequest} lspServerRequest
+         * @param {string} boxId 
+         * @param {LspServerRequest} lspServerRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async lspStartDeprecated(sandboxId: string, lspServerRequest: LspServerRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.lspStartDeprecated(sandboxId, lspServerRequest, xBoxLiteOrganizationID, options);
+        async lspStartDeprecated(boxId: string, lspServerRequest: LspServerRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.lspStartDeprecated(boxId, lspServerRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.lspStartDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Stop Lsp server process inside sandbox project
+         * Stop Lsp server process inside box project
          * @summary [DEPRECATED] Stop Lsp server
-         * @param {string} sandboxId
-         * @param {LspServerRequest} lspServerRequest
+         * @param {string} boxId 
+         * @param {LspServerRequest} lspServerRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async lspStopDeprecated(sandboxId: string, lspServerRequest: LspServerRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.lspStopDeprecated(sandboxId, lspServerRequest, xBoxLiteOrganizationID, options);
+        async lspStopDeprecated(boxId: string, lspServerRequest: LspServerRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.lspStopDeprecated(boxId, lspServerRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.lspStopDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4507,34 +4454,34 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * The workspace symbol request is sent from the client to the server to list project-wide symbols matching the query string.
          * @summary [DEPRECATED] Call Lsp WorkspaceSymbols
-         * @param {string} sandboxId
-         * @param {string} languageId
-         * @param {string} pathToProject
-         * @param {string} query
+         * @param {string} boxId 
+         * @param {string} languageId 
+         * @param {string} pathToProject 
+         * @param {string} query 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async lspWorkspaceSymbolsDeprecated(sandboxId: string, languageId: string, pathToProject: string, query: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<LspSymbol>>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.lspWorkspaceSymbolsDeprecated(sandboxId, languageId, pathToProject, query, xBoxLiteOrganizationID, options);
+        async lspWorkspaceSymbolsDeprecated(boxId: string, languageId: string, pathToProject: string, query: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<LspSymbol>>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.lspWorkspaceSymbolsDeprecated(boxId, languageId, pathToProject, query, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.lspWorkspaceSymbolsDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Move file inside sandbox
+         * Move file inside box
          * @summary [DEPRECATED] Move file
-         * @param {string} sandboxId
-         * @param {string} source
-         * @param {string} destination
+         * @param {string} boxId 
+         * @param {string} source 
+         * @param {string} destination 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async moveFileDeprecated(sandboxId: string, source: string, destination: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.moveFileDeprecated(sandboxId, source, destination, xBoxLiteOrganizationID, options);
+        async moveFileDeprecated(boxId: string, source: string, destination: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.moveFileDeprecated(boxId, source, destination, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.moveFileDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4542,15 +4489,15 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Move mouse cursor to specified coordinates
          * @summary [DEPRECATED] Move mouse
-         * @param {string} sandboxId
-         * @param {MouseMoveRequest} mouseMoveRequest
+         * @param {string} boxId 
+         * @param {MouseMoveRequest} mouseMoveRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async moveMouseDeprecated(sandboxId: string, mouseMoveRequest: MouseMoveRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<MouseMoveResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.moveMouseDeprecated(sandboxId, mouseMoveRequest, xBoxLiteOrganizationID, options);
+        async moveMouseDeprecated(boxId: string, mouseMoveRequest: MouseMoveRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<MouseMoveResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.moveMouseDeprecated(boxId, mouseMoveRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.moveMouseDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4558,15 +4505,15 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Press a hotkey combination
          * @summary [DEPRECATED] Press hotkey
-         * @param {string} sandboxId
-         * @param {KeyboardHotkeyRequest} keyboardHotkeyRequest
+         * @param {string} boxId 
+         * @param {KeyboardHotkeyRequest} keyboardHotkeyRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async pressHotkeyDeprecated(sandboxId: string, keyboardHotkeyRequest: KeyboardHotkeyRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.pressHotkeyDeprecated(sandboxId, keyboardHotkeyRequest, xBoxLiteOrganizationID, options);
+        async pressHotkeyDeprecated(boxId: string, keyboardHotkeyRequest: KeyboardHotkeyRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.pressHotkeyDeprecated(boxId, keyboardHotkeyRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.pressHotkeyDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4574,31 +4521,31 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Press a key with optional modifiers
          * @summary [DEPRECATED] Press key
-         * @param {string} sandboxId
-         * @param {KeyboardPressRequest} keyboardPressRequest
+         * @param {string} boxId 
+         * @param {KeyboardPressRequest} keyboardPressRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async pressKeyDeprecated(sandboxId: string, keyboardPressRequest: KeyboardPressRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.pressKeyDeprecated(sandboxId, keyboardPressRequest, xBoxLiteOrganizationID, options);
+        async pressKeyDeprecated(boxId: string, keyboardPressRequest: KeyboardPressRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.pressKeyDeprecated(boxId, keyboardPressRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.pressKeyDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Replace text/pattern in multiple files inside sandbox
+         * Replace text/pattern in multiple files inside box
          * @summary [DEPRECATED] Replace in files
-         * @param {string} sandboxId
-         * @param {ReplaceRequest} replaceRequest
+         * @param {string} boxId 
+         * @param {ReplaceRequest} replaceRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async replaceInFilesDeprecated(sandboxId: string, replaceRequest: ReplaceRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<ReplaceResult>>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.replaceInFilesDeprecated(sandboxId, replaceRequest, xBoxLiteOrganizationID, options);
+        async replaceInFilesDeprecated(boxId: string, replaceRequest: ReplaceRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<ReplaceResult>>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.replaceInFilesDeprecated(boxId, replaceRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.replaceInFilesDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4606,16 +4553,16 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Resize a PTY session
          * @summary [DEPRECATED] Resize PTY session
-         * @param {string} sandboxId
-         * @param {string} sessionId
-         * @param {PtyResizeRequest} ptyResizeRequest
+         * @param {string} boxId 
+         * @param {string} sessionId 
+         * @param {PtyResizeRequest} ptyResizeRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async resizePTYSessionDeprecated(sandboxId: string, sessionId: string, ptyResizeRequest: PtyResizeRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<PtySessionInfo>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.resizePTYSessionDeprecated(sandboxId, sessionId, ptyResizeRequest, xBoxLiteOrganizationID, options);
+        async resizePTYSessionDeprecated(boxId: string, sessionId: string, ptyResizeRequest: PtyResizeRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<PtySessionInfo>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.resizePTYSessionDeprecated(boxId, sessionId, ptyResizeRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.resizePTYSessionDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4623,15 +4570,15 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Restart a specific VNC process
          * @summary [DEPRECATED] Restart process
-         * @param {string} processName
-         * @param {string} sandboxId
+         * @param {string} processName 
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async restartProcessDeprecated(processName: string, sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ProcessRestartResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.restartProcessDeprecated(processName, sandboxId, xBoxLiteOrganizationID, options);
+        async restartProcessDeprecated(processName: string, boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ProcessRestartResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.restartProcessDeprecated(processName, boxId, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.restartProcessDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4639,51 +4586,51 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Scroll mouse at specified coordinates
          * @summary [DEPRECATED] Scroll mouse
-         * @param {string} sandboxId
-         * @param {MouseScrollRequest} mouseScrollRequest
+         * @param {string} boxId 
+         * @param {MouseScrollRequest} mouseScrollRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async scrollMouseDeprecated(sandboxId: string, mouseScrollRequest: MouseScrollRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<MouseScrollResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.scrollMouseDeprecated(sandboxId, mouseScrollRequest, xBoxLiteOrganizationID, options);
+        async scrollMouseDeprecated(boxId: string, mouseScrollRequest: MouseScrollRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<MouseScrollResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.scrollMouseDeprecated(boxId, mouseScrollRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.scrollMouseDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Search for files inside sandbox
+         * Search for files inside box
          * @summary [DEPRECATED] Search files
-         * @param {string} sandboxId
-         * @param {string} path
-         * @param {string} pattern
+         * @param {string} boxId 
+         * @param {string} path 
+         * @param {string} pattern 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async searchFilesDeprecated(sandboxId: string, path: string, pattern: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<SearchFilesResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.searchFilesDeprecated(sandboxId, path, pattern, xBoxLiteOrganizationID, options);
+        async searchFilesDeprecated(boxId: string, path: string, pattern: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<SearchFilesResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.searchFilesDeprecated(boxId, path, pattern, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.searchFilesDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Set file owner/group/permissions inside sandbox
+         * Set file owner/group/permissions inside box
          * @summary [DEPRECATED] Set file permissions
-         * @param {string} sandboxId
-         * @param {string} path
+         * @param {string} boxId 
+         * @param {string} path 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {string} [owner]
-         * @param {string} [group]
-         * @param {string} [mode]
+         * @param {string} [owner] 
+         * @param {string} [group] 
+         * @param {string} [mode] 
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async setFilePermissionsDeprecated(sandboxId: string, path: string, xBoxLiteOrganizationID?: string, owner?: string, group?: string, mode?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.setFilePermissionsDeprecated(sandboxId, path, xBoxLiteOrganizationID, owner, group, mode, options);
+        async setFilePermissionsDeprecated(boxId: string, path: string, xBoxLiteOrganizationID?: string, owner?: string, group?: string, mode?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.setFilePermissionsDeprecated(boxId, path, xBoxLiteOrganizationID, owner, group, mode, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.setFilePermissionsDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4691,14 +4638,14 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Start all VNC desktop processes (Xvfb, xfce4, x11vnc, novnc)
          * @summary [DEPRECATED] Start computer use processes
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async startComputerUseDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ComputerUseStartResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.startComputerUseDeprecated(sandboxId, xBoxLiteOrganizationID, options);
+        async startComputerUseDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ComputerUseStartResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.startComputerUseDeprecated(boxId, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.startComputerUseDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4706,14 +4653,14 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Stop all VNC desktop processes (Xvfb, xfce4, x11vnc, novnc)
          * @summary [DEPRECATED] Stop computer use processes
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async stopComputerUseDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ComputerUseStopResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.stopComputerUseDeprecated(sandboxId, xBoxLiteOrganizationID, options);
+        async stopComputerUseDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ComputerUseStopResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.stopComputerUseDeprecated(boxId, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.stopComputerUseDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4721,22 +4668,22 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Take a compressed screenshot of a specific region
          * @summary [DEPRECATED] Take compressed region screenshot
-         * @param {string} sandboxId
-         * @param {number} height
-         * @param {number} width
-         * @param {number} y
-         * @param {number} x
+         * @param {string} boxId 
+         * @param {number} height 
+         * @param {number} width 
+         * @param {number} y 
+         * @param {number} x 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {number} [scale]
-         * @param {number} [quality]
-         * @param {string} [format]
-         * @param {boolean} [showCursor]
+         * @param {number} [scale] 
+         * @param {number} [quality] 
+         * @param {string} [format] 
+         * @param {boolean} [showCursor] 
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async takeCompressedRegionScreenshotDeprecated(sandboxId: string, height: number, width: number, y: number, x: number, xBoxLiteOrganizationID?: string, scale?: number, quality?: number, format?: string, showCursor?: boolean, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<CompressedScreenshotResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.takeCompressedRegionScreenshotDeprecated(sandboxId, height, width, y, x, xBoxLiteOrganizationID, scale, quality, format, showCursor, options);
+        async takeCompressedRegionScreenshotDeprecated(boxId: string, height: number, width: number, y: number, x: number, xBoxLiteOrganizationID?: string, scale?: number, quality?: number, format?: string, showCursor?: boolean, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<CompressedScreenshotResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.takeCompressedRegionScreenshotDeprecated(boxId, height, width, y, x, xBoxLiteOrganizationID, scale, quality, format, showCursor, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.takeCompressedRegionScreenshotDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4744,18 +4691,18 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Take a compressed screenshot with format, quality, and scale options
          * @summary [DEPRECATED] Take compressed screenshot
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {number} [scale]
-         * @param {number} [quality]
-         * @param {string} [format]
-         * @param {boolean} [showCursor]
+         * @param {number} [scale] 
+         * @param {number} [quality] 
+         * @param {string} [format] 
+         * @param {boolean} [showCursor] 
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async takeCompressedScreenshotDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, scale?: number, quality?: number, format?: string, showCursor?: boolean, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<CompressedScreenshotResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.takeCompressedScreenshotDeprecated(sandboxId, xBoxLiteOrganizationID, scale, quality, format, showCursor, options);
+        async takeCompressedScreenshotDeprecated(boxId: string, xBoxLiteOrganizationID?: string, scale?: number, quality?: number, format?: string, showCursor?: boolean, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<CompressedScreenshotResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.takeCompressedScreenshotDeprecated(boxId, xBoxLiteOrganizationID, scale, quality, format, showCursor, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.takeCompressedScreenshotDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4763,19 +4710,19 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Take a screenshot of a specific region
          * @summary [DEPRECATED] Take region screenshot
-         * @param {string} sandboxId
-         * @param {number} height
-         * @param {number} width
-         * @param {number} y
-         * @param {number} x
+         * @param {string} boxId 
+         * @param {number} height 
+         * @param {number} width 
+         * @param {number} y 
+         * @param {number} x 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {boolean} [showCursor]
+         * @param {boolean} [showCursor] 
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async takeRegionScreenshotDeprecated(sandboxId: string, height: number, width: number, y: number, x: number, xBoxLiteOrganizationID?: string, showCursor?: boolean, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<RegionScreenshotResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.takeRegionScreenshotDeprecated(sandboxId, height, width, y, x, xBoxLiteOrganizationID, showCursor, options);
+        async takeRegionScreenshotDeprecated(boxId: string, height: number, width: number, y: number, x: number, xBoxLiteOrganizationID?: string, showCursor?: boolean, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<RegionScreenshotResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.takeRegionScreenshotDeprecated(boxId, height, width, y, x, xBoxLiteOrganizationID, showCursor, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.takeRegionScreenshotDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4783,15 +4730,15 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Take a screenshot of the entire screen
          * @summary [DEPRECATED] Take screenshot
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {boolean} [showCursor]
+         * @param {boolean} [showCursor] 
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async takeScreenshotDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, showCursor?: boolean, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ScreenshotResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.takeScreenshotDeprecated(sandboxId, xBoxLiteOrganizationID, showCursor, options);
+        async takeScreenshotDeprecated(boxId: string, xBoxLiteOrganizationID?: string, showCursor?: boolean, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ScreenshotResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.takeScreenshotDeprecated(boxId, xBoxLiteOrganizationID, showCursor, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.takeScreenshotDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4799,47 +4746,47 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
         /**
          * Type text using keyboard
          * @summary [DEPRECATED] Type text
-         * @param {string} sandboxId
-         * @param {KeyboardTypeRequest} keyboardTypeRequest
+         * @param {string} boxId 
+         * @param {KeyboardTypeRequest} keyboardTypeRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async typeTextDeprecated(sandboxId: string, keyboardTypeRequest: KeyboardTypeRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.typeTextDeprecated(sandboxId, keyboardTypeRequest, xBoxLiteOrganizationID, options);
+        async typeTextDeprecated(boxId: string, keyboardTypeRequest: KeyboardTypeRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.typeTextDeprecated(boxId, keyboardTypeRequest, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.typeTextDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Upload file inside sandbox
+         * Upload file inside box
          * @summary [DEPRECATED] Upload file
-         * @param {string} sandboxId
-         * @param {string} path
+         * @param {string} boxId 
+         * @param {string} path 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {File} [file]
+         * @param {File} [file] 
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async uploadFileDeprecated(sandboxId: string, path: string, xBoxLiteOrganizationID?: string, file?: File, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.uploadFileDeprecated(sandboxId, path, xBoxLiteOrganizationID, file, options);
+        async uploadFileDeprecated(boxId: string, path: string, xBoxLiteOrganizationID?: string, file?: File, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.uploadFileDeprecated(boxId, path, xBoxLiteOrganizationID, file, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.uploadFileDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Upload multiple files inside sandbox
+         * Upload multiple files inside box
          * @summary [DEPRECATED] Upload multiple files
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async uploadFilesDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.uploadFilesDeprecated(sandboxId, xBoxLiteOrganizationID, options);
+        async uploadFilesDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.uploadFilesDeprecated(boxId, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolboxApi.uploadFilesDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -4849,7 +4796,6 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
 
 /**
  * ToolboxApi - factory interface
- * @export
  */
 export const ToolboxApiFactory = function (configuration?: Configuration, basePath?: string, axios?: AxiosInstance) {
     const localVarFp = ToolboxApiFp(configuration)
@@ -4857,1954 +4803,1884 @@ export const ToolboxApiFactory = function (configuration?: Configuration, basePa
         /**
          * Click mouse at specified coordinates
          * @summary [DEPRECATED] Click mouse
-         * @param {string} sandboxId
-         * @param {MouseClickRequest} mouseClickRequest
+         * @param {string} boxId 
+         * @param {MouseClickRequest} mouseClickRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        clickMouseDeprecated(sandboxId: string, mouseClickRequest: MouseClickRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<MouseClickResponse> {
-            return localVarFp.clickMouseDeprecated(sandboxId, mouseClickRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        clickMouseDeprecated(boxId: string, mouseClickRequest: MouseClickRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<MouseClickResponse> {
+            return localVarFp.clickMouseDeprecated(boxId, mouseClickRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Create folder inside sandbox
+         * Create folder inside box
          * @summary [DEPRECATED] Create folder
-         * @param {string} sandboxId
-         * @param {string} path
-         * @param {string} mode
+         * @param {string} boxId 
+         * @param {string} path 
+         * @param {string} mode 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        createFolderDeprecated(sandboxId: string, path: string, mode: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.createFolderDeprecated(sandboxId, path, mode, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        createFolderDeprecated(boxId: string, path: string, mode: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.createFolderDeprecated(boxId, path, mode, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Create a new PTY session in the sandbox
+         * Create a new PTY session in the box
          * @summary [DEPRECATED] Create PTY session
-         * @param {string} sandboxId
-         * @param {PtyCreateRequest} ptyCreateRequest
+         * @param {string} boxId 
+         * @param {PtyCreateRequest} ptyCreateRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        createPTYSessionDeprecated(sandboxId: string, ptyCreateRequest: PtyCreateRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<PtyCreateResponse> {
-            return localVarFp.createPTYSessionDeprecated(sandboxId, ptyCreateRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        createPTYSessionDeprecated(boxId: string, ptyCreateRequest: PtyCreateRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<PtyCreateResponse> {
+            return localVarFp.createPTYSessionDeprecated(boxId, ptyCreateRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Create a new session in the sandbox
+         * Create a new session in the box
          * @summary [DEPRECATED] Create session
-         * @param {string} sandboxId
-         * @param {CreateSessionRequest} createSessionRequest
+         * @param {string} boxId 
+         * @param {CreateSessionRequest} createSessionRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        createSessionDeprecated(sandboxId: string, createSessionRequest: CreateSessionRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.createSessionDeprecated(sandboxId, createSessionRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        createSessionDeprecated(boxId: string, createSessionRequest: CreateSessionRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.createSessionDeprecated(boxId, createSessionRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Delete file inside sandbox
+         * Delete file inside box
          * @summary [DEPRECATED] Delete file
-         * @param {string} sandboxId
-         * @param {string} path
+         * @param {string} boxId 
+         * @param {string} path 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {boolean} [recursive]
+         * @param {boolean} [recursive] 
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        deleteFileDeprecated(sandboxId: string, path: string, xBoxLiteOrganizationID?: string, recursive?: boolean, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.deleteFileDeprecated(sandboxId, path, xBoxLiteOrganizationID, recursive, options).then((request) => request(axios, basePath));
+        deleteFileDeprecated(boxId: string, path: string, xBoxLiteOrganizationID?: string, recursive?: boolean, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.deleteFileDeprecated(boxId, path, xBoxLiteOrganizationID, recursive, options).then((request) => request(axios, basePath));
         },
         /**
          * Delete a PTY session and terminate the associated process
          * @summary [DEPRECATED] Delete PTY session
-         * @param {string} sandboxId
-         * @param {string} sessionId
+         * @param {string} boxId 
+         * @param {string} sessionId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        deletePTYSessionDeprecated(sandboxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.deletePTYSessionDeprecated(sandboxId, sessionId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        deletePTYSessionDeprecated(boxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.deletePTYSessionDeprecated(boxId, sessionId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Delete a specific session
          * @summary [DEPRECATED] Delete session
-         * @param {string} sandboxId
-         * @param {string} sessionId
+         * @param {string} boxId 
+         * @param {string} sessionId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        deleteSessionDeprecated(sandboxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.deleteSessionDeprecated(sandboxId, sessionId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        deleteSessionDeprecated(boxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.deleteSessionDeprecated(boxId, sessionId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Download file from sandbox
+         * Download file from box
          * @summary [DEPRECATED] Download file
-         * @param {string} sandboxId
-         * @param {string} path
+         * @param {string} boxId 
+         * @param {string} path 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        downloadFileDeprecated(sandboxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<File> {
-            return localVarFp.downloadFileDeprecated(sandboxId, path, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        downloadFileDeprecated(boxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<File> {
+            return localVarFp.downloadFileDeprecated(boxId, path, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Streams back a multipart/form-data bundle of the requested paths
          * @summary [DEPRECATED] Download multiple files
-         * @param {string} sandboxId
-         * @param {DownloadFiles} downloadFiles
+         * @param {string} boxId 
+         * @param {DownloadFiles} downloadFiles 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        downloadFilesDeprecated(sandboxId: string, downloadFiles: DownloadFiles, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<File> {
-            return localVarFp.downloadFilesDeprecated(sandboxId, downloadFiles, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        downloadFilesDeprecated(boxId: string, downloadFiles: DownloadFiles, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<File> {
+            return localVarFp.downloadFilesDeprecated(boxId, downloadFiles, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Drag mouse from start to end coordinates
          * @summary [DEPRECATED] Drag mouse
-         * @param {string} sandboxId
-         * @param {MouseDragRequest} mouseDragRequest
+         * @param {string} boxId 
+         * @param {MouseDragRequest} mouseDragRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        dragMouseDeprecated(sandboxId: string, mouseDragRequest: MouseDragRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<MouseDragResponse> {
-            return localVarFp.dragMouseDeprecated(sandboxId, mouseDragRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        dragMouseDeprecated(boxId: string, mouseDragRequest: MouseDragRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<MouseDragResponse> {
+            return localVarFp.dragMouseDeprecated(boxId, mouseDragRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Execute command synchronously inside sandbox
+         * Execute command synchronously inside box
          * @summary [DEPRECATED] Execute command
-         * @param {string} sandboxId
-         * @param {ExecuteRequest} executeRequest
+         * @param {string} boxId 
+         * @param {ExecuteRequest} executeRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        executeCommandDeprecated(sandboxId: string, executeRequest: ExecuteRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<ExecuteResponse> {
-            return localVarFp.executeCommandDeprecated(sandboxId, executeRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        executeCommandDeprecated(boxId: string, executeRequest: ExecuteRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<ExecuteResponse> {
+            return localVarFp.executeCommandDeprecated(boxId, executeRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Execute a command in a specific session
          * @summary [DEPRECATED] Execute command in session
-         * @param {string} sandboxId
-         * @param {string} sessionId
-         * @param {SessionExecuteRequest} sessionExecuteRequest
+         * @param {string} boxId 
+         * @param {string} sessionId 
+         * @param {SessionExecuteRequest} sessionExecuteRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        executeSessionCommandDeprecated(sandboxId: string, sessionId: string, sessionExecuteRequest: SessionExecuteRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<SessionExecuteResponse> {
-            return localVarFp.executeSessionCommandDeprecated(sandboxId, sessionId, sessionExecuteRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        executeSessionCommandDeprecated(boxId: string, sessionId: string, sessionExecuteRequest: SessionExecuteRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<SessionExecuteResponse> {
+            return localVarFp.executeSessionCommandDeprecated(boxId, sessionId, sessionExecuteRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Search for text/pattern inside sandbox files
+         * Search for text/pattern inside box files
          * @summary [DEPRECATED] Search for text/pattern in files
-         * @param {string} sandboxId
-         * @param {string} path
-         * @param {string} pattern
+         * @param {string} boxId 
+         * @param {string} path 
+         * @param {string} pattern 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        findInFilesDeprecated(sandboxId: string, path: string, pattern: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<Match>> {
-            return localVarFp.findInFilesDeprecated(sandboxId, path, pattern, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        findInFilesDeprecated(boxId: string, path: string, pattern: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<Match>> {
+            return localVarFp.findInFilesDeprecated(boxId, path, pattern, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Get status of all VNC desktop processes
          * @summary [DEPRECATED] Get computer use status
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getComputerUseStatusDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<ComputerUseStatusResponse> {
-            return localVarFp.getComputerUseStatusDeprecated(sandboxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        getComputerUseStatusDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<ComputerUseStatusResponse> {
+            return localVarFp.getComputerUseStatusDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Get information about displays
          * @summary [DEPRECATED] Get display info
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getDisplayInfoDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<DisplayInfoResponse> {
-            return localVarFp.getDisplayInfoDeprecated(sandboxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        getDisplayInfoDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<DisplayInfoResponse> {
+            return localVarFp.getDisplayInfoDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Get file info inside sandbox
+         * Get file info inside box
          * @summary [DEPRECATED] Get file info
-         * @param {string} sandboxId
-         * @param {string} path
+         * @param {string} boxId 
+         * @param {string} path 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getFileInfoDeprecated(sandboxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<FileInfo> {
-            return localVarFp.getFileInfoDeprecated(sandboxId, path, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        getFileInfoDeprecated(boxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<FileInfo> {
+            return localVarFp.getFileInfoDeprecated(boxId, path, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Get current mouse cursor position
          * @summary [DEPRECATED] Get mouse position
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getMousePositionDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<MousePosition> {
-            return localVarFp.getMousePositionDeprecated(sandboxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        getMousePositionDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<MousePosition> {
+            return localVarFp.getMousePositionDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Get PTY session information by ID
          * @summary [DEPRECATED] Get PTY session
-         * @param {string} sandboxId
-         * @param {string} sessionId
+         * @param {string} boxId 
+         * @param {string} sessionId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getPTYSessionDeprecated(sandboxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<PtySessionInfo> {
-            return localVarFp.getPTYSessionDeprecated(sandboxId, sessionId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        getPTYSessionDeprecated(boxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<PtySessionInfo> {
+            return localVarFp.getPTYSessionDeprecated(boxId, sessionId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Get error logs for a specific VNC process
          * @summary [DEPRECATED] Get process errors
-         * @param {string} processName
-         * @param {string} sandboxId
+         * @param {string} processName 
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getProcessErrorsDeprecated(processName: string, sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<ProcessErrorsResponse> {
-            return localVarFp.getProcessErrorsDeprecated(processName, sandboxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        getProcessErrorsDeprecated(processName: string, boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<ProcessErrorsResponse> {
+            return localVarFp.getProcessErrorsDeprecated(processName, boxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Get logs for a specific VNC process
          * @summary [DEPRECATED] Get process logs
-         * @param {string} processName
-         * @param {string} sandboxId
+         * @param {string} processName 
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getProcessLogsDeprecated(processName: string, sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<ProcessLogsResponse> {
-            return localVarFp.getProcessLogsDeprecated(processName, sandboxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        getProcessLogsDeprecated(processName: string, boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<ProcessLogsResponse> {
+            return localVarFp.getProcessLogsDeprecated(processName, boxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Get status of a specific VNC process
          * @summary [DEPRECATED] Get process status
-         * @param {string} processName
-         * @param {string} sandboxId
+         * @param {string} processName 
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getProcessStatusDeprecated(processName: string, sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<ProcessStatusResponse> {
-            return localVarFp.getProcessStatusDeprecated(processName, sandboxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        getProcessStatusDeprecated(processName: string, boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<ProcessStatusResponse> {
+            return localVarFp.getProcessStatusDeprecated(processName, boxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
-         * @summary [DEPRECATED] Get sandbox project dir
-         * @param {string} sandboxId
+         * 
+         * @summary [DEPRECATED] Get box project dir
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getProjectDirDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<ProjectDirResponse> {
-            return localVarFp.getProjectDirDeprecated(sandboxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        getProjectDirDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<ProjectDirResponse> {
+            return localVarFp.getProjectDirDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Get session command by ID
          * @summary [DEPRECATED] Get session command
-         * @param {string} sandboxId
-         * @param {string} sessionId
-         * @param {string} commandId
+         * @param {string} boxId 
+         * @param {string} sessionId 
+         * @param {string} commandId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getSessionCommandDeprecated(sandboxId: string, sessionId: string, commandId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Command> {
-            return localVarFp.getSessionCommandDeprecated(sandboxId, sessionId, commandId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        getSessionCommandDeprecated(boxId: string, sessionId: string, commandId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Command> {
+            return localVarFp.getSessionCommandDeprecated(boxId, sessionId, commandId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Get logs for a specific command in a session
          * @summary [DEPRECATED] Get command logs
-         * @param {string} sandboxId
-         * @param {string} sessionId
-         * @param {string} commandId
+         * @param {string} boxId 
+         * @param {string} sessionId 
+         * @param {string} commandId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {boolean} [follow] Whether to stream the logs
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getSessionCommandLogsDeprecated(sandboxId: string, sessionId: string, commandId: string, xBoxLiteOrganizationID?: string, follow?: boolean, options?: RawAxiosRequestConfig): AxiosPromise<string> {
-            return localVarFp.getSessionCommandLogsDeprecated(sandboxId, sessionId, commandId, xBoxLiteOrganizationID, follow, options).then((request) => request(axios, basePath));
+        getSessionCommandLogsDeprecated(boxId: string, sessionId: string, commandId: string, xBoxLiteOrganizationID?: string, follow?: boolean, options?: RawAxiosRequestConfig): AxiosPromise<string> {
+            return localVarFp.getSessionCommandLogsDeprecated(boxId, sessionId, commandId, xBoxLiteOrganizationID, follow, options).then((request) => request(axios, basePath));
         },
         /**
          * Get session by ID
          * @summary [DEPRECATED] Get session
-         * @param {string} sandboxId
-         * @param {string} sessionId
+         * @param {string} boxId 
+         * @param {string} sessionId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getSessionDeprecated(sandboxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Session> {
-            return localVarFp.getSessionDeprecated(sandboxId, sessionId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        getSessionDeprecated(boxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Session> {
+            return localVarFp.getSessionDeprecated(boxId, sessionId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
-         * @summary [DEPRECATED] Get sandbox user home dir
-         * @param {string} sandboxId
+         * 
+         * @summary [DEPRECATED] Get box user home dir
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getUserHomeDirDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<UserHomeDirResponse> {
-            return localVarFp.getUserHomeDirDeprecated(sandboxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        getUserHomeDirDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<UserHomeDirResponse> {
+            return localVarFp.getUserHomeDirDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Get list of open windows
          * @summary [DEPRECATED] Get windows
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getWindowsDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<WindowsResponse> {
-            return localVarFp.getWindowsDeprecated(sandboxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        getWindowsDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<WindowsResponse> {
+            return localVarFp.getWindowsDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
-         * @summary [DEPRECATED] Get sandbox work-dir
-         * @param {string} sandboxId
+         * 
+         * @summary [DEPRECATED] Get box work-dir
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        getWorkDirDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<WorkDirResponse> {
-            return localVarFp.getWorkDirDeprecated(sandboxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        getWorkDirDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<WorkDirResponse> {
+            return localVarFp.getWorkDirDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Add files to git commit
          * @summary [DEPRECATED] Add files
-         * @param {string} sandboxId
-         * @param {GitAddRequest} gitAddRequest
+         * @param {string} boxId 
+         * @param {GitAddRequest} gitAddRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        gitAddFilesDeprecated(sandboxId: string, gitAddRequest: GitAddRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.gitAddFilesDeprecated(sandboxId, gitAddRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        gitAddFilesDeprecated(boxId: string, gitAddRequest: GitAddRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.gitAddFilesDeprecated(boxId, gitAddRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Checkout branch or commit in git repository
          * @summary [DEPRECATED] Checkout branch
-         * @param {string} sandboxId
-         * @param {GitCheckoutRequest} gitCheckoutRequest
+         * @param {string} boxId 
+         * @param {GitCheckoutRequest} gitCheckoutRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        gitCheckoutBranchDeprecated(sandboxId: string, gitCheckoutRequest: GitCheckoutRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.gitCheckoutBranchDeprecated(sandboxId, gitCheckoutRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        gitCheckoutBranchDeprecated(boxId: string, gitCheckoutRequest: GitCheckoutRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.gitCheckoutBranchDeprecated(boxId, gitCheckoutRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Clone git repository
          * @summary [DEPRECATED] Clone repository
-         * @param {string} sandboxId
-         * @param {GitCloneRequest} gitCloneRequest
+         * @param {string} boxId 
+         * @param {GitCloneRequest} gitCloneRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        gitCloneRepositoryDeprecated(sandboxId: string, gitCloneRequest: GitCloneRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.gitCloneRepositoryDeprecated(sandboxId, gitCloneRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        gitCloneRepositoryDeprecated(boxId: string, gitCloneRequest: GitCloneRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.gitCloneRepositoryDeprecated(boxId, gitCloneRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Commit changes to git repository
          * @summary [DEPRECATED] Commit changes
-         * @param {string} sandboxId
-         * @param {GitCommitRequest} gitCommitRequest
+         * @param {string} boxId 
+         * @param {GitCommitRequest} gitCommitRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        gitCommitChangesDeprecated(sandboxId: string, gitCommitRequest: GitCommitRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<GitCommitResponse> {
-            return localVarFp.gitCommitChangesDeprecated(sandboxId, gitCommitRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        gitCommitChangesDeprecated(boxId: string, gitCommitRequest: GitCommitRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<GitCommitResponse> {
+            return localVarFp.gitCommitChangesDeprecated(boxId, gitCommitRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Create branch on git repository
          * @summary [DEPRECATED] Create branch
-         * @param {string} sandboxId
-         * @param {GitBranchRequest} gitBranchRequest
+         * @param {string} boxId 
+         * @param {GitBranchRequest} gitBranchRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        gitCreateBranchDeprecated(sandboxId: string, gitBranchRequest: GitBranchRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.gitCreateBranchDeprecated(sandboxId, gitBranchRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        gitCreateBranchDeprecated(boxId: string, gitBranchRequest: GitBranchRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.gitCreateBranchDeprecated(boxId, gitBranchRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Delete branch on git repository
          * @summary [DEPRECATED] Delete branch
-         * @param {string} sandboxId
-         * @param {GitDeleteBranchRequest} gitDeleteBranchRequest
+         * @param {string} boxId 
+         * @param {GitDeleteBranchRequest} gitDeleteBranchRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        gitDeleteBranchDeprecated(sandboxId: string, gitDeleteBranchRequest: GitDeleteBranchRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.gitDeleteBranchDeprecated(sandboxId, gitDeleteBranchRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        gitDeleteBranchDeprecated(boxId: string, gitDeleteBranchRequest: GitDeleteBranchRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.gitDeleteBranchDeprecated(boxId, gitDeleteBranchRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Get commit history from git repository
          * @summary [DEPRECATED] Get commit history
-         * @param {string} sandboxId
-         * @param {string} path
+         * @param {string} boxId 
+         * @param {string} path 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        gitGetHistoryDeprecated(sandboxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<GitCommitInfo>> {
-            return localVarFp.gitGetHistoryDeprecated(sandboxId, path, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        gitGetHistoryDeprecated(boxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<GitCommitInfo>> {
+            return localVarFp.gitGetHistoryDeprecated(boxId, path, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Get status from git repository
          * @summary [DEPRECATED] Get git status
-         * @param {string} sandboxId
-         * @param {string} path
+         * @param {string} boxId 
+         * @param {string} path 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        gitGetStatusDeprecated(sandboxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<GitStatus> {
-            return localVarFp.gitGetStatusDeprecated(sandboxId, path, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        gitGetStatusDeprecated(boxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<GitStatus> {
+            return localVarFp.gitGetStatusDeprecated(boxId, path, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Get branch list from git repository
          * @summary [DEPRECATED] Get branch list
-         * @param {string} sandboxId
-         * @param {string} path
+         * @param {string} boxId 
+         * @param {string} path 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        gitListBranchesDeprecated(sandboxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<ListBranchResponse> {
-            return localVarFp.gitListBranchesDeprecated(sandboxId, path, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        gitListBranchesDeprecated(boxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<ListBranchResponse> {
+            return localVarFp.gitListBranchesDeprecated(boxId, path, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Pull changes from remote
          * @summary [DEPRECATED] Pull changes
-         * @param {string} sandboxId
-         * @param {GitRepoRequest} gitRepoRequest
+         * @param {string} boxId 
+         * @param {GitRepoRequest} gitRepoRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        gitPullChangesDeprecated(sandboxId: string, gitRepoRequest: GitRepoRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.gitPullChangesDeprecated(sandboxId, gitRepoRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        gitPullChangesDeprecated(boxId: string, gitRepoRequest: GitRepoRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.gitPullChangesDeprecated(boxId, gitRepoRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Push changes to remote
          * @summary [DEPRECATED] Push changes
-         * @param {string} sandboxId
-         * @param {GitRepoRequest} gitRepoRequest
+         * @param {string} boxId 
+         * @param {GitRepoRequest} gitRepoRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        gitPushChangesDeprecated(sandboxId: string, gitRepoRequest: GitRepoRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.gitPushChangesDeprecated(sandboxId, gitRepoRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        gitPushChangesDeprecated(boxId: string, gitRepoRequest: GitRepoRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.gitPushChangesDeprecated(boxId, gitRepoRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] List files
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {string} [path]
+         * @param {string} [path] 
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        listFilesDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, path?: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<FileInfo>> {
-            return localVarFp.listFilesDeprecated(sandboxId, xBoxLiteOrganizationID, path, options).then((request) => request(axios, basePath));
+        listFilesDeprecated(boxId: string, xBoxLiteOrganizationID?: string, path?: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<FileInfo>> {
+            return localVarFp.listFilesDeprecated(boxId, xBoxLiteOrganizationID, path, options).then((request) => request(axios, basePath));
         },
         /**
-         * List all active PTY sessions in the sandbox
+         * List all active PTY sessions in the box
          * @summary [DEPRECATED] List PTY sessions
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        listPTYSessionsDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<PtyListResponse> {
-            return localVarFp.listPTYSessionsDeprecated(sandboxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        listPTYSessionsDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<PtyListResponse> {
+            return localVarFp.listPTYSessionsDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * List all active sessions in the sandbox
+         * List all active sessions in the box
          * @summary [DEPRECATED] List sessions
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        listSessionsDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<Session>> {
-            return localVarFp.listSessionsDeprecated(sandboxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        listSessionsDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<Session>> {
+            return localVarFp.listSessionsDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * The Completion request is sent from the client to the server to compute completion items at a given cursor position.
          * @summary [DEPRECATED] Get Lsp Completions
-         * @param {string} sandboxId
-         * @param {LspCompletionParams} lspCompletionParams
+         * @param {string} boxId 
+         * @param {LspCompletionParams} lspCompletionParams 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        lspCompletionsDeprecated(sandboxId: string, lspCompletionParams: LspCompletionParams, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<CompletionList> {
-            return localVarFp.lspCompletionsDeprecated(sandboxId, lspCompletionParams, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        lspCompletionsDeprecated(boxId: string, lspCompletionParams: LspCompletionParams, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<CompletionList> {
+            return localVarFp.lspCompletionsDeprecated(boxId, lspCompletionParams, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * The document close notification is sent from the client to the server when the document got closed in the client.
          * @summary [DEPRECATED] Call Lsp DidClose
-         * @param {string} sandboxId
-         * @param {LspDocumentRequest} lspDocumentRequest
+         * @param {string} boxId 
+         * @param {LspDocumentRequest} lspDocumentRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        lspDidCloseDeprecated(sandboxId: string, lspDocumentRequest: LspDocumentRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.lspDidCloseDeprecated(sandboxId, lspDocumentRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        lspDidCloseDeprecated(boxId: string, lspDocumentRequest: LspDocumentRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.lspDidCloseDeprecated(boxId, lspDocumentRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * The document open notification is sent from the client to the server to signal newly opened text documents.
          * @summary [DEPRECATED] Call Lsp DidOpen
-         * @param {string} sandboxId
-         * @param {LspDocumentRequest} lspDocumentRequest
+         * @param {string} boxId 
+         * @param {LspDocumentRequest} lspDocumentRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        lspDidOpenDeprecated(sandboxId: string, lspDocumentRequest: LspDocumentRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.lspDidOpenDeprecated(sandboxId, lspDocumentRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        lspDidOpenDeprecated(boxId: string, lspDocumentRequest: LspDocumentRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.lspDidOpenDeprecated(boxId, lspDocumentRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * The document symbol request is sent from the client to the server.
          * @summary [DEPRECATED] Call Lsp DocumentSymbols
-         * @param {string} sandboxId
-         * @param {string} languageId
-         * @param {string} pathToProject
-         * @param {string} uri
+         * @param {string} boxId 
+         * @param {string} languageId 
+         * @param {string} pathToProject 
+         * @param {string} uri 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        lspDocumentSymbolsDeprecated(sandboxId: string, languageId: string, pathToProject: string, uri: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<LspSymbol>> {
-            return localVarFp.lspDocumentSymbolsDeprecated(sandboxId, languageId, pathToProject, uri, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        lspDocumentSymbolsDeprecated(boxId: string, languageId: string, pathToProject: string, uri: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<LspSymbol>> {
+            return localVarFp.lspDocumentSymbolsDeprecated(boxId, languageId, pathToProject, uri, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Start Lsp server process inside sandbox project
+         * Start Lsp server process inside box project
          * @summary [DEPRECATED] Start Lsp server
-         * @param {string} sandboxId
-         * @param {LspServerRequest} lspServerRequest
+         * @param {string} boxId 
+         * @param {LspServerRequest} lspServerRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        lspStartDeprecated(sandboxId: string, lspServerRequest: LspServerRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.lspStartDeprecated(sandboxId, lspServerRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        lspStartDeprecated(boxId: string, lspServerRequest: LspServerRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.lspStartDeprecated(boxId, lspServerRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Stop Lsp server process inside sandbox project
+         * Stop Lsp server process inside box project
          * @summary [DEPRECATED] Stop Lsp server
-         * @param {string} sandboxId
-         * @param {LspServerRequest} lspServerRequest
+         * @param {string} boxId 
+         * @param {LspServerRequest} lspServerRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        lspStopDeprecated(sandboxId: string, lspServerRequest: LspServerRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.lspStopDeprecated(sandboxId, lspServerRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        lspStopDeprecated(boxId: string, lspServerRequest: LspServerRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.lspStopDeprecated(boxId, lspServerRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * The workspace symbol request is sent from the client to the server to list project-wide symbols matching the query string.
          * @summary [DEPRECATED] Call Lsp WorkspaceSymbols
-         * @param {string} sandboxId
-         * @param {string} languageId
-         * @param {string} pathToProject
-         * @param {string} query
+         * @param {string} boxId 
+         * @param {string} languageId 
+         * @param {string} pathToProject 
+         * @param {string} query 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        lspWorkspaceSymbolsDeprecated(sandboxId: string, languageId: string, pathToProject: string, query: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<LspSymbol>> {
-            return localVarFp.lspWorkspaceSymbolsDeprecated(sandboxId, languageId, pathToProject, query, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        lspWorkspaceSymbolsDeprecated(boxId: string, languageId: string, pathToProject: string, query: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<LspSymbol>> {
+            return localVarFp.lspWorkspaceSymbolsDeprecated(boxId, languageId, pathToProject, query, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Move file inside sandbox
+         * Move file inside box
          * @summary [DEPRECATED] Move file
-         * @param {string} sandboxId
-         * @param {string} source
-         * @param {string} destination
+         * @param {string} boxId 
+         * @param {string} source 
+         * @param {string} destination 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        moveFileDeprecated(sandboxId: string, source: string, destination: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.moveFileDeprecated(sandboxId, source, destination, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        moveFileDeprecated(boxId: string, source: string, destination: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.moveFileDeprecated(boxId, source, destination, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Move mouse cursor to specified coordinates
          * @summary [DEPRECATED] Move mouse
-         * @param {string} sandboxId
-         * @param {MouseMoveRequest} mouseMoveRequest
+         * @param {string} boxId 
+         * @param {MouseMoveRequest} mouseMoveRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        moveMouseDeprecated(sandboxId: string, mouseMoveRequest: MouseMoveRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<MouseMoveResponse> {
-            return localVarFp.moveMouseDeprecated(sandboxId, mouseMoveRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        moveMouseDeprecated(boxId: string, mouseMoveRequest: MouseMoveRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<MouseMoveResponse> {
+            return localVarFp.moveMouseDeprecated(boxId, mouseMoveRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Press a hotkey combination
          * @summary [DEPRECATED] Press hotkey
-         * @param {string} sandboxId
-         * @param {KeyboardHotkeyRequest} keyboardHotkeyRequest
+         * @param {string} boxId 
+         * @param {KeyboardHotkeyRequest} keyboardHotkeyRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        pressHotkeyDeprecated(sandboxId: string, keyboardHotkeyRequest: KeyboardHotkeyRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.pressHotkeyDeprecated(sandboxId, keyboardHotkeyRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        pressHotkeyDeprecated(boxId: string, keyboardHotkeyRequest: KeyboardHotkeyRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.pressHotkeyDeprecated(boxId, keyboardHotkeyRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Press a key with optional modifiers
          * @summary [DEPRECATED] Press key
-         * @param {string} sandboxId
-         * @param {KeyboardPressRequest} keyboardPressRequest
+         * @param {string} boxId 
+         * @param {KeyboardPressRequest} keyboardPressRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        pressKeyDeprecated(sandboxId: string, keyboardPressRequest: KeyboardPressRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.pressKeyDeprecated(sandboxId, keyboardPressRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        pressKeyDeprecated(boxId: string, keyboardPressRequest: KeyboardPressRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.pressKeyDeprecated(boxId, keyboardPressRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Replace text/pattern in multiple files inside sandbox
+         * Replace text/pattern in multiple files inside box
          * @summary [DEPRECATED] Replace in files
-         * @param {string} sandboxId
-         * @param {ReplaceRequest} replaceRequest
+         * @param {string} boxId 
+         * @param {ReplaceRequest} replaceRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        replaceInFilesDeprecated(sandboxId: string, replaceRequest: ReplaceRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<ReplaceResult>> {
-            return localVarFp.replaceInFilesDeprecated(sandboxId, replaceRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        replaceInFilesDeprecated(boxId: string, replaceRequest: ReplaceRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<ReplaceResult>> {
+            return localVarFp.replaceInFilesDeprecated(boxId, replaceRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Resize a PTY session
          * @summary [DEPRECATED] Resize PTY session
-         * @param {string} sandboxId
-         * @param {string} sessionId
-         * @param {PtyResizeRequest} ptyResizeRequest
+         * @param {string} boxId 
+         * @param {string} sessionId 
+         * @param {PtyResizeRequest} ptyResizeRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        resizePTYSessionDeprecated(sandboxId: string, sessionId: string, ptyResizeRequest: PtyResizeRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<PtySessionInfo> {
-            return localVarFp.resizePTYSessionDeprecated(sandboxId, sessionId, ptyResizeRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        resizePTYSessionDeprecated(boxId: string, sessionId: string, ptyResizeRequest: PtyResizeRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<PtySessionInfo> {
+            return localVarFp.resizePTYSessionDeprecated(boxId, sessionId, ptyResizeRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Restart a specific VNC process
          * @summary [DEPRECATED] Restart process
-         * @param {string} processName
-         * @param {string} sandboxId
+         * @param {string} processName 
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        restartProcessDeprecated(processName: string, sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<ProcessRestartResponse> {
-            return localVarFp.restartProcessDeprecated(processName, sandboxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        restartProcessDeprecated(processName: string, boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<ProcessRestartResponse> {
+            return localVarFp.restartProcessDeprecated(processName, boxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Scroll mouse at specified coordinates
          * @summary [DEPRECATED] Scroll mouse
-         * @param {string} sandboxId
-         * @param {MouseScrollRequest} mouseScrollRequest
+         * @param {string} boxId 
+         * @param {MouseScrollRequest} mouseScrollRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        scrollMouseDeprecated(sandboxId: string, mouseScrollRequest: MouseScrollRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<MouseScrollResponse> {
-            return localVarFp.scrollMouseDeprecated(sandboxId, mouseScrollRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        scrollMouseDeprecated(boxId: string, mouseScrollRequest: MouseScrollRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<MouseScrollResponse> {
+            return localVarFp.scrollMouseDeprecated(boxId, mouseScrollRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Search for files inside sandbox
+         * Search for files inside box
          * @summary [DEPRECATED] Search files
-         * @param {string} sandboxId
-         * @param {string} path
-         * @param {string} pattern
+         * @param {string} boxId 
+         * @param {string} path 
+         * @param {string} pattern 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        searchFilesDeprecated(sandboxId: string, path: string, pattern: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<SearchFilesResponse> {
-            return localVarFp.searchFilesDeprecated(sandboxId, path, pattern, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        searchFilesDeprecated(boxId: string, path: string, pattern: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<SearchFilesResponse> {
+            return localVarFp.searchFilesDeprecated(boxId, path, pattern, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Set file owner/group/permissions inside sandbox
+         * Set file owner/group/permissions inside box
          * @summary [DEPRECATED] Set file permissions
-         * @param {string} sandboxId
-         * @param {string} path
+         * @param {string} boxId 
+         * @param {string} path 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {string} [owner]
-         * @param {string} [group]
-         * @param {string} [mode]
+         * @param {string} [owner] 
+         * @param {string} [group] 
+         * @param {string} [mode] 
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        setFilePermissionsDeprecated(sandboxId: string, path: string, xBoxLiteOrganizationID?: string, owner?: string, group?: string, mode?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.setFilePermissionsDeprecated(sandboxId, path, xBoxLiteOrganizationID, owner, group, mode, options).then((request) => request(axios, basePath));
+        setFilePermissionsDeprecated(boxId: string, path: string, xBoxLiteOrganizationID?: string, owner?: string, group?: string, mode?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.setFilePermissionsDeprecated(boxId, path, xBoxLiteOrganizationID, owner, group, mode, options).then((request) => request(axios, basePath));
         },
         /**
          * Start all VNC desktop processes (Xvfb, xfce4, x11vnc, novnc)
          * @summary [DEPRECATED] Start computer use processes
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        startComputerUseDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<ComputerUseStartResponse> {
-            return localVarFp.startComputerUseDeprecated(sandboxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        startComputerUseDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<ComputerUseStartResponse> {
+            return localVarFp.startComputerUseDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Stop all VNC desktop processes (Xvfb, xfce4, x11vnc, novnc)
          * @summary [DEPRECATED] Stop computer use processes
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        stopComputerUseDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<ComputerUseStopResponse> {
-            return localVarFp.stopComputerUseDeprecated(sandboxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        stopComputerUseDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<ComputerUseStopResponse> {
+            return localVarFp.stopComputerUseDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * Take a compressed screenshot of a specific region
          * @summary [DEPRECATED] Take compressed region screenshot
-         * @param {string} sandboxId
-         * @param {number} height
-         * @param {number} width
-         * @param {number} y
-         * @param {number} x
+         * @param {string} boxId 
+         * @param {number} height 
+         * @param {number} width 
+         * @param {number} y 
+         * @param {number} x 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {number} [scale]
-         * @param {number} [quality]
-         * @param {string} [format]
-         * @param {boolean} [showCursor]
+         * @param {number} [scale] 
+         * @param {number} [quality] 
+         * @param {string} [format] 
+         * @param {boolean} [showCursor] 
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        takeCompressedRegionScreenshotDeprecated(sandboxId: string, height: number, width: number, y: number, x: number, xBoxLiteOrganizationID?: string, scale?: number, quality?: number, format?: string, showCursor?: boolean, options?: RawAxiosRequestConfig): AxiosPromise<CompressedScreenshotResponse> {
-            return localVarFp.takeCompressedRegionScreenshotDeprecated(sandboxId, height, width, y, x, xBoxLiteOrganizationID, scale, quality, format, showCursor, options).then((request) => request(axios, basePath));
+        takeCompressedRegionScreenshotDeprecated(boxId: string, height: number, width: number, y: number, x: number, xBoxLiteOrganizationID?: string, scale?: number, quality?: number, format?: string, showCursor?: boolean, options?: RawAxiosRequestConfig): AxiosPromise<CompressedScreenshotResponse> {
+            return localVarFp.takeCompressedRegionScreenshotDeprecated(boxId, height, width, y, x, xBoxLiteOrganizationID, scale, quality, format, showCursor, options).then((request) => request(axios, basePath));
         },
         /**
          * Take a compressed screenshot with format, quality, and scale options
          * @summary [DEPRECATED] Take compressed screenshot
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {number} [scale]
-         * @param {number} [quality]
-         * @param {string} [format]
-         * @param {boolean} [showCursor]
+         * @param {number} [scale] 
+         * @param {number} [quality] 
+         * @param {string} [format] 
+         * @param {boolean} [showCursor] 
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        takeCompressedScreenshotDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, scale?: number, quality?: number, format?: string, showCursor?: boolean, options?: RawAxiosRequestConfig): AxiosPromise<CompressedScreenshotResponse> {
-            return localVarFp.takeCompressedScreenshotDeprecated(sandboxId, xBoxLiteOrganizationID, scale, quality, format, showCursor, options).then((request) => request(axios, basePath));
+        takeCompressedScreenshotDeprecated(boxId: string, xBoxLiteOrganizationID?: string, scale?: number, quality?: number, format?: string, showCursor?: boolean, options?: RawAxiosRequestConfig): AxiosPromise<CompressedScreenshotResponse> {
+            return localVarFp.takeCompressedScreenshotDeprecated(boxId, xBoxLiteOrganizationID, scale, quality, format, showCursor, options).then((request) => request(axios, basePath));
         },
         /**
          * Take a screenshot of a specific region
          * @summary [DEPRECATED] Take region screenshot
-         * @param {string} sandboxId
-         * @param {number} height
-         * @param {number} width
-         * @param {number} y
-         * @param {number} x
+         * @param {string} boxId 
+         * @param {number} height 
+         * @param {number} width 
+         * @param {number} y 
+         * @param {number} x 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {boolean} [showCursor]
+         * @param {boolean} [showCursor] 
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        takeRegionScreenshotDeprecated(sandboxId: string, height: number, width: number, y: number, x: number, xBoxLiteOrganizationID?: string, showCursor?: boolean, options?: RawAxiosRequestConfig): AxiosPromise<RegionScreenshotResponse> {
-            return localVarFp.takeRegionScreenshotDeprecated(sandboxId, height, width, y, x, xBoxLiteOrganizationID, showCursor, options).then((request) => request(axios, basePath));
+        takeRegionScreenshotDeprecated(boxId: string, height: number, width: number, y: number, x: number, xBoxLiteOrganizationID?: string, showCursor?: boolean, options?: RawAxiosRequestConfig): AxiosPromise<RegionScreenshotResponse> {
+            return localVarFp.takeRegionScreenshotDeprecated(boxId, height, width, y, x, xBoxLiteOrganizationID, showCursor, options).then((request) => request(axios, basePath));
         },
         /**
          * Take a screenshot of the entire screen
          * @summary [DEPRECATED] Take screenshot
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {boolean} [showCursor]
+         * @param {boolean} [showCursor] 
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        takeScreenshotDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, showCursor?: boolean, options?: RawAxiosRequestConfig): AxiosPromise<ScreenshotResponse> {
-            return localVarFp.takeScreenshotDeprecated(sandboxId, xBoxLiteOrganizationID, showCursor, options).then((request) => request(axios, basePath));
+        takeScreenshotDeprecated(boxId: string, xBoxLiteOrganizationID?: string, showCursor?: boolean, options?: RawAxiosRequestConfig): AxiosPromise<ScreenshotResponse> {
+            return localVarFp.takeScreenshotDeprecated(boxId, xBoxLiteOrganizationID, showCursor, options).then((request) => request(axios, basePath));
         },
         /**
          * Type text using keyboard
          * @summary [DEPRECATED] Type text
-         * @param {string} sandboxId
-         * @param {KeyboardTypeRequest} keyboardTypeRequest
+         * @param {string} boxId 
+         * @param {KeyboardTypeRequest} keyboardTypeRequest 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        typeTextDeprecated(sandboxId: string, keyboardTypeRequest: KeyboardTypeRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.typeTextDeprecated(sandboxId, keyboardTypeRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        typeTextDeprecated(boxId: string, keyboardTypeRequest: KeyboardTypeRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.typeTextDeprecated(boxId, keyboardTypeRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Upload file inside sandbox
+         * Upload file inside box
          * @summary [DEPRECATED] Upload file
-         * @param {string} sandboxId
-         * @param {string} path
+         * @param {string} boxId 
+         * @param {string} path 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {File} [file]
+         * @param {File} [file] 
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        uploadFileDeprecated(sandboxId: string, path: string, xBoxLiteOrganizationID?: string, file?: File, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.uploadFileDeprecated(sandboxId, path, xBoxLiteOrganizationID, file, options).then((request) => request(axios, basePath));
+        uploadFileDeprecated(boxId: string, path: string, xBoxLiteOrganizationID?: string, file?: File, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.uploadFileDeprecated(boxId, path, xBoxLiteOrganizationID, file, options).then((request) => request(axios, basePath));
         },
         /**
-         * Upload multiple files inside sandbox
+         * Upload multiple files inside box
          * @summary [DEPRECATED] Upload multiple files
-         * @param {string} sandboxId
+         * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        uploadFilesDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.uploadFilesDeprecated(sandboxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        uploadFilesDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.uploadFilesDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
     };
 };
 
 /**
  * ToolboxApi - object-oriented interface
- * @export
- * @class ToolboxApi
- * @extends {BaseAPI}
  */
 export class ToolboxApi extends BaseAPI {
     /**
      * Click mouse at specified coordinates
      * @summary [DEPRECATED] Click mouse
-     * @param {string} sandboxId
-     * @param {MouseClickRequest} mouseClickRequest
+     * @param {string} boxId 
+     * @param {MouseClickRequest} mouseClickRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public clickMouseDeprecated(sandboxId: string, mouseClickRequest: MouseClickRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).clickMouseDeprecated(sandboxId, mouseClickRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public clickMouseDeprecated(boxId: string, mouseClickRequest: MouseClickRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).clickMouseDeprecated(boxId, mouseClickRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     * Create folder inside sandbox
+     * Create folder inside box
      * @summary [DEPRECATED] Create folder
-     * @param {string} sandboxId
-     * @param {string} path
-     * @param {string} mode
+     * @param {string} boxId 
+     * @param {string} path 
+     * @param {string} mode 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public createFolderDeprecated(sandboxId: string, path: string, mode: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).createFolderDeprecated(sandboxId, path, mode, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public createFolderDeprecated(boxId: string, path: string, mode: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).createFolderDeprecated(boxId, path, mode, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     * Create a new PTY session in the sandbox
+     * Create a new PTY session in the box
      * @summary [DEPRECATED] Create PTY session
-     * @param {string} sandboxId
-     * @param {PtyCreateRequest} ptyCreateRequest
+     * @param {string} boxId 
+     * @param {PtyCreateRequest} ptyCreateRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public createPTYSessionDeprecated(sandboxId: string, ptyCreateRequest: PtyCreateRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).createPTYSessionDeprecated(sandboxId, ptyCreateRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public createPTYSessionDeprecated(boxId: string, ptyCreateRequest: PtyCreateRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).createPTYSessionDeprecated(boxId, ptyCreateRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     * Create a new session in the sandbox
+     * Create a new session in the box
      * @summary [DEPRECATED] Create session
-     * @param {string} sandboxId
-     * @param {CreateSessionRequest} createSessionRequest
+     * @param {string} boxId 
+     * @param {CreateSessionRequest} createSessionRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public createSessionDeprecated(sandboxId: string, createSessionRequest: CreateSessionRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).createSessionDeprecated(sandboxId, createSessionRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public createSessionDeprecated(boxId: string, createSessionRequest: CreateSessionRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).createSessionDeprecated(boxId, createSessionRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     * Delete file inside sandbox
+     * Delete file inside box
      * @summary [DEPRECATED] Delete file
-     * @param {string} sandboxId
-     * @param {string} path
+     * @param {string} boxId 
+     * @param {string} path 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {boolean} [recursive]
+     * @param {boolean} [recursive] 
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public deleteFileDeprecated(sandboxId: string, path: string, xBoxLiteOrganizationID?: string, recursive?: boolean, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).deleteFileDeprecated(sandboxId, path, xBoxLiteOrganizationID, recursive, options).then((request) => request(this.axios, this.basePath));
+    public deleteFileDeprecated(boxId: string, path: string, xBoxLiteOrganizationID?: string, recursive?: boolean, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).deleteFileDeprecated(boxId, path, xBoxLiteOrganizationID, recursive, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Delete a PTY session and terminate the associated process
      * @summary [DEPRECATED] Delete PTY session
-     * @param {string} sandboxId
-     * @param {string} sessionId
+     * @param {string} boxId 
+     * @param {string} sessionId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public deletePTYSessionDeprecated(sandboxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).deletePTYSessionDeprecated(sandboxId, sessionId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public deletePTYSessionDeprecated(boxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).deletePTYSessionDeprecated(boxId, sessionId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Delete a specific session
      * @summary [DEPRECATED] Delete session
-     * @param {string} sandboxId
-     * @param {string} sessionId
+     * @param {string} boxId 
+     * @param {string} sessionId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public deleteSessionDeprecated(sandboxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).deleteSessionDeprecated(sandboxId, sessionId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public deleteSessionDeprecated(boxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).deleteSessionDeprecated(boxId, sessionId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     * Download file from sandbox
+     * Download file from box
      * @summary [DEPRECATED] Download file
-     * @param {string} sandboxId
-     * @param {string} path
+     * @param {string} boxId 
+     * @param {string} path 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public downloadFileDeprecated(sandboxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).downloadFileDeprecated(sandboxId, path, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public downloadFileDeprecated(boxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).downloadFileDeprecated(boxId, path, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Streams back a multipart/form-data bundle of the requested paths
      * @summary [DEPRECATED] Download multiple files
-     * @param {string} sandboxId
-     * @param {DownloadFiles} downloadFiles
+     * @param {string} boxId 
+     * @param {DownloadFiles} downloadFiles 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public downloadFilesDeprecated(sandboxId: string, downloadFiles: DownloadFiles, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).downloadFilesDeprecated(sandboxId, downloadFiles, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public downloadFilesDeprecated(boxId: string, downloadFiles: DownloadFiles, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).downloadFilesDeprecated(boxId, downloadFiles, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Drag mouse from start to end coordinates
      * @summary [DEPRECATED] Drag mouse
-     * @param {string} sandboxId
-     * @param {MouseDragRequest} mouseDragRequest
+     * @param {string} boxId 
+     * @param {MouseDragRequest} mouseDragRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public dragMouseDeprecated(sandboxId: string, mouseDragRequest: MouseDragRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).dragMouseDeprecated(sandboxId, mouseDragRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public dragMouseDeprecated(boxId: string, mouseDragRequest: MouseDragRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).dragMouseDeprecated(boxId, mouseDragRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     * Execute command synchronously inside sandbox
+     * Execute command synchronously inside box
      * @summary [DEPRECATED] Execute command
-     * @param {string} sandboxId
-     * @param {ExecuteRequest} executeRequest
+     * @param {string} boxId 
+     * @param {ExecuteRequest} executeRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public executeCommandDeprecated(sandboxId: string, executeRequest: ExecuteRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).executeCommandDeprecated(sandboxId, executeRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public executeCommandDeprecated(boxId: string, executeRequest: ExecuteRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).executeCommandDeprecated(boxId, executeRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Execute a command in a specific session
      * @summary [DEPRECATED] Execute command in session
-     * @param {string} sandboxId
-     * @param {string} sessionId
-     * @param {SessionExecuteRequest} sessionExecuteRequest
+     * @param {string} boxId 
+     * @param {string} sessionId 
+     * @param {SessionExecuteRequest} sessionExecuteRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public executeSessionCommandDeprecated(sandboxId: string, sessionId: string, sessionExecuteRequest: SessionExecuteRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).executeSessionCommandDeprecated(sandboxId, sessionId, sessionExecuteRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public executeSessionCommandDeprecated(boxId: string, sessionId: string, sessionExecuteRequest: SessionExecuteRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).executeSessionCommandDeprecated(boxId, sessionId, sessionExecuteRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     * Search for text/pattern inside sandbox files
+     * Search for text/pattern inside box files
      * @summary [DEPRECATED] Search for text/pattern in files
-     * @param {string} sandboxId
-     * @param {string} path
-     * @param {string} pattern
+     * @param {string} boxId 
+     * @param {string} path 
+     * @param {string} pattern 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public findInFilesDeprecated(sandboxId: string, path: string, pattern: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).findInFilesDeprecated(sandboxId, path, pattern, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public findInFilesDeprecated(boxId: string, path: string, pattern: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).findInFilesDeprecated(boxId, path, pattern, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Get status of all VNC desktop processes
      * @summary [DEPRECATED] Get computer use status
-     * @param {string} sandboxId
+     * @param {string} boxId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public getComputerUseStatusDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).getComputerUseStatusDeprecated(sandboxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public getComputerUseStatusDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).getComputerUseStatusDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Get information about displays
      * @summary [DEPRECATED] Get display info
-     * @param {string} sandboxId
+     * @param {string} boxId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public getDisplayInfoDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).getDisplayInfoDeprecated(sandboxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public getDisplayInfoDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).getDisplayInfoDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     * Get file info inside sandbox
+     * Get file info inside box
      * @summary [DEPRECATED] Get file info
-     * @param {string} sandboxId
-     * @param {string} path
+     * @param {string} boxId 
+     * @param {string} path 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public getFileInfoDeprecated(sandboxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).getFileInfoDeprecated(sandboxId, path, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public getFileInfoDeprecated(boxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).getFileInfoDeprecated(boxId, path, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Get current mouse cursor position
      * @summary [DEPRECATED] Get mouse position
-     * @param {string} sandboxId
+     * @param {string} boxId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public getMousePositionDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).getMousePositionDeprecated(sandboxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public getMousePositionDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).getMousePositionDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Get PTY session information by ID
      * @summary [DEPRECATED] Get PTY session
-     * @param {string} sandboxId
-     * @param {string} sessionId
+     * @param {string} boxId 
+     * @param {string} sessionId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public getPTYSessionDeprecated(sandboxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).getPTYSessionDeprecated(sandboxId, sessionId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public getPTYSessionDeprecated(boxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).getPTYSessionDeprecated(boxId, sessionId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Get error logs for a specific VNC process
      * @summary [DEPRECATED] Get process errors
-     * @param {string} processName
-     * @param {string} sandboxId
+     * @param {string} processName 
+     * @param {string} boxId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public getProcessErrorsDeprecated(processName: string, sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).getProcessErrorsDeprecated(processName, sandboxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public getProcessErrorsDeprecated(processName: string, boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).getProcessErrorsDeprecated(processName, boxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Get logs for a specific VNC process
      * @summary [DEPRECATED] Get process logs
-     * @param {string} processName
-     * @param {string} sandboxId
+     * @param {string} processName 
+     * @param {string} boxId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public getProcessLogsDeprecated(processName: string, sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).getProcessLogsDeprecated(processName, sandboxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public getProcessLogsDeprecated(processName: string, boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).getProcessLogsDeprecated(processName, boxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Get status of a specific VNC process
      * @summary [DEPRECATED] Get process status
-     * @param {string} processName
-     * @param {string} sandboxId
+     * @param {string} processName 
+     * @param {string} boxId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public getProcessStatusDeprecated(processName: string, sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).getProcessStatusDeprecated(processName, sandboxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public getProcessStatusDeprecated(processName: string, boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).getProcessStatusDeprecated(processName, boxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
-     * @summary [DEPRECATED] Get sandbox project dir
-     * @param {string} sandboxId
+     * 
+     * @summary [DEPRECATED] Get box project dir
+     * @param {string} boxId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public getProjectDirDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).getProjectDirDeprecated(sandboxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public getProjectDirDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).getProjectDirDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Get session command by ID
      * @summary [DEPRECATED] Get session command
-     * @param {string} sandboxId
-     * @param {string} sessionId
-     * @param {string} commandId
+     * @param {string} boxId 
+     * @param {string} sessionId 
+     * @param {string} commandId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public getSessionCommandDeprecated(sandboxId: string, sessionId: string, commandId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).getSessionCommandDeprecated(sandboxId, sessionId, commandId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public getSessionCommandDeprecated(boxId: string, sessionId: string, commandId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).getSessionCommandDeprecated(boxId, sessionId, commandId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Get logs for a specific command in a session
      * @summary [DEPRECATED] Get command logs
-     * @param {string} sandboxId
-     * @param {string} sessionId
-     * @param {string} commandId
+     * @param {string} boxId 
+     * @param {string} sessionId 
+     * @param {string} commandId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {boolean} [follow] Whether to stream the logs
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public getSessionCommandLogsDeprecated(sandboxId: string, sessionId: string, commandId: string, xBoxLiteOrganizationID?: string, follow?: boolean, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).getSessionCommandLogsDeprecated(sandboxId, sessionId, commandId, xBoxLiteOrganizationID, follow, options).then((request) => request(this.axios, this.basePath));
+    public getSessionCommandLogsDeprecated(boxId: string, sessionId: string, commandId: string, xBoxLiteOrganizationID?: string, follow?: boolean, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).getSessionCommandLogsDeprecated(boxId, sessionId, commandId, xBoxLiteOrganizationID, follow, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Get session by ID
      * @summary [DEPRECATED] Get session
-     * @param {string} sandboxId
-     * @param {string} sessionId
+     * @param {string} boxId 
+     * @param {string} sessionId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public getSessionDeprecated(sandboxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).getSessionDeprecated(sandboxId, sessionId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public getSessionDeprecated(boxId: string, sessionId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).getSessionDeprecated(boxId, sessionId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
-     * @summary [DEPRECATED] Get sandbox user home dir
-     * @param {string} sandboxId
+     * 
+     * @summary [DEPRECATED] Get box user home dir
+     * @param {string} boxId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public getUserHomeDirDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).getUserHomeDirDeprecated(sandboxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public getUserHomeDirDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).getUserHomeDirDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Get list of open windows
      * @summary [DEPRECATED] Get windows
-     * @param {string} sandboxId
+     * @param {string} boxId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public getWindowsDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).getWindowsDeprecated(sandboxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public getWindowsDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).getWindowsDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
-     * @summary [DEPRECATED] Get sandbox work-dir
-     * @param {string} sandboxId
+     * 
+     * @summary [DEPRECATED] Get box work-dir
+     * @param {string} boxId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public getWorkDirDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).getWorkDirDeprecated(sandboxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public getWorkDirDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).getWorkDirDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Add files to git commit
      * @summary [DEPRECATED] Add files
-     * @param {string} sandboxId
-     * @param {GitAddRequest} gitAddRequest
+     * @param {string} boxId 
+     * @param {GitAddRequest} gitAddRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public gitAddFilesDeprecated(sandboxId: string, gitAddRequest: GitAddRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).gitAddFilesDeprecated(sandboxId, gitAddRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public gitAddFilesDeprecated(boxId: string, gitAddRequest: GitAddRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).gitAddFilesDeprecated(boxId, gitAddRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Checkout branch or commit in git repository
      * @summary [DEPRECATED] Checkout branch
-     * @param {string} sandboxId
-     * @param {GitCheckoutRequest} gitCheckoutRequest
+     * @param {string} boxId 
+     * @param {GitCheckoutRequest} gitCheckoutRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public gitCheckoutBranchDeprecated(sandboxId: string, gitCheckoutRequest: GitCheckoutRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).gitCheckoutBranchDeprecated(sandboxId, gitCheckoutRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public gitCheckoutBranchDeprecated(boxId: string, gitCheckoutRequest: GitCheckoutRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).gitCheckoutBranchDeprecated(boxId, gitCheckoutRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Clone git repository
      * @summary [DEPRECATED] Clone repository
-     * @param {string} sandboxId
-     * @param {GitCloneRequest} gitCloneRequest
+     * @param {string} boxId 
+     * @param {GitCloneRequest} gitCloneRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public gitCloneRepositoryDeprecated(sandboxId: string, gitCloneRequest: GitCloneRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).gitCloneRepositoryDeprecated(sandboxId, gitCloneRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public gitCloneRepositoryDeprecated(boxId: string, gitCloneRequest: GitCloneRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).gitCloneRepositoryDeprecated(boxId, gitCloneRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Commit changes to git repository
      * @summary [DEPRECATED] Commit changes
-     * @param {string} sandboxId
-     * @param {GitCommitRequest} gitCommitRequest
+     * @param {string} boxId 
+     * @param {GitCommitRequest} gitCommitRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public gitCommitChangesDeprecated(sandboxId: string, gitCommitRequest: GitCommitRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).gitCommitChangesDeprecated(sandboxId, gitCommitRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public gitCommitChangesDeprecated(boxId: string, gitCommitRequest: GitCommitRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).gitCommitChangesDeprecated(boxId, gitCommitRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Create branch on git repository
      * @summary [DEPRECATED] Create branch
-     * @param {string} sandboxId
-     * @param {GitBranchRequest} gitBranchRequest
+     * @param {string} boxId 
+     * @param {GitBranchRequest} gitBranchRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public gitCreateBranchDeprecated(sandboxId: string, gitBranchRequest: GitBranchRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).gitCreateBranchDeprecated(sandboxId, gitBranchRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public gitCreateBranchDeprecated(boxId: string, gitBranchRequest: GitBranchRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).gitCreateBranchDeprecated(boxId, gitBranchRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Delete branch on git repository
      * @summary [DEPRECATED] Delete branch
-     * @param {string} sandboxId
-     * @param {GitDeleteBranchRequest} gitDeleteBranchRequest
+     * @param {string} boxId 
+     * @param {GitDeleteBranchRequest} gitDeleteBranchRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public gitDeleteBranchDeprecated(sandboxId: string, gitDeleteBranchRequest: GitDeleteBranchRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).gitDeleteBranchDeprecated(sandboxId, gitDeleteBranchRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public gitDeleteBranchDeprecated(boxId: string, gitDeleteBranchRequest: GitDeleteBranchRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).gitDeleteBranchDeprecated(boxId, gitDeleteBranchRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Get commit history from git repository
      * @summary [DEPRECATED] Get commit history
-     * @param {string} sandboxId
-     * @param {string} path
+     * @param {string} boxId 
+     * @param {string} path 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public gitGetHistoryDeprecated(sandboxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).gitGetHistoryDeprecated(sandboxId, path, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public gitGetHistoryDeprecated(boxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).gitGetHistoryDeprecated(boxId, path, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Get status from git repository
      * @summary [DEPRECATED] Get git status
-     * @param {string} sandboxId
-     * @param {string} path
+     * @param {string} boxId 
+     * @param {string} path 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public gitGetStatusDeprecated(sandboxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).gitGetStatusDeprecated(sandboxId, path, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public gitGetStatusDeprecated(boxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).gitGetStatusDeprecated(boxId, path, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Get branch list from git repository
      * @summary [DEPRECATED] Get branch list
-     * @param {string} sandboxId
-     * @param {string} path
+     * @param {string} boxId 
+     * @param {string} path 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public gitListBranchesDeprecated(sandboxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).gitListBranchesDeprecated(sandboxId, path, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public gitListBranchesDeprecated(boxId: string, path: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).gitListBranchesDeprecated(boxId, path, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Pull changes from remote
      * @summary [DEPRECATED] Pull changes
-     * @param {string} sandboxId
-     * @param {GitRepoRequest} gitRepoRequest
+     * @param {string} boxId 
+     * @param {GitRepoRequest} gitRepoRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public gitPullChangesDeprecated(sandboxId: string, gitRepoRequest: GitRepoRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).gitPullChangesDeprecated(sandboxId, gitRepoRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public gitPullChangesDeprecated(boxId: string, gitRepoRequest: GitRepoRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).gitPullChangesDeprecated(boxId, gitRepoRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Push changes to remote
      * @summary [DEPRECATED] Push changes
-     * @param {string} sandboxId
-     * @param {GitRepoRequest} gitRepoRequest
+     * @param {string} boxId 
+     * @param {GitRepoRequest} gitRepoRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public gitPushChangesDeprecated(sandboxId: string, gitRepoRequest: GitRepoRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).gitPushChangesDeprecated(sandboxId, gitRepoRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public gitPushChangesDeprecated(boxId: string, gitRepoRequest: GitRepoRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).gitPushChangesDeprecated(boxId, gitRepoRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary [DEPRECATED] List files
-     * @param {string} sandboxId
+     * @param {string} boxId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {string} [path]
+     * @param {string} [path] 
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public listFilesDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, path?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).listFilesDeprecated(sandboxId, xBoxLiteOrganizationID, path, options).then((request) => request(this.axios, this.basePath));
+    public listFilesDeprecated(boxId: string, xBoxLiteOrganizationID?: string, path?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).listFilesDeprecated(boxId, xBoxLiteOrganizationID, path, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     * List all active PTY sessions in the sandbox
+     * List all active PTY sessions in the box
      * @summary [DEPRECATED] List PTY sessions
-     * @param {string} sandboxId
+     * @param {string} boxId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public listPTYSessionsDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).listPTYSessionsDeprecated(sandboxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public listPTYSessionsDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).listPTYSessionsDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     * List all active sessions in the sandbox
+     * List all active sessions in the box
      * @summary [DEPRECATED] List sessions
-     * @param {string} sandboxId
+     * @param {string} boxId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public listSessionsDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).listSessionsDeprecated(sandboxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public listSessionsDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).listSessionsDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * The Completion request is sent from the client to the server to compute completion items at a given cursor position.
      * @summary [DEPRECATED] Get Lsp Completions
-     * @param {string} sandboxId
-     * @param {LspCompletionParams} lspCompletionParams
+     * @param {string} boxId 
+     * @param {LspCompletionParams} lspCompletionParams 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public lspCompletionsDeprecated(sandboxId: string, lspCompletionParams: LspCompletionParams, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).lspCompletionsDeprecated(sandboxId, lspCompletionParams, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public lspCompletionsDeprecated(boxId: string, lspCompletionParams: LspCompletionParams, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).lspCompletionsDeprecated(boxId, lspCompletionParams, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * The document close notification is sent from the client to the server when the document got closed in the client.
      * @summary [DEPRECATED] Call Lsp DidClose
-     * @param {string} sandboxId
-     * @param {LspDocumentRequest} lspDocumentRequest
+     * @param {string} boxId 
+     * @param {LspDocumentRequest} lspDocumentRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public lspDidCloseDeprecated(sandboxId: string, lspDocumentRequest: LspDocumentRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).lspDidCloseDeprecated(sandboxId, lspDocumentRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public lspDidCloseDeprecated(boxId: string, lspDocumentRequest: LspDocumentRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).lspDidCloseDeprecated(boxId, lspDocumentRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * The document open notification is sent from the client to the server to signal newly opened text documents.
      * @summary [DEPRECATED] Call Lsp DidOpen
-     * @param {string} sandboxId
-     * @param {LspDocumentRequest} lspDocumentRequest
+     * @param {string} boxId 
+     * @param {LspDocumentRequest} lspDocumentRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public lspDidOpenDeprecated(sandboxId: string, lspDocumentRequest: LspDocumentRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).lspDidOpenDeprecated(sandboxId, lspDocumentRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public lspDidOpenDeprecated(boxId: string, lspDocumentRequest: LspDocumentRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).lspDidOpenDeprecated(boxId, lspDocumentRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * The document symbol request is sent from the client to the server.
      * @summary [DEPRECATED] Call Lsp DocumentSymbols
-     * @param {string} sandboxId
-     * @param {string} languageId
-     * @param {string} pathToProject
-     * @param {string} uri
+     * @param {string} boxId 
+     * @param {string} languageId 
+     * @param {string} pathToProject 
+     * @param {string} uri 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public lspDocumentSymbolsDeprecated(sandboxId: string, languageId: string, pathToProject: string, uri: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).lspDocumentSymbolsDeprecated(sandboxId, languageId, pathToProject, uri, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public lspDocumentSymbolsDeprecated(boxId: string, languageId: string, pathToProject: string, uri: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).lspDocumentSymbolsDeprecated(boxId, languageId, pathToProject, uri, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     * Start Lsp server process inside sandbox project
+     * Start Lsp server process inside box project
      * @summary [DEPRECATED] Start Lsp server
-     * @param {string} sandboxId
-     * @param {LspServerRequest} lspServerRequest
+     * @param {string} boxId 
+     * @param {LspServerRequest} lspServerRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public lspStartDeprecated(sandboxId: string, lspServerRequest: LspServerRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).lspStartDeprecated(sandboxId, lspServerRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public lspStartDeprecated(boxId: string, lspServerRequest: LspServerRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).lspStartDeprecated(boxId, lspServerRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     * Stop Lsp server process inside sandbox project
+     * Stop Lsp server process inside box project
      * @summary [DEPRECATED] Stop Lsp server
-     * @param {string} sandboxId
-     * @param {LspServerRequest} lspServerRequest
+     * @param {string} boxId 
+     * @param {LspServerRequest} lspServerRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public lspStopDeprecated(sandboxId: string, lspServerRequest: LspServerRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).lspStopDeprecated(sandboxId, lspServerRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public lspStopDeprecated(boxId: string, lspServerRequest: LspServerRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).lspStopDeprecated(boxId, lspServerRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * The workspace symbol request is sent from the client to the server to list project-wide symbols matching the query string.
      * @summary [DEPRECATED] Call Lsp WorkspaceSymbols
-     * @param {string} sandboxId
-     * @param {string} languageId
-     * @param {string} pathToProject
-     * @param {string} query
+     * @param {string} boxId 
+     * @param {string} languageId 
+     * @param {string} pathToProject 
+     * @param {string} query 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public lspWorkspaceSymbolsDeprecated(sandboxId: string, languageId: string, pathToProject: string, query: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).lspWorkspaceSymbolsDeprecated(sandboxId, languageId, pathToProject, query, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public lspWorkspaceSymbolsDeprecated(boxId: string, languageId: string, pathToProject: string, query: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).lspWorkspaceSymbolsDeprecated(boxId, languageId, pathToProject, query, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     * Move file inside sandbox
+     * Move file inside box
      * @summary [DEPRECATED] Move file
-     * @param {string} sandboxId
-     * @param {string} source
-     * @param {string} destination
+     * @param {string} boxId 
+     * @param {string} source 
+     * @param {string} destination 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public moveFileDeprecated(sandboxId: string, source: string, destination: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).moveFileDeprecated(sandboxId, source, destination, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public moveFileDeprecated(boxId: string, source: string, destination: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).moveFileDeprecated(boxId, source, destination, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Move mouse cursor to specified coordinates
      * @summary [DEPRECATED] Move mouse
-     * @param {string} sandboxId
-     * @param {MouseMoveRequest} mouseMoveRequest
+     * @param {string} boxId 
+     * @param {MouseMoveRequest} mouseMoveRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public moveMouseDeprecated(sandboxId: string, mouseMoveRequest: MouseMoveRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).moveMouseDeprecated(sandboxId, mouseMoveRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public moveMouseDeprecated(boxId: string, mouseMoveRequest: MouseMoveRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).moveMouseDeprecated(boxId, mouseMoveRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Press a hotkey combination
      * @summary [DEPRECATED] Press hotkey
-     * @param {string} sandboxId
-     * @param {KeyboardHotkeyRequest} keyboardHotkeyRequest
+     * @param {string} boxId 
+     * @param {KeyboardHotkeyRequest} keyboardHotkeyRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public pressHotkeyDeprecated(sandboxId: string, keyboardHotkeyRequest: KeyboardHotkeyRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).pressHotkeyDeprecated(sandboxId, keyboardHotkeyRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public pressHotkeyDeprecated(boxId: string, keyboardHotkeyRequest: KeyboardHotkeyRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).pressHotkeyDeprecated(boxId, keyboardHotkeyRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Press a key with optional modifiers
      * @summary [DEPRECATED] Press key
-     * @param {string} sandboxId
-     * @param {KeyboardPressRequest} keyboardPressRequest
+     * @param {string} boxId 
+     * @param {KeyboardPressRequest} keyboardPressRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public pressKeyDeprecated(sandboxId: string, keyboardPressRequest: KeyboardPressRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).pressKeyDeprecated(sandboxId, keyboardPressRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public pressKeyDeprecated(boxId: string, keyboardPressRequest: KeyboardPressRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).pressKeyDeprecated(boxId, keyboardPressRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     * Replace text/pattern in multiple files inside sandbox
+     * Replace text/pattern in multiple files inside box
      * @summary [DEPRECATED] Replace in files
-     * @param {string} sandboxId
-     * @param {ReplaceRequest} replaceRequest
+     * @param {string} boxId 
+     * @param {ReplaceRequest} replaceRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public replaceInFilesDeprecated(sandboxId: string, replaceRequest: ReplaceRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).replaceInFilesDeprecated(sandboxId, replaceRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public replaceInFilesDeprecated(boxId: string, replaceRequest: ReplaceRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).replaceInFilesDeprecated(boxId, replaceRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Resize a PTY session
      * @summary [DEPRECATED] Resize PTY session
-     * @param {string} sandboxId
-     * @param {string} sessionId
-     * @param {PtyResizeRequest} ptyResizeRequest
+     * @param {string} boxId 
+     * @param {string} sessionId 
+     * @param {PtyResizeRequest} ptyResizeRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public resizePTYSessionDeprecated(sandboxId: string, sessionId: string, ptyResizeRequest: PtyResizeRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).resizePTYSessionDeprecated(sandboxId, sessionId, ptyResizeRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public resizePTYSessionDeprecated(boxId: string, sessionId: string, ptyResizeRequest: PtyResizeRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).resizePTYSessionDeprecated(boxId, sessionId, ptyResizeRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Restart a specific VNC process
      * @summary [DEPRECATED] Restart process
-     * @param {string} processName
-     * @param {string} sandboxId
+     * @param {string} processName 
+     * @param {string} boxId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public restartProcessDeprecated(processName: string, sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).restartProcessDeprecated(processName, sandboxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public restartProcessDeprecated(processName: string, boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).restartProcessDeprecated(processName, boxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Scroll mouse at specified coordinates
      * @summary [DEPRECATED] Scroll mouse
-     * @param {string} sandboxId
-     * @param {MouseScrollRequest} mouseScrollRequest
+     * @param {string} boxId 
+     * @param {MouseScrollRequest} mouseScrollRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public scrollMouseDeprecated(sandboxId: string, mouseScrollRequest: MouseScrollRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).scrollMouseDeprecated(sandboxId, mouseScrollRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public scrollMouseDeprecated(boxId: string, mouseScrollRequest: MouseScrollRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).scrollMouseDeprecated(boxId, mouseScrollRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     * Search for files inside sandbox
+     * Search for files inside box
      * @summary [DEPRECATED] Search files
-     * @param {string} sandboxId
-     * @param {string} path
-     * @param {string} pattern
+     * @param {string} boxId 
+     * @param {string} path 
+     * @param {string} pattern 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public searchFilesDeprecated(sandboxId: string, path: string, pattern: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).searchFilesDeprecated(sandboxId, path, pattern, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public searchFilesDeprecated(boxId: string, path: string, pattern: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).searchFilesDeprecated(boxId, path, pattern, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     * Set file owner/group/permissions inside sandbox
+     * Set file owner/group/permissions inside box
      * @summary [DEPRECATED] Set file permissions
-     * @param {string} sandboxId
-     * @param {string} path
+     * @param {string} boxId 
+     * @param {string} path 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {string} [owner]
-     * @param {string} [group]
-     * @param {string} [mode]
+     * @param {string} [owner] 
+     * @param {string} [group] 
+     * @param {string} [mode] 
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public setFilePermissionsDeprecated(sandboxId: string, path: string, xBoxLiteOrganizationID?: string, owner?: string, group?: string, mode?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).setFilePermissionsDeprecated(sandboxId, path, xBoxLiteOrganizationID, owner, group, mode, options).then((request) => request(this.axios, this.basePath));
+    public setFilePermissionsDeprecated(boxId: string, path: string, xBoxLiteOrganizationID?: string, owner?: string, group?: string, mode?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).setFilePermissionsDeprecated(boxId, path, xBoxLiteOrganizationID, owner, group, mode, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Start all VNC desktop processes (Xvfb, xfce4, x11vnc, novnc)
      * @summary [DEPRECATED] Start computer use processes
-     * @param {string} sandboxId
+     * @param {string} boxId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public startComputerUseDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).startComputerUseDeprecated(sandboxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public startComputerUseDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).startComputerUseDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Stop all VNC desktop processes (Xvfb, xfce4, x11vnc, novnc)
      * @summary [DEPRECATED] Stop computer use processes
-     * @param {string} sandboxId
+     * @param {string} boxId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public stopComputerUseDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).stopComputerUseDeprecated(sandboxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public stopComputerUseDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).stopComputerUseDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Take a compressed screenshot of a specific region
      * @summary [DEPRECATED] Take compressed region screenshot
-     * @param {string} sandboxId
-     * @param {number} height
-     * @param {number} width
-     * @param {number} y
-     * @param {number} x
+     * @param {string} boxId 
+     * @param {number} height 
+     * @param {number} width 
+     * @param {number} y 
+     * @param {number} x 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {number} [scale]
-     * @param {number} [quality]
-     * @param {string} [format]
-     * @param {boolean} [showCursor]
+     * @param {number} [scale] 
+     * @param {number} [quality] 
+     * @param {string} [format] 
+     * @param {boolean} [showCursor] 
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public takeCompressedRegionScreenshotDeprecated(sandboxId: string, height: number, width: number, y: number, x: number, xBoxLiteOrganizationID?: string, scale?: number, quality?: number, format?: string, showCursor?: boolean, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).takeCompressedRegionScreenshotDeprecated(sandboxId, height, width, y, x, xBoxLiteOrganizationID, scale, quality, format, showCursor, options).then((request) => request(this.axios, this.basePath));
+    public takeCompressedRegionScreenshotDeprecated(boxId: string, height: number, width: number, y: number, x: number, xBoxLiteOrganizationID?: string, scale?: number, quality?: number, format?: string, showCursor?: boolean, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).takeCompressedRegionScreenshotDeprecated(boxId, height, width, y, x, xBoxLiteOrganizationID, scale, quality, format, showCursor, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Take a compressed screenshot with format, quality, and scale options
      * @summary [DEPRECATED] Take compressed screenshot
-     * @param {string} sandboxId
+     * @param {string} boxId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {number} [scale]
-     * @param {number} [quality]
-     * @param {string} [format]
-     * @param {boolean} [showCursor]
+     * @param {number} [scale] 
+     * @param {number} [quality] 
+     * @param {string} [format] 
+     * @param {boolean} [showCursor] 
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public takeCompressedScreenshotDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, scale?: number, quality?: number, format?: string, showCursor?: boolean, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).takeCompressedScreenshotDeprecated(sandboxId, xBoxLiteOrganizationID, scale, quality, format, showCursor, options).then((request) => request(this.axios, this.basePath));
+    public takeCompressedScreenshotDeprecated(boxId: string, xBoxLiteOrganizationID?: string, scale?: number, quality?: number, format?: string, showCursor?: boolean, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).takeCompressedScreenshotDeprecated(boxId, xBoxLiteOrganizationID, scale, quality, format, showCursor, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Take a screenshot of a specific region
      * @summary [DEPRECATED] Take region screenshot
-     * @param {string} sandboxId
-     * @param {number} height
-     * @param {number} width
-     * @param {number} y
-     * @param {number} x
+     * @param {string} boxId 
+     * @param {number} height 
+     * @param {number} width 
+     * @param {number} y 
+     * @param {number} x 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {boolean} [showCursor]
+     * @param {boolean} [showCursor] 
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public takeRegionScreenshotDeprecated(sandboxId: string, height: number, width: number, y: number, x: number, xBoxLiteOrganizationID?: string, showCursor?: boolean, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).takeRegionScreenshotDeprecated(sandboxId, height, width, y, x, xBoxLiteOrganizationID, showCursor, options).then((request) => request(this.axios, this.basePath));
+    public takeRegionScreenshotDeprecated(boxId: string, height: number, width: number, y: number, x: number, xBoxLiteOrganizationID?: string, showCursor?: boolean, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).takeRegionScreenshotDeprecated(boxId, height, width, y, x, xBoxLiteOrganizationID, showCursor, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Take a screenshot of the entire screen
      * @summary [DEPRECATED] Take screenshot
-     * @param {string} sandboxId
+     * @param {string} boxId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {boolean} [showCursor]
+     * @param {boolean} [showCursor] 
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public takeScreenshotDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, showCursor?: boolean, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).takeScreenshotDeprecated(sandboxId, xBoxLiteOrganizationID, showCursor, options).then((request) => request(this.axios, this.basePath));
+    public takeScreenshotDeprecated(boxId: string, xBoxLiteOrganizationID?: string, showCursor?: boolean, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).takeScreenshotDeprecated(boxId, xBoxLiteOrganizationID, showCursor, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Type text using keyboard
      * @summary [DEPRECATED] Type text
-     * @param {string} sandboxId
-     * @param {KeyboardTypeRequest} keyboardTypeRequest
+     * @param {string} boxId 
+     * @param {KeyboardTypeRequest} keyboardTypeRequest 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public typeTextDeprecated(sandboxId: string, keyboardTypeRequest: KeyboardTypeRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).typeTextDeprecated(sandboxId, keyboardTypeRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public typeTextDeprecated(boxId: string, keyboardTypeRequest: KeyboardTypeRequest, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).typeTextDeprecated(boxId, keyboardTypeRequest, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     * Upload file inside sandbox
+     * Upload file inside box
      * @summary [DEPRECATED] Upload file
-     * @param {string} sandboxId
-     * @param {string} path
+     * @param {string} boxId 
+     * @param {string} path 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {File} [file]
+     * @param {File} [file] 
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public uploadFileDeprecated(sandboxId: string, path: string, xBoxLiteOrganizationID?: string, file?: File, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).uploadFileDeprecated(sandboxId, path, xBoxLiteOrganizationID, file, options).then((request) => request(this.axios, this.basePath));
+    public uploadFileDeprecated(boxId: string, path: string, xBoxLiteOrganizationID?: string, file?: File, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).uploadFileDeprecated(boxId, path, xBoxLiteOrganizationID, file, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     * Upload multiple files inside sandbox
+     * Upload multiple files inside box
      * @summary [DEPRECATED] Upload multiple files
-     * @param {string} sandboxId
+     * @param {string} boxId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof ToolboxApi
      */
-    public uploadFilesDeprecated(sandboxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return ToolboxApiFp(this.configuration).uploadFilesDeprecated(sandboxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public uploadFilesDeprecated(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ToolboxApiFp(this.configuration).uploadFilesDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 }
+

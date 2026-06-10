@@ -21,7 +21,7 @@ export class Migration1741088883002 implements MigrationInterface {
           'Developer',
           'Grants the ability to create sandboxes and keys in the organization',
           ARRAY[
-            '${OrganizationResourcePermission.WRITE_SANDBOXES}'
+            '${OrganizationResourcePermission.WRITE_BOXES}'
           ]::organization_role_permissions_enum[],
           TRUE
         )
@@ -32,12 +32,12 @@ export class Migration1741088883002 implements MigrationInterface {
         ("id", "name", "description", "permissions", "isGlobal")
       VALUES
         (
-          '${GlobalOrganizationRolesIds.SANDBOXES_ADMIN}',
+          '${GlobalOrganizationRolesIds.BOXES_ADMIN}',
           'Sandboxes Admin',
           'Grants admin access to sandboxes in the organization',
           ARRAY[
-            '${OrganizationResourcePermission.WRITE_SANDBOXES}',
-            '${OrganizationResourcePermission.DELETE_SANDBOXES}'
+            '${OrganizationResourcePermission.WRITE_BOXES}',
+            '${OrganizationResourcePermission.DELETE_BOXES}'
           ]::organization_role_permissions_enum[],
           TRUE
         )
@@ -88,8 +88,8 @@ export class Migration1741088883002 implements MigrationInterface {
             '${OrganizationResourcePermission.DELETE_REGISTRIES}',
             'write:images',
             'delete:images',
-            '${OrganizationResourcePermission.WRITE_SANDBOXES}',
-            '${OrganizationResourcePermission.DELETE_SANDBOXES}'
+            '${OrganizationResourcePermission.WRITE_BOXES}',
+            '${OrganizationResourcePermission.DELETE_BOXES}'
           ]::organization_role_permissions_enum[],
           TRUE
         )

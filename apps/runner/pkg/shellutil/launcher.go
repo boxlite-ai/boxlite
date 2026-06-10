@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 // Package shellutil contains shared decisions about how to spawn an
-// interactive shell inside a sandbox VM. All three entry points that drop
+// interactive shell inside a box VM. All three entry points that drop
 // the user into a shell — the SSH gateway (sshgateway.Service), the
 // dashboard's WebSocket terminal handler (controllers.handleWebSocketTerminal),
 // and the proxy's iframe-terminal endpoint — should use the same selection
@@ -71,7 +71,7 @@ func SftpSubsystem() (command string, args []string) {
 		`bin=$(command -v sftp-server 2>/dev/null || ` +
 			`ls /usr/lib/openssh/sftp-server /usr/lib/ssh/sftp-server /usr/libexec/sftp-server /usr/libexec/openssh/sftp-server 2>/dev/null | head -n1); ` +
 			`if [ -z "$bin" ]; then ` +
-			`echo "boxlite: sftp-server not found in sandbox VM; install openssh-sftp-server (or 'apk add openssh-sftp-server'), or fall back to 'scp -O'" >&2; ` +
+			`echo "boxlite: sftp-server not found in box VM; install openssh-sftp-server (or 'apk add openssh-sftp-server'), or fall back to 'scp -O'" >&2; ` +
 			`exit 127; ` +
 			`fi; ` +
 			`exec "$bin"`,

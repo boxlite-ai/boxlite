@@ -14,40 +14,25 @@
 
 
 
-/**
- *
- * @export
- * @interface ApiKeyResponse
- */
 export interface ApiKeyResponse {
     /**
      * The name of the API key
-     * @type {string}
-     * @memberof ApiKeyResponse
      */
     'name': string;
     /**
      * The API key value
-     * @type {string}
-     * @memberof ApiKeyResponse
      */
     'value': string;
     /**
      * When the API key was created
-     * @type {Date}
-     * @memberof ApiKeyResponse
      */
     'createdAt': Date;
     /**
      * The list of organization resource permissions assigned to the API key
-     * @type {Array<string>}
-     * @memberof ApiKeyResponse
      */
     'permissions': Array<ApiKeyResponsePermissionsEnum>;
     /**
      * When the API key expires
-     * @type {Date}
-     * @memberof ApiKeyResponse
      */
     'expiresAt': Date | null;
 }
@@ -57,8 +42,8 @@ export const ApiKeyResponsePermissionsEnum = {
     DELETE_REGISTRIES: 'delete:registries',
     WRITE_SNAPSHOTS: 'write:snapshots',
     DELETE_SNAPSHOTS: 'delete:snapshots',
-    WRITE_SANDBOXES: 'write:sandboxes',
-    DELETE_SANDBOXES: 'delete:sandboxes',
+    WRITE_BOXES: 'write:boxes',
+    DELETE_BOXES: 'delete:boxes',
     READ_VOLUMES: 'read:volumes',
     WRITE_VOLUMES: 'write:volumes',
     DELETE_VOLUMES: 'delete:volumes',
@@ -67,7 +52,10 @@ export const ApiKeyResponsePermissionsEnum = {
     READ_RUNNERS: 'read:runners',
     WRITE_RUNNERS: 'write:runners',
     DELETE_RUNNERS: 'delete:runners',
-    READ_AUDIT_LOGS: 'read:audit_logs'
+    READ_AUDIT_LOGS: 'read:audit_logs',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 
 export type ApiKeyResponsePermissionsEnum = typeof ApiKeyResponsePermissionsEnum[keyof typeof ApiKeyResponsePermissionsEnum];
+
+

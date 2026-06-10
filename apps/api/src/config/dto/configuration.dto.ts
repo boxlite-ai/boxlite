@@ -80,18 +80,18 @@ export class RateLimitConfig {
   authenticated?: RateLimitEntry
 
   @ApiPropertyOptional({
-    description: 'Sandbox create rate limit',
+    description: 'Box create rate limit',
     type: RateLimitEntry,
   })
   @IsOptional()
-  sandboxCreate?: RateLimitEntry
+  boxCreate?: RateLimitEntry
 
   @ApiPropertyOptional({
-    description: 'Sandbox lifecycle rate limit',
+    description: 'Box lifecycle rate limit',
     type: RateLimitEntry,
   })
   @IsOptional()
-  sandboxLifecycle?: RateLimitEntry
+  boxLifecycle?: RateLimitEntry
 }
 
 @ApiSchema({ name: 'OidcConfig' })
@@ -174,7 +174,7 @@ export class ConfigurationDto {
 
   @ApiProperty({
     description: 'Proxy template URL',
-    example: 'https://{{PORT}}-{{sandboxId}}.proxy.example.com',
+    example: 'https://{{PORT}}-{{boxId}}.proxy.example.com',
   })
   @IsString()
   proxyTemplateUrl: string
@@ -187,7 +187,7 @@ export class ConfigurationDto {
   proxyToolboxUrl: string
 
   @ApiProperty({
-    description: 'Default snapshot for sandboxes',
+    description: 'Default snapshot for boxes',
     example: 'ubuntu:22.04',
   })
   @IsString()
@@ -315,13 +315,13 @@ export class ConfigurationDto {
         ttl: configService.get('rateLimit.authenticated.ttl'),
         limit: configService.get('rateLimit.authenticated.limit'),
       },
-      sandboxCreate: {
-        ttl: configService.get('rateLimit.sandboxCreate.ttl'),
-        limit: configService.get('rateLimit.sandboxCreate.limit'),
+      boxCreate: {
+        ttl: configService.get('rateLimit.boxCreate.ttl'),
+        limit: configService.get('rateLimit.boxCreate.limit'),
       },
-      sandboxLifecycle: {
-        ttl: configService.get('rateLimit.sandboxLifecycle.ttl'),
-        limit: configService.get('rateLimit.sandboxLifecycle.limit'),
+      boxLifecycle: {
+        ttl: configService.get('rateLimit.boxLifecycle.ttl'),
+        limit: configService.get('rateLimit.boxLifecycle.limit'),
       },
     }
   }

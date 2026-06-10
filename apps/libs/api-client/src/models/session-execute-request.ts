@@ -14,29 +14,19 @@
 
 
 
-/**
- *
- * @export
- * @interface SessionExecuteRequest
- */
 export interface SessionExecuteRequest {
     /**
      * The command to execute
-     * @type {string}
-     * @memberof SessionExecuteRequest
      */
     'command': string;
     /**
      * Whether to execute the command asynchronously
-     * @type {boolean}
-     * @memberof SessionExecuteRequest
      */
     'runAsync'?: boolean;
     /**
      * Deprecated: Use runAsync instead. Whether to execute the command asynchronously
-     * @type {boolean}
-     * @memberof SessionExecuteRequest
      * @deprecated
      */
     'async'?: boolean;
 }
+

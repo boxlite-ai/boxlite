@@ -14,7 +14,7 @@ import (
 type Config struct {
 	DaemonLogFilePath        string        `envconfig:"BOXLITE_DAEMON_LOG_FILE_PATH"`
 	UserHomeAsWorkDir        bool          `envconfig:"BOXLITE_USER_HOME_AS_WORKDIR"`
-	SandboxId                string        `envconfig:"BOXLITE_SANDBOX_ID" validate:"required"`
+	BoxId                    string        `envconfig:"BOXLITE_BOX_ID" validate:"required"`
 	OtelEndpoint             *string       `envconfig:"BOXLITE_OTEL_ENDPOINT"`
 	TerminationCheckInterval time.Duration `envconfig:"BOXLITE_TERMINATION_CHECK_INTERVAL" default:"100ms" validate:"min_duration=1ms"`
 	TerminationGracePeriod   time.Duration `envconfig:"BOXLITE_TERMINATION_GRACE_PERIOD" default:"5s" validate:"min_duration=1s"`

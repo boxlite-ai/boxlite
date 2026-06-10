@@ -9,7 +9,7 @@ import { PageContent, PageHeader, PageLayout, PageTitle } from '@/components/Pag
 import { AggregatedUsageChart, ResourceUsageBreakdown, UsageSummary } from '@/components/spending/AggregatedUsageChart'
 import { CostBreakdown } from '@/components/spending/CostBreakdown'
 import { UsageChartData } from '@/components/spending/ResourceUsageChart'
-import { SandboxUsageTable } from '@/components/spending/SandboxUsageTable'
+import { BoxUsageTable } from '@/components/spending/BoxUsageTable'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardTitle } from '@/components/ui/card'
 import { DateRangePicker, QuickRangesConfig } from '@/components/ui/date-range-picker'
@@ -17,7 +17,7 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTi
 import { Separator } from '@/components/ui/separator'
 import { FeatureFlags } from '@/enums/FeatureFlags'
 import { UsageTimelineChart } from '@/components/spending/UsageTimelineChart'
-import { useAggregatedUsage, useSandboxesUsage, useUsageChart } from '@/hooks/queries/useAnalyticsUsage'
+import { useAggregatedUsage, useBoxesUsage, useUsageChart } from '@/hooks/queries/useAnalyticsUsage'
 import { useOrganizationUsageOverviewQuery } from '@/hooks/queries/useOrganizationUsageOverviewQuery'
 import { useOrganizationUsageQuery } from '@/hooks/queries/useOrganizationUsageQuery'
 import { usePastOrganizationUsageQuery } from '@/hooks/queries/usePastOrganizationUsageQuery'
@@ -37,7 +37,7 @@ const analyticsQuickRanges: QuickRangesConfig = {
 const Spending = () => {
   const { selectedOrganization } = useSelectedOrganization()
   const config = useConfig()
-  const spendingEnabled = useFeatureFlagEnabled(FeatureFlags.SANDBOX_SPENDING)
+  const spendingEnabled = useFeatureFlagEnabled(FeatureFlags.BOX_SPENDING)
   const analyticsAvailable = spendingEnabled && !!config.analyticsApiUrl
 
   const [analyticsDateRange, setAnalyticsDateRange] = useState<DateRange>(() => {
@@ -72,11 +72,11 @@ const Spending = () => {
     refetch: refetchAggregated,
   } = useAggregatedUsage(analyticsParams)
   const {
-    data: sandboxesUsage,
-    isLoading: sandboxesLoading,
-    isError: sandboxesError,
-    refetch: refetchSandboxes,
-  } = useSandboxesUsage(analyticsParams)
+    data: boxesUsage,
+    isLoading: boxesLoading,
+    isError: boxesError,
+    refetch: refetchBoxes,
+  } = useBoxesUsage(analyticsParams)
   const { data: usageChartPoints, isLoading: chartLoading } = useUsageChart({
     ...analyticsParams,
     region: selectedChartRegion,
@@ -173,7 +173,7 @@ const Spending = () => {
                   </Button>
                 </EmptyContent>
               </Empty>
-            ) : !aggregatedLoading && !aggregatedUsage?.sandboxCount ? (
+            ) : !aggregatedLoading && !aggregatedUsage?.boxCount ? (
               <Empty className="py-12">
                 <EmptyHeader>
                   <EmptyMedia variant="icon">
@@ -181,8 +181,7 @@ const Spending = () => {
                   </EmptyMedia>
                   <EmptyTitle>No resource usage data</EmptyTitle>
                   <EmptyDescription>
-                    Usage data will appear here once your sandboxes start consuming resources in the selected time
-                    range.
+                    Usage data will appear here once your boxes start consuming resources in the selected time range.
                   </EmptyDescription>
                 </EmptyHeader>
               </Empty>
@@ -206,43 +205,41 @@ const Spending = () => {
             )}
             <Separator />
             <div className="p-4">
-              <p className="text-xl font-semibold leading-none tracking-tight">Per-Sandbox Usage</p>
-              <p className="text-sm text-muted-foreground mt-2">
-                Resource consumption broken down by individual sandbox.
-              </p>
+              <p className="text-xl font-semibold leading-none tracking-tight">Per-Box Usage</p>
+              <p className="text-sm text-muted-foreground mt-2">Resource consumption broken down by individual box.</p>
             </div>
-            {sandboxesError ? (
+            {boxesError ? (
               <Empty className="py-12">
                 <EmptyHeader>
                   <EmptyMedia variant="icon" className="bg-destructive-background text-destructive">
                     <AlertCircle />
                   </EmptyMedia>
-                  <EmptyTitle className="text-destructive">Failed to load sandbox usage</EmptyTitle>
+                  <EmptyTitle className="text-destructive">Failed to load box usage</EmptyTitle>
                   <EmptyDescription>
-                    Something went wrong while fetching per-sandbox data. Please try again.
+                    Something went wrong while fetching per-box data. Please try again.
                   </EmptyDescription>
                 </EmptyHeader>
                 <EmptyContent>
-                  <Button variant="secondary" size="sm" onClick={() => refetchSandboxes()}>
+                  <Button variant="secondary" size="sm" onClick={() => refetchBoxes()}>
                     <RefreshCw />
                     Retry
                   </Button>
                 </EmptyContent>
               </Empty>
-            ) : !sandboxesLoading && !sandboxesUsage?.length ? (
+            ) : !boxesLoading && !boxesUsage?.length ? (
               <Empty className="py-12">
                 <EmptyHeader>
                   <EmptyMedia variant="icon">
                     <BarChart3 />
                   </EmptyMedia>
-                  <EmptyTitle>No sandbox usage yet</EmptyTitle>
+                  <EmptyTitle>No box usage yet</EmptyTitle>
                   <EmptyDescription>
-                    Once you create and run a sandbox, its resource consumption will appear here.
+                    Once you create and run a box, its resource consumption will appear here.
                   </EmptyDescription>
                 </EmptyHeader>
               </Empty>
             ) : (
-              <SandboxUsageTable data={sandboxesUsage} isLoading={sandboxesLoading} />
+              <BoxUsageTable data={boxesUsage} isLoading={boxesLoading} />
             )}
           </Card>
         )}

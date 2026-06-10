@@ -1,15 +1,15 @@
 ## boxlite delete
 
-Delete a sandbox
+Delete a box
 
 ```
-boxlite delete [SANDBOX_ID] | [SANDBOX_NAME] [flags]
+boxlite delete [BOX_ID] | [BOX_NAME] [flags]
 ```
 
 ### Options
 
 ```
-  -a, --all   Delete all sandboxes
+  -a, --all   Delete all boxes
 ```
 
 ### Options inherited from parent commands
@@ -20,4 +20,5 @@ boxlite delete [SANDBOX_ID] | [SANDBOX_NAME] [flags]
 
 ### SEE ALSO
 
-* [boxlite](boxlite.md)  - BoxLite CLI
+* [boxlite](boxlite.md)	 - BoxLite CLI
+

@@ -16,26 +16,21 @@ export type VncSession = {
   expiresAt: number
 }
 
-export const useVncSessionQuery = (sandboxId: string, enabled: boolean) => {
-  const { sandboxApi } = useApi()
+export const useVncSessionQuery = (boxId: string, enabled: boolean) => {
+  const { boxApi } = useApi()
   const { selectedOrganization } = useSelectedOrganization()
   const queryClient = useQueryClient()
-  const queryKey = queryKeys.sandboxes.vncSession(sandboxId)
+  const queryKey = queryKeys.boxes.vncSession(boxId)
 
   const query = useQuery({
     queryKey,
     queryFn: async (): Promise<VncSession> => {
       const url = (
-        await sandboxApi.getSignedPortPreviewUrl(
-          sandboxId,
-          VNC_PORT,
-          selectedOrganization?.id,
-          SESSION_DURATION_SECONDS,
-        )
+        await boxApi.getSignedPortPreviewUrl(boxId, VNC_PORT, selectedOrganization?.id, SESSION_DURATION_SECONDS)
       ).data.url
       return { url, expiresAt: Date.now() + SESSION_DURATION_SECONDS * 1000 }
     },
-    enabled: enabled && !!sandboxId && !!selectedOrganization?.id,
+    enabled: enabled && !!boxId && !!selectedOrganization?.id,
     staleTime: Infinity,
   })
 

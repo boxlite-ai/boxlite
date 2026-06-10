@@ -14,7 +14,7 @@ var SnapshotsCmd = &cobra.Command{
 	Short:   "Manage BoxLite snapshots",
 	Long:    "Commands for managing BoxLite snapshots",
 	Aliases: []string{"snapshots"},
-	GroupID: internal.SANDBOX_GROUP,
+	GroupID: internal.BOX_GROUP,
 }
 
 func init() {

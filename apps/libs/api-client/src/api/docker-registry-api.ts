@@ -18,7 +18,7 @@ import type { AxiosPromise, AxiosInstance, RawAxiosRequestConfig } from 'axios';
 import globalAxios from 'axios';
 // Some imports not used depending on template conditions
 // @ts-ignore
-import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObject, setBearerAuthToObject, setOAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction } from '../common';
+import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObject, setBearerAuthToObject, setOAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction, replaceWithSerializableTypeIfNeeded } from '../common';
 // @ts-ignore
 import { BASE_PATH, COLLECTION_FORMATS, type RequestArgs, BaseAPI, RequiredError, operationServerMap } from '../base';
 // @ts-ignore
@@ -31,14 +31,13 @@ import type { RegistryPushAccessDto } from '../models';
 import type { UpdateDockerRegistry } from '../models';
 /**
  * DockerRegistryApi - axios parameter creator
- * @export
  */
 export const DockerRegistryApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         *
+         * 
          * @summary Create registry
-         * @param {CreateDockerRegistry} createDockerRegistry
+         * @param {CreateDockerRegistry} createDockerRegistry 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -64,9 +63,8 @@ export const DockerRegistryApiAxiosParamCreator = function (configuration?: Conf
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -82,7 +80,7 @@ export const DockerRegistryApiAxiosParamCreator = function (configuration?: Conf
             };
         },
         /**
-         *
+         * 
          * @summary Delete registry
          * @param {string} id ID of the docker registry
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -93,7 +91,7 @@ export const DockerRegistryApiAxiosParamCreator = function (configuration?: Conf
             // verify required parameter 'id' is not null or undefined
             assertParamExists('deleteRegistry', 'id', id)
             const localVarPath = `/docker-registry/{id}`
-                .replace(`{${"id"}}`, encodeURIComponent(String(id)));
+                .replace('{id}', encodeURIComponent(String(id)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -112,7 +110,6 @@ export const DockerRegistryApiAxiosParamCreator = function (configuration?: Conf
             // authentication oauth2 required
 
 
-
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
             }
@@ -126,7 +123,7 @@ export const DockerRegistryApiAxiosParamCreator = function (configuration?: Conf
             };
         },
         /**
-         *
+         * 
          * @summary Get registry
          * @param {string} id ID of the docker registry
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -137,7 +134,7 @@ export const DockerRegistryApiAxiosParamCreator = function (configuration?: Conf
             // verify required parameter 'id' is not null or undefined
             assertParamExists('getRegistry', 'id', id)
             const localVarPath = `/docker-registry/{id}`
-                .replace(`{${"id"}}`, encodeURIComponent(String(id)));
+                .replace('{id}', encodeURIComponent(String(id)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -155,7 +152,7 @@ export const DockerRegistryApiAxiosParamCreator = function (configuration?: Conf
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -170,7 +167,7 @@ export const DockerRegistryApiAxiosParamCreator = function (configuration?: Conf
             };
         },
         /**
-         *
+         * 
          * @summary Get temporary registry access for pushing snapshots
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {string} [regionId] ID of the region where the snapshot will be available (defaults to organization default region)
@@ -200,7 +197,7 @@ export const DockerRegistryApiAxiosParamCreator = function (configuration?: Conf
                 localVarQueryParameter['regionId'] = regionId;
             }
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -215,7 +212,7 @@ export const DockerRegistryApiAxiosParamCreator = function (configuration?: Conf
             };
         },
         /**
-         *
+         * 
          * @summary List registries
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -240,7 +237,7 @@ export const DockerRegistryApiAxiosParamCreator = function (configuration?: Conf
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -255,7 +252,7 @@ export const DockerRegistryApiAxiosParamCreator = function (configuration?: Conf
             };
         },
         /**
-         *
+         * 
          * @summary Set default registry
          * @param {string} id ID of the docker registry
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -266,7 +263,7 @@ export const DockerRegistryApiAxiosParamCreator = function (configuration?: Conf
             // verify required parameter 'id' is not null or undefined
             assertParamExists('setDefaultRegistry', 'id', id)
             const localVarPath = `/docker-registry/{id}/set-default`
-                .replace(`{${"id"}}`, encodeURIComponent(String(id)));
+                .replace('{id}', encodeURIComponent(String(id)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -284,7 +281,7 @@ export const DockerRegistryApiAxiosParamCreator = function (configuration?: Conf
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -299,10 +296,10 @@ export const DockerRegistryApiAxiosParamCreator = function (configuration?: Conf
             };
         },
         /**
-         *
+         * 
          * @summary Update registry
          * @param {string} id ID of the docker registry
-         * @param {UpdateDockerRegistry} updateDockerRegistry
+         * @param {UpdateDockerRegistry} updateDockerRegistry 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -313,7 +310,7 @@ export const DockerRegistryApiAxiosParamCreator = function (configuration?: Conf
             // verify required parameter 'updateDockerRegistry' is not null or undefined
             assertParamExists('updateRegistry', 'updateDockerRegistry', updateDockerRegistry)
             const localVarPath = `/docker-registry/{id}`
-                .replace(`{${"id"}}`, encodeURIComponent(String(id)));
+                .replace('{id}', encodeURIComponent(String(id)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -331,9 +328,8 @@ export const DockerRegistryApiAxiosParamCreator = function (configuration?: Conf
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -353,15 +349,14 @@ export const DockerRegistryApiAxiosParamCreator = function (configuration?: Conf
 
 /**
  * DockerRegistryApi - functional programming interface
- * @export
  */
 export const DockerRegistryApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = DockerRegistryApiAxiosParamCreator(configuration)
     return {
         /**
-         *
+         * 
          * @summary Create registry
-         * @param {CreateDockerRegistry} createDockerRegistry
+         * @param {CreateDockerRegistry} createDockerRegistry 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -373,7 +368,7 @@ export const DockerRegistryApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Delete registry
          * @param {string} id ID of the docker registry
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -387,7 +382,7 @@ export const DockerRegistryApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get registry
          * @param {string} id ID of the docker registry
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -401,7 +396,7 @@ export const DockerRegistryApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get temporary registry access for pushing snapshots
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {string} [regionId] ID of the region where the snapshot will be available (defaults to organization default region)
@@ -415,7 +410,7 @@ export const DockerRegistryApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary List registries
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -428,7 +423,7 @@ export const DockerRegistryApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Set default registry
          * @param {string} id ID of the docker registry
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -442,10 +437,10 @@ export const DockerRegistryApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Update registry
          * @param {string} id ID of the docker registry
-         * @param {UpdateDockerRegistry} updateDockerRegistry
+         * @param {UpdateDockerRegistry} updateDockerRegistry 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -461,15 +456,14 @@ export const DockerRegistryApiFp = function(configuration?: Configuration) {
 
 /**
  * DockerRegistryApi - factory interface
- * @export
  */
 export const DockerRegistryApiFactory = function (configuration?: Configuration, basePath?: string, axios?: AxiosInstance) {
     const localVarFp = DockerRegistryApiFp(configuration)
     return {
         /**
-         *
+         * 
          * @summary Create registry
-         * @param {CreateDockerRegistry} createDockerRegistry
+         * @param {CreateDockerRegistry} createDockerRegistry 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -478,7 +472,7 @@ export const DockerRegistryApiFactory = function (configuration?: Configuration,
             return localVarFp.createRegistry(createDockerRegistry, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Delete registry
          * @param {string} id ID of the docker registry
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -489,7 +483,7 @@ export const DockerRegistryApiFactory = function (configuration?: Configuration,
             return localVarFp.deleteRegistry(id, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get registry
          * @param {string} id ID of the docker registry
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -500,7 +494,7 @@ export const DockerRegistryApiFactory = function (configuration?: Configuration,
             return localVarFp.getRegistry(id, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get temporary registry access for pushing snapshots
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {string} [regionId] ID of the region where the snapshot will be available (defaults to organization default region)
@@ -511,7 +505,7 @@ export const DockerRegistryApiFactory = function (configuration?: Configuration,
             return localVarFp.getTransientPushAccess(xBoxLiteOrganizationID, regionId, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary List registries
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -521,7 +515,7 @@ export const DockerRegistryApiFactory = function (configuration?: Configuration,
             return localVarFp.listRegistries(xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Set default registry
          * @param {string} id ID of the docker registry
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -532,10 +526,10 @@ export const DockerRegistryApiFactory = function (configuration?: Configuration,
             return localVarFp.setDefaultRegistry(id, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Update registry
          * @param {string} id ID of the docker registry
-         * @param {UpdateDockerRegistry} updateDockerRegistry
+         * @param {UpdateDockerRegistry} updateDockerRegistry 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -548,99 +542,90 @@ export const DockerRegistryApiFactory = function (configuration?: Configuration,
 
 /**
  * DockerRegistryApi - object-oriented interface
- * @export
- * @class DockerRegistryApi
- * @extends {BaseAPI}
  */
 export class DockerRegistryApi extends BaseAPI {
     /**
-     *
+     * 
      * @summary Create registry
-     * @param {CreateDockerRegistry} createDockerRegistry
+     * @param {CreateDockerRegistry} createDockerRegistry 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof DockerRegistryApi
      */
     public createRegistry(createDockerRegistry: CreateDockerRegistry, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return DockerRegistryApiFp(this.configuration).createRegistry(createDockerRegistry, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Delete registry
      * @param {string} id ID of the docker registry
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof DockerRegistryApi
      */
     public deleteRegistry(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return DockerRegistryApiFp(this.configuration).deleteRegistry(id, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Get registry
      * @param {string} id ID of the docker registry
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof DockerRegistryApi
      */
     public getRegistry(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return DockerRegistryApiFp(this.configuration).getRegistry(id, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Get temporary registry access for pushing snapshots
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {string} [regionId] ID of the region where the snapshot will be available (defaults to organization default region)
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof DockerRegistryApi
      */
     public getTransientPushAccess(xBoxLiteOrganizationID?: string, regionId?: string, options?: RawAxiosRequestConfig) {
         return DockerRegistryApiFp(this.configuration).getTransientPushAccess(xBoxLiteOrganizationID, regionId, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary List registries
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof DockerRegistryApi
      */
     public listRegistries(xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return DockerRegistryApiFp(this.configuration).listRegistries(xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Set default registry
      * @param {string} id ID of the docker registry
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof DockerRegistryApi
      */
     public setDefaultRegistry(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return DockerRegistryApiFp(this.configuration).setDefaultRegistry(id, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Update registry
      * @param {string} id ID of the docker registry
-     * @param {UpdateDockerRegistry} updateDockerRegistry
+     * @param {UpdateDockerRegistry} updateDockerRegistry 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof DockerRegistryApi
      */
     public updateRegistry(id: string, updateDockerRegistry: UpdateDockerRegistry, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return DockerRegistryApiFp(this.configuration).updateRegistry(id, updateDockerRegistry, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 }
+

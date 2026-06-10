@@ -1,0 +1,75 @@
+# CodeQL advanced setup.
+#
+# Replaces CodeQL "default setup", which does not analyze pull requests from
+# forks. Advanced setup runs on `pull_request`, so fork PRs are scanned and the
+# "Require code scanning results" ruleset rule can be satisfied without an admin
+# bypass.
+#
+# GitHub rejects advanced CodeQL uploads while default setup is enabled, so keep
+# this workflow dormant until repository variable CODEQL_ADVANCED_SETUP_ENABLED
+# is set to "true" after default setup is disabled.
+#
+# Languages use `build-mode: none` (source-only analysis, no compile step) where
+# CodeQL supports it. Go does not support `none` — its extractor must observe a
+# build — so Go uses `autobuild` (the same mode default setup used successfully
+# for this repo).
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    # Weekly full scan of the default branch (Mondays 03:31 UTC).
+    - cron: "31 3 * * 1"
+
+# Cancel in-progress analysis when a PR is updated.
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    if: vars.CODEQL_ADVANCED_SETUP_ENABLED == 'true'
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      # Required to upload code scanning results.
+      security-events: write
+      # Required by the CodeQL action to read the repository and Actions runs.
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            build-mode: none
+          - language: c-cpp
+            build-mode: none
+          - language: go
+            build-mode: autobuild
+          - language: javascript-typescript
+            build-mode: none
+          - language: python
+            build-mode: none
+          - language: rust
+            build-mode: none
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          category: "/language:${{ matrix.language }}"

@@ -14,22 +14,14 @@
 
 
 
-/**
- *
- * @export
- * @interface SshAccessValidationDto
- */
 export interface SshAccessValidationDto {
     /**
      * Whether the SSH access token is valid
-     * @type {boolean}
-     * @memberof SshAccessValidationDto
      */
     'valid': boolean;
     /**
-     * ID of the sandbox this SSH access is for
-     * @type {string}
-     * @memberof SshAccessValidationDto
+     * ID of the box this SSH access is for
      */
-    'sandboxId': string;
+    'boxId': string;
 }
+

@@ -65,9 +65,9 @@ func (p *Proxy) AuthCallback(ctx *gin.Context) {
 		return
 	}
 
-	sandboxId := stateData["sandboxId"]
-	if sandboxId == "" {
-		ctx.Error(common_errors.NewBadRequestError(errors.New("no sandboxId in state")))
+	boxId := stateData["boxId"]
+	if boxId == "" {
+		ctx.Error(common_errors.NewBadRequestError(errors.New("no boxId in state")))
 		return
 	}
 
@@ -109,29 +109,29 @@ func (p *Proxy) AuthCallback(ctx *gin.Context) {
 		return
 	}
 
-	hasAccess, err := p.hasSandboxAccess(ctx, sandboxId, token.AccessToken)
+	hasAccess, err := p.hasBoxAccess(ctx, boxId, token.AccessToken)
 	if err != nil {
-		ctx.Error(common_errors.NewInternalServerError(fmt.Errorf("failed to verify sandbox access: %w", err)))
+		ctx.Error(common_errors.NewInternalServerError(fmt.Errorf("failed to verify box access: %w", err)))
 		return
 	}
 	if !hasAccess {
-		ctx.Error(common_errors.NewNotFoundError(errors.New("sandbox not found")))
+		ctx.Error(common_errors.NewNotFoundError(errors.New("box not found")))
 		return
 	}
 
-	encoded, err := p.secureCookie.Encode(SANDBOX_AUTH_COOKIE_NAME+sandboxId, sandboxId)
+	encoded, err := p.secureCookie.Encode(BOX_AUTH_COOKIE_NAME+boxId, boxId)
 	if err != nil {
 		ctx.Error(common_errors.NewBadRequestError(fmt.Errorf("failed to encode cookie: %w", err)))
 		return
 	}
 
-	ctx.SetCookie(SANDBOX_AUTH_COOKIE_NAME+sandboxId, encoded, 3600, "/", cookieDomain, p.config.EnableTLS, true)
+	ctx.SetCookie(BOX_AUTH_COOKIE_NAME+boxId, encoded, 3600, "/", cookieDomain, p.config.EnableTLS, true)
 
 	// Redirect back to the original URL
 	ctx.Redirect(http.StatusFound, returnTo)
 }
 
-func (p *Proxy) getAuthUrl(ctx *gin.Context, sandboxId string) (string, error) {
+func (p *Proxy) getAuthUrl(ctx *gin.Context, boxId string) (string, error) {
 	_, endpoint, err := p.getOidcEndpoint(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to initialize OIDC endpoint: %w", err)
@@ -168,9 +168,9 @@ func (p *Proxy) getAuthUrl(ctx *gin.Context, sandboxId string) (string, error) {
 
 	// Store the original request URL in the state
 	stateData := map[string]string{
-		"state":     state,
-		"returnTo":  fmt.Sprintf("%s://%s%s", p.config.ProxyProtocol, ctx.Request.Host, ctx.Request.URL.String()),
-		"sandboxId": sandboxId,
+		"state":    state,
+		"returnTo": fmt.Sprintf("%s://%s%s", p.config.ProxyProtocol, ctx.Request.Host, ctx.Request.URL.String()),
+		"boxId":    boxId,
 	}
 	stateJson, err := json.Marshal(stateData)
 	if err != nil {
@@ -187,10 +187,10 @@ func (p *Proxy) getAuthUrl(ctx *gin.Context, sandboxId string) (string, error) {
 	return authURL, nil
 }
 
-func (p *Proxy) hasSandboxAccess(ctx context.Context, sandboxId string, authToken string) (bool, error) {
+func (p *Proxy) hasBoxAccess(ctx context.Context, boxId string, authToken string) (bool, error) {
 	apiClient := p.getUserApiClient(ctx, authToken)
 
-	_, res, err := apiClient.PreviewAPI.HasSandboxAccess(context.Background(), sandboxId).Execute()
+	_, res, err := apiClient.PreviewAPI.HasBoxAccess(context.Background(), boxId).Execute()
 	if res != nil && res.StatusCode == http.StatusOK {
 		return true, nil
 	}

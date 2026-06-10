@@ -5,8 +5,10 @@
  */
 
 import { Controller, Get } from '@nestjs/common'
-import { ApiTags } from '@nestjs/swagger'
+import { ApiTags, ApiExcludeController } from '@nestjs/swagger'
 
+// Spec-first surface: the contract is openapi/box.openapi.yaml.
+@ApiExcludeController()
 @ApiTags('BoxLite REST')
 @Controller('v1')
 export class BoxliteConfigController {

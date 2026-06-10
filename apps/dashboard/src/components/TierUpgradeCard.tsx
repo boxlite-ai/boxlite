@@ -129,7 +129,7 @@ export function TierUpgradeCard({ tiers, organizationTier, requirementsState, or
           </div>
 
           <Button variant={organizationTier?.tier && organizationTier.tier > 2 ? 'default' : 'secondary'} asChild>
-            <a href="mailto:sales@boxlite.ai?subject=Custom%20Tier%20Inquiry&body=Hi%20BoxLite%20Team%2C%0A%0AI%27m%20interested%20in%20a%20custom%20plan%20and%20would%20like%20to%20learn%20more%20about%20your%20options.%0A%0AHere%27s%20some%20context%3A%0A%0A-%20Your%20use%20case%3A%20%0A-%20Current%20technology%3A%20%0A-%20Requirements%3A%20%0A-%20Typical%20sandbox%20size%3A%20%0A-%20Peak%20concurrent%20sandboxes%3A%20%0A%0AThanks.">
+            <a href="mailto:sales@boxlite.ai?subject=Custom%20Tier%20Inquiry&body=Hi%20BoxLite%20Team%2C%0A%0AI%27m%20interested%20in%20a%20custom%20plan%20and%20would%20like%20to%20learn%20more%20about%20your%20options.%0A%0AHere%27s%20some%20context%3A%0A%0A-%20Your%20use%20case%3A%20%0A-%20Current%20technology%3A%20%0A-%20Requirements%3A%20%0A-%20Typical%20box%20size%3A%20%0A-%20Peak%20concurrent%20boxes%3A%20%0A%0AThanks.">
               Contact Sales
             </a>
           </Button>

@@ -8,17 +8,17 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useMutation } from '@tanstack/react-query'
 
 interface RevokeSshAccessVariables {
-  sandboxId: string
+  boxId: string
   token: string
 }
 
 export const useRevokeSshAccessMutation = () => {
-  const { sandboxApi } = useApi()
+  const { boxApi } = useApi()
   const { selectedOrganization } = useSelectedOrganization()
 
   return useMutation({
-    mutationFn: async ({ sandboxId, token }: RevokeSshAccessVariables) => {
-      await sandboxApi.revokeSshAccess(sandboxId, selectedOrganization?.id, token)
+    mutationFn: async ({ boxId, token }: RevokeSshAccessVariables) => {
+      await boxApi.revokeSshAccess(boxId, selectedOrganization?.id, token)
     },
   })
 }

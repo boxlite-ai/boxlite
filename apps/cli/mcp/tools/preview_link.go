@@ -26,11 +26,11 @@ type PreviewLinkArgs struct {
 
 func GetPreviewLinkTool() mcp.Tool {
 	return mcp.NewTool("preview_link",
-		mcp.WithDescription("Generate accessible preview URLs for web applications running in the BoxLite sandbox. Creates a secure tunnel to expose local ports externally without configuration. Validates if a server is actually running on the specified port and provides diagnostic information for troubleshooting. Supports custom descriptions and metadata for better organization of multiple services."),
+		mcp.WithDescription("Generate accessible preview URLs for web applications running in the BoxLite box. Creates a secure tunnel to expose local ports externally without configuration. Validates if a server is actually running on the specified port and provides diagnostic information for troubleshooting. Supports custom descriptions and metadata for better organization of multiple services."),
 		mcp.WithNumber("port", mcp.Required(), mcp.Description("Port to expose.")),
 		mcp.WithString("description", mcp.Required(), mcp.Description("Description of the service.")),
 		mcp.WithBoolean("checkServer", mcp.Required(), mcp.Description("Check if a server is running on the specified port.")),
-		mcp.WithString("id", mcp.Required(), mcp.Description("ID of the sandbox to generate the preview link for.")),
+		mcp.WithString("id", mcp.Required(), mcp.Description("ID of the box to generate the preview link for.")),
 	)
 }
 
@@ -41,7 +41,7 @@ func PreviewLink(ctx context.Context, request mcp.CallToolRequest, args PreviewL
 	}
 
 	if args.Id == nil || *args.Id == "" {
-		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("sandbox ID is required")
+		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("box ID is required")
 	}
 
 	if args.Port == nil {
@@ -55,14 +55,14 @@ func PreviewLink(ctx context.Context, request mcp.CallToolRequest, args PreviewL
 
 	log.Infof("Generating preview link - port: %d", *args.Port)
 
-	// Get the sandbox using sandbox ID
-	sandbox, _, err := apiClient.SandboxAPI.GetSandbox(ctx, *args.Id).Execute()
+	// Get the box using box ID
+	box, _, err := apiClient.BoxAPI.GetBox(ctx, *args.Id).Execute()
 	if err != nil {
-		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("failed to get sandbox: %v", err)
+		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("failed to get box: %v", err)
 	}
 
-	if sandbox == nil {
-		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("no sandbox available")
+	if box == nil {
+		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("no box available")
 	}
 
 	// Check if server is running on specified port
@@ -91,7 +91,7 @@ func PreviewLink(ctx context.Context, request mcp.CallToolRequest, args PreviewL
 	}
 
 	// Fetch preview URL
-	previewURL, _, err := apiClient.SandboxAPI.GetPortPreviewUrl(ctx, *args.Id, float32(*args.Port)).Execute()
+	previewURL, _, err := apiClient.BoxAPI.GetPortPreviewUrl(ctx, *args.Id, float32(*args.Port)).Execute()
 	if err != nil {
 		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("failed to get preview URL: %v", err)
 	}

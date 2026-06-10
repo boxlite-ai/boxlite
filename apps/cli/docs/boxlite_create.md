@@ -1,6 +1,6 @@
 ## boxlite create
 
-Create a new sandbox
+Create a new box
 
 ```
 boxlite create [flags]
@@ -12,22 +12,22 @@ boxlite create [flags]
       --auto-archive int32          Auto-archive interval in minutes (0 means the maximum interval will be used) (default 10080)
       --auto-delete int32           Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping) (default -1)
       --auto-stop int32             Auto-stop interval in minutes (0 means disabled) (default 15)
-      --class string                Sandbox class type (small, medium, large)
+      --class string                Box class type (small, medium, large)
   -c, --context stringArray         Files or directories to include in the build context (can be specified multiple times)
-      --cpu int32                   CPU cores allocated to the sandbox
-      --disk int32                  Disk space allocated to the sandbox in GB
-  -f, --dockerfile string           Path to Dockerfile for Sandbox snapshot
+      --cpu int32                   CPU cores allocated to the box
+      --disk int32                  Disk space allocated to the box in GB
+  -f, --dockerfile string           Path to Dockerfile for Box snapshot
   -e, --env stringArray             Environment variables (format: KEY=VALUE)
-      --gpu int32                   GPU units allocated to the sandbox
+      --gpu int32                   GPU units allocated to the box
   -l, --label stringArray           Labels (format: KEY=VALUE)
-      --memory int32                Memory allocated to the sandbox in MB
-      --name string                 Name of the sandbox
-      --network-allow-list string   Comma-separated list of allowed CIDR network addresses for the sandbox
-      --network-block-all           Whether to block all network access for the sandbox
-      --public                      Make sandbox publicly accessible
-      --snapshot string             Snapshot to use for the sandbox
+      --memory int32                Memory allocated to the box in MB
+      --name string                 Name of the box
+      --network-allow-list string   Comma-separated list of allowed CIDR network addresses for the box
+      --network-block-all           Whether to block all network access for the box
+      --public                      Make box publicly accessible
+      --snapshot string             Snapshot to use for the box
       --target string               Target region (eu, us)
-      --user string                 User associated with the sandbox
+      --user string                 User associated with the box
   -v, --volume stringArray          Volumes to mount (format: VOLUME_NAME:MOUNT_PATH)
 ```
 
@@ -39,4 +39,5 @@ boxlite create [flags]
 
 ### SEE ALSO
 
-* [boxlite](boxlite.md)  - BoxLite CLI
+* [boxlite](boxlite.md)	 - BoxLite CLI
+

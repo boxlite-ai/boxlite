@@ -18,7 +18,7 @@ import type { AxiosPromise, AxiosInstance, RawAxiosRequestConfig } from 'axios';
 import globalAxios from 'axios';
 // Some imports not used depending on template conditions
 // @ts-ignore
-import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObject, setBearerAuthToObject, setOAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction } from '../common';
+import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObject, setBearerAuthToObject, setOAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction, replaceWithSerializableTypeIfNeeded } from '../common';
 // @ts-ignore
 import { BASE_PATH, COLLECTION_FORMATS, type RequestArgs, BaseAPI, RequiredError, operationServerMap } from '../base';
 // @ts-ignore
@@ -31,14 +31,13 @@ import type { CreateUser } from '../models';
 import type { User } from '../models';
 /**
  * UsersApi - axios parameter creator
- * @export
  */
 export const UsersApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         *
+         * 
          * @summary Create user
-         * @param {CreateUser} createUser
+         * @param {CreateUser} createUser 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -63,8 +62,6 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
 
             setSearchParams(localVarUrlObj, localVarQueryParameter);
@@ -78,7 +75,7 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         *
+         * 
          * @summary Enroll in SMS MFA
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -102,7 +99,7 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
@@ -114,7 +111,7 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         *
+         * 
          * @summary Get authenticated user
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -138,7 +135,7 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
@@ -150,7 +147,7 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         *
+         * 
          * @summary Get available account providers
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -174,7 +171,7 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
@@ -186,9 +183,9 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         *
+         * 
          * @summary Get user by ID
-         * @param {string} id
+         * @param {string} id 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -196,7 +193,7 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
             // verify required parameter 'id' is not null or undefined
             assertParamExists('getUser', 'id', id)
             const localVarPath = `/users/{id}`
-                .replace(`{${"id"}}`, encodeURIComponent(String(id)));
+                .replace('{id}', encodeURIComponent(String(id)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -214,7 +211,7 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
@@ -226,9 +223,9 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         *
+         * 
          * @summary Link account
-         * @param {CreateLinkedAccount} createLinkedAccount
+         * @param {CreateLinkedAccount} createLinkedAccount 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -253,8 +250,6 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
 
             setSearchParams(localVarUrlObj, localVarQueryParameter);
@@ -268,7 +263,7 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         *
+         * 
          * @summary List all users
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -293,7 +288,6 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
             // authentication oauth2 required
 
 
-
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
@@ -304,9 +298,9 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         *
+         * 
          * @summary Regenerate user key pair
-         * @param {string} id
+         * @param {string} id 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -314,7 +308,7 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
             // verify required parameter 'id' is not null or undefined
             assertParamExists('regenerateKeyPair', 'id', id)
             const localVarPath = `/users/{id}/regenerate-key-pair`
-                .replace(`{${"id"}}`, encodeURIComponent(String(id)));
+                .replace('{id}', encodeURIComponent(String(id)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -333,7 +327,6 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
             // authentication oauth2 required
 
 
-
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
@@ -344,10 +337,10 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         *
+         * 
          * @summary Unlink account
-         * @param {string} provider
-         * @param {string} providerUserId
+         * @param {string} provider 
+         * @param {string} providerUserId 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -357,8 +350,8 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
             // verify required parameter 'providerUserId' is not null or undefined
             assertParamExists('unlinkAccount', 'providerUserId', providerUserId)
             const localVarPath = `/users/linked-accounts/{provider}/{providerUserId}`
-                .replace(`{${"provider"}}`, encodeURIComponent(String(provider)))
-                .replace(`{${"providerUserId"}}`, encodeURIComponent(String(providerUserId)));
+                .replace('{provider}', encodeURIComponent(String(provider)))
+                .replace('{providerUserId}', encodeURIComponent(String(providerUserId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -377,7 +370,6 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
             // authentication oauth2 required
 
 
-
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
@@ -392,15 +384,14 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
 
 /**
  * UsersApi - functional programming interface
- * @export
  */
 export const UsersApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = UsersApiAxiosParamCreator(configuration)
     return {
         /**
-         *
+         * 
          * @summary Create user
-         * @param {CreateUser} createUser
+         * @param {CreateUser} createUser 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -411,7 +402,7 @@ export const UsersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Enroll in SMS MFA
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -423,7 +414,7 @@ export const UsersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get authenticated user
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -435,7 +426,7 @@ export const UsersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get available account providers
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -447,9 +438,9 @@ export const UsersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get user by ID
-         * @param {string} id
+         * @param {string} id 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -460,9 +451,9 @@ export const UsersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Link account
-         * @param {CreateLinkedAccount} createLinkedAccount
+         * @param {CreateLinkedAccount} createLinkedAccount 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -473,7 +464,7 @@ export const UsersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary List all users
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -485,9 +476,9 @@ export const UsersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Regenerate user key pair
-         * @param {string} id
+         * @param {string} id 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -498,10 +489,10 @@ export const UsersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Unlink account
-         * @param {string} provider
-         * @param {string} providerUserId
+         * @param {string} provider 
+         * @param {string} providerUserId 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -516,15 +507,14 @@ export const UsersApiFp = function(configuration?: Configuration) {
 
 /**
  * UsersApi - factory interface
- * @export
  */
 export const UsersApiFactory = function (configuration?: Configuration, basePath?: string, axios?: AxiosInstance) {
     const localVarFp = UsersApiFp(configuration)
     return {
         /**
-         *
+         * 
          * @summary Create user
-         * @param {CreateUser} createUser
+         * @param {CreateUser} createUser 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -532,7 +522,7 @@ export const UsersApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.createUser(createUser, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Enroll in SMS MFA
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -541,7 +531,7 @@ export const UsersApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.enrollInSmsMfa(options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get authenticated user
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -550,7 +540,7 @@ export const UsersApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.getAuthenticatedUser(options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get available account providers
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -559,9 +549,9 @@ export const UsersApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.getAvailableAccountProviders(options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get user by ID
-         * @param {string} id
+         * @param {string} id 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -569,9 +559,9 @@ export const UsersApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.getUser(id, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Link account
-         * @param {CreateLinkedAccount} createLinkedAccount
+         * @param {CreateLinkedAccount} createLinkedAccount 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -579,7 +569,7 @@ export const UsersApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.linkAccount(createLinkedAccount, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary List all users
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -588,9 +578,9 @@ export const UsersApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.listUsers(options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Regenerate user key pair
-         * @param {string} id
+         * @param {string} id 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -598,10 +588,10 @@ export const UsersApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.regenerateKeyPair(id, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Unlink account
-         * @param {string} provider
-         * @param {string} providerUserId
+         * @param {string} provider 
+         * @param {string} providerUserId 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -613,113 +603,102 @@ export const UsersApiFactory = function (configuration?: Configuration, basePath
 
 /**
  * UsersApi - object-oriented interface
- * @export
- * @class UsersApi
- * @extends {BaseAPI}
  */
 export class UsersApi extends BaseAPI {
     /**
-     *
+     * 
      * @summary Create user
-     * @param {CreateUser} createUser
+     * @param {CreateUser} createUser 
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof UsersApi
      */
     public createUser(createUser: CreateUser, options?: RawAxiosRequestConfig) {
         return UsersApiFp(this.configuration).createUser(createUser, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Enroll in SMS MFA
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof UsersApi
      */
     public enrollInSmsMfa(options?: RawAxiosRequestConfig) {
         return UsersApiFp(this.configuration).enrollInSmsMfa(options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Get authenticated user
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof UsersApi
      */
     public getAuthenticatedUser(options?: RawAxiosRequestConfig) {
         return UsersApiFp(this.configuration).getAuthenticatedUser(options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Get available account providers
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof UsersApi
      */
     public getAvailableAccountProviders(options?: RawAxiosRequestConfig) {
         return UsersApiFp(this.configuration).getAvailableAccountProviders(options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Get user by ID
-     * @param {string} id
+     * @param {string} id 
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof UsersApi
      */
     public getUser(id: string, options?: RawAxiosRequestConfig) {
         return UsersApiFp(this.configuration).getUser(id, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Link account
-     * @param {CreateLinkedAccount} createLinkedAccount
+     * @param {CreateLinkedAccount} createLinkedAccount 
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof UsersApi
      */
     public linkAccount(createLinkedAccount: CreateLinkedAccount, options?: RawAxiosRequestConfig) {
         return UsersApiFp(this.configuration).linkAccount(createLinkedAccount, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary List all users
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof UsersApi
      */
     public listUsers(options?: RawAxiosRequestConfig) {
         return UsersApiFp(this.configuration).listUsers(options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Regenerate user key pair
-     * @param {string} id
+     * @param {string} id 
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof UsersApi
      */
     public regenerateKeyPair(id: string, options?: RawAxiosRequestConfig) {
         return UsersApiFp(this.configuration).regenerateKeyPair(id, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Unlink account
-     * @param {string} provider
-     * @param {string} providerUserId
+     * @param {string} provider 
+     * @param {string} providerUserId 
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof UsersApi
      */
     public unlinkAccount(provider: string, providerUserId: string, options?: RawAxiosRequestConfig) {
         return UsersApiFp(this.configuration).unlinkAccount(provider, providerUserId, options).then((request) => request(this.axios, this.basePath));
     }
 }
+

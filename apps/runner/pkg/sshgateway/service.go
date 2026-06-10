@@ -65,19 +65,19 @@ func (s *Service) Start(ctx context.Context) error {
 
 	serverConfig := &ssh.ServerConfig{
 		PublicKeyCallback: func(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-			// The username should be the sandbox ID
-			sandboxId := conn.User()
+			// The username should be the box ID
+			boxId := conn.User()
 
 			// Check if the provided key matches the configured public key
 			if key.Type() == configPublicKey.Type() && bytes.Equal(key.Marshal(), configPublicKey.Marshal()) {
 				return &ssh.Permissions{
 					Extensions: map[string]string{
-						"sandbox-id": sandboxId,
+						"box-id": boxId,
 					},
 				}, nil
 			}
 
-			s.log.WarnContext(ctx, "Public key authentication failed for sandbox", "sandboxID", sandboxId)
+			s.log.WarnContext(ctx, "Public key authentication failed for box", "boxID", boxId)
 			return nil, fmt.Errorf("authentication failed")
 		},
 		NoClientAuth: false,
@@ -120,23 +120,23 @@ func (s *Service) handleConnection(ctx context.Context, conn net.Conn, serverCon
 	}
 	defer serverConn.Close()
 
-	sandboxId := serverConn.Permissions.Extensions["sandbox-id"]
+	boxId := serverConn.Permissions.Extensions["box-id"]
 
 	// Discard global requests; we don't currently forward any.
 	go ssh.DiscardRequests(reqs)
 
 	for newChannel := range chans {
-		go s.handleChannel(ctx, newChannel, sandboxId)
+		go s.handleChannel(ctx, newChannel, boxId)
 	}
 }
 
 // handleChannel bridges an SSH session channel to an in-VM exec via the
 // BoxLite SDK (libkrun vsock), the same primitive the dashboard's WebSocket
 // terminal uses at apps/runner/pkg/api/controllers/proxy.go:114. There is no
-// host-side hostname lookup, no `ssh.Dial` to a sandbox-internal address —
+// host-side hostname lookup, no `ssh.Dial` to a box-internal address —
 // the kernel routes the spawn through libkrun and pipes stdio over the
 // connection's file descriptors.
-func (s *Service) handleChannel(ctx context.Context, newChannel ssh.NewChannel, sandboxId string) {
+func (s *Service) handleChannel(ctx context.Context, newChannel ssh.NewChannel, boxId string) {
 	if newChannel.ChannelType() != "session" {
 		_ = newChannel.Reject(ssh.UnknownChannelType, "only session channels are supported")
 		return
@@ -156,7 +156,7 @@ func (s *Service) handleChannel(ctx context.Context, newChannel ssh.NewChannel, 
 	state := &sessionState{
 		log:           s.log,
 		boxlite:       s.boxlite,
-		sandboxId:     sandboxId,
+		boxId:         boxId,
 		clientChannel: clientChannel,
 		cmd:           defaultCmd,
 		args:          defaultArgs,
@@ -187,7 +187,7 @@ func (s *Service) handleChannel(ctx context.Context, newChannel ssh.NewChannel, 
 type sessionState struct {
 	log           *slog.Logger
 	boxlite       *blclient.Client
-	sandboxId     string
+	boxId         string
 	clientChannel ssh.Channel
 
 	// Negotiated before exec start.
@@ -276,7 +276,7 @@ func (s *Service) handleRequest(ctx context.Context, st *sessionState, req *ssh.
 		// interactive sessions to terminate via Ctrl-C → SIGINT in pty.)
 
 	default:
-		s.log.Debug("Ignoring unsupported channel request", "type", req.Type, "sandboxID", st.sandboxId)
+		s.log.Debug("Ignoring unsupported channel request", "type", req.Type, "boxID", st.boxId)
 		if req.WantReply {
 			_ = req.Reply(false, nil)
 		}
@@ -304,16 +304,16 @@ func (st *sessionState) runExec(ctx context.Context, kind string) {
 		stderr = st.clientChannel
 	}
 
-	st.log.Info("Starting exec in sandbox",
-		"sandboxID", st.sandboxId,
+	st.log.Info("Starting exec in box",
+		"boxID", st.boxId,
 		"cmd", st.cmd,
 		"tty", st.withTTY,
 		"kind", kind,
 	)
 
-	exec, err := st.boxlite.StartExecution(ctx, st.sandboxId, st.cmd, st.args, stdout, stderr, st.withTTY)
+	exec, err := st.boxlite.StartExecution(ctx, st.boxId, st.cmd, st.args, stdout, stderr, st.withTTY)
 	if err != nil {
-		st.log.Warn("Failed to start execution in sandbox", "sandboxID", st.sandboxId, "error", err)
+		st.log.Warn("Failed to start execution in box", "boxID", st.boxId, "error", err)
 		_, _ = st.clientChannel.SendRequest("exit-status", false, exitStatusPayload(127))
 		_ = st.clientChannel.Close()
 		st.exitDone <- 127
@@ -341,7 +341,7 @@ func (st *sessionState) runExec(ctx context.Context, kind string) {
 			}
 		}()
 		if _, err := io.Copy(exec.Stdin, st.clientChannel); err != nil && err != io.EOF {
-			st.log.Debug("stdin pump ended", "sandboxID", st.sandboxId, "error", err)
+			st.log.Debug("stdin pump ended", "boxID", st.boxId, "error", err)
 		}
 	}()
 
@@ -357,10 +357,10 @@ func (st *sessionState) runExec(ctx context.Context, kind string) {
 			// a genuine 0 exit.
 			exitCode = 255
 			st.log.Warn("exec.Wait returned error",
-				"sandboxID", st.sandboxId, "error", werr)
+				"boxID", st.boxId, "error", werr)
 		}
 		st.log.Info("Exec completed",
-			"sandboxID", st.sandboxId, "exitCode", exitCode)
+			"boxID", st.boxId, "exitCode", exitCode)
 		_, _ = st.clientChannel.SendRequest("exit-status", false, exitStatusPayload(exitCode))
 		_ = exec.Close()
 		_ = st.clientChannel.Close()
@@ -386,7 +386,7 @@ func (st *sessionState) resize(ctx context.Context) {
 		return
 	}
 	if err := exec.ResizeTTY(ctx, rows, cols); err != nil {
-		st.log.Debug("ResizeTTY failed", "sandboxID", st.sandboxId, "error", err)
+		st.log.Debug("ResizeTTY failed", "boxID", st.boxId, "error", err)
 	}
 }
 

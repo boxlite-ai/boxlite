@@ -6,7 +6,7 @@
 
 import { IsNumber, IsOptional, IsString } from 'class-validator'
 import { ApiProperty, ApiSchema } from '@nestjs/swagger'
-import { CreateRunnerDto } from '../../sandbox/dto/create-runner.dto'
+import { CreateRunnerDto } from '../../box/dto/create-runner.dto'
 
 @ApiSchema({ name: 'AdminCreateRunner' })
 export class AdminCreateRunnerDto extends CreateRunnerDto {

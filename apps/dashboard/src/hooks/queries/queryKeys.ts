@@ -96,31 +96,30 @@ export const queryKeys = {
         },
       ] as const,
   },
-  sandboxes: {
-    all: ['sandboxes'] as const,
-    detail: (organizationId: string, sandboxId: string) =>
-      [...queryKeys.sandboxes.all, organizationId, sandboxId, 'detail'] as const,
-    terminalSession: (sandboxId: string) => [...queryKeys.sandboxes.all, sandboxId, 'terminal-session'] as const,
-    vncInitialStatus: (sandboxId: string) => [...queryKeys.sandboxes.all, sandboxId, 'vnc-initial-status'] as const,
-    vncPollStatus: (sandboxId: string) => [...queryKeys.sandboxes.all, sandboxId, 'vnc-poll-status'] as const,
-    vncSession: (sandboxId: string) => [...queryKeys.sandboxes.all, sandboxId, 'vnc-session'] as const,
+  boxes: {
+    all: ['boxes'] as const,
+    detail: (organizationId: string, boxId: string) =>
+      [...queryKeys.boxes.all, organizationId, boxId, 'detail'] as const,
+    terminalSession: (boxId: string) => [...queryKeys.boxes.all, boxId, 'terminal-session'] as const,
+    vncInitialStatus: (boxId: string) => [...queryKeys.boxes.all, boxId, 'vnc-initial-status'] as const,
+    vncPollStatus: (boxId: string) => [...queryKeys.boxes.all, boxId, 'vnc-poll-status'] as const,
+    vncSession: (boxId: string) => [...queryKeys.boxes.all, boxId, 'vnc-session'] as const,
   },
   telemetry: {
     all: ['telemetry'] as const,
-    logs: (sandboxId: string, params: object) => [...queryKeys.telemetry.all, sandboxId, 'logs', params] as const,
-    traces: (sandboxId: string, params: object) => [...queryKeys.telemetry.all, sandboxId, 'traces', params] as const,
-    metrics: (sandboxId: string, params: object) => [...queryKeys.telemetry.all, sandboxId, 'metrics', params] as const,
-    traceSpans: (sandboxId: string, traceId: string) =>
-      [...queryKeys.telemetry.all, sandboxId, 'traces', traceId] as const,
+    logs: (boxId: string, params: object) => [...queryKeys.telemetry.all, boxId, 'logs', params] as const,
+    traces: (boxId: string, params: object) => [...queryKeys.telemetry.all, boxId, 'traces', params] as const,
+    metrics: (boxId: string, params: object) => [...queryKeys.telemetry.all, boxId, 'metrics', params] as const,
+    traceSpans: (boxId: string, traceId: string) => [...queryKeys.telemetry.all, boxId, 'traces', traceId] as const,
   },
-  sandbox: {
-    all: ['sandbox'] as const,
-    session: (scope: string) => [...queryKeys.sandbox.all, scope] as const,
-    currentId: (scope: string) => [...queryKeys.sandbox.all, scope, 'current-id'] as const,
-    instance: (scope: string, id: string) => [...queryKeys.sandbox.all, scope, id] as const,
-    terminalUrl: (scope: string, id: string) => [...queryKeys.sandbox.all, scope, id, 'terminal-url'] as const,
-    vncStatus: (scope: string, id: string) => [...queryKeys.sandbox.all, scope, id, 'vnc-status'] as const,
-    vncUrl: (scope: string, id: string) => [...queryKeys.sandbox.all, scope, id, 'vnc-url'] as const,
+  box: {
+    all: ['box'] as const,
+    session: (scope: string) => [...queryKeys.box.all, scope] as const,
+    currentId: (scope: string) => [...queryKeys.box.all, scope, 'current-id'] as const,
+    instance: (scope: string, id: string) => [...queryKeys.box.all, scope, id] as const,
+    terminalUrl: (scope: string, id: string) => [...queryKeys.box.all, scope, id, 'terminal-url'] as const,
+    vncStatus: (scope: string, id: string) => [...queryKeys.box.all, scope, id, 'vnc-status'] as const,
+    vncUrl: (scope: string, id: string) => [...queryKeys.box.all, scope, id, 'vnc-url'] as const,
   },
   analytics: {
     all: ['analytics'] as const,
@@ -128,9 +127,9 @@ export const queryKeys = {
       [...queryKeys.analytics.all, organizationId, 'aggregated-usage', params] as const,
     usageChart: (organizationId: string, params: object) =>
       [...queryKeys.analytics.all, organizationId, 'usage-chart', params] as const,
-    sandboxesUsage: (organizationId: string, params: object) =>
-      [...queryKeys.analytics.all, organizationId, 'sandboxes-usage', params] as const,
-    sandboxUsagePeriods: (organizationId: string, sandboxId: string, params: object) =>
-      [...queryKeys.analytics.all, organizationId, sandboxId, 'usage-periods', params] as const,
+    boxesUsage: (organizationId: string, params: object) =>
+      [...queryKeys.analytics.all, organizationId, 'boxes-usage', params] as const,
+    boxUsagePeriods: (organizationId: string, boxId: string, params: object) =>
+      [...queryKeys.analytics.all, organizationId, boxId, 'usage-periods', params] as const,
   },
 } as const

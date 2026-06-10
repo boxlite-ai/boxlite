@@ -1,5 +1,5 @@
 name: boxlite create
-synopsis: Create a new sandbox
+synopsis: Create a new box
 usage: boxlite create [flags]
 options:
   - name: auto-archive
@@ -14,7 +14,7 @@ options:
     default_value: '15'
     usage: Auto-stop interval in minutes (0 means disabled)
   - name: class
-    usage: Sandbox class type (small, medium, large)
+    usage: Box class type (small, medium, large)
   - name: context
     shorthand: c
     default_value: '[]'
@@ -22,44 +22,44 @@ options:
       Files or directories to include in the build context (can be specified multiple times)
   - name: cpu
     default_value: '0'
-    usage: CPU cores allocated to the sandbox
+    usage: CPU cores allocated to the box
   - name: disk
     default_value: '0'
-    usage: Disk space allocated to the sandbox in GB
+    usage: Disk space allocated to the box in GB
   - name: dockerfile
     shorthand: f
-    usage: Path to Dockerfile for Sandbox snapshot
+    usage: Path to Dockerfile for Box snapshot
   - name: env
     shorthand: e
     default_value: '[]'
     usage: 'Environment variables (format: KEY=VALUE)'
   - name: gpu
     default_value: '0'
-    usage: GPU units allocated to the sandbox
+    usage: GPU units allocated to the box
   - name: label
     shorthand: l
     default_value: '[]'
     usage: 'Labels (format: KEY=VALUE)'
   - name: memory
     default_value: '0'
-    usage: Memory allocated to the sandbox in MB
+    usage: Memory allocated to the box in MB
   - name: name
-    usage: Name of the sandbox
+    usage: Name of the box
   - name: network-allow-list
     usage: |
-      Comma-separated list of allowed CIDR network addresses for the sandbox
+      Comma-separated list of allowed CIDR network addresses for the box
   - name: network-block-all
     default_value: 'false'
-    usage: Whether to block all network access for the sandbox
+    usage: Whether to block all network access for the box
   - name: public
     default_value: 'false'
-    usage: Make sandbox publicly accessible
+    usage: Make box publicly accessible
   - name: snapshot
-    usage: Snapshot to use for the sandbox
+    usage: Snapshot to use for the box
   - name: target
     usage: Target region (eu, us)
   - name: user
-    usage: User associated with the sandbox
+    usage: User associated with the box
   - name: volume
     shorthand: v
     default_value: '[]'

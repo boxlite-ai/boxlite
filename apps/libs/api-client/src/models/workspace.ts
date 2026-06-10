@@ -15,243 +15,166 @@
 
 // May contain unused imports in some cases
 // @ts-ignore
+import type { BoxDesiredState } from './box-desired-state';
+// May contain unused imports in some cases
+// @ts-ignore
+import type { BoxInfo } from './box-info';
+// May contain unused imports in some cases
+// @ts-ignore
+import type { BoxState } from './box-state';
+// May contain unused imports in some cases
+// @ts-ignore
+import type { BoxVolume } from './box-volume';
+// May contain unused imports in some cases
+// @ts-ignore
 import type { BuildInfo } from './build-info';
-// May contain unused imports in some cases
-// @ts-ignore
-import type { SandboxDesiredState } from './sandbox-desired-state';
-// May contain unused imports in some cases
-// @ts-ignore
-import type { SandboxInfo } from './sandbox-info';
-// May contain unused imports in some cases
-// @ts-ignore
-import type { SandboxState } from './sandbox-state';
-// May contain unused imports in some cases
-// @ts-ignore
-import type { SandboxVolume } from './sandbox-volume';
 
-/**
- *
- * @export
- * @interface Workspace
- */
 export interface Workspace {
     /**
-     * The ID of the sandbox
-     * @type {string}
-     * @memberof Workspace
+     * The ID of the box
      */
     'id': string;
     /**
-     * The organization ID of the sandbox
-     * @type {string}
-     * @memberof Workspace
+     * The organization ID of the box
      */
     'organizationId': string;
     /**
-     * The name of the sandbox
-     * @type {string}
-     * @memberof Workspace
+     * The name of the box
      */
     'name': string;
     /**
-     * The snapshot used for the sandbox
-     * @type {string}
-     * @memberof Workspace
+     * The snapshot used for the box
      */
     'snapshot'?: string;
     /**
      * The user associated with the project
-     * @type {string}
-     * @memberof Workspace
      */
     'user': string;
     /**
-     * Environment variables for the sandbox
-     * @type {{ [key: string]: string; }}
-     * @memberof Workspace
+     * Environment variables for the box
      */
     'env': { [key: string]: string; };
     /**
-     * Labels for the sandbox
-     * @type {{ [key: string]: string; }}
-     * @memberof Workspace
+     * Labels for the box
      */
     'labels': { [key: string]: string; };
     /**
-     * Whether the sandbox http preview is public
-     * @type {boolean}
-     * @memberof Workspace
+     * Whether the box http preview is public
      */
     'public': boolean;
     /**
-     * Whether to block all network access for the sandbox
-     * @type {boolean}
-     * @memberof Workspace
+     * Whether to block all network access for the box
      */
     'networkBlockAll': boolean;
     /**
-     * Comma-separated list of allowed CIDR network addresses for the sandbox
-     * @type {string}
-     * @memberof Workspace
+     * Comma-separated list of allowed CIDR network addresses for the box
      */
     'networkAllowList'?: string;
     /**
-     * The target environment for the sandbox
-     * @type {string}
-     * @memberof Workspace
+     * The target environment for the box
      */
     'target': string;
     /**
-     * The CPU quota for the sandbox
-     * @type {number}
-     * @memberof Workspace
+     * The CPU quota for the box
      */
     'cpu': number;
     /**
-     * The GPU quota for the sandbox
-     * @type {number}
-     * @memberof Workspace
+     * The GPU quota for the box
      */
     'gpu': number;
     /**
-     * The memory quota for the sandbox
-     * @type {number}
-     * @memberof Workspace
+     * The memory quota for the box
      */
     'memory': number;
     /**
-     * The disk quota for the sandbox
-     * @type {number}
-     * @memberof Workspace
+     * The disk quota for the box
      */
     'disk': number;
     /**
-     * The state of the sandbox
-     * @type {SandboxState}
-     * @memberof Workspace
+     * The state of the box
      */
-    'state'?: SandboxState;
+    'state'?: BoxState;
     /**
-     * The desired state of the sandbox
-     * @type {SandboxDesiredState}
-     * @memberof Workspace
+     * The desired state of the box
      */
-    'desiredState'?: SandboxDesiredState;
+    'desiredState'?: BoxDesiredState;
     /**
-     * The error reason of the sandbox
-     * @type {string}
-     * @memberof Workspace
+     * The error reason of the box
      */
     'errorReason'?: string;
     /**
-     * Whether the sandbox error is recoverable.
-     * @type {boolean}
-     * @memberof Workspace
+     * Whether the box error is recoverable.
      */
     'recoverable'?: boolean;
     /**
      * The state of the backup
-     * @type {string}
-     * @memberof Workspace
      */
     'backupState'?: WorkspaceBackupStateEnum;
     /**
      * The creation timestamp of the last backup
-     * @type {string}
-     * @memberof Workspace
      */
     'backupCreatedAt'?: string;
     /**
      * Auto-stop interval in minutes (0 means disabled)
-     * @type {number}
-     * @memberof Workspace
      */
     'autoStopInterval'?: number;
     /**
      * Auto-archive interval in minutes
-     * @type {number}
-     * @memberof Workspace
      */
     'autoArchiveInterval'?: number;
     /**
      * Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping)
-     * @type {number}
-     * @memberof Workspace
      */
     'autoDeleteInterval'?: number;
     /**
-     * Array of volumes attached to the sandbox
-     * @type {Array<SandboxVolume>}
-     * @memberof Workspace
+     * Array of volumes attached to the box
      */
-    'volumes'?: Array<SandboxVolume>;
+    'volumes'?: Array<BoxVolume>;
     /**
-     * Build information for the sandbox
-     * @type {BuildInfo}
-     * @memberof Workspace
+     * Build information for the box
      */
     'buildInfo'?: BuildInfo;
     /**
-     * The creation timestamp of the sandbox
-     * @type {string}
-     * @memberof Workspace
+     * The creation timestamp of the box
      */
     'createdAt'?: string;
     /**
-     * The last update timestamp of the sandbox
-     * @type {string}
-     * @memberof Workspace
+     * The last update timestamp of the box
      */
     'updatedAt'?: string;
     /**
-     * The class of the sandbox
-     * @type {string}
-     * @memberof Workspace
+     * The class of the box
      * @deprecated
      */
     'class'?: WorkspaceClassEnum;
     /**
-     * The version of the daemon running in the sandbox
-     * @type {string}
-     * @memberof Workspace
+     * The version of the daemon running in the box
      */
     'daemonVersion'?: string;
     /**
-     * The runner ID of the sandbox
-     * @type {string}
-     * @memberof Workspace
+     * The runner ID of the box
      */
     'runnerId'?: string;
     /**
-     * The toolbox proxy URL for the sandbox
-     * @type {string}
-     * @memberof Workspace
+     * The toolbox proxy URL for the box
      */
     'toolboxProxyUrl': string;
     /**
      * The image used for the workspace
-     * @type {string}
-     * @memberof Workspace
      */
     'image'?: string;
     /**
      * The state of the snapshot
-     * @type {string}
-     * @memberof Workspace
      */
     'snapshotState'?: WorkspaceSnapshotStateEnum;
     /**
      * The creation timestamp of the last snapshot
-     * @type {string}
-     * @memberof Workspace
      */
     'snapshotCreatedAt'?: string;
     /**
-     * Additional information about the sandbox
-     * @type {SandboxInfo}
-     * @memberof Workspace
+     * Additional information about the box
      */
-    'info'?: SandboxInfo;
+    'info'?: BoxInfo;
 }
 
 export const WorkspaceBackupStateEnum = {
@@ -259,14 +182,16 @@ export const WorkspaceBackupStateEnum = {
     PENDING: 'Pending',
     IN_PROGRESS: 'InProgress',
     COMPLETED: 'Completed',
-    ERROR: 'Error'
+    ERROR: 'Error',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 
 export type WorkspaceBackupStateEnum = typeof WorkspaceBackupStateEnum[keyof typeof WorkspaceBackupStateEnum];
 export const WorkspaceClassEnum = {
     SMALL: 'small',
     MEDIUM: 'medium',
-    LARGE: 'large'
+    LARGE: 'large',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 
 export type WorkspaceClassEnum = typeof WorkspaceClassEnum[keyof typeof WorkspaceClassEnum];
@@ -275,7 +200,10 @@ export const WorkspaceSnapshotStateEnum = {
     PENDING: 'Pending',
     IN_PROGRESS: 'InProgress',
     COMPLETED: 'Completed',
-    ERROR: 'Error'
+    ERROR: 'Error',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 
 export type WorkspaceSnapshotStateEnum = typeof WorkspaceSnapshotStateEnum[keyof typeof WorkspaceSnapshotStateEnum];
+
+

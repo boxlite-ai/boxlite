@@ -18,7 +18,7 @@ import type { AxiosPromise, AxiosInstance, RawAxiosRequestConfig } from 'axios';
 import globalAxios from 'axios';
 // Some imports not used depending on template conditions
 // @ts-ignore
-import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObject, setBearerAuthToObject, setOAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction } from '../common';
+import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObject, setBearerAuthToObject, setOAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction, replaceWithSerializableTypeIfNeeded } from '../common';
 // @ts-ignore
 import { BASE_PATH, COLLECTION_FORMATS, type RequestArgs, BaseAPI, RequiredError, operationServerMap } from '../base';
 // @ts-ignore
@@ -33,12 +33,11 @@ import type { SnapshotDto } from '../models';
 import type { Url } from '../models';
 /**
  * SnapshotsApi - axios parameter creator
- * @export
  */
 export const SnapshotsApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         *
+         * 
          * @summary Activate a snapshot
          * @param {string} id Snapshot ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -49,7 +48,7 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
             // verify required parameter 'id' is not null or undefined
             assertParamExists('activateSnapshot', 'id', id)
             const localVarPath = `/snapshots/{id}/activate`
-                .replace(`{${"id"}}`, encodeURIComponent(String(id)));
+                .replace('{id}', encodeURIComponent(String(id)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -67,7 +66,7 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -82,7 +81,7 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         *
+         * 
          * @summary Check if an image can be cleaned up
          * @param {string} imageName Image name with tag to check
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -114,7 +113,7 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
                 localVarQueryParameter['imageName'] = imageName;
             }
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -129,9 +128,9 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         *
+         * 
          * @summary Create a new snapshot
-         * @param {CreateSnapshot} createSnapshot
+         * @param {CreateSnapshot} createSnapshot 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -157,9 +156,8 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -175,7 +173,7 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         *
+         * 
          * @summary Deactivate a snapshot
          * @param {string} id Snapshot ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -186,7 +184,7 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
             // verify required parameter 'id' is not null or undefined
             assertParamExists('deactivateSnapshot', 'id', id)
             const localVarPath = `/snapshots/{id}/deactivate`
-                .replace(`{${"id"}}`, encodeURIComponent(String(id)));
+                .replace('{id}', encodeURIComponent(String(id)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -205,7 +203,6 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
             // authentication oauth2 required
 
 
-
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
             }
@@ -219,7 +216,7 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         *
+         * 
          * @summary List all snapshots
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {number} [page] Page number of the results
@@ -269,7 +266,7 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
                 localVarQueryParameter['order'] = order;
             }
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -284,7 +281,7 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         *
+         * 
          * @summary Get snapshot by ID or name
          * @param {string} id Snapshot ID or name
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -295,7 +292,7 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
             // verify required parameter 'id' is not null or undefined
             assertParamExists('getSnapshot', 'id', id)
             const localVarPath = `/snapshots/{id}`
-                .replace(`{${"id"}}`, encodeURIComponent(String(id)));
+                .replace('{id}', encodeURIComponent(String(id)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -313,7 +310,7 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -341,7 +338,7 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
             // verify required parameter 'id' is not null or undefined
             assertParamExists('getSnapshotBuildLogs', 'id', id)
             const localVarPath = `/snapshots/{id}/build-logs`
-                .replace(`{${"id"}}`, encodeURIComponent(String(id)));
+                .replace('{id}', encodeURIComponent(String(id)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -364,7 +361,6 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
             }
 
 
-
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
             }
@@ -378,7 +374,7 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         *
+         * 
          * @summary Get snapshot build logs URL
          * @param {string} id Snapshot ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -389,7 +385,7 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
             // verify required parameter 'id' is not null or undefined
             assertParamExists('getSnapshotBuildLogsUrl', 'id', id)
             const localVarPath = `/snapshots/{id}/build-logs-url`
-                .replace(`{${"id"}}`, encodeURIComponent(String(id)));
+                .replace('{id}', encodeURIComponent(String(id)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -407,7 +403,7 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -422,7 +418,7 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         *
+         * 
          * @summary Delete snapshot
          * @param {string} id Snapshot ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -433,7 +429,7 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
             // verify required parameter 'id' is not null or undefined
             assertParamExists('removeSnapshot', 'id', id)
             const localVarPath = `/snapshots/{id}`
-                .replace(`{${"id"}}`, encodeURIComponent(String(id)));
+                .replace('{id}', encodeURIComponent(String(id)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -452,7 +448,6 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
             // authentication oauth2 required
 
 
-
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
             }
@@ -466,10 +461,10 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         *
+         * 
          * @summary Set snapshot general status
          * @param {string} id Snapshot ID
-         * @param {SetSnapshotGeneralStatusDto} setSnapshotGeneralStatusDto
+         * @param {SetSnapshotGeneralStatusDto} setSnapshotGeneralStatusDto 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -480,7 +475,7 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
             // verify required parameter 'setSnapshotGeneralStatusDto' is not null or undefined
             assertParamExists('setSnapshotGeneralStatus', 'setSnapshotGeneralStatusDto', setSnapshotGeneralStatusDto)
             const localVarPath = `/snapshots/{id}/general`
-                .replace(`{${"id"}}`, encodeURIComponent(String(id)));
+                .replace('{id}', encodeURIComponent(String(id)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -498,9 +493,8 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -520,13 +514,12 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
 
 /**
  * SnapshotsApi - functional programming interface
- * @export
  */
 export const SnapshotsApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = SnapshotsApiAxiosParamCreator(configuration)
     return {
         /**
-         *
+         * 
          * @summary Activate a snapshot
          * @param {string} id Snapshot ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -540,7 +533,7 @@ export const SnapshotsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Check if an image can be cleaned up
          * @param {string} imageName Image name with tag to check
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -554,9 +547,9 @@ export const SnapshotsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Create a new snapshot
-         * @param {CreateSnapshot} createSnapshot
+         * @param {CreateSnapshot} createSnapshot 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -568,7 +561,7 @@ export const SnapshotsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Deactivate a snapshot
          * @param {string} id Snapshot ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -582,7 +575,7 @@ export const SnapshotsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary List all snapshots
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {number} [page] Page number of the results
@@ -600,7 +593,7 @@ export const SnapshotsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get snapshot by ID or name
          * @param {string} id Snapshot ID or name
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -630,7 +623,7 @@ export const SnapshotsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get snapshot build logs URL
          * @param {string} id Snapshot ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -644,7 +637,7 @@ export const SnapshotsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Delete snapshot
          * @param {string} id Snapshot ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -658,10 +651,10 @@ export const SnapshotsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Set snapshot general status
          * @param {string} id Snapshot ID
-         * @param {SetSnapshotGeneralStatusDto} setSnapshotGeneralStatusDto
+         * @param {SetSnapshotGeneralStatusDto} setSnapshotGeneralStatusDto 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -677,13 +670,12 @@ export const SnapshotsApiFp = function(configuration?: Configuration) {
 
 /**
  * SnapshotsApi - factory interface
- * @export
  */
 export const SnapshotsApiFactory = function (configuration?: Configuration, basePath?: string, axios?: AxiosInstance) {
     const localVarFp = SnapshotsApiFp(configuration)
     return {
         /**
-         *
+         * 
          * @summary Activate a snapshot
          * @param {string} id Snapshot ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -694,7 +686,7 @@ export const SnapshotsApiFactory = function (configuration?: Configuration, base
             return localVarFp.activateSnapshot(id, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Check if an image can be cleaned up
          * @param {string} imageName Image name with tag to check
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -705,9 +697,9 @@ export const SnapshotsApiFactory = function (configuration?: Configuration, base
             return localVarFp.canCleanupImage(imageName, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Create a new snapshot
-         * @param {CreateSnapshot} createSnapshot
+         * @param {CreateSnapshot} createSnapshot 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -716,7 +708,7 @@ export const SnapshotsApiFactory = function (configuration?: Configuration, base
             return localVarFp.createSnapshot(createSnapshot, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Deactivate a snapshot
          * @param {string} id Snapshot ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -727,7 +719,7 @@ export const SnapshotsApiFactory = function (configuration?: Configuration, base
             return localVarFp.deactivateSnapshot(id, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary List all snapshots
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {number} [page] Page number of the results
@@ -742,7 +734,7 @@ export const SnapshotsApiFactory = function (configuration?: Configuration, base
             return localVarFp.getAllSnapshots(xBoxLiteOrganizationID, page, limit, name, sort, order, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get snapshot by ID or name
          * @param {string} id Snapshot ID or name
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -766,7 +758,7 @@ export const SnapshotsApiFactory = function (configuration?: Configuration, base
             return localVarFp.getSnapshotBuildLogs(id, xBoxLiteOrganizationID, follow, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get snapshot build logs URL
          * @param {string} id Snapshot ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -777,7 +769,7 @@ export const SnapshotsApiFactory = function (configuration?: Configuration, base
             return localVarFp.getSnapshotBuildLogsUrl(id, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Delete snapshot
          * @param {string} id Snapshot ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -788,10 +780,10 @@ export const SnapshotsApiFactory = function (configuration?: Configuration, base
             return localVarFp.removeSnapshot(id, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Set snapshot general status
          * @param {string} id Snapshot ID
-         * @param {SetSnapshotGeneralStatusDto} setSnapshotGeneralStatusDto
+         * @param {SetSnapshotGeneralStatusDto} setSnapshotGeneralStatusDto 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -804,65 +796,58 @@ export const SnapshotsApiFactory = function (configuration?: Configuration, base
 
 /**
  * SnapshotsApi - object-oriented interface
- * @export
- * @class SnapshotsApi
- * @extends {BaseAPI}
  */
 export class SnapshotsApi extends BaseAPI {
     /**
-     *
+     * 
      * @summary Activate a snapshot
      * @param {string} id Snapshot ID
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof SnapshotsApi
      */
     public activateSnapshot(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return SnapshotsApiFp(this.configuration).activateSnapshot(id, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Check if an image can be cleaned up
      * @param {string} imageName Image name with tag to check
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof SnapshotsApi
      */
     public canCleanupImage(imageName: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return SnapshotsApiFp(this.configuration).canCleanupImage(imageName, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Create a new snapshot
-     * @param {CreateSnapshot} createSnapshot
+     * @param {CreateSnapshot} createSnapshot 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof SnapshotsApi
      */
     public createSnapshot(createSnapshot: CreateSnapshot, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return SnapshotsApiFp(this.configuration).createSnapshot(createSnapshot, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Deactivate a snapshot
      * @param {string} id Snapshot ID
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof SnapshotsApi
      */
     public deactivateSnapshot(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return SnapshotsApiFp(this.configuration).deactivateSnapshot(id, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary List all snapshots
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {number} [page] Page number of the results
@@ -872,20 +857,18 @@ export class SnapshotsApi extends BaseAPI {
      * @param {GetAllSnapshotsOrderEnum} [order] Direction to sort by
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof SnapshotsApi
      */
     public getAllSnapshots(xBoxLiteOrganizationID?: string, page?: number, limit?: number, name?: string, sort?: GetAllSnapshotsSortEnum, order?: GetAllSnapshotsOrderEnum, options?: RawAxiosRequestConfig) {
         return SnapshotsApiFp(this.configuration).getAllSnapshots(xBoxLiteOrganizationID, page, limit, name, sort, order, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Get snapshot by ID or name
      * @param {string} id Snapshot ID or name
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof SnapshotsApi
      */
     public getSnapshot(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return SnapshotsApiFp(this.configuration).getSnapshot(id, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
@@ -900,68 +883,60 @@ export class SnapshotsApi extends BaseAPI {
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof SnapshotsApi
      */
     public getSnapshotBuildLogs(id: string, xBoxLiteOrganizationID?: string, follow?: boolean, options?: RawAxiosRequestConfig) {
         return SnapshotsApiFp(this.configuration).getSnapshotBuildLogs(id, xBoxLiteOrganizationID, follow, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Get snapshot build logs URL
      * @param {string} id Snapshot ID
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof SnapshotsApi
      */
     public getSnapshotBuildLogsUrl(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return SnapshotsApiFp(this.configuration).getSnapshotBuildLogsUrl(id, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Delete snapshot
      * @param {string} id Snapshot ID
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof SnapshotsApi
      */
     public removeSnapshot(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return SnapshotsApiFp(this.configuration).removeSnapshot(id, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Set snapshot general status
      * @param {string} id Snapshot ID
-     * @param {SetSnapshotGeneralStatusDto} setSnapshotGeneralStatusDto
+     * @param {SetSnapshotGeneralStatusDto} setSnapshotGeneralStatusDto 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof SnapshotsApi
      */
     public setSnapshotGeneralStatus(id: string, setSnapshotGeneralStatusDto: SetSnapshotGeneralStatusDto, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return SnapshotsApiFp(this.configuration).setSnapshotGeneralStatus(id, setSnapshotGeneralStatusDto, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 }
 
-/**
- * @export
- */
 export const GetAllSnapshotsSortEnum = {
     NAME: 'name',
     STATE: 'state',
     LAST_USED_AT: 'lastUsedAt',
-    CREATED_AT: 'createdAt'
+    CREATED_AT: 'createdAt',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 export type GetAllSnapshotsSortEnum = typeof GetAllSnapshotsSortEnum[keyof typeof GetAllSnapshotsSortEnum];
-/**
- * @export
- */
 export const GetAllSnapshotsOrderEnum = {
     ASC: 'asc',
-    DESC: 'desc'
+    DESC: 'desc',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 export type GetAllSnapshotsOrderEnum = typeof GetAllSnapshotsOrderEnum[keyof typeof GetAllSnapshotsOrderEnum];

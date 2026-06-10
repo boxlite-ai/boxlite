@@ -5,7 +5,7 @@
  */
 
 export * from './AggregatedUsageChart'
-export * from './SandboxUsageTable'
-export * from './SandboxSpendingTab'
+export * from './BoxUsageTable'
+export * from './BoxSpendingTab'
 export * from './CostBreakdown'
 export * from './ResourceUsageChart'

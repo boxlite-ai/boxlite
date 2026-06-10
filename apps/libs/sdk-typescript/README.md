@@ -1,8 +1,8 @@
 # BoxLite TypeScript SDK
 
-The official TypeScript SDK for [BoxLite](https://boxlite.io), an open-source, secure and elastic infrastructure for running AI-generated code. BoxLite provides full composable computers — [sandboxes](https://www.boxlite.io/docs/en/sandboxes/) — that you can manage programmatically using the BoxLite SDK.
+The official TypeScript SDK for [BoxLite](https://boxlite.io), an open-source, secure and elastic infrastructure for running AI-generated code. BoxLite provides full composable computers — [boxes](https://www.boxlite.io/docs/en/boxes/) — that you can manage programmatically using the BoxLite SDK.
 
-The SDK provides an interface for sandbox management, file system operations, Git operations, language server protocol support, process and code execution, and computer use. For more information, see the [documentation](https://www.boxlite.io/docs/en/typescript-sdk/).
+The SDK provides an interface for box management, file system operations, Git operations, language server protocol support, process and code execution, and computer use. For more information, see the [documentation](https://www.boxlite.io/docs/en/typescript-sdk/).
 
 ## Installation
 
@@ -44,62 +44,62 @@ const boxlite = new BoxLite({
 });
 ```
 
-## Create a sandbox
+## Create a box
 
-Create a sandbox to run your code securely in an isolated environment.
+Create a box to run your code securely in an isolated environment.
 
 ```typescript
 import { BoxLite } from '@boxlite-ai/sdk'
 
 const boxlite = new BoxLite({apiKey: "YOUR_API_KEY"});
-const sandbox = await boxlite.create({
+const box = await boxlite.create({
   language: 'typescript'
 });
-const response = await sandbox.process.codeRun('console.log("Hello World!")');
+const response = await box.process.codeRun('console.log("Hello World!")');
 console.log(response.result);
 ```
 
 ## Examples and guides
 
-BoxLite provides [examples](https://www.boxlite.io/docs/en/getting-started/#examples) and [guides](https://www.boxlite.io/docs/en/guides/) for common sandbox operations, best practices, and a wide range of topics, from basic usage to advanced topics, showcasing various types of integrations between BoxLite and other tools.
+BoxLite provides [examples](https://www.boxlite.io/docs/en/getting-started/#examples) and [guides](https://www.boxlite.io/docs/en/guides/) for common box operations, best practices, and a wide range of topics, from basic usage to advanced topics, showcasing various types of integrations between BoxLite and other tools.
 
-### Create a sandbox with custom resources
+### Create a box with custom resources
 
-Create a sandbox with [custom resources](https://www.boxlite.io/docs/en/sandboxes/#resources) (CPU, memory, disk).
+Create a box with [custom resources](https://www.boxlite.io/docs/en/boxes/#resources) (CPU, memory, disk).
 
 ```typescript
 import { BoxLite, Image } from '@boxlite-ai/sdk';
 
 const boxlite = new BoxLite();
-const sandbox = await boxlite.create({
+const box = await boxlite.create({
     image: Image.debianSlim('3.12'),
     resources: { cpu: 2, memory: 4, disk: 8 }
 });
 ```
 
-### Create an ephemeral sandbox
+### Create an ephemeral box
 
-Create an [ephemeral sandbox](https://www.boxlite.io/docs/en/sandboxes/#ephemeral-sandboxes) that is automatically deleted when stopped.
+Create an [ephemeral box](https://www.boxlite.io/docs/en/boxes/#ephemeral-boxes) that is automatically deleted when stopped.
 
 ```typescript
 import { BoxLite } from '@boxlite-ai/sdk';
 
 const boxlite = new BoxLite();
-const sandbox = await boxlite.create({
+const box = await boxlite.create({
     ephemeral: true,
     autoStopInterval: 5
 });
 ```
 
-### Create a sandbox from a snapshot
+### Create a box from a snapshot
 
-Create a sandbox from a [snapshot](https://www.boxlite.io/docs/en/snapshots/).
+Create a box from a [snapshot](https://www.boxlite.io/docs/en/snapshots/).
 
 ```typescript
 import { BoxLite } from '@boxlite-ai/sdk';
 
 const boxlite = new BoxLite();
-const sandbox = await boxlite.create({
+const box = await boxlite.create({
     snapshot: 'my-snapshot-name',
     language: 'typescript'
 });
@@ -107,15 +107,15 @@ const sandbox = await boxlite.create({
 
 ### Execute commands
 
-Execute commands in the sandbox.
+Execute commands in the box.
 
 ```typescript
 // Execute a shell command
-const response = await sandbox.process.executeCommand('echo "Hello, World!"')
+const response = await box.process.executeCommand('echo "Hello, World!"')
 console.log(response.result)
 
 // Run TypeScript code
-const response = await sandbox.process.codeRun(`
+const response = await box.process.codeRun(`
 const x = 10
 const y = 20
 console.log(\`Sum: \${x + y}\`)
@@ -125,32 +125,32 @@ console.log(response.result)
 
 ### File operations
 
-Upload, download, and search files in the sandbox.
+Upload, download, and search files in the box.
 
 ```typescript
 // Upload a file
-await sandbox.fs.uploadFile(Buffer.from('Hello, World!'), 'path/to/file.txt')
+await box.fs.uploadFile(Buffer.from('Hello, World!'), 'path/to/file.txt')
 
 // Download a file
-const content = await sandbox.fs.downloadFile('path/to/file.txt')
+const content = await box.fs.downloadFile('path/to/file.txt')
 
 // Search for files
-const matches = await sandbox.fs.findFiles(root_dir, 'search_pattern')
+const matches = await box.fs.findFiles(root_dir, 'search_pattern')
 ```
 
 ### Git operations
 
-Clone, list branches, and add files to the sandbox.
+Clone, list branches, and add files to the box.
 
 ```typescript
 // Clone a repository
-await sandbox.git.clone('https://github.com/example/repo', 'path/to/clone')
+await box.git.clone('https://github.com/example/repo', 'path/to/clone')
 
 // List branches
-const branches = await sandbox.git.branches('path/to/repo')
+const branches = await box.git.branches('path/to/repo')
 
 // Add files
-await sandbox.git.add('path/to/repo', ['file1.txt', 'file2.txt'])
+await box.git.add('path/to/repo', ['file1.txt', 'file2.txt'])
 ```
 
 ### Language server protocol
@@ -159,7 +159,7 @@ Create and start a language server to get code completions, document symbols, an
 
 ```typescript
 // Create and start a language server
-const lsp = await sandbox.createLspServer('typescript', 'path/to/project')
+const lsp = await box.createLspServer('typescript', 'path/to/project')
 await lsp.start()
 
 // Notify the lsp for the file

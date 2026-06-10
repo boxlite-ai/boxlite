@@ -11,9 +11,9 @@ import (
 
 	"github.com/boxlite-ai/boxlite/cli/cmd"
 	"github.com/boxlite-ai/boxlite/cli/cmd/auth"
+	"github.com/boxlite-ai/boxlite/cli/cmd/box"
 	"github.com/boxlite-ai/boxlite/cli/cmd/mcp"
 	"github.com/boxlite-ai/boxlite/cli/cmd/organization"
-	"github.com/boxlite-ai/boxlite/cli/cmd/sandbox"
 	"github.com/boxlite-ai/boxlite/cli/cmd/snapshot"
 	"github.com/boxlite-ai/boxlite/cli/cmd/volume"
 	"github.com/boxlite-ai/boxlite/cli/internal"
@@ -24,7 +24,7 @@ import (
 var rootCmd = &cobra.Command{
 	Use:               "boxlite",
 	Short:             "BoxLite CLI",
-	Long:              "Command line interface for BoxLite Sandboxes",
+	Long:              "Command line interface for BoxLite Boxes",
 	DisableAutoGenTag: true,
 	SilenceUsage:      true,
 	SilenceErrors:     true,
@@ -35,11 +35,11 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddGroup(&cobra.Group{ID: internal.USER_GROUP, Title: "User"})
-	rootCmd.AddGroup(&cobra.Group{ID: internal.SANDBOX_GROUP, Title: "Sandbox"})
+	rootCmd.AddGroup(&cobra.Group{ID: internal.BOX_GROUP, Title: "Box"})
 
 	rootCmd.AddCommand(auth.LoginCmd)
 	rootCmd.AddCommand(auth.LogoutCmd)
-	rootCmd.AddCommand(sandbox.SandboxCmd)
+	rootCmd.AddCommand(box.BoxCmd)
 	rootCmd.AddCommand(snapshot.SnapshotsCmd)
 	rootCmd.AddCommand(volume.VolumeCmd)
 	rootCmd.AddCommand(organization.OrganizationCmd)
@@ -49,17 +49,17 @@ func init() {
 	rootCmd.AddCommand(cmd.GenerateDocsCmd)
 	rootCmd.AddCommand(cmd.VersionCmd)
 
-	// Add sandbox subcommands as top-level shortcuts
-	rootCmd.AddCommand(createSandboxShortcut(sandbox.CreateCmd))
-	rootCmd.AddCommand(createSandboxShortcut(sandbox.DeleteCmd))
-	rootCmd.AddCommand(createSandboxShortcut(sandbox.InfoCmd))
-	rootCmd.AddCommand(createSandboxShortcut(sandbox.ListCmd))
-	rootCmd.AddCommand(createSandboxShortcut(sandbox.StartCmd))
-	rootCmd.AddCommand(createSandboxShortcut(sandbox.StopCmd))
-	rootCmd.AddCommand(createSandboxShortcut(sandbox.ArchiveCmd))
-	rootCmd.AddCommand(createSandboxShortcut(sandbox.SSHCmd))
-	rootCmd.AddCommand(createSandboxShortcut(sandbox.ExecCmd))
-	rootCmd.AddCommand(createSandboxShortcut(sandbox.PreviewUrlCmd))
+	// Add box subcommands as top-level shortcuts
+	rootCmd.AddCommand(createBoxShortcut(box.CreateCmd))
+	rootCmd.AddCommand(createBoxShortcut(box.DeleteCmd))
+	rootCmd.AddCommand(createBoxShortcut(box.InfoCmd))
+	rootCmd.AddCommand(createBoxShortcut(box.ListCmd))
+	rootCmd.AddCommand(createBoxShortcut(box.StartCmd))
+	rootCmd.AddCommand(createBoxShortcut(box.StopCmd))
+	rootCmd.AddCommand(createBoxShortcut(box.ArchiveCmd))
+	rootCmd.AddCommand(createBoxShortcut(box.SSHCmd))
+	rootCmd.AddCommand(createBoxShortcut(box.ExecCmd))
+	rootCmd.AddCommand(createBoxShortcut(box.PreviewUrlCmd))
 
 	rootCmd.CompletionOptions.HiddenDefaultCmd = true
 	rootCmd.PersistentFlags().BoolP("help", "", false, "help for boxlite")
@@ -77,15 +77,15 @@ func init() {
 	}
 }
 
-// createSandboxShortcut creates a top-level shortcut for a sandbox subcommand
-func createSandboxShortcut(original *cobra.Command) *cobra.Command {
+// createBoxShortcut creates a top-level shortcut for a box subcommand
+func createBoxShortcut(original *cobra.Command) *cobra.Command {
 	shortcut := &cobra.Command{
 		Use:     original.Use,
 		Short:   original.Short,
 		Long:    original.Long,
 		Args:    original.Args,
 		Aliases: original.Aliases,
-		GroupID: internal.SANDBOX_GROUP,
+		GroupID: internal.BOX_GROUP,
 		RunE:    original.RunE,
 	}
 	shortcut.Flags().AddFlagSet(original.Flags())

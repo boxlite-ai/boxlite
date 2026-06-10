@@ -13,7 +13,7 @@ import { InterpreterApi, InterpreterContext } from '@boxlite-ai/toolbox-api-clie
 import { Configuration } from '@boxlite-ai/api-client'
 import { BoxliteError, BoxLiteTimeoutError } from './errors/BoxliteError'
 import { ExecutionError, ExecutionResult, RunCodeOptions } from './types/CodeInterpreter'
-import { createSandboxWebSocket } from './utils/WebSocket'
+import { createBoxWebSocket } from './utils/WebSocket'
 
 type CloseEvent = {
   code: number
@@ -23,12 +23,12 @@ type CloseEvent = {
 const WEBSOCKET_TIMEOUT_CODE = 4008
 
 /**
- * Handles Python code interpretation and execution within a Sandbox.
+ * Handles Python code interpretation and execution within a Box.
  *
  * Provides methods to execute code (currently only Python) in isolated interpreter contexts,
  * manage contexts, and stream execution output via callbacks.
  *
- * For other languages, use the `codeRun` method from the `Process` interface, or execute the appropriate command directly in the sandbox terminal.
+ * For other languages, use the `codeRun` method from the `Process` interface, or execute the appropriate command directly in the box terminal.
  */
 export class CodeInterpreter {
   constructor(
@@ -38,7 +38,7 @@ export class CodeInterpreter {
   ) {}
 
   /**
-   * Run Python code in the sandbox.
+   * Run Python code in the box.
    *
    * @param {string} code - Code to run.
    * @param {RunCodeOptions} options - Execution options (context, envs, callbacks, timeout).
@@ -75,7 +75,7 @@ export class CodeInterpreter {
 
     const url = `${this.clientConfig.basePath.replace(/^http/, 'ws')}/process/interpreter/execute`
 
-    const ws = await createSandboxWebSocket(url, this.clientConfig.baseOptions?.headers || {}, this.getPreviewToken)
+    const ws = await createBoxWebSocket(url, this.clientConfig.baseOptions?.headers || {}, this.getPreviewToken)
 
     const result: ExecutionResult = { stdout: '', stderr: '' }
 
@@ -221,15 +221,15 @@ export class CodeInterpreter {
   /**
    * Create a new isolated interpreter context.
    *
-   * @param {string} [cwd] - Working directory for the context. Uses sandbox working directory if omitted.
+   * @param {string} [cwd] - Working directory for the context. Uses box working directory if omitted.
    *
    * @returns {Promise<InterpreterContext>} The created context.
    *
    * @example
    * ```ts
-   * const ctx = await sandbox.codeInterpreter.createContext()
-   * await sandbox.codeInterpreter.runCode('x = 10', { context: ctx })
-   * await sandbox.codeInterpreter.deleteContext(ctx.id!)
+   * const ctx = await box.codeInterpreter.createContext()
+   * await box.codeInterpreter.runCode('x = 10', { context: ctx })
+   * await box.codeInterpreter.deleteContext(ctx.id!)
    * ```
    */
   public async createContext(cwd?: string): Promise<InterpreterContext> {
@@ -243,7 +243,7 @@ export class CodeInterpreter {
    *
    * @example
    * ```ts
-   * const contexts = await sandbox.codeInterpreter.listContexts()
+   * const contexts = await box.codeInterpreter.listContexts()
    * for (const ctx of contexts) {
    *   console.log(ctx.id, ctx.language, ctx.cwd)
    * }
@@ -260,9 +260,9 @@ export class CodeInterpreter {
    *
    * @example
    * ```ts
-   * const ctx = await sandbox.codeInterpreter.createContext()
+   * const ctx = await box.codeInterpreter.createContext()
    * // ... use context ...
-   * await sandbox.codeInterpreter.deleteContext(ctx)
+   * await box.codeInterpreter.deleteContext(ctx)
    * ```
    */
   public async deleteContext(context: InterpreterContext): Promise<void> {

@@ -174,66 +174,66 @@ func (g *SSHGateway) handleConnection(conn net.Conn, serverConfig *ssh.ServerCon
 		return
 	}
 
-	log.Printf("Validating token: %s", token)
+	log.Printf("Validating SSH token")
 
 	// Validate the token using the API
-	validation, _, err := g.apiClient.SandboxAPI.ValidateSshAccess(context.Background()).Token(token).Execute()
+	validation, _, err := g.apiClient.BoxAPI.ValidateSshAccess(context.Background()).Token(token).Execute()
 	if err != nil {
-		log.Printf("Failed to validate SSH access: %v", err)
+		log.Printf("Failed to validate SSH access")
 		conn.Close()
 		return
 	}
 
 	if !validation.Valid {
-		log.Printf("Invalid token: %s", token)
+		log.Printf("Invalid SSH token")
 		conn.Close()
 		return
 	}
 
-	runner, _, err := g.apiClient.RunnersAPI.GetRunnerBySandboxId(context.Background(), validation.SandboxId).Execute()
+	runner, _, err := g.apiClient.RunnersAPI.GetRunnerByBoxId(context.Background(), validation.BoxId).Execute()
 	if err != nil {
-		log.Printf("Failed to get runner by sandbox ID: %v", err)
+		log.Printf("Failed to get runner by box ID: %v", err)
 		conn.Close()
 		return
 	}
 
 	if runner.Domain == nil {
-		log.Printf("Runner domain is nil for sandbox ID: %s", validation.SandboxId)
+		log.Printf("Runner domain is nil for box ID: %s", validation.BoxId)
 		g.sendErrorAndClose(conn, "Runner domain not found. Cannot establish SSH connection.")
 		return
 	}
 
 	runnerID := runner.Id
 	runnerDomain := *runner.Domain
-	sandboxId := validation.SandboxId
+	boxId := validation.BoxId
 
 	log.Printf("Token validated, SSH connection established for runner: %s", runnerID)
 
-	// Check if the sandbox is started before proceeding
-	if sandboxId != "" {
-		log.Printf("Checking sandbox state for sandbox: %s", sandboxId)
-		sandbox, _, err := g.apiClient.SandboxAPI.GetSandbox(context.Background(), sandboxId).Execute()
+	// Check if the box is started before proceeding
+	if boxId != "" {
+		log.Printf("Checking box state for box: %s", boxId)
+		box, _, err := g.apiClient.BoxAPI.GetBox(context.Background(), boxId).Execute()
 		if err != nil {
-			log.Printf("Failed to get sandbox state for %s: %v", sandboxId, err)
+			log.Printf("Failed to get box state for %s", boxId)
 			// Send error message to client and close connection
-			g.sendErrorAndClose(conn, fmt.Sprintf("Failed to verify sandbox state: %v", err))
+			g.sendErrorAndClose(conn, "Failed to verify box state.")
 			return
 		}
 
-		if sandbox.State == nil || *sandbox.State != apiclient.SANDBOXSTATE_STARTED {
+		if box.State == nil || *box.State != apiclient.BOXSTATE_STARTED {
 			state := "unknown"
-			if sandbox.State != nil {
-				state = string(*sandbox.State)
+			if box.State != nil {
+				state = string(*box.State)
 			}
 
-			log.Printf("Sandbox %s is not started (state: %s), closing connection", sandboxId, state)
-			g.sendErrorAndClose(conn, fmt.Sprintf("Sandbox is not started (state: %s). Please start the sandbox before attempting to connect.", state))
+			log.Printf("Box %s is not started (state: %s), closing connection", boxId, state)
+			g.sendErrorAndClose(conn, fmt.Sprintf("Box is not started (state: %s). Please start the box before attempting to connect.", state))
 			return
 		}
 
-		log.Printf("Sandbox %s is started, allowing SSH connection", sandboxId)
+		log.Printf("Box %s is started, allowing SSH connection", boxId)
 	} else {
-		log.Printf("No sandbox ID provided, proceeding with connection")
+		log.Printf("No box ID provided, proceeding with connection")
 	}
 
 	// Handle global requests
@@ -252,11 +252,11 @@ func (g *SSHGateway) handleConnection(conn net.Conn, serverConfig *ssh.ServerCon
 
 	// Handle channels
 	for newChannel := range chans {
-		go g.handleChannel(newChannel, runnerID, runnerDomain, token, sandboxId)
+		go g.handleChannel(newChannel, runnerID, runnerDomain, token, boxId)
 	}
 }
 
-func (g *SSHGateway) handleChannel(newChannel ssh.NewChannel, runnerID string, runnerDomain string, token string, sandboxId string) {
+func (g *SSHGateway) handleChannel(newChannel ssh.NewChannel, runnerID string, runnerDomain string, token string, boxId string) {
 	log.Printf("New channel: %s for runner: %s", newChannel.ChannelType(), runnerID)
 
 	// Accept the channel from the client
@@ -271,7 +271,7 @@ func (g *SSHGateway) handleChannel(newChannel ssh.NewChannel, runnerID string, r
 	signer := g.privateKey
 
 	// Connect to the runner's SSH gateway
-	runnerConn, err := g.connectToRunner(sandboxId, runnerDomain, signer)
+	runnerConn, err := g.connectToRunner(boxId, runnerDomain, signer)
 	if err != nil {
 		log.Printf("Failed to connect to runner: %v", err)
 		clientChannel.Close()
@@ -337,12 +337,12 @@ func (g *SSHGateway) handleChannel(newChannel ssh.NewChannel, runnerID string, r
 
 	keepAliveContext, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	// Keep sandbox alive while connection is open
+	// Keep box alive while connection is open
 	go func() {
 		// Update immediately upon starting
-		_, err := g.apiClient.SandboxAPI.UpdateLastActivity(keepAliveContext, sandboxId).Execute()
+		_, err := g.apiClient.BoxAPI.UpdateLastActivity(keepAliveContext, boxId).Execute()
 		if err != nil {
-			log.Warnf("failed to update last activity for sandbox %s (will retry): %v", sandboxId, err)
+			log.Warnf("failed to update last activity for box %s (will retry)", boxId)
 		}
 
 		// Then every 45 seconds
@@ -352,9 +352,9 @@ func (g *SSHGateway) handleChannel(newChannel ssh.NewChannel, runnerID string, r
 		for {
 			select {
 			case <-ticker.C:
-				_, err := g.apiClient.SandboxAPI.UpdateLastActivity(keepAliveContext, sandboxId).Execute()
+				_, err := g.apiClient.BoxAPI.UpdateLastActivity(keepAliveContext, boxId).Execute()
 				if err != nil {
-					log.Errorf("failed to update last activity for sandbox %s: %v", sandboxId, err)
+					log.Errorf("failed to update last activity for box %s", boxId)
 				}
 			case <-keepAliveContext.Done():
 				return
@@ -370,7 +370,7 @@ func (g *SSHGateway) handleChannel(newChannel ssh.NewChannel, runnerID string, r
 	log.Printf("Channel closed for runner: %s", runnerID)
 }
 
-func (g *SSHGateway) connectToRunner(sandboxId string, runnerDomain string, signer ssh.Signer) (*ssh.Client, error) {
+func (g *SSHGateway) connectToRunner(boxId string, runnerDomain string, signer ssh.Signer) (*ssh.Client, error) {
 	// Use runner domain if available, otherwise use localhost
 	host := runnerDomain
 	if host == "" {
@@ -391,7 +391,7 @@ func (g *SSHGateway) connectToRunner(sandboxId string, runnerDomain string, sign
 	}
 
 	config := &ssh.ClientConfig{
-		User: sandboxId, // Default username for sandbox
+		User: boxId, // Default username for box
 		Auth: []ssh.AuthMethod{
 			ssh.PublicKeys(signer),
 		},

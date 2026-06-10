@@ -10,7 +10,7 @@ import { JwtStrategy } from './jwt.strategy'
 import { ApiKeyStrategy } from './api-key.strategy'
 import { UserModule } from '../user/user.module'
 import { ApiKeyModule } from '../api-key/api-key.module'
-import { SandboxModule } from '../sandbox/sandbox.module'
+import { BoxModule } from '../box/box.module'
 import { TypedConfigService } from '../config/typed-config.service'
 import { UserService } from '../user/user.service'
 import { TypedConfigModule } from '../config/typed-config.module'
@@ -28,7 +28,7 @@ import { LogoutController } from './logout.controller'
     TypedConfigModule,
     UserModule,
     ApiKeyModule,
-    SandboxModule,
+    BoxModule,
     RegionModule,
   ],
   controllers: [LogoutController],

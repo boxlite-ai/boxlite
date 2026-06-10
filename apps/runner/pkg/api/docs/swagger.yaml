@@ -1,4 +1,17 @@
 definitions:
+  BoxInfoResponse:
+    properties:
+      backupError:
+        type: string
+      backupSnapshot:
+        type: string
+      backupState:
+        $ref: '#/definitions/enums.BackupState'
+      daemonVersion:
+        type: string
+      state:
+        $ref: '#/definitions/enums.BoxState'
+    type: object
   BuildSnapshotRequestDTO:
     properties:
       context:
@@ -34,7 +47,7 @@ definitions:
       - registry
       - snapshot
     type: object
-  CreateSandboxDTO:
+  CreateBoxDTO:
     properties:
       authToken:
         type: string
@@ -161,7 +174,7 @@ definitions:
     required:
       - snapshot
     type: object
-  RecoverSandboxDTO:
+  RecoverBoxDTO:
     properties:
       backupErrorReason:
         type: string
@@ -217,7 +230,7 @@ definitions:
     required:
       - url
     type: object
-  ResizeSandboxDTO:
+  ResizeBoxDTO:
     properties:
       cpu:
         minimum: 1
@@ -261,7 +274,7 @@ definitions:
         type: number
       currentSnapshotCount:
         type: integer
-      currentStartedSandboxes:
+      currentStartedBoxes:
         type: integer
     type: object
   RunnerServiceInfo:
@@ -275,19 +288,6 @@ definitions:
     required:
       - healthy
       - serviceName
-    type: object
-  SandboxInfoResponse:
-    properties:
-      backupError:
-        type: string
-      backupSnapshot:
-        type: string
-      backupState:
-        $ref: '#/definitions/enums.BackupState'
-      daemonVersion:
-        type: string
-      state:
-        $ref: '#/definitions/enums.SandboxState'
     type: object
   SnapshotDigestResponse:
     properties:
@@ -332,12 +332,12 @@ definitions:
         example: 0.13
         type: number
     type: object
-  StartSandboxResponse:
+  StartBoxResponse:
     properties:
       daemonVersion:
         type: string
     type: object
-  StopSandboxDTO:
+  StopBoxDTO:
     properties:
       force:
         type: boolean
@@ -384,7 +384,7 @@ definitions:
       - BackupStateInProgress
       - BackupStateCompleted
       - BackupStateFailed
-  enums.SandboxState:
+  enums.BoxState:
     enum:
       - creating
       - restoring
@@ -400,18 +400,18 @@ definitions:
       - pulling_snapshot
     type: string
     x-enum-varnames:
-      - SandboxStateCreating
-      - SandboxStateRestoring
-      - SandboxStateDestroyed
-      - SandboxStateDestroying
-      - SandboxStateStarted
-      - SandboxStateStopped
-      - SandboxStateStarting
-      - SandboxStateStopping
-      - SandboxStateResizing
-      - SandboxStateError
-      - SandboxStateUnknown
-      - SandboxStatePullingSnapshot
+      - BoxStateCreating
+      - BoxStateRestoring
+      - BoxStateDestroyed
+      - BoxStateDestroying
+      - BoxStateStarted
+      - BoxStateStopped
+      - BoxStateStarting
+      - BoxStateStopping
+      - BoxStateResizing
+      - BoxStateError
+      - BoxStateUnknown
+      - BoxStatePullingSnapshot
 info:
   contact: {}
   description: BoxLite Runner API
@@ -432,36 +432,24 @@ paths:
               type: string
             type: object
       summary: Health check
-  /info:
-    get:
-      description: Runner info with system metrics
-      operationId: RunnerInfo
-      produces:
-        - application/json
-      responses:
-        '200':
-          description: OK
-          schema:
-            $ref: '#/definitions/RunnerInfoResponseDTO'
-      summary: Runner info
-  /sandboxes:
+  /boxes:
     post:
-      description: Create a sandbox
+      description: Create a box
       operationId: Create
       parameters:
-        - description: Create sandbox
+        - description: Create box
           in: body
-          name: sandbox
+          name: box
           required: true
           schema:
-            $ref: '#/definitions/CreateSandboxDTO'
+            $ref: '#/definitions/CreateBoxDTO'
       produces:
         - application/json
       responses:
         '201':
           description: Created
           schema:
-            $ref: '#/definitions/StartSandboxResponse'
+            $ref: '#/definitions/StartBoxResponse'
         '400':
           description: Bad Request
           schema:
@@ -482,26 +470,26 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/ErrorResponse'
-      summary: Create a sandbox
+      summary: Create a box
       tags:
-        - sandbox
-  /sandboxes/{sandboxId}:
+        - box
+  /boxes/{boxId}:
     get:
-      description: Get sandbox info
+      description: Get box info
       operationId: Info
       parameters:
-        - description: Sandbox ID
+        - description: Box ID
           in: path
-          name: sandboxId
+          name: boxId
           required: true
           type: string
       produces:
         - application/json
       responses:
         '200':
-          description: Sandbox info
+          description: Box info
           schema:
-            $ref: '#/definitions/SandboxInfoResponse'
+            $ref: '#/definitions/BoxInfoResponse'
         '400':
           description: Bad Request
           schema:
@@ -522,22 +510,22 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/ErrorResponse'
-      summary: Get sandbox info
+      summary: Get box info
       tags:
-        - sandbox
-  /sandboxes/{sandboxId}/backup:
+        - box
+  /boxes/{boxId}/backup:
     post:
-      description: Create sandbox backup
+      description: Create box backup
       operationId: CreateBackup
       parameters:
-        - description: Sandbox ID
+        - description: Box ID
           in: path
-          name: sandboxId
+          name: boxId
           required: true
           type: string
         - description: Create backup
           in: body
-          name: sandbox
+          name: box
           required: true
           schema:
             $ref: '#/definitions/CreateBackupDTO'
@@ -568,24 +556,24 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/ErrorResponse'
-      summary: Create sandbox backup
+      summary: Create box backup
       tags:
-        - sandbox
-  /sandboxes/{sandboxId}/destroy:
+        - box
+  /boxes/{boxId}/destroy:
     post:
-      description: Destroy sandbox
+      description: Destroy box
       operationId: Destroy
       parameters:
-        - description: Sandbox ID
+        - description: Box ID
           in: path
-          name: sandboxId
+          name: boxId
           required: true
           type: string
       produces:
         - application/json
       responses:
         '200':
-          description: Sandbox destroyed
+          description: Box destroyed
           schema:
             type: string
         '400':
@@ -608,19 +596,19 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/ErrorResponse'
-      summary: Destroy sandbox
+      summary: Destroy box
       tags:
-        - sandbox
-  /sandboxes/{sandboxId}/is-recoverable:
+        - box
+  /boxes/{boxId}/is-recoverable:
     post:
       consumes:
         - application/json
-      description: Check if the sandbox's error reason indicates a recoverable error
+      description: Check if the box's error reason indicates a recoverable error
       operationId: IsRecoverable
       parameters:
-        - description: Sandbox ID
+        - description: Box ID
           in: path
-          name: sandboxId
+          name: boxId
           required: true
           type: string
         - description: Error reason to check
@@ -640,17 +628,17 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/ErrorResponse'
-      summary: Check if sandbox error is recoverable
+      summary: Check if box error is recoverable
       tags:
-        - sandbox
-  /sandboxes/{sandboxId}/network-settings:
+        - box
+  /boxes/{boxId}/network-settings:
     get:
-      description: Get sandbox network settings
+      description: Get box network settings
       operationId: GetNetworkSettings
       parameters:
-        - description: Sandbox ID
+        - description: Box ID
           in: path
-          name: sandboxId
+          name: boxId
           required: true
           type: string
       produces:
@@ -680,21 +668,21 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/ErrorResponse'
-      summary: Get sandbox network settings
+      summary: Get box network settings
       tags:
-        - sandbox
+        - box
     post:
-      description: Update sandbox network settings
+      description: Update box network settings
       operationId: UpdateNetworkSettings
       parameters:
-        - description: Sandbox ID
+        - description: Box ID
           in: path
-          name: sandboxId
+          name: boxId
           required: true
           type: string
         - description: Update network settings
           in: body
-          name: sandbox
+          name: box
           required: true
           schema:
             $ref: '#/definitions/UpdateNetworkSettingsDTO'
@@ -725,19 +713,19 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/ErrorResponse'
-      summary: Update sandbox network settings
+      summary: Update box network settings
       tags:
-        - sandbox
-  /sandboxes/{sandboxId}/recover:
+        - box
+  /boxes/{boxId}/recover:
     post:
       consumes:
         - application/json
-      description: Recover sandbox from error state using specified recovery type
+      description: Recover box from error state using specified recovery type
       operationId: Recover
       parameters:
-        - description: Sandbox ID
+        - description: Box ID
           in: path
-          name: sandboxId
+          name: boxId
           required: true
           type: string
         - description: Recovery parameters
@@ -745,12 +733,12 @@ paths:
           name: recovery
           required: true
           schema:
-            $ref: '#/definitions/RecoverSandboxDTO'
+            $ref: '#/definitions/RecoverBoxDTO'
       produces:
         - application/json
       responses:
         '200':
-          description: Sandbox recovered
+          description: Box recovered
           schema:
             type: string
         '400':
@@ -773,30 +761,30 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/ErrorResponse'
-      summary: Recover sandbox from error state
+      summary: Recover box from error state
       tags:
-        - sandbox
-  /sandboxes/{sandboxId}/resize:
+        - box
+  /boxes/{boxId}/resize:
     post:
-      description: Resize sandbox
+      description: Resize box
       operationId: Resize
       parameters:
-        - description: Sandbox ID
+        - description: Box ID
           in: path
-          name: sandboxId
+          name: boxId
           required: true
           type: string
-        - description: Resize sandbox
+        - description: Resize box
           in: body
-          name: sandbox
+          name: box
           required: true
           schema:
-            $ref: '#/definitions/ResizeSandboxDTO'
+            $ref: '#/definitions/ResizeBoxDTO'
       produces:
         - application/json
       responses:
         '200':
-          description: Sandbox resized
+          description: Box resized
           schema:
             type: string
         '400':
@@ -819,17 +807,17 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/ErrorResponse'
-      summary: Resize sandbox
+      summary: Resize box
       tags:
-        - sandbox
-  /sandboxes/{sandboxId}/start:
+        - box
+  /boxes/{boxId}/start:
     post:
-      description: Start sandbox
+      description: Start box
       operationId: Start
       parameters:
-        - description: Sandbox ID
+        - description: Box ID
           in: path
-          name: sandboxId
+          name: boxId
           required: true
           type: string
         - description: Metadata
@@ -845,9 +833,9 @@ paths:
         - application/json
       responses:
         '200':
-          description: Sandbox started
+          description: Box started
           schema:
-            $ref: '#/definitions/StartSandboxResponse'
+            $ref: '#/definitions/StartBoxResponse'
         '400':
           description: Bad Request
           schema:
@@ -868,29 +856,29 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/ErrorResponse'
-      summary: Start sandbox
+      summary: Start box
       tags:
-        - sandbox
-  /sandboxes/{sandboxId}/stop:
+        - box
+  /boxes/{boxId}/stop:
     post:
-      description: Stop sandbox
+      description: Stop box
       operationId: Stop
       parameters:
-        - description: Sandbox ID
+        - description: Box ID
           in: path
-          name: sandboxId
+          name: boxId
           required: true
           type: string
-        - description: Stop sandbox
+        - description: Stop box
           in: body
-          name: sandbox
+          name: box
           schema:
-            $ref: '#/definitions/StopSandboxDTO'
+            $ref: '#/definitions/StopBoxDTO'
       produces:
         - application/json
       responses:
         '200':
-          description: Sandbox stopped
+          description: Box stopped
           schema:
             type: string
         '400':
@@ -913,130 +901,21 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/ErrorResponse'
-      summary: Stop sandbox
+      summary: Stop box
       tags:
-        - sandbox
-  /sandboxes/{sandboxId}/toolbox/{path}:
-    delete:
-      description: Forwards the request to the specified sandbox's container
-      parameters:
-        - description: Sandbox ID
-          in: path
-          name: sandboxId
-          required: true
-          type: string
-        - description: Path to forward
-          in: path
-          name: path
-          required: true
-          type: string
-      responses:
-        '200':
-          description: Proxied response
-          schema: {}
-        '400':
-          description: Bad request
-          schema:
-            type: string
-        '401':
-          description: Unauthorized
-          schema:
-            type: string
-        '404':
-          description: Sandbox container not found
-          schema:
-            type: string
-        '409':
-          description: Sandbox container conflict
-          schema:
-            type: string
-        '500':
-          description: Internal server error
-          schema:
-            type: string
-      summary: Proxy requests to the sandbox toolbox
-      tags:
-        - toolbox
+        - box
+  /info:
     get:
-      description: Forwards the request to the specified sandbox's container
-      parameters:
-        - description: Sandbox ID
-          in: path
-          name: sandboxId
-          required: true
-          type: string
-        - description: Path to forward
-          in: path
-          name: path
-          required: true
-          type: string
+      description: Runner info with system metrics
+      operationId: RunnerInfo
+      produces:
+        - application/json
       responses:
         '200':
-          description: Proxied response
-          schema: {}
-        '400':
-          description: Bad request
+          description: OK
           schema:
-            type: string
-        '401':
-          description: Unauthorized
-          schema:
-            type: string
-        '404':
-          description: Sandbox container not found
-          schema:
-            type: string
-        '409':
-          description: Sandbox container conflict
-          schema:
-            type: string
-        '500':
-          description: Internal server error
-          schema:
-            type: string
-      summary: Proxy requests to the sandbox toolbox
-      tags:
-        - toolbox
-    post:
-      description: Forwards the request to the specified sandbox's container
-      parameters:
-        - description: Sandbox ID
-          in: path
-          name: sandboxId
-          required: true
-          type: string
-        - description: Path to forward
-          in: path
-          name: path
-          required: true
-          type: string
-      responses:
-        '200':
-          description: Proxied response
-          schema: {}
-        '400':
-          description: Bad request
-          schema:
-            type: string
-        '401':
-          description: Unauthorized
-          schema:
-            type: string
-        '404':
-          description: Sandbox container not found
-          schema:
-            type: string
-        '409':
-          description: Sandbox container conflict
-          schema:
-            type: string
-        '500':
-          description: Internal server error
-          schema:
-            type: string
-      summary: Proxy requests to the sandbox toolbox
-      tags:
-        - toolbox
+            $ref: '#/definitions/RunnerInfoResponseDTO'
+      summary: Runner info
   /snapshots/build:
     post:
       description: Build a snapshot from a Dockerfile and context hashes. The operation
@@ -1354,6 +1233,37 @@ paths:
       summary: Tag an image
       tags:
         - snapshots
+  /v1/boxes/{boxId}/executions/{execId}/attach:
+    get:
+      parameters:
+        - description: Box ID
+          in: path
+          name: boxId
+          required: true
+          type: string
+        - description: Execution ID
+          in: path
+          name: execId
+          required: true
+          type: string
+      responses:
+        '101':
+          description: Switching Protocols
+        '404':
+          description: execution not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        '409':
+          description: already attached
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Attach to an execution via WebSocket
+      tags:
+        - boxlite
 security:
   - Bearer: []
 securityDefinitions:

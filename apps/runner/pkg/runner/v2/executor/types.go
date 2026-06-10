@@ -5,7 +5,7 @@
 
 package executor
 
-type StartSandboxPayload struct {
+type StartBoxPayload struct {
 	AuthToken *string           `json:"authToken,omitempty"`
 	Metadata  map[string]string `json:"metadata,omitempty"`
 }

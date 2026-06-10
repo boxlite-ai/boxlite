@@ -27,14 +27,14 @@ type GitCloneArgs struct {
 
 func GetGitCloneTool() mcp.Tool {
 	return mcp.NewTool("git_clone",
-		mcp.WithDescription("Clone a Git repository into the BoxLite sandbox."),
+		mcp.WithDescription("Clone a Git repository into the BoxLite box."),
 		mcp.WithString("url", mcp.Required(), mcp.Description("URL of the Git repository to clone.")),
 		mcp.WithString("path", mcp.Description("Directory to clone the repository into (defaults to current directory).")),
 		mcp.WithString("branch", mcp.Description("Branch to clone.")),
 		mcp.WithString("commitId", mcp.Description("Commit ID to clone.")),
 		mcp.WithString("username", mcp.Description("Username to clone the repository with.")),
 		mcp.WithString("password", mcp.Description("Password to clone the repository with.")),
-		mcp.WithString("id", mcp.Required(), mcp.Description("ID of the sandbox to clone the repository in.")),
+		mcp.WithString("id", mcp.Required(), mcp.Description("ID of the box to clone the repository in.")),
 	)
 }
 
@@ -45,7 +45,7 @@ func GitClone(ctx context.Context, request mcp.CallToolRequest, args GitCloneArg
 	}
 
 	if args.Id == nil || *args.Id == "" {
-		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("sandbox ID is required")
+		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("box ID is required")
 	}
 
 	gitCloneRequest, err := getGitCloneRequest(args)

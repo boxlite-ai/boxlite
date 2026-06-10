@@ -56,7 +56,7 @@ export interface PyprojectOptions extends PipInstallOptions {
 }
 
 /**
- * Represents an image definition for a BoxLite sandbox.
+ * Represents an image definition for a BoxLite box.
  * Do not construct this class directly. Instead use one of its static factory methods,
  * such as `Image.base()`, `Image.debianSlim()` or `Image.fromDockerfile()`.
  *

@@ -30,12 +30,12 @@ type ToolboxAPI interface {
 	Click mouse at specified coordinates
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIClickMouseDeprecatedRequest
 
 	Deprecated
 	*/
-	ClickMouseDeprecated(ctx context.Context, sandboxId string) ToolboxAPIClickMouseDeprecatedRequest
+	ClickMouseDeprecated(ctx context.Context, boxId string) ToolboxAPIClickMouseDeprecatedRequest
 
 	// ClickMouseDeprecatedExecute executes the request
 	//  @return MouseClickResponse
@@ -45,15 +45,15 @@ type ToolboxAPI interface {
 	/*
 	CreateFolderDeprecated [DEPRECATED] Create folder
 
-	Create folder inside sandbox
+	Create folder inside box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPICreateFolderDeprecatedRequest
 
 	Deprecated
 	*/
-	CreateFolderDeprecated(ctx context.Context, sandboxId string) ToolboxAPICreateFolderDeprecatedRequest
+	CreateFolderDeprecated(ctx context.Context, boxId string) ToolboxAPICreateFolderDeprecatedRequest
 
 	// CreateFolderDeprecatedExecute executes the request
 	// Deprecated
@@ -62,15 +62,15 @@ type ToolboxAPI interface {
 	/*
 	CreatePTYSessionDeprecated [DEPRECATED] Create PTY session
 
-	Create a new PTY session in the sandbox
+	Create a new PTY session in the box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPICreatePTYSessionDeprecatedRequest
 
 	Deprecated
 	*/
-	CreatePTYSessionDeprecated(ctx context.Context, sandboxId string) ToolboxAPICreatePTYSessionDeprecatedRequest
+	CreatePTYSessionDeprecated(ctx context.Context, boxId string) ToolboxAPICreatePTYSessionDeprecatedRequest
 
 	// CreatePTYSessionDeprecatedExecute executes the request
 	//  @return PtyCreateResponse
@@ -80,15 +80,15 @@ type ToolboxAPI interface {
 	/*
 	CreateSessionDeprecated [DEPRECATED] Create session
 
-	Create a new session in the sandbox
+	Create a new session in the box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPICreateSessionDeprecatedRequest
 
 	Deprecated
 	*/
-	CreateSessionDeprecated(ctx context.Context, sandboxId string) ToolboxAPICreateSessionDeprecatedRequest
+	CreateSessionDeprecated(ctx context.Context, boxId string) ToolboxAPICreateSessionDeprecatedRequest
 
 	// CreateSessionDeprecatedExecute executes the request
 	// Deprecated
@@ -97,15 +97,15 @@ type ToolboxAPI interface {
 	/*
 	DeleteFileDeprecated [DEPRECATED] Delete file
 
-	Delete file inside sandbox
+	Delete file inside box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIDeleteFileDeprecatedRequest
 
 	Deprecated
 	*/
-	DeleteFileDeprecated(ctx context.Context, sandboxId string) ToolboxAPIDeleteFileDeprecatedRequest
+	DeleteFileDeprecated(ctx context.Context, boxId string) ToolboxAPIDeleteFileDeprecatedRequest
 
 	// DeleteFileDeprecatedExecute executes the request
 	// Deprecated
@@ -117,13 +117,13 @@ type ToolboxAPI interface {
 	Delete a PTY session and terminate the associated process
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@param sessionId
 	@return ToolboxAPIDeletePTYSessionDeprecatedRequest
 
 	Deprecated
 	*/
-	DeletePTYSessionDeprecated(ctx context.Context, sandboxId string, sessionId string) ToolboxAPIDeletePTYSessionDeprecatedRequest
+	DeletePTYSessionDeprecated(ctx context.Context, boxId string, sessionId string) ToolboxAPIDeletePTYSessionDeprecatedRequest
 
 	// DeletePTYSessionDeprecatedExecute executes the request
 	// Deprecated
@@ -135,13 +135,13 @@ type ToolboxAPI interface {
 	Delete a specific session
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@param sessionId
 	@return ToolboxAPIDeleteSessionDeprecatedRequest
 
 	Deprecated
 	*/
-	DeleteSessionDeprecated(ctx context.Context, sandboxId string, sessionId string) ToolboxAPIDeleteSessionDeprecatedRequest
+	DeleteSessionDeprecated(ctx context.Context, boxId string, sessionId string) ToolboxAPIDeleteSessionDeprecatedRequest
 
 	// DeleteSessionDeprecatedExecute executes the request
 	// Deprecated
@@ -150,15 +150,15 @@ type ToolboxAPI interface {
 	/*
 	DownloadFileDeprecated [DEPRECATED] Download file
 
-	Download file from sandbox
+	Download file from box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIDownloadFileDeprecatedRequest
 
 	Deprecated
 	*/
-	DownloadFileDeprecated(ctx context.Context, sandboxId string) ToolboxAPIDownloadFileDeprecatedRequest
+	DownloadFileDeprecated(ctx context.Context, boxId string) ToolboxAPIDownloadFileDeprecatedRequest
 
 	// DownloadFileDeprecatedExecute executes the request
 	//  @return *os.File
@@ -171,12 +171,12 @@ type ToolboxAPI interface {
 	Streams back a multipart/form-data bundle of the requested paths
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIDownloadFilesDeprecatedRequest
 
 	Deprecated
 	*/
-	DownloadFilesDeprecated(ctx context.Context, sandboxId string) ToolboxAPIDownloadFilesDeprecatedRequest
+	DownloadFilesDeprecated(ctx context.Context, boxId string) ToolboxAPIDownloadFilesDeprecatedRequest
 
 	// DownloadFilesDeprecatedExecute executes the request
 	//  @return *os.File
@@ -189,12 +189,12 @@ type ToolboxAPI interface {
 	Drag mouse from start to end coordinates
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIDragMouseDeprecatedRequest
 
 	Deprecated
 	*/
-	DragMouseDeprecated(ctx context.Context, sandboxId string) ToolboxAPIDragMouseDeprecatedRequest
+	DragMouseDeprecated(ctx context.Context, boxId string) ToolboxAPIDragMouseDeprecatedRequest
 
 	// DragMouseDeprecatedExecute executes the request
 	//  @return MouseDragResponse
@@ -204,15 +204,15 @@ type ToolboxAPI interface {
 	/*
 	ExecuteCommandDeprecated [DEPRECATED] Execute command
 
-	Execute command synchronously inside sandbox
+	Execute command synchronously inside box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIExecuteCommandDeprecatedRequest
 
 	Deprecated
 	*/
-	ExecuteCommandDeprecated(ctx context.Context, sandboxId string) ToolboxAPIExecuteCommandDeprecatedRequest
+	ExecuteCommandDeprecated(ctx context.Context, boxId string) ToolboxAPIExecuteCommandDeprecatedRequest
 
 	// ExecuteCommandDeprecatedExecute executes the request
 	//  @return ExecuteResponse
@@ -225,13 +225,13 @@ type ToolboxAPI interface {
 	Execute a command in a specific session
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@param sessionId
 	@return ToolboxAPIExecuteSessionCommandDeprecatedRequest
 
 	Deprecated
 	*/
-	ExecuteSessionCommandDeprecated(ctx context.Context, sandboxId string, sessionId string) ToolboxAPIExecuteSessionCommandDeprecatedRequest
+	ExecuteSessionCommandDeprecated(ctx context.Context, boxId string, sessionId string) ToolboxAPIExecuteSessionCommandDeprecatedRequest
 
 	// ExecuteSessionCommandDeprecatedExecute executes the request
 	//  @return SessionExecuteResponse
@@ -241,15 +241,15 @@ type ToolboxAPI interface {
 	/*
 	FindInFilesDeprecated [DEPRECATED] Search for text/pattern in files
 
-	Search for text/pattern inside sandbox files
+	Search for text/pattern inside box files
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIFindInFilesDeprecatedRequest
 
 	Deprecated
 	*/
-	FindInFilesDeprecated(ctx context.Context, sandboxId string) ToolboxAPIFindInFilesDeprecatedRequest
+	FindInFilesDeprecated(ctx context.Context, boxId string) ToolboxAPIFindInFilesDeprecatedRequest
 
 	// FindInFilesDeprecatedExecute executes the request
 	//  @return []Match
@@ -262,12 +262,12 @@ type ToolboxAPI interface {
 	Get status of all VNC desktop processes
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIGetComputerUseStatusDeprecatedRequest
 
 	Deprecated
 	*/
-	GetComputerUseStatusDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGetComputerUseStatusDeprecatedRequest
+	GetComputerUseStatusDeprecated(ctx context.Context, boxId string) ToolboxAPIGetComputerUseStatusDeprecatedRequest
 
 	// GetComputerUseStatusDeprecatedExecute executes the request
 	//  @return ComputerUseStatusResponse
@@ -280,12 +280,12 @@ type ToolboxAPI interface {
 	Get information about displays
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIGetDisplayInfoDeprecatedRequest
 
 	Deprecated
 	*/
-	GetDisplayInfoDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGetDisplayInfoDeprecatedRequest
+	GetDisplayInfoDeprecated(ctx context.Context, boxId string) ToolboxAPIGetDisplayInfoDeprecatedRequest
 
 	// GetDisplayInfoDeprecatedExecute executes the request
 	//  @return DisplayInfoResponse
@@ -295,15 +295,15 @@ type ToolboxAPI interface {
 	/*
 	GetFileInfoDeprecated [DEPRECATED] Get file info
 
-	Get file info inside sandbox
+	Get file info inside box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIGetFileInfoDeprecatedRequest
 
 	Deprecated
 	*/
-	GetFileInfoDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGetFileInfoDeprecatedRequest
+	GetFileInfoDeprecated(ctx context.Context, boxId string) ToolboxAPIGetFileInfoDeprecatedRequest
 
 	// GetFileInfoDeprecatedExecute executes the request
 	//  @return FileInfo
@@ -316,12 +316,12 @@ type ToolboxAPI interface {
 	Get current mouse cursor position
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIGetMousePositionDeprecatedRequest
 
 	Deprecated
 	*/
-	GetMousePositionDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGetMousePositionDeprecatedRequest
+	GetMousePositionDeprecated(ctx context.Context, boxId string) ToolboxAPIGetMousePositionDeprecatedRequest
 
 	// GetMousePositionDeprecatedExecute executes the request
 	//  @return MousePosition
@@ -334,13 +334,13 @@ type ToolboxAPI interface {
 	Get PTY session information by ID
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@param sessionId
 	@return ToolboxAPIGetPTYSessionDeprecatedRequest
 
 	Deprecated
 	*/
-	GetPTYSessionDeprecated(ctx context.Context, sandboxId string, sessionId string) ToolboxAPIGetPTYSessionDeprecatedRequest
+	GetPTYSessionDeprecated(ctx context.Context, boxId string, sessionId string) ToolboxAPIGetPTYSessionDeprecatedRequest
 
 	// GetPTYSessionDeprecatedExecute executes the request
 	//  @return PtySessionInfo
@@ -354,12 +354,12 @@ type ToolboxAPI interface {
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param processName
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIGetProcessErrorsDeprecatedRequest
 
 	Deprecated
 	*/
-	GetProcessErrorsDeprecated(ctx context.Context, processName string, sandboxId string) ToolboxAPIGetProcessErrorsDeprecatedRequest
+	GetProcessErrorsDeprecated(ctx context.Context, processName string, boxId string) ToolboxAPIGetProcessErrorsDeprecatedRequest
 
 	// GetProcessErrorsDeprecatedExecute executes the request
 	//  @return ProcessErrorsResponse
@@ -373,12 +373,12 @@ type ToolboxAPI interface {
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param processName
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIGetProcessLogsDeprecatedRequest
 
 	Deprecated
 	*/
-	GetProcessLogsDeprecated(ctx context.Context, processName string, sandboxId string) ToolboxAPIGetProcessLogsDeprecatedRequest
+	GetProcessLogsDeprecated(ctx context.Context, processName string, boxId string) ToolboxAPIGetProcessLogsDeprecatedRequest
 
 	// GetProcessLogsDeprecatedExecute executes the request
 	//  @return ProcessLogsResponse
@@ -392,12 +392,12 @@ type ToolboxAPI interface {
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param processName
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIGetProcessStatusDeprecatedRequest
 
 	Deprecated
 	*/
-	GetProcessStatusDeprecated(ctx context.Context, processName string, sandboxId string) ToolboxAPIGetProcessStatusDeprecatedRequest
+	GetProcessStatusDeprecated(ctx context.Context, processName string, boxId string) ToolboxAPIGetProcessStatusDeprecatedRequest
 
 	// GetProcessStatusDeprecatedExecute executes the request
 	//  @return ProcessStatusResponse
@@ -405,15 +405,15 @@ type ToolboxAPI interface {
 	GetProcessStatusDeprecatedExecute(r ToolboxAPIGetProcessStatusDeprecatedRequest) (*ProcessStatusResponse, *http.Response, error)
 
 	/*
-	GetProjectDirDeprecated [DEPRECATED] Get sandbox project dir
+	GetProjectDirDeprecated [DEPRECATED] Get box project dir
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIGetProjectDirDeprecatedRequest
 
 	Deprecated
 	*/
-	GetProjectDirDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGetProjectDirDeprecatedRequest
+	GetProjectDirDeprecated(ctx context.Context, boxId string) ToolboxAPIGetProjectDirDeprecatedRequest
 
 	// GetProjectDirDeprecatedExecute executes the request
 	//  @return ProjectDirResponse
@@ -426,14 +426,14 @@ type ToolboxAPI interface {
 	Get session command by ID
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@param sessionId
 	@param commandId
 	@return ToolboxAPIGetSessionCommandDeprecatedRequest
 
 	Deprecated
 	*/
-	GetSessionCommandDeprecated(ctx context.Context, sandboxId string, sessionId string, commandId string) ToolboxAPIGetSessionCommandDeprecatedRequest
+	GetSessionCommandDeprecated(ctx context.Context, boxId string, sessionId string, commandId string) ToolboxAPIGetSessionCommandDeprecatedRequest
 
 	// GetSessionCommandDeprecatedExecute executes the request
 	//  @return Command
@@ -446,14 +446,14 @@ type ToolboxAPI interface {
 	Get logs for a specific command in a session
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@param sessionId
 	@param commandId
 	@return ToolboxAPIGetSessionCommandLogsDeprecatedRequest
 
 	Deprecated
 	*/
-	GetSessionCommandLogsDeprecated(ctx context.Context, sandboxId string, sessionId string, commandId string) ToolboxAPIGetSessionCommandLogsDeprecatedRequest
+	GetSessionCommandLogsDeprecated(ctx context.Context, boxId string, sessionId string, commandId string) ToolboxAPIGetSessionCommandLogsDeprecatedRequest
 
 	// GetSessionCommandLogsDeprecatedExecute executes the request
 	//  @return string
@@ -466,13 +466,13 @@ type ToolboxAPI interface {
 	Get session by ID
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@param sessionId
 	@return ToolboxAPIGetSessionDeprecatedRequest
 
 	Deprecated
 	*/
-	GetSessionDeprecated(ctx context.Context, sandboxId string, sessionId string) ToolboxAPIGetSessionDeprecatedRequest
+	GetSessionDeprecated(ctx context.Context, boxId string, sessionId string) ToolboxAPIGetSessionDeprecatedRequest
 
 	// GetSessionDeprecatedExecute executes the request
 	//  @return Session
@@ -480,15 +480,15 @@ type ToolboxAPI interface {
 	GetSessionDeprecatedExecute(r ToolboxAPIGetSessionDeprecatedRequest) (*Session, *http.Response, error)
 
 	/*
-	GetUserHomeDirDeprecated [DEPRECATED] Get sandbox user home dir
+	GetUserHomeDirDeprecated [DEPRECATED] Get box user home dir
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIGetUserHomeDirDeprecatedRequest
 
 	Deprecated
 	*/
-	GetUserHomeDirDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGetUserHomeDirDeprecatedRequest
+	GetUserHomeDirDeprecated(ctx context.Context, boxId string) ToolboxAPIGetUserHomeDirDeprecatedRequest
 
 	// GetUserHomeDirDeprecatedExecute executes the request
 	//  @return UserHomeDirResponse
@@ -501,12 +501,12 @@ type ToolboxAPI interface {
 	Get list of open windows
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIGetWindowsDeprecatedRequest
 
 	Deprecated
 	*/
-	GetWindowsDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGetWindowsDeprecatedRequest
+	GetWindowsDeprecated(ctx context.Context, boxId string) ToolboxAPIGetWindowsDeprecatedRequest
 
 	// GetWindowsDeprecatedExecute executes the request
 	//  @return WindowsResponse
@@ -514,15 +514,15 @@ type ToolboxAPI interface {
 	GetWindowsDeprecatedExecute(r ToolboxAPIGetWindowsDeprecatedRequest) (*WindowsResponse, *http.Response, error)
 
 	/*
-	GetWorkDirDeprecated [DEPRECATED] Get sandbox work-dir
+	GetWorkDirDeprecated [DEPRECATED] Get box work-dir
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIGetWorkDirDeprecatedRequest
 
 	Deprecated
 	*/
-	GetWorkDirDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGetWorkDirDeprecatedRequest
+	GetWorkDirDeprecated(ctx context.Context, boxId string) ToolboxAPIGetWorkDirDeprecatedRequest
 
 	// GetWorkDirDeprecatedExecute executes the request
 	//  @return WorkDirResponse
@@ -535,12 +535,12 @@ type ToolboxAPI interface {
 	Add files to git commit
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIGitAddFilesDeprecatedRequest
 
 	Deprecated
 	*/
-	GitAddFilesDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGitAddFilesDeprecatedRequest
+	GitAddFilesDeprecated(ctx context.Context, boxId string) ToolboxAPIGitAddFilesDeprecatedRequest
 
 	// GitAddFilesDeprecatedExecute executes the request
 	// Deprecated
@@ -552,12 +552,12 @@ type ToolboxAPI interface {
 	Checkout branch or commit in git repository
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIGitCheckoutBranchDeprecatedRequest
 
 	Deprecated
 	*/
-	GitCheckoutBranchDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGitCheckoutBranchDeprecatedRequest
+	GitCheckoutBranchDeprecated(ctx context.Context, boxId string) ToolboxAPIGitCheckoutBranchDeprecatedRequest
 
 	// GitCheckoutBranchDeprecatedExecute executes the request
 	// Deprecated
@@ -569,12 +569,12 @@ type ToolboxAPI interface {
 	Clone git repository
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIGitCloneRepositoryDeprecatedRequest
 
 	Deprecated
 	*/
-	GitCloneRepositoryDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGitCloneRepositoryDeprecatedRequest
+	GitCloneRepositoryDeprecated(ctx context.Context, boxId string) ToolboxAPIGitCloneRepositoryDeprecatedRequest
 
 	// GitCloneRepositoryDeprecatedExecute executes the request
 	// Deprecated
@@ -586,12 +586,12 @@ type ToolboxAPI interface {
 	Commit changes to git repository
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIGitCommitChangesDeprecatedRequest
 
 	Deprecated
 	*/
-	GitCommitChangesDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGitCommitChangesDeprecatedRequest
+	GitCommitChangesDeprecated(ctx context.Context, boxId string) ToolboxAPIGitCommitChangesDeprecatedRequest
 
 	// GitCommitChangesDeprecatedExecute executes the request
 	//  @return GitCommitResponse
@@ -604,12 +604,12 @@ type ToolboxAPI interface {
 	Create branch on git repository
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIGitCreateBranchDeprecatedRequest
 
 	Deprecated
 	*/
-	GitCreateBranchDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGitCreateBranchDeprecatedRequest
+	GitCreateBranchDeprecated(ctx context.Context, boxId string) ToolboxAPIGitCreateBranchDeprecatedRequest
 
 	// GitCreateBranchDeprecatedExecute executes the request
 	// Deprecated
@@ -621,12 +621,12 @@ type ToolboxAPI interface {
 	Delete branch on git repository
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIGitDeleteBranchDeprecatedRequest
 
 	Deprecated
 	*/
-	GitDeleteBranchDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGitDeleteBranchDeprecatedRequest
+	GitDeleteBranchDeprecated(ctx context.Context, boxId string) ToolboxAPIGitDeleteBranchDeprecatedRequest
 
 	// GitDeleteBranchDeprecatedExecute executes the request
 	// Deprecated
@@ -638,12 +638,12 @@ type ToolboxAPI interface {
 	Get commit history from git repository
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIGitGetHistoryDeprecatedRequest
 
 	Deprecated
 	*/
-	GitGetHistoryDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGitGetHistoryDeprecatedRequest
+	GitGetHistoryDeprecated(ctx context.Context, boxId string) ToolboxAPIGitGetHistoryDeprecatedRequest
 
 	// GitGetHistoryDeprecatedExecute executes the request
 	//  @return []GitCommitInfo
@@ -656,12 +656,12 @@ type ToolboxAPI interface {
 	Get status from git repository
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIGitGetStatusDeprecatedRequest
 
 	Deprecated
 	*/
-	GitGetStatusDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGitGetStatusDeprecatedRequest
+	GitGetStatusDeprecated(ctx context.Context, boxId string) ToolboxAPIGitGetStatusDeprecatedRequest
 
 	// GitGetStatusDeprecatedExecute executes the request
 	//  @return GitStatus
@@ -674,12 +674,12 @@ type ToolboxAPI interface {
 	Get branch list from git repository
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIGitListBranchesDeprecatedRequest
 
 	Deprecated
 	*/
-	GitListBranchesDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGitListBranchesDeprecatedRequest
+	GitListBranchesDeprecated(ctx context.Context, boxId string) ToolboxAPIGitListBranchesDeprecatedRequest
 
 	// GitListBranchesDeprecatedExecute executes the request
 	//  @return ListBranchResponse
@@ -692,12 +692,12 @@ type ToolboxAPI interface {
 	Pull changes from remote
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIGitPullChangesDeprecatedRequest
 
 	Deprecated
 	*/
-	GitPullChangesDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGitPullChangesDeprecatedRequest
+	GitPullChangesDeprecated(ctx context.Context, boxId string) ToolboxAPIGitPullChangesDeprecatedRequest
 
 	// GitPullChangesDeprecatedExecute executes the request
 	// Deprecated
@@ -709,12 +709,12 @@ type ToolboxAPI interface {
 	Push changes to remote
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIGitPushChangesDeprecatedRequest
 
 	Deprecated
 	*/
-	GitPushChangesDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGitPushChangesDeprecatedRequest
+	GitPushChangesDeprecated(ctx context.Context, boxId string) ToolboxAPIGitPushChangesDeprecatedRequest
 
 	// GitPushChangesDeprecatedExecute executes the request
 	// Deprecated
@@ -724,12 +724,12 @@ type ToolboxAPI interface {
 	ListFilesDeprecated [DEPRECATED] List files
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIListFilesDeprecatedRequest
 
 	Deprecated
 	*/
-	ListFilesDeprecated(ctx context.Context, sandboxId string) ToolboxAPIListFilesDeprecatedRequest
+	ListFilesDeprecated(ctx context.Context, boxId string) ToolboxAPIListFilesDeprecatedRequest
 
 	// ListFilesDeprecatedExecute executes the request
 	//  @return []FileInfo
@@ -739,15 +739,15 @@ type ToolboxAPI interface {
 	/*
 	ListPTYSessionsDeprecated [DEPRECATED] List PTY sessions
 
-	List all active PTY sessions in the sandbox
+	List all active PTY sessions in the box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIListPTYSessionsDeprecatedRequest
 
 	Deprecated
 	*/
-	ListPTYSessionsDeprecated(ctx context.Context, sandboxId string) ToolboxAPIListPTYSessionsDeprecatedRequest
+	ListPTYSessionsDeprecated(ctx context.Context, boxId string) ToolboxAPIListPTYSessionsDeprecatedRequest
 
 	// ListPTYSessionsDeprecatedExecute executes the request
 	//  @return PtyListResponse
@@ -757,15 +757,15 @@ type ToolboxAPI interface {
 	/*
 	ListSessionsDeprecated [DEPRECATED] List sessions
 
-	List all active sessions in the sandbox
+	List all active sessions in the box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIListSessionsDeprecatedRequest
 
 	Deprecated
 	*/
-	ListSessionsDeprecated(ctx context.Context, sandboxId string) ToolboxAPIListSessionsDeprecatedRequest
+	ListSessionsDeprecated(ctx context.Context, boxId string) ToolboxAPIListSessionsDeprecatedRequest
 
 	// ListSessionsDeprecatedExecute executes the request
 	//  @return []Session
@@ -778,12 +778,12 @@ type ToolboxAPI interface {
 	The Completion request is sent from the client to the server to compute completion items at a given cursor position.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPILspCompletionsDeprecatedRequest
 
 	Deprecated
 	*/
-	LspCompletionsDeprecated(ctx context.Context, sandboxId string) ToolboxAPILspCompletionsDeprecatedRequest
+	LspCompletionsDeprecated(ctx context.Context, boxId string) ToolboxAPILspCompletionsDeprecatedRequest
 
 	// LspCompletionsDeprecatedExecute executes the request
 	//  @return CompletionList
@@ -796,12 +796,12 @@ type ToolboxAPI interface {
 	The document close notification is sent from the client to the server when the document got closed in the client.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPILspDidCloseDeprecatedRequest
 
 	Deprecated
 	*/
-	LspDidCloseDeprecated(ctx context.Context, sandboxId string) ToolboxAPILspDidCloseDeprecatedRequest
+	LspDidCloseDeprecated(ctx context.Context, boxId string) ToolboxAPILspDidCloseDeprecatedRequest
 
 	// LspDidCloseDeprecatedExecute executes the request
 	// Deprecated
@@ -813,12 +813,12 @@ type ToolboxAPI interface {
 	The document open notification is sent from the client to the server to signal newly opened text documents.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPILspDidOpenDeprecatedRequest
 
 	Deprecated
 	*/
-	LspDidOpenDeprecated(ctx context.Context, sandboxId string) ToolboxAPILspDidOpenDeprecatedRequest
+	LspDidOpenDeprecated(ctx context.Context, boxId string) ToolboxAPILspDidOpenDeprecatedRequest
 
 	// LspDidOpenDeprecatedExecute executes the request
 	// Deprecated
@@ -830,12 +830,12 @@ type ToolboxAPI interface {
 	The document symbol request is sent from the client to the server.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPILspDocumentSymbolsDeprecatedRequest
 
 	Deprecated
 	*/
-	LspDocumentSymbolsDeprecated(ctx context.Context, sandboxId string) ToolboxAPILspDocumentSymbolsDeprecatedRequest
+	LspDocumentSymbolsDeprecated(ctx context.Context, boxId string) ToolboxAPILspDocumentSymbolsDeprecatedRequest
 
 	// LspDocumentSymbolsDeprecatedExecute executes the request
 	//  @return []LspSymbol
@@ -845,15 +845,15 @@ type ToolboxAPI interface {
 	/*
 	LspStartDeprecated [DEPRECATED] Start Lsp server
 
-	Start Lsp server process inside sandbox project
+	Start Lsp server process inside box project
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPILspStartDeprecatedRequest
 
 	Deprecated
 	*/
-	LspStartDeprecated(ctx context.Context, sandboxId string) ToolboxAPILspStartDeprecatedRequest
+	LspStartDeprecated(ctx context.Context, boxId string) ToolboxAPILspStartDeprecatedRequest
 
 	// LspStartDeprecatedExecute executes the request
 	// Deprecated
@@ -862,15 +862,15 @@ type ToolboxAPI interface {
 	/*
 	LspStopDeprecated [DEPRECATED] Stop Lsp server
 
-	Stop Lsp server process inside sandbox project
+	Stop Lsp server process inside box project
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPILspStopDeprecatedRequest
 
 	Deprecated
 	*/
-	LspStopDeprecated(ctx context.Context, sandboxId string) ToolboxAPILspStopDeprecatedRequest
+	LspStopDeprecated(ctx context.Context, boxId string) ToolboxAPILspStopDeprecatedRequest
 
 	// LspStopDeprecatedExecute executes the request
 	// Deprecated
@@ -882,12 +882,12 @@ type ToolboxAPI interface {
 	The workspace symbol request is sent from the client to the server to list project-wide symbols matching the query string.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPILspWorkspaceSymbolsDeprecatedRequest
 
 	Deprecated
 	*/
-	LspWorkspaceSymbolsDeprecated(ctx context.Context, sandboxId string) ToolboxAPILspWorkspaceSymbolsDeprecatedRequest
+	LspWorkspaceSymbolsDeprecated(ctx context.Context, boxId string) ToolboxAPILspWorkspaceSymbolsDeprecatedRequest
 
 	// LspWorkspaceSymbolsDeprecatedExecute executes the request
 	//  @return []LspSymbol
@@ -897,15 +897,15 @@ type ToolboxAPI interface {
 	/*
 	MoveFileDeprecated [DEPRECATED] Move file
 
-	Move file inside sandbox
+	Move file inside box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIMoveFileDeprecatedRequest
 
 	Deprecated
 	*/
-	MoveFileDeprecated(ctx context.Context, sandboxId string) ToolboxAPIMoveFileDeprecatedRequest
+	MoveFileDeprecated(ctx context.Context, boxId string) ToolboxAPIMoveFileDeprecatedRequest
 
 	// MoveFileDeprecatedExecute executes the request
 	// Deprecated
@@ -917,12 +917,12 @@ type ToolboxAPI interface {
 	Move mouse cursor to specified coordinates
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIMoveMouseDeprecatedRequest
 
 	Deprecated
 	*/
-	MoveMouseDeprecated(ctx context.Context, sandboxId string) ToolboxAPIMoveMouseDeprecatedRequest
+	MoveMouseDeprecated(ctx context.Context, boxId string) ToolboxAPIMoveMouseDeprecatedRequest
 
 	// MoveMouseDeprecatedExecute executes the request
 	//  @return MouseMoveResponse
@@ -935,12 +935,12 @@ type ToolboxAPI interface {
 	Press a hotkey combination
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIPressHotkeyDeprecatedRequest
 
 	Deprecated
 	*/
-	PressHotkeyDeprecated(ctx context.Context, sandboxId string) ToolboxAPIPressHotkeyDeprecatedRequest
+	PressHotkeyDeprecated(ctx context.Context, boxId string) ToolboxAPIPressHotkeyDeprecatedRequest
 
 	// PressHotkeyDeprecatedExecute executes the request
 	// Deprecated
@@ -952,12 +952,12 @@ type ToolboxAPI interface {
 	Press a key with optional modifiers
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIPressKeyDeprecatedRequest
 
 	Deprecated
 	*/
-	PressKeyDeprecated(ctx context.Context, sandboxId string) ToolboxAPIPressKeyDeprecatedRequest
+	PressKeyDeprecated(ctx context.Context, boxId string) ToolboxAPIPressKeyDeprecatedRequest
 
 	// PressKeyDeprecatedExecute executes the request
 	// Deprecated
@@ -966,15 +966,15 @@ type ToolboxAPI interface {
 	/*
 	ReplaceInFilesDeprecated [DEPRECATED] Replace in files
 
-	Replace text/pattern in multiple files inside sandbox
+	Replace text/pattern in multiple files inside box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIReplaceInFilesDeprecatedRequest
 
 	Deprecated
 	*/
-	ReplaceInFilesDeprecated(ctx context.Context, sandboxId string) ToolboxAPIReplaceInFilesDeprecatedRequest
+	ReplaceInFilesDeprecated(ctx context.Context, boxId string) ToolboxAPIReplaceInFilesDeprecatedRequest
 
 	// ReplaceInFilesDeprecatedExecute executes the request
 	//  @return []ReplaceResult
@@ -987,13 +987,13 @@ type ToolboxAPI interface {
 	Resize a PTY session
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@param sessionId
 	@return ToolboxAPIResizePTYSessionDeprecatedRequest
 
 	Deprecated
 	*/
-	ResizePTYSessionDeprecated(ctx context.Context, sandboxId string, sessionId string) ToolboxAPIResizePTYSessionDeprecatedRequest
+	ResizePTYSessionDeprecated(ctx context.Context, boxId string, sessionId string) ToolboxAPIResizePTYSessionDeprecatedRequest
 
 	// ResizePTYSessionDeprecatedExecute executes the request
 	//  @return PtySessionInfo
@@ -1007,12 +1007,12 @@ type ToolboxAPI interface {
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param processName
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIRestartProcessDeprecatedRequest
 
 	Deprecated
 	*/
-	RestartProcessDeprecated(ctx context.Context, processName string, sandboxId string) ToolboxAPIRestartProcessDeprecatedRequest
+	RestartProcessDeprecated(ctx context.Context, processName string, boxId string) ToolboxAPIRestartProcessDeprecatedRequest
 
 	// RestartProcessDeprecatedExecute executes the request
 	//  @return ProcessRestartResponse
@@ -1025,12 +1025,12 @@ type ToolboxAPI interface {
 	Scroll mouse at specified coordinates
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIScrollMouseDeprecatedRequest
 
 	Deprecated
 	*/
-	ScrollMouseDeprecated(ctx context.Context, sandboxId string) ToolboxAPIScrollMouseDeprecatedRequest
+	ScrollMouseDeprecated(ctx context.Context, boxId string) ToolboxAPIScrollMouseDeprecatedRequest
 
 	// ScrollMouseDeprecatedExecute executes the request
 	//  @return MouseScrollResponse
@@ -1040,15 +1040,15 @@ type ToolboxAPI interface {
 	/*
 	SearchFilesDeprecated [DEPRECATED] Search files
 
-	Search for files inside sandbox
+	Search for files inside box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPISearchFilesDeprecatedRequest
 
 	Deprecated
 	*/
-	SearchFilesDeprecated(ctx context.Context, sandboxId string) ToolboxAPISearchFilesDeprecatedRequest
+	SearchFilesDeprecated(ctx context.Context, boxId string) ToolboxAPISearchFilesDeprecatedRequest
 
 	// SearchFilesDeprecatedExecute executes the request
 	//  @return SearchFilesResponse
@@ -1058,15 +1058,15 @@ type ToolboxAPI interface {
 	/*
 	SetFilePermissionsDeprecated [DEPRECATED] Set file permissions
 
-	Set file owner/group/permissions inside sandbox
+	Set file owner/group/permissions inside box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPISetFilePermissionsDeprecatedRequest
 
 	Deprecated
 	*/
-	SetFilePermissionsDeprecated(ctx context.Context, sandboxId string) ToolboxAPISetFilePermissionsDeprecatedRequest
+	SetFilePermissionsDeprecated(ctx context.Context, boxId string) ToolboxAPISetFilePermissionsDeprecatedRequest
 
 	// SetFilePermissionsDeprecatedExecute executes the request
 	// Deprecated
@@ -1078,12 +1078,12 @@ type ToolboxAPI interface {
 	Start all VNC desktop processes (Xvfb, xfce4, x11vnc, novnc)
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIStartComputerUseDeprecatedRequest
 
 	Deprecated
 	*/
-	StartComputerUseDeprecated(ctx context.Context, sandboxId string) ToolboxAPIStartComputerUseDeprecatedRequest
+	StartComputerUseDeprecated(ctx context.Context, boxId string) ToolboxAPIStartComputerUseDeprecatedRequest
 
 	// StartComputerUseDeprecatedExecute executes the request
 	//  @return ComputerUseStartResponse
@@ -1096,12 +1096,12 @@ type ToolboxAPI interface {
 	Stop all VNC desktop processes (Xvfb, xfce4, x11vnc, novnc)
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIStopComputerUseDeprecatedRequest
 
 	Deprecated
 	*/
-	StopComputerUseDeprecated(ctx context.Context, sandboxId string) ToolboxAPIStopComputerUseDeprecatedRequest
+	StopComputerUseDeprecated(ctx context.Context, boxId string) ToolboxAPIStopComputerUseDeprecatedRequest
 
 	// StopComputerUseDeprecatedExecute executes the request
 	//  @return ComputerUseStopResponse
@@ -1114,12 +1114,12 @@ type ToolboxAPI interface {
 	Take a compressed screenshot of a specific region
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPITakeCompressedRegionScreenshotDeprecatedRequest
 
 	Deprecated
 	*/
-	TakeCompressedRegionScreenshotDeprecated(ctx context.Context, sandboxId string) ToolboxAPITakeCompressedRegionScreenshotDeprecatedRequest
+	TakeCompressedRegionScreenshotDeprecated(ctx context.Context, boxId string) ToolboxAPITakeCompressedRegionScreenshotDeprecatedRequest
 
 	// TakeCompressedRegionScreenshotDeprecatedExecute executes the request
 	//  @return CompressedScreenshotResponse
@@ -1132,12 +1132,12 @@ type ToolboxAPI interface {
 	Take a compressed screenshot with format, quality, and scale options
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPITakeCompressedScreenshotDeprecatedRequest
 
 	Deprecated
 	*/
-	TakeCompressedScreenshotDeprecated(ctx context.Context, sandboxId string) ToolboxAPITakeCompressedScreenshotDeprecatedRequest
+	TakeCompressedScreenshotDeprecated(ctx context.Context, boxId string) ToolboxAPITakeCompressedScreenshotDeprecatedRequest
 
 	// TakeCompressedScreenshotDeprecatedExecute executes the request
 	//  @return CompressedScreenshotResponse
@@ -1150,12 +1150,12 @@ type ToolboxAPI interface {
 	Take a screenshot of a specific region
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPITakeRegionScreenshotDeprecatedRequest
 
 	Deprecated
 	*/
-	TakeRegionScreenshotDeprecated(ctx context.Context, sandboxId string) ToolboxAPITakeRegionScreenshotDeprecatedRequest
+	TakeRegionScreenshotDeprecated(ctx context.Context, boxId string) ToolboxAPITakeRegionScreenshotDeprecatedRequest
 
 	// TakeRegionScreenshotDeprecatedExecute executes the request
 	//  @return RegionScreenshotResponse
@@ -1168,12 +1168,12 @@ type ToolboxAPI interface {
 	Take a screenshot of the entire screen
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPITakeScreenshotDeprecatedRequest
 
 	Deprecated
 	*/
-	TakeScreenshotDeprecated(ctx context.Context, sandboxId string) ToolboxAPITakeScreenshotDeprecatedRequest
+	TakeScreenshotDeprecated(ctx context.Context, boxId string) ToolboxAPITakeScreenshotDeprecatedRequest
 
 	// TakeScreenshotDeprecatedExecute executes the request
 	//  @return ScreenshotResponse
@@ -1186,12 +1186,12 @@ type ToolboxAPI interface {
 	Type text using keyboard
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPITypeTextDeprecatedRequest
 
 	Deprecated
 	*/
-	TypeTextDeprecated(ctx context.Context, sandboxId string) ToolboxAPITypeTextDeprecatedRequest
+	TypeTextDeprecated(ctx context.Context, boxId string) ToolboxAPITypeTextDeprecatedRequest
 
 	// TypeTextDeprecatedExecute executes the request
 	// Deprecated
@@ -1200,15 +1200,15 @@ type ToolboxAPI interface {
 	/*
 	UploadFileDeprecated [DEPRECATED] Upload file
 
-	Upload file inside sandbox
+	Upload file inside box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIUploadFileDeprecatedRequest
 
 	Deprecated
 	*/
-	UploadFileDeprecated(ctx context.Context, sandboxId string) ToolboxAPIUploadFileDeprecatedRequest
+	UploadFileDeprecated(ctx context.Context, boxId string) ToolboxAPIUploadFileDeprecatedRequest
 
 	// UploadFileDeprecatedExecute executes the request
 	// Deprecated
@@ -1217,15 +1217,15 @@ type ToolboxAPI interface {
 	/*
 	UploadFilesDeprecated [DEPRECATED] Upload multiple files
 
-	Upload multiple files inside sandbox
+	Upload multiple files inside box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId
+	@param boxId
 	@return ToolboxAPIUploadFilesDeprecatedRequest
 
 	Deprecated
 	*/
-	UploadFilesDeprecated(ctx context.Context, sandboxId string) ToolboxAPIUploadFilesDeprecatedRequest
+	UploadFilesDeprecated(ctx context.Context, boxId string) ToolboxAPIUploadFilesDeprecatedRequest
 
 	// UploadFilesDeprecatedExecute executes the request
 	// Deprecated
@@ -1238,7 +1238,7 @@ type ToolboxAPIService service
 type ToolboxAPIClickMouseDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	mouseClickRequest *MouseClickRequest
 	xBoxLiteOrganizationID *string
 }
@@ -1264,16 +1264,16 @@ ClickMouseDeprecated [DEPRECATED] Click mouse
 Click mouse at specified coordinates
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIClickMouseDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) ClickMouseDeprecated(ctx context.Context, sandboxId string) ToolboxAPIClickMouseDeprecatedRequest {
+func (a *ToolboxAPIService) ClickMouseDeprecated(ctx context.Context, boxId string) ToolboxAPIClickMouseDeprecatedRequest {
 	return ToolboxAPIClickMouseDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -1293,8 +1293,8 @@ func (a *ToolboxAPIService) ClickMouseDeprecatedExecute(r ToolboxAPIClickMouseDe
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/computeruse/mouse/click"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/computeruse/mouse/click"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -1365,7 +1365,7 @@ func (a *ToolboxAPIService) ClickMouseDeprecatedExecute(r ToolboxAPIClickMouseDe
 type ToolboxAPICreateFolderDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	path *string
 	mode *string
 	xBoxLiteOrganizationID *string
@@ -1394,19 +1394,19 @@ func (r ToolboxAPICreateFolderDeprecatedRequest) Execute() (*http.Response, erro
 /*
 CreateFolderDeprecated [DEPRECATED] Create folder
 
-Create folder inside sandbox
+Create folder inside box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPICreateFolderDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) CreateFolderDeprecated(ctx context.Context, sandboxId string) ToolboxAPICreateFolderDeprecatedRequest {
+func (a *ToolboxAPIService) CreateFolderDeprecated(ctx context.Context, boxId string) ToolboxAPICreateFolderDeprecatedRequest {
 	return ToolboxAPICreateFolderDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -1424,8 +1424,8 @@ func (a *ToolboxAPIService) CreateFolderDeprecatedExecute(r ToolboxAPICreateFold
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/files/folder"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/files/folder"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -1490,7 +1490,7 @@ func (a *ToolboxAPIService) CreateFolderDeprecatedExecute(r ToolboxAPICreateFold
 type ToolboxAPICreatePTYSessionDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	ptyCreateRequest *PtyCreateRequest
 	xBoxLiteOrganizationID *string
 }
@@ -1513,19 +1513,19 @@ func (r ToolboxAPICreatePTYSessionDeprecatedRequest) Execute() (*PtyCreateRespon
 /*
 CreatePTYSessionDeprecated [DEPRECATED] Create PTY session
 
-Create a new PTY session in the sandbox
+Create a new PTY session in the box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPICreatePTYSessionDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) CreatePTYSessionDeprecated(ctx context.Context, sandboxId string) ToolboxAPICreatePTYSessionDeprecatedRequest {
+func (a *ToolboxAPIService) CreatePTYSessionDeprecated(ctx context.Context, boxId string) ToolboxAPICreatePTYSessionDeprecatedRequest {
 	return ToolboxAPICreatePTYSessionDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -1545,8 +1545,8 @@ func (a *ToolboxAPIService) CreatePTYSessionDeprecatedExecute(r ToolboxAPICreate
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/process/pty"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/process/pty"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -1617,7 +1617,7 @@ func (a *ToolboxAPIService) CreatePTYSessionDeprecatedExecute(r ToolboxAPICreate
 type ToolboxAPICreateSessionDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	createSessionRequest *CreateSessionRequest
 	xBoxLiteOrganizationID *string
 }
@@ -1640,19 +1640,19 @@ func (r ToolboxAPICreateSessionDeprecatedRequest) Execute() (*http.Response, err
 /*
 CreateSessionDeprecated [DEPRECATED] Create session
 
-Create a new session in the sandbox
+Create a new session in the box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPICreateSessionDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) CreateSessionDeprecated(ctx context.Context, sandboxId string) ToolboxAPICreateSessionDeprecatedRequest {
+func (a *ToolboxAPIService) CreateSessionDeprecated(ctx context.Context, boxId string) ToolboxAPICreateSessionDeprecatedRequest {
 	return ToolboxAPICreateSessionDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -1670,8 +1670,8 @@ func (a *ToolboxAPIService) CreateSessionDeprecatedExecute(r ToolboxAPICreateSes
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/process/session"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/process/session"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -1733,7 +1733,7 @@ func (a *ToolboxAPIService) CreateSessionDeprecatedExecute(r ToolboxAPICreateSes
 type ToolboxAPIDeleteFileDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	path *string
 	xBoxLiteOrganizationID *string
 	recursive *bool
@@ -1762,19 +1762,19 @@ func (r ToolboxAPIDeleteFileDeprecatedRequest) Execute() (*http.Response, error)
 /*
 DeleteFileDeprecated [DEPRECATED] Delete file
 
-Delete file inside sandbox
+Delete file inside box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIDeleteFileDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) DeleteFileDeprecated(ctx context.Context, sandboxId string) ToolboxAPIDeleteFileDeprecatedRequest {
+func (a *ToolboxAPIService) DeleteFileDeprecated(ctx context.Context, boxId string) ToolboxAPIDeleteFileDeprecatedRequest {
 	return ToolboxAPIDeleteFileDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -1792,8 +1792,8 @@ func (a *ToolboxAPIService) DeleteFileDeprecatedExecute(r ToolboxAPIDeleteFileDe
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/files"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/files"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -1857,7 +1857,7 @@ func (a *ToolboxAPIService) DeleteFileDeprecatedExecute(r ToolboxAPIDeleteFileDe
 type ToolboxAPIDeletePTYSessionDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	sessionId string
 	xBoxLiteOrganizationID *string
 }
@@ -1878,17 +1878,17 @@ DeletePTYSessionDeprecated [DEPRECATED] Delete PTY session
 Delete a PTY session and terminate the associated process
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @param sessionId
  @return ToolboxAPIDeletePTYSessionDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) DeletePTYSessionDeprecated(ctx context.Context, sandboxId string, sessionId string) ToolboxAPIDeletePTYSessionDeprecatedRequest {
+func (a *ToolboxAPIService) DeletePTYSessionDeprecated(ctx context.Context, boxId string, sessionId string) ToolboxAPIDeletePTYSessionDeprecatedRequest {
 	return ToolboxAPIDeletePTYSessionDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 		sessionId: sessionId,
 	}
 }
@@ -1907,8 +1907,8 @@ func (a *ToolboxAPIService) DeletePTYSessionDeprecatedExecute(r ToolboxAPIDelete
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/process/pty/{sessionId}"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/process/pty/{sessionId}"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 	localVarPath = strings.Replace(localVarPath, "{"+"sessionId"+"}", url.PathEscape(parameterValueToString(r.sessionId, "sessionId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -1966,7 +1966,7 @@ func (a *ToolboxAPIService) DeletePTYSessionDeprecatedExecute(r ToolboxAPIDelete
 type ToolboxAPIDeleteSessionDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	sessionId string
 	xBoxLiteOrganizationID *string
 }
@@ -1987,17 +1987,17 @@ DeleteSessionDeprecated [DEPRECATED] Delete session
 Delete a specific session
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @param sessionId
  @return ToolboxAPIDeleteSessionDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) DeleteSessionDeprecated(ctx context.Context, sandboxId string, sessionId string) ToolboxAPIDeleteSessionDeprecatedRequest {
+func (a *ToolboxAPIService) DeleteSessionDeprecated(ctx context.Context, boxId string, sessionId string) ToolboxAPIDeleteSessionDeprecatedRequest {
 	return ToolboxAPIDeleteSessionDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 		sessionId: sessionId,
 	}
 }
@@ -2016,8 +2016,8 @@ func (a *ToolboxAPIService) DeleteSessionDeprecatedExecute(r ToolboxAPIDeleteSes
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/process/session/{sessionId}"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/process/session/{sessionId}"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 	localVarPath = strings.Replace(localVarPath, "{"+"sessionId"+"}", url.PathEscape(parameterValueToString(r.sessionId, "sessionId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -2075,7 +2075,7 @@ func (a *ToolboxAPIService) DeleteSessionDeprecatedExecute(r ToolboxAPIDeleteSes
 type ToolboxAPIDownloadFileDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	path *string
 	xBoxLiteOrganizationID *string
 }
@@ -2098,19 +2098,19 @@ func (r ToolboxAPIDownloadFileDeprecatedRequest) Execute() (*os.File, *http.Resp
 /*
 DownloadFileDeprecated [DEPRECATED] Download file
 
-Download file from sandbox
+Download file from box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIDownloadFileDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) DownloadFileDeprecated(ctx context.Context, sandboxId string) ToolboxAPIDownloadFileDeprecatedRequest {
+func (a *ToolboxAPIService) DownloadFileDeprecated(ctx context.Context, boxId string) ToolboxAPIDownloadFileDeprecatedRequest {
 	return ToolboxAPIDownloadFileDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -2130,8 +2130,8 @@ func (a *ToolboxAPIService) DownloadFileDeprecatedExecute(r ToolboxAPIDownloadFi
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/files/download"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/files/download"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -2201,7 +2201,7 @@ func (a *ToolboxAPIService) DownloadFileDeprecatedExecute(r ToolboxAPIDownloadFi
 type ToolboxAPIDownloadFilesDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	downloadFiles *DownloadFiles
 	xBoxLiteOrganizationID *string
 }
@@ -2227,16 +2227,16 @@ DownloadFilesDeprecated [DEPRECATED] Download multiple files
 Streams back a multipart/form-data bundle of the requested paths
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIDownloadFilesDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) DownloadFilesDeprecated(ctx context.Context, sandboxId string) ToolboxAPIDownloadFilesDeprecatedRequest {
+func (a *ToolboxAPIService) DownloadFilesDeprecated(ctx context.Context, boxId string) ToolboxAPIDownloadFilesDeprecatedRequest {
 	return ToolboxAPIDownloadFilesDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -2256,8 +2256,8 @@ func (a *ToolboxAPIService) DownloadFilesDeprecatedExecute(r ToolboxAPIDownloadF
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/files/bulk-download"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/files/bulk-download"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -2328,7 +2328,7 @@ func (a *ToolboxAPIService) DownloadFilesDeprecatedExecute(r ToolboxAPIDownloadF
 type ToolboxAPIDragMouseDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	mouseDragRequest *MouseDragRequest
 	xBoxLiteOrganizationID *string
 }
@@ -2354,16 +2354,16 @@ DragMouseDeprecated [DEPRECATED] Drag mouse
 Drag mouse from start to end coordinates
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIDragMouseDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) DragMouseDeprecated(ctx context.Context, sandboxId string) ToolboxAPIDragMouseDeprecatedRequest {
+func (a *ToolboxAPIService) DragMouseDeprecated(ctx context.Context, boxId string) ToolboxAPIDragMouseDeprecatedRequest {
 	return ToolboxAPIDragMouseDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -2383,8 +2383,8 @@ func (a *ToolboxAPIService) DragMouseDeprecatedExecute(r ToolboxAPIDragMouseDepr
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/computeruse/mouse/drag"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/computeruse/mouse/drag"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -2455,7 +2455,7 @@ func (a *ToolboxAPIService) DragMouseDeprecatedExecute(r ToolboxAPIDragMouseDepr
 type ToolboxAPIExecuteCommandDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	executeRequest *ExecuteRequest
 	xBoxLiteOrganizationID *string
 }
@@ -2478,19 +2478,19 @@ func (r ToolboxAPIExecuteCommandDeprecatedRequest) Execute() (*ExecuteResponse, 
 /*
 ExecuteCommandDeprecated [DEPRECATED] Execute command
 
-Execute command synchronously inside sandbox
+Execute command synchronously inside box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIExecuteCommandDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) ExecuteCommandDeprecated(ctx context.Context, sandboxId string) ToolboxAPIExecuteCommandDeprecatedRequest {
+func (a *ToolboxAPIService) ExecuteCommandDeprecated(ctx context.Context, boxId string) ToolboxAPIExecuteCommandDeprecatedRequest {
 	return ToolboxAPIExecuteCommandDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -2510,8 +2510,8 @@ func (a *ToolboxAPIService) ExecuteCommandDeprecatedExecute(r ToolboxAPIExecuteC
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/process/execute"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/process/execute"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -2582,7 +2582,7 @@ func (a *ToolboxAPIService) ExecuteCommandDeprecatedExecute(r ToolboxAPIExecuteC
 type ToolboxAPIExecuteSessionCommandDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	sessionId string
 	sessionExecuteRequest *SessionExecuteRequest
 	xBoxLiteOrganizationID *string
@@ -2609,17 +2609,17 @@ ExecuteSessionCommandDeprecated [DEPRECATED] Execute command in session
 Execute a command in a specific session
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @param sessionId
  @return ToolboxAPIExecuteSessionCommandDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) ExecuteSessionCommandDeprecated(ctx context.Context, sandboxId string, sessionId string) ToolboxAPIExecuteSessionCommandDeprecatedRequest {
+func (a *ToolboxAPIService) ExecuteSessionCommandDeprecated(ctx context.Context, boxId string, sessionId string) ToolboxAPIExecuteSessionCommandDeprecatedRequest {
 	return ToolboxAPIExecuteSessionCommandDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 		sessionId: sessionId,
 	}
 }
@@ -2640,8 +2640,8 @@ func (a *ToolboxAPIService) ExecuteSessionCommandDeprecatedExecute(r ToolboxAPIE
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/process/session/{sessionId}/exec"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/process/session/{sessionId}/exec"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 	localVarPath = strings.Replace(localVarPath, "{"+"sessionId"+"}", url.PathEscape(parameterValueToString(r.sessionId, "sessionId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -2713,7 +2713,7 @@ func (a *ToolboxAPIService) ExecuteSessionCommandDeprecatedExecute(r ToolboxAPIE
 type ToolboxAPIFindInFilesDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	path *string
 	pattern *string
 	xBoxLiteOrganizationID *string
@@ -2742,19 +2742,19 @@ func (r ToolboxAPIFindInFilesDeprecatedRequest) Execute() ([]Match, *http.Respon
 /*
 FindInFilesDeprecated [DEPRECATED] Search for text/pattern in files
 
-Search for text/pattern inside sandbox files
+Search for text/pattern inside box files
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIFindInFilesDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) FindInFilesDeprecated(ctx context.Context, sandboxId string) ToolboxAPIFindInFilesDeprecatedRequest {
+func (a *ToolboxAPIService) FindInFilesDeprecated(ctx context.Context, boxId string) ToolboxAPIFindInFilesDeprecatedRequest {
 	return ToolboxAPIFindInFilesDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -2774,8 +2774,8 @@ func (a *ToolboxAPIService) FindInFilesDeprecatedExecute(r ToolboxAPIFindInFiles
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/files/find"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/files/find"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -2849,7 +2849,7 @@ func (a *ToolboxAPIService) FindInFilesDeprecatedExecute(r ToolboxAPIFindInFiles
 type ToolboxAPIGetComputerUseStatusDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	xBoxLiteOrganizationID *string
 }
 
@@ -2869,16 +2869,16 @@ GetComputerUseStatusDeprecated [DEPRECATED] Get computer use status
 Get status of all VNC desktop processes
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIGetComputerUseStatusDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GetComputerUseStatusDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGetComputerUseStatusDeprecatedRequest {
+func (a *ToolboxAPIService) GetComputerUseStatusDeprecated(ctx context.Context, boxId string) ToolboxAPIGetComputerUseStatusDeprecatedRequest {
 	return ToolboxAPIGetComputerUseStatusDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -2898,8 +2898,8 @@ func (a *ToolboxAPIService) GetComputerUseStatusDeprecatedExecute(r ToolboxAPIGe
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/computeruse/status"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/computeruse/status"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -2965,7 +2965,7 @@ func (a *ToolboxAPIService) GetComputerUseStatusDeprecatedExecute(r ToolboxAPIGe
 type ToolboxAPIGetDisplayInfoDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	xBoxLiteOrganizationID *string
 }
 
@@ -2985,16 +2985,16 @@ GetDisplayInfoDeprecated [DEPRECATED] Get display info
 Get information about displays
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIGetDisplayInfoDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GetDisplayInfoDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGetDisplayInfoDeprecatedRequest {
+func (a *ToolboxAPIService) GetDisplayInfoDeprecated(ctx context.Context, boxId string) ToolboxAPIGetDisplayInfoDeprecatedRequest {
 	return ToolboxAPIGetDisplayInfoDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -3014,8 +3014,8 @@ func (a *ToolboxAPIService) GetDisplayInfoDeprecatedExecute(r ToolboxAPIGetDispl
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/computeruse/display/info"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/computeruse/display/info"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -3081,7 +3081,7 @@ func (a *ToolboxAPIService) GetDisplayInfoDeprecatedExecute(r ToolboxAPIGetDispl
 type ToolboxAPIGetFileInfoDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	path *string
 	xBoxLiteOrganizationID *string
 }
@@ -3104,19 +3104,19 @@ func (r ToolboxAPIGetFileInfoDeprecatedRequest) Execute() (*FileInfo, *http.Resp
 /*
 GetFileInfoDeprecated [DEPRECATED] Get file info
 
-Get file info inside sandbox
+Get file info inside box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIGetFileInfoDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GetFileInfoDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGetFileInfoDeprecatedRequest {
+func (a *ToolboxAPIService) GetFileInfoDeprecated(ctx context.Context, boxId string) ToolboxAPIGetFileInfoDeprecatedRequest {
 	return ToolboxAPIGetFileInfoDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -3136,8 +3136,8 @@ func (a *ToolboxAPIService) GetFileInfoDeprecatedExecute(r ToolboxAPIGetFileInfo
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/files/info"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/files/info"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -3207,7 +3207,7 @@ func (a *ToolboxAPIService) GetFileInfoDeprecatedExecute(r ToolboxAPIGetFileInfo
 type ToolboxAPIGetMousePositionDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	xBoxLiteOrganizationID *string
 }
 
@@ -3227,16 +3227,16 @@ GetMousePositionDeprecated [DEPRECATED] Get mouse position
 Get current mouse cursor position
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIGetMousePositionDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GetMousePositionDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGetMousePositionDeprecatedRequest {
+func (a *ToolboxAPIService) GetMousePositionDeprecated(ctx context.Context, boxId string) ToolboxAPIGetMousePositionDeprecatedRequest {
 	return ToolboxAPIGetMousePositionDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -3256,8 +3256,8 @@ func (a *ToolboxAPIService) GetMousePositionDeprecatedExecute(r ToolboxAPIGetMou
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/computeruse/mouse/position"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/computeruse/mouse/position"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -3323,7 +3323,7 @@ func (a *ToolboxAPIService) GetMousePositionDeprecatedExecute(r ToolboxAPIGetMou
 type ToolboxAPIGetPTYSessionDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	sessionId string
 	xBoxLiteOrganizationID *string
 }
@@ -3344,17 +3344,17 @@ GetPTYSessionDeprecated [DEPRECATED] Get PTY session
 Get PTY session information by ID
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @param sessionId
  @return ToolboxAPIGetPTYSessionDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GetPTYSessionDeprecated(ctx context.Context, sandboxId string, sessionId string) ToolboxAPIGetPTYSessionDeprecatedRequest {
+func (a *ToolboxAPIService) GetPTYSessionDeprecated(ctx context.Context, boxId string, sessionId string) ToolboxAPIGetPTYSessionDeprecatedRequest {
 	return ToolboxAPIGetPTYSessionDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 		sessionId: sessionId,
 	}
 }
@@ -3375,8 +3375,8 @@ func (a *ToolboxAPIService) GetPTYSessionDeprecatedExecute(r ToolboxAPIGetPTYSes
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/process/pty/{sessionId}"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/process/pty/{sessionId}"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 	localVarPath = strings.Replace(localVarPath, "{"+"sessionId"+"}", url.PathEscape(parameterValueToString(r.sessionId, "sessionId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -3444,7 +3444,7 @@ type ToolboxAPIGetProcessErrorsDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
 	processName string
-	sandboxId string
+	boxId string
 	xBoxLiteOrganizationID *string
 }
 
@@ -3465,17 +3465,17 @@ Get error logs for a specific VNC process
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param processName
- @param sandboxId
+ @param boxId
  @return ToolboxAPIGetProcessErrorsDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GetProcessErrorsDeprecated(ctx context.Context, processName string, sandboxId string) ToolboxAPIGetProcessErrorsDeprecatedRequest {
+func (a *ToolboxAPIService) GetProcessErrorsDeprecated(ctx context.Context, processName string, boxId string) ToolboxAPIGetProcessErrorsDeprecatedRequest {
 	return ToolboxAPIGetProcessErrorsDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
 		processName: processName,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -3495,9 +3495,9 @@ func (a *ToolboxAPIService) GetProcessErrorsDeprecatedExecute(r ToolboxAPIGetPro
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/computeruse/process/{processName}/errors"
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/computeruse/process/{processName}/errors"
 	localVarPath = strings.Replace(localVarPath, "{"+"processName"+"}", url.PathEscape(parameterValueToString(r.processName, "processName")), -1)
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -3564,7 +3564,7 @@ type ToolboxAPIGetProcessLogsDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
 	processName string
-	sandboxId string
+	boxId string
 	xBoxLiteOrganizationID *string
 }
 
@@ -3585,17 +3585,17 @@ Get logs for a specific VNC process
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param processName
- @param sandboxId
+ @param boxId
  @return ToolboxAPIGetProcessLogsDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GetProcessLogsDeprecated(ctx context.Context, processName string, sandboxId string) ToolboxAPIGetProcessLogsDeprecatedRequest {
+func (a *ToolboxAPIService) GetProcessLogsDeprecated(ctx context.Context, processName string, boxId string) ToolboxAPIGetProcessLogsDeprecatedRequest {
 	return ToolboxAPIGetProcessLogsDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
 		processName: processName,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -3615,9 +3615,9 @@ func (a *ToolboxAPIService) GetProcessLogsDeprecatedExecute(r ToolboxAPIGetProce
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/computeruse/process/{processName}/logs"
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/computeruse/process/{processName}/logs"
 	localVarPath = strings.Replace(localVarPath, "{"+"processName"+"}", url.PathEscape(parameterValueToString(r.processName, "processName")), -1)
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -3684,7 +3684,7 @@ type ToolboxAPIGetProcessStatusDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
 	processName string
-	sandboxId string
+	boxId string
 	xBoxLiteOrganizationID *string
 }
 
@@ -3705,17 +3705,17 @@ Get status of a specific VNC process
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param processName
- @param sandboxId
+ @param boxId
  @return ToolboxAPIGetProcessStatusDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GetProcessStatusDeprecated(ctx context.Context, processName string, sandboxId string) ToolboxAPIGetProcessStatusDeprecatedRequest {
+func (a *ToolboxAPIService) GetProcessStatusDeprecated(ctx context.Context, processName string, boxId string) ToolboxAPIGetProcessStatusDeprecatedRequest {
 	return ToolboxAPIGetProcessStatusDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
 		processName: processName,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -3735,9 +3735,9 @@ func (a *ToolboxAPIService) GetProcessStatusDeprecatedExecute(r ToolboxAPIGetPro
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/computeruse/process/{processName}/status"
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/computeruse/process/{processName}/status"
 	localVarPath = strings.Replace(localVarPath, "{"+"processName"+"}", url.PathEscape(parameterValueToString(r.processName, "processName")), -1)
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -3803,7 +3803,7 @@ func (a *ToolboxAPIService) GetProcessStatusDeprecatedExecute(r ToolboxAPIGetPro
 type ToolboxAPIGetProjectDirDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	xBoxLiteOrganizationID *string
 }
 
@@ -3818,19 +3818,19 @@ func (r ToolboxAPIGetProjectDirDeprecatedRequest) Execute() (*ProjectDirResponse
 }
 
 /*
-GetProjectDirDeprecated [DEPRECATED] Get sandbox project dir
+GetProjectDirDeprecated [DEPRECATED] Get box project dir
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIGetProjectDirDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GetProjectDirDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGetProjectDirDeprecatedRequest {
+func (a *ToolboxAPIService) GetProjectDirDeprecated(ctx context.Context, boxId string) ToolboxAPIGetProjectDirDeprecatedRequest {
 	return ToolboxAPIGetProjectDirDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -3850,8 +3850,8 @@ func (a *ToolboxAPIService) GetProjectDirDeprecatedExecute(r ToolboxAPIGetProjec
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/project-dir"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/project-dir"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -3917,7 +3917,7 @@ func (a *ToolboxAPIService) GetProjectDirDeprecatedExecute(r ToolboxAPIGetProjec
 type ToolboxAPIGetSessionCommandDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	sessionId string
 	commandId string
 	xBoxLiteOrganizationID *string
@@ -3939,18 +3939,18 @@ GetSessionCommandDeprecated [DEPRECATED] Get session command
 Get session command by ID
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @param sessionId
  @param commandId
  @return ToolboxAPIGetSessionCommandDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GetSessionCommandDeprecated(ctx context.Context, sandboxId string, sessionId string, commandId string) ToolboxAPIGetSessionCommandDeprecatedRequest {
+func (a *ToolboxAPIService) GetSessionCommandDeprecated(ctx context.Context, boxId string, sessionId string, commandId string) ToolboxAPIGetSessionCommandDeprecatedRequest {
 	return ToolboxAPIGetSessionCommandDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 		sessionId: sessionId,
 		commandId: commandId,
 	}
@@ -3972,8 +3972,8 @@ func (a *ToolboxAPIService) GetSessionCommandDeprecatedExecute(r ToolboxAPIGetSe
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/process/session/{sessionId}/command/{commandId}"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/process/session/{sessionId}/command/{commandId}"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 	localVarPath = strings.Replace(localVarPath, "{"+"sessionId"+"}", url.PathEscape(parameterValueToString(r.sessionId, "sessionId")), -1)
 	localVarPath = strings.Replace(localVarPath, "{"+"commandId"+"}", url.PathEscape(parameterValueToString(r.commandId, "commandId")), -1)
 
@@ -4041,7 +4041,7 @@ func (a *ToolboxAPIService) GetSessionCommandDeprecatedExecute(r ToolboxAPIGetSe
 type ToolboxAPIGetSessionCommandLogsDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	sessionId string
 	commandId string
 	xBoxLiteOrganizationID *string
@@ -4070,18 +4070,18 @@ GetSessionCommandLogsDeprecated [DEPRECATED] Get command logs
 Get logs for a specific command in a session
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @param sessionId
  @param commandId
  @return ToolboxAPIGetSessionCommandLogsDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GetSessionCommandLogsDeprecated(ctx context.Context, sandboxId string, sessionId string, commandId string) ToolboxAPIGetSessionCommandLogsDeprecatedRequest {
+func (a *ToolboxAPIService) GetSessionCommandLogsDeprecated(ctx context.Context, boxId string, sessionId string, commandId string) ToolboxAPIGetSessionCommandLogsDeprecatedRequest {
 	return ToolboxAPIGetSessionCommandLogsDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 		sessionId: sessionId,
 		commandId: commandId,
 	}
@@ -4103,8 +4103,8 @@ func (a *ToolboxAPIService) GetSessionCommandLogsDeprecatedExecute(r ToolboxAPIG
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/process/session/{sessionId}/command/{commandId}/logs"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/process/session/{sessionId}/command/{commandId}/logs"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 	localVarPath = strings.Replace(localVarPath, "{"+"sessionId"+"}", url.PathEscape(parameterValueToString(r.sessionId, "sessionId")), -1)
 	localVarPath = strings.Replace(localVarPath, "{"+"commandId"+"}", url.PathEscape(parameterValueToString(r.commandId, "commandId")), -1)
 
@@ -4175,7 +4175,7 @@ func (a *ToolboxAPIService) GetSessionCommandLogsDeprecatedExecute(r ToolboxAPIG
 type ToolboxAPIGetSessionDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	sessionId string
 	xBoxLiteOrganizationID *string
 }
@@ -4196,17 +4196,17 @@ GetSessionDeprecated [DEPRECATED] Get session
 Get session by ID
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @param sessionId
  @return ToolboxAPIGetSessionDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GetSessionDeprecated(ctx context.Context, sandboxId string, sessionId string) ToolboxAPIGetSessionDeprecatedRequest {
+func (a *ToolboxAPIService) GetSessionDeprecated(ctx context.Context, boxId string, sessionId string) ToolboxAPIGetSessionDeprecatedRequest {
 	return ToolboxAPIGetSessionDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 		sessionId: sessionId,
 	}
 }
@@ -4227,8 +4227,8 @@ func (a *ToolboxAPIService) GetSessionDeprecatedExecute(r ToolboxAPIGetSessionDe
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/process/session/{sessionId}"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/process/session/{sessionId}"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 	localVarPath = strings.Replace(localVarPath, "{"+"sessionId"+"}", url.PathEscape(parameterValueToString(r.sessionId, "sessionId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -4295,7 +4295,7 @@ func (a *ToolboxAPIService) GetSessionDeprecatedExecute(r ToolboxAPIGetSessionDe
 type ToolboxAPIGetUserHomeDirDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	xBoxLiteOrganizationID *string
 }
 
@@ -4310,19 +4310,19 @@ func (r ToolboxAPIGetUserHomeDirDeprecatedRequest) Execute() (*UserHomeDirRespon
 }
 
 /*
-GetUserHomeDirDeprecated [DEPRECATED] Get sandbox user home dir
+GetUserHomeDirDeprecated [DEPRECATED] Get box user home dir
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIGetUserHomeDirDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GetUserHomeDirDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGetUserHomeDirDeprecatedRequest {
+func (a *ToolboxAPIService) GetUserHomeDirDeprecated(ctx context.Context, boxId string) ToolboxAPIGetUserHomeDirDeprecatedRequest {
 	return ToolboxAPIGetUserHomeDirDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -4342,8 +4342,8 @@ func (a *ToolboxAPIService) GetUserHomeDirDeprecatedExecute(r ToolboxAPIGetUserH
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/user-home-dir"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/user-home-dir"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -4409,7 +4409,7 @@ func (a *ToolboxAPIService) GetUserHomeDirDeprecatedExecute(r ToolboxAPIGetUserH
 type ToolboxAPIGetWindowsDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	xBoxLiteOrganizationID *string
 }
 
@@ -4429,16 +4429,16 @@ GetWindowsDeprecated [DEPRECATED] Get windows
 Get list of open windows
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIGetWindowsDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GetWindowsDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGetWindowsDeprecatedRequest {
+func (a *ToolboxAPIService) GetWindowsDeprecated(ctx context.Context, boxId string) ToolboxAPIGetWindowsDeprecatedRequest {
 	return ToolboxAPIGetWindowsDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -4458,8 +4458,8 @@ func (a *ToolboxAPIService) GetWindowsDeprecatedExecute(r ToolboxAPIGetWindowsDe
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/computeruse/display/windows"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/computeruse/display/windows"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -4525,7 +4525,7 @@ func (a *ToolboxAPIService) GetWindowsDeprecatedExecute(r ToolboxAPIGetWindowsDe
 type ToolboxAPIGetWorkDirDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	xBoxLiteOrganizationID *string
 }
 
@@ -4540,19 +4540,19 @@ func (r ToolboxAPIGetWorkDirDeprecatedRequest) Execute() (*WorkDirResponse, *htt
 }
 
 /*
-GetWorkDirDeprecated [DEPRECATED] Get sandbox work-dir
+GetWorkDirDeprecated [DEPRECATED] Get box work-dir
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIGetWorkDirDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GetWorkDirDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGetWorkDirDeprecatedRequest {
+func (a *ToolboxAPIService) GetWorkDirDeprecated(ctx context.Context, boxId string) ToolboxAPIGetWorkDirDeprecatedRequest {
 	return ToolboxAPIGetWorkDirDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -4572,8 +4572,8 @@ func (a *ToolboxAPIService) GetWorkDirDeprecatedExecute(r ToolboxAPIGetWorkDirDe
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/work-dir"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/work-dir"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -4639,7 +4639,7 @@ func (a *ToolboxAPIService) GetWorkDirDeprecatedExecute(r ToolboxAPIGetWorkDirDe
 type ToolboxAPIGitAddFilesDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	gitAddRequest *GitAddRequest
 	xBoxLiteOrganizationID *string
 }
@@ -4665,16 +4665,16 @@ GitAddFilesDeprecated [DEPRECATED] Add files
 Add files to git commit
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIGitAddFilesDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GitAddFilesDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGitAddFilesDeprecatedRequest {
+func (a *ToolboxAPIService) GitAddFilesDeprecated(ctx context.Context, boxId string) ToolboxAPIGitAddFilesDeprecatedRequest {
 	return ToolboxAPIGitAddFilesDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -4692,8 +4692,8 @@ func (a *ToolboxAPIService) GitAddFilesDeprecatedExecute(r ToolboxAPIGitAddFiles
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/git/add"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/git/add"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -4755,7 +4755,7 @@ func (a *ToolboxAPIService) GitAddFilesDeprecatedExecute(r ToolboxAPIGitAddFiles
 type ToolboxAPIGitCheckoutBranchDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	gitCheckoutRequest *GitCheckoutRequest
 	xBoxLiteOrganizationID *string
 }
@@ -4781,16 +4781,16 @@ GitCheckoutBranchDeprecated [DEPRECATED] Checkout branch
 Checkout branch or commit in git repository
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIGitCheckoutBranchDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GitCheckoutBranchDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGitCheckoutBranchDeprecatedRequest {
+func (a *ToolboxAPIService) GitCheckoutBranchDeprecated(ctx context.Context, boxId string) ToolboxAPIGitCheckoutBranchDeprecatedRequest {
 	return ToolboxAPIGitCheckoutBranchDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -4808,8 +4808,8 @@ func (a *ToolboxAPIService) GitCheckoutBranchDeprecatedExecute(r ToolboxAPIGitCh
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/git/checkout"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/git/checkout"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -4871,7 +4871,7 @@ func (a *ToolboxAPIService) GitCheckoutBranchDeprecatedExecute(r ToolboxAPIGitCh
 type ToolboxAPIGitCloneRepositoryDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	gitCloneRequest *GitCloneRequest
 	xBoxLiteOrganizationID *string
 }
@@ -4897,16 +4897,16 @@ GitCloneRepositoryDeprecated [DEPRECATED] Clone repository
 Clone git repository
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIGitCloneRepositoryDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GitCloneRepositoryDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGitCloneRepositoryDeprecatedRequest {
+func (a *ToolboxAPIService) GitCloneRepositoryDeprecated(ctx context.Context, boxId string) ToolboxAPIGitCloneRepositoryDeprecatedRequest {
 	return ToolboxAPIGitCloneRepositoryDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -4924,8 +4924,8 @@ func (a *ToolboxAPIService) GitCloneRepositoryDeprecatedExecute(r ToolboxAPIGitC
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/git/clone"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/git/clone"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -4987,7 +4987,7 @@ func (a *ToolboxAPIService) GitCloneRepositoryDeprecatedExecute(r ToolboxAPIGitC
 type ToolboxAPIGitCommitChangesDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	gitCommitRequest *GitCommitRequest
 	xBoxLiteOrganizationID *string
 }
@@ -5013,16 +5013,16 @@ GitCommitChangesDeprecated [DEPRECATED] Commit changes
 Commit changes to git repository
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIGitCommitChangesDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GitCommitChangesDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGitCommitChangesDeprecatedRequest {
+func (a *ToolboxAPIService) GitCommitChangesDeprecated(ctx context.Context, boxId string) ToolboxAPIGitCommitChangesDeprecatedRequest {
 	return ToolboxAPIGitCommitChangesDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -5042,8 +5042,8 @@ func (a *ToolboxAPIService) GitCommitChangesDeprecatedExecute(r ToolboxAPIGitCom
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/git/commit"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/git/commit"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -5114,7 +5114,7 @@ func (a *ToolboxAPIService) GitCommitChangesDeprecatedExecute(r ToolboxAPIGitCom
 type ToolboxAPIGitCreateBranchDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	gitBranchRequest *GitBranchRequest
 	xBoxLiteOrganizationID *string
 }
@@ -5140,16 +5140,16 @@ GitCreateBranchDeprecated [DEPRECATED] Create branch
 Create branch on git repository
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIGitCreateBranchDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GitCreateBranchDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGitCreateBranchDeprecatedRequest {
+func (a *ToolboxAPIService) GitCreateBranchDeprecated(ctx context.Context, boxId string) ToolboxAPIGitCreateBranchDeprecatedRequest {
 	return ToolboxAPIGitCreateBranchDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -5167,8 +5167,8 @@ func (a *ToolboxAPIService) GitCreateBranchDeprecatedExecute(r ToolboxAPIGitCrea
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/git/branches"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/git/branches"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -5230,7 +5230,7 @@ func (a *ToolboxAPIService) GitCreateBranchDeprecatedExecute(r ToolboxAPIGitCrea
 type ToolboxAPIGitDeleteBranchDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	gitDeleteBranchRequest *GitDeleteBranchRequest
 	xBoxLiteOrganizationID *string
 }
@@ -5256,16 +5256,16 @@ GitDeleteBranchDeprecated [DEPRECATED] Delete branch
 Delete branch on git repository
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIGitDeleteBranchDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GitDeleteBranchDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGitDeleteBranchDeprecatedRequest {
+func (a *ToolboxAPIService) GitDeleteBranchDeprecated(ctx context.Context, boxId string) ToolboxAPIGitDeleteBranchDeprecatedRequest {
 	return ToolboxAPIGitDeleteBranchDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -5283,8 +5283,8 @@ func (a *ToolboxAPIService) GitDeleteBranchDeprecatedExecute(r ToolboxAPIGitDele
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/git/branches"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/git/branches"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -5346,7 +5346,7 @@ func (a *ToolboxAPIService) GitDeleteBranchDeprecatedExecute(r ToolboxAPIGitDele
 type ToolboxAPIGitGetHistoryDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	path *string
 	xBoxLiteOrganizationID *string
 }
@@ -5372,16 +5372,16 @@ GitGetHistoryDeprecated [DEPRECATED] Get commit history
 Get commit history from git repository
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIGitGetHistoryDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GitGetHistoryDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGitGetHistoryDeprecatedRequest {
+func (a *ToolboxAPIService) GitGetHistoryDeprecated(ctx context.Context, boxId string) ToolboxAPIGitGetHistoryDeprecatedRequest {
 	return ToolboxAPIGitGetHistoryDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -5401,8 +5401,8 @@ func (a *ToolboxAPIService) GitGetHistoryDeprecatedExecute(r ToolboxAPIGitGetHis
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/git/history"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/git/history"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -5472,7 +5472,7 @@ func (a *ToolboxAPIService) GitGetHistoryDeprecatedExecute(r ToolboxAPIGitGetHis
 type ToolboxAPIGitGetStatusDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	path *string
 	xBoxLiteOrganizationID *string
 }
@@ -5498,16 +5498,16 @@ GitGetStatusDeprecated [DEPRECATED] Get git status
 Get status from git repository
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIGitGetStatusDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GitGetStatusDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGitGetStatusDeprecatedRequest {
+func (a *ToolboxAPIService) GitGetStatusDeprecated(ctx context.Context, boxId string) ToolboxAPIGitGetStatusDeprecatedRequest {
 	return ToolboxAPIGitGetStatusDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -5527,8 +5527,8 @@ func (a *ToolboxAPIService) GitGetStatusDeprecatedExecute(r ToolboxAPIGitGetStat
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/git/status"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/git/status"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -5598,7 +5598,7 @@ func (a *ToolboxAPIService) GitGetStatusDeprecatedExecute(r ToolboxAPIGitGetStat
 type ToolboxAPIGitListBranchesDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	path *string
 	xBoxLiteOrganizationID *string
 }
@@ -5624,16 +5624,16 @@ GitListBranchesDeprecated [DEPRECATED] Get branch list
 Get branch list from git repository
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIGitListBranchesDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GitListBranchesDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGitListBranchesDeprecatedRequest {
+func (a *ToolboxAPIService) GitListBranchesDeprecated(ctx context.Context, boxId string) ToolboxAPIGitListBranchesDeprecatedRequest {
 	return ToolboxAPIGitListBranchesDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -5653,8 +5653,8 @@ func (a *ToolboxAPIService) GitListBranchesDeprecatedExecute(r ToolboxAPIGitList
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/git/branches"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/git/branches"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -5724,7 +5724,7 @@ func (a *ToolboxAPIService) GitListBranchesDeprecatedExecute(r ToolboxAPIGitList
 type ToolboxAPIGitPullChangesDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	gitRepoRequest *GitRepoRequest
 	xBoxLiteOrganizationID *string
 }
@@ -5750,16 +5750,16 @@ GitPullChangesDeprecated [DEPRECATED] Pull changes
 Pull changes from remote
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIGitPullChangesDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GitPullChangesDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGitPullChangesDeprecatedRequest {
+func (a *ToolboxAPIService) GitPullChangesDeprecated(ctx context.Context, boxId string) ToolboxAPIGitPullChangesDeprecatedRequest {
 	return ToolboxAPIGitPullChangesDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -5777,8 +5777,8 @@ func (a *ToolboxAPIService) GitPullChangesDeprecatedExecute(r ToolboxAPIGitPullC
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/git/pull"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/git/pull"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -5840,7 +5840,7 @@ func (a *ToolboxAPIService) GitPullChangesDeprecatedExecute(r ToolboxAPIGitPullC
 type ToolboxAPIGitPushChangesDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	gitRepoRequest *GitRepoRequest
 	xBoxLiteOrganizationID *string
 }
@@ -5866,16 +5866,16 @@ GitPushChangesDeprecated [DEPRECATED] Push changes
 Push changes to remote
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIGitPushChangesDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) GitPushChangesDeprecated(ctx context.Context, sandboxId string) ToolboxAPIGitPushChangesDeprecatedRequest {
+func (a *ToolboxAPIService) GitPushChangesDeprecated(ctx context.Context, boxId string) ToolboxAPIGitPushChangesDeprecatedRequest {
 	return ToolboxAPIGitPushChangesDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -5893,8 +5893,8 @@ func (a *ToolboxAPIService) GitPushChangesDeprecatedExecute(r ToolboxAPIGitPushC
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/git/push"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/git/push"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -5956,7 +5956,7 @@ func (a *ToolboxAPIService) GitPushChangesDeprecatedExecute(r ToolboxAPIGitPushC
 type ToolboxAPIListFilesDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	xBoxLiteOrganizationID *string
 	path *string
 }
@@ -5980,16 +5980,16 @@ func (r ToolboxAPIListFilesDeprecatedRequest) Execute() ([]FileInfo, *http.Respo
 ListFilesDeprecated [DEPRECATED] List files
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIListFilesDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) ListFilesDeprecated(ctx context.Context, sandboxId string) ToolboxAPIListFilesDeprecatedRequest {
+func (a *ToolboxAPIService) ListFilesDeprecated(ctx context.Context, boxId string) ToolboxAPIListFilesDeprecatedRequest {
 	return ToolboxAPIListFilesDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -6009,8 +6009,8 @@ func (a *ToolboxAPIService) ListFilesDeprecatedExecute(r ToolboxAPIListFilesDepr
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/files"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/files"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -6079,7 +6079,7 @@ func (a *ToolboxAPIService) ListFilesDeprecatedExecute(r ToolboxAPIListFilesDepr
 type ToolboxAPIListPTYSessionsDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	xBoxLiteOrganizationID *string
 }
 
@@ -6096,19 +6096,19 @@ func (r ToolboxAPIListPTYSessionsDeprecatedRequest) Execute() (*PtyListResponse,
 /*
 ListPTYSessionsDeprecated [DEPRECATED] List PTY sessions
 
-List all active PTY sessions in the sandbox
+List all active PTY sessions in the box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIListPTYSessionsDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) ListPTYSessionsDeprecated(ctx context.Context, sandboxId string) ToolboxAPIListPTYSessionsDeprecatedRequest {
+func (a *ToolboxAPIService) ListPTYSessionsDeprecated(ctx context.Context, boxId string) ToolboxAPIListPTYSessionsDeprecatedRequest {
 	return ToolboxAPIListPTYSessionsDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -6128,8 +6128,8 @@ func (a *ToolboxAPIService) ListPTYSessionsDeprecatedExecute(r ToolboxAPIListPTY
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/process/pty"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/process/pty"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -6195,7 +6195,7 @@ func (a *ToolboxAPIService) ListPTYSessionsDeprecatedExecute(r ToolboxAPIListPTY
 type ToolboxAPIListSessionsDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	xBoxLiteOrganizationID *string
 }
 
@@ -6212,19 +6212,19 @@ func (r ToolboxAPIListSessionsDeprecatedRequest) Execute() ([]Session, *http.Res
 /*
 ListSessionsDeprecated [DEPRECATED] List sessions
 
-List all active sessions in the sandbox
+List all active sessions in the box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIListSessionsDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) ListSessionsDeprecated(ctx context.Context, sandboxId string) ToolboxAPIListSessionsDeprecatedRequest {
+func (a *ToolboxAPIService) ListSessionsDeprecated(ctx context.Context, boxId string) ToolboxAPIListSessionsDeprecatedRequest {
 	return ToolboxAPIListSessionsDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -6244,8 +6244,8 @@ func (a *ToolboxAPIService) ListSessionsDeprecatedExecute(r ToolboxAPIListSessio
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/process/session"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/process/session"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -6311,7 +6311,7 @@ func (a *ToolboxAPIService) ListSessionsDeprecatedExecute(r ToolboxAPIListSessio
 type ToolboxAPILspCompletionsDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	lspCompletionParams *LspCompletionParams
 	xBoxLiteOrganizationID *string
 }
@@ -6337,16 +6337,16 @@ LspCompletionsDeprecated [DEPRECATED] Get Lsp Completions
 The Completion request is sent from the client to the server to compute completion items at a given cursor position.
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPILspCompletionsDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) LspCompletionsDeprecated(ctx context.Context, sandboxId string) ToolboxAPILspCompletionsDeprecatedRequest {
+func (a *ToolboxAPIService) LspCompletionsDeprecated(ctx context.Context, boxId string) ToolboxAPILspCompletionsDeprecatedRequest {
 	return ToolboxAPILspCompletionsDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -6366,8 +6366,8 @@ func (a *ToolboxAPIService) LspCompletionsDeprecatedExecute(r ToolboxAPILspCompl
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/lsp/completions"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/lsp/completions"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -6438,7 +6438,7 @@ func (a *ToolboxAPIService) LspCompletionsDeprecatedExecute(r ToolboxAPILspCompl
 type ToolboxAPILspDidCloseDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	lspDocumentRequest *LspDocumentRequest
 	xBoxLiteOrganizationID *string
 }
@@ -6464,16 +6464,16 @@ LspDidCloseDeprecated [DEPRECATED] Call Lsp DidClose
 The document close notification is sent from the client to the server when the document got closed in the client.
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPILspDidCloseDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) LspDidCloseDeprecated(ctx context.Context, sandboxId string) ToolboxAPILspDidCloseDeprecatedRequest {
+func (a *ToolboxAPIService) LspDidCloseDeprecated(ctx context.Context, boxId string) ToolboxAPILspDidCloseDeprecatedRequest {
 	return ToolboxAPILspDidCloseDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -6491,8 +6491,8 @@ func (a *ToolboxAPIService) LspDidCloseDeprecatedExecute(r ToolboxAPILspDidClose
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/lsp/did-close"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/lsp/did-close"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -6554,7 +6554,7 @@ func (a *ToolboxAPIService) LspDidCloseDeprecatedExecute(r ToolboxAPILspDidClose
 type ToolboxAPILspDidOpenDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	lspDocumentRequest *LspDocumentRequest
 	xBoxLiteOrganizationID *string
 }
@@ -6580,16 +6580,16 @@ LspDidOpenDeprecated [DEPRECATED] Call Lsp DidOpen
 The document open notification is sent from the client to the server to signal newly opened text documents.
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPILspDidOpenDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) LspDidOpenDeprecated(ctx context.Context, sandboxId string) ToolboxAPILspDidOpenDeprecatedRequest {
+func (a *ToolboxAPIService) LspDidOpenDeprecated(ctx context.Context, boxId string) ToolboxAPILspDidOpenDeprecatedRequest {
 	return ToolboxAPILspDidOpenDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -6607,8 +6607,8 @@ func (a *ToolboxAPIService) LspDidOpenDeprecatedExecute(r ToolboxAPILspDidOpenDe
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/lsp/did-open"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/lsp/did-open"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -6670,7 +6670,7 @@ func (a *ToolboxAPIService) LspDidOpenDeprecatedExecute(r ToolboxAPILspDidOpenDe
 type ToolboxAPILspDocumentSymbolsDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	languageId *string
 	pathToProject *string
 	uri *string
@@ -6708,16 +6708,16 @@ LspDocumentSymbolsDeprecated [DEPRECATED] Call Lsp DocumentSymbols
 The document symbol request is sent from the client to the server.
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPILspDocumentSymbolsDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) LspDocumentSymbolsDeprecated(ctx context.Context, sandboxId string) ToolboxAPILspDocumentSymbolsDeprecatedRequest {
+func (a *ToolboxAPIService) LspDocumentSymbolsDeprecated(ctx context.Context, boxId string) ToolboxAPILspDocumentSymbolsDeprecatedRequest {
 	return ToolboxAPILspDocumentSymbolsDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -6737,8 +6737,8 @@ func (a *ToolboxAPIService) LspDocumentSymbolsDeprecatedExecute(r ToolboxAPILspD
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/lsp/document-symbols"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/lsp/document-symbols"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -6816,7 +6816,7 @@ func (a *ToolboxAPIService) LspDocumentSymbolsDeprecatedExecute(r ToolboxAPILspD
 type ToolboxAPILspStartDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	lspServerRequest *LspServerRequest
 	xBoxLiteOrganizationID *string
 }
@@ -6839,19 +6839,19 @@ func (r ToolboxAPILspStartDeprecatedRequest) Execute() (*http.Response, error) {
 /*
 LspStartDeprecated [DEPRECATED] Start Lsp server
 
-Start Lsp server process inside sandbox project
+Start Lsp server process inside box project
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPILspStartDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) LspStartDeprecated(ctx context.Context, sandboxId string) ToolboxAPILspStartDeprecatedRequest {
+func (a *ToolboxAPIService) LspStartDeprecated(ctx context.Context, boxId string) ToolboxAPILspStartDeprecatedRequest {
 	return ToolboxAPILspStartDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -6869,8 +6869,8 @@ func (a *ToolboxAPIService) LspStartDeprecatedExecute(r ToolboxAPILspStartDeprec
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/lsp/start"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/lsp/start"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -6932,7 +6932,7 @@ func (a *ToolboxAPIService) LspStartDeprecatedExecute(r ToolboxAPILspStartDeprec
 type ToolboxAPILspStopDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	lspServerRequest *LspServerRequest
 	xBoxLiteOrganizationID *string
 }
@@ -6955,19 +6955,19 @@ func (r ToolboxAPILspStopDeprecatedRequest) Execute() (*http.Response, error) {
 /*
 LspStopDeprecated [DEPRECATED] Stop Lsp server
 
-Stop Lsp server process inside sandbox project
+Stop Lsp server process inside box project
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPILspStopDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) LspStopDeprecated(ctx context.Context, sandboxId string) ToolboxAPILspStopDeprecatedRequest {
+func (a *ToolboxAPIService) LspStopDeprecated(ctx context.Context, boxId string) ToolboxAPILspStopDeprecatedRequest {
 	return ToolboxAPILspStopDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -6985,8 +6985,8 @@ func (a *ToolboxAPIService) LspStopDeprecatedExecute(r ToolboxAPILspStopDeprecat
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/lsp/stop"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/lsp/stop"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -7048,7 +7048,7 @@ func (a *ToolboxAPIService) LspStopDeprecatedExecute(r ToolboxAPILspStopDeprecat
 type ToolboxAPILspWorkspaceSymbolsDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	languageId *string
 	pathToProject *string
 	query *string
@@ -7086,16 +7086,16 @@ LspWorkspaceSymbolsDeprecated [DEPRECATED] Call Lsp WorkspaceSymbols
 The workspace symbol request is sent from the client to the server to list project-wide symbols matching the query string.
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPILspWorkspaceSymbolsDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) LspWorkspaceSymbolsDeprecated(ctx context.Context, sandboxId string) ToolboxAPILspWorkspaceSymbolsDeprecatedRequest {
+func (a *ToolboxAPIService) LspWorkspaceSymbolsDeprecated(ctx context.Context, boxId string) ToolboxAPILspWorkspaceSymbolsDeprecatedRequest {
 	return ToolboxAPILspWorkspaceSymbolsDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -7115,8 +7115,8 @@ func (a *ToolboxAPIService) LspWorkspaceSymbolsDeprecatedExecute(r ToolboxAPILsp
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/lsp/workspace-symbols"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/lsp/workspace-symbols"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -7194,7 +7194,7 @@ func (a *ToolboxAPIService) LspWorkspaceSymbolsDeprecatedExecute(r ToolboxAPILsp
 type ToolboxAPIMoveFileDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	source *string
 	destination *string
 	xBoxLiteOrganizationID *string
@@ -7223,19 +7223,19 @@ func (r ToolboxAPIMoveFileDeprecatedRequest) Execute() (*http.Response, error) {
 /*
 MoveFileDeprecated [DEPRECATED] Move file
 
-Move file inside sandbox
+Move file inside box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIMoveFileDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) MoveFileDeprecated(ctx context.Context, sandboxId string) ToolboxAPIMoveFileDeprecatedRequest {
+func (a *ToolboxAPIService) MoveFileDeprecated(ctx context.Context, boxId string) ToolboxAPIMoveFileDeprecatedRequest {
 	return ToolboxAPIMoveFileDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -7253,8 +7253,8 @@ func (a *ToolboxAPIService) MoveFileDeprecatedExecute(r ToolboxAPIMoveFileDeprec
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/files/move"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/files/move"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -7319,7 +7319,7 @@ func (a *ToolboxAPIService) MoveFileDeprecatedExecute(r ToolboxAPIMoveFileDeprec
 type ToolboxAPIMoveMouseDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	mouseMoveRequest *MouseMoveRequest
 	xBoxLiteOrganizationID *string
 }
@@ -7345,16 +7345,16 @@ MoveMouseDeprecated [DEPRECATED] Move mouse
 Move mouse cursor to specified coordinates
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIMoveMouseDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) MoveMouseDeprecated(ctx context.Context, sandboxId string) ToolboxAPIMoveMouseDeprecatedRequest {
+func (a *ToolboxAPIService) MoveMouseDeprecated(ctx context.Context, boxId string) ToolboxAPIMoveMouseDeprecatedRequest {
 	return ToolboxAPIMoveMouseDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -7374,8 +7374,8 @@ func (a *ToolboxAPIService) MoveMouseDeprecatedExecute(r ToolboxAPIMoveMouseDepr
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/computeruse/mouse/move"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/computeruse/mouse/move"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -7446,7 +7446,7 @@ func (a *ToolboxAPIService) MoveMouseDeprecatedExecute(r ToolboxAPIMoveMouseDepr
 type ToolboxAPIPressHotkeyDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	keyboardHotkeyRequest *KeyboardHotkeyRequest
 	xBoxLiteOrganizationID *string
 }
@@ -7472,16 +7472,16 @@ PressHotkeyDeprecated [DEPRECATED] Press hotkey
 Press a hotkey combination
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIPressHotkeyDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) PressHotkeyDeprecated(ctx context.Context, sandboxId string) ToolboxAPIPressHotkeyDeprecatedRequest {
+func (a *ToolboxAPIService) PressHotkeyDeprecated(ctx context.Context, boxId string) ToolboxAPIPressHotkeyDeprecatedRequest {
 	return ToolboxAPIPressHotkeyDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -7499,8 +7499,8 @@ func (a *ToolboxAPIService) PressHotkeyDeprecatedExecute(r ToolboxAPIPressHotkey
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/computeruse/keyboard/hotkey"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/computeruse/keyboard/hotkey"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -7562,7 +7562,7 @@ func (a *ToolboxAPIService) PressHotkeyDeprecatedExecute(r ToolboxAPIPressHotkey
 type ToolboxAPIPressKeyDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	keyboardPressRequest *KeyboardPressRequest
 	xBoxLiteOrganizationID *string
 }
@@ -7588,16 +7588,16 @@ PressKeyDeprecated [DEPRECATED] Press key
 Press a key with optional modifiers
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIPressKeyDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) PressKeyDeprecated(ctx context.Context, sandboxId string) ToolboxAPIPressKeyDeprecatedRequest {
+func (a *ToolboxAPIService) PressKeyDeprecated(ctx context.Context, boxId string) ToolboxAPIPressKeyDeprecatedRequest {
 	return ToolboxAPIPressKeyDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -7615,8 +7615,8 @@ func (a *ToolboxAPIService) PressKeyDeprecatedExecute(r ToolboxAPIPressKeyDeprec
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/computeruse/keyboard/key"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/computeruse/keyboard/key"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -7678,7 +7678,7 @@ func (a *ToolboxAPIService) PressKeyDeprecatedExecute(r ToolboxAPIPressKeyDeprec
 type ToolboxAPIReplaceInFilesDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	replaceRequest *ReplaceRequest
 	xBoxLiteOrganizationID *string
 }
@@ -7701,19 +7701,19 @@ func (r ToolboxAPIReplaceInFilesDeprecatedRequest) Execute() ([]ReplaceResult, *
 /*
 ReplaceInFilesDeprecated [DEPRECATED] Replace in files
 
-Replace text/pattern in multiple files inside sandbox
+Replace text/pattern in multiple files inside box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIReplaceInFilesDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) ReplaceInFilesDeprecated(ctx context.Context, sandboxId string) ToolboxAPIReplaceInFilesDeprecatedRequest {
+func (a *ToolboxAPIService) ReplaceInFilesDeprecated(ctx context.Context, boxId string) ToolboxAPIReplaceInFilesDeprecatedRequest {
 	return ToolboxAPIReplaceInFilesDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -7733,8 +7733,8 @@ func (a *ToolboxAPIService) ReplaceInFilesDeprecatedExecute(r ToolboxAPIReplaceI
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/files/replace"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/files/replace"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -7805,7 +7805,7 @@ func (a *ToolboxAPIService) ReplaceInFilesDeprecatedExecute(r ToolboxAPIReplaceI
 type ToolboxAPIResizePTYSessionDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	sessionId string
 	ptyResizeRequest *PtyResizeRequest
 	xBoxLiteOrganizationID *string
@@ -7832,17 +7832,17 @@ ResizePTYSessionDeprecated [DEPRECATED] Resize PTY session
 Resize a PTY session
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @param sessionId
  @return ToolboxAPIResizePTYSessionDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) ResizePTYSessionDeprecated(ctx context.Context, sandboxId string, sessionId string) ToolboxAPIResizePTYSessionDeprecatedRequest {
+func (a *ToolboxAPIService) ResizePTYSessionDeprecated(ctx context.Context, boxId string, sessionId string) ToolboxAPIResizePTYSessionDeprecatedRequest {
 	return ToolboxAPIResizePTYSessionDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 		sessionId: sessionId,
 	}
 }
@@ -7863,8 +7863,8 @@ func (a *ToolboxAPIService) ResizePTYSessionDeprecatedExecute(r ToolboxAPIResize
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/process/pty/{sessionId}/resize"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/process/pty/{sessionId}/resize"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 	localVarPath = strings.Replace(localVarPath, "{"+"sessionId"+"}", url.PathEscape(parameterValueToString(r.sessionId, "sessionId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -7937,7 +7937,7 @@ type ToolboxAPIRestartProcessDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
 	processName string
-	sandboxId string
+	boxId string
 	xBoxLiteOrganizationID *string
 }
 
@@ -7958,17 +7958,17 @@ Restart a specific VNC process
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param processName
- @param sandboxId
+ @param boxId
  @return ToolboxAPIRestartProcessDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) RestartProcessDeprecated(ctx context.Context, processName string, sandboxId string) ToolboxAPIRestartProcessDeprecatedRequest {
+func (a *ToolboxAPIService) RestartProcessDeprecated(ctx context.Context, processName string, boxId string) ToolboxAPIRestartProcessDeprecatedRequest {
 	return ToolboxAPIRestartProcessDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
 		processName: processName,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -7988,9 +7988,9 @@ func (a *ToolboxAPIService) RestartProcessDeprecatedExecute(r ToolboxAPIRestartP
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/computeruse/process/{processName}/restart"
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/computeruse/process/{processName}/restart"
 	localVarPath = strings.Replace(localVarPath, "{"+"processName"+"}", url.PathEscape(parameterValueToString(r.processName, "processName")), -1)
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -8056,7 +8056,7 @@ func (a *ToolboxAPIService) RestartProcessDeprecatedExecute(r ToolboxAPIRestartP
 type ToolboxAPIScrollMouseDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	mouseScrollRequest *MouseScrollRequest
 	xBoxLiteOrganizationID *string
 }
@@ -8082,16 +8082,16 @@ ScrollMouseDeprecated [DEPRECATED] Scroll mouse
 Scroll mouse at specified coordinates
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIScrollMouseDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) ScrollMouseDeprecated(ctx context.Context, sandboxId string) ToolboxAPIScrollMouseDeprecatedRequest {
+func (a *ToolboxAPIService) ScrollMouseDeprecated(ctx context.Context, boxId string) ToolboxAPIScrollMouseDeprecatedRequest {
 	return ToolboxAPIScrollMouseDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -8111,8 +8111,8 @@ func (a *ToolboxAPIService) ScrollMouseDeprecatedExecute(r ToolboxAPIScrollMouse
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/computeruse/mouse/scroll"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/computeruse/mouse/scroll"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -8183,7 +8183,7 @@ func (a *ToolboxAPIService) ScrollMouseDeprecatedExecute(r ToolboxAPIScrollMouse
 type ToolboxAPISearchFilesDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	path *string
 	pattern *string
 	xBoxLiteOrganizationID *string
@@ -8212,19 +8212,19 @@ func (r ToolboxAPISearchFilesDeprecatedRequest) Execute() (*SearchFilesResponse,
 /*
 SearchFilesDeprecated [DEPRECATED] Search files
 
-Search for files inside sandbox
+Search for files inside box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPISearchFilesDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) SearchFilesDeprecated(ctx context.Context, sandboxId string) ToolboxAPISearchFilesDeprecatedRequest {
+func (a *ToolboxAPIService) SearchFilesDeprecated(ctx context.Context, boxId string) ToolboxAPISearchFilesDeprecatedRequest {
 	return ToolboxAPISearchFilesDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -8244,8 +8244,8 @@ func (a *ToolboxAPIService) SearchFilesDeprecatedExecute(r ToolboxAPISearchFiles
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/files/search"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/files/search"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -8319,7 +8319,7 @@ func (a *ToolboxAPIService) SearchFilesDeprecatedExecute(r ToolboxAPISearchFiles
 type ToolboxAPISetFilePermissionsDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	path *string
 	xBoxLiteOrganizationID *string
 	owner *string
@@ -8360,19 +8360,19 @@ func (r ToolboxAPISetFilePermissionsDeprecatedRequest) Execute() (*http.Response
 /*
 SetFilePermissionsDeprecated [DEPRECATED] Set file permissions
 
-Set file owner/group/permissions inside sandbox
+Set file owner/group/permissions inside box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPISetFilePermissionsDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) SetFilePermissionsDeprecated(ctx context.Context, sandboxId string) ToolboxAPISetFilePermissionsDeprecatedRequest {
+func (a *ToolboxAPIService) SetFilePermissionsDeprecated(ctx context.Context, boxId string) ToolboxAPISetFilePermissionsDeprecatedRequest {
 	return ToolboxAPISetFilePermissionsDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -8390,8 +8390,8 @@ func (a *ToolboxAPIService) SetFilePermissionsDeprecatedExecute(r ToolboxAPISetF
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/files/permissions"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/files/permissions"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -8461,7 +8461,7 @@ func (a *ToolboxAPIService) SetFilePermissionsDeprecatedExecute(r ToolboxAPISetF
 type ToolboxAPIStartComputerUseDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	xBoxLiteOrganizationID *string
 }
 
@@ -8481,16 +8481,16 @@ StartComputerUseDeprecated [DEPRECATED] Start computer use processes
 Start all VNC desktop processes (Xvfb, xfce4, x11vnc, novnc)
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIStartComputerUseDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) StartComputerUseDeprecated(ctx context.Context, sandboxId string) ToolboxAPIStartComputerUseDeprecatedRequest {
+func (a *ToolboxAPIService) StartComputerUseDeprecated(ctx context.Context, boxId string) ToolboxAPIStartComputerUseDeprecatedRequest {
 	return ToolboxAPIStartComputerUseDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -8510,8 +8510,8 @@ func (a *ToolboxAPIService) StartComputerUseDeprecatedExecute(r ToolboxAPIStartC
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/computeruse/start"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/computeruse/start"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -8577,7 +8577,7 @@ func (a *ToolboxAPIService) StartComputerUseDeprecatedExecute(r ToolboxAPIStartC
 type ToolboxAPIStopComputerUseDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	xBoxLiteOrganizationID *string
 }
 
@@ -8597,16 +8597,16 @@ StopComputerUseDeprecated [DEPRECATED] Stop computer use processes
 Stop all VNC desktop processes (Xvfb, xfce4, x11vnc, novnc)
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIStopComputerUseDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) StopComputerUseDeprecated(ctx context.Context, sandboxId string) ToolboxAPIStopComputerUseDeprecatedRequest {
+func (a *ToolboxAPIService) StopComputerUseDeprecated(ctx context.Context, boxId string) ToolboxAPIStopComputerUseDeprecatedRequest {
 	return ToolboxAPIStopComputerUseDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -8626,8 +8626,8 @@ func (a *ToolboxAPIService) StopComputerUseDeprecatedExecute(r ToolboxAPIStopCom
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/computeruse/stop"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/computeruse/stop"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -8693,7 +8693,7 @@ func (a *ToolboxAPIService) StopComputerUseDeprecatedExecute(r ToolboxAPIStopCom
 type ToolboxAPITakeCompressedRegionScreenshotDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	height *float32
 	width *float32
 	y *float32
@@ -8761,16 +8761,16 @@ TakeCompressedRegionScreenshotDeprecated [DEPRECATED] Take compressed region scr
 Take a compressed screenshot of a specific region
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPITakeCompressedRegionScreenshotDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) TakeCompressedRegionScreenshotDeprecated(ctx context.Context, sandboxId string) ToolboxAPITakeCompressedRegionScreenshotDeprecatedRequest {
+func (a *ToolboxAPIService) TakeCompressedRegionScreenshotDeprecated(ctx context.Context, boxId string) ToolboxAPITakeCompressedRegionScreenshotDeprecatedRequest {
 	return ToolboxAPITakeCompressedRegionScreenshotDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -8790,8 +8790,8 @@ func (a *ToolboxAPIService) TakeCompressedRegionScreenshotDeprecatedExecute(r To
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/computeruse/screenshot/region/compressed"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/computeruse/screenshot/region/compressed"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -8885,7 +8885,7 @@ func (a *ToolboxAPIService) TakeCompressedRegionScreenshotDeprecatedExecute(r To
 type ToolboxAPITakeCompressedScreenshotDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	xBoxLiteOrganizationID *string
 	scale *float32
 	quality *float32
@@ -8929,16 +8929,16 @@ TakeCompressedScreenshotDeprecated [DEPRECATED] Take compressed screenshot
 Take a compressed screenshot with format, quality, and scale options
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPITakeCompressedScreenshotDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) TakeCompressedScreenshotDeprecated(ctx context.Context, sandboxId string) ToolboxAPITakeCompressedScreenshotDeprecatedRequest {
+func (a *ToolboxAPIService) TakeCompressedScreenshotDeprecated(ctx context.Context, boxId string) ToolboxAPITakeCompressedScreenshotDeprecatedRequest {
 	return ToolboxAPITakeCompressedScreenshotDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -8958,8 +8958,8 @@ func (a *ToolboxAPIService) TakeCompressedScreenshotDeprecatedExecute(r ToolboxA
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/computeruse/screenshot/compressed"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/computeruse/screenshot/compressed"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -9037,7 +9037,7 @@ func (a *ToolboxAPIService) TakeCompressedScreenshotDeprecatedExecute(r ToolboxA
 type ToolboxAPITakeRegionScreenshotDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	height *float32
 	width *float32
 	y *float32
@@ -9087,16 +9087,16 @@ TakeRegionScreenshotDeprecated [DEPRECATED] Take region screenshot
 Take a screenshot of a specific region
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPITakeRegionScreenshotDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) TakeRegionScreenshotDeprecated(ctx context.Context, sandboxId string) ToolboxAPITakeRegionScreenshotDeprecatedRequest {
+func (a *ToolboxAPIService) TakeRegionScreenshotDeprecated(ctx context.Context, boxId string) ToolboxAPITakeRegionScreenshotDeprecatedRequest {
 	return ToolboxAPITakeRegionScreenshotDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -9116,8 +9116,8 @@ func (a *ToolboxAPIService) TakeRegionScreenshotDeprecatedExecute(r ToolboxAPITa
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/computeruse/screenshot/region"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/computeruse/screenshot/region"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -9202,7 +9202,7 @@ func (a *ToolboxAPIService) TakeRegionScreenshotDeprecatedExecute(r ToolboxAPITa
 type ToolboxAPITakeScreenshotDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	xBoxLiteOrganizationID *string
 	showCursor *bool
 }
@@ -9228,16 +9228,16 @@ TakeScreenshotDeprecated [DEPRECATED] Take screenshot
 Take a screenshot of the entire screen
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPITakeScreenshotDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) TakeScreenshotDeprecated(ctx context.Context, sandboxId string) ToolboxAPITakeScreenshotDeprecatedRequest {
+func (a *ToolboxAPIService) TakeScreenshotDeprecated(ctx context.Context, boxId string) ToolboxAPITakeScreenshotDeprecatedRequest {
 	return ToolboxAPITakeScreenshotDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -9257,8 +9257,8 @@ func (a *ToolboxAPIService) TakeScreenshotDeprecatedExecute(r ToolboxAPITakeScre
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/computeruse/screenshot"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/computeruse/screenshot"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -9327,7 +9327,7 @@ func (a *ToolboxAPIService) TakeScreenshotDeprecatedExecute(r ToolboxAPITakeScre
 type ToolboxAPITypeTextDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	keyboardTypeRequest *KeyboardTypeRequest
 	xBoxLiteOrganizationID *string
 }
@@ -9353,16 +9353,16 @@ TypeTextDeprecated [DEPRECATED] Type text
 Type text using keyboard
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPITypeTextDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) TypeTextDeprecated(ctx context.Context, sandboxId string) ToolboxAPITypeTextDeprecatedRequest {
+func (a *ToolboxAPIService) TypeTextDeprecated(ctx context.Context, boxId string) ToolboxAPITypeTextDeprecatedRequest {
 	return ToolboxAPITypeTextDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -9380,8 +9380,8 @@ func (a *ToolboxAPIService) TypeTextDeprecatedExecute(r ToolboxAPITypeTextDeprec
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/computeruse/keyboard/type"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/computeruse/keyboard/type"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -9443,7 +9443,7 @@ func (a *ToolboxAPIService) TypeTextDeprecatedExecute(r ToolboxAPITypeTextDeprec
 type ToolboxAPIUploadFileDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	path *string
 	xBoxLiteOrganizationID *string
 	file *os.File
@@ -9472,19 +9472,19 @@ func (r ToolboxAPIUploadFileDeprecatedRequest) Execute() (*http.Response, error)
 /*
 UploadFileDeprecated [DEPRECATED] Upload file
 
-Upload file inside sandbox
+Upload file inside box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIUploadFileDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) UploadFileDeprecated(ctx context.Context, sandboxId string) ToolboxAPIUploadFileDeprecatedRequest {
+func (a *ToolboxAPIService) UploadFileDeprecated(ctx context.Context, boxId string) ToolboxAPIUploadFileDeprecatedRequest {
 	return ToolboxAPIUploadFileDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -9502,8 +9502,8 @@ func (a *ToolboxAPIService) UploadFileDeprecatedExecute(r ToolboxAPIUploadFileDe
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/files/upload"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/files/upload"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -9579,7 +9579,7 @@ func (a *ToolboxAPIService) UploadFileDeprecatedExecute(r ToolboxAPIUploadFileDe
 type ToolboxAPIUploadFilesDeprecatedRequest struct {
 	ctx context.Context
 	ApiService ToolboxAPI
-	sandboxId string
+	boxId string
 	xBoxLiteOrganizationID *string
 }
 
@@ -9596,19 +9596,19 @@ func (r ToolboxAPIUploadFilesDeprecatedRequest) Execute() (*http.Response, error
 /*
 UploadFilesDeprecated [DEPRECATED] Upload multiple files
 
-Upload multiple files inside sandbox
+Upload multiple files inside box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId
+ @param boxId
  @return ToolboxAPIUploadFilesDeprecatedRequest
 
 Deprecated
 */
-func (a *ToolboxAPIService) UploadFilesDeprecated(ctx context.Context, sandboxId string) ToolboxAPIUploadFilesDeprecatedRequest {
+func (a *ToolboxAPIService) UploadFilesDeprecated(ctx context.Context, boxId string) ToolboxAPIUploadFilesDeprecatedRequest {
 	return ToolboxAPIUploadFilesDeprecatedRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
@@ -9626,8 +9626,8 @@ func (a *ToolboxAPIService) UploadFilesDeprecatedExecute(r ToolboxAPIUploadFiles
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/toolbox/{sandboxId}/toolbox/files/bulk-upload"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/toolbox/{boxId}/toolbox/files/bulk-upload"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}

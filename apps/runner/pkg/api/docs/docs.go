@@ -36,43 +36,25 @@ const docTemplate = `{
                 }
             }
         },
-        "/info": {
-            "get": {
-                "description": "Runner info with system metrics",
-                "produces": [
-                    "application/json"
-                ],
-                "summary": "Runner info",
-                "operationId": "RunnerInfo",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/RunnerInfoResponseDTO"
-                        }
-                    }
-                }
-            }
-        },
-        "/sandboxes": {
+        "/boxes": {
             "post": {
-                "description": "Create a sandbox",
+                "description": "Create a box",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "sandbox"
+                    "box"
                 ],
-                "summary": "Create a sandbox",
+                "summary": "Create a box",
                 "operationId": "Create",
                 "parameters": [
                     {
-                        "description": "Create sandbox",
-                        "name": "sandbox",
+                        "description": "Create box",
+                        "name": "box",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/CreateSandboxDTO"
+                            "$ref": "#/definitions/CreateBoxDTO"
                         }
                     }
                 ],
@@ -80,7 +62,7 @@ const docTemplate = `{
                     "201": {
                         "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/StartSandboxResponse"
+                            "$ref": "#/definitions/StartBoxResponse"
                         }
                     },
                     "400": {
@@ -116,31 +98,31 @@ const docTemplate = `{
                 }
             }
         },
-        "/sandboxes/{sandboxId}": {
+        "/boxes/{boxId}": {
             "get": {
-                "description": "Get sandbox info",
+                "description": "Get box info",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "sandbox"
+                    "box"
                 ],
-                "summary": "Get sandbox info",
+                "summary": "Get box info",
                 "operationId": "Info",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Sandbox ID",
-                        "name": "sandboxId",
+                        "description": "Box ID",
+                        "name": "boxId",
                         "in": "path",
                         "required": true
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "Sandbox info",
+                        "description": "Box info",
                         "schema": {
-                            "$ref": "#/definitions/SandboxInfoResponse"
+                            "$ref": "#/definitions/BoxInfoResponse"
                         }
                     },
                     "400": {
@@ -176,28 +158,28 @@ const docTemplate = `{
                 }
             }
         },
-        "/sandboxes/{sandboxId}/backup": {
+        "/boxes/{boxId}/backup": {
             "post": {
-                "description": "Create sandbox backup",
+                "description": "Create box backup",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "sandbox"
+                    "box"
                 ],
-                "summary": "Create sandbox backup",
+                "summary": "Create box backup",
                 "operationId": "CreateBackup",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Sandbox ID",
-                        "name": "sandboxId",
+                        "description": "Box ID",
+                        "name": "boxId",
                         "in": "path",
                         "required": true
                     },
                     {
                         "description": "Create backup",
-                        "name": "sandbox",
+                        "name": "box",
                         "in": "body",
                         "required": true,
                         "schema": {
@@ -245,29 +227,29 @@ const docTemplate = `{
                 }
             }
         },
-        "/sandboxes/{sandboxId}/destroy": {
+        "/boxes/{boxId}/destroy": {
             "post": {
-                "description": "Destroy sandbox",
+                "description": "Destroy box",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "sandbox"
+                    "box"
                 ],
-                "summary": "Destroy sandbox",
+                "summary": "Destroy box",
                 "operationId": "Destroy",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Sandbox ID",
-                        "name": "sandboxId",
+                        "description": "Box ID",
+                        "name": "boxId",
                         "in": "path",
                         "required": true
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "Sandbox destroyed",
+                        "description": "Box destroyed",
                         "schema": {
                             "type": "string"
                         }
@@ -305,9 +287,9 @@ const docTemplate = `{
                 }
             }
         },
-        "/sandboxes/{sandboxId}/is-recoverable": {
+        "/boxes/{boxId}/is-recoverable": {
             "post": {
-                "description": "Check if the sandbox's error reason indicates a recoverable error",
+                "description": "Check if the box's error reason indicates a recoverable error",
                 "consumes": [
                     "application/json"
                 ],
@@ -315,15 +297,15 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "sandbox"
+                    "box"
                 ],
-                "summary": "Check if sandbox error is recoverable",
+                "summary": "Check if box error is recoverable",
                 "operationId": "IsRecoverable",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Sandbox ID",
-                        "name": "sandboxId",
+                        "description": "Box ID",
+                        "name": "boxId",
                         "in": "path",
                         "required": true
                     },
@@ -353,22 +335,22 @@ const docTemplate = `{
                 }
             }
         },
-        "/sandboxes/{sandboxId}/network-settings": {
+        "/boxes/{boxId}/network-settings": {
             "get": {
-                "description": "Get sandbox network settings",
+                "description": "Get box network settings",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "sandbox"
+                    "box"
                 ],
-                "summary": "Get sandbox network settings",
+                "summary": "Get box network settings",
                 "operationId": "GetNetworkSettings",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Sandbox ID",
-                        "name": "sandboxId",
+                        "description": "Box ID",
+                        "name": "boxId",
                         "in": "path",
                         "required": true
                     }
@@ -413,26 +395,26 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "Update sandbox network settings",
+                "description": "Update box network settings",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "sandbox"
+                    "box"
                 ],
-                "summary": "Update sandbox network settings",
+                "summary": "Update box network settings",
                 "operationId": "UpdateNetworkSettings",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Sandbox ID",
-                        "name": "sandboxId",
+                        "description": "Box ID",
+                        "name": "boxId",
                         "in": "path",
                         "required": true
                     },
                     {
                         "description": "Update network settings",
-                        "name": "sandbox",
+                        "name": "box",
                         "in": "body",
                         "required": true,
                         "schema": {
@@ -480,9 +462,9 @@ const docTemplate = `{
                 }
             }
         },
-        "/sandboxes/{sandboxId}/recover": {
+        "/boxes/{boxId}/recover": {
             "post": {
-                "description": "Recover sandbox from error state using specified recovery type",
+                "description": "Recover box from error state using specified recovery type",
                 "consumes": [
                     "application/json"
                 ],
@@ -490,15 +472,15 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "sandbox"
+                    "box"
                 ],
-                "summary": "Recover sandbox from error state",
+                "summary": "Recover box from error state",
                 "operationId": "Recover",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Sandbox ID",
-                        "name": "sandboxId",
+                        "description": "Box ID",
+                        "name": "boxId",
                         "in": "path",
                         "required": true
                     },
@@ -508,13 +490,13 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/RecoverSandboxDTO"
+                            "$ref": "#/definitions/RecoverBoxDTO"
                         }
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "Sandbox recovered",
+                        "description": "Box recovered",
                         "schema": {
                             "type": "string"
                         }
@@ -552,38 +534,38 @@ const docTemplate = `{
                 }
             }
         },
-        "/sandboxes/{sandboxId}/resize": {
+        "/boxes/{boxId}/resize": {
             "post": {
-                "description": "Resize sandbox",
+                "description": "Resize box",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "sandbox"
+                    "box"
                 ],
-                "summary": "Resize sandbox",
+                "summary": "Resize box",
                 "operationId": "Resize",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Sandbox ID",
-                        "name": "sandboxId",
+                        "description": "Box ID",
+                        "name": "boxId",
                         "in": "path",
                         "required": true
                     },
                     {
-                        "description": "Resize sandbox",
-                        "name": "sandbox",
+                        "description": "Resize box",
+                        "name": "box",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/ResizeSandboxDTO"
+                            "$ref": "#/definitions/ResizeBoxDTO"
                         }
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "Sandbox resized",
+                        "description": "Box resized",
                         "schema": {
                             "type": "string"
                         }
@@ -621,22 +603,22 @@ const docTemplate = `{
                 }
             }
         },
-        "/sandboxes/{sandboxId}/start": {
+        "/boxes/{boxId}/start": {
             "post": {
-                "description": "Start sandbox",
+                "description": "Start box",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "sandbox"
+                    "box"
                 ],
-                "summary": "Start sandbox",
+                "summary": "Start box",
                 "operationId": "Start",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Sandbox ID",
-                        "name": "sandboxId",
+                        "description": "Box ID",
+                        "name": "boxId",
                         "in": "path",
                         "required": true
                     },
@@ -657,9 +639,9 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "Sandbox started",
+                        "description": "Box started",
                         "schema": {
-                            "$ref": "#/definitions/StartSandboxResponse"
+                            "$ref": "#/definitions/StartBoxResponse"
                         }
                     },
                     "400": {
@@ -695,37 +677,37 @@ const docTemplate = `{
                 }
             }
         },
-        "/sandboxes/{sandboxId}/stop": {
+        "/boxes/{boxId}/stop": {
             "post": {
-                "description": "Stop sandbox",
+                "description": "Stop box",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "sandbox"
+                    "box"
                 ],
-                "summary": "Stop sandbox",
+                "summary": "Stop box",
                 "operationId": "Stop",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Sandbox ID",
-                        "name": "sandboxId",
+                        "description": "Box ID",
+                        "name": "boxId",
                         "in": "path",
                         "required": true
                     },
                     {
-                        "description": "Stop sandbox",
-                        "name": "sandbox",
+                        "description": "Stop box",
+                        "name": "box",
                         "in": "body",
                         "schema": {
-                            "$ref": "#/definitions/StopSandboxDTO"
+                            "$ref": "#/definitions/StopBoxDTO"
                         }
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "Sandbox stopped",
+                        "description": "Box stopped",
                         "schema": {
                             "type": "string"
                         }
@@ -763,180 +745,19 @@ const docTemplate = `{
                 }
             }
         },
-        "/sandboxes/{sandboxId}/toolbox/{path}": {
+        "/info": {
             "get": {
-                "description": "Forwards the request to the specified sandbox's container",
-                "tags": [
-                    "toolbox"
+                "description": "Runner info with system metrics",
+                "produces": [
+                    "application/json"
                 ],
-                "summary": "Proxy requests to the sandbox toolbox",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Sandbox ID",
-                        "name": "sandboxId",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Path to forward",
-                        "name": "path",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
+                "summary": "Runner info",
+                "operationId": "RunnerInfo",
                 "responses": {
                     "200": {
-                        "description": "Proxied response",
-                        "schema": {}
-                    },
-                    "400": {
-                        "description": "Bad request",
+                        "description": "OK",
                         "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "404": {
-                        "description": "Sandbox container not found",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "409": {
-                        "description": "Sandbox container conflict",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal server error",
-                        "schema": {
-                            "type": "string"
-                        }
-                    }
-                }
-            },
-            "post": {
-                "description": "Forwards the request to the specified sandbox's container",
-                "tags": [
-                    "toolbox"
-                ],
-                "summary": "Proxy requests to the sandbox toolbox",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Sandbox ID",
-                        "name": "sandboxId",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Path to forward",
-                        "name": "path",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Proxied response",
-                        "schema": {}
-                    },
-                    "400": {
-                        "description": "Bad request",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "404": {
-                        "description": "Sandbox container not found",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "409": {
-                        "description": "Sandbox container conflict",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal server error",
-                        "schema": {
-                            "type": "string"
-                        }
-                    }
-                }
-            },
-            "delete": {
-                "description": "Forwards the request to the specified sandbox's container",
-                "tags": [
-                    "toolbox"
-                ],
-                "summary": "Proxy requests to the sandbox toolbox",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Sandbox ID",
-                        "name": "sandboxId",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Path to forward",
-                        "name": "path",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Proxied response",
-                        "schema": {}
-                    },
-                    "400": {
-                        "description": "Bad request",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "404": {
-                        "description": "Sandbox container not found",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "409": {
-                        "description": "Sandbox container conflict",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal server error",
-                        "schema": {
-                            "type": "string"
+                            "$ref": "#/definitions/RunnerInfoResponseDTO"
                         }
                     }
                 }
@@ -1412,9 +1233,76 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "/v1/boxes/{boxId}/executions/{execId}/attach": {
+            "get": {
+                "tags": [
+                    "boxlite"
+                ],
+                "summary": "Attach to an execution via WebSocket",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Box ID",
+                        "name": "boxId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Execution ID",
+                        "name": "execId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "101": {
+                        "description": "Switching Protocols"
+                    },
+                    "404": {
+                        "description": "execution not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "already attached",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
+        "BoxInfoResponse": {
+            "type": "object",
+            "properties": {
+                "backupError": {
+                    "type": "string"
+                },
+                "backupSnapshot": {
+                    "type": "string"
+                },
+                "backupState": {
+                    "$ref": "#/definitions/enums.BackupState"
+                },
+                "daemonVersion": {
+                    "type": "string"
+                },
+                "state": {
+                    "$ref": "#/definitions/enums.BoxState"
+                }
+            }
+        },
         "BuildSnapshotRequestDTO": {
             "type": "object",
             "required": [
@@ -1467,7 +1355,7 @@ const docTemplate = `{
                 }
             }
         },
-        "CreateSandboxDTO": {
+        "CreateBoxDTO": {
             "type": "object",
             "required": [
                 "id",
@@ -1651,7 +1539,7 @@ const docTemplate = `{
                 }
             }
         },
-        "RecoverSandboxDTO": {
+        "RecoverBoxDTO": {
             "type": "object",
             "required": [
                 "errorReason",
@@ -1733,7 +1621,7 @@ const docTemplate = `{
                 }
             }
         },
-        "ResizeSandboxDTO": {
+        "ResizeBoxDTO": {
             "type": "object",
             "properties": {
                 "cpu": {
@@ -1798,7 +1686,7 @@ const docTemplate = `{
                 "currentSnapshotCount": {
                     "type": "integer"
                 },
-                "currentStartedSandboxes": {
+                "currentStartedBoxes": {
                     "type": "integer"
                 }
             }
@@ -1818,26 +1706,6 @@ const docTemplate = `{
                 },
                 "serviceName": {
                     "type": "string"
-                }
-            }
-        },
-        "SandboxInfoResponse": {
-            "type": "object",
-            "properties": {
-                "backupError": {
-                    "type": "string"
-                },
-                "backupSnapshot": {
-                    "type": "string"
-                },
-                "backupState": {
-                    "$ref": "#/definitions/enums.BackupState"
-                },
-                "daemonVersion": {
-                    "type": "string"
-                },
-                "state": {
-                    "$ref": "#/definitions/enums.SandboxState"
                 }
             }
         },
@@ -1902,7 +1770,7 @@ const docTemplate = `{
                 }
             }
         },
-        "StartSandboxResponse": {
+        "StartBoxResponse": {
             "type": "object",
             "properties": {
                 "daemonVersion": {
@@ -1910,7 +1778,7 @@ const docTemplate = `{
                 }
             }
         },
-        "StopSandboxDTO": {
+        "StopBoxDTO": {
             "type": "object",
             "properties": {
                 "force": {
@@ -1978,7 +1846,7 @@ const docTemplate = `{
                 "BackupStateFailed"
             ]
         },
-        "enums.SandboxState": {
+        "enums.BoxState": {
             "type": "string",
             "enum": [
                 "creating",
@@ -1995,18 +1863,18 @@ const docTemplate = `{
                 "pulling_snapshot"
             ],
             "x-enum-varnames": [
-                "SandboxStateCreating",
-                "SandboxStateRestoring",
-                "SandboxStateDestroyed",
-                "SandboxStateDestroying",
-                "SandboxStateStarted",
-                "SandboxStateStopped",
-                "SandboxStateStarting",
-                "SandboxStateStopping",
-                "SandboxStateResizing",
-                "SandboxStateError",
-                "SandboxStateUnknown",
-                "SandboxStatePullingSnapshot"
+                "BoxStateCreating",
+                "BoxStateRestoring",
+                "BoxStateDestroyed",
+                "BoxStateDestroying",
+                "BoxStateStarted",
+                "BoxStateStopped",
+                "BoxStateStarting",
+                "BoxStateStopping",
+                "BoxStateResizing",
+                "BoxStateError",
+                "BoxStateUnknown",
+                "BoxStatePullingSnapshot"
             ]
         }
     },

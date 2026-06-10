@@ -14,7 +14,8 @@ Commands for managing BoxLite MCP Server
 
 ### SEE ALSO
 
-* [boxlite](boxlite.md)  - BoxLite CLI
-* [boxlite mcp config](boxlite_mcp_config.md)  - Outputs JSON configuration for BoxLite MCP Server
-* [boxlite mcp init](boxlite_mcp_init.md)  - Initialize BoxLite MCP Server with an agent (currently supported: claude, windsurf, cursor)
-* [boxlite mcp start](boxlite_mcp_start.md)  - Start BoxLite MCP Server
+* [boxlite](boxlite.md)	 - BoxLite CLI
+* [boxlite mcp config](boxlite_mcp_config.md)	 - Outputs JSON configuration for BoxLite MCP Server
+* [boxlite mcp init](boxlite_mcp_init.md)	 - Initialize BoxLite MCP Server with an agent (currently supported: claude, windsurf, cursor)
+* [boxlite mcp start](boxlite_mcp_start.md)	 - Start BoxLite MCP Server
+

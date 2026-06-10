@@ -27,6 +27,8 @@ type OidcConfig struct {
 	ClientId string `json:"clientId"`
 	// OIDC audience
 	Audience string `json:"audience"`
+	// OIDC end-session endpoint. Set when the IdP does not advertise one via discovery (e.g. Dex) and BoxLite hosts a compatible logout endpoint.
+	EndSessionEndpoint *string `json:"endSessionEndpoint,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -124,6 +126,38 @@ func (o *OidcConfig) SetAudience(v string) {
 	o.Audience = v
 }
 
+// GetEndSessionEndpoint returns the EndSessionEndpoint field value if set, zero value otherwise.
+func (o *OidcConfig) GetEndSessionEndpoint() string {
+	if o == nil || IsNil(o.EndSessionEndpoint) {
+		var ret string
+		return ret
+	}
+	return *o.EndSessionEndpoint
+}
+
+// GetEndSessionEndpointOk returns a tuple with the EndSessionEndpoint field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *OidcConfig) GetEndSessionEndpointOk() (*string, bool) {
+	if o == nil || IsNil(o.EndSessionEndpoint) {
+		return nil, false
+	}
+	return o.EndSessionEndpoint, true
+}
+
+// HasEndSessionEndpoint returns a boolean if a field has been set.
+func (o *OidcConfig) HasEndSessionEndpoint() bool {
+	if o != nil && !IsNil(o.EndSessionEndpoint) {
+		return true
+	}
+
+	return false
+}
+
+// SetEndSessionEndpoint gets a reference to the given string and assigns it to the EndSessionEndpoint field.
+func (o *OidcConfig) SetEndSessionEndpoint(v string) {
+	o.EndSessionEndpoint = &v
+}
+
 func (o OidcConfig) MarshalJSON() ([]byte, error) {
 	toSerialize,err := o.ToMap()
 	if err != nil {
@@ -137,6 +171,9 @@ func (o OidcConfig) ToMap() (map[string]interface{}, error) {
 	toSerialize["issuer"] = o.Issuer
 	toSerialize["clientId"] = o.ClientId
 	toSerialize["audience"] = o.Audience
+	if !IsNil(o.EndSessionEndpoint) {
+		toSerialize["endSessionEndpoint"] = o.EndSessionEndpoint
+	}
 
 	for key, value := range o.AdditionalProperties {
 		toSerialize[key] = value
@@ -185,6 +222,7 @@ func (o *OidcConfig) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "issuer")
 		delete(additionalProperties, "clientId")
 		delete(additionalProperties, "audience")
+		delete(additionalProperties, "endSessionEndpoint")
 		o.AdditionalProperties = additionalProperties
 	}
 
@@ -226,3 +264,5 @@ func (v *NullableOidcConfig) UnmarshalJSON(src []byte) error {
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }
+
+
