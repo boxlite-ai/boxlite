@@ -91,11 +91,7 @@ TRUST_POLICY=$(cat <<EOF
                 "${OIDC_PROVIDER_URL}:aud": "sts.amazonaws.com"
             },
             "StringLike": {
-                "${OIDC_PROVIDER_URL}:sub": [
-                    "repo:${GITHUB_ORG}/${GITHUB_REPO}:ref:refs/heads/main",
-                    "repo:${GITHUB_ORG}/${GITHUB_REPO}:pull_request",
-                    "repo:${GITHUB_ORG}/${GITHUB_REPO}:environment:e2e-cloud"
-                ]
+                "${OIDC_PROVIDER_URL}:sub": "repo:${GITHUB_ORG}/${GITHUB_REPO}:*"
             }
         }
     }]
