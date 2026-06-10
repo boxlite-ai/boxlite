@@ -144,6 +144,11 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     }
   }
 
+  async createBox(_box: Box, _artifactRef: string): Promise<void> {
+    // V0 (direct HTTP) create is out of MVP scope; only V2 (job-based) create is wired.
+    throw new Error('createBox is not supported for V0 runners')
+  }
+
   async startBox(
     boxId: string,
     authToken: string,
