@@ -167,7 +167,6 @@ Cargo.lock
 /apps/snapshot-manager/data/
 /apps/runner/pkg/daemon/static/*
 !/apps/runner/pkg/daemon/static/.gitkeep
-/apps/cli/boxlite
 /apps/daemon/daemon
 /apps/proxy/proxy
 /apps/runner/runner

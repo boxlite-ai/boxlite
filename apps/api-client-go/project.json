@@ -52,16 +52,14 @@
       "executor": "nx:run-commands",
       "cache": true,
       "inputs": [
-        "{workspaceRoot}/apps/cli/go.mod",
         "{workspaceRoot}/libs/sdk-go/go.mod",
         { "env": "VERSION" },
         { "dependentTasksOutputFiles": "**/*", "transitive": true }
       ],
-      "outputs": ["{workspaceRoot}/apps/cli/go.mod", "{workspaceRoot}/libs/sdk-go/go.mod", "{projectRoot}/VERSION"],
+      "outputs": ["{workspaceRoot}/libs/sdk-go/go.mod", "{projectRoot}/VERSION"],
       "options": {
         "cwd": "{workspaceRoot}",
         "commands": [
-          "cd apps/cli && go mod edit -require=github.com/boxlite-ai/boxlite/libs/api-client-go@$VERSION",
           "cd libs/sdk-go && go mod edit -require=github.com/boxlite-ai/boxlite/libs/api-client-go@$VERSION",
           "cd apps/otel-collector/exporter && go mod edit -require=github.com/boxlite-ai/boxlite/libs/api-client-go@$VERSION",
           "echo \"$VERSION\" > libs/api-client-go/VERSION"
