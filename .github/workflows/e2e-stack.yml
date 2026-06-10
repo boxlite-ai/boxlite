@@ -6,6 +6,13 @@
 # exec-stdout drop, #627's attach re-drain) reach production without
 # breaking CI. This workflow runs the full path.
 #
+# Required-check shape: the `e2e-gate` job ALWAYS runs and reports
+# success/failure. Branch protection on `main` should require the
+# `E2E gate (required)` check — the cheap `changes` job on a
+# GitHub-hosted runner decides if the expensive `e2e` job needs to
+# fire at all (kvm self-hosted runner contention), and the gate
+# collapses the result into one always-reported check.
+#
 # Requires nested-KVM. Targets a self-hosted runner labeled `kvm` (a
 # common pattern is a long-lived EC2 m5.metal or *.metal-* with the
 # stack pre-bootstrapped). On a fresh runner the first run will
@@ -13,29 +20,14 @@
 
 name: E2E stack
 
+# No path filter on triggers: must always start so branch protection
+# can require this workflow's gate as a status check. Path matching
+# happens inside the `changes` job and gates the expensive `e2e` job.
 on:
   push:
     branches: [main]
-    paths:
-      - 'sdks/c/src/exec/**'
-      - 'sdks/python/src/**'
-      - 'src/boxlite/src/rest/**'
-      - 'src/boxlite/src/cli/**'
-      - 'apps/runner/**'
-      - 'apps/api/src/**'
-      - 'scripts/test/e2e/**'
-      - '.github/workflows/e2e-stack.yml'
   pull_request:
     branches: [main]
-    paths:
-      - 'sdks/c/src/exec/**'
-      - 'sdks/python/src/**'
-      - 'src/boxlite/src/rest/**'
-      - 'src/boxlite/src/cli/**'
-      - 'apps/runner/**'
-      - 'apps/api/src/**'
-      - 'scripts/test/e2e/**'
-      - '.github/workflows/e2e-stack.yml'
   workflow_dispatch:
     inputs:
       pr_ref:
@@ -47,7 +39,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Cheap detector on GitHub-hosted runner: decide if the expensive
+  # e2e job needs to fire. Avoids burning self-hosted KVM-runner time
+  # on PRs that don't touch any code path the suite exercises.
+  changes:
+    name: Detect relevant changes
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'sdks/c/src/exec/**'
+              - 'sdks/python/src/**'
+              - 'src/boxlite/src/rest/**'
+              - 'src/boxlite/src/cli/**'
+              - 'apps/runner/**'
+              - 'apps/api/src/**'
+              - 'scripts/test/e2e/**'
+              - '.github/workflows/e2e-stack.yml'
+
   e2e:
+    name: E2E suite (kvm)
+    needs: changes
+    # Skip on PRs that don't touch relevant paths. workflow_dispatch
+    # always runs (operator explicitly asked for it).
+    if: needs.changes.outputs.relevant == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: [self-hosted, kvm]
     timeout-minutes: 30
     steps:
@@ -87,3 +108,36 @@ jobs:
         run: |
           tail -200 /var/log/boxlite-api.log
           sudo journalctl -u boxlite-runner --no-pager -n 200
+
+  # Single always-runs job that branch protection can require.
+  # Collapses the conditional `e2e` outcome into one stable check
+  # name. Pass = e2e ran and passed, OR no relevant paths changed.
+  # Fail = e2e ran and failed / was cancelled.
+  e2e-gate:
+    name: E2E gate (required)
+    needs: [changes, e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide gate result
+        run: |
+          set -e
+          IS_DISPATCH="${{ github.event_name == 'workflow_dispatch' }}"
+          RELEVANT="${{ needs.changes.outputs.relevant }}"
+          E2E_RESULT="${{ needs.e2e.result }}"
+
+          if [[ "$RELEVANT" != "true" && "$IS_DISPATCH" != "true" ]]; then
+            echo "✅ E2E gate: skipped — no relevant paths changed in this PR"
+            exit 0
+          fi
+
+          case "$E2E_RESULT" in
+            success)
+              echo "✅ E2E gate: e2e suite passed"
+              exit 0
+              ;;
+            *)
+              echo "❌ E2E gate: e2e suite reported '$E2E_RESULT'"
+              exit 1
+              ;;
+          esac
