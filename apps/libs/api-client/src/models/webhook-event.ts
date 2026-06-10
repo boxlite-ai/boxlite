@@ -19,13 +19,14 @@
  */
 
 export const WebhookEvent = {
-    SANDBOX_CREATED: 'sandbox.created',
-    SANDBOX_STATE_UPDATED: 'sandbox.state.updated',
+    BOX_CREATED: 'box.created',
+    BOX_STATE_UPDATED: 'box.state.updated',
     SNAPSHOT_CREATED: 'snapshot.created',
     SNAPSHOT_STATE_UPDATED: 'snapshot.state.updated',
     SNAPSHOT_REMOVED: 'snapshot.removed',
     VOLUME_CREATED: 'volume.created',
     VOLUME_STATE_UPDATED: 'volume.state.updated',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 
 export type WebhookEvent = typeof WebhookEvent[keyof typeof WebhookEvent];

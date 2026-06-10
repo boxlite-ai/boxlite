@@ -13,7 +13,6 @@ package apiclient
 
 import (
 	"encoding/json"
-	"fmt"
 )
 
 // JobType The type of the job
@@ -33,6 +32,7 @@ const (
 	JOBTYPE_INSPECT_SNAPSHOT_IN_REGISTRY JobType = "INSPECT_SNAPSHOT_IN_REGISTRY"
 	JOBTYPE_REMOVE_SNAPSHOT JobType = "REMOVE_SNAPSHOT"
 	JOBTYPE_UPDATE_BOX_NETWORK_SETTINGS JobType = "UPDATE_BOX_NETWORK_SETTINGS"
+	JOBTYPE_UNKNOWN_DEFAULT_OPEN_API JobType = "unknown_default_open_api"
 )
 
 // All allowed values of JobType enum
@@ -49,6 +49,7 @@ var AllowedJobTypeEnumValues = []JobType{
 	"INSPECT_SNAPSHOT_IN_REGISTRY",
 	"REMOVE_SNAPSHOT",
 	"UPDATE_BOX_NETWORK_SETTINGS",
+	"unknown_default_open_api",
 }
 
 func (v *JobType) UnmarshalJSON(src []byte) error {
@@ -65,7 +66,8 @@ func (v *JobType) UnmarshalJSON(src []byte) error {
 		}
 	}
 
-	return fmt.Errorf("%+v is not a valid JobType", value)
+	*v = JOBTYPE_UNKNOWN_DEFAULT_OPEN_API
+	return nil
 }
 
 // NewJobTypeFromValue returns a pointer to a valid JobType
@@ -75,7 +77,8 @@ func NewJobTypeFromValue(v string) (*JobType, error) {
 	if ev.IsValid() {
 		return &ev, nil
 	} else {
-		return nil, fmt.Errorf("invalid value '%v' for JobType: valid values are %v", v, AllowedJobTypeEnumValues)
+		enumValue := JOBTYPE_UNKNOWN_DEFAULT_OPEN_API
+		return &enumValue, nil
 	}
 }
 

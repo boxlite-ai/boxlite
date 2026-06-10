@@ -44,11 +44,11 @@ type Organization struct {
 	SuspendedUntil time.Time `json:"suspendedUntil"`
 	// Suspension cleanup grace period hours
 	SuspensionCleanupGracePeriodHours float32 `json:"suspensionCleanupGracePeriodHours"`
-	// Max CPU per sandbox
+	// Max CPU per box
 	MaxCpuPerBox float32 `json:"maxCpuPerBox"`
-	// Max memory per sandbox
+	// Max memory per box
 	MaxMemoryPerBox float32 `json:"maxMemoryPerBox"`
-	// Max disk per sandbox
+	// Max disk per box
 	MaxDiskPerBox float32 `json:"maxDiskPerBox"`
 	// Time in minutes before an unused snapshot is deactivated
 	SnapshotDeactivationTimeoutMinutes float32 `json:"snapshotDeactivationTimeoutMinutes"`

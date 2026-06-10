@@ -40,7 +40,7 @@ export interface SshAccessDto {
      */
     'updatedAt': Date;
     /**
-     * SSH command to connect to the sandbox
+     * SSH command to connect to the box
      */
     'sshCommand': string;
 }

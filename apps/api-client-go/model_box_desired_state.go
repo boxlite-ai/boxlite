@@ -13,10 +13,9 @@ package apiclient
 
 import (
 	"encoding/json"
-	"fmt"
 )
 
-// BoxDesiredState The desired state of the sandbox
+// BoxDesiredState The desired state of the box
 type BoxDesiredState string
 
 // List of BoxDesiredState
@@ -26,6 +25,7 @@ const (
 	BOXDESIREDSTATE_STOPPED BoxDesiredState = "stopped"
 	BOXDESIREDSTATE_RESIZED BoxDesiredState = "resized"
 	BOXDESIREDSTATE_ARCHIVED BoxDesiredState = "archived"
+	BOXDESIREDSTATE_UNKNOWN_DEFAULT_OPEN_API BoxDesiredState = "unknown_default_open_api"
 )
 
 // All allowed values of BoxDesiredState enum
@@ -35,6 +35,7 @@ var AllowedBoxDesiredStateEnumValues = []BoxDesiredState{
 	"stopped",
 	"resized",
 	"archived",
+	"unknown_default_open_api",
 }
 
 func (v *BoxDesiredState) UnmarshalJSON(src []byte) error {
@@ -51,7 +52,8 @@ func (v *BoxDesiredState) UnmarshalJSON(src []byte) error {
 		}
 	}
 
-	return fmt.Errorf("%+v is not a valid BoxDesiredState", value)
+	*v = BOXDESIREDSTATE_UNKNOWN_DEFAULT_OPEN_API
+	return nil
 }
 
 // NewBoxDesiredStateFromValue returns a pointer to a valid BoxDesiredState
@@ -61,7 +63,8 @@ func NewBoxDesiredStateFromValue(v string) (*BoxDesiredState, error) {
 	if ev.IsValid() {
 		return &ev, nil
 	} else {
-		return nil, fmt.Errorf("invalid value '%v' for BoxDesiredState: valid values are %v", v, AllowedBoxDesiredStateEnumValues)
+		enumValue := BOXDESIREDSTATE_UNKNOWN_DEFAULT_OPEN_API
+		return &enumValue, nil
 	}
 }
 

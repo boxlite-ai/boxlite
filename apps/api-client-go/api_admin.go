@@ -76,7 +76,7 @@ type AdminAPI interface {
 	AdminRecoverBox Recover box from error state as an admin
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param boxId ID of the sandbox
+	@param boxId ID of the box
 	@return AdminAPIAdminRecoverBoxRequest
 	*/
 	AdminRecoverBox(ctx context.Context, boxId string) AdminAPIAdminRecoverBoxRequest
@@ -521,7 +521,7 @@ func (r AdminAPIAdminRecoverBoxRequest) Execute() (*Box, *http.Response, error) 
 AdminRecoverBox Recover box from error state as an admin
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param boxId ID of the sandbox
+ @param boxId ID of the box
  @return AdminAPIAdminRecoverBoxRequest
 */
 func (a *AdminAPIService) AdminRecoverBox(ctx context.Context, boxId string) AdminAPIAdminRecoverBoxRequest {

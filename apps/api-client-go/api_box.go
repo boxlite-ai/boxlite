@@ -26,13 +26,13 @@ import (
 type BoxAPI interface {
 
 	/*
-	ArchiveBox Archive sandbox
+	ArchiveBox Archive box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxIdOrName
+	@param boxIdOrName
 	@return BoxAPIArchiveBoxRequest
 	*/
-	ArchiveBox(ctx context.Context, sandboxIdOrName string) BoxAPIArchiveBoxRequest
+	ArchiveBox(ctx context.Context, boxIdOrName string) BoxAPIArchiveBoxRequest
 
 	// ArchiveBoxExecute executes the request
 	//  @return Box
@@ -42,17 +42,17 @@ type BoxAPI interface {
 	CreateBackup Create box backup
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxIdOrName ID or name of the sandbox
+	@param boxIdOrName ID or name of the box
 	@return BoxAPICreateBackupRequest
 	*/
-	CreateBackup(ctx context.Context, sandboxIdOrName string) BoxAPICreateBackupRequest
+	CreateBackup(ctx context.Context, boxIdOrName string) BoxAPICreateBackupRequest
 
 	// CreateBackupExecute executes the request
 	//  @return Box
 	CreateBackupExecute(r BoxAPICreateBackupRequest) (*Box, *http.Response, error)
 
 	/*
-	CreateBox Create a new sandbox
+	CreateBox Create a new box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return BoxAPICreateBoxRequest
@@ -64,26 +64,26 @@ type BoxAPI interface {
 	CreateBoxExecute(r BoxAPICreateBoxRequest) (*Box, *http.Response, error)
 
 	/*
-	CreateSshAccess Create SSH access for sandbox
+	CreateSshAccess Create SSH access for box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxIdOrName ID or name of the sandbox
+	@param boxIdOrName ID or name of the box
 	@return BoxAPICreateSshAccessRequest
 	*/
-	CreateSshAccess(ctx context.Context, sandboxIdOrName string) BoxAPICreateSshAccessRequest
+	CreateSshAccess(ctx context.Context, boxIdOrName string) BoxAPICreateSshAccessRequest
 
 	// CreateSshAccessExecute executes the request
 	//  @return SshAccessDto
 	CreateSshAccessExecute(r BoxAPICreateSshAccessRequest) (*SshAccessDto, *http.Response, error)
 
 	/*
-	DeleteBox Delete sandbox
+	DeleteBox Delete box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxIdOrName ID or name of the sandbox
+	@param boxIdOrName ID or name of the box
 	@return BoxAPIDeleteBoxRequest
 	*/
-	DeleteBox(ctx context.Context, sandboxIdOrName string) BoxAPIDeleteBoxRequest
+	DeleteBox(ctx context.Context, boxIdOrName string) BoxAPIDeleteBoxRequest
 
 	// DeleteBoxExecute executes the request
 	//  @return Box
@@ -93,12 +93,12 @@ type BoxAPI interface {
 	ExpireSignedPortPreviewUrl Expire signed preview URL for a box port
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxIdOrName ID or name of the sandbox
+	@param boxIdOrName ID or name of the box
 	@param port Port number to expire signed preview URL for
 	@param token Token to expire signed preview URL for
 	@return BoxAPIExpireSignedPortPreviewUrlRequest
 	*/
-	ExpireSignedPortPreviewUrl(ctx context.Context, sandboxIdOrName string, port int32, token string) BoxAPIExpireSignedPortPreviewUrlRequest
+	ExpireSignedPortPreviewUrl(ctx context.Context, boxIdOrName string, port int32, token string) BoxAPIExpireSignedPortPreviewUrlRequest
 
 	// ExpireSignedPortPreviewUrlExecute executes the request
 	ExpireSignedPortPreviewUrlExecute(r BoxAPIExpireSignedPortPreviewUrlRequest) (*http.Response, error)
@@ -107,10 +107,10 @@ type BoxAPI interface {
 	GetBox Get box details
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxIdOrName ID or name of the sandbox
+	@param boxIdOrName ID or name of the box
 	@return BoxAPIGetBoxRequest
 	*/
-	GetBox(ctx context.Context, sandboxIdOrName string) BoxAPIGetBoxRequest
+	GetBox(ctx context.Context, boxIdOrName string) BoxAPIGetBoxRequest
 
 	// GetBoxExecute executes the request
 	//  @return Box
@@ -122,7 +122,7 @@ type BoxAPI interface {
 	Retrieve OTEL logs for a box within a time range
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param boxId ID of the sandbox
+	@param boxId ID of the box
 	@return BoxAPIGetBoxLogsRequest
 	*/
 	GetBoxLogs(ctx context.Context, boxId string) BoxAPIGetBoxLogsRequest
@@ -137,7 +137,7 @@ type BoxAPI interface {
 	Retrieve OTEL metrics for a box within a time range
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param boxId ID of the sandbox
+	@param boxId ID of the box
 	@return BoxAPIGetBoxMetricsRequest
 	*/
 	GetBoxMetrics(ctx context.Context, boxId string) BoxAPIGetBoxMetricsRequest
@@ -152,7 +152,7 @@ type BoxAPI interface {
 	Retrieve all spans for a specific trace
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param boxId ID of the sandbox
+	@param boxId ID of the box
 	@param traceId ID of the trace
 	@return BoxAPIGetBoxTraceSpansRequest
 	*/
@@ -168,7 +168,7 @@ type BoxAPI interface {
 	Retrieve OTEL traces for a box within a time range
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param boxId ID of the sandbox
+	@param boxId ID of the box
 	@return BoxAPIGetBoxTracesRequest
 	*/
 	GetBoxTraces(ctx context.Context, boxId string) BoxAPIGetBoxTracesRequest
@@ -195,12 +195,12 @@ type BoxAPI interface {
 	This endpoint is deprecated. Use `getBuildLogsUrl` instead.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxIdOrName ID or name of the sandbox
+	@param boxIdOrName ID or name of the box
 	@return BoxAPIGetBuildLogsRequest
 
 	Deprecated
 	*/
-	GetBuildLogs(ctx context.Context, sandboxIdOrName string) BoxAPIGetBuildLogsRequest
+	GetBuildLogs(ctx context.Context, boxIdOrName string) BoxAPIGetBuildLogsRequest
 
 	// GetBuildLogsExecute executes the request
 	// Deprecated
@@ -210,10 +210,10 @@ type BoxAPI interface {
 	GetBuildLogsUrl Get build logs URL
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxIdOrName ID or name of the sandbox
+	@param boxIdOrName ID or name of the box
 	@return BoxAPIGetBuildLogsUrlRequest
 	*/
-	GetBuildLogsUrl(ctx context.Context, sandboxIdOrName string) BoxAPIGetBuildLogsUrlRequest
+	GetBuildLogsUrl(ctx context.Context, boxIdOrName string) BoxAPIGetBuildLogsUrlRequest
 
 	// GetBuildLogsUrlExecute executes the request
 	//  @return Url
@@ -223,11 +223,11 @@ type BoxAPI interface {
 	GetPortPreviewUrl Get preview URL for a box port
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxIdOrName ID or name of the sandbox
+	@param boxIdOrName ID or name of the box
 	@param port Port number to get preview URL for
 	@return BoxAPIGetPortPreviewUrlRequest
 	*/
-	GetPortPreviewUrl(ctx context.Context, sandboxIdOrName string, port float32) BoxAPIGetPortPreviewUrlRequest
+	GetPortPreviewUrl(ctx context.Context, boxIdOrName string, port float32) BoxAPIGetPortPreviewUrlRequest
 
 	// GetPortPreviewUrlExecute executes the request
 	//  @return PortPreviewUrl
@@ -237,21 +237,21 @@ type BoxAPI interface {
 	GetSignedPortPreviewUrl Get signed preview URL for a box port
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxIdOrName ID or name of the sandbox
+	@param boxIdOrName ID or name of the box
 	@param port Port number to get signed preview URL for
 	@return BoxAPIGetSignedPortPreviewUrlRequest
 	*/
-	GetSignedPortPreviewUrl(ctx context.Context, sandboxIdOrName string, port int32) BoxAPIGetSignedPortPreviewUrlRequest
+	GetSignedPortPreviewUrl(ctx context.Context, boxIdOrName string, port int32) BoxAPIGetSignedPortPreviewUrlRequest
 
 	// GetSignedPortPreviewUrlExecute executes the request
 	//  @return SignedPortPreviewUrl
 	GetSignedPortPreviewUrlExecute(r BoxAPIGetSignedPortPreviewUrlRequest) (*SignedPortPreviewUrl, *http.Response, error)
 
 	/*
-	GetToolboxProxyUrl Get toolbox proxy URL for a sandbox
+	GetToolboxProxyUrl Get toolbox proxy URL for a box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param boxId ID of the sandbox
+	@param boxId ID of the box
 	@return BoxAPIGetToolboxProxyUrlRequest
 	*/
 	GetToolboxProxyUrl(ctx context.Context, boxId string) BoxAPIGetToolboxProxyUrlRequest
@@ -288,10 +288,10 @@ type BoxAPI interface {
 	RecoverBox Recover box from error state
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxIdOrName ID or name of the sandbox
+	@param boxIdOrName ID or name of the box
 	@return BoxAPIRecoverBoxRequest
 	*/
-	RecoverBox(ctx context.Context, sandboxIdOrName string) BoxAPIRecoverBoxRequest
+	RecoverBox(ctx context.Context, boxIdOrName string) BoxAPIRecoverBoxRequest
 
 	// RecoverBoxExecute executes the request
 	//  @return Box
@@ -301,10 +301,10 @@ type BoxAPI interface {
 	ReplaceLabels Replace box labels
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxIdOrName ID or name of the sandbox
+	@param boxIdOrName ID or name of the box
 	@return BoxAPIReplaceLabelsRequest
 	*/
-	ReplaceLabels(ctx context.Context, sandboxIdOrName string) BoxAPIReplaceLabelsRequest
+	ReplaceLabels(ctx context.Context, boxIdOrName string) BoxAPIReplaceLabelsRequest
 
 	// ReplaceLabelsExecute executes the request
 	//  @return BoxLabels
@@ -314,23 +314,23 @@ type BoxAPI interface {
 	ResizeBox Resize box resources
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxIdOrName ID or name of the sandbox
+	@param boxIdOrName ID or name of the box
 	@return BoxAPIResizeBoxRequest
 	*/
-	ResizeBox(ctx context.Context, sandboxIdOrName string) BoxAPIResizeBoxRequest
+	ResizeBox(ctx context.Context, boxIdOrName string) BoxAPIResizeBoxRequest
 
 	// ResizeBoxExecute executes the request
 	//  @return Box
 	ResizeBoxExecute(r BoxAPIResizeBoxRequest) (*Box, *http.Response, error)
 
 	/*
-	RevokeSshAccess Revoke SSH access for sandbox
+	RevokeSshAccess Revoke SSH access for box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxIdOrName ID or name of the sandbox
+	@param boxIdOrName ID or name of the box
 	@return BoxAPIRevokeSshAccessRequest
 	*/
-	RevokeSshAccess(ctx context.Context, sandboxIdOrName string) BoxAPIRevokeSshAccessRequest
+	RevokeSshAccess(ctx context.Context, boxIdOrName string) BoxAPIRevokeSshAccessRequest
 
 	// RevokeSshAccessExecute executes the request
 	//  @return Box
@@ -340,11 +340,11 @@ type BoxAPI interface {
 	SetAutoArchiveInterval Set box auto-archive interval
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxIdOrName ID or name of the sandbox
+	@param boxIdOrName ID or name of the box
 	@param interval Auto-archive interval in minutes (0 means the maximum interval will be used)
 	@return BoxAPISetAutoArchiveIntervalRequest
 	*/
-	SetAutoArchiveInterval(ctx context.Context, sandboxIdOrName string, interval float32) BoxAPISetAutoArchiveIntervalRequest
+	SetAutoArchiveInterval(ctx context.Context, boxIdOrName string, interval float32) BoxAPISetAutoArchiveIntervalRequest
 
 	// SetAutoArchiveIntervalExecute executes the request
 	//  @return Box
@@ -354,11 +354,11 @@ type BoxAPI interface {
 	SetAutoDeleteInterval Set box auto-delete interval
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxIdOrName ID or name of the sandbox
+	@param boxIdOrName ID or name of the box
 	@param interval Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping)
 	@return BoxAPISetAutoDeleteIntervalRequest
 	*/
-	SetAutoDeleteInterval(ctx context.Context, sandboxIdOrName string, interval float32) BoxAPISetAutoDeleteIntervalRequest
+	SetAutoDeleteInterval(ctx context.Context, boxIdOrName string, interval float32) BoxAPISetAutoDeleteIntervalRequest
 
 	// SetAutoDeleteIntervalExecute executes the request
 	//  @return Box
@@ -368,37 +368,37 @@ type BoxAPI interface {
 	SetAutostopInterval Set box auto-stop interval
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxIdOrName ID or name of the sandbox
+	@param boxIdOrName ID or name of the box
 	@param interval Auto-stop interval in minutes (0 to disable)
 	@return BoxAPISetAutostopIntervalRequest
 	*/
-	SetAutostopInterval(ctx context.Context, sandboxIdOrName string, interval float32) BoxAPISetAutostopIntervalRequest
+	SetAutostopInterval(ctx context.Context, boxIdOrName string, interval float32) BoxAPISetAutostopIntervalRequest
 
 	// SetAutostopIntervalExecute executes the request
 	//  @return Box
 	SetAutostopIntervalExecute(r BoxAPISetAutostopIntervalRequest) (*Box, *http.Response, error)
 
 	/*
-	StartBox Start sandbox
+	StartBox Start box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxIdOrName ID or name of the sandbox
+	@param boxIdOrName ID or name of the box
 	@return BoxAPIStartBoxRequest
 	*/
-	StartBox(ctx context.Context, sandboxIdOrName string) BoxAPIStartBoxRequest
+	StartBox(ctx context.Context, boxIdOrName string) BoxAPIStartBoxRequest
 
 	// StartBoxExecute executes the request
 	//  @return Box
 	StartBoxExecute(r BoxAPIStartBoxRequest) (*Box, *http.Response, error)
 
 	/*
-	StopBox Stop sandbox
+	StopBox Stop box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxIdOrName ID or name of the sandbox
+	@param boxIdOrName ID or name of the box
 	@return BoxAPIStopBoxRequest
 	*/
-	StopBox(ctx context.Context, sandboxIdOrName string) BoxAPIStopBoxRequest
+	StopBox(ctx context.Context, boxIdOrName string) BoxAPIStopBoxRequest
 
 	// StopBoxExecute executes the request
 	//  @return Box
@@ -408,7 +408,7 @@ type BoxAPI interface {
 	UpdateBoxState Update box state
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param boxId ID of the sandbox
+	@param boxId ID of the box
 	@return BoxAPIUpdateBoxStateRequest
 	*/
 	UpdateBoxState(ctx context.Context, boxId string) BoxAPIUpdateBoxStateRequest
@@ -420,7 +420,7 @@ type BoxAPI interface {
 	UpdateLastActivity Update box last activity
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param boxId ID of the sandbox
+	@param boxId ID of the box
 	@return BoxAPIUpdateLastActivityRequest
 	*/
 	UpdateLastActivity(ctx context.Context, boxId string) BoxAPIUpdateLastActivityRequest
@@ -432,18 +432,18 @@ type BoxAPI interface {
 	UpdatePublicStatus Update public status
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxIdOrName ID or name of the sandbox
+	@param boxIdOrName ID or name of the box
 	@param isPublic Public status to set
 	@return BoxAPIUpdatePublicStatusRequest
 	*/
-	UpdatePublicStatus(ctx context.Context, sandboxIdOrName string, isPublic bool) BoxAPIUpdatePublicStatusRequest
+	UpdatePublicStatus(ctx context.Context, boxIdOrName string, isPublic bool) BoxAPIUpdatePublicStatusRequest
 
 	// UpdatePublicStatusExecute executes the request
 	//  @return Box
 	UpdatePublicStatusExecute(r BoxAPIUpdatePublicStatusRequest) (*Box, *http.Response, error)
 
 	/*
-	ValidateSshAccess Validate SSH access for sandbox
+	ValidateSshAccess Validate SSH access for box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return BoxAPIValidateSshAccessRequest
@@ -461,7 +461,7 @@ type BoxAPIService service
 type BoxAPIArchiveBoxRequest struct {
 	ctx context.Context
 	ApiService BoxAPI
-	sandboxIdOrName string
+	boxIdOrName string
 	xBoxLiteOrganizationID *string
 }
 
@@ -476,17 +476,17 @@ func (r BoxAPIArchiveBoxRequest) Execute() (*Box, *http.Response, error) {
 }
 
 /*
-ArchiveBox Archive sandbox
+ArchiveBox Archive box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxIdOrName
+ @param boxIdOrName
  @return BoxAPIArchiveBoxRequest
 */
-func (a *BoxAPIService) ArchiveBox(ctx context.Context, sandboxIdOrName string) BoxAPIArchiveBoxRequest {
+func (a *BoxAPIService) ArchiveBox(ctx context.Context, boxIdOrName string) BoxAPIArchiveBoxRequest {
 	return BoxAPIArchiveBoxRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxIdOrName: sandboxIdOrName,
+		boxIdOrName: boxIdOrName,
 	}
 }
 
@@ -506,7 +506,7 @@ func (a *BoxAPIService) ArchiveBoxExecute(r BoxAPIArchiveBoxRequest) (*Box, *htt
 	}
 
 	localVarPath := localBasePath + "/box/{boxIdOrName}/archive"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxIdOrName"+"}", url.PathEscape(parameterValueToString(r.sandboxIdOrName, "sandboxIdOrName")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"boxIdOrName"+"}", url.PathEscape(parameterValueToString(r.boxIdOrName, "boxIdOrName")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -572,7 +572,7 @@ func (a *BoxAPIService) ArchiveBoxExecute(r BoxAPIArchiveBoxRequest) (*Box, *htt
 type BoxAPICreateBackupRequest struct {
 	ctx context.Context
 	ApiService BoxAPI
-	sandboxIdOrName string
+	boxIdOrName string
 	xBoxLiteOrganizationID *string
 }
 
@@ -590,14 +590,14 @@ func (r BoxAPICreateBackupRequest) Execute() (*Box, *http.Response, error) {
 CreateBackup Create box backup
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxIdOrName ID or name of the sandbox
+ @param boxIdOrName ID or name of the box
  @return BoxAPICreateBackupRequest
 */
-func (a *BoxAPIService) CreateBackup(ctx context.Context, sandboxIdOrName string) BoxAPICreateBackupRequest {
+func (a *BoxAPIService) CreateBackup(ctx context.Context, boxIdOrName string) BoxAPICreateBackupRequest {
 	return BoxAPICreateBackupRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxIdOrName: sandboxIdOrName,
+		boxIdOrName: boxIdOrName,
 	}
 }
 
@@ -617,7 +617,7 @@ func (a *BoxAPIService) CreateBackupExecute(r BoxAPICreateBackupRequest) (*Box, 
 	}
 
 	localVarPath := localBasePath + "/box/{boxIdOrName}/backup"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxIdOrName"+"}", url.PathEscape(parameterValueToString(r.sandboxIdOrName, "sandboxIdOrName")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"boxIdOrName"+"}", url.PathEscape(parameterValueToString(r.boxIdOrName, "boxIdOrName")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -703,7 +703,7 @@ func (r BoxAPICreateBoxRequest) Execute() (*Box, *http.Response, error) {
 }
 
 /*
-CreateBox Create a new sandbox
+CreateBox Create a new box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @return BoxAPICreateBoxRequest
@@ -801,7 +801,7 @@ func (a *BoxAPIService) CreateBoxExecute(r BoxAPICreateBoxRequest) (*Box, *http.
 type BoxAPICreateSshAccessRequest struct {
 	ctx context.Context
 	ApiService BoxAPI
-	sandboxIdOrName string
+	boxIdOrName string
 	xBoxLiteOrganizationID *string
 	expiresInMinutes *float32
 }
@@ -823,17 +823,17 @@ func (r BoxAPICreateSshAccessRequest) Execute() (*SshAccessDto, *http.Response, 
 }
 
 /*
-CreateSshAccess Create SSH access for sandbox
+CreateSshAccess Create SSH access for box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxIdOrName ID or name of the sandbox
+ @param boxIdOrName ID or name of the box
  @return BoxAPICreateSshAccessRequest
 */
-func (a *BoxAPIService) CreateSshAccess(ctx context.Context, sandboxIdOrName string) BoxAPICreateSshAccessRequest {
+func (a *BoxAPIService) CreateSshAccess(ctx context.Context, boxIdOrName string) BoxAPICreateSshAccessRequest {
 	return BoxAPICreateSshAccessRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxIdOrName: sandboxIdOrName,
+		boxIdOrName: boxIdOrName,
 	}
 }
 
@@ -853,7 +853,7 @@ func (a *BoxAPIService) CreateSshAccessExecute(r BoxAPICreateSshAccessRequest) (
 	}
 
 	localVarPath := localBasePath + "/box/{boxIdOrName}/ssh-access"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxIdOrName"+"}", url.PathEscape(parameterValueToString(r.sandboxIdOrName, "sandboxIdOrName")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"boxIdOrName"+"}", url.PathEscape(parameterValueToString(r.boxIdOrName, "boxIdOrName")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -922,7 +922,7 @@ func (a *BoxAPIService) CreateSshAccessExecute(r BoxAPICreateSshAccessRequest) (
 type BoxAPIDeleteBoxRequest struct {
 	ctx context.Context
 	ApiService BoxAPI
-	sandboxIdOrName string
+	boxIdOrName string
 	xBoxLiteOrganizationID *string
 }
 
@@ -937,17 +937,17 @@ func (r BoxAPIDeleteBoxRequest) Execute() (*Box, *http.Response, error) {
 }
 
 /*
-DeleteBox Delete sandbox
+DeleteBox Delete box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxIdOrName ID or name of the sandbox
+ @param boxIdOrName ID or name of the box
  @return BoxAPIDeleteBoxRequest
 */
-func (a *BoxAPIService) DeleteBox(ctx context.Context, sandboxIdOrName string) BoxAPIDeleteBoxRequest {
+func (a *BoxAPIService) DeleteBox(ctx context.Context, boxIdOrName string) BoxAPIDeleteBoxRequest {
 	return BoxAPIDeleteBoxRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxIdOrName: sandboxIdOrName,
+		boxIdOrName: boxIdOrName,
 	}
 }
 
@@ -967,7 +967,7 @@ func (a *BoxAPIService) DeleteBoxExecute(r BoxAPIDeleteBoxRequest) (*Box, *http.
 	}
 
 	localVarPath := localBasePath + "/box/{boxIdOrName}"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxIdOrName"+"}", url.PathEscape(parameterValueToString(r.sandboxIdOrName, "sandboxIdOrName")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"boxIdOrName"+"}", url.PathEscape(parameterValueToString(r.boxIdOrName, "boxIdOrName")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -1033,7 +1033,7 @@ func (a *BoxAPIService) DeleteBoxExecute(r BoxAPIDeleteBoxRequest) (*Box, *http.
 type BoxAPIExpireSignedPortPreviewUrlRequest struct {
 	ctx context.Context
 	ApiService BoxAPI
-	sandboxIdOrName string
+	boxIdOrName string
 	port int32
 	token string
 	xBoxLiteOrganizationID *string
@@ -1053,16 +1053,16 @@ func (r BoxAPIExpireSignedPortPreviewUrlRequest) Execute() (*http.Response, erro
 ExpireSignedPortPreviewUrl Expire signed preview URL for a box port
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxIdOrName ID or name of the sandbox
+ @param boxIdOrName ID or name of the box
  @param port Port number to expire signed preview URL for
  @param token Token to expire signed preview URL for
  @return BoxAPIExpireSignedPortPreviewUrlRequest
 */
-func (a *BoxAPIService) ExpireSignedPortPreviewUrl(ctx context.Context, sandboxIdOrName string, port int32, token string) BoxAPIExpireSignedPortPreviewUrlRequest {
+func (a *BoxAPIService) ExpireSignedPortPreviewUrl(ctx context.Context, boxIdOrName string, port int32, token string) BoxAPIExpireSignedPortPreviewUrlRequest {
 	return BoxAPIExpireSignedPortPreviewUrlRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxIdOrName: sandboxIdOrName,
+		boxIdOrName: boxIdOrName,
 		port: port,
 		token: token,
 	}
@@ -1082,7 +1082,7 @@ func (a *BoxAPIService) ExpireSignedPortPreviewUrlExecute(r BoxAPIExpireSignedPo
 	}
 
 	localVarPath := localBasePath + "/box/{boxIdOrName}/ports/{port}/signed-preview-url/{token}/expire"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxIdOrName"+"}", url.PathEscape(parameterValueToString(r.sandboxIdOrName, "sandboxIdOrName")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"boxIdOrName"+"}", url.PathEscape(parameterValueToString(r.boxIdOrName, "boxIdOrName")), -1)
 	localVarPath = strings.Replace(localVarPath, "{"+"port"+"}", url.PathEscape(parameterValueToString(r.port, "port")), -1)
 	localVarPath = strings.Replace(localVarPath, "{"+"token"+"}", url.PathEscape(parameterValueToString(r.token, "token")), -1)
 
@@ -1141,7 +1141,7 @@ func (a *BoxAPIService) ExpireSignedPortPreviewUrlExecute(r BoxAPIExpireSignedPo
 type BoxAPIGetBoxRequest struct {
 	ctx context.Context
 	ApiService BoxAPI
-	sandboxIdOrName string
+	boxIdOrName string
 	xBoxLiteOrganizationID *string
 	verbose *bool
 }
@@ -1166,14 +1166,14 @@ func (r BoxAPIGetBoxRequest) Execute() (*Box, *http.Response, error) {
 GetBox Get box details
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxIdOrName ID or name of the sandbox
+ @param boxIdOrName ID or name of the box
  @return BoxAPIGetBoxRequest
 */
-func (a *BoxAPIService) GetBox(ctx context.Context, sandboxIdOrName string) BoxAPIGetBoxRequest {
+func (a *BoxAPIService) GetBox(ctx context.Context, boxIdOrName string) BoxAPIGetBoxRequest {
 	return BoxAPIGetBoxRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxIdOrName: sandboxIdOrName,
+		boxIdOrName: boxIdOrName,
 	}
 }
 
@@ -1193,7 +1193,7 @@ func (a *BoxAPIService) GetBoxExecute(r BoxAPIGetBoxRequest) (*Box, *http.Respon
 	}
 
 	localVarPath := localBasePath + "/box/{boxIdOrName}"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxIdOrName"+"}", url.PathEscape(parameterValueToString(r.sandboxIdOrName, "sandboxIdOrName")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"boxIdOrName"+"}", url.PathEscape(parameterValueToString(r.boxIdOrName, "boxIdOrName")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -1324,7 +1324,7 @@ GetBoxLogs Get box logs
 Retrieve OTEL logs for a box within a time range
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param boxId ID of the sandbox
+ @param boxId ID of the box
  @return BoxAPIGetBoxLogsRequest
 */
 func (a *BoxAPIService) GetBoxLogs(ctx context.Context, boxId string) BoxAPIGetBoxLogsRequest {
@@ -1494,7 +1494,7 @@ GetBoxMetrics Get box metrics
 Retrieve OTEL metrics for a box within a time range
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param boxId ID of the sandbox
+ @param boxId ID of the box
  @return BoxAPIGetBoxMetricsRequest
 */
 func (a *BoxAPIService) GetBoxMetrics(ctx context.Context, boxId string) BoxAPIGetBoxMetricsRequest {
@@ -1627,7 +1627,7 @@ GetBoxTraceSpans Get trace spans
 Retrieve all spans for a specific trace
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param boxId ID of the sandbox
+ @param boxId ID of the box
  @param traceId ID of the trace
  @return BoxAPIGetBoxTraceSpansRequest
 */
@@ -1771,7 +1771,7 @@ GetBoxTraces Get box traces
 Retrieve OTEL traces for a box within a time range
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param boxId ID of the sandbox
+ @param boxId ID of the box
  @return BoxAPIGetBoxTracesRequest
 */
 func (a *BoxAPIService) GetBoxTraces(ctx context.Context, boxId string) BoxAPIGetBoxTracesRequest {
@@ -2013,7 +2013,7 @@ func (a *BoxAPIService) GetBoxesForRunnerExecute(r BoxAPIGetBoxesForRunnerReques
 type BoxAPIGetBuildLogsRequest struct {
 	ctx context.Context
 	ApiService BoxAPI
-	sandboxIdOrName string
+	boxIdOrName string
 	xBoxLiteOrganizationID *string
 	follow *bool
 }
@@ -2040,16 +2040,16 @@ GetBuildLogs Get build logs
 This endpoint is deprecated. Use `getBuildLogsUrl` instead.
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxIdOrName ID or name of the sandbox
+ @param boxIdOrName ID or name of the box
  @return BoxAPIGetBuildLogsRequest
 
 Deprecated
 */
-func (a *BoxAPIService) GetBuildLogs(ctx context.Context, sandboxIdOrName string) BoxAPIGetBuildLogsRequest {
+func (a *BoxAPIService) GetBuildLogs(ctx context.Context, boxIdOrName string) BoxAPIGetBuildLogsRequest {
 	return BoxAPIGetBuildLogsRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxIdOrName: sandboxIdOrName,
+		boxIdOrName: boxIdOrName,
 	}
 }
 
@@ -2068,7 +2068,7 @@ func (a *BoxAPIService) GetBuildLogsExecute(r BoxAPIGetBuildLogsRequest) (*http.
 	}
 
 	localVarPath := localBasePath + "/box/{boxIdOrName}/build-logs"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxIdOrName"+"}", url.PathEscape(parameterValueToString(r.sandboxIdOrName, "sandboxIdOrName")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"boxIdOrName"+"}", url.PathEscape(parameterValueToString(r.boxIdOrName, "boxIdOrName")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -2128,7 +2128,7 @@ func (a *BoxAPIService) GetBuildLogsExecute(r BoxAPIGetBuildLogsRequest) (*http.
 type BoxAPIGetBuildLogsUrlRequest struct {
 	ctx context.Context
 	ApiService BoxAPI
-	sandboxIdOrName string
+	boxIdOrName string
 	xBoxLiteOrganizationID *string
 }
 
@@ -2146,14 +2146,14 @@ func (r BoxAPIGetBuildLogsUrlRequest) Execute() (*Url, *http.Response, error) {
 GetBuildLogsUrl Get build logs URL
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxIdOrName ID or name of the sandbox
+ @param boxIdOrName ID or name of the box
  @return BoxAPIGetBuildLogsUrlRequest
 */
-func (a *BoxAPIService) GetBuildLogsUrl(ctx context.Context, sandboxIdOrName string) BoxAPIGetBuildLogsUrlRequest {
+func (a *BoxAPIService) GetBuildLogsUrl(ctx context.Context, boxIdOrName string) BoxAPIGetBuildLogsUrlRequest {
 	return BoxAPIGetBuildLogsUrlRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxIdOrName: sandboxIdOrName,
+		boxIdOrName: boxIdOrName,
 	}
 }
 
@@ -2173,7 +2173,7 @@ func (a *BoxAPIService) GetBuildLogsUrlExecute(r BoxAPIGetBuildLogsUrlRequest) (
 	}
 
 	localVarPath := localBasePath + "/box/{boxIdOrName}/build-logs-url"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxIdOrName"+"}", url.PathEscape(parameterValueToString(r.sandboxIdOrName, "sandboxIdOrName")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"boxIdOrName"+"}", url.PathEscape(parameterValueToString(r.boxIdOrName, "boxIdOrName")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -2239,7 +2239,7 @@ func (a *BoxAPIService) GetBuildLogsUrlExecute(r BoxAPIGetBuildLogsUrlRequest) (
 type BoxAPIGetPortPreviewUrlRequest struct {
 	ctx context.Context
 	ApiService BoxAPI
-	sandboxIdOrName string
+	boxIdOrName string
 	port float32
 	xBoxLiteOrganizationID *string
 }
@@ -2258,15 +2258,15 @@ func (r BoxAPIGetPortPreviewUrlRequest) Execute() (*PortPreviewUrl, *http.Respon
 GetPortPreviewUrl Get preview URL for a box port
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxIdOrName ID or name of the sandbox
+ @param boxIdOrName ID or name of the box
  @param port Port number to get preview URL for
  @return BoxAPIGetPortPreviewUrlRequest
 */
-func (a *BoxAPIService) GetPortPreviewUrl(ctx context.Context, sandboxIdOrName string, port float32) BoxAPIGetPortPreviewUrlRequest {
+func (a *BoxAPIService) GetPortPreviewUrl(ctx context.Context, boxIdOrName string, port float32) BoxAPIGetPortPreviewUrlRequest {
 	return BoxAPIGetPortPreviewUrlRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxIdOrName: sandboxIdOrName,
+		boxIdOrName: boxIdOrName,
 		port: port,
 	}
 }
@@ -2287,7 +2287,7 @@ func (a *BoxAPIService) GetPortPreviewUrlExecute(r BoxAPIGetPortPreviewUrlReques
 	}
 
 	localVarPath := localBasePath + "/box/{boxIdOrName}/ports/{port}/preview-url"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxIdOrName"+"}", url.PathEscape(parameterValueToString(r.sandboxIdOrName, "sandboxIdOrName")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"boxIdOrName"+"}", url.PathEscape(parameterValueToString(r.boxIdOrName, "boxIdOrName")), -1)
 	localVarPath = strings.Replace(localVarPath, "{"+"port"+"}", url.PathEscape(parameterValueToString(r.port, "port")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -2354,7 +2354,7 @@ func (a *BoxAPIService) GetPortPreviewUrlExecute(r BoxAPIGetPortPreviewUrlReques
 type BoxAPIGetSignedPortPreviewUrlRequest struct {
 	ctx context.Context
 	ApiService BoxAPI
-	sandboxIdOrName string
+	boxIdOrName string
 	port int32
 	xBoxLiteOrganizationID *string
 	expiresInSeconds *int32
@@ -2380,15 +2380,15 @@ func (r BoxAPIGetSignedPortPreviewUrlRequest) Execute() (*SignedPortPreviewUrl, 
 GetSignedPortPreviewUrl Get signed preview URL for a box port
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxIdOrName ID or name of the sandbox
+ @param boxIdOrName ID or name of the box
  @param port Port number to get signed preview URL for
  @return BoxAPIGetSignedPortPreviewUrlRequest
 */
-func (a *BoxAPIService) GetSignedPortPreviewUrl(ctx context.Context, sandboxIdOrName string, port int32) BoxAPIGetSignedPortPreviewUrlRequest {
+func (a *BoxAPIService) GetSignedPortPreviewUrl(ctx context.Context, boxIdOrName string, port int32) BoxAPIGetSignedPortPreviewUrlRequest {
 	return BoxAPIGetSignedPortPreviewUrlRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxIdOrName: sandboxIdOrName,
+		boxIdOrName: boxIdOrName,
 		port: port,
 	}
 }
@@ -2409,7 +2409,7 @@ func (a *BoxAPIService) GetSignedPortPreviewUrlExecute(r BoxAPIGetSignedPortPrev
 	}
 
 	localVarPath := localBasePath + "/box/{boxIdOrName}/ports/{port}/signed-preview-url"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxIdOrName"+"}", url.PathEscape(parameterValueToString(r.sandboxIdOrName, "sandboxIdOrName")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"boxIdOrName"+"}", url.PathEscape(parameterValueToString(r.boxIdOrName, "boxIdOrName")), -1)
 	localVarPath = strings.Replace(localVarPath, "{"+"port"+"}", url.PathEscape(parameterValueToString(r.port, "port")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -2494,10 +2494,10 @@ func (r BoxAPIGetToolboxProxyUrlRequest) Execute() (*ToolboxProxyUrl, *http.Resp
 }
 
 /*
-GetToolboxProxyUrl Get toolbox proxy URL for a sandbox
+GetToolboxProxyUrl Get toolbox proxy URL for a box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param boxId ID of the sandbox
+ @param boxId ID of the box
  @return BoxAPIGetToolboxProxyUrlRequest
 */
 func (a *BoxAPIService) GetToolboxProxyUrl(ctx context.Context, boxId string) BoxAPIGetToolboxProxyUrlRequest {
@@ -3068,7 +3068,7 @@ func (a *BoxAPIService) ListBoxesPaginatedExecute(r BoxAPIListBoxesPaginatedRequ
 type BoxAPIRecoverBoxRequest struct {
 	ctx context.Context
 	ApiService BoxAPI
-	sandboxIdOrName string
+	boxIdOrName string
 	xBoxLiteOrganizationID *string
 }
 
@@ -3086,14 +3086,14 @@ func (r BoxAPIRecoverBoxRequest) Execute() (*Box, *http.Response, error) {
 RecoverBox Recover box from error state
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxIdOrName ID or name of the sandbox
+ @param boxIdOrName ID or name of the box
  @return BoxAPIRecoverBoxRequest
 */
-func (a *BoxAPIService) RecoverBox(ctx context.Context, sandboxIdOrName string) BoxAPIRecoverBoxRequest {
+func (a *BoxAPIService) RecoverBox(ctx context.Context, boxIdOrName string) BoxAPIRecoverBoxRequest {
 	return BoxAPIRecoverBoxRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxIdOrName: sandboxIdOrName,
+		boxIdOrName: boxIdOrName,
 	}
 }
 
@@ -3113,7 +3113,7 @@ func (a *BoxAPIService) RecoverBoxExecute(r BoxAPIRecoverBoxRequest) (*Box, *htt
 	}
 
 	localVarPath := localBasePath + "/box/{boxIdOrName}/recover"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxIdOrName"+"}", url.PathEscape(parameterValueToString(r.sandboxIdOrName, "sandboxIdOrName")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"boxIdOrName"+"}", url.PathEscape(parameterValueToString(r.boxIdOrName, "boxIdOrName")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -3179,7 +3179,7 @@ func (a *BoxAPIService) RecoverBoxExecute(r BoxAPIRecoverBoxRequest) (*Box, *htt
 type BoxAPIReplaceLabelsRequest struct {
 	ctx context.Context
 	ApiService BoxAPI
-	sandboxIdOrName string
+	boxIdOrName string
 	boxLabels *BoxLabels
 	xBoxLiteOrganizationID *string
 }
@@ -3203,14 +3203,14 @@ func (r BoxAPIReplaceLabelsRequest) Execute() (*BoxLabels, *http.Response, error
 ReplaceLabels Replace box labels
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxIdOrName ID or name of the sandbox
+ @param boxIdOrName ID or name of the box
  @return BoxAPIReplaceLabelsRequest
 */
-func (a *BoxAPIService) ReplaceLabels(ctx context.Context, sandboxIdOrName string) BoxAPIReplaceLabelsRequest {
+func (a *BoxAPIService) ReplaceLabels(ctx context.Context, boxIdOrName string) BoxAPIReplaceLabelsRequest {
 	return BoxAPIReplaceLabelsRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxIdOrName: sandboxIdOrName,
+		boxIdOrName: boxIdOrName,
 	}
 }
 
@@ -3230,7 +3230,7 @@ func (a *BoxAPIService) ReplaceLabelsExecute(r BoxAPIReplaceLabelsRequest) (*Box
 	}
 
 	localVarPath := localBasePath + "/box/{boxIdOrName}/labels"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxIdOrName"+"}", url.PathEscape(parameterValueToString(r.sandboxIdOrName, "sandboxIdOrName")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"boxIdOrName"+"}", url.PathEscape(parameterValueToString(r.boxIdOrName, "boxIdOrName")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -3301,7 +3301,7 @@ func (a *BoxAPIService) ReplaceLabelsExecute(r BoxAPIReplaceLabelsRequest) (*Box
 type BoxAPIResizeBoxRequest struct {
 	ctx context.Context
 	ApiService BoxAPI
-	sandboxIdOrName string
+	boxIdOrName string
 	resizeBox *ResizeBox
 	xBoxLiteOrganizationID *string
 }
@@ -3325,14 +3325,14 @@ func (r BoxAPIResizeBoxRequest) Execute() (*Box, *http.Response, error) {
 ResizeBox Resize box resources
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxIdOrName ID or name of the sandbox
+ @param boxIdOrName ID or name of the box
  @return BoxAPIResizeBoxRequest
 */
-func (a *BoxAPIService) ResizeBox(ctx context.Context, sandboxIdOrName string) BoxAPIResizeBoxRequest {
+func (a *BoxAPIService) ResizeBox(ctx context.Context, boxIdOrName string) BoxAPIResizeBoxRequest {
 	return BoxAPIResizeBoxRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxIdOrName: sandboxIdOrName,
+		boxIdOrName: boxIdOrName,
 	}
 }
 
@@ -3352,7 +3352,7 @@ func (a *BoxAPIService) ResizeBoxExecute(r BoxAPIResizeBoxRequest) (*Box, *http.
 	}
 
 	localVarPath := localBasePath + "/box/{boxIdOrName}/resize"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxIdOrName"+"}", url.PathEscape(parameterValueToString(r.sandboxIdOrName, "sandboxIdOrName")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"boxIdOrName"+"}", url.PathEscape(parameterValueToString(r.boxIdOrName, "boxIdOrName")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -3423,7 +3423,7 @@ func (a *BoxAPIService) ResizeBoxExecute(r BoxAPIResizeBoxRequest) (*Box, *http.
 type BoxAPIRevokeSshAccessRequest struct {
 	ctx context.Context
 	ApiService BoxAPI
-	sandboxIdOrName string
+	boxIdOrName string
 	xBoxLiteOrganizationID *string
 	token *string
 }
@@ -3445,17 +3445,17 @@ func (r BoxAPIRevokeSshAccessRequest) Execute() (*Box, *http.Response, error) {
 }
 
 /*
-RevokeSshAccess Revoke SSH access for sandbox
+RevokeSshAccess Revoke SSH access for box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxIdOrName ID or name of the sandbox
+ @param boxIdOrName ID or name of the box
  @return BoxAPIRevokeSshAccessRequest
 */
-func (a *BoxAPIService) RevokeSshAccess(ctx context.Context, sandboxIdOrName string) BoxAPIRevokeSshAccessRequest {
+func (a *BoxAPIService) RevokeSshAccess(ctx context.Context, boxIdOrName string) BoxAPIRevokeSshAccessRequest {
 	return BoxAPIRevokeSshAccessRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxIdOrName: sandboxIdOrName,
+		boxIdOrName: boxIdOrName,
 	}
 }
 
@@ -3475,7 +3475,7 @@ func (a *BoxAPIService) RevokeSshAccessExecute(r BoxAPIRevokeSshAccessRequest) (
 	}
 
 	localVarPath := localBasePath + "/box/{boxIdOrName}/ssh-access"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxIdOrName"+"}", url.PathEscape(parameterValueToString(r.sandboxIdOrName, "sandboxIdOrName")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"boxIdOrName"+"}", url.PathEscape(parameterValueToString(r.boxIdOrName, "boxIdOrName")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -3544,7 +3544,7 @@ func (a *BoxAPIService) RevokeSshAccessExecute(r BoxAPIRevokeSshAccessRequest) (
 type BoxAPISetAutoArchiveIntervalRequest struct {
 	ctx context.Context
 	ApiService BoxAPI
-	sandboxIdOrName string
+	boxIdOrName string
 	interval float32
 	xBoxLiteOrganizationID *string
 }
@@ -3563,15 +3563,15 @@ func (r BoxAPISetAutoArchiveIntervalRequest) Execute() (*Box, *http.Response, er
 SetAutoArchiveInterval Set box auto-archive interval
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxIdOrName ID or name of the sandbox
+ @param boxIdOrName ID or name of the box
  @param interval Auto-archive interval in minutes (0 means the maximum interval will be used)
  @return BoxAPISetAutoArchiveIntervalRequest
 */
-func (a *BoxAPIService) SetAutoArchiveInterval(ctx context.Context, sandboxIdOrName string, interval float32) BoxAPISetAutoArchiveIntervalRequest {
+func (a *BoxAPIService) SetAutoArchiveInterval(ctx context.Context, boxIdOrName string, interval float32) BoxAPISetAutoArchiveIntervalRequest {
 	return BoxAPISetAutoArchiveIntervalRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxIdOrName: sandboxIdOrName,
+		boxIdOrName: boxIdOrName,
 		interval: interval,
 	}
 }
@@ -3592,7 +3592,7 @@ func (a *BoxAPIService) SetAutoArchiveIntervalExecute(r BoxAPISetAutoArchiveInte
 	}
 
 	localVarPath := localBasePath + "/box/{boxIdOrName}/autoarchive/{interval}"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxIdOrName"+"}", url.PathEscape(parameterValueToString(r.sandboxIdOrName, "sandboxIdOrName")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"boxIdOrName"+"}", url.PathEscape(parameterValueToString(r.boxIdOrName, "boxIdOrName")), -1)
 	localVarPath = strings.Replace(localVarPath, "{"+"interval"+"}", url.PathEscape(parameterValueToString(r.interval, "interval")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -3659,7 +3659,7 @@ func (a *BoxAPIService) SetAutoArchiveIntervalExecute(r BoxAPISetAutoArchiveInte
 type BoxAPISetAutoDeleteIntervalRequest struct {
 	ctx context.Context
 	ApiService BoxAPI
-	sandboxIdOrName string
+	boxIdOrName string
 	interval float32
 	xBoxLiteOrganizationID *string
 }
@@ -3678,15 +3678,15 @@ func (r BoxAPISetAutoDeleteIntervalRequest) Execute() (*Box, *http.Response, err
 SetAutoDeleteInterval Set box auto-delete interval
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxIdOrName ID or name of the sandbox
+ @param boxIdOrName ID or name of the box
  @param interval Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping)
  @return BoxAPISetAutoDeleteIntervalRequest
 */
-func (a *BoxAPIService) SetAutoDeleteInterval(ctx context.Context, sandboxIdOrName string, interval float32) BoxAPISetAutoDeleteIntervalRequest {
+func (a *BoxAPIService) SetAutoDeleteInterval(ctx context.Context, boxIdOrName string, interval float32) BoxAPISetAutoDeleteIntervalRequest {
 	return BoxAPISetAutoDeleteIntervalRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxIdOrName: sandboxIdOrName,
+		boxIdOrName: boxIdOrName,
 		interval: interval,
 	}
 }
@@ -3707,7 +3707,7 @@ func (a *BoxAPIService) SetAutoDeleteIntervalExecute(r BoxAPISetAutoDeleteInterv
 	}
 
 	localVarPath := localBasePath + "/box/{boxIdOrName}/autodelete/{interval}"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxIdOrName"+"}", url.PathEscape(parameterValueToString(r.sandboxIdOrName, "sandboxIdOrName")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"boxIdOrName"+"}", url.PathEscape(parameterValueToString(r.boxIdOrName, "boxIdOrName")), -1)
 	localVarPath = strings.Replace(localVarPath, "{"+"interval"+"}", url.PathEscape(parameterValueToString(r.interval, "interval")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -3774,7 +3774,7 @@ func (a *BoxAPIService) SetAutoDeleteIntervalExecute(r BoxAPISetAutoDeleteInterv
 type BoxAPISetAutostopIntervalRequest struct {
 	ctx context.Context
 	ApiService BoxAPI
-	sandboxIdOrName string
+	boxIdOrName string
 	interval float32
 	xBoxLiteOrganizationID *string
 }
@@ -3793,15 +3793,15 @@ func (r BoxAPISetAutostopIntervalRequest) Execute() (*Box, *http.Response, error
 SetAutostopInterval Set box auto-stop interval
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxIdOrName ID or name of the sandbox
+ @param boxIdOrName ID or name of the box
  @param interval Auto-stop interval in minutes (0 to disable)
  @return BoxAPISetAutostopIntervalRequest
 */
-func (a *BoxAPIService) SetAutostopInterval(ctx context.Context, sandboxIdOrName string, interval float32) BoxAPISetAutostopIntervalRequest {
+func (a *BoxAPIService) SetAutostopInterval(ctx context.Context, boxIdOrName string, interval float32) BoxAPISetAutostopIntervalRequest {
 	return BoxAPISetAutostopIntervalRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxIdOrName: sandboxIdOrName,
+		boxIdOrName: boxIdOrName,
 		interval: interval,
 	}
 }
@@ -3822,7 +3822,7 @@ func (a *BoxAPIService) SetAutostopIntervalExecute(r BoxAPISetAutostopIntervalRe
 	}
 
 	localVarPath := localBasePath + "/box/{boxIdOrName}/autostop/{interval}"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxIdOrName"+"}", url.PathEscape(parameterValueToString(r.sandboxIdOrName, "sandboxIdOrName")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"boxIdOrName"+"}", url.PathEscape(parameterValueToString(r.boxIdOrName, "boxIdOrName")), -1)
 	localVarPath = strings.Replace(localVarPath, "{"+"interval"+"}", url.PathEscape(parameterValueToString(r.interval, "interval")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -3889,7 +3889,7 @@ func (a *BoxAPIService) SetAutostopIntervalExecute(r BoxAPISetAutostopIntervalRe
 type BoxAPIStartBoxRequest struct {
 	ctx context.Context
 	ApiService BoxAPI
-	sandboxIdOrName string
+	boxIdOrName string
 	xBoxLiteOrganizationID *string
 }
 
@@ -3904,17 +3904,17 @@ func (r BoxAPIStartBoxRequest) Execute() (*Box, *http.Response, error) {
 }
 
 /*
-StartBox Start sandbox
+StartBox Start box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxIdOrName ID or name of the sandbox
+ @param boxIdOrName ID or name of the box
  @return BoxAPIStartBoxRequest
 */
-func (a *BoxAPIService) StartBox(ctx context.Context, sandboxIdOrName string) BoxAPIStartBoxRequest {
+func (a *BoxAPIService) StartBox(ctx context.Context, boxIdOrName string) BoxAPIStartBoxRequest {
 	return BoxAPIStartBoxRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxIdOrName: sandboxIdOrName,
+		boxIdOrName: boxIdOrName,
 	}
 }
 
@@ -3934,7 +3934,7 @@ func (a *BoxAPIService) StartBoxExecute(r BoxAPIStartBoxRequest) (*Box, *http.Re
 	}
 
 	localVarPath := localBasePath + "/box/{boxIdOrName}/start"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxIdOrName"+"}", url.PathEscape(parameterValueToString(r.sandboxIdOrName, "sandboxIdOrName")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"boxIdOrName"+"}", url.PathEscape(parameterValueToString(r.boxIdOrName, "boxIdOrName")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -4000,7 +4000,7 @@ func (a *BoxAPIService) StartBoxExecute(r BoxAPIStartBoxRequest) (*Box, *http.Re
 type BoxAPIStopBoxRequest struct {
 	ctx context.Context
 	ApiService BoxAPI
-	sandboxIdOrName string
+	boxIdOrName string
 	xBoxLiteOrganizationID *string
 	force *bool
 }
@@ -4022,17 +4022,17 @@ func (r BoxAPIStopBoxRequest) Execute() (*Box, *http.Response, error) {
 }
 
 /*
-StopBox Stop sandbox
+StopBox Stop box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxIdOrName ID or name of the sandbox
+ @param boxIdOrName ID or name of the box
  @return BoxAPIStopBoxRequest
 */
-func (a *BoxAPIService) StopBox(ctx context.Context, sandboxIdOrName string) BoxAPIStopBoxRequest {
+func (a *BoxAPIService) StopBox(ctx context.Context, boxIdOrName string) BoxAPIStopBoxRequest {
 	return BoxAPIStopBoxRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxIdOrName: sandboxIdOrName,
+		boxIdOrName: boxIdOrName,
 	}
 }
 
@@ -4052,7 +4052,7 @@ func (a *BoxAPIService) StopBoxExecute(r BoxAPIStopBoxRequest) (*Box, *http.Resp
 	}
 
 	localVarPath := localBasePath + "/box/{boxIdOrName}/stop"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxIdOrName"+"}", url.PathEscape(parameterValueToString(r.sandboxIdOrName, "sandboxIdOrName")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"boxIdOrName"+"}", url.PathEscape(parameterValueToString(r.boxIdOrName, "boxIdOrName")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -4145,7 +4145,7 @@ func (r BoxAPIUpdateBoxStateRequest) Execute() (*http.Response, error) {
 UpdateBoxState Update box state
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param boxId ID of the sandbox
+ @param boxId ID of the box
  @return BoxAPIUpdateBoxStateRequest
 */
 func (a *BoxAPIService) UpdateBoxState(ctx context.Context, boxId string) BoxAPIUpdateBoxStateRequest {
@@ -4250,7 +4250,7 @@ func (r BoxAPIUpdateLastActivityRequest) Execute() (*http.Response, error) {
 UpdateLastActivity Update box last activity
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param boxId ID of the sandbox
+ @param boxId ID of the box
  @return BoxAPIUpdateLastActivityRequest
 */
 func (a *BoxAPIService) UpdateLastActivity(ctx context.Context, boxId string) BoxAPIUpdateLastActivityRequest {
@@ -4332,7 +4332,7 @@ func (a *BoxAPIService) UpdateLastActivityExecute(r BoxAPIUpdateLastActivityRequ
 type BoxAPIUpdatePublicStatusRequest struct {
 	ctx context.Context
 	ApiService BoxAPI
-	sandboxIdOrName string
+	boxIdOrName string
 	isPublic bool
 	xBoxLiteOrganizationID *string
 }
@@ -4351,15 +4351,15 @@ func (r BoxAPIUpdatePublicStatusRequest) Execute() (*Box, *http.Response, error)
 UpdatePublicStatus Update public status
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxIdOrName ID or name of the sandbox
+ @param boxIdOrName ID or name of the box
  @param isPublic Public status to set
  @return BoxAPIUpdatePublicStatusRequest
 */
-func (a *BoxAPIService) UpdatePublicStatus(ctx context.Context, sandboxIdOrName string, isPublic bool) BoxAPIUpdatePublicStatusRequest {
+func (a *BoxAPIService) UpdatePublicStatus(ctx context.Context, boxIdOrName string, isPublic bool) BoxAPIUpdatePublicStatusRequest {
 	return BoxAPIUpdatePublicStatusRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxIdOrName: sandboxIdOrName,
+		boxIdOrName: boxIdOrName,
 		isPublic: isPublic,
 	}
 }
@@ -4380,7 +4380,7 @@ func (a *BoxAPIService) UpdatePublicStatusExecute(r BoxAPIUpdatePublicStatusRequ
 	}
 
 	localVarPath := localBasePath + "/box/{boxIdOrName}/public/{isPublic}"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxIdOrName"+"}", url.PathEscape(parameterValueToString(r.sandboxIdOrName, "sandboxIdOrName")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"boxIdOrName"+"}", url.PathEscape(parameterValueToString(r.boxIdOrName, "boxIdOrName")), -1)
 	localVarPath = strings.Replace(localVarPath, "{"+"isPublic"+"}", url.PathEscape(parameterValueToString(r.isPublic, "isPublic")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -4468,7 +4468,7 @@ func (r BoxAPIValidateSshAccessRequest) Execute() (*SshAccessValidationDto, *htt
 }
 
 /*
-ValidateSshAccess Validate SSH access for sandbox
+ValidateSshAccess Validate SSH access for box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @return BoxAPIValidateSshAccessRequest

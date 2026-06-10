@@ -21,7 +21,7 @@ var _ MappedNullable = &UpdateBoxStateDto{}
 
 // UpdateBoxStateDto struct for UpdateBoxStateDto
 type UpdateBoxStateDto struct {
-	// The new state for the sandbox
+	// The new state for the box
 	State string `json:"state"`
 	// Optional error message when reporting an error state
 	ErrorReason *string `json:"errorReason,omitempty"`

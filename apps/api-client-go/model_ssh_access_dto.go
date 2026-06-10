@@ -34,7 +34,7 @@ type SshAccessDto struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When the SSH access was last updated
 	UpdatedAt time.Time `json:"updatedAt"`
-	// SSH command to connect to the sandbox
+	// SSH command to connect to the box
 	SshCommand string `json:"sshCommand"`
 	AdditionalProperties map[string]interface{}
 }

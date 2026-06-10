@@ -66,7 +66,7 @@ export const PreviewApiAxiosParamCreator = function (configuration?: Configurati
         },
         /**
          * 
-         * @summary Check if user has access to the sandbox
+         * @summary Check if user has access to the box
          * @param {string} boxId 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -107,7 +107,7 @@ export const PreviewApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * 
          * @summary Check if box is public
-         * @param {string} boxId ID of the sandbox
+         * @param {string} boxId ID of the box
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -141,8 +141,8 @@ export const PreviewApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * 
          * @summary Check if box auth token is valid
-         * @param {string} boxId ID of the sandbox
-         * @param {string} authToken Auth token of the sandbox
+         * @param {string} boxId ID of the box
+         * @param {string} authToken Auth token of the box
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -201,7 +201,7 @@ export const PreviewApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
-         * @summary Check if user has access to the sandbox
+         * @summary Check if user has access to the box
          * @param {string} boxId 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -215,7 +215,7 @@ export const PreviewApiFp = function(configuration?: Configuration) {
         /**
          * 
          * @summary Check if box is public
-         * @param {string} boxId ID of the sandbox
+         * @param {string} boxId ID of the box
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -228,8 +228,8 @@ export const PreviewApiFp = function(configuration?: Configuration) {
         /**
          * 
          * @summary Check if box auth token is valid
-         * @param {string} boxId ID of the sandbox
-         * @param {string} authToken Auth token of the sandbox
+         * @param {string} boxId ID of the box
+         * @param {string} authToken Auth token of the box
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -261,7 +261,7 @@ export const PreviewApiFactory = function (configuration?: Configuration, basePa
         },
         /**
          * 
-         * @summary Check if user has access to the sandbox
+         * @summary Check if user has access to the box
          * @param {string} boxId 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -272,7 +272,7 @@ export const PreviewApiFactory = function (configuration?: Configuration, basePa
         /**
          * 
          * @summary Check if box is public
-         * @param {string} boxId ID of the sandbox
+         * @param {string} boxId ID of the box
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -282,8 +282,8 @@ export const PreviewApiFactory = function (configuration?: Configuration, basePa
         /**
          * 
          * @summary Check if box auth token is valid
-         * @param {string} boxId ID of the sandbox
-         * @param {string} authToken Auth token of the sandbox
+         * @param {string} boxId ID of the box
+         * @param {string} authToken Auth token of the box
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -311,7 +311,7 @@ export class PreviewApi extends BaseAPI {
 
     /**
      * 
-     * @summary Check if user has access to the sandbox
+     * @summary Check if user has access to the box
      * @param {string} boxId 
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -323,7 +323,7 @@ export class PreviewApi extends BaseAPI {
     /**
      * 
      * @summary Check if box is public
-     * @param {string} boxId ID of the sandbox
+     * @param {string} boxId ID of the box
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -334,8 +334,8 @@ export class PreviewApi extends BaseAPI {
     /**
      * 
      * @summary Check if box auth token is valid
-     * @param {string} boxId ID of the sandbox
-     * @param {string} authToken Auth token of the sandbox
+     * @param {string} boxId ID of the box
+     * @param {string} authToken Auth token of the box
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */

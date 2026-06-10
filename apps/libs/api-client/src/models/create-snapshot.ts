@@ -35,11 +35,11 @@ export interface CreateSnapshot {
      */
     'general'?: boolean;
     /**
-     * CPU cores allocated to the resulting sandbox
+     * CPU cores allocated to the resulting box
      */
     'cpu'?: number;
     /**
-     * GPU units allocated to the resulting sandbox
+     * GPU units allocated to the resulting box
      */
     'gpu'?: number;
     /**

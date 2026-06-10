@@ -45,7 +45,7 @@ type ToolboxAPI interface {
 	/*
 	CreateFolderDeprecated [DEPRECATED] Create folder
 
-	Create folder inside sandbox
+	Create folder inside box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param boxId
@@ -62,7 +62,7 @@ type ToolboxAPI interface {
 	/*
 	CreatePTYSessionDeprecated [DEPRECATED] Create PTY session
 
-	Create a new PTY session in the sandbox
+	Create a new PTY session in the box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param boxId
@@ -80,7 +80,7 @@ type ToolboxAPI interface {
 	/*
 	CreateSessionDeprecated [DEPRECATED] Create session
 
-	Create a new session in the sandbox
+	Create a new session in the box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param boxId
@@ -97,7 +97,7 @@ type ToolboxAPI interface {
 	/*
 	DeleteFileDeprecated [DEPRECATED] Delete file
 
-	Delete file inside sandbox
+	Delete file inside box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param boxId
@@ -150,7 +150,7 @@ type ToolboxAPI interface {
 	/*
 	DownloadFileDeprecated [DEPRECATED] Download file
 
-	Download file from sandbox
+	Download file from box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param boxId
@@ -204,7 +204,7 @@ type ToolboxAPI interface {
 	/*
 	ExecuteCommandDeprecated [DEPRECATED] Execute command
 
-	Execute command synchronously inside sandbox
+	Execute command synchronously inside box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param boxId
@@ -295,7 +295,7 @@ type ToolboxAPI interface {
 	/*
 	GetFileInfoDeprecated [DEPRECATED] Get file info
 
-	Get file info inside sandbox
+	Get file info inside box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param boxId
@@ -739,7 +739,7 @@ type ToolboxAPI interface {
 	/*
 	ListPTYSessionsDeprecated [DEPRECATED] List PTY sessions
 
-	List all active PTY sessions in the sandbox
+	List all active PTY sessions in the box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param boxId
@@ -757,7 +757,7 @@ type ToolboxAPI interface {
 	/*
 	ListSessionsDeprecated [DEPRECATED] List sessions
 
-	List all active sessions in the sandbox
+	List all active sessions in the box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param boxId
@@ -897,7 +897,7 @@ type ToolboxAPI interface {
 	/*
 	MoveFileDeprecated [DEPRECATED] Move file
 
-	Move file inside sandbox
+	Move file inside box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param boxId
@@ -966,7 +966,7 @@ type ToolboxAPI interface {
 	/*
 	ReplaceInFilesDeprecated [DEPRECATED] Replace in files
 
-	Replace text/pattern in multiple files inside sandbox
+	Replace text/pattern in multiple files inside box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param boxId
@@ -1040,7 +1040,7 @@ type ToolboxAPI interface {
 	/*
 	SearchFilesDeprecated [DEPRECATED] Search files
 
-	Search for files inside sandbox
+	Search for files inside box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param boxId
@@ -1058,7 +1058,7 @@ type ToolboxAPI interface {
 	/*
 	SetFilePermissionsDeprecated [DEPRECATED] Set file permissions
 
-	Set file owner/group/permissions inside sandbox
+	Set file owner/group/permissions inside box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param boxId
@@ -1200,7 +1200,7 @@ type ToolboxAPI interface {
 	/*
 	UploadFileDeprecated [DEPRECATED] Upload file
 
-	Upload file inside sandbox
+	Upload file inside box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param boxId
@@ -1217,7 +1217,7 @@ type ToolboxAPI interface {
 	/*
 	UploadFilesDeprecated [DEPRECATED] Upload multiple files
 
-	Upload multiple files inside sandbox
+	Upload multiple files inside box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param boxId
@@ -1394,7 +1394,7 @@ func (r ToolboxAPICreateFolderDeprecatedRequest) Execute() (*http.Response, erro
 /*
 CreateFolderDeprecated [DEPRECATED] Create folder
 
-Create folder inside sandbox
+Create folder inside box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param boxId
@@ -1513,7 +1513,7 @@ func (r ToolboxAPICreatePTYSessionDeprecatedRequest) Execute() (*PtyCreateRespon
 /*
 CreatePTYSessionDeprecated [DEPRECATED] Create PTY session
 
-Create a new PTY session in the sandbox
+Create a new PTY session in the box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param boxId
@@ -1640,7 +1640,7 @@ func (r ToolboxAPICreateSessionDeprecatedRequest) Execute() (*http.Response, err
 /*
 CreateSessionDeprecated [DEPRECATED] Create session
 
-Create a new session in the sandbox
+Create a new session in the box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param boxId
@@ -1762,7 +1762,7 @@ func (r ToolboxAPIDeleteFileDeprecatedRequest) Execute() (*http.Response, error)
 /*
 DeleteFileDeprecated [DEPRECATED] Delete file
 
-Delete file inside sandbox
+Delete file inside box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param boxId
@@ -2098,7 +2098,7 @@ func (r ToolboxAPIDownloadFileDeprecatedRequest) Execute() (*os.File, *http.Resp
 /*
 DownloadFileDeprecated [DEPRECATED] Download file
 
-Download file from sandbox
+Download file from box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param boxId
@@ -2478,7 +2478,7 @@ func (r ToolboxAPIExecuteCommandDeprecatedRequest) Execute() (*ExecuteResponse, 
 /*
 ExecuteCommandDeprecated [DEPRECATED] Execute command
 
-Execute command synchronously inside sandbox
+Execute command synchronously inside box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param boxId
@@ -3104,7 +3104,7 @@ func (r ToolboxAPIGetFileInfoDeprecatedRequest) Execute() (*FileInfo, *http.Resp
 /*
 GetFileInfoDeprecated [DEPRECATED] Get file info
 
-Get file info inside sandbox
+Get file info inside box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param boxId
@@ -6096,7 +6096,7 @@ func (r ToolboxAPIListPTYSessionsDeprecatedRequest) Execute() (*PtyListResponse,
 /*
 ListPTYSessionsDeprecated [DEPRECATED] List PTY sessions
 
-List all active PTY sessions in the sandbox
+List all active PTY sessions in the box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param boxId
@@ -6212,7 +6212,7 @@ func (r ToolboxAPIListSessionsDeprecatedRequest) Execute() ([]Session, *http.Res
 /*
 ListSessionsDeprecated [DEPRECATED] List sessions
 
-List all active sessions in the sandbox
+List all active sessions in the box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param boxId
@@ -7223,7 +7223,7 @@ func (r ToolboxAPIMoveFileDeprecatedRequest) Execute() (*http.Response, error) {
 /*
 MoveFileDeprecated [DEPRECATED] Move file
 
-Move file inside sandbox
+Move file inside box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param boxId
@@ -7701,7 +7701,7 @@ func (r ToolboxAPIReplaceInFilesDeprecatedRequest) Execute() ([]ReplaceResult, *
 /*
 ReplaceInFilesDeprecated [DEPRECATED] Replace in files
 
-Replace text/pattern in multiple files inside sandbox
+Replace text/pattern in multiple files inside box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param boxId
@@ -8212,7 +8212,7 @@ func (r ToolboxAPISearchFilesDeprecatedRequest) Execute() (*SearchFilesResponse,
 /*
 SearchFilesDeprecated [DEPRECATED] Search files
 
-Search for files inside sandbox
+Search for files inside box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param boxId
@@ -8360,7 +8360,7 @@ func (r ToolboxAPISetFilePermissionsDeprecatedRequest) Execute() (*http.Response
 /*
 SetFilePermissionsDeprecated [DEPRECATED] Set file permissions
 
-Set file owner/group/permissions inside sandbox
+Set file owner/group/permissions inside box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param boxId
@@ -9472,7 +9472,7 @@ func (r ToolboxAPIUploadFileDeprecatedRequest) Execute() (*http.Response, error)
 /*
 UploadFileDeprecated [DEPRECATED] Upload file
 
-Upload file inside sandbox
+Upload file inside box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param boxId
@@ -9596,7 +9596,7 @@ func (r ToolboxAPIUploadFilesDeprecatedRequest) Execute() (*http.Response, error
 /*
 UploadFilesDeprecated [DEPRECATED] Upload multiple files
 
-Upload multiple files inside sandbox
+Upload multiple files inside box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param boxId

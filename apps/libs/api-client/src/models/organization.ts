@@ -60,15 +60,15 @@ export interface Organization {
      */
     'suspensionCleanupGracePeriodHours': number;
     /**
-     * Max CPU per sandbox
+     * Max CPU per box
      */
     'maxCpuPerBox': number;
     /**
-     * Max memory per sandbox
+     * Max memory per box
      */
     'maxMemoryPerBox': number;
     /**
-     * Max disk per sandbox
+     * Max disk per box
      */
     'maxDiskPerBox': number;
     /**

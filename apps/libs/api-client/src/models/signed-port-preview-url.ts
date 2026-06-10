@@ -16,7 +16,7 @@
 
 export interface SignedPortPreviewUrl {
     /**
-     * ID of the sandbox
+     * ID of the box
      */
     'boxId': string;
     /**

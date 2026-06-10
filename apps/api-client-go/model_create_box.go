@@ -22,27 +22,27 @@ var _ MappedNullable = &CreateBox{}
 type CreateBox struct {
 	// The name of the box. If not provided, the box ID will be used as the name
 	Name *string `json:"name,omitempty"`
-	// The ID or name of the snapshot used for the sandbox
+	// The ID or name of the snapshot used for the box
 	Snapshot *string `json:"snapshot,omitempty"`
 	// The user associated with the project
 	User *string `json:"user,omitempty"`
-	// Environment variables for the sandbox
+	// Environment variables for the box
 	Env *map[string]string `json:"env,omitempty"`
-	// Labels for the sandbox
+	// Labels for the box
 	Labels *map[string]string `json:"labels,omitempty"`
 	// Whether the box http preview is publicly accessible
 	Public *bool `json:"public,omitempty"`
-	// Whether to block all network access for the sandbox
+	// Whether to block all network access for the box
 	NetworkBlockAll *bool `json:"networkBlockAll,omitempty"`
-	// Comma-separated list of allowed CIDR network addresses for the sandbox
+	// Comma-separated list of allowed CIDR network addresses for the box
 	NetworkAllowList *string `json:"networkAllowList,omitempty"`
 	// The box class type
 	Class *string `json:"class,omitempty"`
 	// The target (region) where the box will be created
 	Target *string `json:"target,omitempty"`
-	// CPU cores allocated to the sandbox
+	// CPU cores allocated to the box
 	Cpu *int32 `json:"cpu,omitempty"`
-	// GPU units allocated to the sandbox
+	// GPU units allocated to the box
 	Gpu *int32 `json:"gpu,omitempty"`
 	// Memory allocated to the box in GB
 	Memory *int32 `json:"memory,omitempty"`
@@ -54,9 +54,9 @@ type CreateBox struct {
 	AutoArchiveInterval *int32 `json:"autoArchiveInterval,omitempty"`
 	// Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping)
 	AutoDeleteInterval *int32 `json:"autoDeleteInterval,omitempty"`
-	// Array of volumes to attach to the sandbox
+	// Array of volumes to attach to the box
 	Volumes []BoxVolume `json:"volumes,omitempty"`
-	// Build information for the sandbox
+	// Build information for the box
 	BuildInfo *CreateBuildInfo `json:"buildInfo,omitempty"`
 	AdditionalProperties map[string]interface{}
 }

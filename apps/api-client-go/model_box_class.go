@@ -13,7 +13,6 @@ package apiclient
 
 import (
 	"encoding/json"
-	"fmt"
 )
 
 // BoxClass The class of the runner
@@ -24,6 +23,7 @@ const (
 	BOXCLASS_SMALL BoxClass = "small"
 	BOXCLASS_MEDIUM BoxClass = "medium"
 	BOXCLASS_LARGE BoxClass = "large"
+	BOXCLASS_UNKNOWN_DEFAULT_OPEN_API BoxClass = "unknown_default_open_api"
 )
 
 // All allowed values of BoxClass enum
@@ -31,6 +31,7 @@ var AllowedBoxClassEnumValues = []BoxClass{
 	"small",
 	"medium",
 	"large",
+	"unknown_default_open_api",
 }
 
 func (v *BoxClass) UnmarshalJSON(src []byte) error {
@@ -47,7 +48,8 @@ func (v *BoxClass) UnmarshalJSON(src []byte) error {
 		}
 	}
 
-	return fmt.Errorf("%+v is not a valid BoxClass", value)
+	*v = BOXCLASS_UNKNOWN_DEFAULT_OPEN_API
+	return nil
 }
 
 // NewBoxClassFromValue returns a pointer to a valid BoxClass
@@ -57,7 +59,8 @@ func NewBoxClassFromValue(v string) (*BoxClass, error) {
 	if ev.IsValid() {
 		return &ev, nil
 	} else {
-		return nil, fmt.Errorf("invalid value '%v' for BoxClass: valid values are %v", v, AllowedBoxClassEnumValues)
+		enumValue := BOXCLASS_UNKNOWN_DEFAULT_OPEN_API
+		return &enumValue, nil
 	}
 }
 

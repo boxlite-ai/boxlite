@@ -23,7 +23,7 @@ var _ MappedNullable = &PtyCreateRequest{}
 type PtyCreateRequest struct {
 	// The unique identifier for the PTY session
 	Id string `json:"id"`
-	// Starting directory for the PTY session, defaults to the sandbox's working directory
+	// Starting directory for the PTY session, defaults to the box's working directory
 	Cwd *string `json:"cwd,omitempty"`
 	// Environment variables for the PTY session
 	Envs map[string]interface{} `json:"envs,omitempty"`

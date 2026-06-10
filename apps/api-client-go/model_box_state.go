@@ -13,10 +13,9 @@ package apiclient
 
 import (
 	"encoding/json"
-	"fmt"
 )
 
-// BoxState The state of the sandbox
+// BoxState The state of the box
 type BoxState string
 
 // List of BoxState
@@ -38,6 +37,7 @@ const (
 	BOXSTATE_ARCHIVED BoxState = "archived"
 	BOXSTATE_ARCHIVING BoxState = "archiving"
 	BOXSTATE_RESIZING BoxState = "resizing"
+	BOXSTATE_UNKNOWN_DEFAULT_OPEN_API BoxState = "unknown_default_open_api"
 )
 
 // All allowed values of BoxState enum
@@ -59,6 +59,7 @@ var AllowedBoxStateEnumValues = []BoxState{
 	"archived",
 	"archiving",
 	"resizing",
+	"unknown_default_open_api",
 }
 
 func (v *BoxState) UnmarshalJSON(src []byte) error {
@@ -75,7 +76,8 @@ func (v *BoxState) UnmarshalJSON(src []byte) error {
 		}
 	}
 
-	return fmt.Errorf("%+v is not a valid BoxState", value)
+	*v = BOXSTATE_UNKNOWN_DEFAULT_OPEN_API
+	return nil
 }
 
 // NewBoxStateFromValue returns a pointer to a valid BoxState
@@ -85,7 +87,8 @@ func NewBoxStateFromValue(v string) (*BoxState, error) {
 	if ev.IsValid() {
 		return &ev, nil
 	} else {
-		return nil, fmt.Errorf("invalid value '%v' for BoxState: valid values are %v", v, AllowedBoxStateEnumValues)
+		enumValue := BOXSTATE_UNKNOWN_DEFAULT_OPEN_API
+		return &enumValue, nil
 	}
 }
 

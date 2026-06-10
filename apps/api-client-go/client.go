@@ -60,8 +60,6 @@ type APIClient struct {
 
 	BoxAPI BoxAPI
 
-	BoxLiteRESTAPI BoxLiteRESTAPI
-
 	ConfigAPI ConfigAPI
 
 	DockerRegistryAPI DockerRegistryAPI
@@ -114,7 +112,6 @@ func NewAPIClient(cfg *Configuration) *APIClient {
 	c.AuditAPI = (*AuditAPIService)(&c.common)
 	c.AuthAPI = (*AuthAPIService)(&c.common)
 	c.BoxAPI = (*BoxAPIService)(&c.common)
-	c.BoxLiteRESTAPI = (*BoxLiteRESTAPIService)(&c.common)
 	c.ConfigAPI = (*ConfigAPIService)(&c.common)
 	c.DockerRegistryAPI = (*DockerRegistryAPIService)(&c.common)
 	c.HealthAPI = (*HealthAPIService)(&c.common)

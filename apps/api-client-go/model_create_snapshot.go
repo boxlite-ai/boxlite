@@ -29,9 +29,9 @@ type CreateSnapshot struct {
 	Entrypoint []string `json:"entrypoint,omitempty"`
 	// Whether the snapshot is general
 	General *bool `json:"general,omitempty"`
-	// CPU cores allocated to the resulting sandbox
+	// CPU cores allocated to the resulting box
 	Cpu *int32 `json:"cpu,omitempty"`
-	// GPU units allocated to the resulting sandbox
+	// GPU units allocated to the resulting box
 	Gpu *int32 `json:"gpu,omitempty"`
 	// Memory allocated to the resulting box in GB
 	Memory *int32 `json:"memory,omitempty"`

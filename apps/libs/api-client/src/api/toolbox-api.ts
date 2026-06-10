@@ -199,7 +199,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Create folder inside sandbox
+         * Create folder inside box
          * @summary [DEPRECATED] Create folder
          * @param {string} boxId 
          * @param {string} path 
@@ -257,7 +257,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Create a new PTY session in the sandbox
+         * Create a new PTY session in the box
          * @summary [DEPRECATED] Create PTY session
          * @param {string} boxId 
          * @param {PtyCreateRequest} ptyCreateRequest 
@@ -307,7 +307,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Create a new session in the sandbox
+         * Create a new session in the box
          * @summary [DEPRECATED] Create session
          * @param {string} boxId 
          * @param {CreateSessionRequest} createSessionRequest 
@@ -356,7 +356,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Delete file inside sandbox
+         * Delete file inside box
          * @summary [DEPRECATED] Delete file
          * @param {string} boxId 
          * @param {string} path 
@@ -508,7 +508,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Download file from sandbox
+         * Download file from box
          * @summary [DEPRECATED] Download file
          * @param {string} boxId 
          * @param {string} path 
@@ -660,7 +660,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Execute command synchronously inside sandbox
+         * Execute command synchronously inside box
          * @summary [DEPRECATED] Execute command
          * @param {string} boxId 
          * @param {ExecuteRequest} executeRequest 
@@ -913,7 +913,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Get file info inside sandbox
+         * Get file info inside box
          * @summary [DEPRECATED] Get file info
          * @param {string} boxId 
          * @param {string} path 
@@ -2145,7 +2145,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * List all active PTY sessions in the sandbox
+         * List all active PTY sessions in the box
          * @summary [DEPRECATED] List PTY sessions
          * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -2190,7 +2190,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * List all active sessions in the sandbox
+         * List all active sessions in the box
          * @summary [DEPRECATED] List sessions
          * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -2613,7 +2613,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Move file inside sandbox
+         * Move file inside box
          * @summary [DEPRECATED] Move file
          * @param {string} boxId 
          * @param {string} source 
@@ -2819,7 +2819,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Replace text/pattern in multiple files inside sandbox
+         * Replace text/pattern in multiple files inside box
          * @summary [DEPRECATED] Replace in files
          * @param {string} boxId 
          * @param {ReplaceRequest} replaceRequest 
@@ -3022,7 +3022,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Search for files inside sandbox
+         * Search for files inside box
          * @summary [DEPRECATED] Search files
          * @param {string} boxId 
          * @param {string} path 
@@ -3081,7 +3081,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Set file owner/group/permissions inside sandbox
+         * Set file owner/group/permissions inside box
          * @summary [DEPRECATED] Set file permissions
          * @param {string} boxId 
          * @param {string} path 
@@ -3572,7 +3572,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Upload file inside sandbox
+         * Upload file inside box
          * @summary [DEPRECATED] Upload file
          * @param {string} boxId 
          * @param {string} path 
@@ -3631,7 +3631,7 @@ export const ToolboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Upload multiple files inside sandbox
+         * Upload multiple files inside box
          * @summary [DEPRECATED] Upload multiple files
          * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -3700,7 +3700,7 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Create folder inside sandbox
+         * Create folder inside box
          * @summary [DEPRECATED] Create folder
          * @param {string} boxId 
          * @param {string} path 
@@ -3717,7 +3717,7 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Create a new PTY session in the sandbox
+         * Create a new PTY session in the box
          * @summary [DEPRECATED] Create PTY session
          * @param {string} boxId 
          * @param {PtyCreateRequest} ptyCreateRequest 
@@ -3733,7 +3733,7 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Create a new session in the sandbox
+         * Create a new session in the box
          * @summary [DEPRECATED] Create session
          * @param {string} boxId 
          * @param {CreateSessionRequest} createSessionRequest 
@@ -3749,7 +3749,7 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Delete file inside sandbox
+         * Delete file inside box
          * @summary [DEPRECATED] Delete file
          * @param {string} boxId 
          * @param {string} path 
@@ -3798,7 +3798,7 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Download file from sandbox
+         * Download file from box
          * @summary [DEPRECATED] Download file
          * @param {string} boxId 
          * @param {string} path 
@@ -3846,7 +3846,7 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Execute command synchronously inside sandbox
+         * Execute command synchronously inside box
          * @summary [DEPRECATED] Execute command
          * @param {string} boxId 
          * @param {ExecuteRequest} executeRequest 
@@ -3926,7 +3926,7 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Get file info inside sandbox
+         * Get file info inside box
          * @summary [DEPRECATED] Get file info
          * @param {string} boxId 
          * @param {string} path 
@@ -4324,7 +4324,7 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * List all active PTY sessions in the sandbox
+         * List all active PTY sessions in the box
          * @summary [DEPRECATED] List PTY sessions
          * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -4339,7 +4339,7 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * List all active sessions in the sandbox
+         * List all active sessions in the box
          * @summary [DEPRECATED] List sessions
          * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -4470,7 +4470,7 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Move file inside sandbox
+         * Move file inside box
          * @summary [DEPRECATED] Move file
          * @param {string} boxId 
          * @param {string} source 
@@ -4535,7 +4535,7 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Replace text/pattern in multiple files inside sandbox
+         * Replace text/pattern in multiple files inside box
          * @summary [DEPRECATED] Replace in files
          * @param {string} boxId 
          * @param {ReplaceRequest} replaceRequest 
@@ -4600,7 +4600,7 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Search for files inside sandbox
+         * Search for files inside box
          * @summary [DEPRECATED] Search files
          * @param {string} boxId 
          * @param {string} path 
@@ -4617,7 +4617,7 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Set file owner/group/permissions inside sandbox
+         * Set file owner/group/permissions inside box
          * @summary [DEPRECATED] Set file permissions
          * @param {string} boxId 
          * @param {string} path 
@@ -4760,7 +4760,7 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Upload file inside sandbox
+         * Upload file inside box
          * @summary [DEPRECATED] Upload file
          * @param {string} boxId 
          * @param {string} path 
@@ -4777,7 +4777,7 @@ export const ToolboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Upload multiple files inside sandbox
+         * Upload multiple files inside box
          * @summary [DEPRECATED] Upload multiple files
          * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -4814,7 +4814,7 @@ export const ToolboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.clickMouseDeprecated(boxId, mouseClickRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Create folder inside sandbox
+         * Create folder inside box
          * @summary [DEPRECATED] Create folder
          * @param {string} boxId 
          * @param {string} path 
@@ -4828,7 +4828,7 @@ export const ToolboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.createFolderDeprecated(boxId, path, mode, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Create a new PTY session in the sandbox
+         * Create a new PTY session in the box
          * @summary [DEPRECATED] Create PTY session
          * @param {string} boxId 
          * @param {PtyCreateRequest} ptyCreateRequest 
@@ -4841,7 +4841,7 @@ export const ToolboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.createPTYSessionDeprecated(boxId, ptyCreateRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Create a new session in the sandbox
+         * Create a new session in the box
          * @summary [DEPRECATED] Create session
          * @param {string} boxId 
          * @param {CreateSessionRequest} createSessionRequest 
@@ -4854,7 +4854,7 @@ export const ToolboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.createSessionDeprecated(boxId, createSessionRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Delete file inside sandbox
+         * Delete file inside box
          * @summary [DEPRECATED] Delete file
          * @param {string} boxId 
          * @param {string} path 
@@ -4894,7 +4894,7 @@ export const ToolboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.deleteSessionDeprecated(boxId, sessionId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Download file from sandbox
+         * Download file from box
          * @summary [DEPRECATED] Download file
          * @param {string} boxId 
          * @param {string} path 
@@ -4933,7 +4933,7 @@ export const ToolboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.dragMouseDeprecated(boxId, mouseDragRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Execute command synchronously inside sandbox
+         * Execute command synchronously inside box
          * @summary [DEPRECATED] Execute command
          * @param {string} boxId 
          * @param {ExecuteRequest} executeRequest 
@@ -4998,7 +4998,7 @@ export const ToolboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getDisplayInfoDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Get file info inside sandbox
+         * Get file info inside box
          * @summary [DEPRECATED] Get file info
          * @param {string} boxId 
          * @param {string} path 
@@ -5321,7 +5321,7 @@ export const ToolboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.listFilesDeprecated(boxId, xBoxLiteOrganizationID, path, options).then((request) => request(axios, basePath));
         },
         /**
-         * List all active PTY sessions in the sandbox
+         * List all active PTY sessions in the box
          * @summary [DEPRECATED] List PTY sessions
          * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -5333,7 +5333,7 @@ export const ToolboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.listPTYSessionsDeprecated(boxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * List all active sessions in the sandbox
+         * List all active sessions in the box
          * @summary [DEPRECATED] List sessions
          * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -5440,7 +5440,7 @@ export const ToolboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.lspWorkspaceSymbolsDeprecated(boxId, languageId, pathToProject, query, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Move file inside sandbox
+         * Move file inside box
          * @summary [DEPRECATED] Move file
          * @param {string} boxId 
          * @param {string} source 
@@ -5493,7 +5493,7 @@ export const ToolboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.pressKeyDeprecated(boxId, keyboardPressRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Replace text/pattern in multiple files inside sandbox
+         * Replace text/pattern in multiple files inside box
          * @summary [DEPRECATED] Replace in files
          * @param {string} boxId 
          * @param {ReplaceRequest} replaceRequest 
@@ -5546,7 +5546,7 @@ export const ToolboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.scrollMouseDeprecated(boxId, mouseScrollRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Search for files inside sandbox
+         * Search for files inside box
          * @summary [DEPRECATED] Search files
          * @param {string} boxId 
          * @param {string} path 
@@ -5560,7 +5560,7 @@ export const ToolboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.searchFilesDeprecated(boxId, path, pattern, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Set file owner/group/permissions inside sandbox
+         * Set file owner/group/permissions inside box
          * @summary [DEPRECATED] Set file permissions
          * @param {string} boxId 
          * @param {string} path 
@@ -5679,7 +5679,7 @@ export const ToolboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.typeTextDeprecated(boxId, keyboardTypeRequest, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * Upload file inside sandbox
+         * Upload file inside box
          * @summary [DEPRECATED] Upload file
          * @param {string} boxId 
          * @param {string} path 
@@ -5693,7 +5693,7 @@ export const ToolboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.uploadFileDeprecated(boxId, path, xBoxLiteOrganizationID, file, options).then((request) => request(axios, basePath));
         },
         /**
-         * Upload multiple files inside sandbox
+         * Upload multiple files inside box
          * @summary [DEPRECATED] Upload multiple files
          * @param {string} boxId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -5726,7 +5726,7 @@ export class ToolboxApi extends BaseAPI {
     }
 
     /**
-     * Create folder inside sandbox
+     * Create folder inside box
      * @summary [DEPRECATED] Create folder
      * @param {string} boxId 
      * @param {string} path 
@@ -5741,7 +5741,7 @@ export class ToolboxApi extends BaseAPI {
     }
 
     /**
-     * Create a new PTY session in the sandbox
+     * Create a new PTY session in the box
      * @summary [DEPRECATED] Create PTY session
      * @param {string} boxId 
      * @param {PtyCreateRequest} ptyCreateRequest 
@@ -5755,7 +5755,7 @@ export class ToolboxApi extends BaseAPI {
     }
 
     /**
-     * Create a new session in the sandbox
+     * Create a new session in the box
      * @summary [DEPRECATED] Create session
      * @param {string} boxId 
      * @param {CreateSessionRequest} createSessionRequest 
@@ -5769,7 +5769,7 @@ export class ToolboxApi extends BaseAPI {
     }
 
     /**
-     * Delete file inside sandbox
+     * Delete file inside box
      * @summary [DEPRECATED] Delete file
      * @param {string} boxId 
      * @param {string} path 
@@ -5812,7 +5812,7 @@ export class ToolboxApi extends BaseAPI {
     }
 
     /**
-     * Download file from sandbox
+     * Download file from box
      * @summary [DEPRECATED] Download file
      * @param {string} boxId 
      * @param {string} path 
@@ -5854,7 +5854,7 @@ export class ToolboxApi extends BaseAPI {
     }
 
     /**
-     * Execute command synchronously inside sandbox
+     * Execute command synchronously inside box
      * @summary [DEPRECATED] Execute command
      * @param {string} boxId 
      * @param {ExecuteRequest} executeRequest 
@@ -5924,7 +5924,7 @@ export class ToolboxApi extends BaseAPI {
     }
 
     /**
-     * Get file info inside sandbox
+     * Get file info inside box
      * @summary [DEPRECATED] Get file info
      * @param {string} boxId 
      * @param {string} path 
@@ -6272,7 +6272,7 @@ export class ToolboxApi extends BaseAPI {
     }
 
     /**
-     * List all active PTY sessions in the sandbox
+     * List all active PTY sessions in the box
      * @summary [DEPRECATED] List PTY sessions
      * @param {string} boxId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -6285,7 +6285,7 @@ export class ToolboxApi extends BaseAPI {
     }
 
     /**
-     * List all active sessions in the sandbox
+     * List all active sessions in the box
      * @summary [DEPRECATED] List sessions
      * @param {string} boxId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -6400,7 +6400,7 @@ export class ToolboxApi extends BaseAPI {
     }
 
     /**
-     * Move file inside sandbox
+     * Move file inside box
      * @summary [DEPRECATED] Move file
      * @param {string} boxId 
      * @param {string} source 
@@ -6457,7 +6457,7 @@ export class ToolboxApi extends BaseAPI {
     }
 
     /**
-     * Replace text/pattern in multiple files inside sandbox
+     * Replace text/pattern in multiple files inside box
      * @summary [DEPRECATED] Replace in files
      * @param {string} boxId 
      * @param {ReplaceRequest} replaceRequest 
@@ -6514,7 +6514,7 @@ export class ToolboxApi extends BaseAPI {
     }
 
     /**
-     * Search for files inside sandbox
+     * Search for files inside box
      * @summary [DEPRECATED] Search files
      * @param {string} boxId 
      * @param {string} path 
@@ -6529,7 +6529,7 @@ export class ToolboxApi extends BaseAPI {
     }
 
     /**
-     * Set file owner/group/permissions inside sandbox
+     * Set file owner/group/permissions inside box
      * @summary [DEPRECATED] Set file permissions
      * @param {string} boxId 
      * @param {string} path 
@@ -6656,7 +6656,7 @@ export class ToolboxApi extends BaseAPI {
     }
 
     /**
-     * Upload file inside sandbox
+     * Upload file inside box
      * @summary [DEPRECATED] Upload file
      * @param {string} boxId 
      * @param {string} path 
@@ -6671,7 +6671,7 @@ export class ToolboxApi extends BaseAPI {
     }
 
     /**
-     * Upload multiple files inside sandbox
+     * Upload multiple files inside box
      * @summary [DEPRECATED] Upload multiple files
      * @param {string} boxId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID

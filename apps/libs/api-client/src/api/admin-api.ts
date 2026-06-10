@@ -198,7 +198,7 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
         /**
          * 
          * @summary Recover box from error state as an admin
-         * @param {string} boxId ID of the sandbox
+         * @param {string} boxId ID of the box
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -338,7 +338,7 @@ export const AdminApiFp = function(configuration?: Configuration) {
         /**
          * 
          * @summary Recover box from error state as an admin
-         * @param {string} boxId ID of the sandbox
+         * @param {string} boxId ID of the box
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -413,7 +413,7 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
         /**
          * 
          * @summary Recover box from error state as an admin
-         * @param {string} boxId ID of the sandbox
+         * @param {string} boxId ID of the box
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -484,7 +484,7 @@ export class AdminApi extends BaseAPI {
     /**
      * 
      * @summary Recover box from error state as an admin
-     * @param {string} boxId ID of the sandbox
+     * @param {string} boxId ID of the box
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */

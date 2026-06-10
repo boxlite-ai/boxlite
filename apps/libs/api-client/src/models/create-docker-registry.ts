@@ -50,6 +50,7 @@ export const CreateDockerRegistryRegistryTypeEnum = {
     ORGANIZATION: 'organization',
     TRANSIENT: 'transient',
     BACKUP: 'backup',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 
 export type CreateDockerRegistryRegistryTypeEnum = typeof CreateDockerRegistryRegistryTypeEnum[keyof typeof CreateDockerRegistryRegistryTypeEnum];

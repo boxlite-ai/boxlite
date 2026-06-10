@@ -31,19 +31,19 @@ import type { BuildInfo } from './build-info';
 
 export interface Workspace {
     /**
-     * The ID of the sandbox
+     * The ID of the box
      */
     'id': string;
     /**
-     * The organization ID of the sandbox
+     * The organization ID of the box
      */
     'organizationId': string;
     /**
-     * The name of the sandbox
+     * The name of the box
      */
     'name': string;
     /**
-     * The snapshot used for the sandbox
+     * The snapshot used for the box
      */
     'snapshot'?: string;
     /**
@@ -51,11 +51,11 @@ export interface Workspace {
      */
     'user': string;
     /**
-     * Environment variables for the sandbox
+     * Environment variables for the box
      */
     'env': { [key: string]: string; };
     /**
-     * Labels for the sandbox
+     * Labels for the box
      */
     'labels': { [key: string]: string; };
     /**
@@ -63,43 +63,43 @@ export interface Workspace {
      */
     'public': boolean;
     /**
-     * Whether to block all network access for the sandbox
+     * Whether to block all network access for the box
      */
     'networkBlockAll': boolean;
     /**
-     * Comma-separated list of allowed CIDR network addresses for the sandbox
+     * Comma-separated list of allowed CIDR network addresses for the box
      */
     'networkAllowList'?: string;
     /**
-     * The target environment for the sandbox
+     * The target environment for the box
      */
     'target': string;
     /**
-     * The CPU quota for the sandbox
+     * The CPU quota for the box
      */
     'cpu': number;
     /**
-     * The GPU quota for the sandbox
+     * The GPU quota for the box
      */
     'gpu': number;
     /**
-     * The memory quota for the sandbox
+     * The memory quota for the box
      */
     'memory': number;
     /**
-     * The disk quota for the sandbox
+     * The disk quota for the box
      */
     'disk': number;
     /**
-     * The state of the sandbox
+     * The state of the box
      */
     'state'?: BoxState;
     /**
-     * The desired state of the sandbox
+     * The desired state of the box
      */
     'desiredState'?: BoxDesiredState;
     /**
-     * The error reason of the sandbox
+     * The error reason of the box
      */
     'errorReason'?: string;
     /**
@@ -127,36 +127,36 @@ export interface Workspace {
      */
     'autoDeleteInterval'?: number;
     /**
-     * Array of volumes attached to the sandbox
+     * Array of volumes attached to the box
      */
     'volumes'?: Array<BoxVolume>;
     /**
-     * Build information for the sandbox
+     * Build information for the box
      */
     'buildInfo'?: BuildInfo;
     /**
-     * The creation timestamp of the sandbox
+     * The creation timestamp of the box
      */
     'createdAt'?: string;
     /**
-     * The last update timestamp of the sandbox
+     * The last update timestamp of the box
      */
     'updatedAt'?: string;
     /**
-     * The class of the sandbox
+     * The class of the box
      * @deprecated
      */
     'class'?: WorkspaceClassEnum;
     /**
-     * The version of the daemon running in the sandbox
+     * The version of the daemon running in the box
      */
     'daemonVersion'?: string;
     /**
-     * The runner ID of the sandbox
+     * The runner ID of the box
      */
     'runnerId'?: string;
     /**
-     * The toolbox proxy URL for the sandbox
+     * The toolbox proxy URL for the box
      */
     'toolboxProxyUrl': string;
     /**
@@ -172,7 +172,7 @@ export interface Workspace {
      */
     'snapshotCreatedAt'?: string;
     /**
-     * Additional information about the sandbox
+     * Additional information about the box
      */
     'info'?: BoxInfo;
 }
@@ -183,6 +183,7 @@ export const WorkspaceBackupStateEnum = {
     IN_PROGRESS: 'InProgress',
     COMPLETED: 'Completed',
     ERROR: 'Error',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 
 export type WorkspaceBackupStateEnum = typeof WorkspaceBackupStateEnum[keyof typeof WorkspaceBackupStateEnum];
@@ -190,6 +191,7 @@ export const WorkspaceClassEnum = {
     SMALL: 'small',
     MEDIUM: 'medium',
     LARGE: 'large',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 
 export type WorkspaceClassEnum = typeof WorkspaceClassEnum[keyof typeof WorkspaceClassEnum];
@@ -199,6 +201,7 @@ export const WorkspaceSnapshotStateEnum = {
     IN_PROGRESS: 'InProgress',
     COMPLETED: 'Completed',
     ERROR: 'Error',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 
 export type WorkspaceSnapshotStateEnum = typeof WorkspaceSnapshotStateEnum[keyof typeof WorkspaceSnapshotStateEnum];

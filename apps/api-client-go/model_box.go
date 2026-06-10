@@ -21,41 +21,41 @@ var _ MappedNullable = &Box{}
 
 // Box struct for Box
 type Box struct {
-	// The ID of the sandbox
+	// The ID of the box
 	Id string `json:"id"`
-	// The organization ID of the sandbox
+	// The organization ID of the box
 	OrganizationId string `json:"organizationId"`
-	// The name of the sandbox
+	// The name of the box
 	Name string `json:"name"`
-	// The snapshot used for the sandbox
+	// The snapshot used for the box
 	Snapshot *string `json:"snapshot,omitempty"`
 	// The user associated with the project
 	User string `json:"user"`
-	// Environment variables for the sandbox
+	// Environment variables for the box
 	Env map[string]string `json:"env"`
-	// Labels for the sandbox
+	// Labels for the box
 	Labels map[string]string `json:"labels"`
 	// Whether the box http preview is public
 	Public bool `json:"public"`
-	// Whether to block all network access for the sandbox
+	// Whether to block all network access for the box
 	NetworkBlockAll bool `json:"networkBlockAll"`
-	// Comma-separated list of allowed CIDR network addresses for the sandbox
+	// Comma-separated list of allowed CIDR network addresses for the box
 	NetworkAllowList *string `json:"networkAllowList,omitempty"`
-	// The target environment for the sandbox
+	// The target environment for the box
 	Target string `json:"target"`
-	// The CPU quota for the sandbox
+	// The CPU quota for the box
 	Cpu float32 `json:"cpu"`
-	// The GPU quota for the sandbox
+	// The GPU quota for the box
 	Gpu float32 `json:"gpu"`
-	// The memory quota for the sandbox
+	// The memory quota for the box
 	Memory float32 `json:"memory"`
-	// The disk quota for the sandbox
+	// The disk quota for the box
 	Disk float32 `json:"disk"`
-	// The state of the sandbox
+	// The state of the box
 	State *BoxState `json:"state,omitempty"`
-	// The desired state of the sandbox
+	// The desired state of the box
 	DesiredState *BoxDesiredState `json:"desiredState,omitempty"`
-	// The error reason of the sandbox
+	// The error reason of the box
 	ErrorReason *string `json:"errorReason,omitempty"`
 	// Whether the box error is recoverable.
 	Recoverable *bool `json:"recoverable,omitempty"`
@@ -69,22 +69,22 @@ type Box struct {
 	AutoArchiveInterval *float32 `json:"autoArchiveInterval,omitempty"`
 	// Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping)
 	AutoDeleteInterval *float32 `json:"autoDeleteInterval,omitempty"`
-	// Array of volumes attached to the sandbox
+	// Array of volumes attached to the box
 	Volumes []BoxVolume `json:"volumes,omitempty"`
-	// Build information for the sandbox
+	// Build information for the box
 	BuildInfo *BuildInfo `json:"buildInfo,omitempty"`
-	// The creation timestamp of the sandbox
+	// The creation timestamp of the box
 	CreatedAt *string `json:"createdAt,omitempty"`
-	// The last update timestamp of the sandbox
+	// The last update timestamp of the box
 	UpdatedAt *string `json:"updatedAt,omitempty"`
-	// The class of the sandbox
+	// The class of the box
 	// Deprecated
 	Class *string `json:"class,omitempty"`
-	// The version of the daemon running in the sandbox
+	// The version of the daemon running in the box
 	DaemonVersion *string `json:"daemonVersion,omitempty"`
-	// The runner ID of the sandbox
+	// The runner ID of the box
 	RunnerId *string `json:"runnerId,omitempty"`
-	// The toolbox proxy URL for the sandbox
+	// The toolbox proxy URL for the box
 	ToolboxProxyUrl string `json:"toolboxProxyUrl"`
 	AdditionalProperties map[string]interface{}
 }

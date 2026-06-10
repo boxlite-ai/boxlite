@@ -16,7 +16,7 @@
 
 export interface ToolboxProxyUrl {
     /**
-     * The toolbox proxy URL for the sandbox
+     * The toolbox proxy URL for the box
      */
     'url': string;
 }

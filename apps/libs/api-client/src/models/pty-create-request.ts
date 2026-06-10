@@ -20,7 +20,7 @@ export interface PtyCreateRequest {
      */
     'id': string;
     /**
-     * Starting directory for the PTY session, defaults to the sandbox\'s working directory
+     * Starting directory for the PTY session, defaults to the box\'s working directory
      */
     'cwd'?: string;
     /**

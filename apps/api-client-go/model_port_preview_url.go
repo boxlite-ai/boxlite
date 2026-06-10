@@ -21,7 +21,7 @@ var _ MappedNullable = &PortPreviewUrl{}
 
 // PortPreviewUrl struct for PortPreviewUrl
 type PortPreviewUrl struct {
-	// ID of the sandbox
+	// ID of the box
 	BoxId string `json:"boxId"`
 	// Preview url
 	Url string `json:"url"`

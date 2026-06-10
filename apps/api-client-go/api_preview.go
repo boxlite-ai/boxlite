@@ -38,7 +38,7 @@ type PreviewAPI interface {
 	GetBoxIdFromSignedPreviewUrlTokenExecute(r PreviewAPIGetBoxIdFromSignedPreviewUrlTokenRequest) (string, *http.Response, error)
 
 	/*
-	HasBoxAccess Check if user has access to the sandbox
+	HasBoxAccess Check if user has access to the box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param boxId
@@ -54,7 +54,7 @@ type PreviewAPI interface {
 	IsBoxPublic Check if box is public
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param boxId ID of the sandbox
+	@param boxId ID of the box
 	@return PreviewAPIIsBoxPublicRequest
 	*/
 	IsBoxPublic(ctx context.Context, boxId string) PreviewAPIIsBoxPublicRequest
@@ -67,8 +67,8 @@ type PreviewAPI interface {
 	IsValidAuthToken Check if box auth token is valid
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param boxId ID of the sandbox
-	@param authToken Auth token of the sandbox
+	@param boxId ID of the box
+	@param authToken Auth token of the box
 	@return PreviewAPIIsValidAuthTokenRequest
 	*/
 	IsValidAuthToken(ctx context.Context, boxId string, authToken string) PreviewAPIIsValidAuthTokenRequest
@@ -197,7 +197,7 @@ func (r PreviewAPIHasBoxAccessRequest) Execute() (bool, *http.Response, error) {
 }
 
 /*
-HasBoxAccess Check if user has access to the sandbox
+HasBoxAccess Check if user has access to the box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param boxId
@@ -301,7 +301,7 @@ func (r PreviewAPIIsBoxPublicRequest) Execute() (bool, *http.Response, error) {
 IsBoxPublic Check if box is public
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param boxId ID of the sandbox
+ @param boxId ID of the box
  @return PreviewAPIIsBoxPublicRequest
 */
 func (a *PreviewAPIService) IsBoxPublic(ctx context.Context, boxId string) PreviewAPIIsBoxPublicRequest {
@@ -403,8 +403,8 @@ func (r PreviewAPIIsValidAuthTokenRequest) Execute() (bool, *http.Response, erro
 IsValidAuthToken Check if box auth token is valid
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param boxId ID of the sandbox
- @param authToken Auth token of the sandbox
+ @param boxId ID of the box
+ @param authToken Auth token of the box
  @return PreviewAPIIsValidAuthTokenRequest
 */
 func (a *PreviewAPIService) IsValidAuthToken(ctx context.Context, boxId string, authToken string) PreviewAPIIsValidAuthTokenRequest {

@@ -7,7 +7,6 @@ api/api-keys-api.ts
 api/audit-api.ts
 api/auth-api.ts
 api/box-api.ts
-api/box-lite-restapi.ts
 api/config-api.ts
 api/docker-registry-api.ts
 api/health-api.ts
@@ -42,7 +41,6 @@ docs/BoxClass.md
 docs/BoxDesiredState.md
 docs/BoxInfo.md
 docs/BoxLabels.md
-docs/BoxLiteRESTApi.md
 docs/BoxState.md
 docs/BoxVolume.md
 docs/BoxliteConfiguration.md

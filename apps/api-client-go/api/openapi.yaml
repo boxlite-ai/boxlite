@@ -1765,7 +1765,7 @@ paths:
         - openid
         - profile
         - email
-      summary: Create a new sandbox
+      summary: Create a new box
       tags:
       - box
   /box/paginated:
@@ -2061,10 +2061,10 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID or name of the sandbox
+      - description: ID or name of the box
         explode: false
         in: path
-        name: sandboxIdOrName
+        name: boxIdOrName
         required: true
         schema:
           type: string
@@ -2082,7 +2082,7 @@ paths:
         - openid
         - profile
         - email
-      summary: Delete sandbox
+      summary: Delete box
       tags:
       - box
     get:
@@ -2096,10 +2096,10 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID or name of the sandbox
+      - description: ID or name of the box
         explode: false
         in: path
-        name: sandboxIdOrName
+        name: boxIdOrName
         required: true
         schema:
           type: string
@@ -2140,10 +2140,10 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID or name of the sandbox
+      - description: ID or name of the box
         explode: false
         in: path
-        name: sandboxIdOrName
+        name: boxIdOrName
         required: true
         schema:
           type: string
@@ -2176,10 +2176,10 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID or name of the sandbox
+      - description: ID or name of the box
         explode: false
         in: path
-        name: sandboxIdOrName
+        name: boxIdOrName
         required: true
         schema:
           type: string
@@ -2197,7 +2197,7 @@ paths:
         - openid
         - profile
         - email
-      summary: Start sandbox
+      summary: Start box
       tags:
       - box
   /box/{boxIdOrName}/stop:
@@ -2212,10 +2212,10 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID or name of the sandbox
+      - description: ID or name of the box
         explode: false
         in: path
-        name: sandboxIdOrName
+        name: boxIdOrName
         required: true
         schema:
           type: string
@@ -2241,7 +2241,7 @@ paths:
         - openid
         - profile
         - email
-      summary: Stop sandbox
+      summary: Stop box
       tags:
       - box
   /box/{boxIdOrName}/resize:
@@ -2256,10 +2256,10 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID or name of the sandbox
+      - description: ID or name of the box
         explode: false
         in: path
-        name: sandboxIdOrName
+        name: boxIdOrName
         required: true
         schema:
           type: string
@@ -2298,10 +2298,10 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID or name of the sandbox
+      - description: ID or name of the box
         explode: false
         in: path
-        name: sandboxIdOrName
+        name: boxIdOrName
         required: true
         schema:
           type: string
@@ -2340,7 +2340,7 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID of the sandbox
+      - description: ID of the box
         explode: false
         in: path
         name: boxId
@@ -2378,10 +2378,10 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID or name of the sandbox
+      - description: ID or name of the box
         explode: false
         in: path
-        name: sandboxIdOrName
+        name: boxIdOrName
         required: true
         schema:
           type: string
@@ -2414,10 +2414,10 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID or name of the sandbox
+      - description: ID or name of the box
         explode: false
         in: path
-        name: sandboxIdOrName
+        name: boxIdOrName
         required: true
         schema:
           type: string
@@ -2458,7 +2458,7 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID of the sandbox
+      - description: ID of the box
         explode: false
         in: path
         name: boxId
@@ -2490,10 +2490,10 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID or name of the sandbox
+      - description: ID or name of the box
         explode: false
         in: path
-        name: sandboxIdOrName
+        name: boxIdOrName
         required: true
         schema:
           type: string
@@ -2534,10 +2534,10 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID or name of the sandbox
+      - description: ID or name of the box
         explode: false
         in: path
-        name: sandboxIdOrName
+        name: boxIdOrName
         required: true
         schema:
           type: string
@@ -2579,10 +2579,10 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID or name of the sandbox
+      - description: ID or name of the box
         explode: false
         in: path
-        name: sandboxIdOrName
+        name: boxIdOrName
         required: true
         schema:
           type: string
@@ -2626,7 +2626,7 @@ paths:
         style: simple
       - explode: false
         in: path
-        name: sandboxIdOrName
+        name: boxIdOrName
         required: true
         schema:
           type: string
@@ -2644,7 +2644,7 @@ paths:
         - openid
         - profile
         - email
-      summary: Archive sandbox
+      summary: Archive box
       tags:
       - box
   /box/{boxIdOrName}/ports/{port}/preview-url:
@@ -2659,10 +2659,10 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID or name of the sandbox
+      - description: ID or name of the box
         explode: false
         in: path
-        name: sandboxIdOrName
+        name: boxIdOrName
         required: true
         schema:
           type: string
@@ -2703,10 +2703,10 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID or name of the sandbox
+      - description: ID or name of the box
         explode: false
         in: path
-        name: sandboxIdOrName
+        name: boxIdOrName
         required: true
         schema:
           type: string
@@ -2755,10 +2755,10 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID or name of the sandbox
+      - description: ID or name of the box
         explode: false
         in: path
-        name: sandboxIdOrName
+        name: boxIdOrName
         required: true
         schema:
           type: string
@@ -2805,10 +2805,10 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID or name of the sandbox
+      - description: ID or name of the box
         explode: false
         in: path
-        name: sandboxIdOrName
+        name: boxIdOrName
         required: true
         schema:
           type: string
@@ -2845,10 +2845,10 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID or name of the sandbox
+      - description: ID or name of the box
         explode: false
         in: path
-        name: sandboxIdOrName
+        name: boxIdOrName
         required: true
         schema:
           type: string
@@ -2881,10 +2881,10 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID or name of the sandbox
+      - description: ID or name of the box
         explode: false
         in: path
-        name: sandboxIdOrName
+        name: boxIdOrName
         required: true
         schema:
           type: string
@@ -2911,7 +2911,7 @@ paths:
         - openid
         - profile
         - email
-      summary: Revoke SSH access for sandbox
+      summary: Revoke SSH access for box
       tags:
       - box
     post:
@@ -2925,10 +2925,10 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID or name of the sandbox
+      - description: ID or name of the box
         explode: false
         in: path
-        name: sandboxIdOrName
+        name: boxIdOrName
         required: true
         schema:
           type: string
@@ -2954,7 +2954,7 @@ paths:
         - openid
         - profile
         - email
-      summary: Create SSH access for sandbox
+      summary: Create SSH access for box
       tags:
       - box
   /box/ssh-access/validate:
@@ -2990,7 +2990,7 @@ paths:
         - openid
         - profile
         - email
-      summary: Validate SSH access for sandbox
+      summary: Validate SSH access for box
       tags:
       - box
   /box/{boxId}/toolbox-proxy-url:
@@ -3005,7 +3005,7 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID of the sandbox
+      - description: ID of the box
         explode: false
         in: path
         name: boxId
@@ -3019,14 +3019,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ToolboxProxyUrl"
-          description: Toolbox proxy URL for the specified sandbox
+          description: Toolbox proxy URL for the specified box
       security:
       - bearer: []
       - oauth2:
         - openid
         - profile
         - email
-      summary: Get toolbox proxy URL for a sandbox
+      summary: Get toolbox proxy URL for a box
       tags:
       - box
   /runners:
@@ -3471,7 +3471,7 @@ paths:
   /toolbox/{boxId}/toolbox/files:
     delete:
       deprecated: true
-      description: Delete file inside sandbox
+      description: Delete file inside box
       operationId: deleteFile_deprecated
       parameters:
       - description: Use with JWT to specify the organization ID
@@ -3562,7 +3562,7 @@ paths:
   /toolbox/{boxId}/toolbox/files/download:
     get:
       deprecated: true
-      description: Download file from sandbox
+      description: Download file from box
       operationId: downloadFile_deprecated
       parameters:
       - description: Use with JWT to specify the organization ID
@@ -3704,7 +3704,7 @@ paths:
   /toolbox/{boxId}/toolbox/files/folder:
     post:
       deprecated: true
-      description: Create folder inside sandbox
+      description: Create folder inside box
       operationId: createFolder_deprecated
       parameters:
       - description: Use with JWT to specify the organization ID
@@ -3751,7 +3751,7 @@ paths:
   /toolbox/{boxId}/toolbox/files/info:
     get:
       deprecated: true
-      description: Get file info inside sandbox
+      description: Get file info inside box
       operationId: getFileInfo_deprecated
       parameters:
       - description: Use with JWT to specify the organization ID
@@ -3795,7 +3795,7 @@ paths:
   /toolbox/{boxId}/toolbox/files/move:
     post:
       deprecated: true
-      description: Move file inside sandbox
+      description: Move file inside box
       operationId: moveFile_deprecated
       parameters:
       - description: Use with JWT to specify the organization ID
@@ -3842,7 +3842,7 @@ paths:
   /toolbox/{boxId}/toolbox/files/permissions:
     post:
       deprecated: true
-      description: Set file owner/group/permissions inside sandbox
+      description: Set file owner/group/permissions inside box
       operationId: setFilePermissions_deprecated
       parameters:
       - description: Use with JWT to specify the organization ID
@@ -3903,7 +3903,7 @@ paths:
   /toolbox/{boxId}/toolbox/files/replace:
     post:
       deprecated: true
-      description: Replace text/pattern in multiple files inside sandbox
+      description: Replace text/pattern in multiple files inside box
       operationId: replaceInFiles_deprecated
       parameters:
       - description: Use with JWT to specify the organization ID
@@ -3948,7 +3948,7 @@ paths:
   /toolbox/{boxId}/toolbox/files/search:
     get:
       deprecated: true
-      description: Search for files inside sandbox
+      description: Search for files inside box
       operationId: searchFiles_deprecated
       parameters:
       - description: Use with JWT to specify the organization ID
@@ -3999,7 +3999,7 @@ paths:
   /toolbox/{boxId}/toolbox/files/upload:
     post:
       deprecated: true
-      description: Upload file inside sandbox
+      description: Upload file inside box
       operationId: uploadFile_deprecated
       parameters:
       - description: Use with JWT to specify the organization ID
@@ -4045,7 +4045,7 @@ paths:
   /toolbox/{boxId}/toolbox/files/bulk-upload:
     post:
       deprecated: true
-      description: Upload multiple files inside sandbox
+      description: Upload multiple files inside box
       operationId: uploadFiles_deprecated
       parameters:
       - description: Use with JWT to specify the organization ID
@@ -4534,7 +4534,7 @@ paths:
   /toolbox/{boxId}/toolbox/process/execute:
     post:
       deprecated: true
-      description: Execute command synchronously inside sandbox
+      description: Execute command synchronously inside box
       operationId: executeCommand_deprecated
       parameters:
       - description: Use with JWT to specify the organization ID
@@ -4577,7 +4577,7 @@ paths:
   /toolbox/{boxId}/toolbox/process/session:
     get:
       deprecated: true
-      description: List all active sessions in the sandbox
+      description: List all active sessions in the box
       operationId: listSessions_deprecated
       parameters:
       - description: Use with JWT to specify the organization ID
@@ -4615,7 +4615,7 @@ paths:
       - toolbox
     post:
       deprecated: true
-      description: Create a new session in the sandbox
+      description: Create a new session in the box
       operationId: createSession_deprecated
       parameters:
       - description: Use with JWT to specify the organization ID
@@ -4903,7 +4903,7 @@ paths:
   /toolbox/{boxId}/toolbox/process/pty:
     get:
       deprecated: true
-      description: List all active PTY sessions in the sandbox
+      description: List all active PTY sessions in the box
       operationId: listPTYSessions_deprecated
       parameters:
       - description: Use with JWT to specify the organization ID
@@ -4939,7 +4939,7 @@ paths:
       - toolbox
     post:
       deprecated: true
-      description: Create a new PTY session in the sandbox
+      description: Create a new PTY session in the box
       operationId: createPTYSession_deprecated
       parameters:
       - description: Use with JWT to specify the organization ID
@@ -7371,7 +7371,7 @@ paths:
     get:
       operationId: isBoxPublic
       parameters:
-      - description: ID of the sandbox
+      - description: ID of the box
         explode: false
         in: path
         name: boxId
@@ -7385,7 +7385,7 @@ paths:
             application/json:
               schema:
                 type: boolean
-          description: Public status of the sandbox
+          description: Public status of the box
       summary: Check if box is public
       tags:
       - preview
@@ -7393,7 +7393,7 @@ paths:
     get:
       operationId: isValidAuthToken
       parameters:
-      - description: ID of the sandbox
+      - description: ID of the box
         explode: false
         in: path
         name: boxId
@@ -7401,7 +7401,7 @@ paths:
         schema:
           type: string
         style: simple
-      - description: Auth token of the sandbox
+      - description: Auth token of the box
         explode: false
         in: path
         name: authToken
@@ -7436,14 +7436,14 @@ paths:
             application/json:
               schema:
                 type: boolean
-          description: User access status to the sandbox
+          description: User access status to the box
       security:
       - bearer: []
       - oauth2:
         - openid
         - profile
         - email
-      summary: Check if user has access to the sandbox
+      summary: Check if user has access to the box
       tags:
       - preview
   /preview/{signedPreviewToken}/{port}/box-id:
@@ -8188,7 +8188,7 @@ paths:
     post:
       operationId: adminRecoverBox
       parameters:
-      - description: ID of the sandbox
+      - description: ID of the box
         explode: false
         in: path
         name: boxId
@@ -8617,7 +8617,7 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID of the sandbox
+      - description: ID of the box
         explode: false
         in: path
         name: boxId
@@ -8708,7 +8708,7 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID of the sandbox
+      - description: ID of the box
         explode: false
         in: path
         name: boxId
@@ -8781,7 +8781,7 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID of the sandbox
+      - description: ID of the box
         explode: false
         in: path
         name: boxId
@@ -8828,7 +8828,7 @@ paths:
         schema:
           type: string
         style: simple
-      - description: ID of the sandbox
+      - description: ID of the box
         explode: false
         in: path
         name: boxId
@@ -8880,895 +8880,6 @@ paths:
       summary: Get box metrics
       tags:
       - box
-  /v1/me:
-    get:
-      operationId: BoxliteMeController_getMe
-      parameters: []
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-  /v1/config:
-    get:
-      operationId: BoxliteConfigController_getConfig
-      parameters: []
-      responses:
-        "200":
-          description: ""
-      tags:
-      - BoxLite REST
-  /v1/{prefix}/boxes:
-    get:
-      operationId: BoxliteBoxController_listBoxes
-      parameters:
-      - explode: true
-        in: query
-        name: pageSize
-        required: true
-        schema:
-          type: string
-        style: form
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    post:
-      operationId: BoxliteBoxController_createBox
-      parameters: []
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CreateBoxDto"
-        required: true
-      responses:
-        "201":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-  /v1/{prefix}/boxes/{boxId}:
-    delete:
-      operationId: BoxliteBoxController_removeBox
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "204":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    get:
-      operationId: BoxliteBoxController_getBox
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    head:
-      operationId: BoxliteBoxController_headBox
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-  /v1/{prefix}/boxes/{boxId}/start:
-    post:
-      operationId: BoxliteBoxController_startBox
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "201":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-  /v1/{prefix}/boxes/{boxId}/stop:
-    post:
-      operationId: BoxliteBoxController_stopBox
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "201":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-  /v1/{prefix}/boxes/{boxId}/exec:
-    delete:
-      operationId: BoxliteProxyController_proxyExec_delete
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    get:
-      operationId: BoxliteProxyController_proxyExec_get
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    head:
-      operationId: BoxliteProxyController_proxyExec_head
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    options:
-      operationId: BoxliteProxyController_proxyExec_options
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    patch:
-      operationId: BoxliteProxyController_proxyExec_patch
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    post:
-      operationId: BoxliteProxyController_proxyExec_post
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    put:
-      operationId: BoxliteProxyController_proxyExec_put
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-  /v1/{prefix}/boxes/{boxId}/executions/{execId}/signal:
-    delete:
-      operationId: BoxliteProxyController_proxyExecSignal_delete
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - explode: false
-        in: path
-        name: execId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    get:
-      operationId: BoxliteProxyController_proxyExecSignal_get
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - explode: false
-        in: path
-        name: execId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    head:
-      operationId: BoxliteProxyController_proxyExecSignal_head
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - explode: false
-        in: path
-        name: execId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    options:
-      operationId: BoxliteProxyController_proxyExecSignal_options
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - explode: false
-        in: path
-        name: execId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    patch:
-      operationId: BoxliteProxyController_proxyExecSignal_patch
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - explode: false
-        in: path
-        name: execId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    post:
-      operationId: BoxliteProxyController_proxyExecSignal_post
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - explode: false
-        in: path
-        name: execId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    put:
-      operationId: BoxliteProxyController_proxyExecSignal_put
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - explode: false
-        in: path
-        name: execId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-  /v1/{prefix}/boxes/{boxId}/executions/{execId}/resize:
-    delete:
-      operationId: BoxliteProxyController_proxyExecResize_delete
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - explode: false
-        in: path
-        name: execId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    get:
-      operationId: BoxliteProxyController_proxyExecResize_get
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - explode: false
-        in: path
-        name: execId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    head:
-      operationId: BoxliteProxyController_proxyExecResize_head
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - explode: false
-        in: path
-        name: execId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    options:
-      operationId: BoxliteProxyController_proxyExecResize_options
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - explode: false
-        in: path
-        name: execId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    patch:
-      operationId: BoxliteProxyController_proxyExecResize_patch
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - explode: false
-        in: path
-        name: execId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    post:
-      operationId: BoxliteProxyController_proxyExecResize_post
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - explode: false
-        in: path
-        name: execId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    put:
-      operationId: BoxliteProxyController_proxyExecResize_put
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - explode: false
-        in: path
-        name: execId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-  /v1/{prefix}/boxes/{boxId}/executions/{execId}:
-    delete:
-      operationId: BoxliteProxyController_proxyExecKill
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - explode: false
-        in: path
-        name: execId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    get:
-      operationId: BoxliteProxyController_proxyExecStatus
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - explode: false
-        in: path
-        name: execId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-  /v1/{prefix}/boxes/{boxId}/files:
-    delete:
-      operationId: BoxliteProxyController_proxyFiles_delete
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    get:
-      operationId: BoxliteProxyController_proxyFiles_get
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    head:
-      operationId: BoxliteProxyController_proxyFiles_head
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    options:
-      operationId: BoxliteProxyController_proxyFiles_options
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    patch:
-      operationId: BoxliteProxyController_proxyFiles_patch
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    post:
-      operationId: BoxliteProxyController_proxyFiles_post
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    put:
-      operationId: BoxliteProxyController_proxyFiles_put
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-  /v1/{prefix}/boxes/{boxId}/metrics:
-    delete:
-      operationId: BoxliteProxyController_proxyMetrics_delete
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    get:
-      operationId: BoxliteProxyController_proxyMetrics_get
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    head:
-      operationId: BoxliteProxyController_proxyMetrics_head
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    options:
-      operationId: BoxliteProxyController_proxyMetrics_options
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    patch:
-      operationId: BoxliteProxyController_proxyMetrics_patch
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    post:
-      operationId: BoxliteProxyController_proxyMetrics_post
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
-    put:
-      operationId: BoxliteProxyController_proxyMetrics_put
-      parameters:
-      - explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      tags:
-      - BoxLite REST
 components:
   schemas:
     Announcement:
@@ -10375,13 +9486,13 @@ components:
           description: Suspension cleanup grace period hours
           type: number
         maxCpuPerBox:
-          description: Max CPU per sandbox
+          description: Max CPU per box
           type: number
         maxMemoryPerBox:
-          description: Max memory per sandbox
+          description: Max memory per box
           type: number
         maxDiskPerBox:
-          description: Max disk per sandbox
+          description: Max disk per box
           type: number
         snapshotDeactivationTimeoutMinutes:
           default: 20160
@@ -11272,7 +10383,7 @@ components:
       - userId
       type: object
     BoxState:
-      description: The state of the sandbox
+      description: The state of the box
       enum:
       - creating
       - restoring
@@ -11293,7 +10404,7 @@ components:
       - resizing
       type: string
     BoxDesiredState:
-      description: The desired state of the sandbox
+      description: The desired state of the box
       enum:
       - destroyed
       - started
@@ -11363,7 +10474,7 @@ components:
       type: object
     Box:
       example:
-        id: sandbox123
+        id: box123
         organizationId: organization123
         name: MyBox
         snapshot: boxlite-ai/box:latest
@@ -11405,19 +10516,19 @@ components:
         toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
       properties:
         id:
-          description: The ID of the sandbox
-          example: sandbox123
+          description: The ID of the box
+          example: box123
           type: string
         organizationId:
-          description: The organization ID of the sandbox
+          description: The organization ID of the box
           example: organization123
           type: string
         name:
-          description: The name of the sandbox
+          description: The name of the box
           example: MyBox
           type: string
         snapshot:
-          description: The snapshot used for the sandbox
+          description: The snapshot used for the box
           example: boxlite-ai/box:latest
           type: string
         user:
@@ -11427,14 +10538,14 @@ components:
         env:
           additionalProperties:
             type: string
-          description: Environment variables for the sandbox
+          description: Environment variables for the box
           example:
             NODE_ENV: production
           type: object
         labels:
           additionalProperties:
             type: string
-          description: Labels for the sandbox
+          description: Labels for the box
           example:
             boxlite.io/public: "true"
           type: object
@@ -11443,46 +10554,46 @@ components:
           example: false
           type: boolean
         networkBlockAll:
-          description: Whether to block all network access for the sandbox
+          description: Whether to block all network access for the box
           example: false
           type: boolean
         networkAllowList:
           description: Comma-separated list of allowed CIDR network addresses for
-            the sandbox
+            the box
           example: "192.168.1.0/16,10.0.0.0/24"
           type: string
         target:
-          description: The target environment for the sandbox
+          description: The target environment for the box
           example: local
           type: string
         cpu:
-          description: The CPU quota for the sandbox
+          description: The CPU quota for the box
           example: 2
           type: number
         gpu:
-          description: The GPU quota for the sandbox
+          description: The GPU quota for the box
           example: 0
           type: number
         memory:
-          description: The memory quota for the sandbox
+          description: The memory quota for the box
           example: 4
           type: number
         disk:
-          description: The disk quota for the sandbox
+          description: The disk quota for the box
           example: 10
           type: number
         state:
           allOf:
           - $ref: "#/components/schemas/BoxState"
-          description: The state of the sandbox
+          description: The state of the box
           example: creating
         desiredState:
           allOf:
           - $ref: "#/components/schemas/BoxDesiredState"
-          description: The desired state of the sandbox
+          description: The desired state of the box
           example: destroyed
         errorReason:
-          description: The error reason of the sandbox
+          description: The error reason of the box
           example: The box is not running
           type: string
         recoverable:
@@ -11517,25 +10628,25 @@ components:
           example: 30
           type: number
         volumes:
-          description: Array of volumes attached to the sandbox
+          description: Array of volumes attached to the box
           items:
             $ref: "#/components/schemas/BoxVolume"
           type: array
         buildInfo:
           allOf:
           - $ref: "#/components/schemas/BuildInfo"
-          description: Build information for the sandbox
+          description: Build information for the box
         createdAt:
-          description: The creation timestamp of the sandbox
+          description: The creation timestamp of the box
           example: 2024-10-01T12:00:00Z
           type: string
         updatedAt:
-          description: The last update timestamp of the sandbox
+          description: The last update timestamp of the box
           example: 2024-10-01T12:00:00Z
           type: string
         class:
           deprecated: true
-          description: The class of the sandbox
+          description: The class of the box
           enum:
           - small
           - medium
@@ -11543,15 +10654,15 @@ components:
           example: small
           type: string
         daemonVersion:
-          description: The version of the daemon running in the sandbox
+          description: The version of the daemon running in the box
           example: 1.0.0
           type: string
         runnerId:
-          description: The runner ID of the sandbox
+          description: The runner ID of the box
           example: runner123
           type: string
         toolboxProxyUrl:
-          description: The toolbox proxy URL for the sandbox
+          description: The toolbox proxy URL for the box
           example: https://proxy.app.boxlite.io/toolbox
           type: string
       required:
@@ -11573,7 +10684,7 @@ components:
     PaginatedBoxes:
       example:
         items:
-        - id: sandbox123
+        - id: box123
           organizationId: organization123
           name: MyBox
           snapshot: boxlite-ai/box:latest
@@ -11613,7 +10724,7 @@ components:
           daemonVersion: 1.0.0
           runnerId: runner123
           toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
-        - id: sandbox123
+        - id: box123
           organizationId: organization123
           name: MyBox
           snapshot: boxlite-ai/box:latest
@@ -11731,7 +10842,7 @@ components:
           example: MyBox
           type: string
         snapshot:
-          description: The ID or name of the snapshot used for the sandbox
+          description: The ID or name of the snapshot used for the box
           example: ubuntu-4vcpu-8ram-100gb
           type: string
         user:
@@ -11741,14 +10852,14 @@ components:
         env:
           additionalProperties:
             type: string
-          description: Environment variables for the sandbox
+          description: Environment variables for the box
           example:
             NODE_ENV: production
           type: object
         labels:
           additionalProperties:
             type: string
-          description: Labels for the sandbox
+          description: Labels for the box
           example:
             boxlite.io/public: "true"
           type: object
@@ -11757,12 +10868,12 @@ components:
           example: false
           type: boolean
         networkBlockAll:
-          description: Whether to block all network access for the sandbox
+          description: Whether to block all network access for the box
           example: false
           type: boolean
         networkAllowList:
           description: Comma-separated list of allowed CIDR network addresses for
-            the sandbox
+            the box
           example: "192.168.1.0/16,10.0.0.0/24"
           type: string
         class:
@@ -11778,11 +10889,11 @@ components:
           example: us
           type: string
         cpu:
-          description: CPU cores allocated to the sandbox
+          description: CPU cores allocated to the box
           example: 2
           type: integer
         gpu:
-          description: GPU units allocated to the sandbox
+          description: GPU units allocated to the box
           example: 1
           type: integer
         memory:
@@ -11808,14 +10919,14 @@ components:
           example: 30
           type: integer
         volumes:
-          description: Array of volumes to attach to the sandbox
+          description: Array of volumes to attach to the box
           items:
             $ref: "#/components/schemas/BoxVolume"
           type: array
         buildInfo:
           allOf:
           - $ref: "#/components/schemas/CreateBuildInfo"
-          description: Build information for the sandbox
+          description: Build information for the box
       type: object
     ResizeBox:
       example:
@@ -11863,7 +10974,7 @@ components:
         recoverable: true
       properties:
         state:
-          description: The new state for the sandbox
+          description: The new state for the box
           enum:
           - creating
           - restoring
@@ -11902,7 +11013,7 @@ components:
         token: ul67qtv-jl6wb9z5o3eii-ljqt9qed6l
       properties:
         boxId:
-          description: ID of the sandbox
+          description: ID of the box
           example: "123456"
           type: string
         url:
@@ -11926,7 +11037,7 @@ components:
         url: "https://{port}-{token}.{proxyDomain}"
       properties:
         boxId:
-          description: ID of the sandbox
+          description: ID of the box
           example: "123456"
           type: string
         port:
@@ -11995,7 +11106,7 @@ components:
           format: date-time
           type: string
         sshCommand:
-          description: SSH command to connect to the sandbox
+          description: SSH command to connect to the box
           example: ssh -p 2222 token@localhost
           type: string
       required:
@@ -12029,7 +11140,7 @@ components:
         url: https://proxy.app.boxlite.io/toolbox
       properties:
         url:
-          description: The toolbox proxy URL for the sandbox
+          description: The toolbox proxy URL for the box
           example: https://proxy.app.boxlite.io/toolbox
           type: string
       required:
@@ -13105,7 +12216,7 @@ components:
           example: pty-session-12345
           type: string
         cwd:
-          description: "Starting directory for the PTY session, defaults to the sandbox's\
+          description: "Starting directory for the PTY session, defaults to the box's\
             \ working directory"
           example: /home/user
           type: string
@@ -13195,7 +12306,7 @@ components:
           example: pty-session-12345
           type: string
         cwd:
-          description: "Starting directory for the PTY session, defaults to the sandbox's\
+          description: "Starting directory for the PTY session, defaults to the box's\
             \ working directory"
           example: /home/user
           type: string
@@ -14043,11 +13154,11 @@ components:
           description: Whether the snapshot is general
           type: boolean
         cpu:
-          description: CPU cores allocated to the resulting sandbox
+          description: CPU cores allocated to the resulting box
           example: 1
           type: integer
         gpu:
-          description: GPU units allocated to the resulting sandbox
+          description: GPU units allocated to the resulting box
           example: 0
           type: integer
         memory:
@@ -14273,7 +13384,7 @@ components:
         name:
           default: ""
           deprecated: true
-          description: "Deprecated: The name of the sandbox"
+          description: "Deprecated: The name of the box"
           example: MyBox
           type: string
         providerMetadata:
@@ -14286,7 +13397,7 @@ components:
       type: object
     Workspace:
       example:
-        id: sandbox123
+        id: box123
         organizationId: organization123
         name: MyBox
         snapshot: boxlite-ai/box:latest
@@ -14332,19 +13443,19 @@ components:
         info: ""
       properties:
         id:
-          description: The ID of the sandbox
-          example: sandbox123
+          description: The ID of the box
+          example: box123
           type: string
         organizationId:
-          description: The organization ID of the sandbox
+          description: The organization ID of the box
           example: organization123
           type: string
         name:
-          description: The name of the sandbox
+          description: The name of the box
           example: MyBox
           type: string
         snapshot:
-          description: The snapshot used for the sandbox
+          description: The snapshot used for the box
           example: boxlite-ai/box:latest
           type: string
         user:
@@ -14354,14 +13465,14 @@ components:
         env:
           additionalProperties:
             type: string
-          description: Environment variables for the sandbox
+          description: Environment variables for the box
           example:
             NODE_ENV: production
           type: object
         labels:
           additionalProperties:
             type: string
-          description: Labels for the sandbox
+          description: Labels for the box
           example:
             boxlite.io/public: "true"
           type: object
@@ -14370,46 +13481,46 @@ components:
           example: false
           type: boolean
         networkBlockAll:
-          description: Whether to block all network access for the sandbox
+          description: Whether to block all network access for the box
           example: false
           type: boolean
         networkAllowList:
           description: Comma-separated list of allowed CIDR network addresses for
-            the sandbox
+            the box
           example: "192.168.1.0/16,10.0.0.0/24"
           type: string
         target:
-          description: The target environment for the sandbox
+          description: The target environment for the box
           example: local
           type: string
         cpu:
-          description: The CPU quota for the sandbox
+          description: The CPU quota for the box
           example: 2
           type: number
         gpu:
-          description: The GPU quota for the sandbox
+          description: The GPU quota for the box
           example: 0
           type: number
         memory:
-          description: The memory quota for the sandbox
+          description: The memory quota for the box
           example: 4
           type: number
         disk:
-          description: The disk quota for the sandbox
+          description: The disk quota for the box
           example: 10
           type: number
         state:
           allOf:
           - $ref: "#/components/schemas/BoxState"
-          description: The state of the sandbox
+          description: The state of the box
           example: creating
         desiredState:
           allOf:
           - $ref: "#/components/schemas/BoxDesiredState"
-          description: The desired state of the sandbox
+          description: The desired state of the box
           example: destroyed
         errorReason:
-          description: The error reason of the sandbox
+          description: The error reason of the box
           example: The box is not running
           type: string
         recoverable:
@@ -14444,25 +13555,25 @@ components:
           example: 30
           type: number
         volumes:
-          description: Array of volumes attached to the sandbox
+          description: Array of volumes attached to the box
           items:
             $ref: "#/components/schemas/BoxVolume"
           type: array
         buildInfo:
           allOf:
           - $ref: "#/components/schemas/BuildInfo"
-          description: Build information for the sandbox
+          description: Build information for the box
         createdAt:
-          description: The creation timestamp of the sandbox
+          description: The creation timestamp of the box
           example: 2024-10-01T12:00:00Z
           type: string
         updatedAt:
-          description: The last update timestamp of the sandbox
+          description: The last update timestamp of the box
           example: 2024-10-01T12:00:00Z
           type: string
         class:
           deprecated: true
-          description: The class of the sandbox
+          description: The class of the box
           enum:
           - small
           - medium
@@ -14470,15 +13581,15 @@ components:
           example: small
           type: string
         daemonVersion:
-          description: The version of the daemon running in the sandbox
+          description: The version of the daemon running in the box
           example: 1.0.0
           type: string
         runnerId:
-          description: The runner ID of the sandbox
+          description: The runner ID of the box
           example: runner123
           type: string
         toolboxProxyUrl:
-          description: The toolbox proxy URL for the sandbox
+          description: The toolbox proxy URL for the box
           example: https://proxy.app.boxlite.io/toolbox
           type: string
         image:
@@ -14502,7 +13613,7 @@ components:
         info:
           allOf:
           - $ref: "#/components/schemas/BoxInfo"
-          description: Additional information about the sandbox
+          description: Additional information about the box
       required:
       - cpu
       - disk
@@ -14624,12 +13735,12 @@ components:
       type: object
     WorkspacePortPreviewUrl:
       example:
-        url: https://123456-mysandbox.runner.com
+        url: https://123456-mybox.runner.com
         token: ul67qtv-jl6wb9z5o3eii-ljqt9qed6l
       properties:
         url:
           description: Preview url
-          example: https://123456-mysandbox.runner.com
+          example: https://123456-mybox.runner.com
           type: string
         token:
           description: Access token
@@ -14743,11 +13854,11 @@ components:
         type: CREATE_BOX
         status: PENDING
         resourceType: BOX
-        resourceId: sandbox123
+        resourceId: box123
         payload: payload
         traceContext:
           traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
-        errorMessage: Failed to create sandbox
+        errorMessage: Failed to create box
         createdAt: 2024-10-01T12:00:00Z
         updatedAt: 2024-10-01T12:00:00Z
       properties:
@@ -14776,7 +13887,7 @@ components:
         resourceId:
           description: "The ID of the resource this job operates on (boxId, snapshotRef,\
             \ etc.)"
-          example: sandbox123
+          example: box123
           type: string
         payload:
           description: Job-specific JSON-encoded payload data (operational metadata)
@@ -14790,7 +13901,7 @@ components:
           type: object
         errorMessage:
           description: Error message if the job failed
-          example: Failed to create sandbox
+          example: Failed to create box
           type: string
         createdAt:
           description: The creation timestamp of the job
@@ -14815,22 +13926,22 @@ components:
           type: CREATE_BOX
           status: PENDING
           resourceType: BOX
-          resourceId: sandbox123
+          resourceId: box123
           payload: payload
           traceContext:
             traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
-          errorMessage: Failed to create sandbox
+          errorMessage: Failed to create box
           createdAt: 2024-10-01T12:00:00Z
           updatedAt: 2024-10-01T12:00:00Z
         - id: job123
           type: CREATE_BOX
           status: PENDING
           resourceType: BOX
-          resourceId: sandbox123
+          resourceId: box123
           payload: payload
           traceContext:
             traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
-          errorMessage: Failed to create sandbox
+          errorMessage: Failed to create box
           createdAt: 2024-10-01T12:00:00Z
           updatedAt: 2024-10-01T12:00:00Z
         total: 0.8008281904610115
@@ -14860,22 +13971,22 @@ components:
           type: CREATE_BOX
           status: PENDING
           resourceType: BOX
-          resourceId: sandbox123
+          resourceId: box123
           payload: payload
           traceContext:
             traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
-          errorMessage: Failed to create sandbox
+          errorMessage: Failed to create box
           createdAt: 2024-10-01T12:00:00Z
           updatedAt: 2024-10-01T12:00:00Z
         - id: job123
           type: CREATE_BOX
           status: PENDING
           resourceType: BOX
-          resourceId: sandbox123
+          resourceId: box123
           payload: payload
           traceContext:
             traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
-          errorMessage: Failed to create sandbox
+          errorMessage: Failed to create box
           createdAt: 2024-10-01T12:00:00Z
           updatedAt: 2024-10-01T12:00:00Z
       properties:
@@ -14890,7 +14001,7 @@ components:
     UpdateJobStatus:
       example:
         status: IN_PROGRESS
-        errorMessage: Failed to create sandbox
+        errorMessage: Failed to create box
         resultMetadata: resultMetadata
       properties:
         status:
@@ -14900,7 +14011,7 @@ components:
           example: IN_PROGRESS
         errorMessage:
           description: Error message if the job failed
-          example: Failed to create sandbox
+          example: Failed to create box
           type: string
         resultMetadata:
           description: Result metadata for the job
@@ -15155,8 +14266,8 @@ components:
     WebhookEvent:
       description: The type of event being sent
       enum:
-      - sandbox.created
-      - sandbox.state.updated
+      - box.created
+      - box.state.updated
       - snapshot.created
       - snapshot.state.updated
       - snapshot.removed
@@ -15165,9 +14276,9 @@ components:
       type: string
     SendWebhookDto:
       example:
-        eventType: sandbox.created
+        eventType: box.created
         payload:
-          id: sandbox-123
+          id: box-123
           name: My Box
         eventId: evt_1234567890abcdef
       properties:
@@ -15175,11 +14286,11 @@ components:
           allOf:
           - $ref: "#/components/schemas/WebhookEvent"
           description: The type of event being sent
-          example: sandbox.created
+          example: box.created
         payload:
           description: The payload data to send
           example:
-            id: sandbox-123
+            id: box-123
             name: My Box
           type: object
         eventId:
@@ -15677,9 +14788,6 @@ components:
           type: array
       required:
       - series
-      type: object
-    CreateBoxDto:
-      properties: {}
       type: object
     uploadFile_deprecated_request:
       properties:

@@ -21,7 +21,7 @@ var _ MappedNullable = &SignedPortPreviewUrl{}
 
 // SignedPortPreviewUrl struct for SignedPortPreviewUrl
 type SignedPortPreviewUrl struct {
-	// ID of the sandbox
+	// ID of the box
 	BoxId string `json:"boxId"`
 	// Port number of the signed preview URL
 	Port int32 `json:"port"`

@@ -23,7 +23,7 @@ var _ MappedNullable = &BoxInfo{}
 type BoxInfo struct {
 	// The creation timestamp of the project
 	Created string `json:"created"`
-	// Deprecated: The name of the sandbox
+	// Deprecated: The name of the box
 	// Deprecated
 	Name string `json:"name"`
 	// Additional metadata provided by the provider

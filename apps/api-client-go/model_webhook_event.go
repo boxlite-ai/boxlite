@@ -13,7 +13,6 @@ package apiclient
 
 import (
 	"encoding/json"
-	"fmt"
 )
 
 // WebhookEvent The type of event being sent
@@ -21,24 +20,26 @@ type WebhookEvent string
 
 // List of WebhookEvent
 const (
-	WEBHOOKEVENT_SANDBOX_CREATED WebhookEvent = "sandbox.created"
-	WEBHOOKEVENT_SANDBOX_STATE_UPDATED WebhookEvent = "sandbox.state.updated"
+	WEBHOOKEVENT_BOX_CREATED WebhookEvent = "box.created"
+	WEBHOOKEVENT_BOX_STATE_UPDATED WebhookEvent = "box.state.updated"
 	WEBHOOKEVENT_SNAPSHOT_CREATED WebhookEvent = "snapshot.created"
 	WEBHOOKEVENT_SNAPSHOT_STATE_UPDATED WebhookEvent = "snapshot.state.updated"
 	WEBHOOKEVENT_SNAPSHOT_REMOVED WebhookEvent = "snapshot.removed"
 	WEBHOOKEVENT_VOLUME_CREATED WebhookEvent = "volume.created"
 	WEBHOOKEVENT_VOLUME_STATE_UPDATED WebhookEvent = "volume.state.updated"
+	WEBHOOKEVENT_UNKNOWN_DEFAULT_OPEN_API WebhookEvent = "unknown_default_open_api"
 )
 
 // All allowed values of WebhookEvent enum
 var AllowedWebhookEventEnumValues = []WebhookEvent{
-	"sandbox.created",
-	"sandbox.state.updated",
+	"box.created",
+	"box.state.updated",
 	"snapshot.created",
 	"snapshot.state.updated",
 	"snapshot.removed",
 	"volume.created",
 	"volume.state.updated",
+	"unknown_default_open_api",
 }
 
 func (v *WebhookEvent) UnmarshalJSON(src []byte) error {
@@ -55,7 +56,8 @@ func (v *WebhookEvent) UnmarshalJSON(src []byte) error {
 		}
 	}
 
-	return fmt.Errorf("%+v is not a valid WebhookEvent", value)
+	*v = WEBHOOKEVENT_UNKNOWN_DEFAULT_OPEN_API
+	return nil
 }
 
 // NewWebhookEventFromValue returns a pointer to a valid WebhookEvent
@@ -65,7 +67,8 @@ func NewWebhookEventFromValue(v string) (*WebhookEvent, error) {
 	if ev.IsValid() {
 		return &ev, nil
 	} else {
-		return nil, fmt.Errorf("invalid value '%v' for WebhookEvent: valid values are %v", v, AllowedWebhookEventEnumValues)
+		enumValue := WEBHOOKEVENT_UNKNOWN_DEFAULT_OPEN_API
+		return &enumValue, nil
 	}
 }
 
