@@ -13069,6 +13069,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@types/node-forge@npm:^1.3.14":
+  version: 1.3.14
+  resolution: "@types/node-forge@npm:1.3.14"
+  dependencies:
+    "@types/node": "npm:*"
+  checksum: 10c0/da6158fd34fa7652aa7f8164508f97a76b558724ab292f13c257e39d54d95d4d77604e8fb14dc454a867f1aeec7af70118294889195ec4400cecbb8a5c77a212
+  languageName: node
+  linkType: hard
+
 "@types/node@npm:*, @types/node@npm:>=10.0.0, @types/node@npm:>=13.7.0":
   version: 25.8.0
   resolution: "@types/node@npm:25.8.0"
@@ -16283,6 +16292,7 @@ __metadata:
     "@types/jest": "npm:30.0.0"
     "@types/multer": "npm:^1.4.12"
     "@types/node": "npm:^22.13.4"
+    "@types/node-forge": "npm:^1.3.14"
     "@types/nodemailer": "npm:^6.4.17"
     "@types/passport-http-bearer": "npm:^1.0.41"
     "@types/passport-jwt": "npm:^4.0.1"
@@ -16411,7 +16421,7 @@ __metadata:
     typedoc: "npm:~0.27.7"
     typedoc-plugin-markdown: "npm:~4.4.2"
     typedoc-plugin-merge-modules: "npm:~6.1.0"
-    typeorm: "npm:^0.3.20"
+    typeorm: "npm:0.3.28"
     typescript: "npm:5.8.3"
     typescript-eslint: "npm:^8.19.0"
     usehooks-ts: "npm:^3.1.1"
@@ -18542,10 +18552,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"dayjs@npm:^1.11.20":
-  version: 1.11.20
-  resolution: "dayjs@npm:1.11.20"
-  checksum: 10c0/8af525e2aa100c8db9923d706c42b2b2d30579faf89456619413a5c10916efc92c2b166e193c27c02eb3174b30aa440ee1e7b72b0a2876b3da651d204db848a0
+"dayjs@npm:^1.11.19":
+  version: 1.11.21
+  resolution: "dayjs@npm:1.11.21"
+  checksum: 10c0/bd97dfdc4bfea3c66268635690313828b386faa040fbc1f829ff42a2bd748b72c9d9b3c8f9616ce9e61fcb78923f1461a462c969c54b1084458ae1b715898fb0
   languageName: node
   linkType: hard
 
@@ -18659,7 +18669,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"dedent@npm:^1.6.0, dedent@npm:^1.7.2":
+"dedent@npm:^1.6.0, dedent@npm:^1.7.0":
   version: 1.7.2
   resolution: "dedent@npm:1.7.2"
   peerDependencies:
@@ -36586,24 +36596,24 @@ __metadata:
   languageName: node
   linkType: hard
 
-"typeorm@npm:^0.3.20":
-  version: 0.3.29
-  resolution: "typeorm@npm:0.3.29"
+"typeorm@npm:0.3.28":
+  version: 0.3.28
+  resolution: "typeorm@npm:0.3.28"
   dependencies:
     "@sqltools/formatter": "npm:^1.2.5"
     ansis: "npm:^4.2.0"
     app-root-path: "npm:^3.1.0"
     buffer: "npm:^6.0.3"
-    dayjs: "npm:^1.11.20"
+    dayjs: "npm:^1.11.19"
     debug: "npm:^4.4.3"
-    dedent: "npm:^1.7.2"
+    dedent: "npm:^1.7.0"
     dotenv: "npm:^16.6.1"
     glob: "npm:^10.5.0"
     reflect-metadata: "npm:^0.2.2"
     sha.js: "npm:^2.4.12"
     sql-highlight: "npm:^6.1.0"
     tslib: "npm:^2.8.1"
-    uuid: "npm:^11.1.1"
+    uuid: "npm:^11.1.0"
     yargs: "npm:^17.7.2"
   peerDependencies:
     "@google-cloud/spanner": ^5.18.0 || ^6.0.0 || ^7.0.0 || ^8.0.0
@@ -36659,7 +36669,7 @@ __metadata:
     typeorm: cli.js
     typeorm-ts-node-commonjs: cli-ts-node-commonjs.js
     typeorm-ts-node-esm: cli-ts-node-esm.js
-  checksum: 10c0/9fe642e87657ff81005edfcf983f183a3172adba0eaca90fdc36fba1dd1348b41444f2b168d98adc57f3dc16b20b86bdde65c489cad9ba35bb7627c103dcc413
+  checksum: 10c0/b850b2f76ed576f9eae3deb39617466c527572328cb2727cb962d263822aabf289b52fe3f070d779e9cde5c164eed7486e73d77aef91e69a919b21e59a2e6122
   languageName: node
   linkType: hard
 
@@ -37468,7 +37478,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"uuid@npm:^11.1.1":
+"uuid@npm:^11.1.0":
   version: 11.1.1
   resolution: "uuid@npm:11.1.1"
   bin:

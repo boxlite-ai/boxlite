@@ -26,6 +26,10 @@
         ]
       },
       "configurations": {
+        "development": {
+          "generatePackageJson": false,
+          "skipTypeChecking": true
+        },
         "production": {
           "optimization": true,
           "extractLicenses": true,
@@ -63,7 +67,6 @@
     "serve": {
       "executor": "@nx/js:node",
       "defaultConfiguration": "development",
-      "dependsOn": ["build"],
       "options": {
         "buildTarget": "api:build",
         "runBuildTargetDependencies": false,

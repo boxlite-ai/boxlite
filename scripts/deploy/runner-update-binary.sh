@@ -3,7 +3,7 @@
 #
 # Replaces /usr/local/bin/boxlite-runner with a freshly downloaded release
 # binary and restarts the systemd unit. The EC2 instance itself is not
-# replaced; sandbox state under /var/lib/boxlite is preserved.
+# replaced; box state under /var/lib/boxlite is preserved.
 #
 # Pair with the `ignoreChanges: ["ami", "userDataBase64"]` setting on the
 # Runner resource in apps/infra/sst.config.ts — that prevents `sst deploy`

@@ -1,10 +1,10 @@
-"""Per-sandbox + per-org quota enforcement at the API boundary.
+"""Per-box + per-org quota enforcement at the API boundary.
 
-The admin org's per-sandbox quotas are set by `fixture_setup.py::patch_admin_quota`:
+The admin org's per-box quotas are set by `fixture_setup.py::patch_admin_quota`:
 
-  max_cpu_per_sandbox    = 4
-  max_memory_per_sandbox = 8 (GiB)
-  max_disk_per_sandbox   = 20 (GiB)
+  max_cpu_per_box    = 4
+  max_memory_per_box = 8 (GiB)
+  max_disk_per_box   = 20 (GiB)
 
 Plus the bootstrap's `ADMIN_TOTAL_*_QUOTA` envelope (32 CPU, 64 GiB mem,
 200 GiB disk org-wide).
@@ -20,8 +20,8 @@ ALL cases in this file currently XFAIL — see module-level pytestmark.
 # out-of-range / over-quota resource values to org defaults instead of
 # rejecting at the boundary. Root cause at
 # apps/api/src/boxlite-rest/dto/create-box.dto.ts:24 (@Min present, no @Max,
-# no quota lookup) + apps/api/src/sandbox/services/sandbox.service.ts
-# (createFromSnapshot doesn't consult max_*_per_sandbox columns even though
+# no quota lookup) + apps/api/src/box/services/box.service.ts
+# (createFromSnapshot doesn't consult max_*_per_box columns even though
 # fixture_setup.py:107-126 sets them).
 #
 # Two-sided requires API-side fix; tests pin the bug, NOT the test code.
@@ -91,8 +91,8 @@ def _delete_box(box_id: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_cpus_above_per_sandbox_limit_returns_4xx():
-    """cpus far above max_cpu_per_sandbox (4) → 429 or 400, not 5xx."""
+async def test_cpus_above_per_box_limit_returns_4xx():
+    """cpus far above max_cpu_per_box (4) → 429 or 400, not 5xx."""
     status, body = _post_box(
         {"image": "alpine:3.23", "cpus": 999, "memory_mib": 256, "disk_size_gb": 4}
     )
@@ -101,8 +101,8 @@ async def test_cpus_above_per_sandbox_limit_returns_4xx():
 
 
 @pytest.mark.asyncio
-async def test_memory_above_per_sandbox_limit_returns_4xx():
-    """memory far above max_memory_per_sandbox (8 GiB) → 4xx, not 5xx."""
+async def test_memory_above_per_box_limit_returns_4xx():
+    """memory far above max_memory_per_box (8 GiB) → 4xx, not 5xx."""
     status, body = _post_box(
         {
             "image": "alpine:3.23",
@@ -116,8 +116,8 @@ async def test_memory_above_per_sandbox_limit_returns_4xx():
 
 
 @pytest.mark.asyncio
-async def test_disk_above_per_sandbox_limit_returns_4xx():
-    """disk far above max_disk_per_sandbox (20 GiB) → 4xx, not 5xx."""
+async def test_disk_above_per_box_limit_returns_4xx():
+    """disk far above max_disk_per_box (20 GiB) → 4xx, not 5xx."""
     status, body = _post_box(
         {
             "image": "alpine:3.23",

@@ -180,3 +180,40 @@ Cargo.lock
 .claude/scheduled_tasks.lock
 .claude/worktrees/
 .claude/.last-audit.json
+
+# ============================================================================
+# Local dev artifacts (apps/infra-local + dashboard E2E session)
+# ============================================================================
+.playwright-mcp/
+dashboard-*.png
+dex-*.png
+crud-*.png
+
+# L2 boot artifacts — local-only, not for repo.
+# NOTE: gitignore syntax does NOT support inline comments — `pattern  # comment`
+# is parsed as the literal path `pattern  # comment`. Keep comments on their
+# own lines.
+
+# self-symlink workaround for apps/apps/... path resolution in webpack.config.js
+apps/apps
+# symlink to apps/api/.env (NestJS env loading from cwd=apps/)
+apps/.env
+# contains secrets (encryption key, runner token)
+apps/api/.env
+# SWC config from attempted compile switch (reverted to tsc, file is dead)
+apps/api/.swcrc
+# 115 MB, prebuilt from upstream releases
+sdks/go/libboxlite.a
+# 73 MB, prebuilt from upstream releases
+sdks/go/libboxlite.dylib
+# extracted prebuilt archive
+sdks/go/boxlite-c-v*/
+
+l2-*.png
+apps/infra-local/.logs/
+
+# Session test screenshots (Playwright runs)
+regions-*.png
+runners-*.png
+term-*.png
+test-*.png

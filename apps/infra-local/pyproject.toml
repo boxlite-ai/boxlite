@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "boxlite_local"
+version = "0.1.0"
+description = "BoxLite-based infra-local orchestrator (dogfood)"
+requires-python = ">=3.10"
+dependencies = ["boxlite>=0.8"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+include = ["boxlite_local*"]
+exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

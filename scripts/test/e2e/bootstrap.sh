@@ -14,7 +14,7 @@
 # NO AWS dependency: e2e tests exercise box lifecycle (create / exec /
 # attach), which fetch images from docker.io into the local registry on
 # 127.0.0.1:5000. The API's S3-backed VolumeManager early-returns when
-# S3_ENDPOINT is empty (apps/api/src/sandbox/managers/volume.manager.ts:47).
+# S3_ENDPOINT is empty (apps/api/src/box/managers/volume.manager.ts:47).
 #
 # Tear down with scripts/test/e2e/teardown.sh.
 
@@ -175,9 +175,9 @@ ADMIN_API_KEY=$ADMIN_API_KEY
 ADMIN_TOTAL_CPU_QUOTA=32
 ADMIN_TOTAL_MEMORY_QUOTA=64
 ADMIN_TOTAL_DISK_QUOTA=200
-ADMIN_MAX_CPU_PER_SANDBOX=8
-ADMIN_MAX_MEMORY_PER_SANDBOX=16
-ADMIN_MAX_DISK_PER_SANDBOX=50
+ADMIN_MAX_CPU_PER_BOX=8
+ADMIN_MAX_MEMORY_PER_BOX=16
+ADMIN_MAX_DISK_PER_BOX=50
 ADMIN_SNAPSHOT_QUOTA=100
 ADMIN_VOLUME_QUOTA=100
 DASHBOARD_URL=http://localhost:5173
