@@ -296,8 +296,8 @@ ls -lt ~/.boxlite-runner/boxes/<id>/logs/
 | All API calls return 401 | `SSH_GATEWAY_API_KEY` or `PROXY_API_KEY` not set | Check `apps/api/.env` — both must be non-empty |
 | Sandbox stuck in PENDING | snapshot has not finished PULLING | Wait 30-60 s; if still stuck, check runner log for image-pull errors |
 | Sandbox reaches STARTED but the terminal is blank + `Connection closed` | image is amd64 but runner runs an arm64 microVM | Already fixed (`runner/registry.go` uses `runtime.GOARCH`) — clear the old image cache and re-pull |
-| "+ Create Sandbox" missing in the dashboard | PostHog feature-flag bootstrap didn't fire | Check `LOCAL_DEV_FEATURE_FLAG_DEFAULTS` in `PostHogProviderWrapper.tsx` for that flag |
-| `POST /api/regions` → 404 "Cannot POST" | API server-side PostHog flag bootstrap didn't fire | Check `bootstrapFlags` config in `app.module.ts` |
+| "+ Create Sandbox" missing in the dashboard | Expected: PostHog isn't configured locally, so flag-gated UI stays hidden (no local flag bootstrap) | Use `POST /api/sandbox` directly, or set `POSTHOG_API_KEY`/`POSTHOG_HOST` in `apps/api/.env` with the flags enabled in PostHog |
+| `POST /api/regions` → 404 "Cannot POST" | Expected: same — flag-gated admin routes stay hidden without a configured PostHog | Same as above; the seed path (`seed-init-data.sh`) doesn't need these routes |
 | Boxlite-runner hits `Another BoxliteRuntime is already using directory` | Another runner process is holding `~/.boxlite-runner/.lock` | `lsof ~/.boxlite-runner/.lock` to find the PID; decide whether to kill it or that you've used the wrong home dir |
 | Terminal `Connection closed` and won't reconnect | signed-url expired (default 300 s) | Click Connect again; the dashboard re-fetches a fresh URL |
 | Dashboard loads `Unauthorized` / `401` even just after OIDC login | **Dex SQLite session db cached an old grant** and the new login reuses a stale token (common after a box SIGKILL or long idle). Diagnostic: decode the token; `accessTokenIat` is days old | `make stack-rebuild-l1-box BOX=dex` + `sessionStorage.clear()` in the browser + log in again |
