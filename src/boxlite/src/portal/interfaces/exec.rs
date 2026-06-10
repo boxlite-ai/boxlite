@@ -535,10 +535,11 @@ impl ExecProtocol {
 /// matches `from_utf8_lossy` semantics for a truncated tail.
 #[derive(Default)]
 struct Utf8StreamDecoder {
-    /// 0-3 trailing bytes from the previous chunk that may be the start of a
-    /// multi-byte sequence. UTF-8 codepoints are at most 4 bytes; if we ever
-    /// hold 4 bytes without finding a complete codepoint, the bytes are
-    /// invalid and get emitted as U+FFFD on the next decode.
+    /// 1-3 trailing bytes from the previous chunk that form the start of an
+    /// incomplete-but-valid multi-byte codepoint, held until the continuation
+    /// bytes arrive. Definitively invalid bytes are emitted as U+FFFD
+    /// immediately rather than held, so this never accumulates garbage and is
+    /// bounded by the 4-byte max codepoint length.
     holdover: Vec<u8>,
 }
 
@@ -548,46 +549,56 @@ impl Utf8StreamDecoder {
     /// the start of a possibly-incomplete codepoint at the end are held for
     /// the next call.
     fn decode(&mut self, chunk: &[u8]) -> String {
-        // Combine any held-over partial bytes with the new chunk. Allocation
-        // is unavoidable when holdover is non-empty; for the common case
-        // (clean chunk boundaries), holdover is empty and we still need to
-        // own the bytes to splice in any new partial tail.
-        let mut buf = std::mem::take(&mut self.holdover);
-        buf.extend_from_slice(chunk);
+        use std::borrow::Cow;
 
-        match std::str::from_utf8(&buf) {
-            Ok(s) => s.to_string(),
-            Err(e) => {
-                let valid_up_to = e.valid_up_to();
-                // SAFETY: `valid_up_to` is, by definition, a valid UTF-8
-                // boundary in `buf` — bytes [0..valid_up_to] are valid.
-                let valid =
-                    unsafe { std::str::from_utf8_unchecked(&buf[..valid_up_to]) }.to_string();
+        // Fast path: with no held-over bytes (the common case — clean chunk
+        // boundaries), scan `chunk` in place. Only when a partial codepoint
+        // was held do we allocate to splice it onto the front of `chunk`.
+        let buf: Cow<[u8]> = if self.holdover.is_empty() {
+            Cow::Borrowed(chunk)
+        } else {
+            let mut joined = std::mem::take(&mut self.holdover);
+            joined.extend_from_slice(chunk);
+            Cow::Owned(joined)
+        };
 
-                let tail = &buf[valid_up_to..];
-                match e.error_len() {
-                    // Tail is the start of a possibly-incomplete codepoint;
-                    // hold it for the next chunk. Cap at 4 bytes — the max
-                    // UTF-8 codepoint length. If we ever hold 4 bytes that
-                    // still don't form a codepoint, the bytes are genuinely
-                    // invalid and the next decode will emit U+FFFD.
-                    None if tail.len() < 4 => {
-                        self.holdover = tail.to_vec();
-                        valid
-                    }
-                    // Either a definitively invalid sequence (Some(len)) or
-                    // an incomplete sequence longer than any valid UTF-8
-                    // codepoint — in both cases, fall through to lossy
-                    // decode of the tail so callers see U+FFFD where the
-                    // bytes are bad.
-                    _ => {
-                        let mut out = valid;
-                        out.push_str(&String::from_utf8_lossy(tail));
-                        out
+        // Walk the buffer, emitting valid runs and one U+FFFD per definitively
+        // invalid sequence, until only an incomplete-but-valid tail remains.
+        // Resuming *after* each error (rather than lossy-decoding the whole
+        // remainder in one shot) is what lets an invalid byte sit immediately
+        // before a codepoint that splits at the chunk boundary without
+        // flattening that still-incomplete codepoint into spurious U+FFFD.
+        let mut out = String::new();
+        let mut rest: &[u8] = &buf;
+        loop {
+            match std::str::from_utf8(rest) {
+                Ok(valid) => {
+                    out.push_str(valid);
+                    break;
+                }
+                Err(e) => {
+                    let valid_up_to = e.valid_up_to();
+                    // SAFETY: bytes [0..valid_up_to] are valid UTF-8 by the
+                    // definition of `valid_up_to`.
+                    out.push_str(unsafe { std::str::from_utf8_unchecked(&rest[..valid_up_to]) });
+                    match e.error_len() {
+                        // Definitively invalid: emit one U+FFFD and resume
+                        // scanning after the bad bytes.
+                        Some(bad) => {
+                            out.push('\u{FFFD}');
+                            rest = &rest[valid_up_to + bad..];
+                        }
+                        // Slice ended mid-codepoint: hold the (<= 3 byte) tail
+                        // for the next chunk.
+                        None => {
+                            self.holdover.extend_from_slice(&rest[valid_up_to..]);
+                            break;
+                        }
                     }
                 }
             }
         }
+        out
     }
 
     /// Drain any held-over partial codepoint as U+FFFD. Call when the stream
@@ -930,6 +941,26 @@ mod tests {
         // 0xFF is never valid in UTF-8.
         let out = d.decode(&[b'a', 0xFF, b'b']);
         assert_eq!(out, "a\u{FFFD}b");
+    }
+
+    /// An invalid byte immediately followed by a codepoint that splits across
+    /// the chunk boundary must emit one U+FFFD for the bad byte and then
+    /// recover the split char — not flatten the still-incomplete tail into
+    /// extra U+FFFD. Regression: the error path lossy-decoded the whole tail,
+    /// so the held partial of "─"/"👋" surfaced as spurious replacements.
+    #[test]
+    fn utf8_decoder_holds_split_codepoint_after_invalid_byte() {
+        // 3-byte "─" (E2 94 80) preceded by a stray 0xFF, split at the cut.
+        let mut d = Utf8StreamDecoder::default();
+        let a = d.decode(&[0xFF, 0xE2]);
+        let b = d.decode(&[0x94, 0x80]);
+        assert_eq!(format!("{a}{b}"), "\u{FFFD}─");
+
+        // 4-byte "👋" (F0 9F 91 8B) preceded by two stray 0xFF bytes.
+        let mut d = Utf8StreamDecoder::default();
+        let a = d.decode(&[0xFF, 0xFF, 0xF0, 0x9F]);
+        let b = d.decode(&[0x91, 0x8B]);
+        assert_eq!(format!("{a}{b}"), "\u{FFFD}\u{FFFD}👋");
     }
 
     /// flush() at EOF must emit U+FFFD for held-over bytes so the truncated
