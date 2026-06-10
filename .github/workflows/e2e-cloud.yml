@@ -222,83 +222,28 @@ jobs:
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
       # ──────────────────────────────────────────────────────────────────
-      # Build runner binary (Go + CGO links libboxlite.a).
+      # Runner binary rebuild is INTENTIONALLY OMITTED here.
       #
-      # Mirrors .github/workflows/build-runner-binary.yml's runner-build
-      # path: download prebuilt libboxlite.a from the matching GitHub
-      # release (v$(Cargo.toml version)), build daemon + computer-use
-      # binaries that are embedded as static assets into runner, then
-      # build the runner binary itself with CGO_ENABLED=1.
+      # Reason: building boxlite-runner from this checkout requires a
+      # matching libboxlite.a (CGo links it). The Go runner code on main
+      # references C symbols (e.g. boxlite_rest_options_set_path_prefix)
+      # that aren't in the latest tagged release's prebuilt libboxlite.a;
+      # building libboxlite.a from Rust source adds 10-15 minutes per
+      # CI run plus a non-trivial cross-build chain.
       #
-      # Pinning to a released libboxlite.a means PR changes that affect
-      # ONLY apps/runner Go code are picked up; PR changes to sdks/c
-      # would need a separate libboxlite.a build (out of scope for now).
+      # The Tokyo runner EC2 (tagged Name=boxlite-runner, instance
+      # 21+ hours uptime as of authoring) is already running a runner
+      # binary that's ABI-compatible with the deployed API and is
+      # exercised by the pytest cases. PR changes touching apps/runner
+      # Go code therefore won't be tested by this workflow until
+      # `make dist:runner` is wired into the e2e-cloud build path —
+      # follow-up.
+      #
+      # If you NEED runner rebuild in CI, add: a Rust toolchain step
+      # that builds libboxlite.a from source (musl, release profile),
+      # then the build-runner-binary.yml-style Go build chain
+      # (daemon -> computer-use -> runner).
       # ──────────────────────────────────────────────────────────────────
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.25.4'
-
-      - name: Install runner build deps
-        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxtst-dev libxinerama-dev
-
-      - name: Determine boxlite version + download prebuilt libboxlite.a
-        id: libboxlite
-        run: |
-          set -euo pipefail
-          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          ARCHIVE="boxlite-c-v${VERSION}-linux-x64-gnu.tar.gz"
-          URL="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/${ARCHIVE}"
-          echo "Downloading $URL"
-          curl -fsSL "$URL" | tar xz -C /tmp/
-          cp "/tmp/boxlite-c-v${VERSION}-linux-x64-gnu/lib/libboxlite.a" sdks/go/libboxlite.a
-
-      - name: Rewrite apps/go.work for minimal modules
-        run: |
-          printf 'go 1.25.4\n\nuse (\n\t./runner\n\t./daemon\n\t./common-go\n\t./api-client-go\n\t./libs/computer-use\n\t../sdks/go\n)\n' > apps/go.work
-
-      - name: Download Go modules
-        run: |
-          set -euo pipefail
-          go -C apps/runner mod download
-          go -C apps/daemon mod download
-          go -C apps/common-go mod download
-          go -C apps/api-client-go mod download
-          go -C apps/libs/computer-use mod download
-
-      - name: Build daemon (embedded asset)
-        env:
-          VERSION: ${{ steps.libboxlite.outputs.version }}
-        run: |
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C apps \
-            -ldflags "-X 'github.com/boxlite-ai/daemon/internal.Version=${VERSION}'" \
-            -o runner/pkg/daemon/static/daemon-amd64 \
-            ./daemon/cmd/daemon/
-
-      - name: Build computer-use (embedded asset)
-        run: |
-          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -C apps \
-            -o runner/pkg/daemon/static/boxlite-computer-use \
-            ./libs/computer-use/
-
-      - name: Build boxlite-runner
-        env:
-          VERSION: ${{ steps.libboxlite.outputs.version }}
-        run: |
-          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -C apps \
-            -ldflags "-X 'github.com/boxlite-ai/runner/internal.Version=${VERSION}'" \
-            -o /tmp/boxlite-runner \
-            ./runner/cmd/runner/
-          ls -la /tmp/boxlite-runner
-          file /tmp/boxlite-runner || true
-
-      - name: Upload runner binary to S3
-        id: upload_runner
-        run: |
-          set -euo pipefail
-          S3_KEY="builds/${{ github.sha }}/boxlite-runner"
-          aws s3 cp /tmp/boxlite-runner "s3://${{ steps.resources.outputs.s3_bucket }}/${S3_KEY}"
-          echo "s3_key=$S3_KEY" >> "$GITHUB_OUTPUT"
 
       # ──────────────────────────────────────────────────────────────────
       # Deploy: register new Api task definition with the new image (all
@@ -366,41 +311,11 @@ jobs:
           echo "::notice::/api/health returned 2xx"
 
       # ──────────────────────────────────────────────────────────────────
-      # Deploy runner binary: SSM the runner instance to pull the artifact
-      # from S3, atomically replace, restart systemd unit.
-      # TODO(runner-drain): boxlite-runner has no documented in-flight
-      # drain behaviour. Restart drops any sandbox-create/exec call
-      # landing in the window. Acceptable for e2e (no concurrent users)
-      # but production-grade rollout would need a runner-side drain.
+      # Runner binary deploy is also omitted (no rebuild step above).
+      # See the "Runner binary rebuild is INTENTIONALLY OMITTED" note
+      # earlier in this job. The deployed Tokyo runner EC2's existing
+      # binary stays in place.
       # ──────────────────────────────────────────────────────────────────
-      - name: Deploy runner binary
-        run: |
-          set -euo pipefail
-          RUNNER="${{ steps.resources.outputs.runner_id }}"
-          BUCKET="${{ steps.resources.outputs.s3_bucket }}"
-          KEY="${{ steps.upload_runner.outputs.s3_key }}"
-
-          CMD_ID=$(aws ssm send-command \
-            --instance-ids "$RUNNER" \
-            --document-name AWS-RunShellScript \
-            --comment "e2e-cloud ${{ github.sha }} runner binary update" \
-            --parameters "commands=[\"set -euo pipefail\",\"aws s3 cp s3://${BUCKET}/${KEY} /tmp/runner.new\",\"chmod +x /tmp/runner.new\",\"systemctl stop boxlite-runner\",\"mv /tmp/runner.new /usr/local/bin/boxlite-runner\",\"systemctl start boxlite-runner\",\"for _ in 1 2 3 4 5 6; do systemctl is-active boxlite-runner && exit 0 || sleep 2; done\",\"exit 1\"]" \
-            --query Command.CommandId --output text)
-          echo "Runner update SSM cmd: $CMD_ID"
-          for _ in $(seq 1 60); do
-              # Capture both stdout (real status) and stderr.
-              STATUS=$(aws ssm get-command-invocation --command-id "$CMD_ID" \
-                  --instance-id "$RUNNER" --query Status --output text 2>/tmp/ssm.err) || STATUS=Pending
-              case "$STATUS" in
-                  Success) echo "::notice::runner updated"; exit 0 ;;
-                  InProgress|Pending|None) sleep 5 ;;
-                  *)  echo "::error::runner update failed: $STATUS"
-                      aws ssm get-command-invocation --command-id "$CMD_ID" \
-                          --instance-id "$RUNNER" --query StandardErrorContent --output text
-                      exit 1 ;;
-              esac
-          done
-          echo "::error::runner update timed out after 5 minutes"; exit 1
 
       # ──────────────────────────────────────────────────────────────────
       # One-time init: admin-org sandbox quota. Naturally idempotent
