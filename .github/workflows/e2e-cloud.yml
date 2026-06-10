@@ -56,8 +56,18 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  AWS_REGION: ${{ vars.AWS_E2E_CLOUD_REGION }}
-  AWS_ROLE_ARN: ${{ vars.AWS_E2E_CLOUD_ROLE_ARN }}
+  # NOTE: hardcoded because `${{ vars.* }}` context is NOT passed to
+  # workflow runs triggered by pull_request from forks (GitHub security
+  # rule). The PR for this workflow is sourced from G4614/boxlite (fork),
+  # so we cannot rely on the repo variables AWS_E2E_CLOUD_REGION /
+  # AWS_E2E_CLOUD_ROLE_ARN being readable here. Region and role ARN are
+  # not secrets (account ID is "sensitive, not secret" per AWS docs; the
+  # role's safety is enforced by its trust policy, not by hiding the
+  # ARN). When this PR lands, future PRs from same-repo branches WILL
+  # see the vars and could optionally fall back to them, but the
+  # hardcoded values remain the source of truth.
+  AWS_REGION: ap-northeast-1
+  AWS_ROLE_ARN: arn:aws:iam::064212132677:role/boxlite-e2e-cloud-github-actions
   STAGE: e2e-ci
   STACK_PREFIX: boxlite-e2e-ci
   ECS_CLUSTER_PATTERN: boxlite-e2e-ci-ClusterCluster-
