@@ -1,0 +1,521 @@
+# End-to-end suite against the deployed Tokyo stack — SDK → API → Runner → libkrun VM.
+#
+# Existing `make test:integration:*` uses the local PyO3 / FFI path
+# (`Boxlite.default()`) and bypasses both the NestJS API and boxlite-runner,
+# so bugs that surface only on the REST → API → runner chain (e.g. #563's
+# exec-stdout drop, #627's attach re-drain) reach production without
+# breaking CI. This workflow runs the full path against the always-on
+# Tokyo stack (`boxlite-e2e-ci-*`), not a per-run local bootstrap.
+#
+# Required-check shape: the `e2e-gate` job ALWAYS runs and reports
+# success/failure. Branch protection on `main` should require the
+# `E2E gate (required)` check — the cheap `changes` job on a
+# GitHub-hosted runner decides if the expensive `e2e` job needs to
+# fire at all (token / deploy cost), and the gate collapses the
+# result into one always-reported check.
+#
+# Authentication: GitHub OIDC → AWS STS (no stored AWS credentials).
+# Required AWS resources (provisioned by `scripts/ci/setup-e2e-cloud-oidc.sh`):
+#   - OIDC identity provider (`token.actions.githubusercontent.com`)
+#   - IAM role `boxlite-e2e-cloud-github-actions` (separate from
+#     `boxlite-e2e-github-actions` which scopes to us-east-1 self-hosted
+#     KVM runner provisioning).
+#
+# Required GitHub repo variables (Settings → Variables → Actions):
+#   - `AWS_ACCOUNT_ID`           (shared with other workflows)
+#   - `AWS_E2E_CLOUD_REGION`     (ap-northeast-1)
+#   - `AWS_E2E_CLOUD_ROLE_ARN`   (arn:aws:iam::<acct>:role/boxlite-e2e-cloud-github-actions)
+#
+# Reads at runtime (must already exist in AWS, see apps/infra docs):
+#   - SSM parameter `/boxlite/e2e-ci/admin-api-key`            (SecureString)
+#   - ELB        `ApiLoadBalancer-*`                            (DNS resolved at runtime)
+#   - ECS cluster `boxlite-e2e-ci-ClusterCluster-*` / service `Api`
+#   - EC2 runner instance tagged `Name=boxlite-runner`
+#   - S3 bucket  `boxlite-e2e-ci-storagebucket-*`               (build artifact staging)
+
+name: E2E cloud
+
+# No path filter on triggers: must always start so branch protection
+# can require this workflow's gate as a status check. Path matching
+# happens inside the `changes` job and gates the expensive `e2e` job.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Singleton lock — every run (every PR + every push) must serialize
+# against the SHARED Tokyo stack. Per-ref grouping is wrong here:
+# PR-A and PR-B have different refs but compete for the same ECS
+# service / runner binary / RDS row. cancel-in-progress: false because
+# a half-applied ECS rolling update is worse than waiting.
+concurrency:
+  group: e2e-cloud-shared
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_E2E_CLOUD_REGION }}
+  AWS_ROLE_ARN: ${{ vars.AWS_E2E_CLOUD_ROLE_ARN }}
+  STAGE: e2e-ci
+  STACK_PREFIX: boxlite-e2e-ci
+  ECS_CLUSTER_PATTERN: boxlite-e2e-ci-ClusterCluster-
+  ADMIN_ORG_ID: 4a1eef70-8734-4814-b7a5-0ca3522a8760
+  ECR_REPO: sst-asset
+
+jobs:
+  # Cheap detector on GitHub-hosted runner: decide if the expensive
+  # e2e job needs to fire. Avoids burning deploy+test cycle time
+  # on PRs that don't touch any code path the suite exercises.
+  changes:
+    name: Detect relevant changes
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'sdks/c/src/exec/**'
+              - 'sdks/python/src/**'
+              - 'src/boxlite/src/rest/**'
+              - 'src/boxlite/src/cli/**'
+              - 'apps/runner/**'
+              - 'apps/api/src/**'
+              - 'scripts/test/e2e/**'
+              - 'scripts/ci/setup-e2e-cloud-oidc.sh'
+              - '.github/workflows/e2e-cloud.yml'
+
+  e2e:
+    name: E2E suite (Tokyo)
+    needs: changes
+    # Skip on PRs that don't touch relevant paths. workflow_dispatch
+    # always runs (operator explicitly asked for it).
+    if: needs.changes.outputs.relevant == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: e2e-cloud-${{ github.run_id }}
+
+      # ──────────────────────────────────────────────────────────────────
+      # Resolve runtime resource identifiers. Cluster suffix is random
+      # per stack instantiation; runner instance id is found by Name
+      # tag, not hardcoded — so SST teardown/recreate doesn't break CI.
+      # Each lookup is GUARDED by an exact count assertion: if more
+      # than one candidate matches the pattern (e.g. orphan ALB from a
+      # failed teardown), the workflow fails loudly instead of silently
+      # binding to the wrong resource.
+      # ──────────────────────────────────────────────────────────────────
+      - name: Resolve stack resources
+        id: resources
+        run: |
+          set -euo pipefail
+
+          assert_one() {
+              local kind="$1" count="$2"
+              if [ "$count" -ne 1 ]; then
+                  echo "::error::Expected exactly 1 $kind, found $count — clean up orphans before re-running."
+                  exit 1
+              fi
+          }
+
+          CLUSTER_COUNT=$(aws ecs list-clusters \
+            --query "length(clusterArns[?contains(@, '${ECS_CLUSTER_PATTERN}')])" --output text)
+          assert_one "ECS cluster matching ${ECS_CLUSTER_PATTERN}" "$CLUSTER_COUNT"
+          CLUSTER=$(aws ecs list-clusters \
+            --query "clusterArns[?contains(@, '${ECS_CLUSTER_PATTERN}')]|[0]" \
+            --output text | awk -F/ '{print $NF}')
+          echo "cluster=$CLUSTER" >> "$GITHUB_OUTPUT"
+
+          LB_COUNT=$(aws elbv2 describe-load-balancers \
+            --query "length(LoadBalancers[?starts_with(LoadBalancerName,'ApiLoadBalancer-')])" --output text)
+          assert_one "ApiLoadBalancer-*" "$LB_COUNT"
+          API_LB_DNS=$(aws elbv2 describe-load-balancers \
+            --query "LoadBalancers[?starts_with(LoadBalancerName,'ApiLoadBalancer-')]|[0].DNSName" \
+            --output text)
+          API_LB_TG_ARN=$(aws elbv2 describe-load-balancers \
+            --query "LoadBalancers[?starts_with(LoadBalancerName,'ApiLoadBalancer-')]|[0].LoadBalancerArn" \
+            --output text \
+            | xargs -I{} aws elbv2 describe-target-groups --load-balancer-arn {} \
+                --query "TargetGroups[0].TargetGroupArn" --output text)
+          echo "api_lb_dns=$API_LB_DNS" >> "$GITHUB_OUTPUT"
+          echo "api_lb_tg_arn=$API_LB_TG_ARN" >> "$GITHUB_OUTPUT"
+
+          RUNNER_COUNT=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=boxlite-runner" "Name=instance-state-name,Values=running" \
+            --query "length(Reservations[].Instances[])" --output text)
+          assert_one "boxlite-runner EC2 instance" "$RUNNER_COUNT"
+          RUNNER_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=boxlite-runner" "Name=instance-state-name,Values=running" \
+            --query "Reservations[0].Instances[0].InstanceId" --output text)
+          echo "runner_id=$RUNNER_ID" >> "$GITHUB_OUTPUT"
+
+          BUCKET_COUNT=$(aws s3api list-buckets \
+            --query "length(Buckets[?starts_with(Name,'${STACK_PREFIX}-storagebucket-')])" --output text)
+          assert_one "${STACK_PREFIX}-storagebucket-* S3 bucket" "$BUCKET_COUNT"
+          S3_BUCKET=$(aws s3api list-buckets \
+            --query "Buckets[?starts_with(Name,'${STACK_PREFIX}-storagebucket-')].Name|[0]" \
+            --output text)
+          echo "s3_bucket=$S3_BUCKET" >> "$GITHUB_OUTPUT"
+
+          # Preflight: ECR repo must exist (hardcoded SST default — fail
+          # fast if SST is reconfigured to a per-stage repo).
+          aws ecr describe-repositories --repository-names "${ECR_REPO}" >/dev/null \
+            || { echo "::error::ECR repo ${ECR_REPO} not found — SST may have been reconfigured. Update ECR_REPO env in this workflow."; exit 1; }
+
+          # Preflight: SSM agent on runner must be online (avoid 5-minute
+          # queue-and-timeout if the agent is dead).
+          PING=$(aws ssm describe-instance-information \
+            --filters "Key=InstanceIds,Values=$RUNNER_ID" \
+            --query "InstanceInformationList[0].PingStatus" --output text)
+          if [ "$PING" != "Online" ]; then
+              echo "::error::SSM agent on runner $RUNNER_ID is not Online (PingStatus=$PING) — runner binary update would hang."
+              exit 1
+          fi
+
+          echo "::notice::cluster=$CLUSTER api_lb=$API_LB_DNS runner=$RUNNER_ID (SSM=Online) s3=$S3_BUCKET"
+
+      # ──────────────────────────────────────────────────────────────────
+      # Build & push Api container image (Node.js / NestJS), tag = git sha.
+      # ──────────────────────────────────────────────────────────────────
+      - name: ECR login
+        id: ecr_login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push Api image
+        id: build_api
+        run: |
+          set -euo pipefail
+          REGISTRY="${{ steps.ecr_login.outputs.registry }}"
+          IMAGE="${REGISTRY}/${ECR_REPO}:api-${{ github.sha }}"
+          docker buildx build --platform linux/amd64 --load -t "$IMAGE" apps/api
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      # ──────────────────────────────────────────────────────────────────
+      # Build runner binary (musl static — no glibc-version drift risk
+      # against the runner EC2's Ubuntu version). Cached so repeated PRs
+      # only pay the changed-crates compile cost, not the full cold build.
+      # ──────────────────────────────────────────────────────────────────
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: e2e-cloud-musl
+          shared-key: e2e-cloud
+          workspaces: ". -> target"
+
+      - name: Build boxlite-runner (musl)
+        run: |
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          cargo build --release --target x86_64-unknown-linux-musl -p boxlite-runner
+
+      - name: Upload runner binary to S3
+        id: upload_runner
+        run: |
+          set -euo pipefail
+          S3_KEY="builds/${{ github.sha }}/boxlite-runner"
+          aws s3 cp \
+            target/x86_64-unknown-linux-musl/release/boxlite-runner \
+            "s3://${{ steps.resources.outputs.s3_bucket }}/${S3_KEY}"
+          echo "s3_key=$S3_KEY" >> "$GITHUB_OUTPUT"
+
+      # ──────────────────────────────────────────────────────────────────
+      # Deploy: register new Api task definition with the new image (all
+      # other env vars preserved verbatim), force-redeploy the service,
+      # wait for stable, then verify the ALB target group reports healthy.
+      # `wait services-stable` alone is NOT sufficient — ECS service can
+      # be stable before the ALB health check passes; an immediate test
+      # run can race a 503 from the LB.
+      # ──────────────────────────────────────────────────────────────────
+      - name: Deploy Api (rolling)
+        run: |
+          set -euo pipefail
+          CLUSTER="${{ steps.resources.outputs.cluster }}"
+          IMAGE="${{ steps.build_api.outputs.image }}"
+          TG_ARN="${{ steps.resources.outputs.api_lb_tg_arn }}"
+
+          OLD_TD_ARN=$(aws ecs describe-services --cluster "$CLUSTER" --services Api \
+            --query 'services[0].taskDefinition' --output text)
+          echo "Old TD: $OLD_TD_ARN"
+
+          # jq deep-clone the task def, swap container image, strip
+          # readonly fields. The task def env contains plaintext
+          # DB_PASSWORD; never `cat`/echo new-td.json — it goes
+          # straight to AWS via --cli-input-json.
+          aws ecs describe-task-definition --task-definition "$OLD_TD_ARN" \
+            --query 'taskDefinition' --output json \
+            | jq --arg img "$IMAGE" '
+                .containerDefinitions[0].image = $img
+                | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                      .compatibilities, .registeredAt, .registeredBy)' \
+            > /tmp/new-td.json
+
+          NEW_TD_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file:///tmp/new-td.json \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "New TD: $NEW_TD_ARN"
+
+          aws ecs update-service --cluster "$CLUSTER" --service Api \
+            --task-definition "$NEW_TD_ARN" --force-new-deployment \
+            >/dev/null
+          aws ecs wait services-stable --cluster "$CLUSTER" --services Api
+          echo "::notice::Api ECS service stable on $NEW_TD_ARN"
+
+          # Now verify the ALB target group is actually serving — wait
+          # for at least one healthy target. Up to ~3 minutes for health
+          # check thresholds to clear.
+          for i in $(seq 1 18); do
+              HEALTHY=$(aws elbv2 describe-target-health \
+                --target-group-arn "$TG_ARN" \
+                --query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" \
+                --output text)
+              if [ "$HEALTHY" -ge 1 ]; then
+                  echo "::notice::ALB target group reports $HEALTHY healthy target(s)"
+                  break
+              fi
+              echo "ALB target group has 0 healthy targets — retry $i/18 in 10s"
+              sleep 10
+          done
+          [ "$HEALTHY" -ge 1 ] || { echo "::error::ALB target group never reported healthy"; exit 1; }
+
+          # Belt-and-suspenders: hit /api/health through the LB
+          API_DNS="${{ steps.resources.outputs.api_lb_dns }}"
+          curl -fsS --retry 6 --retry-delay 5 --retry-all-errors --max-time 10 \
+               -o /dev/null "http://${API_DNS}/api/health"
+          echo "::notice::/api/health returned 2xx"
+
+      # ──────────────────────────────────────────────────────────────────
+      # Deploy runner binary: SSM the runner instance to pull the artifact
+      # from S3, atomically replace, restart systemd unit.
+      # TODO(runner-drain): boxlite-runner has no documented in-flight
+      # drain behaviour. Restart drops any sandbox-create/exec call
+      # landing in the window. Acceptable for e2e (no concurrent users)
+      # but production-grade rollout would need a runner-side drain.
+      # ──────────────────────────────────────────────────────────────────
+      - name: Deploy runner binary
+        run: |
+          set -euo pipefail
+          RUNNER="${{ steps.resources.outputs.runner_id }}"
+          BUCKET="${{ steps.resources.outputs.s3_bucket }}"
+          KEY="${{ steps.upload_runner.outputs.s3_key }}"
+
+          CMD_ID=$(aws ssm send-command \
+            --instance-ids "$RUNNER" \
+            --document-name AWS-RunShellScript \
+            --comment "e2e-cloud ${{ github.sha }} runner binary update" \
+            --parameters "commands=[\"set -euo pipefail\",\"aws s3 cp s3://${BUCKET}/${KEY} /tmp/runner.new\",\"chmod +x /tmp/runner.new\",\"systemctl stop boxlite-runner\",\"mv /tmp/runner.new /usr/local/bin/boxlite-runner\",\"systemctl start boxlite-runner\",\"for _ in 1 2 3 4 5 6; do systemctl is-active boxlite-runner && exit 0 || sleep 2; done\",\"exit 1\"]" \
+            --query Command.CommandId --output text)
+          echo "Runner update SSM cmd: $CMD_ID"
+          for _ in $(seq 1 60); do
+              # Capture both stdout (real status) and stderr.
+              STATUS=$(aws ssm get-command-invocation --command-id "$CMD_ID" \
+                  --instance-id "$RUNNER" --query Status --output text 2>/tmp/ssm.err) || STATUS=Pending
+              case "$STATUS" in
+                  Success) echo "::notice::runner updated"; exit 0 ;;
+                  InProgress|Pending|None) sleep 5 ;;
+                  *)  echo "::error::runner update failed: $STATUS"
+                      aws ssm get-command-invocation --command-id "$CMD_ID" \
+                          --instance-id "$RUNNER" --query StandardErrorContent --output text
+                      exit 1 ;;
+              esac
+          done
+          echo "::error::runner update timed out after 5 minutes"; exit 1
+
+      # ──────────────────────────────────────────────────────────────────
+      # One-time init: admin-org sandbox quota. Naturally idempotent
+      # because the SET clause always writes the same target values; we
+      # drop the `AND max_cpu_per_sandbox=0` guard the first draft had —
+      # it prevented convergence from partial-update states. The SELECT
+      # afterwards prints the post-state for the workflow log.
+      #
+      # Credentials: ECS Exec into the Api container so DB_PASSWORD is
+      # read from the container's env at runtime, not from the SSM
+      # command body. The outer single-quotes prevent the GHA shell
+      # from expanding $DB_PASSWORD/$DB_HOST/etc. — they only resolve
+      # inside the container.
+      # ──────────────────────────────────────────────────────────────────
+      - name: Init admin-org sandbox quota (idempotent)
+        run: |
+          set -euo pipefail
+          CLUSTER="${{ steps.resources.outputs.cluster }}"
+
+          # Pick a task that belongs to the PRIMARY deployment (avoids
+          # picking the still-draining old task during a rolling deploy).
+          PRIMARY_TD=$(aws ecs describe-services --cluster "$CLUSTER" --services Api \
+            --query 'services[0].deployments[?status==`PRIMARY`]|[0].taskDefinition' --output text)
+          TASK=$(aws ecs list-tasks --cluster "$CLUSTER" --service-name Api \
+            --query 'taskArns[]' --output text \
+            | tr '\t' '\n' \
+            | while read -r arn; do
+                TD=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$arn" \
+                    --query 'tasks[0].taskDefinitionArn' --output text)
+                if [ "$TD" = "$PRIMARY_TD" ]; then echo "$arn"; break; fi
+            done)
+          [ -n "$TASK" ] || { echo "::error::No Api task on PRIMARY deployment"; exit 1; }
+          echo "Api task on PRIMARY deployment: $TASK"
+
+          # Capture the ECS Exec session output to a temp file so we can
+          # grep it for the SELECT result. --interactive is required by
+          # ECS Exec, but a non-TTY shell works because we feed nothing
+          # to stdin and our `sh -c '…'` exits immediately after psql.
+          OUT=/tmp/ecs_exec.log
+          aws ecs execute-command --cluster "$CLUSTER" --task "$TASK" --container Api --interactive \
+            --command 'sh -c "PGPASSWORD=\"\$DB_PASSWORD\" psql -h \"\$DB_HOST\" -U \"\$DB_USERNAME\" -d \"\$DB_DATABASE\" -v ON_ERROR_STOP=1 -c \"UPDATE \\\"organization\\\" SET max_cpu_per_sandbox=4, max_memory_per_sandbox=8192, max_disk_per_sandbox=20 WHERE id='\''4a1eef70-8734-4814-b7a5-0ca3522a8760'\''; SELECT id, max_cpu_per_sandbox, max_memory_per_sandbox, max_disk_per_sandbox FROM \\\"organization\\\" WHERE id='\''4a1eef70-8734-4814-b7a5-0ca3522a8760'\'';\""' \
+            2>&1 | tee "$OUT"
+
+          # Verify the SELECT result actually shows the target values.
+          # ECS Exec exit-code propagation through Session Manager is
+          # historically unreliable; grep the output as ground truth.
+          grep -E '4 *\| *8192 *\| *20' "$OUT" \
+            || { echo "::error::admin-org quota SELECT did not show target values (4|8192|20)"; exit 1; }
+
+      # ──────────────────────────────────────────────────────────────────
+      # Build SDK from THIS checkout (path_prefix and other source-tree
+      # additions may be ahead of the PyPI release with the same version
+      # string). Required so tests exercise the code under review.
+      # ──────────────────────────────────────────────────────────────────
+      - name: Build & install Python SDK from this checkout
+        run: |
+          set -euo pipefail
+          cd sdks/python
+          pip install --break-system-packages --quiet maturin
+          maturin build --release
+          pip install --break-system-packages --force-reinstall ../../target/wheels/boxlite-*.whl
+          pip install --break-system-packages --quiet pytest pytest-asyncio pytest-timeout
+
+      # ──────────────────────────────────────────────────────────────────
+      # Pytest configuration: write the profile pointing at Tokyo API LB,
+      # admin key sourced from SSM Parameter Store and immediately
+      # registered as a GHA log mask so it can never leak into the run
+      # log even if a later step accidentally `echo`s credentials.toml.
+      # Use printf with quoted args so a `$` inside the secret can't
+      # be shell-expanded.
+      # ──────────────────────────────────────────────────────────────────
+      - name: Configure pytest profile p1
+        run: |
+          set -euo pipefail
+          API_DNS="${{ steps.resources.outputs.api_lb_dns }}"
+          ADMIN_KEY=$(aws ssm get-parameter \
+            --name "/boxlite/${STAGE}/admin-api-key" \
+            --with-decryption \
+            --query Parameter.Value --output text)
+          # Register the value as a masked secret BEFORE it could ever
+          # appear in subsequent logging.
+          echo "::add-mask::$ADMIN_KEY"
+
+          mkdir -p ~/.boxlite
+          chmod 700 ~/.boxlite
+          {
+              printf '[profiles.p1]\n'
+              printf 'url = "http://%s/api"\n' "$API_DNS"
+              printf 'api_key = "%s"\n'        "$ADMIN_KEY"
+          } > ~/.boxlite/credentials.toml
+          chmod 600 ~/.boxlite/credentials.toml
+          unset ADMIN_KEY
+
+      - name: Run E2E suite
+        env:
+          BOXLITE_E2E_SKIP_PATH_VERIFY: '1'
+          BOXLITE_E2E_PROFILE: p1
+        run: |
+          # pytest-timeout caps individual test wall time so a hung VM /
+          # wedged exec doesn't burn the full 45-minute job timeout (which
+          # would prevent the on-failure log capture step from running).
+          timeout 35m python3 -m pytest scripts/test/e2e/cases/ \
+              -v --tb=short --no-header -p no:cacheprovider \
+              --timeout=180 --timeout-method=thread \
+              --junit-xml=pytest-junit.xml
+
+      - name: Upload pytest junit XML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-junit
+          path: pytest-junit.xml
+          if-no-files-found: ignore
+
+      # ──────────────────────────────────────────────────────────────────
+      # On failure, pull the last 200 lines from each side. CloudWatch
+      # for the Api container (its stdout is shipped via awslogs driver);
+      # runner journalctl via SSM with a short poll loop instead of a
+      # fixed sleep.
+      # ──────────────────────────────────────────────────────────────────
+      - name: Collect logs on failure
+        if: failure()
+        continue-on-error: true
+        run: |
+          set +e
+          CLUSTER="${{ steps.resources.outputs.cluster }}"
+          RUNNER="${{ steps.resources.outputs.runner_id }}"
+          API_TD=$(aws ecs describe-services --cluster "$CLUSTER" --services Api \
+            --query 'services[0].taskDefinition' --output text)
+          LOG_GROUP=$(aws ecs describe-task-definition --task-definition "$API_TD" \
+            --query 'taskDefinition.containerDefinitions[0].logConfiguration.options."awslogs-group"' --output text)
+          echo "──── Api CloudWatch logs (last 500) ────"
+          aws logs tail "$LOG_GROUP" --since 20m --format short | tail -500
+
+          echo "──── boxlite-runner journalctl (last 500) ────"
+          CMD_ID=$(aws ssm send-command --instance-ids "$RUNNER" \
+            --document-name AWS-RunShellScript --comment "e2e-cloud failure log dump" \
+            --parameters 'commands=["journalctl -u boxlite-runner --no-pager -n 500"]' \
+            --query Command.CommandId --output text)
+          for _ in $(seq 1 12); do
+              SS=$(aws ssm get-command-invocation --command-id "$CMD_ID" \
+                  --instance-id "$RUNNER" --query Status --output text 2>/dev/null || echo Pending)
+              case "$SS" in
+                  Success|Failed|Cancelled|TimedOut) break ;;
+                  *) sleep 3 ;;
+              esac
+          done
+          aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$RUNNER" \
+            --query StandardOutputContent --output text | tail -500
+
+  # Single always-runs job that branch protection can require.
+  # Collapses the conditional `e2e` outcome into one stable check
+  # name. Pass = e2e ran and passed, OR no relevant paths changed.
+  # Fail = e2e ran and failed / was cancelled.
+  e2e-gate:
+    name: E2E gate (required)
+    needs: [changes, e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide gate result
+        run: |
+          set -e
+          IS_DISPATCH="${{ github.event_name == 'workflow_dispatch' }}"
+          RELEVANT="${{ needs.changes.outputs.relevant }}"
+          E2E_RESULT="${{ needs.e2e.result }}"
+
+          if [[ "$RELEVANT" != "true" && "$IS_DISPATCH" != "true" ]]; then
+            echo "✅ E2E gate: skipped — no relevant paths changed in this PR"
+            exit 0
+          fi
+
+          case "$E2E_RESULT" in
+            success)
+              echo "✅ E2E gate: e2e suite passed"
+              exit 0
+              ;;
+            *)
+              echo "❌ E2E gate: e2e suite reported '$E2E_RESULT'"
+              exit 1
+              ;;
+          esac
