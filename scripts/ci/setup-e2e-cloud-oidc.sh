@@ -274,7 +274,7 @@ else
     echo "missing — creating"
     aws iam create-role \
         --role-name "$ROLE_NAME" \
-        --description "Used by .github/workflows/e2e-cloud.yml — deploys to Tokyo stack and runs e2e tests" \
+        --description "Used by .github/workflows/e2e-cloud.yml - deploys to Tokyo stack and runs e2e tests" \
         --assume-role-policy-document "$TRUST_POLICY" \
         --max-session-duration 3600 \
         >/dev/null
