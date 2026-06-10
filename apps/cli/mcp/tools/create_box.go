@@ -21,7 +21,6 @@ type CreateBoxArgs struct {
 	Id                 *string                    `json:"id,omitempty"`
 	Name               *string                    `json:"name,omitempty"`
 	Target             *string                    `json:"target,omitempty"`
-	TemplateId         *string                    `json:"templateId,omitempty"`
 	Snapshot           *string                    `json:"snapshot,omitempty"`
 	User               *string                    `json:"user,omitempty"`
 	Env                *map[string]string         `json:"env,omitempty"`
@@ -45,7 +44,6 @@ func GetCreateBoxTool() mcp.Tool {
 		mcp.WithString("id", mcp.Description("If a box ID is provided it is first checked if it exists and is running, if so, the existing box will be used. However, a model is not able to provide custom box ID but only the ones BoxLite commands return and should always leave ID field empty if the intention is to create a new box.")),
 		mcp.WithString("name", mcp.Description("Name of the box. If not provided, the box ID will be used as the name.")),
 		mcp.WithString("target", mcp.DefaultString("us"), mcp.Description("Target region of the box.")),
-		mcp.WithString("templateId", mcp.Description("Template ID or name for the box. Cannot be specified when using a build info entry.")),
 		mcp.WithString("user", mcp.Description("User associated with the box.")),
 		mcp.WithObject("env", mcp.Description("Environment variables for the box. Format: {\"key\": \"value\", \"key2\": \"value2\"}"), mcp.AdditionalProperties(map[string]any{"type": "string"})),
 		mcp.WithObject("labels", mcp.Description("Labels for the box. Format: {\"key\": \"value\", \"key2\": \"value2\"}"), mcp.AdditionalProperties(map[string]any{"type": "string"})),
@@ -126,22 +124,13 @@ func createBoxRequest(args CreateBoxArgs) (*apiclient.CreateBox, error) {
 	}
 
 	if args.BuildInfo != nil {
-		if args.TemplateId != nil && *args.TemplateId != "" {
-			return nil, fmt.Errorf("cannot specify a template when using a build info entry")
-		}
 		if args.Snapshot != nil && *args.Snapshot != "" {
 			return nil, fmt.Errorf("cannot specify a snapshot when using a build info entry")
 		}
 	}
 
-	if args.TemplateId != nil && args.Snapshot != nil && *args.TemplateId != "" && *args.Snapshot != "" {
-		return nil, fmt.Errorf("cannot specify both templateId and snapshot")
-	}
-
-	if args.TemplateId != nil && *args.TemplateId != "" {
-		createBox.SetTemplateId(*args.TemplateId)
-	} else if args.Snapshot != nil && *args.Snapshot != "" {
-		createBox.SetTemplateId(*args.Snapshot)
+	if args.Snapshot != nil && *args.Snapshot != "" {
+		createBox.SetSnapshot(*args.Snapshot)
 	}
 
 	if args.Target != nil && *args.Target != "" {

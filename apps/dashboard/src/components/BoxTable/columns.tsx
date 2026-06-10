@@ -10,7 +10,6 @@ import { Box, BoxState } from '@boxlite-ai/api-client'
 import { ColumnDef } from '@tanstack/react-table'
 import { ArrowDown, ArrowUp } from 'lucide-react'
 import React from 'react'
-import { EllipsisWithTooltip } from '../EllipsisWithTooltip'
 import { ResourceChip } from '../ResourceChip'
 import { Checkbox } from '../ui/checkbox'
 import { BoxState as BoxStateComponent } from './BoxState'
@@ -189,27 +188,6 @@ export function getColumns({
         </div>
       ),
       accessorKey: 'state',
-    },
-    {
-      id: 'template',
-      size: 150,
-      enableSorting: true,
-      enableHiding: false,
-      header: ({ column }) => {
-        return <SortableHeader column={column} label="Image" />
-      },
-      cell: ({ row }) => {
-        return (
-          <div className="w-full truncate">
-            {row.original.template ? (
-              <EllipsisWithTooltip>{row.original.template}</EllipsisWithTooltip>
-            ) : (
-              <div className="truncate text-muted-foreground/50">-</div>
-            )}
-          </div>
-        )
-      },
-      accessorKey: 'template',
     },
     {
       id: 'region',

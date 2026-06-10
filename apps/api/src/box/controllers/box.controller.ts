@@ -237,7 +237,6 @@ export class BoxController {
     requestMetadata: {
       body: (req: TypedRequest<CreateBoxDto>) => ({
         name: req.body?.name,
-        templateId: req.body?.templateId,
         user: req.body?.user,
         env: req.body?.env
           ? Object.fromEntries(Object.keys(req.body?.env).map((key) => [key, MASKED_AUDIT_VALUE]))
@@ -264,10 +263,6 @@ export class BoxController {
   ): Promise<BoxDto> {
     const organization = authContext.organization
     let box: BoxDto
-
-    if (createBoxDto.templateId && createBoxDto.gpu !== undefined) {
-      throw new BadRequestError('Cannot specify GPU resources when using a template')
-    }
 
     box = await this.boxService.createFromTemplate(createBoxDto, organization)
     if (box.state === BoxState.STARTED) {

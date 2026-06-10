@@ -34,8 +34,7 @@ export function isTransitioning(box: Box): boolean {
     box.state === BoxState.STOPPING ||
     box.state === BoxState.DESTROYING ||
     box.state === BoxState.RESTORING ||
-    box.state === BoxState.BUILDING_ARTIFACT ||
-    box.state === BoxState.PULLING_ARTIFACT
+    box.state === BoxState.BUILDING_ARTIFACT
   )
 }
 

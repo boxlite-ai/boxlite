@@ -300,13 +300,10 @@ export const PlaygroundProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     const createBoxFromImageParams: CreateBoxFromImageParams = { image: Image.debianSlim('3.13') } // Default and fixed image if CreateBoxFromImageParams are used
     const templateName = boxParametersState['templateName']
     const useCustomImageName = templateName !== undefined && templateName !== SANDBOX_TEMPLATE_DEFAULT_VALUE
-    const createBoxFromTemplateParams: CreateBoxFromTemplateParams = {
-      templateId: useCustomImageName ? templateName : undefined,
-    }
+    // TODO(image-rewrite): templateId param was removed with the image/template subsystem.
+    const createBoxFromTemplateParams: CreateBoxFromTemplateParams = {}
     const createBoxFromTemplate = useCustomImageName || useDefaultResourceValues
 
-    // SDK/API still use templateId for persisted dashboard Images. That
-    // template-backed path takes precedence over ad-hoc image/resource params.
     const createBoxFromImage = !useDefaultResourceValues && !useCustomImageName
 
     // We specify resources for box creation if there is any specified resource value which has value different from the default one and useCustomImageName is false

@@ -211,7 +211,6 @@ export class Box {
             BoxState.CREATING,
             BoxState.UNKNOWN,
             BoxState.RESTORING,
-            BoxState.PULLING_ARTIFACT,
             BoxState.ERROR,
             BoxState.RESIZING,
           ].includes(this.state)

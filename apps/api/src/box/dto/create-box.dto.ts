@@ -20,14 +20,6 @@ export class CreateBoxDto {
   name?: string
 
   @ApiPropertyOptional({
-    description: 'The ID or name of the template used for the box',
-    example: 'ubuntu-template-id',
-  })
-  @IsOptional()
-  @IsString()
-  templateId?: string
-
-  @ApiPropertyOptional({
     description: 'The user associated with the project',
     example: 'boxlite',
   })

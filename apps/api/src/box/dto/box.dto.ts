@@ -59,14 +59,6 @@ export class BoxDto {
   })
   name: string
 
-  // TODO(image-rewrite): the box image/template is no longer resolved server-side after the
-  // box_template subsystem was removed. Kept optional so REST mappers compile; always unset.
-  @ApiPropertyOptional({
-    description: 'The template used for the sandbox',
-    example: 'boxlite/base',
-  })
-  template?: string
-
   @ApiProperty({
     description: 'The user associated with the project',
     example: 'boxlite',

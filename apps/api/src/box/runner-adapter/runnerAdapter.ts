@@ -18,19 +18,6 @@ export interface RunnerBoxInfo {
   daemonVersion?: string
 }
 
-export interface RunnerArtifactInfo {
-  name: string
-  sizeGB: number
-  entrypoint: string[]
-  cmd: string[]
-  hash: string
-}
-
-export interface ArtifactDigestResponse {
-  hash: string
-  sizeGB: number
-}
-
 export interface RunnerMetrics {
   currentAllocatedCpu?: number
   currentAllocatedDiskGiB?: number
@@ -59,14 +46,6 @@ export interface RunnerAdapter {
   runnerInfo(signal?: AbortSignal): Promise<RunnerInfo>
 
   boxInfo(boxId: string): Promise<RunnerBoxInfo>
-  createBox(
-    box: Box,
-    artifactRef: string,
-    entrypoint?: string[],
-    metadata?: { [key: string]: string },
-    otelEndpoint?: string,
-    skipStart?: boolean,
-  ): Promise<StartBoxResponse | undefined>
   startBox(
     boxId: string,
     authToken: string,
@@ -75,12 +54,6 @@ export interface RunnerAdapter {
   ): Promise<StartBoxResponse | undefined>
   stopBox(boxId: string, force?: boolean): Promise<void>
   destroyBox(boxId: string): Promise<void>
-
-  // TODO(image-rewrite): pullArtifact / getArtifactInfo removed with runner_artifact_cache +
-  // box_template; the runner binary keeps the capability but the API-side adapter no longer uses it.
-  removeArtifact(artifactRef: string): Promise<void>
-  artifactExists(artifactRef: string): Promise<boolean>
-  inspectArtifactInRegistry(artifactRef: string): Promise<ArtifactDigestResponse>
 
   updateNetworkSettings(
     boxId: string,

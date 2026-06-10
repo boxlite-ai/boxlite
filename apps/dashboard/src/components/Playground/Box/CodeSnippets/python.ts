@@ -62,7 +62,6 @@ export const PythonSnippetGenerator: CodeSnippetGenerator = {
     const ind = '\t'
     return [
       `\n\nparams = CreateBoxFromImageParams(`,
-      p.config.useCustomImageName ? `${ind}template_id="${p.state['templateName']}",` : '',
       p.config.createBoxFromImage ? `${ind}image=Image.debian_slim("3.13"),` : '',
       p.config.useResources ? `${ind}resources=resources,` : '',
       p.config.useLanguageParam ? `${ind}language="${p.state['language']}",` : '',

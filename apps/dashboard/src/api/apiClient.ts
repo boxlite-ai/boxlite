@@ -20,7 +20,6 @@ import {
   RegionsApi,
   RunnersApi,
   BoxApi,
-  TemplatesApi,
   ToolboxApi,
   UsersApi,
   VolumesApi,
@@ -31,7 +30,6 @@ import { BoxliteError } from './errors'
 
 export class ApiClient {
   private config: Configuration
-  private _templatesApi: TemplatesApi
   private _boxApi: BoxApi
   private _userApi: UsersApi
   private _apiKeyApi: ApiKeysApi
@@ -79,7 +77,6 @@ export class ApiClient {
     )
 
     // Initialize APIs
-    this._templatesApi = new TemplatesApi(this.config, undefined, axiosInstance)
     this._boxApi = new BoxApi(this.config, undefined, axiosInstance)
     this._userApi = new UsersApi(this.config, undefined, axiosInstance)
     this._apiKeyApi = new ApiKeysApi(this.config, undefined, axiosInstance)
@@ -113,10 +110,6 @@ export class ApiClient {
 
   public setAccessToken(accessToken: string) {
     this.config.accessToken = accessToken
-  }
-
-  public get templatesApi() {
-    return this._templatesApi
   }
 
   public get boxApi() {

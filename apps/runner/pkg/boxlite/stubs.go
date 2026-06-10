@@ -84,7 +84,7 @@ func (c *Client) Resize(ctx context.Context, boxId string, resizeDto dto.ResizeB
 	return nil
 }
 
-// RecoverBox destroys and recreates a box from its snapshot.
+// RecoverBox destroys and recreates a box.
 func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.RecoverBoxDTO) error {
 	c.logger.Info("recover sandbox", "sandbox", boxId)
 
@@ -92,14 +92,9 @@ func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.Re
 		c.logger.Warn("failed to destroy during recover", "error", err)
 	}
 
-	artifactRef := "alpine:latest"
-	if recoverDto.Snapshot != nil {
-		artifactRef = *recoverDto.Snapshot
-	}
-
 	createDto := dto.CreateBoxDTO{
 		Id:               boxId,
-		ArtifactRef:      artifactRef,
+		ArtifactRef:      "alpine:latest",
 		OsUser:           recoverDto.OsUser,
 		CpuQuota:         recoverDto.CpuQuota,
 		MemoryQuota:      recoverDto.MemoryQuota,

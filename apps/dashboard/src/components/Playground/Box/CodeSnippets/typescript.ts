@@ -59,7 +59,6 @@ export const TypeScriptSnippetGenerator: CodeSnippetGenerator = {
     const ind = '\t\t\t'
     return [
       `{`,
-      p.config.useCustomImageName ? `${ind}templateId: '${p.state['templateName']}',` : '',
       p.config.createBoxFromImage ? `${ind}image: Image.debianSlim("3.13"),` : '',
       this.getResources(p),
       p.config.useLanguageParam ? `${ind}language: '${p.state['language']}',` : '',

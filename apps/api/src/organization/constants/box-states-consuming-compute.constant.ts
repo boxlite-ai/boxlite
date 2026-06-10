@@ -13,5 +13,4 @@ export const BOX_STATES_CONSUMING_COMPUTE: BoxState[] = [
   BoxState.STARTING,
   BoxState.STOPPING,
   BoxState.UNKNOWN,
-  BoxState.PULLING_ARTIFACT,
 ]

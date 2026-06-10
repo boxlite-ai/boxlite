@@ -21,7 +21,6 @@ import (
 	"github.com/boxlite-ai/runner/pkg/api"
 	"github.com/boxlite-ai/runner/pkg/backend"
 	blclient "github.com/boxlite-ai/runner/pkg/boxlite"
-	"github.com/boxlite-ai/runner/pkg/cache"
 	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/boxlite-ai/runner/pkg/runner/v2/executor"
 	"github.com/boxlite-ai/runner/pkg/runner/v2/healthcheck"
@@ -129,9 +128,7 @@ func run() int {
 
 	logger.Info("BoxLite runtime initialized")
 
-	backupInfoCache := cache.NewBackupInfoCache(ctx, cfg.BackupInfoCacheRetention)
-
-	boxService := services.NewBoxService(logger, backupInfoCache, boxliteClient)
+	boxService := services.NewBoxService(logger, boxliteClient)
 
 	boxSyncService := services.NewBoxSyncService(services.BoxSyncServiceConfig{
 		Logger:   logger,
@@ -164,7 +161,6 @@ func run() int {
 
 	_, err = runner.GetInstance(&runner.RunnerInstanceConfig{
 		Logger:           logger,
-		BackupInfoCache:  backupInfoCache,
 		Boxlite:          boxliteClient,
 		BoxService:       boxService,
 		MetricsCollector: metricsCollector,

@@ -12,14 +12,12 @@ import (
 
 	"github.com/boxlite-ai/runner/internal/metrics"
 	blclient "github.com/boxlite-ai/runner/pkg/boxlite"
-	"github.com/boxlite-ai/runner/pkg/cache"
 	"github.com/boxlite-ai/runner/pkg/models"
 	"github.com/boxlite-ai/runner/pkg/services"
 )
 
 type RunnerInstanceConfig struct {
 	Logger           *slog.Logger
-	BackupInfoCache  *cache.BackupInfoCache
 	Boxlite          *blclient.Client
 	MetricsCollector *metrics.Collector
 	BoxService       *services.BoxService
@@ -27,7 +25,6 @@ type RunnerInstanceConfig struct {
 
 type Runner struct {
 	Logger           *slog.Logger
-	BackupInfoCache  *cache.BackupInfoCache
 	Boxlite          *blclient.Client
 	MetricsCollector *metrics.Collector
 	BoxService       *services.BoxService
@@ -52,7 +49,6 @@ func GetInstance(config *RunnerInstanceConfig) (*Runner, error) {
 
 		runner = &Runner{
 			Logger:           logger.With(slog.String("component", "runner")),
-			BackupInfoCache:  config.BackupInfoCache,
 			Boxlite:          config.Boxlite,
 			BoxService:       config.BoxService,
 			MetricsCollector: config.MetricsCollector,

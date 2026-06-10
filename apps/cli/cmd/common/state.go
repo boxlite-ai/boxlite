@@ -13,27 +13,6 @@ import (
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 )
 
-func AwaitBoxTemplateState(ctx context.Context, apiClient *apiclient.APIClient, name string, state apiclient.BoxTemplateState) error {
-	for {
-		template, res, err := apiClient.TemplatesAPI.GetBoxTemplate(ctx, name).Execute()
-		if err != nil {
-			return apiclient_cli.HandleErrorResponse(res, err)
-		}
-
-		switch template.State {
-		case state:
-			return nil
-		case apiclient.BOXTEMPLATESTATE_ERROR, apiclient.BOXTEMPLATESTATE_BUILD_FAILED:
-			if template.ErrorReason == nil {
-				return fmt.Errorf("template processing failed")
-			}
-			return fmt.Errorf("template processing failed: %s", *template.ErrorReason)
-		}
-
-		time.Sleep(time.Second)
-	}
-}
-
 func AwaitBoxState(ctx context.Context, apiClient *apiclient.APIClient, targetBox string, state apiclient.BoxState) error {
 	for {
 		box, res, err := apiClient.BoxAPI.GetBox(ctx, targetBox).Execute()

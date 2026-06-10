@@ -20,7 +20,6 @@ import {
 import { Spinner } from '@/components/ui/spinner'
 import { RoutePath } from '@/enums/RoutePath'
 import { useCreateBoxMutation } from '@/hooks/mutations/useCreateBoxMutation'
-import { useConfig } from '@/hooks/useConfig'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
 import { getBoxRouteId } from '@/lib/box-identity'
@@ -123,7 +122,6 @@ export const CreateBoxSheet = ({
   const open = controlledOpen ?? internalOpen
   const setOpen = onOpenChange ?? setInternalOpen
 
-  const { defaultTemplate } = useConfig()
   const { selectedOrganization } = useSelectedOrganization()
   const { reset: resetCreateBoxMutation, ...createBoxMutation } = useCreateBoxMutation()
   const formRef = useRef<HTMLFormElement>(null)
@@ -151,11 +149,10 @@ export const CreateBoxSheet = ({
       let boxId: string | undefined = undefined
       try {
         // TODO(image-rewrite): the image/template picker was removed with the image/template
-        // subsystem. We still pass the configured default template id so creation reaches the
-        // API; rebuild image selection here once the new model lands.
+        // subsystem; box creation no longer selects an image. Rebuild image selection here once
+        // the new model lands.
         const box = await createBoxMutation.mutateAsync({
           name: value.name?.trim() || undefined,
-          templateId: defaultTemplate,
           public: false,
           networkBlockAll: false,
           autoStopInterval: parseOptionalInteger(value.autoStopInterval),

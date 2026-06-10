@@ -37,16 +37,8 @@ var CreateCmd = &cobra.Command{
 
 		createBox := apiclient.NewCreateBox()
 
-		// Add non-zero values to the request
-		if templateFlag != "" && legacySnapshotFlag != "" {
-			return fmt.Errorf("cannot specify both --template and --snapshot")
-		}
-		templateId := templateFlag
-		if legacySnapshotFlag != "" {
-			templateId = legacySnapshotFlag
-		}
-		if templateId != "" {
-			createBox.SetTemplateId(templateId)
+		if snapshotFlag != "" {
+			createBox.SetSnapshot(snapshotFlag)
 		}
 		if nameFlag != "" {
 			createBox.SetName(nameFlag)
@@ -150,7 +142,7 @@ var CreateCmd = &cobra.Command{
 				return err
 			}
 
-			err = common.AwaitBoxState(ctx, apiClient, box.Id, apiclient.BOXSTATE_BUILDING_ARTIFACT)
+			err = common.AwaitBoxState(ctx, apiClient, box.Id, apiclient.BOXSTATE_BUILDING_SNAPSHOT)
 			if err != nil {
 				return err
 			}
@@ -192,8 +184,7 @@ var CreateCmd = &cobra.Command{
 }
 
 var (
-	templateFlag         string
-	legacySnapshotFlag   string
+	snapshotFlag         string
 	nameFlag             string
 	userFlag             string
 	envFlag              []string
@@ -215,8 +206,7 @@ var (
 )
 
 func init() {
-	CreateCmd.Flags().StringVar(&templateFlag, "template", "", "Template to use for the sandbox")
-	CreateCmd.Flags().StringVar(&legacySnapshotFlag, "snapshot", "", "Deprecated: use --template")
+	CreateCmd.Flags().StringVar(&snapshotFlag, "snapshot", "", "Snapshot to use for the sandbox")
 	CreateCmd.Flags().StringVar(&nameFlag, "name", "", "Name of the sandbox")
 	CreateCmd.Flags().StringVar(&userFlag, "user", "", "User associated with the sandbox")
 	CreateCmd.Flags().StringArrayVarP(&envFlag, "env", "e", []string{}, "Environment variables (format: KEY=VALUE)")
@@ -236,10 +226,6 @@ func init() {
 	CreateCmd.Flags().BoolVar(&networkBlockAllFlag, "network-block-all", false, "Whether to block all network access for the sandbox")
 	CreateCmd.Flags().StringVar(&networkAllowListFlag, "network-allow-list", "", "Comma-separated list of allowed CIDR network addresses for the sandbox")
 
-	CreateCmd.MarkFlagsMutuallyExclusive("template", "snapshot")
-	CreateCmd.MarkFlagsMutuallyExclusive("template", "dockerfile")
-	CreateCmd.MarkFlagsMutuallyExclusive("template", "context")
 	CreateCmd.MarkFlagsMutuallyExclusive("snapshot", "dockerfile")
 	CreateCmd.MarkFlagsMutuallyExclusive("snapshot", "context")
-	_ = CreateCmd.Flags().MarkHidden("snapshot")
 }

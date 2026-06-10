@@ -5,7 +5,7 @@
  */
 
 import { BoxDto } from '../../box/dto/box.dto'
-import { boxToBoxResponse, createBoxToCreateBox, resolveSystemTemplateId } from './box-to-box.mapper'
+import { boxToBoxResponse, createBoxToCreateBox } from './box-to-box.mapper'
 
 describe('box-to-box mapper', () => {
   it('maps REST box_id from the public box boxId instead of the internal UUID', () => {
@@ -34,22 +34,6 @@ describe('box-to-box mapper', () => {
     expect(response.box_id).not.toBe('fd955d93-e74a-48e7-9f2d-fcbe6dd9e920')
   })
 
-  it('maps SDK image names to approved agent-ready templates', () => {
-    expect(resolveSystemTemplateId('boxlite/base')).toBe('boxlite/base')
-    expect(resolveSystemTemplateId('boxlite/python')).toBe('boxlite/python')
-    expect(resolveSystemTemplateId('boxlite/node')).toBe('boxlite/node')
-  })
-
-  it('maps legacy approved OS image tags to the base runtime compatibility alias', () => {
-    expect(resolveSystemTemplateId('ubuntu:24.04')).toBe('boxlite/base')
-    expect(resolveSystemTemplateId('debian:13-slim')).toBe('boxlite/base')
-    expect(resolveSystemTemplateId('alpine:3.23')).toBe('boxlite/base')
-  })
-
-  it('uses the default agent-ready image when the SDK omits image', () => {
-    expect(createBoxToCreateBox({ name: 'my-box' }).templateId).toBe('boxlite/base')
-  })
-
   it('maps SDK resource settings to box create overrides', () => {
     const dto = createBoxToCreateBox({
       cpus: 2,
@@ -60,9 +44,5 @@ describe('box-to-box mapper', () => {
     expect(dto.cpu).toBe(2)
     expect(dto.memory).toBe(2)
     expect(dto.disk).toBe(8)
-  })
-
-  it('leaves unsupported images unresolved so the controller can reject them', () => {
-    expect(createBoxToCreateBox({ image: 'node:22' }).templateId).toBeUndefined()
   })
 })

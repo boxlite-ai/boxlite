@@ -15,7 +15,6 @@ export enum BoxState {
   STOPPING = 'stopping',
   ERROR = 'error',
   UNKNOWN = 'unknown',
-  PULLING_ARTIFACT = 'pulling_artifact',
   ARCHIVED = 'archived',
   ARCHIVING = 'archiving',
   RESIZING = 'resizing',

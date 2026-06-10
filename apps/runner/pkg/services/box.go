@@ -9,22 +9,18 @@ import (
 	"log/slog"
 
 	blclient "github.com/boxlite-ai/runner/pkg/boxlite"
-	"github.com/boxlite-ai/runner/pkg/cache"
 	"github.com/boxlite-ai/runner/pkg/models"
-	"github.com/boxlite-ai/runner/pkg/models/enums"
 )
 
 type BoxService struct {
-	backupInfoCache *cache.BackupInfoCache
-	boxlite         *blclient.Client
-	log             *slog.Logger
+	boxlite *blclient.Client
+	log     *slog.Logger
 }
 
-func NewBoxService(logger *slog.Logger, backupInfoCache *cache.BackupInfoCache, boxlite *blclient.Client) *BoxService {
+func NewBoxService(logger *slog.Logger, boxlite *blclient.Client) *BoxService {
 	return &BoxService{
-		log:             logger.With(slog.String("component", "box_service")),
-		backupInfoCache: backupInfoCache,
-		boxlite:         boxlite,
+		log:     logger.With(slog.String("component", "box_service")),
+		boxlite: boxlite,
 	}
 }
 
@@ -35,25 +31,7 @@ func (s *BoxService) GetBoxInfo(ctx context.Context, boxId string) (*models.BoxI
 		return nil, err
 	}
 
-	backupInfo, err := s.backupInfoCache.Get(ctx, boxId)
-	if err != nil {
-		return &models.BoxInfo{
-			BoxState:    boxState,
-			BackupState: enums.BackupStateNone,
-		}, nil
-	}
-
-	boxInfo := &models.BoxInfo{
-		BoxState:       boxState,
-		BackupState:    backupInfo.State,
-		BackupSnapshot: backupInfo.Snapshot,
-	}
-
-	var backupErrReason string
-	if backupInfo.Error != nil {
-		backupErrReason = backupInfo.Error.Error()
-		boxInfo.BackupErrorReason = &backupErrReason
-	}
-
-	return boxInfo, nil
+	return &models.BoxInfo{
+		BoxState: boxState,
+	}, nil
 }

@@ -7,9 +7,8 @@
 import { BoxDto } from '../../box/dto/box.dto'
 import { BoxState } from '../../box/enums/box-state.enum'
 import { BoxResponseDto } from '../dto/box-response.dto'
-import { CreateBoxDto } from '../dto/create-box.dto'
+import { CreateBoxDto as RestCreateBoxDto } from '../dto/create-box.dto'
 import { CreateBoxDto } from '../../box/dto/create-box.dto'
-import { resolveSystemTemplateName } from '../../box/constants/system-templates'
 
 export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
   return {
@@ -18,16 +17,15 @@ export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
     status: mapState(box.state),
     created_at: box.createdAt || new Date().toISOString(),
     updated_at: box.updatedAt || new Date().toISOString(),
-    image: box.template || '',
+    image: '',
     cpus: box.cpu || 1,
     memory_mib: (box.memory || 1) * 1024,
     labels: box.labels || {},
   }
 }
 
-export function createBoxToCreateBox(dto: CreateBoxDto, target?: string): CreateBoxDto {
+export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): CreateBoxDto {
   const createDto = new CreateBoxDto()
-  createDto.templateId = resolveSystemTemplateId(dto.image)
   createDto.name = dto.name
   createDto.user = dto.user
   createDto.env = dto.env
@@ -36,10 +34,6 @@ export function createBoxToCreateBox(dto: CreateBoxDto, target?: string): Create
   createDto.disk = dto.disk_size_gb
   createDto.target = target
   return createDto
-}
-
-export function resolveSystemTemplateId(image?: string): string | undefined {
-  return resolveSystemTemplateName(image)
 }
 
 function mapState(state: string | BoxState | undefined): string {
@@ -52,7 +46,6 @@ function mapState(state: string | BoxState | undefined): string {
     case BoxState.CREATING:
     case BoxState.STARTING:
     case BoxState.RESTORING:
-    case BoxState.PULLING_ARTIFACT:
       return 'configured'
     case BoxState.STOPPING:
     case BoxState.DESTROYING:

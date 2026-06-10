@@ -36,14 +36,6 @@ export class BoxStartAction extends BoxAction {
   @WithSpan()
   async run(box: Box, lockCode: LockCode): Promise<SyncState> {
     switch (box.state) {
-      case BoxState.PULLING_ARTIFACT: {
-        if (!box.runnerId) {
-          // Using the PULLING_ARTIFACT state for the case where the runner isn't assigned yet as well
-          return this.handleUnassignedRunnerBox(box, lockCode)
-        } else {
-          return this.handleRunnerBoxStartedStateCheck(box, lockCode)
-        }
-      }
       case BoxState.UNKNOWN: {
         return this.handleRunnerBoxUnknownStateOnDesiredStateStart(box, lockCode)
       }
@@ -64,29 +56,16 @@ export class BoxStartAction extends BoxAction {
     return DONT_SYNC_AGAIN
   }
 
-  // TODO(image-rewrite): the box boot pipeline (template -> artifactRef resolution, runner
-  // artifact-cache scheduling, pull orchestration, and runner createBox) was removed with the
-  // box_template and runner_artifact_cache subsystems. Boxes can no longer be booted until the
-  // image/template resolution layer is rebuilt; these handlers fail the box explicitly instead.
-  private async handleUnassignedRunnerBox(box: Box, lockCode: LockCode): Promise<SyncState> {
-    await this.updateBoxState(
-      box,
-      BoxState.ERROR,
-      lockCode,
-      undefined,
-      'Box image resolution is unavailable: the image/template subsystem was removed',
-    )
-    return DONT_SYNC_AGAIN
-  }
-
+  // TODO(image-rewrite): the box boot pipeline (image resolution, runner artifact scheduling,
+  // pull orchestration, and runner createBox) was removed with the box_template subsystem. Boxes
+  // can no longer be booted until the image resolution layer is rebuilt; this handler fails the
+  // box explicitly instead.
   private async handleRunnerBoxUnknownStateOnDesiredStateStart(box: Box, lockCode: LockCode): Promise<SyncState> {
     const runner = await this.runnerService.findOneOrFail(box.runnerId)
     if (runner.state !== RunnerState.READY) {
       return DONT_SYNC_AGAIN
     }
 
-    // TODO(image-rewrite): runner createBox requires an artifactRef that previously came from the
-    // box_template. Without image resolution we cannot boot the box; fail it explicitly.
     await this.updateBoxState(
       box,
       BoxState.ERROR,
@@ -179,13 +158,6 @@ export class BoxStartAction extends BoxAction {
           undefined,
           'Box entered error state on runner during startup wait loop',
         )
-        break
-      }
-      case BoxState.PULLING_ARTIFACT: {
-        if (await this.checkTimeoutError(box, 30, 'Timeout while pulling artifact')) {
-          return DONT_SYNC_AGAIN
-        }
-        await this.updateBoxState(box, BoxState.PULLING_ARTIFACT, lockCode)
         break
       }
       case BoxState.DESTROYED: {

@@ -183,8 +183,6 @@ func (s *BoxSyncService) convertToApiState(localState enums.BoxState) apiclient.
 		return apiclient.BOXSTATE_STOPPING
 	case enums.BoxStateError:
 		return apiclient.BOXSTATE_ERROR
-	case enums.BoxStatePullingArtifact:
-		return apiclient.BOXSTATE_PULLING_SNAPSHOT
 	default:
 		return apiclient.BOXSTATE_UNKNOWN
 	}
@@ -210,8 +208,6 @@ func (s *BoxSyncService) convertFromApiState(apiState apiclient.BoxState) enums.
 		return enums.BoxStateStopping
 	case apiclient.BOXSTATE_ERROR:
 		return enums.BoxStateError
-	case apiclient.BOXSTATE_PULLING_SNAPSHOT:
-		return enums.BoxStatePullingArtifact
 	default:
 		return enums.BoxStateUnknown
 	}

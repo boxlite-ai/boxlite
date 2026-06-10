@@ -54,7 +54,6 @@ interface BoxInfoPanelProps {
 }
 
 export function BoxInfoPanel({ box }: BoxInfoPanelProps) {
-  // TODO(image-rewrite): image display formatting removed with the image/template subsystem; show raw value.
   const publicBoxId = getBoxPublicId(box)
 
   return (
@@ -74,18 +73,6 @@ export function BoxInfoPanel({ box }: BoxInfoPanelProps) {
             <span className="truncate font-mono text-xs">{getBoxPublicIdLabel(box)}</span>
             {publicBoxId && <CopyButton value={publicBoxId} tooltipText="Copy Box ID" size="icon-xs" />}
           </div>
-        </InfoRow>
-        <InfoRow label="Image" className="-mr-2">
-          {box.template ? (
-            <div className="flex min-w-0 items-center gap-1">
-              <div className="min-w-0 text-right">
-                <div className="truncate text-sm">{box.template}</div>
-              </div>
-              <CopyButton value={box.template} tooltipText="Copy" size="icon-xs" />
-            </div>
-          ) : (
-            <span className="text-muted-foreground font-normal">—</span>
-          )}
         </InfoRow>
       </InfoSection>
 

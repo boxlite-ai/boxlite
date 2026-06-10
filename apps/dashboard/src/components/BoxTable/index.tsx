@@ -240,7 +240,6 @@ export function BoxTable({
                       </div>
 
                       <div className="grid grid-cols-1 gap-x-5 gap-y-3 text-xs sm:grid-cols-2 xl:grid-cols-4">
-                        <CompactBoxMeta label="Image">{box.template ?? '-'}</CompactBoxMeta>
                         <CompactBoxMeta label="Region">{getRegionName(box.target) ?? box.target}</CompactBoxMeta>
                         <CompactBoxMeta label="Resources">
                           <div className="flex flex-wrap gap-1">

@@ -35,9 +35,6 @@ import { boxToBoxResponse, createBoxToCreateBox } from './mappers/box-to-box.map
 import { Audit, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
-import { BadRequestError } from '../exceptions/bad-request.exception'
-import { getAllowedSystemTemplateNames } from '../box/constants/system-templates'
-
 // Spec-first surface: the contract is openapi/box.openapi.yaml, not the
 // generated product spec (which `:prefix` routes would render invalid).
 @ApiExcludeController()
@@ -89,11 +86,6 @@ export class BoxliteBoxController {
   ): Promise<BoxResponseDto> {
     const organization = authContext.organization
     const createBoxDto = createBoxToCreateBox(dto)
-    if (dto.image && !createBoxDto.templateId) {
-      throw new BadRequestError(
-        `Choose one of the approved images to create a box. Allowed images: ${getAllowedSystemTemplateNames()}`,
-      )
-    }
 
     let box = await this.boxService.createFromTemplate(createBoxDto, organization)
     if (box.state !== BoxState.STARTED) {
@@ -214,9 +206,7 @@ export class BoxliteBoxController {
   private isStartAlreadyInProgress(box: Box): boolean {
     return (
       box.desiredState === BoxDesiredState.STARTED &&
-      [BoxState.UNKNOWN, BoxState.CREATING, BoxState.STARTING, BoxState.RESTORING, BoxState.PULLING_ARTIFACT].includes(
-        box.state,
-      )
+      [BoxState.UNKNOWN, BoxState.CREATING, BoxState.STARTING, BoxState.RESTORING].includes(box.state)
     )
   }
 }

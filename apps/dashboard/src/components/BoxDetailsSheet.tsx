@@ -73,7 +73,6 @@ const BoxDetailsSheet: React.FC<BoxDetailsSheetProps> = ({
   // }, [box?.id, getWebTerminalUrl])
 
   if (!box) return null
-  // TODO(image-rewrite): image display formatting removed with the image/template subsystem; show raw value.
   const publicBoxId = getBoxPublicId(box)
 
   const getLastEvent = (box: Box): { date: Date; relativeTimeString: string } => {
@@ -192,15 +191,6 @@ const BoxDetailsSheet: React.FC<BoxDetailsSheetProps> = ({
                 <h3 className="text-sm text-muted-foreground">State</h3>
                 <div className="mt-1 text-sm">
                   <BoxStateComponent state={box.state} errorReason={box.errorReason} recoverable={box.recoverable} />
-                </div>
-              </div>
-              <div>
-                <h3 className="text-sm text-muted-foreground">Image</h3>
-                <div className="mt-1 flex items-center gap-2">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">{box.template || '-'}</p>
-                  </div>
-                  {box.template && <CopyButton value={box.template} tooltipText="Copy image" size="icon-xs" />}
                 </div>
               </div>
             </div>

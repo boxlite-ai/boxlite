@@ -7,7 +7,6 @@ package config
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -27,7 +26,6 @@ type Config struct {
 	OtelTracingEnabled                 bool          `envconfig:"OTEL_TRACING_ENABLED"`
 	OtelEndpoint                       string        `envconfig:"OTEL_EXPORTER_OTLP_ENDPOINT"`
 	OtelHeaders                        string        `envconfig:"OTEL_EXPORTER_OTLP_HEADERS"`
-	BackupInfoCacheRetention           time.Duration `envconfig:"BACKUP_INFO_CACHE_RETENTION" default:"168h" validate:"min=5m"`
 	Environment                        string        `envconfig:"ENVIRONMENT"`
 	ContainerRuntime                   string        `envconfig:"CONTAINER_RUNTIME"`
 	ContainerNetwork                   string        `envconfig:"CONTAINER_NETWORK"`
@@ -53,8 +51,6 @@ type Config struct {
 	AllocatedResourcesSnapshotInterval time.Duration `envconfig:"ALLOCATED_RESOURCES_SNAPSHOT_INTERVAL" default:"5s" validate:"min=1s"`
 	HealthcheckInterval                time.Duration `envconfig:"HEALTHCHECK_INTERVAL" default:"30s" validate:"min=10s"`
 	HealthcheckTimeout                 time.Duration `envconfig:"HEALTHCHECK_TIMEOUT" default:"10s"`
-	BackupTimeoutMin                   int           `envconfig:"BACKUP_TIMEOUT_MIN" default:"60" validate:"min=1"`
-	ArtifactPullTimeout                time.Duration `envconfig:"ARTIFACT_PULL_TIMEOUT" default:"60m" validate:"min=1m"`
 	BuildTimeoutMin                    int           `envconfig:"BUILD_TIMEOUT_MIN" default:"120" validate:"min=1"`
 	BuildCPUCores                      int64         `envconfig:"BUILD_CPU_CORES" default:"4" validate:"min=1"`
 	BuildMemoryGB                      int64         `envconfig:"BUILD_MEMORY_GB" default:"8" validate:"min=1"`
@@ -155,46 +151,4 @@ func GetEnvironment() string {
 
 func GetBuildEngine() string {
 	return config.BuildEngine
-}
-
-func GetBuildLogFilePath(artifactRef string) (string, error) {
-	// Extract image name from various artifact ref formats:
-	// - registry:5000/boxlite/boxlite-<hash>
-	// - boxlite-<hash>
-	// - boxlite-<hash>:tag
-	// - cr.preprod.boxlite.ai/sbox/boxlite/boxlite-<hash>:boxlite
-
-	buildId := artifactRef
-
-	// Remove tag if present (everything after last colon that's not part of a port)
-	// A tag colon will come after the last slash
-	lastSlashIndex := strings.LastIndex(buildId, "/")
-	lastColonIndex := strings.LastIndex(buildId, ":")
-
-	if lastColonIndex > lastSlashIndex && lastColonIndex != -1 {
-		// This colon is a tag separator, not a port separator
-		buildId = buildId[:lastColonIndex]
-	}
-
-	// Extract the image name (last component after the last slash)
-	if lastSlashIndex := strings.LastIndex(buildId, "/"); lastSlashIndex != -1 {
-		buildId = buildId[lastSlashIndex+1:]
-	}
-
-	c, err := GetConfig()
-	if err != nil {
-		return "", err
-	}
-
-	logPath := filepath.Join(filepath.Dir(c.LogFilePath), "builds", buildId)
-
-	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
-		return "", fmt.Errorf("failed to create log directory: %w", err)
-	}
-
-	if _, err := os.OpenFile(logPath, os.O_CREATE, 0644); err != nil {
-		return "", fmt.Errorf("failed to create log file: %w", err)
-	}
-
-	return logPath, nil
 }

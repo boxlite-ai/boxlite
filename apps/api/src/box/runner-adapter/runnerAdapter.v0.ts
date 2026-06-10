@@ -9,23 +9,14 @@ import axiosDebug from 'axios-debug-log'
 import axiosRetry from 'axios-retry'
 
 import { Injectable, Logger } from '@nestjs/common'
-import {
-  RunnerAdapter,
-  RunnerInfo,
-  RunnerBoxInfo,
-  StartBoxResponse,
-  ArtifactDigestResponse,
-} from './runnerAdapter'
+import { RunnerAdapter, RunnerInfo, RunnerBoxInfo, StartBoxResponse } from './runnerAdapter'
 import { Runner } from '../entities/runner.entity'
 import {
   Configuration,
   BoxApi,
   EnumsBoxState,
-  ArtifactsApi,
   DefaultApi,
-  CreateBoxDTO,
   UpdateNetworkSettingsDTO,
-  InspectArtifactInRegistryRequest,
   RecoverBoxDTO,
 } from '@boxlite-ai/runner-api-client'
 import { Box } from '../entities/box.entity'
@@ -41,7 +32,6 @@ const RETRYABLE_NETWORK_ERROR_CODES = ['ECONNRESET', 'ETIMEDOUT']
 export class RunnerAdapterV0 implements RunnerAdapter {
   private readonly logger = new Logger(RunnerAdapterV0.name)
   private boxApiClient: BoxApi
-  private artifactApiClient: ArtifactsApi
   private runnerApiClient: DefaultApi
 
   private convertBoxState(state: EnumsBoxState): BoxState {
@@ -64,8 +54,6 @@ export class RunnerAdapterV0 implements RunnerAdapter {
         return BoxState.STOPPING
       case EnumsBoxState.BoxStateError:
         return BoxState.ERROR
-      case EnumsBoxState.BoxStatePullingArtifact:
-        return BoxState.PULLING_ARTIFACT
       default:
         return BoxState.UNKNOWN
     }
@@ -129,7 +117,6 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     }
 
     this.boxApiClient = new BoxApi(new Configuration(), '', axiosInstance)
-    this.artifactApiClient = new ArtifactsApi(new Configuration(), '', axiosInstance)
     this.runnerApiClient = new DefaultApi(new Configuration(), '', axiosInstance)
   }
 
@@ -157,52 +144,6 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     }
   }
 
-  async createBox(
-    box: Box,
-    artifactRef: string,
-    entrypoint?: string[],
-    metadata?: { [key: string]: string },
-    otelEndpoint?: string,
-    skipStart?: boolean,
-  ): Promise<StartBoxResponse | undefined> {
-    const createBoxDto: CreateBoxDTO = {
-      id: box.id,
-      boxId: box.boxId,
-      userId: box.organizationId,
-      artifactRef,
-      osUser: box.osUser,
-      cpuQuota: box.cpu,
-      gpuQuota: box.gpu,
-      memoryQuota: box.mem,
-      storageQuota: box.disk,
-      env: box.env,
-      entrypoint: entrypoint,
-      volumes: box.volumes?.map((volume) => ({
-        volumeId: volume.volumeId,
-        mountPath: volume.mountPath,
-        subpath: volume.subpath,
-      })),
-      networkBlockAll: box.networkBlockAll,
-      networkAllowList: box.networkAllowList,
-      metadata: { ...(metadata ?? {}), boxId: box.boxId },
-      authToken: box.authToken,
-      otelEndpoint,
-      skipStart: skipStart,
-      organizationId: box.organizationId,
-      regionId: box.region,
-    }
-
-    const response = await this.boxApiClient.create(createBoxDto)
-
-    if (!response?.data?.daemonVersion) {
-      return undefined
-    }
-
-    return {
-      daemonVersion: response.data.daemonVersion,
-    }
-  }
-
   async startBox(
     boxId: string,
     authToken: string,
@@ -227,32 +168,6 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     await this.boxApiClient.destroy(boxId)
   }
 
-  async removeArtifact(artifactRef: string): Promise<void> {
-    await this.artifactApiClient.removeArtifact(artifactRef)
-  }
-
-  // TODO(image-rewrite): pullArtifact removed with runner_artifact_cache + box_template.
-
-  async artifactExists(artifactRef: string): Promise<boolean> {
-    const response = await this.artifactApiClient.artifactExists(artifactRef)
-    return response.data.exists
-  }
-
-  // TODO(image-rewrite): getArtifactInfo removed with runner_artifact_cache + box_template.
-
-  async inspectArtifactInRegistry(artifactRef: string): Promise<ArtifactDigestResponse> {
-    const request: InspectArtifactInRegistryRequest = {
-      artifactRef,
-    }
-
-    const response = await this.artifactApiClient.inspectArtifactInRegistry(request)
-
-    return {
-      hash: response.data.hash,
-      sizeGB: response.data.sizeGB,
-    }
-  }
-
   async updateNetworkSettings(
     boxId: string,
     networkBlockAll?: boolean,
@@ -271,7 +186,6 @@ export class RunnerAdapterV0 implements RunnerAdapter {
   async recoverBox(box: Box): Promise<void> {
     const recoverBoxDTO: RecoverBoxDTO = {
       userId: box.organizationId,
-      snapshot: box.template,
       osUser: box.osUser,
       cpuQuota: box.cpu,
       gpuQuota: box.gpu,

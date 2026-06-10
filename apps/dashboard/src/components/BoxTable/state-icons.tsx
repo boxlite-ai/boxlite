@@ -31,7 +31,6 @@ export const STATE_ICONS: Record<BoxState | 'RECOVERY', React.ReactNode> = {
   [BoxState.ERROR]: <Square color="bg-destructive" />,
   [BoxState.BUILD_FAILED]: <Square color="bg-destructive" />,
   [BoxState.BUILDING_ARTIFACT]: <Loader2 className="w-3 h-3 animate-spin" />,
-  [BoxState.PULLING_ARTIFACT]: <Loader2 className="w-3 h-3 animate-spin" />,
   [BoxState.PENDING_BUILD]: <Square color="bg-muted-foreground/20" />,
   [BoxState.ARCHIVED]: <Square color="bg-muted-foreground/20" />,
   [BoxState.ARCHIVING]: <Loader2 className="w-3 h-3 animate-spin" />,

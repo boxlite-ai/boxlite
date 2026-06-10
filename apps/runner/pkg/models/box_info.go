@@ -8,8 +8,5 @@ package models
 import "github.com/boxlite-ai/runner/pkg/models/enums"
 
 type BoxInfo struct {
-	BoxState          enums.BoxState
-	BackupState       enums.BackupState
-	BackupSnapshot    string
-	BackupErrorReason *string
+	BoxState enums.BoxState
 }

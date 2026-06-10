@@ -70,7 +70,6 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
       runnerService as any,
       runnerAdapterFactory as any,
       boxRepository as any,
-      {} as any, // boxTemplateService
       organizationService as any,
       {} as any, // configService
       redisLockProvider as any,
@@ -114,7 +113,6 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
       runnerService as any,
       runnerAdapterFactory as any,
       boxRepository as any,
-      {} as any,
       organizationService as any,
       {} as any,
       redisLockProvider as any,

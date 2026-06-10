@@ -63,7 +63,7 @@ export class WorkspaceDto extends BoxDto {
   static fromBoxDto(boxDto: BoxDto): WorkspaceDto {
     return {
       ...boxDto,
-      image: boxDto.template,
+      image: '',
       info: {
         name: boxDto.name,
         created: boxDto.createdAt,

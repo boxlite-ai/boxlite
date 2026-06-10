@@ -11,7 +11,6 @@ import (
 	"maps"
 	"net"
 	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -185,16 +184,6 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 						return
 					case "/health":
 						ctx.JSON(http.StatusOK, gin.H{"status": "ok", "version": internal.Version})
-						return
-					}
-
-					if regexp.MustCompile(`^/templates/[\w-]+/build-logs$`).MatchString(ctx.Request.URL.Path) {
-						common_proxy.NewProxyRequestHandler(proxy.getTemplateTarget, nil)(ctx)
-						return
-					}
-
-					if regexp.MustCompile(`^/boxes/[\w-]+/build-logs$`).MatchString(ctx.Request.URL.Path) {
-						common_proxy.NewProxyRequestHandler(proxy.getBoxBuildTarget, nil)(ctx)
 						return
 					}
 				}

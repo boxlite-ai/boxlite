@@ -45,20 +45,18 @@ type UpdateNetworkSettingsDTO struct {
 } //	@name	UpdateNetworkSettingsDTO
 
 type RecoverBoxDTO struct {
-	FromVolumeId      string            `json:"fromVolumeId,omitempty"`
-	UserId            string            `json:"userId" validate:"required"`
-	Snapshot          *string           `json:"snapshot,omitempty"`
-	OsUser            string            `json:"osUser" validate:"required"`
-	CpuQuota          int64             `json:"cpuQuota" validate:"min=1"`
-	GpuQuota          int64             `json:"gpuQuota" validate:"min=0"`
-	MemoryQuota       int64             `json:"memoryQuota" validate:"min=1"`
-	StorageQuota      int64             `json:"storageQuota" validate:"min=1"`
-	Env               map[string]string `json:"env,omitempty"`
-	Volumes           []VolumeDTO       `json:"volumes,omitempty"`
-	NetworkBlockAll   *bool             `json:"networkBlockAll,omitempty"`
-	NetworkAllowList  *string           `json:"networkAllowList,omitempty"`
-	ErrorReason       string            `json:"errorReason" validate:"required"`
-	BackupErrorReason string            `json:"backupErrorReason,omitempty"`
+	FromVolumeId     string            `json:"fromVolumeId,omitempty"`
+	UserId           string            `json:"userId" validate:"required"`
+	OsUser           string            `json:"osUser" validate:"required"`
+	CpuQuota         int64             `json:"cpuQuota" validate:"min=1"`
+	GpuQuota         int64             `json:"gpuQuota" validate:"min=0"`
+	MemoryQuota      int64             `json:"memoryQuota" validate:"min=1"`
+	StorageQuota     int64             `json:"storageQuota" validate:"min=1"`
+	Env              map[string]string `json:"env,omitempty"`
+	Volumes          []VolumeDTO       `json:"volumes,omitempty"`
+	NetworkBlockAll  *bool             `json:"networkBlockAll,omitempty"`
+	NetworkAllowList *string           `json:"networkAllowList,omitempty"`
+	ErrorReason      string            `json:"errorReason" validate:"required"`
 } //	@name	RecoverBoxDTO
 
 type IsRecoverableDTO struct {

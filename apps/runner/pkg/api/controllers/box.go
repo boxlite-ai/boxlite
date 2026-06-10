@@ -348,20 +348,14 @@ func Info(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusOK, BoxInfoResponse{
-		State:          info.BoxState,
-		BackupState:    info.BackupState,
-		BackupSnapshot: info.BackupSnapshot,
-		BackupError:    info.BackupErrorReason,
-		DaemonVersion:  daemonVersion,
+		State:         info.BoxState,
+		DaemonVersion: daemonVersion,
 	})
 }
 
 type BoxInfoResponse struct {
-	State          enums.BoxState    `json:"state"`
-	BackupState    enums.BackupState `json:"backupState"`
-	BackupSnapshot string            `json:"backupSnapshot,omitempty"`
-	BackupError    *string           `json:"backupError,omitempty"`
-	DaemonVersion  *string           `json:"daemonVersion,omitempty"`
+	State         enums.BoxState `json:"state"`
+	DaemonVersion *string        `json:"daemonVersion,omitempty"`
 } //	@name	BoxInfoResponse
 
 // Recover godoc

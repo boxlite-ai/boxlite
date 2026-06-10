@@ -15,13 +15,6 @@ func NotifyEmptyBoxList(tip bool) {
 	}
 }
 
-func NotifyEmptyTemplateList(tip bool) {
-	common.RenderInfoMessageBold("No templates found")
-	if tip {
-		common.RenderTip("Use 'boxlite template push' to push a template.")
-	}
-}
-
 func NotifyEmptyOrganizationList(tip bool) {
 	common.RenderInfoMessageBold("No organizations found")
 	if tip {

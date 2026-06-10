@@ -22,7 +22,6 @@ const STATE_LABEL_MAPPING: Record<BoxState, string> = {
   [BoxState.STOPPING]: 'Stopping',
   [BoxState.DESTROYING]: 'Deleting',
   [BoxState.DESTROYED]: 'Deleted',
-  [BoxState.PULLING_ARTIFACT]: 'Loading runtime',
   [BoxState.UNKNOWN]: 'Unknown',
   [BoxState.ARCHIVING]: 'Archiving',
   [BoxState.RESIZING]: 'Resizing',

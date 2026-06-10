@@ -9,14 +9,12 @@ import { WebhookEvent } from '@boxlite-ai/api-client'
 export const WEBHOOK_EVENTS: Array<{ value: WebhookEvent; label: string; category: string }> = [
   { value: WebhookEvent.SANDBOX_CREATED, label: 'Box Created', category: 'Box' },
   { value: WebhookEvent.SANDBOX_STATE_UPDATED, label: 'Box State Updated', category: 'Box' },
-  { value: WebhookEvent.TEMPLATE_CREATED, label: 'Image Created', category: 'Image' },
-  { value: WebhookEvent.TEMPLATE_REMOVED, label: 'Image Removed', category: 'Image' },
-  { value: WebhookEvent.TEMPLATE_STATE_UPDATED, label: 'Image State Updated', category: 'Image' },
+  // TODO(image-rewrite): image/template webhook events removed with the image/template subsystem.
   { value: WebhookEvent.VOLUME_CREATED, label: 'Volume Created', category: 'Volume' },
   { value: WebhookEvent.VOLUME_STATE_UPDATED, label: 'Volume State Updated', category: 'Volume' },
 ] as const
 
-export const WEBHOOK_EVENT_CATEGORIES = ['Box', 'Image', 'Volume'] as const
+export const WEBHOOK_EVENT_CATEGORIES = ['Box', 'Volume'] as const
 
 export type WebhookEventValue = (typeof WEBHOOK_EVENTS)[number]['value']
 export type WebhookEventCategory = (typeof WEBHOOK_EVENT_CATEGORIES)[number]

@@ -156,7 +156,6 @@ export class WorkspaceController {
       await this.workspaceService.createFromTemplate(
         {
           ...createWorkspaceDto,
-          templateId: createWorkspaceDto.image,
         },
         organization,
       ),
