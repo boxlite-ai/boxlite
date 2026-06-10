@@ -222,34 +222,82 @@ jobs:
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
       # ──────────────────────────────────────────────────────────────────
-      # Build runner binary (musl static — no glibc-version drift risk
-      # against the runner EC2's Ubuntu version). Cached so repeated PRs
-      # only pay the changed-crates compile cost, not the full cold build.
+      # Build runner binary (Go + CGO links libboxlite.a).
+      #
+      # Mirrors .github/workflows/build-runner-binary.yml's runner-build
+      # path: download prebuilt libboxlite.a from the matching GitHub
+      # release (v$(Cargo.toml version)), build daemon + computer-use
+      # binaries that are embedded as static assets into runner, then
+      # build the runner binary itself with CGO_ENABLED=1.
+      #
+      # Pinning to a released libboxlite.a means PR changes that affect
+      # ONLY apps/runner Go code are picked up; PR changes to sdks/c
+      # would need a separate libboxlite.a build (out of scope for now).
       # ──────────────────────────────────────────────────────────────────
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-go@v5
         with:
-          targets: x86_64-unknown-linux-musl
+          go-version: '1.25.4'
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: e2e-cloud-musl
-          shared-key: e2e-cloud
-          workspaces: ". -> target"
+      - name: Install runner build deps
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxtst-dev libxinerama-dev
 
-      - name: Build boxlite-runner (musl)
+      - name: Determine boxlite version + download prebuilt libboxlite.a
+        id: libboxlite
         run: |
           set -euo pipefail
-          sudo apt-get update && sudo apt-get install -y musl-tools
-          cargo build --release --target x86_64-unknown-linux-musl -p boxlite-runner
+          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          ARCHIVE="boxlite-c-v${VERSION}-linux-x64-gnu.tar.gz"
+          URL="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/${ARCHIVE}"
+          echo "Downloading $URL"
+          curl -fsSL "$URL" | tar xz -C /tmp/
+          cp "/tmp/boxlite-c-v${VERSION}-linux-x64-gnu/lib/libboxlite.a" sdks/go/libboxlite.a
+
+      - name: Rewrite apps/go.work for minimal modules
+        run: |
+          printf 'go 1.25.4\n\nuse (\n\t./runner\n\t./daemon\n\t./common-go\n\t./api-client-go\n\t./libs/computer-use\n\t../sdks/go\n)\n' > apps/go.work
+
+      - name: Download Go modules
+        run: |
+          set -euo pipefail
+          go -C apps/runner mod download
+          go -C apps/daemon mod download
+          go -C apps/common-go mod download
+          go -C apps/api-client-go mod download
+          go -C apps/libs/computer-use mod download
+
+      - name: Build daemon (embedded asset)
+        env:
+          VERSION: ${{ steps.libboxlite.outputs.version }}
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C apps \
+            -ldflags "-X 'github.com/boxlite-ai/daemon/internal.Version=${VERSION}'" \
+            -o runner/pkg/daemon/static/daemon-amd64 \
+            ./daemon/cmd/daemon/
+
+      - name: Build computer-use (embedded asset)
+        run: |
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -C apps \
+            -o runner/pkg/daemon/static/boxlite-computer-use \
+            ./libs/computer-use/
+
+      - name: Build boxlite-runner
+        env:
+          VERSION: ${{ steps.libboxlite.outputs.version }}
+        run: |
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -C apps \
+            -ldflags "-X 'github.com/boxlite-ai/runner/internal.Version=${VERSION}'" \
+            -o /tmp/boxlite-runner \
+            ./runner/cmd/runner/
+          ls -la /tmp/boxlite-runner
+          file /tmp/boxlite-runner || true
 
       - name: Upload runner binary to S3
         id: upload_runner
         run: |
           set -euo pipefail
           S3_KEY="builds/${{ github.sha }}/boxlite-runner"
-          aws s3 cp \
-            target/x86_64-unknown-linux-musl/release/boxlite-runner \
-            "s3://${{ steps.resources.outputs.s3_bucket }}/${S3_KEY}"
+          aws s3 cp /tmp/boxlite-runner "s3://${{ steps.resources.outputs.s3_bucket }}/${S3_KEY}"
           echo "s3_key=$S3_KEY" >> "$GITHUB_OUTPUT"
 
       # ──────────────────────────────────────────────────────────────────
