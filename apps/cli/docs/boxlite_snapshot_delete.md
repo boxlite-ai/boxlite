@@ -3,7 +3,7 @@
 Delete a snapshot
 
 ```
-boxlite snapshot delete [SNAPSHOT_ID] [flags]
+boxlite snapshot delete [SNAPSHOT_ID | SNAPSHOT_NAME] [flags]
 ```
 
 ### Options
@@ -20,4 +20,5 @@ boxlite snapshot delete [SNAPSHOT_ID] [flags]
 
 ### SEE ALSO
 
-* [boxlite snapshot](boxlite_snapshot.md)  - Manage BoxLite snapshots
+* [boxlite snapshot](boxlite_snapshot.md)	 - Manage BoxLite snapshots
+

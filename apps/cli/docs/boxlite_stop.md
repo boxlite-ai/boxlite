@@ -1,9 +1,15 @@
 ## boxlite stop
 
-Stop a sandbox
+Stop a box
 
 ```
-boxlite stop [SANDBOX_ID] | [SANDBOX_NAME] [flags]
+boxlite stop [BOX_ID] | [BOX_NAME] [flags]
+```
+
+### Options
+
+```
+  -f, --force   Force stop the box using SIGKILL
 ```
 
 ### Options inherited from parent commands
@@ -14,4 +20,5 @@ boxlite stop [SANDBOX_ID] | [SANDBOX_NAME] [flags]
 
 ### SEE ALSO
 
-* [boxlite](boxlite.md)  - BoxLite CLI
+* [boxlite](boxlite.md)	 - BoxLite CLI
+

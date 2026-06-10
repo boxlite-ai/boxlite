@@ -1,9 +1,9 @@
 ## boxlite preview-url
 
-Get signed preview URL for a sandbox port
+Get signed preview URL for a box port
 
 ```
-boxlite preview-url [SANDBOX_ID | SANDBOX_NAME] [flags]
+boxlite preview-url [BOX_ID | BOX_NAME] [flags]
 ```
 
 ### Options
@@ -21,4 +21,5 @@ boxlite preview-url [SANDBOX_ID | SANDBOX_NAME] [flags]
 
 ### SEE ALSO
 
-* [boxlite](boxlite.md)  - BoxLite CLI
+* [boxlite](boxlite.md)	 - BoxLite CLI
+

@@ -1,6 +1,6 @@
 name: boxlite info
-synopsis: Get sandbox info
-usage: boxlite info [SANDBOX_ID] | [SANDBOX_NAME] [flags]
+synopsis: Get box info
+usage: boxlite info [BOX_ID] | [BOX_NAME] [flags]
 options:
   - name: format
     shorthand: f

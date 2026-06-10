@@ -1,13 +1,13 @@
 ## boxlite ssh
 
-SSH into a sandbox
+SSH into a box
 
 ### Synopsis
 
-Establish an SSH connection to a running sandbox
+Establish an SSH connection to a running box
 
 ```
-boxlite ssh [SANDBOX_ID] | [SANDBOX_NAME] [flags]
+boxlite ssh [BOX_ID] | [BOX_NAME] [flags]
 ```
 
 ### Options
@@ -24,4 +24,5 @@ boxlite ssh [SANDBOX_ID] | [SANDBOX_NAME] [flags]
 
 ### SEE ALSO
 
-* [boxlite](boxlite.md)  - BoxLite CLI
+* [boxlite](boxlite.md)	 - BoxLite CLI
+

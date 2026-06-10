@@ -1,6 +1,6 @@
 name: boxlite archive
-synopsis: Archive a sandbox
-usage: boxlite archive [SANDBOX_ID] | [SANDBOX_NAME] [flags]
+synopsis: Archive a box
+usage: boxlite archive [BOX_ID] | [BOX_NAME] [flags]
 inherited_options:
   - name: help
     default_value: 'false'

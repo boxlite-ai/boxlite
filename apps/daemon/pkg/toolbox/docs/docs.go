@@ -2585,7 +2585,7 @@ const docTemplate = `{
         },
         "/process/session/entrypoint/logs": {
             "get": {
-                "description": "Get logs for a sandbox entrypoint session. Supports both HTTP and WebSocket streaming.",
+                "description": "Get logs for a box entrypoint session. Supports both HTTP and WebSocket streaming.",
                 "produces": [
                     "text/plain"
                 ],

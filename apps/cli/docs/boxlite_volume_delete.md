@@ -14,4 +14,5 @@ boxlite volume delete [VOLUME_ID] [flags]
 
 ### SEE ALSO
 
-* [boxlite volume](boxlite_volume.md)  - Manage BoxLite volumes
+* [boxlite volume](boxlite_volume.md)	 - Manage BoxLite volumes
+

@@ -1,13 +1,13 @@
 ## boxlite exec
 
-Execute a command in a sandbox
+Execute a command in a box
 
 ### Synopsis
 
-Execute a command in a running sandbox
+Execute a command in a running box
 
 ```
-boxlite exec [SANDBOX_ID | SANDBOX_NAME] -- [COMMAND] [ARGS...] [flags]
+boxlite exec [BOX_ID | BOX_NAME] -- [COMMAND] [ARGS...] [flags]
 ```
 
 ### Options
@@ -25,4 +25,5 @@ boxlite exec [SANDBOX_ID | SANDBOX_NAME] -- [COMMAND] [ARGS...] [flags]
 
 ### SEE ALSO
 
-* [boxlite](boxlite.md)  - BoxLite CLI
+* [boxlite](boxlite.md)	 - BoxLite CLI
+

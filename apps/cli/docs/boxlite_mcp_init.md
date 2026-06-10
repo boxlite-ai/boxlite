@@ -14,4 +14,5 @@ boxlite mcp init [AGENT_NAME] [flags]
 
 ### SEE ALSO
 
-* [boxlite mcp](boxlite_mcp.md)  - Manage BoxLite MCP Server
+* [boxlite mcp](boxlite_mcp.md)	 - Manage BoxLite MCP Server
+

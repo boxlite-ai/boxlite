@@ -1,7 +1,7 @@
 name: boxlite ssh
-synopsis: SSH into a sandbox
-description: Establish an SSH connection to a running sandbox
-usage: boxlite ssh [SANDBOX_ID] | [SANDBOX_NAME] [flags]
+synopsis: SSH into a box
+description: Establish an SSH connection to a running box
+usage: boxlite ssh [BOX_ID] | [BOX_NAME] [flags]
 options:
   - name: expires
     default_value: '1440'
