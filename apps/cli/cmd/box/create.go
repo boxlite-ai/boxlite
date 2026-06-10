@@ -37,9 +37,6 @@ var CreateCmd = &cobra.Command{
 
 		createBox := apiclient.NewCreateBox()
 
-		if snapshotFlag != "" {
-			createBox.SetSnapshot(snapshotFlag)
-		}
 		if nameFlag != "" {
 			createBox.SetName(nameFlag)
 		}
@@ -142,11 +139,6 @@ var CreateCmd = &cobra.Command{
 				return err
 			}
 
-			err = common.AwaitBoxState(ctx, apiClient, box.Id, apiclient.BOXSTATE_BUILDING_SNAPSHOT)
-			if err != nil {
-				return err
-			}
-
 			logsContext, stopLogs := context.WithCancel(context.Background())
 			defer stopLogs()
 
@@ -184,7 +176,6 @@ var CreateCmd = &cobra.Command{
 }
 
 var (
-	snapshotFlag         string
 	nameFlag             string
 	userFlag             string
 	envFlag              []string
@@ -206,7 +197,6 @@ var (
 )
 
 func init() {
-	CreateCmd.Flags().StringVar(&snapshotFlag, "snapshot", "", "Snapshot to use for the box")
 	CreateCmd.Flags().StringVar(&nameFlag, "name", "", "Name of the box")
 	CreateCmd.Flags().StringVar(&userFlag, "user", "", "User associated with the box")
 	CreateCmd.Flags().StringArrayVarP(&envFlag, "env", "e", []string{}, "Environment variables (format: KEY=VALUE)")
@@ -225,7 +215,4 @@ func init() {
 	CreateCmd.Flags().StringArrayVarP(&contextFlag, "context", "c", []string{}, "Files or directories to include in the build context (can be specified multiple times)")
 	CreateCmd.Flags().BoolVar(&networkBlockAllFlag, "network-block-all", false, "Whether to block all network access for the box")
 	CreateCmd.Flags().StringVar(&networkAllowListFlag, "network-allow-list", "", "Comma-separated list of allowed CIDR network addresses for the box")
-
-	CreateCmd.MarkFlagsMutuallyExclusive("snapshot", "dockerfile")
-	CreateCmd.MarkFlagsMutuallyExclusive("snapshot", "context")
 }

@@ -221,7 +221,6 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     organization.maxDiskPerBox = updateDto.maxDiskPerBox ?? organization.maxDiskPerBox
     organization.maxTemplateSize = updateDto.maxTemplateSize ?? organization.maxTemplateSize
     organization.volumeQuota = updateDto.volumeQuota ?? organization.volumeQuota
-    organization.templateQuota = updateDto.templateQuota ?? organization.templateQuota
     organization.authenticatedRateLimit = updateDto.authenticatedRateLimit ?? organization.authenticatedRateLimit
     organization.boxCreateRateLimit = updateDto.boxCreateRateLimit ?? organization.boxCreateRateLimit
     organization.boxLifecycleRateLimit = updateDto.boxLifecycleRateLimit ?? organization.boxLifecycleRateLimit
@@ -531,7 +530,6 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     organization.maxCpuPerBox = quota.maxCpuPerBox
     organization.maxMemoryPerBox = quota.maxMemoryPerBox
     organization.maxDiskPerBox = quota.maxDiskPerBox
-    organization.templateQuota = quota.templateQuota
     organization.maxTemplateSize = quota.maxTemplateSize
     organization.volumeQuota = quota.volumeQuota
 

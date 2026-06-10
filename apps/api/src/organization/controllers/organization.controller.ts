@@ -403,7 +403,6 @@ export class OrganizationController {
         maxCpuPerBox: req.body?.maxCpuPerBox,
         maxMemoryPerBox: req.body?.maxMemoryPerBox,
         maxDiskPerBox: req.body?.maxDiskPerBox,
-        templateQuota: req.body?.templateQuota,
         maxTemplateSize: req.body?.maxTemplateSize,
         volumeQuota: req.body?.volumeQuota,
       }),

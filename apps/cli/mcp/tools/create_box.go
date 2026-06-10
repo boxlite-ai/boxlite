@@ -21,7 +21,6 @@ type CreateBoxArgs struct {
 	Id                 *string                    `json:"id,omitempty"`
 	Name               *string                    `json:"name,omitempty"`
 	Target             *string                    `json:"target,omitempty"`
-	Snapshot           *string                    `json:"snapshot,omitempty"`
 	User               *string                    `json:"user,omitempty"`
 	Env                *map[string]string         `json:"env,omitempty"`
 	Labels             *map[string]string         `json:"labels,omitempty"`
@@ -121,16 +120,6 @@ func createBoxRequest(args CreateBoxArgs) (*apiclient.CreateBox, error) {
 
 	if args.Name != nil && *args.Name != "" {
 		createBox.SetName(*args.Name)
-	}
-
-	if args.BuildInfo != nil {
-		if args.Snapshot != nil && *args.Snapshot != "" {
-			return nil, fmt.Errorf("cannot specify a snapshot when using a build info entry")
-		}
-	}
-
-	if args.Snapshot != nil && *args.Snapshot != "" {
-		createBox.SetSnapshot(*args.Snapshot)
 	}
 
 	if args.Target != nil && *args.Target != "" {

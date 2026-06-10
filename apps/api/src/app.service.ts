@@ -169,7 +169,6 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
           maxCpuPerBox: this.configService.getOrThrow('admin.maxCpuPerBox'),
           maxMemoryPerBox: this.configService.getOrThrow('admin.maxMemoryPerBox'),
           maxDiskPerBox: this.configService.getOrThrow('admin.maxDiskPerBox'),
-          templateQuota: this.configService.getOrThrow('admin.templateQuota'),
           maxTemplateSize: this.configService.getOrThrow('admin.maxTemplateSize'),
           volumeQuota: this.configService.getOrThrow('admin.volumeQuota'),
         },
@@ -202,7 +201,6 @@ Admin API key ensured: ${this.maskApiKeyForLog(value)}
       maxCpuPerBox: this.configService.getOrThrow('admin.maxCpuPerBox'),
       maxMemoryPerBox: this.configService.getOrThrow('admin.maxMemoryPerBox'),
       maxDiskPerBox: this.configService.getOrThrow('admin.maxDiskPerBox'),
-      templateQuota: this.configService.getOrThrow('admin.templateQuota'),
       maxTemplateSize: this.configService.getOrThrow('admin.maxTemplateSize'),
       volumeQuota: this.configService.getOrThrow('admin.volumeQuota'),
     })

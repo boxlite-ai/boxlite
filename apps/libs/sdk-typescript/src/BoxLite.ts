@@ -12,7 +12,6 @@ import {
   VolumesApi,
   BoxVolume,
   ConfigApi,
-  TemplatesApi,
 } from '@boxlite-ai/api-client'
 import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios'
 import { BoxPythonCodeToolbox } from './code-toolbox/BoxPythonCodeToolbox'
@@ -21,7 +20,6 @@ import { BoxJsCodeToolbox } from './code-toolbox/BoxJsCodeToolbox'
 import { BoxliteError, BoxLiteNotFoundError, BoxLiteRateLimitError } from './errors/BoxliteError'
 import { Image } from './Image'
 import { Box, PaginatedBoxes } from './Box'
-import { TemplateService } from './Template'
 import { VolumeService } from './Volume'
 import * as packageJson from '../package.json'
 import { processStreamingResponse } from './utils/Stream'
@@ -199,7 +197,6 @@ export type CreateBoxFromTemplateParams = CreateBoxBaseParams & {
  * Can be initialized either with explicit configuration or using environment variables.
  *
  * @property {VolumeService} volume - Service for managing BoxLite Volumes
- * @property {TemplateService} template - Service for managing BoxLite Templates
  *
  * @example
  * // Using environment variables
@@ -235,7 +232,6 @@ export class BoxLite implements AsyncDisposable {
   private readonly apiUrl: string
   private otelSdk?: NodeSDK
   public readonly volume: VolumeService
-  public readonly template: TemplateService
 
   /**
    * Creates a new BoxLite client instance.
@@ -310,12 +306,6 @@ export class BoxLite implements AsyncDisposable {
     this.objectStorageApi = new ObjectStorageApi(configuration, '', axiosInstance)
     this.configApi = new ConfigApi(configuration, '', axiosInstance)
     this.volume = new VolumeService(new VolumesApi(configuration, '', axiosInstance))
-    this.template = new TemplateService(
-      configuration,
-      new TemplatesApi(configuration, '', axiosInstance),
-      this.objectStorageApi,
-      this.target,
-    )
     this.clientConfig = configuration
 
     if (!config?._experimental?.otelEnabled && envReader()?.get('BOXLITE_EXPERIMENTAL_OTEL_ENABLED') !== 'true') {
@@ -482,9 +472,7 @@ export class BoxLite implements AsyncDisposable {
             dockerfileContent: Image.base(params.image).dockerfile,
           }
         } else if (params.image instanceof Image) {
-          const contextHashes = await TemplateService.processImageContext(this.objectStorageApi, params.image)
           buildInfo = {
-            contextHashes,
             dockerfileContent: params.image.dockerfile,
           }
         }

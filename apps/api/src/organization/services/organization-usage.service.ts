@@ -20,11 +20,6 @@ import {
   BoxUsageOverviewWithPendingInternalDto,
 } from '../dto/box-usage-overview-internal.dto'
 import {
-  PendingTemplateUsageOverviewInternalDto,
-  TemplateUsageOverviewInternalDto,
-  TemplateUsageOverviewWithPendingInternalDto,
-} from '../dto/template-usage-overview-internal.dto'
-import {
   PendingVolumeUsageOverviewInternalDto,
   VolumeUsageOverviewInternalDto,
   VolumeUsageOverviewWithPendingInternalDto,
@@ -108,14 +103,11 @@ export class OrganizationUsageService {
       }),
     )
 
-    const templateUsage = await this.getTemplateUsageOverview(organizationId)
     const volumeUsage = await this.getVolumeUsageOverview(organizationId)
 
     return {
       regionUsage,
-      totalTemplateQuota: organization.templateQuota,
       totalVolumeQuota: organization.volumeQuota,
-      currentTemplateUsage: templateUsage.currentTemplateUsage,
       currentVolumeUsage: volumeUsage.currentVolumeUsage,
     }
   }
@@ -176,47 +168,6 @@ export class OrganizationUsageService {
       }
 
       return combinedUsageOverview
-    } finally {
-      await this.redisLockProvider.unlock(lockKey)
-    }
-  }
-
-  /**
-   * Get the current and pending usage overview for template-related organization quotas.
-   *
-   * @param organizationId
-   */
-  async getTemplateUsageOverview(organizationId: string): Promise<TemplateUsageOverviewWithPendingInternalDto> {
-    let cachedUsageOverview = await this.getCachedTemplateUsageOverview(organizationId)
-
-    // cache hit
-    if (cachedUsageOverview) {
-      return cachedUsageOverview
-    }
-
-    // cache miss, wait for lock
-    const lockKey = `org:${organizationId}:fetch-template-usage-from-db`
-    await this.redisLockProvider.waitForLock(lockKey, 60)
-
-    try {
-      // check if cache was updated while waiting for lock
-      cachedUsageOverview = await this.getCachedTemplateUsageOverview(organizationId)
-
-      // cache hit
-      if (cachedUsageOverview) {
-        return cachedUsageOverview
-      }
-
-      // cache miss, fetch from db
-      const usageOverview = await this.fetchTemplateUsageFromDb(organizationId)
-
-      // get pending usage separately since it's not stored in DB
-      const pendingUsageOverview = await this.getCachedPendingTemplateUsageOverview(organizationId)
-
-      return {
-        ...usageOverview,
-        ...pendingUsageOverview,
-      }
     } finally {
       await this.redisLockProvider.unlock(lockKey)
     }
@@ -411,86 +362,6 @@ export class OrganizationUsageService {
   }
 
   /**
-   * Get the cached overview for current and pending usage for template-related organization quotas.
-   *
-   * @param organizationId
-   */
-  private async getCachedTemplateUsageOverview(
-    organizationId: string,
-  ): Promise<TemplateUsageOverviewWithPendingInternalDto | null> {
-    const script = `
-      return {
-        redis.call("GET", KEYS[1]),
-        redis.call("GET", KEYS[2])
-      }
-    `
-    const result = (await this.redis.eval(
-      script,
-      2,
-      this.getCurrentQuotaUsageCacheKey(organizationId, 'template_count'),
-      this.getPendingQuotaUsageCacheKey(organizationId, 'template_count'),
-    )) as (string | null)[]
-
-    const [currentTemplateUsage, pendingTemplateUsage] = result
-
-    // Cache miss
-    if (currentTemplateUsage === null) {
-      return null
-    }
-
-    // Check cache staleness for current usage
-    const isStale = await this.isCacheStale(organizationId, 'template')
-
-    if (isStale) {
-      return null
-    }
-
-    // Validate current usage values are non-negative numbers
-    const parsedCurrentTemplateUsage = this.parseNonNegativeCachedValue(currentTemplateUsage)
-
-    if (parsedCurrentTemplateUsage === null) {
-      return null
-    }
-
-    // Parse pending usage values (null is acceptable)
-    const parsedPendingTemplateUsage = this.parseNonNegativeCachedValue(pendingTemplateUsage)
-
-    return {
-      currentTemplateUsage: parsedCurrentTemplateUsage,
-      pendingTemplateUsage: parsedPendingTemplateUsage,
-    }
-  }
-
-  /**
-   * Get the cached pending usage overview for template-related organization quotas.
-   *
-   * @param organizationId
-   */
-  private async getCachedPendingTemplateUsageOverview(
-    organizationId: string,
-  ): Promise<PendingTemplateUsageOverviewInternalDto> {
-    const script = `
-      return {
-        redis.call("GET", KEYS[1])
-      }
-    `
-    const result = (await this.redis.eval(
-      script,
-      1,
-      this.getPendingQuotaUsageCacheKey(organizationId, 'template_count'),
-    )) as (string | null)[]
-
-    const [pendingTemplateUsage] = result
-
-    // Parse pending usage values (null is acceptable)
-    const parsedPendingTemplateUsage = this.parseNonNegativeCachedValue(pendingTemplateUsage)
-
-    return {
-      pendingTemplateUsage: parsedPendingTemplateUsage,
-    }
-  }
-
-  /**
    * Get the cached overview for current and pending usage for volume-related organization quotas.
    *
    * @param organizationId
@@ -646,27 +517,6 @@ export class OrganizationUsageService {
   }
 
   /**
-   * Fetch the current usage overview for template-related organization quotas from the database and cache the results.
-   *
-   * @param organizationId
-   */
-  private async fetchTemplateUsageFromDb(organizationId: string): Promise<TemplateUsageOverviewInternalDto> {
-    // TODO(billing-rewrite): template-based metering removed with box_template; billing model TBD.
-    // Until the new image/template model lands, template usage is reported as 0.
-    const templateUsage = 0
-
-    // cache the result
-    const cacheKey = this.getCurrentQuotaUsageCacheKey(organizationId, 'template_count')
-    await this.redis.setex(cacheKey, this.CACHE_TTL_SECONDS, templateUsage)
-
-    await this.resetCacheStaleness(organizationId, 'template')
-
-    return {
-      currentTemplateUsage: templateUsage,
-    }
-  }
-
-  /**
    * Fetch the current usage overview for volume-related organization quotas from the database and cache the results.
    *
    * @param organizationId
@@ -699,7 +549,7 @@ export class OrganizationUsageService {
     quotaType: 'cpu' | 'memory' | 'disk',
     regionId: string,
   ): string
-  private getCurrentQuotaUsageCacheKey(organizationId: string, quotaType: 'template_count' | 'volume_count'): string
+  private getCurrentQuotaUsageCacheKey(organizationId: string, quotaType: 'volume_count'): string
   private getCurrentQuotaUsageCacheKey(
     organizationId: string,
     quotaType: OrganizationUsageQuotaType,
@@ -716,7 +566,7 @@ export class OrganizationUsageService {
     quotaType: 'cpu' | 'memory' | 'disk',
     regionId: string,
   ): string
-  private getPendingQuotaUsageCacheKey(organizationId: string, quotaType: 'template_count' | 'volume_count'): string
+  private getPendingQuotaUsageCacheKey(organizationId: string, quotaType: 'volume_count'): string
   private getPendingQuotaUsageCacheKey(
     organizationId: string,
     quotaType: OrganizationUsageQuotaType,
@@ -738,7 +588,7 @@ export class OrganizationUsageService {
   ): Promise<void>
   private async updateCurrentQuotaUsage(
     organizationId: string,
-    quotaType: 'template_count' | 'volume_count',
+    quotaType: 'volume_count',
     delta: number,
   ): Promise<void>
   private async updateCurrentQuotaUsage(
@@ -774,7 +624,6 @@ export class OrganizationUsageService {
         currentQuotaUsageCacheKey = this.getCurrentQuotaUsageCacheKey(organizationId, quotaType, regionId)
         pendingQuotaUsageCacheKey = this.getPendingQuotaUsageCacheKey(organizationId, quotaType, regionId)
         break
-      case 'template_count':
       case 'volume_count':
         currentQuotaUsageCacheKey = this.getCurrentQuotaUsageCacheKey(organizationId, quotaType)
         pendingQuotaUsageCacheKey = this.getPendingQuotaUsageCacheKey(organizationId, quotaType)
@@ -958,74 +807,6 @@ export class OrganizationUsageService {
   }
 
   /**
-   * Increments the pending usage for template-related organization quotas.
-   *
-   * Pending usage is used to protect against race conditions to prevent quota abuse.
-   *
-   * If a user action will result in increased quota usage, we will first increment the pending usage.
-   *
-   * When the user action is complete, this pending usage will be transfered to the actual usage.
-   *
-   * As a safeguard, an expiration time is set on the pending usage cache to prevent lockout for new operations.
-   *
-   * @param organizationId
-   * @param templateCount - The count of templates to increment.
-   */
-  async incrementPendingTemplateUsage(organizationId: string, templateCount: number): Promise<void> {
-    const script = `
-      local templateCountKey = KEYS[1]
-
-      local templateCountIncrement = tonumber(ARGV[1])
-      local ttl = tonumber(ARGV[2])
-
-      redis.call("INCRBY", templateCountKey, templateCountIncrement)
-      redis.call("EXPIRE", templateCountKey, ttl)
-    `
-
-    await this.redis.eval(
-      script,
-      1,
-      this.getPendingQuotaUsageCacheKey(organizationId, 'template_count'),
-      templateCount.toString(),
-      this.CACHE_TTL_SECONDS.toString(),
-    )
-  }
-
-  /**
-   * Decrements the pending usage for template-related organization quotas.
-   *
-   * Use this method to roll back pending usage after incrementing it for an action that was subsequently rejected.
-   *
-   * Pending usage is used to protect against race conditions to prevent quota abuse.
-   *
-   * If a user action will result in increased quota usage, we will first increment the pending usage.
-   *
-   * When the user action is complete, this pending usage will be transfered to the actual usage.
-   *
-   * @param organizationId
-   * @param templateCount - If provided, the count of templates to decrement.
-   */
-  async decrementPendingTemplateUsage(organizationId: string, templateCount?: number): Promise<void> {
-    // decrement the pending usage for necessary quota types
-    const script = `
-      local templateCountKey = KEYS[1]
-
-      local templateCountDecrement = tonumber(ARGV[1])
-
-      if templateCountDecrement then
-        redis.call("DECRBY", templateCountKey, templateCountDecrement)
-      end
-    `
-
-    await this.redis.eval(
-      script,
-      1,
-      this.getPendingQuotaUsageCacheKey(organizationId, 'template_count'),
-      templateCount?.toString() ?? '0',
-    )
-  }
-
-  /**
    * Increments the pending usage for volume-related organization quotas.
    *
    * Pending usage is used to protect against race conditions to prevent quota abuse.
@@ -1140,7 +921,7 @@ export class OrganizationUsageService {
    * Reset the timestamp of the last time the cached usage of organization quotas for a given resource type was populated from the database.
    */
   private resetCacheStaleness(organizationId: string, resourceType: 'box', regionId: string): Promise<void>
-  private resetCacheStaleness(organizationId: string, resourceType: 'template' | 'volume'): Promise<void>
+  private resetCacheStaleness(organizationId: string, resourceType: 'volume'): Promise<void>
   private async resetCacheStaleness(
     organizationId: string,
     resourceType: OrganizationUsageResourceType,
@@ -1156,7 +937,7 @@ export class OrganizationUsageService {
    * @returns `true` if the cached usage is stale, `false` otherwise
    */
   private async isCacheStale(organizationId: string, resourceType: 'box', regionId: string): Promise<boolean>
-  private async isCacheStale(organizationId: string, resourceType: 'template' | 'volume'): Promise<boolean>
+  private async isCacheStale(organizationId: string, resourceType: 'volume'): Promise<boolean>
   private async isCacheStale(
     organizationId: string,
     resourceType: OrganizationUsageResourceType,
@@ -1265,9 +1046,6 @@ export class OrganizationUsageService {
       await this.redisLockProvider.unlock(lockKey)
     }
   }
-
-  // TODO(billing-rewrite): box_template quota-usage event handlers removed with box_template;
-  // template/image metering model TBD.
 
   @OnEvent(VolumeEvents.CREATED)
   async handleVolumeCreated(event: VolumeCreatedEvent) {

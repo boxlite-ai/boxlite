@@ -34,12 +34,6 @@ export class OrganizationUsageOverviewDto {
   })
   regionUsage: RegionUsageOverviewDto[]
 
-  // Template usage
-  @ApiProperty()
-  totalTemplateQuota: number
-  @ApiProperty()
-  currentTemplateUsage: number
-
   // Volume usage
   @ApiProperty()
   totalVolumeQuota: number

@@ -60,13 +60,6 @@ export class Organization {
   @Column({
     type: 'int',
     default: 100,
-    name: 'template_quota',
-  })
-  templateQuota: number
-
-  @Column({
-    type: 'int',
-    default: 100,
     name: 'volume_quota',
   })
   volumeQuota: number
