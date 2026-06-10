@@ -8,8 +8,6 @@ Name | Type | Description | Notes
 **id** | **string** | ID of the created region | [default to undefined]
 **proxyApiKey** | **string** | Proxy API key for the region | [optional] [default to undefined]
 **sshGatewayApiKey** | **string** | SSH Gateway API key for the region | [optional] [default to undefined]
-**snapshotManagerUsername** | **string** | Snapshot Manager username for the region | [optional] [default to undefined]
-**snapshotManagerPassword** | **string** | Snapshot Manager password for the region | [optional] [default to undefined]
 
 ## Example
 
@@ -20,8 +18,6 @@ const instance: CreateRegionResponse = {
     id,
     proxyApiKey,
     sshGatewayApiKey,
-    snapshotManagerUsername,
-    snapshotManagerPassword,
 };
 ```
 

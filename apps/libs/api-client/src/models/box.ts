@@ -22,15 +22,16 @@ import type { BoxState } from './box-state';
 // May contain unused imports in some cases
 // @ts-ignore
 import type { BoxVolume } from './box-volume';
-// May contain unused imports in some cases
-// @ts-ignore
-import type { BuildInfo } from './build-info';
 
 export interface Box {
     /**
-     * The ID of the box
+     * The internal UUID of the box
      */
     'id': string;
+    /**
+     * The public Box ID shown to users and SDK clients
+     */
+    'boxId': string;
     /**
      * The organization ID of the box
      */
@@ -39,10 +40,6 @@ export interface Box {
      * The name of the box
      */
     'name': string;
-    /**
-     * The snapshot used for the box
-     */
-    'snapshot'?: string;
     /**
      * The user associated with the project
      */
@@ -104,21 +101,9 @@ export interface Box {
      */
     'recoverable'?: boolean;
     /**
-     * The state of the backup
-     */
-    'backupState'?: BoxBackupStateEnum;
-    /**
-     * The creation timestamp of the last backup
-     */
-    'backupCreatedAt'?: string;
-    /**
      * Auto-stop interval in minutes (0 means disabled)
      */
     'autoStopInterval'?: number;
-    /**
-     * Auto-archive interval in minutes
-     */
-    'autoArchiveInterval'?: number;
     /**
      * Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping)
      */
@@ -127,10 +112,6 @@ export interface Box {
      * Array of volumes attached to the box
      */
     'volumes'?: Array<BoxVolume>;
-    /**
-     * Build information for the box
-     */
-    'buildInfo'?: BuildInfo;
     /**
      * The creation timestamp of the box
      */
@@ -158,16 +139,6 @@ export interface Box {
     'toolboxProxyUrl': string;
 }
 
-export const BoxBackupStateEnum = {
-    NONE: 'None',
-    PENDING: 'Pending',
-    IN_PROGRESS: 'InProgress',
-    COMPLETED: 'Completed',
-    ERROR: 'Error',
-    UNKNOWN_DEFAULT_OPEN_API: '11184809',
-} as const;
-
-export type BoxBackupStateEnum = typeof BoxBackupStateEnum[keyof typeof BoxBackupStateEnum];
 export const BoxClassEnum = {
     SMALL: 'small',
     MEDIUM: 'medium',

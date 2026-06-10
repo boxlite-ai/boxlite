@@ -28,7 +28,12 @@ export interface Organization {
      */
     'createdBy': string;
     /**
-     * Personal organization flag
+     * Whether this organization is the authenticated user default organization
+     */
+    'isDefaultForAuthenticatedUser': boolean;
+    /**
+     * Deprecated alias for isDefaultForAuthenticatedUser. Kept for backward compatibility with older REST clients.
+     * @deprecated
      */
     'personal': boolean;
     /**
@@ -72,9 +77,9 @@ export interface Organization {
      */
     'maxDiskPerBox': number;
     /**
-     * Time in minutes before an unused snapshot is deactivated
+     * Time in minutes before an unused template is deactivated
      */
-    'snapshotDeactivationTimeoutMinutes': number;
+    'templateDeactivationTimeoutMinutes': number;
     /**
      * Box default network block all
      */

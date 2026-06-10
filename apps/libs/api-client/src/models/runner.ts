@@ -86,10 +86,6 @@ export interface Runner {
      */
     'currentAllocatedDiskGiB'?: number;
     /**
-     * Current snapshot count
-     */
-    'currentSnapshotCount'?: number;
-    /**
      * Current number of started boxes
      */
     'currentStartedBoxes'?: number;

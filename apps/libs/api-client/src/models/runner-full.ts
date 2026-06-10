@@ -89,10 +89,6 @@ export interface RunnerFull {
      */
     'currentAllocatedDiskGiB'?: number;
     /**
-     * Current snapshot count
-     */
-    'currentSnapshotCount'?: number;
-    /**
      * Current number of started boxes
      */
     'currentStartedBoxes'?: number;

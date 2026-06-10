@@ -53,8 +53,6 @@ type RunnerFull struct {
 	CurrentAllocatedMemoryGiB *float32 `json:"currentAllocatedMemoryGiB,omitempty"`
 	// Current allocated disk in GiB
 	CurrentAllocatedDiskGiB *float32 `json:"currentAllocatedDiskGiB,omitempty"`
-	// Current snapshot count
-	CurrentSnapshotCount *float32 `json:"currentSnapshotCount,omitempty"`
 	// Current number of started boxes
 	CurrentStartedBoxes *float32 `json:"currentStartedBoxes,omitempty"`
 	// Runner availability score
@@ -594,38 +592,6 @@ func (o *RunnerFull) SetCurrentAllocatedDiskGiB(v float32) {
 	o.CurrentAllocatedDiskGiB = &v
 }
 
-// GetCurrentSnapshotCount returns the CurrentSnapshotCount field value if set, zero value otherwise.
-func (o *RunnerFull) GetCurrentSnapshotCount() float32 {
-	if o == nil || IsNil(o.CurrentSnapshotCount) {
-		var ret float32
-		return ret
-	}
-	return *o.CurrentSnapshotCount
-}
-
-// GetCurrentSnapshotCountOk returns a tuple with the CurrentSnapshotCount field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *RunnerFull) GetCurrentSnapshotCountOk() (*float32, bool) {
-	if o == nil || IsNil(o.CurrentSnapshotCount) {
-		return nil, false
-	}
-	return o.CurrentSnapshotCount, true
-}
-
-// HasCurrentSnapshotCount returns a boolean if a field has been set.
-func (o *RunnerFull) HasCurrentSnapshotCount() bool {
-	if o != nil && !IsNil(o.CurrentSnapshotCount) {
-		return true
-	}
-
-	return false
-}
-
-// SetCurrentSnapshotCount gets a reference to the given float32 and assigns it to the CurrentSnapshotCount field.
-func (o *RunnerFull) SetCurrentSnapshotCount(v float32) {
-	o.CurrentSnapshotCount = &v
-}
-
 // GetCurrentStartedBoxes returns the CurrentStartedBoxes field value if set, zero value otherwise.
 func (o *RunnerFull) GetCurrentStartedBoxes() float32 {
 	if o == nil || IsNil(o.CurrentStartedBoxes) {
@@ -1059,9 +1025,6 @@ func (o RunnerFull) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.CurrentAllocatedDiskGiB) {
 		toSerialize["currentAllocatedDiskGiB"] = o.CurrentAllocatedDiskGiB
 	}
-	if !IsNil(o.CurrentSnapshotCount) {
-		toSerialize["currentSnapshotCount"] = o.CurrentSnapshotCount
-	}
 	if !IsNil(o.CurrentStartedBoxes) {
 		toSerialize["currentStartedBoxes"] = o.CurrentStartedBoxes
 	}
@@ -1158,7 +1121,6 @@ func (o *RunnerFull) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "currentAllocatedCpu")
 		delete(additionalProperties, "currentAllocatedMemoryGiB")
 		delete(additionalProperties, "currentAllocatedDiskGiB")
-		delete(additionalProperties, "currentSnapshotCount")
 		delete(additionalProperties, "currentStartedBoxes")
 		delete(additionalProperties, "availabilityScore")
 		delete(additionalProperties, "region")

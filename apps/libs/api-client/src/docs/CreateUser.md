@@ -8,8 +8,8 @@ Name | Type | Description | Notes
 **id** | **string** |  | [default to undefined]
 **name** | **string** |  | [default to undefined]
 **email** | **string** |  | [optional] [default to undefined]
-**personalOrganizationQuota** | [**CreateOrganizationQuota**](CreateOrganizationQuota.md) |  | [optional] [default to undefined]
-**personalOrganizationDefaultRegionId** | **string** |  | [optional] [default to undefined]
+**defaultOrganizationDefaultRegionId** | **string** |  | [optional] [default to undefined]
+**personalOrganizationDefaultRegionId** | **string** | Deprecated alias for defaultOrganizationDefaultRegionId. | [optional] [default to undefined]
 **role** | **string** |  | [optional] [default to undefined]
 **emailVerified** | **boolean** |  | [optional] [default to undefined]
 
@@ -22,7 +22,7 @@ const instance: CreateUser = {
     id,
     name,
     email,
-    personalOrganizationQuota,
+    defaultOrganizationDefaultRegionId,
     personalOrganizationDefaultRegionId,
     role,
     emailVerified,

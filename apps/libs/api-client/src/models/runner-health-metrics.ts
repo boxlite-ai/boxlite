@@ -44,10 +44,6 @@ export interface RunnerHealthMetrics {
      */
     'currentAllocatedDiskGiB': number;
     /**
-     * Number of snapshots currently stored
-     */
-    'currentSnapshotCount': number;
-    /**
      * Number of started boxes
      */
     'currentStartedBoxes': number;

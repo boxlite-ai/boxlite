@@ -42,8 +42,6 @@ import type { OrganizationRole } from '../models';
 // @ts-ignore
 import type { OrganizationSuspension } from '../models';
 // @ts-ignore
-import type { OrganizationUsageOverview } from '../models';
-// @ts-ignore
 import type { OrganizationUser } from '../models';
 // @ts-ignore
 import type { OtelConfig } from '../models';
@@ -52,19 +50,13 @@ import type { RegenerateApiKeyResponse } from '../models';
 // @ts-ignore
 import type { Region } from '../models';
 // @ts-ignore
-import type { RegionQuota } from '../models';
-// @ts-ignore
-import type { SnapshotManagerCredentials } from '../models';
-// @ts-ignore
 import type { UpdateOrganizationDefaultRegion } from '../models';
 // @ts-ignore
 import type { UpdateOrganizationInvitation } from '../models';
 // @ts-ignore
 import type { UpdateOrganizationMemberAccess } from '../models';
 // @ts-ignore
-import type { UpdateOrganizationQuota } from '../models';
-// @ts-ignore
-import type { UpdateOrganizationRegionQuota } from '../models';
+import type { UpdateOrganizationName } from '../models';
 // @ts-ignore
 import type { UpdateOrganizationRole } from '../models';
 // @ts-ignore
@@ -698,46 +690,6 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
         },
         /**
          * 
-         * @summary Get organization current usage overview
-         * @param {string} organizationId Organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        getOrganizationUsageOverview: async (organizationId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'organizationId' is not null or undefined
-            assertParamExists('getOrganizationUsageOverview', 'organizationId', organizationId)
-            const localVarPath = `/organizations/{organizationId}/usage`
-                .replace('{organizationId}', encodeURIComponent(String(organizationId)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * 
          * @summary Get region by ID
          * @param {string} id Region ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -771,46 +723,6 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
             }
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * 
-         * @summary Get region quota by box ID
-         * @param {string} boxId Box ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        getRegionQuotaByBoxId: async (boxId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxId' is not null or undefined
-            assertParamExists('getRegionQuotaByBoxId', 'boxId', boxId)
-            const localVarPath = `/organizations/region-quota/by-box-id/{boxId}`
-                .replace('{boxId}', encodeURIComponent(String(boxId)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
@@ -1103,50 +1015,6 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             // verify required parameter 'id' is not null or undefined
             assertParamExists('regenerateProxyApiKey', 'id', id)
             const localVarPath = `/regions/{id}/regenerate-proxy-api-key`
-                .replace('{id}', encodeURIComponent(String(id)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            if (xBoxLiteOrganizationID != null) {
-                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
-            }
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * 
-         * @summary Regenerate snapshot manager credentials for a region
-         * @param {string} id Region ID
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        regenerateSnapshotManagerCredentials: async (id: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'id' is not null or undefined
-            assertParamExists('regenerateSnapshotManagerCredentials', 'id', id)
-            const localVarPath = `/regions/{id}/regenerate-snapshot-manager-credentials`
                 .replace('{id}', encodeURIComponent(String(id)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -1534,18 +1402,18 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
         },
         /**
          * 
-         * @summary Update organization quota
+         * @summary Update organization name
          * @param {string} organizationId Organization ID
-         * @param {UpdateOrganizationQuota} updateOrganizationQuota 
+         * @param {UpdateOrganizationName} updateOrganizationName 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        updateOrganizationQuota: async (organizationId: string, updateOrganizationQuota: UpdateOrganizationQuota, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        updateOrganizationName: async (organizationId: string, updateOrganizationName: UpdateOrganizationName, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             // verify required parameter 'organizationId' is not null or undefined
-            assertParamExists('updateOrganizationQuota', 'organizationId', organizationId)
-            // verify required parameter 'updateOrganizationQuota' is not null or undefined
-            assertParamExists('updateOrganizationQuota', 'updateOrganizationQuota', updateOrganizationQuota)
-            const localVarPath = `/organizations/{organizationId}/quota`
+            assertParamExists('updateOrganizationName', 'organizationId', organizationId)
+            // verify required parameter 'updateOrganizationName' is not null or undefined
+            assertParamExists('updateOrganizationName', 'updateOrganizationName', updateOrganizationName)
+            const localVarPath = `/organizations/{organizationId}/name`
                 .replace('{organizationId}', encodeURIComponent(String(organizationId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -1565,59 +1433,12 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             // authentication oauth2 required
 
             localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-            localVarRequestOptions.data = serializeDataIfNeeded(updateOrganizationQuota, localVarRequestOptions, configuration)
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * 
-         * @summary Update organization region quota
-         * @param {string} organizationId Organization ID
-         * @param {string} regionId ID of the region where the updated quota will be applied
-         * @param {UpdateOrganizationRegionQuota} updateOrganizationRegionQuota 
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        updateOrganizationRegionQuota: async (organizationId: string, regionId: string, updateOrganizationRegionQuota: UpdateOrganizationRegionQuota, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'organizationId' is not null or undefined
-            assertParamExists('updateOrganizationRegionQuota', 'organizationId', organizationId)
-            // verify required parameter 'regionId' is not null or undefined
-            assertParamExists('updateOrganizationRegionQuota', 'regionId', regionId)
-            // verify required parameter 'updateOrganizationRegionQuota' is not null or undefined
-            assertParamExists('updateOrganizationRegionQuota', 'updateOrganizationRegionQuota', updateOrganizationRegionQuota)
-            const localVarPath = `/organizations/{organizationId}/quota/{regionId}`
-                .replace('{organizationId}', encodeURIComponent(String(organizationId)))
-                .replace('{regionId}', encodeURIComponent(String(regionId)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'PATCH', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-            localVarHeaderParameter['Content-Type'] = 'application/json';
-
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-            localVarRequestOptions.data = serializeDataIfNeeded(updateOrganizationRegionQuota, localVarRequestOptions, configuration)
+            localVarRequestOptions.data = serializeDataIfNeeded(updateOrganizationName, localVarRequestOptions, configuration)
 
             return {
                 url: toPathString(localVarUrlObj),
@@ -1933,19 +1754,6 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
-         * @summary Get organization current usage overview
-         * @param {string} organizationId Organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async getOrganizationUsageOverview(organizationId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<OrganizationUsageOverview>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getOrganizationUsageOverview(organizationId, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['OrganizationsApi.getOrganizationUsageOverview']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
          * @summary Get region by ID
          * @param {string} id Region ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -1956,19 +1764,6 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.getRegionById(id, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['OrganizationsApi.getRegionById']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
-         * @summary Get region quota by box ID
-         * @param {string} boxId Box ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async getRegionQuotaByBoxId(boxId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<RegionQuota>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getRegionQuotaByBoxId(boxId, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['OrganizationsApi.getRegionQuotaByBoxId']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -2072,20 +1867,6 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.regenerateProxyApiKey(id, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['OrganizationsApi.regenerateProxyApiKey']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
-         * @summary Regenerate snapshot manager credentials for a region
-         * @param {string} id Region ID
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async regenerateSnapshotManagerCredentials(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<SnapshotManagerCredentials>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.regenerateSnapshotManagerCredentials(id, xBoxLiteOrganizationID, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['OrganizationsApi.regenerateSnapshotManagerCredentials']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -2203,31 +1984,16 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
-         * @summary Update organization quota
+         * @summary Update organization name
          * @param {string} organizationId Organization ID
-         * @param {UpdateOrganizationQuota} updateOrganizationQuota 
+         * @param {UpdateOrganizationName} updateOrganizationName 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async updateOrganizationQuota(organizationId: string, updateOrganizationQuota: UpdateOrganizationQuota, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.updateOrganizationQuota(organizationId, updateOrganizationQuota, options);
+        async updateOrganizationName(organizationId: string, updateOrganizationName: UpdateOrganizationName, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Organization>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.updateOrganizationName(organizationId, updateOrganizationName, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['OrganizationsApi.updateOrganizationQuota']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
-         * @summary Update organization region quota
-         * @param {string} organizationId Organization ID
-         * @param {string} regionId ID of the region where the updated quota will be applied
-         * @param {UpdateOrganizationRegionQuota} updateOrganizationRegionQuota 
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async updateOrganizationRegionQuota(organizationId: string, regionId: string, updateOrganizationRegionQuota: UpdateOrganizationRegionQuota, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.updateOrganizationRegionQuota(organizationId, regionId, updateOrganizationRegionQuota, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['OrganizationsApi.updateOrganizationRegionQuota']?.[localVarOperationServerIndex]?.url;
+            const localVarOperationServerBasePath = operationServerMap['OrganizationsApi.updateOrganizationName']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -2427,16 +2193,6 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
         },
         /**
          * 
-         * @summary Get organization current usage overview
-         * @param {string} organizationId Organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        getOrganizationUsageOverview(organizationId: string, options?: RawAxiosRequestConfig): AxiosPromise<OrganizationUsageOverview> {
-            return localVarFp.getOrganizationUsageOverview(organizationId, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
          * @summary Get region by ID
          * @param {string} id Region ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -2445,16 +2201,6 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
          */
         getRegionById(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Region> {
             return localVarFp.getRegionById(id, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
-         * @summary Get region quota by box ID
-         * @param {string} boxId Box ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        getRegionQuotaByBoxId(boxId: string, options?: RawAxiosRequestConfig): AxiosPromise<RegionQuota> {
-            return localVarFp.getRegionQuotaByBoxId(boxId, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -2534,17 +2280,6 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
          */
         regenerateProxyApiKey(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<RegenerateApiKeyResponse> {
             return localVarFp.regenerateProxyApiKey(id, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
-         * @summary Regenerate snapshot manager credentials for a region
-         * @param {string} id Region ID
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        regenerateSnapshotManagerCredentials(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<SnapshotManagerCredentials> {
-            return localVarFp.regenerateSnapshotManagerCredentials(id, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -2637,26 +2372,14 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
         },
         /**
          * 
-         * @summary Update organization quota
+         * @summary Update organization name
          * @param {string} organizationId Organization ID
-         * @param {UpdateOrganizationQuota} updateOrganizationQuota 
+         * @param {UpdateOrganizationName} updateOrganizationName 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        updateOrganizationQuota(organizationId: string, updateOrganizationQuota: UpdateOrganizationQuota, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.updateOrganizationQuota(organizationId, updateOrganizationQuota, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
-         * @summary Update organization region quota
-         * @param {string} organizationId Organization ID
-         * @param {string} regionId ID of the region where the updated quota will be applied
-         * @param {UpdateOrganizationRegionQuota} updateOrganizationRegionQuota 
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        updateOrganizationRegionQuota(organizationId: string, regionId: string, updateOrganizationRegionQuota: UpdateOrganizationRegionQuota, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.updateOrganizationRegionQuota(organizationId, regionId, updateOrganizationRegionQuota, options).then((request) => request(axios, basePath));
+        updateOrganizationName(organizationId: string, updateOrganizationName: UpdateOrganizationName, options?: RawAxiosRequestConfig): AxiosPromise<Organization> {
+            return localVarFp.updateOrganizationName(organizationId, updateOrganizationName, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -2862,17 +2585,6 @@ export class OrganizationsApi extends BaseAPI {
 
     /**
      * 
-     * @summary Get organization current usage overview
-     * @param {string} organizationId Organization ID
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public getOrganizationUsageOverview(organizationId: string, options?: RawAxiosRequestConfig) {
-        return OrganizationsApiFp(this.configuration).getOrganizationUsageOverview(organizationId, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
      * @summary Get region by ID
      * @param {string} id Region ID
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -2881,17 +2593,6 @@ export class OrganizationsApi extends BaseAPI {
      */
     public getRegionById(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return OrganizationsApiFp(this.configuration).getRegionById(id, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
-     * @summary Get region quota by box ID
-     * @param {string} boxId Box ID
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public getRegionQuotaByBoxId(boxId: string, options?: RawAxiosRequestConfig) {
-        return OrganizationsApiFp(this.configuration).getRegionQuotaByBoxId(boxId, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -2979,18 +2680,6 @@ export class OrganizationsApi extends BaseAPI {
      */
     public regenerateProxyApiKey(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return OrganizationsApiFp(this.configuration).regenerateProxyApiKey(id, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
-     * @summary Regenerate snapshot manager credentials for a region
-     * @param {string} id Region ID
-     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public regenerateSnapshotManagerCredentials(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return OrganizationsApiFp(this.configuration).regenerateSnapshotManagerCredentials(id, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -3092,27 +2781,14 @@ export class OrganizationsApi extends BaseAPI {
 
     /**
      * 
-     * @summary Update organization quota
+     * @summary Update organization name
      * @param {string} organizationId Organization ID
-     * @param {UpdateOrganizationQuota} updateOrganizationQuota 
+     * @param {UpdateOrganizationName} updateOrganizationName 
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public updateOrganizationQuota(organizationId: string, updateOrganizationQuota: UpdateOrganizationQuota, options?: RawAxiosRequestConfig) {
-        return OrganizationsApiFp(this.configuration).updateOrganizationQuota(organizationId, updateOrganizationQuota, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
-     * @summary Update organization region quota
-     * @param {string} organizationId Organization ID
-     * @param {string} regionId ID of the region where the updated quota will be applied
-     * @param {UpdateOrganizationRegionQuota} updateOrganizationRegionQuota 
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public updateOrganizationRegionQuota(organizationId: string, regionId: string, updateOrganizationRegionQuota: UpdateOrganizationRegionQuota, options?: RawAxiosRequestConfig) {
-        return OrganizationsApiFp(this.configuration).updateOrganizationRegionQuota(organizationId, regionId, updateOrganizationRegionQuota, options).then((request) => request(this.axios, this.basePath));
+    public updateOrganizationName(organizationId: string, updateOrganizationName: UpdateOrganizationName, options?: RawAxiosRequestConfig) {
+        return OrganizationsApiFp(this.configuration).updateOrganizationName(organizationId, updateOrganizationName, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

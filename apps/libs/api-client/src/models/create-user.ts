@@ -13,15 +13,16 @@
  */
 
 
-// May contain unused imports in some cases
-// @ts-ignore
-import type { CreateOrganizationQuota } from './create-organization-quota';
 
 export interface CreateUser {
     'id': string;
     'name': string;
     'email'?: string;
-    'personalOrganizationQuota'?: CreateOrganizationQuota;
+    'defaultOrganizationDefaultRegionId'?: string;
+    /**
+     * Deprecated alias for defaultOrganizationDefaultRegionId.
+     * @deprecated
+     */
     'personalOrganizationDefaultRegionId'?: string;
     'role'?: CreateUserRoleEnum;
     'emailVerified'?: boolean;

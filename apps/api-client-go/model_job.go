@@ -29,7 +29,7 @@ type Job struct {
 	Status JobStatus `json:"status"`
 	// The type of resource this job operates on
 	ResourceType string `json:"resourceType"`
-	// The ID of the resource this job operates on (boxId, snapshotRef, etc.)
+	// The ID of the resource this job operates on (boxId, etc.)
 	ResourceId string `json:"resourceId"`
 	// Job-specific JSON-encoded payload data (operational metadata)
 	Payload *string `json:"payload,omitempty"`

@@ -35,8 +35,6 @@ type RunnerHealthMetrics struct {
 	CurrentAllocatedMemoryGiB float32 `json:"currentAllocatedMemoryGiB"`
 	// Currently allocated disk in GiB
 	CurrentAllocatedDiskGiB float32 `json:"currentAllocatedDiskGiB"`
-	// Number of snapshots currently stored
-	CurrentSnapshotCount float32 `json:"currentSnapshotCount"`
 	// Number of started boxes
 	CurrentStartedBoxes float32 `json:"currentStartedBoxes"`
 	// Total CPU cores on the runner
@@ -54,7 +52,7 @@ type _RunnerHealthMetrics RunnerHealthMetrics
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewRunnerHealthMetrics(currentCpuLoadAverage float32, currentCpuUsagePercentage float32, currentMemoryUsagePercentage float32, currentDiskUsagePercentage float32, currentAllocatedCpu float32, currentAllocatedMemoryGiB float32, currentAllocatedDiskGiB float32, currentSnapshotCount float32, currentStartedBoxes float32, cpu float32, memoryGiB float32, diskGiB float32) *RunnerHealthMetrics {
+func NewRunnerHealthMetrics(currentCpuLoadAverage float32, currentCpuUsagePercentage float32, currentMemoryUsagePercentage float32, currentDiskUsagePercentage float32, currentAllocatedCpu float32, currentAllocatedMemoryGiB float32, currentAllocatedDiskGiB float32, currentStartedBoxes float32, cpu float32, memoryGiB float32, diskGiB float32) *RunnerHealthMetrics {
 	this := RunnerHealthMetrics{}
 	this.CurrentCpuLoadAverage = currentCpuLoadAverage
 	this.CurrentCpuUsagePercentage = currentCpuUsagePercentage
@@ -63,7 +61,6 @@ func NewRunnerHealthMetrics(currentCpuLoadAverage float32, currentCpuUsagePercen
 	this.CurrentAllocatedCpu = currentAllocatedCpu
 	this.CurrentAllocatedMemoryGiB = currentAllocatedMemoryGiB
 	this.CurrentAllocatedDiskGiB = currentAllocatedDiskGiB
-	this.CurrentSnapshotCount = currentSnapshotCount
 	this.CurrentStartedBoxes = currentStartedBoxes
 	this.Cpu = cpu
 	this.MemoryGiB = memoryGiB
@@ -247,30 +244,6 @@ func (o *RunnerHealthMetrics) SetCurrentAllocatedDiskGiB(v float32) {
 	o.CurrentAllocatedDiskGiB = v
 }
 
-// GetCurrentSnapshotCount returns the CurrentSnapshotCount field value
-func (o *RunnerHealthMetrics) GetCurrentSnapshotCount() float32 {
-	if o == nil {
-		var ret float32
-		return ret
-	}
-
-	return o.CurrentSnapshotCount
-}
-
-// GetCurrentSnapshotCountOk returns a tuple with the CurrentSnapshotCount field value
-// and a boolean to check if the value has been set.
-func (o *RunnerHealthMetrics) GetCurrentSnapshotCountOk() (*float32, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.CurrentSnapshotCount, true
-}
-
-// SetCurrentSnapshotCount sets field value
-func (o *RunnerHealthMetrics) SetCurrentSnapshotCount(v float32) {
-	o.CurrentSnapshotCount = v
-}
-
 // GetCurrentStartedBoxes returns the CurrentStartedBoxes field value
 func (o *RunnerHealthMetrics) GetCurrentStartedBoxes() float32 {
 	if o == nil {
@@ -384,7 +357,6 @@ func (o RunnerHealthMetrics) ToMap() (map[string]interface{}, error) {
 	toSerialize["currentAllocatedCpu"] = o.CurrentAllocatedCpu
 	toSerialize["currentAllocatedMemoryGiB"] = o.CurrentAllocatedMemoryGiB
 	toSerialize["currentAllocatedDiskGiB"] = o.CurrentAllocatedDiskGiB
-	toSerialize["currentSnapshotCount"] = o.CurrentSnapshotCount
 	toSerialize["currentStartedBoxes"] = o.CurrentStartedBoxes
 	toSerialize["cpu"] = o.Cpu
 	toSerialize["memoryGiB"] = o.MemoryGiB
@@ -409,7 +381,6 @@ func (o *RunnerHealthMetrics) UnmarshalJSON(data []byte) (err error) {
 		"currentAllocatedCpu",
 		"currentAllocatedMemoryGiB",
 		"currentAllocatedDiskGiB",
-		"currentSnapshotCount",
 		"currentStartedBoxes",
 		"cpu",
 		"memoryGiB",
@@ -450,7 +421,6 @@ func (o *RunnerHealthMetrics) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "currentAllocatedCpu")
 		delete(additionalProperties, "currentAllocatedMemoryGiB")
 		delete(additionalProperties, "currentAllocatedDiskGiB")
-		delete(additionalProperties, "currentSnapshotCount")
 		delete(additionalProperties, "currentStartedBoxes")
 		delete(additionalProperties, "cpu")
 		delete(additionalProperties, "memoryGiB")

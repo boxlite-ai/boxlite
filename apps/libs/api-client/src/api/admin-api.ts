@@ -22,13 +22,35 @@ import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObj
 // @ts-ignore
 import { BASE_PATH, COLLECTION_FORMATS, type RequestArgs, BaseAPI, RequiredError, operationServerMap } from '../base';
 // @ts-ignore
+import type { AdminBoxItem } from '../models';
+// @ts-ignore
 import type { AdminCreateRunner } from '../models';
+// @ts-ignore
+import type { AdminMachineItem } from '../models';
+// @ts-ignore
+import type { AdminObservabilityInvestigateResponse } from '../models';
+// @ts-ignore
+import type { AdminObservabilityStatusDto } from '../models';
+// @ts-ignore
+import type { AdminOverview } from '../models';
+// @ts-ignore
+import type { AdminRunner } from '../models';
+// @ts-ignore
+import type { AdminRunnerItem } from '../models';
+// @ts-ignore
+import type { AdminUserItem } from '../models';
 // @ts-ignore
 import type { Box } from '../models';
 // @ts-ignore
 import type { CreateRunnerResponse } from '../models';
 // @ts-ignore
-import type { RunnerFull } from '../models';
+import type { MetricsResponse } from '../models';
+// @ts-ignore
+import type { PaginatedLogs } from '../models';
+// @ts-ignore
+import type { PaginatedTraces } from '../models';
+// @ts-ignore
+import type { TraceSpan } from '../models';
 /**
  * AdminApi - axios parameter creator
  */
@@ -116,6 +138,572 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
         },
         /**
          * 
+         * @summary Get admin-scoped logs
+         * @param {Date} [from] Start of time range (ISO 8601)
+         * @param {Date} [to] End of time range (ISO 8601)
+         * @param {number} [page] Page number (1-indexed)
+         * @param {number} [limit] Number of items per page
+         * @param {AdminGetObservabilityLogsLayerEnum} [layer] Telemetry producer layer
+         * @param {string} [serviceName] OpenTelemetry service.name filter
+         * @param {string} [orgId] Organization ID filter
+         * @param {string} [userId] User ID filter
+         * @param {string} [boxId] Box ID filter
+         * @param {string} [runnerId] Runner ID filter
+         * @param {string} [machineId] Machine or host ID filter
+         * @param {string} [traceId] Trace ID filter
+         * @param {string} [requestId] Request ID filter
+         * @param {string} [operationId] Operation ID filter
+         * @param {string} [executionId] Execution ID filter
+         * @param {string} [jobId] Job ID filter
+         * @param {Array<string>} [severities] Filter by severity levels (DEBUG, INFO, WARN, ERROR)
+         * @param {string} [search] Search in log body
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetObservabilityLogs: async (from?: Date, to?: Date, page?: number, limit?: number, layer?: AdminGetObservabilityLogsLayerEnum, serviceName?: string, orgId?: string, userId?: string, boxId?: string, runnerId?: string, machineId?: string, traceId?: string, requestId?: string, operationId?: string, executionId?: string, jobId?: string, severities?: Array<string>, search?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/admin/observability/logs`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            if (from !== undefined) {
+                localVarQueryParameter['from'] = (from as any instanceof Date) ?
+                    (from as any).toISOString() :
+                    from;
+            }
+
+            if (to !== undefined) {
+                localVarQueryParameter['to'] = (to as any instanceof Date) ?
+                    (to as any).toISOString() :
+                    to;
+            }
+
+            if (page !== undefined) {
+                localVarQueryParameter['page'] = page;
+            }
+
+            if (limit !== undefined) {
+                localVarQueryParameter['limit'] = limit;
+            }
+
+            if (layer !== undefined) {
+                localVarQueryParameter['layer'] = layer;
+            }
+
+            if (serviceName !== undefined) {
+                localVarQueryParameter['serviceName'] = serviceName;
+            }
+
+            if (orgId !== undefined) {
+                localVarQueryParameter['orgId'] = orgId;
+            }
+
+            if (userId !== undefined) {
+                localVarQueryParameter['userId'] = userId;
+            }
+
+            if (boxId !== undefined) {
+                localVarQueryParameter['boxId'] = boxId;
+            }
+
+            if (runnerId !== undefined) {
+                localVarQueryParameter['runnerId'] = runnerId;
+            }
+
+            if (machineId !== undefined) {
+                localVarQueryParameter['machineId'] = machineId;
+            }
+
+            if (traceId !== undefined) {
+                localVarQueryParameter['traceId'] = traceId;
+            }
+
+            if (requestId !== undefined) {
+                localVarQueryParameter['requestId'] = requestId;
+            }
+
+            if (operationId !== undefined) {
+                localVarQueryParameter['operationId'] = operationId;
+            }
+
+            if (executionId !== undefined) {
+                localVarQueryParameter['executionId'] = executionId;
+            }
+
+            if (jobId !== undefined) {
+                localVarQueryParameter['jobId'] = jobId;
+            }
+
+            if (severities) {
+                localVarQueryParameter['severities'] = severities;
+            }
+
+            if (search !== undefined) {
+                localVarQueryParameter['search'] = search;
+            }
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Get admin-scoped metrics
+         * @param {Date} [from] Start of time range (ISO 8601)
+         * @param {Date} [to] End of time range (ISO 8601)
+         * @param {number} [page] Page number (1-indexed)
+         * @param {number} [limit] Number of items per page
+         * @param {AdminGetObservabilityMetricsLayerEnum} [layer] Telemetry producer layer
+         * @param {string} [serviceName] OpenTelemetry service.name filter
+         * @param {string} [orgId] Organization ID filter
+         * @param {string} [userId] User ID filter
+         * @param {string} [boxId] Box ID filter
+         * @param {string} [runnerId] Runner ID filter
+         * @param {string} [machineId] Machine or host ID filter
+         * @param {string} [traceId] Trace ID filter
+         * @param {string} [requestId] Request ID filter
+         * @param {string} [operationId] Operation ID filter
+         * @param {string} [executionId] Execution ID filter
+         * @param {string} [jobId] Job ID filter
+         * @param {Array<string>} [metricNames] Filter by metric names
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetObservabilityMetrics: async (from?: Date, to?: Date, page?: number, limit?: number, layer?: AdminGetObservabilityMetricsLayerEnum, serviceName?: string, orgId?: string, userId?: string, boxId?: string, runnerId?: string, machineId?: string, traceId?: string, requestId?: string, operationId?: string, executionId?: string, jobId?: string, metricNames?: Array<string>, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/admin/observability/metrics`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            if (from !== undefined) {
+                localVarQueryParameter['from'] = (from as any instanceof Date) ?
+                    (from as any).toISOString() :
+                    from;
+            }
+
+            if (to !== undefined) {
+                localVarQueryParameter['to'] = (to as any instanceof Date) ?
+                    (to as any).toISOString() :
+                    to;
+            }
+
+            if (page !== undefined) {
+                localVarQueryParameter['page'] = page;
+            }
+
+            if (limit !== undefined) {
+                localVarQueryParameter['limit'] = limit;
+            }
+
+            if (layer !== undefined) {
+                localVarQueryParameter['layer'] = layer;
+            }
+
+            if (serviceName !== undefined) {
+                localVarQueryParameter['serviceName'] = serviceName;
+            }
+
+            if (orgId !== undefined) {
+                localVarQueryParameter['orgId'] = orgId;
+            }
+
+            if (userId !== undefined) {
+                localVarQueryParameter['userId'] = userId;
+            }
+
+            if (boxId !== undefined) {
+                localVarQueryParameter['boxId'] = boxId;
+            }
+
+            if (runnerId !== undefined) {
+                localVarQueryParameter['runnerId'] = runnerId;
+            }
+
+            if (machineId !== undefined) {
+                localVarQueryParameter['machineId'] = machineId;
+            }
+
+            if (traceId !== undefined) {
+                localVarQueryParameter['traceId'] = traceId;
+            }
+
+            if (requestId !== undefined) {
+                localVarQueryParameter['requestId'] = requestId;
+            }
+
+            if (operationId !== undefined) {
+                localVarQueryParameter['operationId'] = operationId;
+            }
+
+            if (executionId !== undefined) {
+                localVarQueryParameter['executionId'] = executionId;
+            }
+
+            if (jobId !== undefined) {
+                localVarQueryParameter['jobId'] = jobId;
+            }
+
+            if (metricNames) {
+                localVarQueryParameter['metricNames'] = metricNames;
+            }
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Get admin observability backend and layer status
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetObservabilityStatus: async (options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/admin/observability/status`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Get admin-scoped trace spans
+         * @param {string} traceId 
+         * @param {Date} [from] Start of time range (ISO 8601)
+         * @param {Date} [to] End of time range (ISO 8601)
+         * @param {number} [page] Page number (1-indexed)
+         * @param {number} [limit] Number of items per page
+         * @param {AdminGetObservabilityTraceSpansLayerEnum} [layer] Telemetry producer layer
+         * @param {string} [serviceName] OpenTelemetry service.name filter
+         * @param {string} [orgId] Organization ID filter
+         * @param {string} [userId] User ID filter
+         * @param {string} [boxId] Box ID filter
+         * @param {string} [runnerId] Runner ID filter
+         * @param {string} [machineId] Machine or host ID filter
+         * @param {string} [requestId] Request ID filter
+         * @param {string} [operationId] Operation ID filter
+         * @param {string} [executionId] Execution ID filter
+         * @param {string} [jobId] Job ID filter
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetObservabilityTraceSpans: async (traceId: string, from?: Date, to?: Date, page?: number, limit?: number, layer?: AdminGetObservabilityTraceSpansLayerEnum, serviceName?: string, orgId?: string, userId?: string, boxId?: string, runnerId?: string, machineId?: string, requestId?: string, operationId?: string, executionId?: string, jobId?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'traceId' is not null or undefined
+            assertParamExists('adminGetObservabilityTraceSpans', 'traceId', traceId)
+            const localVarPath = `/admin/observability/traces/{traceId}`
+                .replace('{traceId}', encodeURIComponent(String(traceId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            if (from !== undefined) {
+                localVarQueryParameter['from'] = (from as any instanceof Date) ?
+                    (from as any).toISOString() :
+                    from;
+            }
+
+            if (to !== undefined) {
+                localVarQueryParameter['to'] = (to as any instanceof Date) ?
+                    (to as any).toISOString() :
+                    to;
+            }
+
+            if (page !== undefined) {
+                localVarQueryParameter['page'] = page;
+            }
+
+            if (limit !== undefined) {
+                localVarQueryParameter['limit'] = limit;
+            }
+
+            if (layer !== undefined) {
+                localVarQueryParameter['layer'] = layer;
+            }
+
+            if (serviceName !== undefined) {
+                localVarQueryParameter['serviceName'] = serviceName;
+            }
+
+            if (orgId !== undefined) {
+                localVarQueryParameter['orgId'] = orgId;
+            }
+
+            if (userId !== undefined) {
+                localVarQueryParameter['userId'] = userId;
+            }
+
+            if (boxId !== undefined) {
+                localVarQueryParameter['boxId'] = boxId;
+            }
+
+            if (runnerId !== undefined) {
+                localVarQueryParameter['runnerId'] = runnerId;
+            }
+
+            if (machineId !== undefined) {
+                localVarQueryParameter['machineId'] = machineId;
+            }
+
+            if (requestId !== undefined) {
+                localVarQueryParameter['requestId'] = requestId;
+            }
+
+            if (operationId !== undefined) {
+                localVarQueryParameter['operationId'] = operationId;
+            }
+
+            if (executionId !== undefined) {
+                localVarQueryParameter['executionId'] = executionId;
+            }
+
+            if (jobId !== undefined) {
+                localVarQueryParameter['jobId'] = jobId;
+            }
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Get admin-scoped traces
+         * @param {Date} [from] Start of time range (ISO 8601)
+         * @param {Date} [to] End of time range (ISO 8601)
+         * @param {number} [page] Page number (1-indexed)
+         * @param {number} [limit] Number of items per page
+         * @param {AdminGetObservabilityTracesLayerEnum} [layer] Telemetry producer layer
+         * @param {string} [serviceName] OpenTelemetry service.name filter
+         * @param {string} [orgId] Organization ID filter
+         * @param {string} [userId] User ID filter
+         * @param {string} [boxId] Box ID filter
+         * @param {string} [runnerId] Runner ID filter
+         * @param {string} [machineId] Machine or host ID filter
+         * @param {string} [traceId] Trace ID filter
+         * @param {string} [requestId] Request ID filter
+         * @param {string} [operationId] Operation ID filter
+         * @param {string} [executionId] Execution ID filter
+         * @param {string} [jobId] Job ID filter
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetObservabilityTraces: async (from?: Date, to?: Date, page?: number, limit?: number, layer?: AdminGetObservabilityTracesLayerEnum, serviceName?: string, orgId?: string, userId?: string, boxId?: string, runnerId?: string, machineId?: string, traceId?: string, requestId?: string, operationId?: string, executionId?: string, jobId?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/admin/observability/traces`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            if (from !== undefined) {
+                localVarQueryParameter['from'] = (from as any instanceof Date) ?
+                    (from as any).toISOString() :
+                    from;
+            }
+
+            if (to !== undefined) {
+                localVarQueryParameter['to'] = (to as any instanceof Date) ?
+                    (to as any).toISOString() :
+                    to;
+            }
+
+            if (page !== undefined) {
+                localVarQueryParameter['page'] = page;
+            }
+
+            if (limit !== undefined) {
+                localVarQueryParameter['limit'] = limit;
+            }
+
+            if (layer !== undefined) {
+                localVarQueryParameter['layer'] = layer;
+            }
+
+            if (serviceName !== undefined) {
+                localVarQueryParameter['serviceName'] = serviceName;
+            }
+
+            if (orgId !== undefined) {
+                localVarQueryParameter['orgId'] = orgId;
+            }
+
+            if (userId !== undefined) {
+                localVarQueryParameter['userId'] = userId;
+            }
+
+            if (boxId !== undefined) {
+                localVarQueryParameter['boxId'] = boxId;
+            }
+
+            if (runnerId !== undefined) {
+                localVarQueryParameter['runnerId'] = runnerId;
+            }
+
+            if (machineId !== undefined) {
+                localVarQueryParameter['machineId'] = machineId;
+            }
+
+            if (traceId !== undefined) {
+                localVarQueryParameter['traceId'] = traceId;
+            }
+
+            if (requestId !== undefined) {
+                localVarQueryParameter['requestId'] = requestId;
+            }
+
+            if (operationId !== undefined) {
+                localVarQueryParameter['operationId'] = operationId;
+            }
+
+            if (executionId !== undefined) {
+                localVarQueryParameter['executionId'] = executionId;
+            }
+
+            if (jobId !== undefined) {
+                localVarQueryParameter['jobId'] = jobId;
+            }
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Admin KPI summary
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetOverview: async (options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/admin/overview`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
          * @summary Get runner by ID
          * @param {string} id Runner ID
          * @param {*} [options] Override http request option.
@@ -126,6 +714,198 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             assertParamExists('adminGetRunnerById', 'id', id)
             const localVarPath = `/admin/runners/{id}`
                 .replace('{id}', encodeURIComponent(String(id)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Investigate related observability and platform state from trace or resource identifiers
+         * @param {Date} [from] Start of time range (ISO 8601)
+         * @param {Date} [to] End of time range (ISO 8601)
+         * @param {number} [page] Page number (1-indexed)
+         * @param {number} [limit] Number of items per page
+         * @param {AdminInvestigateObservabilityLayerEnum} [layer] Telemetry producer layer
+         * @param {string} [serviceName] OpenTelemetry service.name filter
+         * @param {string} [orgId] Organization ID filter
+         * @param {string} [userId] User ID filter
+         * @param {string} [boxId] Box ID filter
+         * @param {string} [runnerId] Runner ID filter
+         * @param {string} [machineId] Machine or host ID filter
+         * @param {string} [traceId] Trace ID filter
+         * @param {string} [requestId] Request ID filter
+         * @param {string} [operationId] Operation ID filter
+         * @param {string} [executionId] Execution ID filter
+         * @param {string} [jobId] Job ID filter
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminInvestigateObservability: async (from?: Date, to?: Date, page?: number, limit?: number, layer?: AdminInvestigateObservabilityLayerEnum, serviceName?: string, orgId?: string, userId?: string, boxId?: string, runnerId?: string, machineId?: string, traceId?: string, requestId?: string, operationId?: string, executionId?: string, jobId?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/admin/observability/investigate`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            if (from !== undefined) {
+                localVarQueryParameter['from'] = (from as any instanceof Date) ?
+                    (from as any).toISOString() :
+                    from;
+            }
+
+            if (to !== undefined) {
+                localVarQueryParameter['to'] = (to as any instanceof Date) ?
+                    (to as any).toISOString() :
+                    to;
+            }
+
+            if (page !== undefined) {
+                localVarQueryParameter['page'] = page;
+            }
+
+            if (limit !== undefined) {
+                localVarQueryParameter['limit'] = limit;
+            }
+
+            if (layer !== undefined) {
+                localVarQueryParameter['layer'] = layer;
+            }
+
+            if (serviceName !== undefined) {
+                localVarQueryParameter['serviceName'] = serviceName;
+            }
+
+            if (orgId !== undefined) {
+                localVarQueryParameter['orgId'] = orgId;
+            }
+
+            if (userId !== undefined) {
+                localVarQueryParameter['userId'] = userId;
+            }
+
+            if (boxId !== undefined) {
+                localVarQueryParameter['boxId'] = boxId;
+            }
+
+            if (runnerId !== undefined) {
+                localVarQueryParameter['runnerId'] = runnerId;
+            }
+
+            if (machineId !== undefined) {
+                localVarQueryParameter['machineId'] = machineId;
+            }
+
+            if (traceId !== undefined) {
+                localVarQueryParameter['traceId'] = traceId;
+            }
+
+            if (requestId !== undefined) {
+                localVarQueryParameter['requestId'] = requestId;
+            }
+
+            if (operationId !== undefined) {
+                localVarQueryParameter['operationId'] = operationId;
+            }
+
+            if (executionId !== undefined) {
+                localVarQueryParameter['executionId'] = executionId;
+            }
+
+            if (jobId !== undefined) {
+                localVarQueryParameter['jobId'] = jobId;
+            }
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary List all boxes (cross-org)
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminListBoxes: async (options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/admin/overview/boxes`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Runner-as-machine resource view
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminListMachines: async (options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/admin/overview/machines`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -183,6 +963,78 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             if (regionId !== undefined) {
                 localVarQueryParameter['regionId'] = regionId;
             }
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary List all runners with full details
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminListRunnersOverview: async (options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/admin/overview/runners`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary List all users (cross-org)
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminListUsers: async (options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/admin/overview/users`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
 
             localVarHeaderParameter['Accept'] = 'application/json';
 
@@ -311,15 +1163,206 @@ export const AdminApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
+         * @summary Get admin-scoped logs
+         * @param {Date} [from] Start of time range (ISO 8601)
+         * @param {Date} [to] End of time range (ISO 8601)
+         * @param {number} [page] Page number (1-indexed)
+         * @param {number} [limit] Number of items per page
+         * @param {AdminGetObservabilityLogsLayerEnum} [layer] Telemetry producer layer
+         * @param {string} [serviceName] OpenTelemetry service.name filter
+         * @param {string} [orgId] Organization ID filter
+         * @param {string} [userId] User ID filter
+         * @param {string} [boxId] Box ID filter
+         * @param {string} [runnerId] Runner ID filter
+         * @param {string} [machineId] Machine or host ID filter
+         * @param {string} [traceId] Trace ID filter
+         * @param {string} [requestId] Request ID filter
+         * @param {string} [operationId] Operation ID filter
+         * @param {string} [executionId] Execution ID filter
+         * @param {string} [jobId] Job ID filter
+         * @param {Array<string>} [severities] Filter by severity levels (DEBUG, INFO, WARN, ERROR)
+         * @param {string} [search] Search in log body
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminGetObservabilityLogs(from?: Date, to?: Date, page?: number, limit?: number, layer?: AdminGetObservabilityLogsLayerEnum, serviceName?: string, orgId?: string, userId?: string, boxId?: string, runnerId?: string, machineId?: string, traceId?: string, requestId?: string, operationId?: string, executionId?: string, jobId?: string, severities?: Array<string>, search?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<PaginatedLogs>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminGetObservabilityLogs(from, to, page, limit, layer, serviceName, orgId, userId, boxId, runnerId, machineId, traceId, requestId, operationId, executionId, jobId, severities, search, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminGetObservabilityLogs']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Get admin-scoped metrics
+         * @param {Date} [from] Start of time range (ISO 8601)
+         * @param {Date} [to] End of time range (ISO 8601)
+         * @param {number} [page] Page number (1-indexed)
+         * @param {number} [limit] Number of items per page
+         * @param {AdminGetObservabilityMetricsLayerEnum} [layer] Telemetry producer layer
+         * @param {string} [serviceName] OpenTelemetry service.name filter
+         * @param {string} [orgId] Organization ID filter
+         * @param {string} [userId] User ID filter
+         * @param {string} [boxId] Box ID filter
+         * @param {string} [runnerId] Runner ID filter
+         * @param {string} [machineId] Machine or host ID filter
+         * @param {string} [traceId] Trace ID filter
+         * @param {string} [requestId] Request ID filter
+         * @param {string} [operationId] Operation ID filter
+         * @param {string} [executionId] Execution ID filter
+         * @param {string} [jobId] Job ID filter
+         * @param {Array<string>} [metricNames] Filter by metric names
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminGetObservabilityMetrics(from?: Date, to?: Date, page?: number, limit?: number, layer?: AdminGetObservabilityMetricsLayerEnum, serviceName?: string, orgId?: string, userId?: string, boxId?: string, runnerId?: string, machineId?: string, traceId?: string, requestId?: string, operationId?: string, executionId?: string, jobId?: string, metricNames?: Array<string>, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<MetricsResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminGetObservabilityMetrics(from, to, page, limit, layer, serviceName, orgId, userId, boxId, runnerId, machineId, traceId, requestId, operationId, executionId, jobId, metricNames, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminGetObservabilityMetrics']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Get admin observability backend and layer status
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminGetObservabilityStatus(options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminObservabilityStatusDto>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminGetObservabilityStatus(options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminGetObservabilityStatus']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Get admin-scoped trace spans
+         * @param {string} traceId 
+         * @param {Date} [from] Start of time range (ISO 8601)
+         * @param {Date} [to] End of time range (ISO 8601)
+         * @param {number} [page] Page number (1-indexed)
+         * @param {number} [limit] Number of items per page
+         * @param {AdminGetObservabilityTraceSpansLayerEnum} [layer] Telemetry producer layer
+         * @param {string} [serviceName] OpenTelemetry service.name filter
+         * @param {string} [orgId] Organization ID filter
+         * @param {string} [userId] User ID filter
+         * @param {string} [boxId] Box ID filter
+         * @param {string} [runnerId] Runner ID filter
+         * @param {string} [machineId] Machine or host ID filter
+         * @param {string} [requestId] Request ID filter
+         * @param {string} [operationId] Operation ID filter
+         * @param {string} [executionId] Execution ID filter
+         * @param {string} [jobId] Job ID filter
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminGetObservabilityTraceSpans(traceId: string, from?: Date, to?: Date, page?: number, limit?: number, layer?: AdminGetObservabilityTraceSpansLayerEnum, serviceName?: string, orgId?: string, userId?: string, boxId?: string, runnerId?: string, machineId?: string, requestId?: string, operationId?: string, executionId?: string, jobId?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<TraceSpan>>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminGetObservabilityTraceSpans(traceId, from, to, page, limit, layer, serviceName, orgId, userId, boxId, runnerId, machineId, requestId, operationId, executionId, jobId, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminGetObservabilityTraceSpans']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Get admin-scoped traces
+         * @param {Date} [from] Start of time range (ISO 8601)
+         * @param {Date} [to] End of time range (ISO 8601)
+         * @param {number} [page] Page number (1-indexed)
+         * @param {number} [limit] Number of items per page
+         * @param {AdminGetObservabilityTracesLayerEnum} [layer] Telemetry producer layer
+         * @param {string} [serviceName] OpenTelemetry service.name filter
+         * @param {string} [orgId] Organization ID filter
+         * @param {string} [userId] User ID filter
+         * @param {string} [boxId] Box ID filter
+         * @param {string} [runnerId] Runner ID filter
+         * @param {string} [machineId] Machine or host ID filter
+         * @param {string} [traceId] Trace ID filter
+         * @param {string} [requestId] Request ID filter
+         * @param {string} [operationId] Operation ID filter
+         * @param {string} [executionId] Execution ID filter
+         * @param {string} [jobId] Job ID filter
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminGetObservabilityTraces(from?: Date, to?: Date, page?: number, limit?: number, layer?: AdminGetObservabilityTracesLayerEnum, serviceName?: string, orgId?: string, userId?: string, boxId?: string, runnerId?: string, machineId?: string, traceId?: string, requestId?: string, operationId?: string, executionId?: string, jobId?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<PaginatedTraces>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminGetObservabilityTraces(from, to, page, limit, layer, serviceName, orgId, userId, boxId, runnerId, machineId, traceId, requestId, operationId, executionId, jobId, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminGetObservabilityTraces']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Admin KPI summary
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminGetOverview(options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminOverview>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminGetOverview(options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminGetOverview']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
          * @summary Get runner by ID
          * @param {string} id Runner ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async adminGetRunnerById(id: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<RunnerFull>> {
+        async adminGetRunnerById(id: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminRunner>> {
             const localVarAxiosArgs = await localVarAxiosParamCreator.adminGetRunnerById(id, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['AdminApi.adminGetRunnerById']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Investigate related observability and platform state from trace or resource identifiers
+         * @param {Date} [from] Start of time range (ISO 8601)
+         * @param {Date} [to] End of time range (ISO 8601)
+         * @param {number} [page] Page number (1-indexed)
+         * @param {number} [limit] Number of items per page
+         * @param {AdminInvestigateObservabilityLayerEnum} [layer] Telemetry producer layer
+         * @param {string} [serviceName] OpenTelemetry service.name filter
+         * @param {string} [orgId] Organization ID filter
+         * @param {string} [userId] User ID filter
+         * @param {string} [boxId] Box ID filter
+         * @param {string} [runnerId] Runner ID filter
+         * @param {string} [machineId] Machine or host ID filter
+         * @param {string} [traceId] Trace ID filter
+         * @param {string} [requestId] Request ID filter
+         * @param {string} [operationId] Operation ID filter
+         * @param {string} [executionId] Execution ID filter
+         * @param {string} [jobId] Job ID filter
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminInvestigateObservability(from?: Date, to?: Date, page?: number, limit?: number, layer?: AdminInvestigateObservabilityLayerEnum, serviceName?: string, orgId?: string, userId?: string, boxId?: string, runnerId?: string, machineId?: string, traceId?: string, requestId?: string, operationId?: string, executionId?: string, jobId?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminObservabilityInvestigateResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminInvestigateObservability(from, to, page, limit, layer, serviceName, orgId, userId, boxId, runnerId, machineId, traceId, requestId, operationId, executionId, jobId, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminInvestigateObservability']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary List all boxes (cross-org)
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminListBoxes(options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<AdminBoxItem>>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminListBoxes(options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminListBoxes']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Runner-as-machine resource view
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminListMachines(options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<AdminMachineItem>>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminListMachines(options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminListMachines']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -329,10 +1372,34 @@ export const AdminApiFp = function(configuration?: Configuration) {
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async adminListRunners(regionId?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<RunnerFull>>> {
+        async adminListRunners(regionId?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<AdminRunner>>> {
             const localVarAxiosArgs = await localVarAxiosParamCreator.adminListRunners(regionId, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['AdminApi.adminListRunners']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary List all runners with full details
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminListRunnersOverview(options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<AdminRunnerItem>>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminListRunnersOverview(options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminListRunnersOverview']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary List all users (cross-org)
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminListUsers(options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<AdminUserItem>>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminListUsers(options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminListUsers']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -392,13 +1459,177 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
         },
         /**
          * 
+         * @summary Get admin-scoped logs
+         * @param {Date} [from] Start of time range (ISO 8601)
+         * @param {Date} [to] End of time range (ISO 8601)
+         * @param {number} [page] Page number (1-indexed)
+         * @param {number} [limit] Number of items per page
+         * @param {AdminGetObservabilityLogsLayerEnum} [layer] Telemetry producer layer
+         * @param {string} [serviceName] OpenTelemetry service.name filter
+         * @param {string} [orgId] Organization ID filter
+         * @param {string} [userId] User ID filter
+         * @param {string} [boxId] Box ID filter
+         * @param {string} [runnerId] Runner ID filter
+         * @param {string} [machineId] Machine or host ID filter
+         * @param {string} [traceId] Trace ID filter
+         * @param {string} [requestId] Request ID filter
+         * @param {string} [operationId] Operation ID filter
+         * @param {string} [executionId] Execution ID filter
+         * @param {string} [jobId] Job ID filter
+         * @param {Array<string>} [severities] Filter by severity levels (DEBUG, INFO, WARN, ERROR)
+         * @param {string} [search] Search in log body
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetObservabilityLogs(from?: Date, to?: Date, page?: number, limit?: number, layer?: AdminGetObservabilityLogsLayerEnum, serviceName?: string, orgId?: string, userId?: string, boxId?: string, runnerId?: string, machineId?: string, traceId?: string, requestId?: string, operationId?: string, executionId?: string, jobId?: string, severities?: Array<string>, search?: string, options?: RawAxiosRequestConfig): AxiosPromise<PaginatedLogs> {
+            return localVarFp.adminGetObservabilityLogs(from, to, page, limit, layer, serviceName, orgId, userId, boxId, runnerId, machineId, traceId, requestId, operationId, executionId, jobId, severities, search, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Get admin-scoped metrics
+         * @param {Date} [from] Start of time range (ISO 8601)
+         * @param {Date} [to] End of time range (ISO 8601)
+         * @param {number} [page] Page number (1-indexed)
+         * @param {number} [limit] Number of items per page
+         * @param {AdminGetObservabilityMetricsLayerEnum} [layer] Telemetry producer layer
+         * @param {string} [serviceName] OpenTelemetry service.name filter
+         * @param {string} [orgId] Organization ID filter
+         * @param {string} [userId] User ID filter
+         * @param {string} [boxId] Box ID filter
+         * @param {string} [runnerId] Runner ID filter
+         * @param {string} [machineId] Machine or host ID filter
+         * @param {string} [traceId] Trace ID filter
+         * @param {string} [requestId] Request ID filter
+         * @param {string} [operationId] Operation ID filter
+         * @param {string} [executionId] Execution ID filter
+         * @param {string} [jobId] Job ID filter
+         * @param {Array<string>} [metricNames] Filter by metric names
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetObservabilityMetrics(from?: Date, to?: Date, page?: number, limit?: number, layer?: AdminGetObservabilityMetricsLayerEnum, serviceName?: string, orgId?: string, userId?: string, boxId?: string, runnerId?: string, machineId?: string, traceId?: string, requestId?: string, operationId?: string, executionId?: string, jobId?: string, metricNames?: Array<string>, options?: RawAxiosRequestConfig): AxiosPromise<MetricsResponse> {
+            return localVarFp.adminGetObservabilityMetrics(from, to, page, limit, layer, serviceName, orgId, userId, boxId, runnerId, machineId, traceId, requestId, operationId, executionId, jobId, metricNames, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Get admin observability backend and layer status
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetObservabilityStatus(options?: RawAxiosRequestConfig): AxiosPromise<AdminObservabilityStatusDto> {
+            return localVarFp.adminGetObservabilityStatus(options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Get admin-scoped trace spans
+         * @param {string} traceId 
+         * @param {Date} [from] Start of time range (ISO 8601)
+         * @param {Date} [to] End of time range (ISO 8601)
+         * @param {number} [page] Page number (1-indexed)
+         * @param {number} [limit] Number of items per page
+         * @param {AdminGetObservabilityTraceSpansLayerEnum} [layer] Telemetry producer layer
+         * @param {string} [serviceName] OpenTelemetry service.name filter
+         * @param {string} [orgId] Organization ID filter
+         * @param {string} [userId] User ID filter
+         * @param {string} [boxId] Box ID filter
+         * @param {string} [runnerId] Runner ID filter
+         * @param {string} [machineId] Machine or host ID filter
+         * @param {string} [requestId] Request ID filter
+         * @param {string} [operationId] Operation ID filter
+         * @param {string} [executionId] Execution ID filter
+         * @param {string} [jobId] Job ID filter
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetObservabilityTraceSpans(traceId: string, from?: Date, to?: Date, page?: number, limit?: number, layer?: AdminGetObservabilityTraceSpansLayerEnum, serviceName?: string, orgId?: string, userId?: string, boxId?: string, runnerId?: string, machineId?: string, requestId?: string, operationId?: string, executionId?: string, jobId?: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<TraceSpan>> {
+            return localVarFp.adminGetObservabilityTraceSpans(traceId, from, to, page, limit, layer, serviceName, orgId, userId, boxId, runnerId, machineId, requestId, operationId, executionId, jobId, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Get admin-scoped traces
+         * @param {Date} [from] Start of time range (ISO 8601)
+         * @param {Date} [to] End of time range (ISO 8601)
+         * @param {number} [page] Page number (1-indexed)
+         * @param {number} [limit] Number of items per page
+         * @param {AdminGetObservabilityTracesLayerEnum} [layer] Telemetry producer layer
+         * @param {string} [serviceName] OpenTelemetry service.name filter
+         * @param {string} [orgId] Organization ID filter
+         * @param {string} [userId] User ID filter
+         * @param {string} [boxId] Box ID filter
+         * @param {string} [runnerId] Runner ID filter
+         * @param {string} [machineId] Machine or host ID filter
+         * @param {string} [traceId] Trace ID filter
+         * @param {string} [requestId] Request ID filter
+         * @param {string} [operationId] Operation ID filter
+         * @param {string} [executionId] Execution ID filter
+         * @param {string} [jobId] Job ID filter
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetObservabilityTraces(from?: Date, to?: Date, page?: number, limit?: number, layer?: AdminGetObservabilityTracesLayerEnum, serviceName?: string, orgId?: string, userId?: string, boxId?: string, runnerId?: string, machineId?: string, traceId?: string, requestId?: string, operationId?: string, executionId?: string, jobId?: string, options?: RawAxiosRequestConfig): AxiosPromise<PaginatedTraces> {
+            return localVarFp.adminGetObservabilityTraces(from, to, page, limit, layer, serviceName, orgId, userId, boxId, runnerId, machineId, traceId, requestId, operationId, executionId, jobId, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Admin KPI summary
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetOverview(options?: RawAxiosRequestConfig): AxiosPromise<AdminOverview> {
+            return localVarFp.adminGetOverview(options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
          * @summary Get runner by ID
          * @param {string} id Runner ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        adminGetRunnerById(id: string, options?: RawAxiosRequestConfig): AxiosPromise<RunnerFull> {
+        adminGetRunnerById(id: string, options?: RawAxiosRequestConfig): AxiosPromise<AdminRunner> {
             return localVarFp.adminGetRunnerById(id, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Investigate related observability and platform state from trace or resource identifiers
+         * @param {Date} [from] Start of time range (ISO 8601)
+         * @param {Date} [to] End of time range (ISO 8601)
+         * @param {number} [page] Page number (1-indexed)
+         * @param {number} [limit] Number of items per page
+         * @param {AdminInvestigateObservabilityLayerEnum} [layer] Telemetry producer layer
+         * @param {string} [serviceName] OpenTelemetry service.name filter
+         * @param {string} [orgId] Organization ID filter
+         * @param {string} [userId] User ID filter
+         * @param {string} [boxId] Box ID filter
+         * @param {string} [runnerId] Runner ID filter
+         * @param {string} [machineId] Machine or host ID filter
+         * @param {string} [traceId] Trace ID filter
+         * @param {string} [requestId] Request ID filter
+         * @param {string} [operationId] Operation ID filter
+         * @param {string} [executionId] Execution ID filter
+         * @param {string} [jobId] Job ID filter
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminInvestigateObservability(from?: Date, to?: Date, page?: number, limit?: number, layer?: AdminInvestigateObservabilityLayerEnum, serviceName?: string, orgId?: string, userId?: string, boxId?: string, runnerId?: string, machineId?: string, traceId?: string, requestId?: string, operationId?: string, executionId?: string, jobId?: string, options?: RawAxiosRequestConfig): AxiosPromise<AdminObservabilityInvestigateResponse> {
+            return localVarFp.adminInvestigateObservability(from, to, page, limit, layer, serviceName, orgId, userId, boxId, runnerId, machineId, traceId, requestId, operationId, executionId, jobId, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary List all boxes (cross-org)
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminListBoxes(options?: RawAxiosRequestConfig): AxiosPromise<Array<AdminBoxItem>> {
+            return localVarFp.adminListBoxes(options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Runner-as-machine resource view
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminListMachines(options?: RawAxiosRequestConfig): AxiosPromise<Array<AdminMachineItem>> {
+            return localVarFp.adminListMachines(options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -407,8 +1638,26 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        adminListRunners(regionId?: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<RunnerFull>> {
+        adminListRunners(regionId?: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<AdminRunner>> {
             return localVarFp.adminListRunners(regionId, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary List all runners with full details
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminListRunnersOverview(options?: RawAxiosRequestConfig): AxiosPromise<Array<AdminRunnerItem>> {
+            return localVarFp.adminListRunnersOverview(options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary List all users (cross-org)
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminListUsers(options?: RawAxiosRequestConfig): AxiosPromise<Array<AdminUserItem>> {
+            return localVarFp.adminListUsers(options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -461,6 +1710,133 @@ export class AdminApi extends BaseAPI {
 
     /**
      * 
+     * @summary Get admin-scoped logs
+     * @param {Date} [from] Start of time range (ISO 8601)
+     * @param {Date} [to] End of time range (ISO 8601)
+     * @param {number} [page] Page number (1-indexed)
+     * @param {number} [limit] Number of items per page
+     * @param {AdminGetObservabilityLogsLayerEnum} [layer] Telemetry producer layer
+     * @param {string} [serviceName] OpenTelemetry service.name filter
+     * @param {string} [orgId] Organization ID filter
+     * @param {string} [userId] User ID filter
+     * @param {string} [boxId] Box ID filter
+     * @param {string} [runnerId] Runner ID filter
+     * @param {string} [machineId] Machine or host ID filter
+     * @param {string} [traceId] Trace ID filter
+     * @param {string} [requestId] Request ID filter
+     * @param {string} [operationId] Operation ID filter
+     * @param {string} [executionId] Execution ID filter
+     * @param {string} [jobId] Job ID filter
+     * @param {Array<string>} [severities] Filter by severity levels (DEBUG, INFO, WARN, ERROR)
+     * @param {string} [search] Search in log body
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminGetObservabilityLogs(from?: Date, to?: Date, page?: number, limit?: number, layer?: AdminGetObservabilityLogsLayerEnum, serviceName?: string, orgId?: string, userId?: string, boxId?: string, runnerId?: string, machineId?: string, traceId?: string, requestId?: string, operationId?: string, executionId?: string, jobId?: string, severities?: Array<string>, search?: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminGetObservabilityLogs(from, to, page, limit, layer, serviceName, orgId, userId, boxId, runnerId, machineId, traceId, requestId, operationId, executionId, jobId, severities, search, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Get admin-scoped metrics
+     * @param {Date} [from] Start of time range (ISO 8601)
+     * @param {Date} [to] End of time range (ISO 8601)
+     * @param {number} [page] Page number (1-indexed)
+     * @param {number} [limit] Number of items per page
+     * @param {AdminGetObservabilityMetricsLayerEnum} [layer] Telemetry producer layer
+     * @param {string} [serviceName] OpenTelemetry service.name filter
+     * @param {string} [orgId] Organization ID filter
+     * @param {string} [userId] User ID filter
+     * @param {string} [boxId] Box ID filter
+     * @param {string} [runnerId] Runner ID filter
+     * @param {string} [machineId] Machine or host ID filter
+     * @param {string} [traceId] Trace ID filter
+     * @param {string} [requestId] Request ID filter
+     * @param {string} [operationId] Operation ID filter
+     * @param {string} [executionId] Execution ID filter
+     * @param {string} [jobId] Job ID filter
+     * @param {Array<string>} [metricNames] Filter by metric names
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminGetObservabilityMetrics(from?: Date, to?: Date, page?: number, limit?: number, layer?: AdminGetObservabilityMetricsLayerEnum, serviceName?: string, orgId?: string, userId?: string, boxId?: string, runnerId?: string, machineId?: string, traceId?: string, requestId?: string, operationId?: string, executionId?: string, jobId?: string, metricNames?: Array<string>, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminGetObservabilityMetrics(from, to, page, limit, layer, serviceName, orgId, userId, boxId, runnerId, machineId, traceId, requestId, operationId, executionId, jobId, metricNames, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Get admin observability backend and layer status
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminGetObservabilityStatus(options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminGetObservabilityStatus(options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Get admin-scoped trace spans
+     * @param {string} traceId 
+     * @param {Date} [from] Start of time range (ISO 8601)
+     * @param {Date} [to] End of time range (ISO 8601)
+     * @param {number} [page] Page number (1-indexed)
+     * @param {number} [limit] Number of items per page
+     * @param {AdminGetObservabilityTraceSpansLayerEnum} [layer] Telemetry producer layer
+     * @param {string} [serviceName] OpenTelemetry service.name filter
+     * @param {string} [orgId] Organization ID filter
+     * @param {string} [userId] User ID filter
+     * @param {string} [boxId] Box ID filter
+     * @param {string} [runnerId] Runner ID filter
+     * @param {string} [machineId] Machine or host ID filter
+     * @param {string} [requestId] Request ID filter
+     * @param {string} [operationId] Operation ID filter
+     * @param {string} [executionId] Execution ID filter
+     * @param {string} [jobId] Job ID filter
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminGetObservabilityTraceSpans(traceId: string, from?: Date, to?: Date, page?: number, limit?: number, layer?: AdminGetObservabilityTraceSpansLayerEnum, serviceName?: string, orgId?: string, userId?: string, boxId?: string, runnerId?: string, machineId?: string, requestId?: string, operationId?: string, executionId?: string, jobId?: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminGetObservabilityTraceSpans(traceId, from, to, page, limit, layer, serviceName, orgId, userId, boxId, runnerId, machineId, requestId, operationId, executionId, jobId, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Get admin-scoped traces
+     * @param {Date} [from] Start of time range (ISO 8601)
+     * @param {Date} [to] End of time range (ISO 8601)
+     * @param {number} [page] Page number (1-indexed)
+     * @param {number} [limit] Number of items per page
+     * @param {AdminGetObservabilityTracesLayerEnum} [layer] Telemetry producer layer
+     * @param {string} [serviceName] OpenTelemetry service.name filter
+     * @param {string} [orgId] Organization ID filter
+     * @param {string} [userId] User ID filter
+     * @param {string} [boxId] Box ID filter
+     * @param {string} [runnerId] Runner ID filter
+     * @param {string} [machineId] Machine or host ID filter
+     * @param {string} [traceId] Trace ID filter
+     * @param {string} [requestId] Request ID filter
+     * @param {string} [operationId] Operation ID filter
+     * @param {string} [executionId] Execution ID filter
+     * @param {string} [jobId] Job ID filter
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminGetObservabilityTraces(from?: Date, to?: Date, page?: number, limit?: number, layer?: AdminGetObservabilityTracesLayerEnum, serviceName?: string, orgId?: string, userId?: string, boxId?: string, runnerId?: string, machineId?: string, traceId?: string, requestId?: string, operationId?: string, executionId?: string, jobId?: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminGetObservabilityTraces(from, to, page, limit, layer, serviceName, orgId, userId, boxId, runnerId, machineId, traceId, requestId, operationId, executionId, jobId, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Admin KPI summary
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminGetOverview(options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminGetOverview(options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
      * @summary Get runner by ID
      * @param {string} id Runner ID
      * @param {*} [options] Override http request option.
@@ -472,6 +1848,52 @@ export class AdminApi extends BaseAPI {
 
     /**
      * 
+     * @summary Investigate related observability and platform state from trace or resource identifiers
+     * @param {Date} [from] Start of time range (ISO 8601)
+     * @param {Date} [to] End of time range (ISO 8601)
+     * @param {number} [page] Page number (1-indexed)
+     * @param {number} [limit] Number of items per page
+     * @param {AdminInvestigateObservabilityLayerEnum} [layer] Telemetry producer layer
+     * @param {string} [serviceName] OpenTelemetry service.name filter
+     * @param {string} [orgId] Organization ID filter
+     * @param {string} [userId] User ID filter
+     * @param {string} [boxId] Box ID filter
+     * @param {string} [runnerId] Runner ID filter
+     * @param {string} [machineId] Machine or host ID filter
+     * @param {string} [traceId] Trace ID filter
+     * @param {string} [requestId] Request ID filter
+     * @param {string} [operationId] Operation ID filter
+     * @param {string} [executionId] Execution ID filter
+     * @param {string} [jobId] Job ID filter
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminInvestigateObservability(from?: Date, to?: Date, page?: number, limit?: number, layer?: AdminInvestigateObservabilityLayerEnum, serviceName?: string, orgId?: string, userId?: string, boxId?: string, runnerId?: string, machineId?: string, traceId?: string, requestId?: string, operationId?: string, executionId?: string, jobId?: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminInvestigateObservability(from, to, page, limit, layer, serviceName, orgId, userId, boxId, runnerId, machineId, traceId, requestId, operationId, executionId, jobId, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary List all boxes (cross-org)
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminListBoxes(options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminListBoxes(options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Runner-as-machine resource view
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminListMachines(options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminListMachines(options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
      * @summary List all runners
      * @param {string} [regionId] Filter runners by region ID
      * @param {*} [options] Override http request option.
@@ -479,6 +1901,26 @@ export class AdminApi extends BaseAPI {
      */
     public adminListRunners(regionId?: string, options?: RawAxiosRequestConfig) {
         return AdminApiFp(this.configuration).adminListRunners(regionId, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary List all runners with full details
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminListRunnersOverview(options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminListRunnersOverview(options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary List all users (cross-org)
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminListUsers(options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminListUsers(options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -504,3 +1946,43 @@ export class AdminApi extends BaseAPI {
     }
 }
 
+export const AdminGetObservabilityLogsLayerEnum = {
+    API: 'api',
+    RUNNER: 'runner',
+    EC2_HOST: 'ec2_host',
+    BOX: 'box',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
+} as const;
+export type AdminGetObservabilityLogsLayerEnum = typeof AdminGetObservabilityLogsLayerEnum[keyof typeof AdminGetObservabilityLogsLayerEnum];
+export const AdminGetObservabilityMetricsLayerEnum = {
+    API: 'api',
+    RUNNER: 'runner',
+    EC2_HOST: 'ec2_host',
+    BOX: 'box',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
+} as const;
+export type AdminGetObservabilityMetricsLayerEnum = typeof AdminGetObservabilityMetricsLayerEnum[keyof typeof AdminGetObservabilityMetricsLayerEnum];
+export const AdminGetObservabilityTraceSpansLayerEnum = {
+    API: 'api',
+    RUNNER: 'runner',
+    EC2_HOST: 'ec2_host',
+    BOX: 'box',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
+} as const;
+export type AdminGetObservabilityTraceSpansLayerEnum = typeof AdminGetObservabilityTraceSpansLayerEnum[keyof typeof AdminGetObservabilityTraceSpansLayerEnum];
+export const AdminGetObservabilityTracesLayerEnum = {
+    API: 'api',
+    RUNNER: 'runner',
+    EC2_HOST: 'ec2_host',
+    BOX: 'box',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
+} as const;
+export type AdminGetObservabilityTracesLayerEnum = typeof AdminGetObservabilityTracesLayerEnum[keyof typeof AdminGetObservabilityTracesLayerEnum];
+export const AdminInvestigateObservabilityLayerEnum = {
+    API: 'api',
+    RUNNER: 'runner',
+    EC2_HOST: 'ec2_host',
+    BOX: 'box',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
+} as const;
+export type AdminInvestigateObservabilityLayerEnum = typeof AdminInvestigateObservabilityLayerEnum[keyof typeof AdminInvestigateObservabilityLayerEnum];

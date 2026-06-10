@@ -31,8 +31,6 @@ import type { Runner } from '../models';
 import type { RunnerFull } from '../models';
 // @ts-ignore
 import type { RunnerHealthcheck } from '../models';
-// @ts-ignore
-import type { RunnerSnapshotDto } from '../models';
 /**
  * RunnersApi - axios parameter creator
  */
@@ -274,49 +272,6 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * 
-         * @summary Get runners by snapshot ref
-         * @param {string} ref Snapshot ref
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        getRunnersBySnapshotRef: async (ref: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'ref' is not null or undefined
-            assertParamExists('getRunnersBySnapshotRef', 'ref', ref)
-            const localVarPath = `/runners/by-snapshot-ref`;
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-            if (ref !== undefined) {
-                localVarQueryParameter['ref'] = ref;
-            }
 
             localVarHeaderParameter['Accept'] = 'application/json';
 
@@ -588,19 +543,6 @@ export const RunnersApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
-         * @summary Get runners by snapshot ref
-         * @param {string} ref Snapshot ref
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async getRunnersBySnapshotRef(ref: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<RunnerSnapshotDto>>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getRunnersBySnapshotRef(ref, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['RunnersApi.getRunnersBySnapshotRef']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
          * @summary List all runners
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -726,16 +668,6 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
         },
         /**
          * 
-         * @summary Get runners by snapshot ref
-         * @param {string} ref Snapshot ref
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        getRunnersBySnapshotRef(ref: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<RunnerSnapshotDto>> {
-            return localVarFp.getRunnersBySnapshotRef(ref, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
          * @summary List all runners
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -849,17 +781,6 @@ export class RunnersApi extends BaseAPI {
      */
     public getRunnerFullById(id: string, options?: RawAxiosRequestConfig) {
         return RunnersApiFp(this.configuration).getRunnerFullById(id, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
-     * @summary Get runners by snapshot ref
-     * @param {string} ref Snapshot ref
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public getRunnersBySnapshotRef(ref: string, options?: RawAxiosRequestConfig) {
-        return RunnersApiFp(this.configuration).getRunnersBySnapshotRef(ref, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

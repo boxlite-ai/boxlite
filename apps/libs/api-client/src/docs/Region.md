@@ -13,7 +13,6 @@ Name | Type | Description | Notes
 **updatedAt** | **string** | Last update timestamp | [default to undefined]
 **proxyUrl** | **string** | Proxy URL for the region | [optional] [default to undefined]
 **sshGatewayUrl** | **string** | SSH Gateway URL for the region | [optional] [default to undefined]
-**snapshotManagerUrl** | **string** | Snapshot Manager URL for the region | [optional] [default to undefined]
 
 ## Example
 
@@ -29,7 +28,6 @@ const instance: Region = {
     updatedAt,
     proxyUrl,
     sshGatewayUrl,
-    snapshotManagerUrl,
 };
 ```
 

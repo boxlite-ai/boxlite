@@ -60,17 +60,9 @@ export interface BoxliteConfiguration {
      */
     'proxyToolboxUrl': string;
     /**
-     * Default snapshot for boxes
-     */
-    'defaultSnapshot': string;
-    /**
      * Dashboard URL
      */
     'dashboardUrl': string;
-    /**
-     * Maximum auto-archive interval in minutes
-     */
-    'maxAutoArchiveInterval': number;
     /**
      * Whether maintenance mode is enabled
      */

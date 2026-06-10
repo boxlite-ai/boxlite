@@ -19,9 +19,7 @@ All URIs are relative to *http://localhost:3000*
 |[**getOrganizationByBoxId**](#getorganizationbyboxid) | **GET** /organizations/by-box-id/{boxId} | Get organization by box ID|
 |[**getOrganizationInvitationsCountForAuthenticatedUser**](#getorganizationinvitationscountforauthenticateduser) | **GET** /organizations/invitations/count | Get count of organization invitations for authenticated user|
 |[**getOrganizationOtelConfigByBoxAuthToken**](#getorganizationotelconfigbyboxauthtoken) | **GET** /organizations/otel-config/by-box-auth-token/{authToken} | Get organization OTEL config by box auth token|
-|[**getOrganizationUsageOverview**](#getorganizationusageoverview) | **GET** /organizations/{organizationId}/usage | Get organization current usage overview|
 |[**getRegionById**](#getregionbyid) | **GET** /regions/{id} | Get region by ID|
-|[**getRegionQuotaByBoxId**](#getregionquotabyboxid) | **GET** /organizations/region-quota/by-box-id/{boxId} | Get region quota by box ID|
 |[**leaveOrganization**](#leaveorganization) | **POST** /organizations/{organizationId}/leave | Leave organization|
 |[**listAvailableRegions**](#listavailableregions) | **GET** /regions | List all available regions for the organization|
 |[**listOrganizationInvitations**](#listorganizationinvitations) | **GET** /organizations/{organizationId}/invitations | List pending organization invitations|
@@ -30,7 +28,6 @@ All URIs are relative to *http://localhost:3000*
 |[**listOrganizationRoles**](#listorganizationroles) | **GET** /organizations/{organizationId}/roles | List organization roles|
 |[**listOrganizations**](#listorganizations) | **GET** /organizations | List organizations|
 |[**regenerateProxyApiKey**](#regenerateproxyapikey) | **POST** /regions/{id}/regenerate-proxy-api-key | Regenerate proxy API key for a region|
-|[**regenerateSnapshotManagerCredentials**](#regeneratesnapshotmanagercredentials) | **POST** /regions/{id}/regenerate-snapshot-manager-credentials | Regenerate snapshot manager credentials for a region|
 |[**regenerateSshGatewayApiKey**](#regeneratesshgatewayapikey) | **POST** /regions/{id}/regenerate-ssh-gateway-api-key | Regenerate SSH gateway API key for a region|
 |[**setOrganizationDefaultRegion**](#setorganizationdefaultregion) | **PATCH** /organizations/{organizationId}/default-region | Set default region for organization|
 |[**suspendOrganization**](#suspendorganization) | **POST** /organizations/{organizationId}/suspend | Suspend organization|
@@ -39,8 +36,7 @@ All URIs are relative to *http://localhost:3000*
 |[**updateBoxDefaultLimitedNetworkEgress**](#updateboxdefaultlimitednetworkegress) | **POST** /organizations/{organizationId}/box-default-limited-network-egress | Update box default limited network egress|
 |[**updateExperimentalConfig**](#updateexperimentalconfig) | **PUT** /organizations/{organizationId}/experimental-config | Update experimental configuration|
 |[**updateOrganizationInvitation**](#updateorganizationinvitation) | **PUT** /organizations/{organizationId}/invitations/{invitationId} | Update organization invitation|
-|[**updateOrganizationQuota**](#updateorganizationquota) | **PATCH** /organizations/{organizationId}/quota | Update organization quota|
-|[**updateOrganizationRegionQuota**](#updateorganizationregionquota) | **PATCH** /organizations/{organizationId}/quota/{regionId} | Update organization region quota|
+|[**updateOrganizationName**](#updateorganizationname) | **PATCH** /organizations/{organizationId}/name | Update organization name|
 |[**updateOrganizationRole**](#updateorganizationrole) | **PUT** /organizations/{organizationId}/roles/{roleId} | Update organization role|
 |[**updateRegion**](#updateregion) | **PATCH** /regions/{id} | Update region configuration|
 
@@ -812,56 +808,6 @@ const { status, data } = await apiInstance.getOrganizationOtelConfigByBoxAuthTok
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
-# **getOrganizationUsageOverview**
-> OrganizationUsageOverview getOrganizationUsageOverview()
-
-
-### Example
-
-```typescript
-import {
-    OrganizationsApi,
-    Configuration
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new OrganizationsApi(configuration);
-
-let organizationId: string; //Organization ID (default to undefined)
-
-const { status, data } = await apiInstance.getOrganizationUsageOverview(
-    organizationId
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **organizationId** | [**string**] | Organization ID | defaults to undefined|
-
-
-### Return type
-
-**OrganizationUsageOverview**
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | Current usage overview |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
 # **getRegionById**
 > Region getRegionById()
 
@@ -912,56 +858,6 @@ const { status, data } = await apiInstance.getRegionById(
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**200** |  |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
-# **getRegionQuotaByBoxId**
-> RegionQuota getRegionQuotaByBoxId()
-
-
-### Example
-
-```typescript
-import {
-    OrganizationsApi,
-    Configuration
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new OrganizationsApi(configuration);
-
-let boxId: string; //Box ID (default to undefined)
-
-const { status, data } = await apiInstance.getRegionQuotaByBoxId(
-    boxId
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **boxId** | [**string**] | Box ID | defaults to undefined|
-
-
-### Return type
-
-**RegionQuota**
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | Region quota |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
@@ -1351,59 +1247,6 @@ const { status, data } = await apiInstance.regenerateProxyApiKey(
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**200** | The proxy API key has been successfully regenerated. |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
-# **regenerateSnapshotManagerCredentials**
-> SnapshotManagerCredentials regenerateSnapshotManagerCredentials()
-
-
-### Example
-
-```typescript
-import {
-    OrganizationsApi,
-    Configuration
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new OrganizationsApi(configuration);
-
-let id: string; //Region ID (default to undefined)
-let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
-
-const { status, data } = await apiInstance.regenerateSnapshotManagerCredentials(
-    id,
-    xBoxLiteOrganizationID
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **id** | [**string**] | Region ID | defaults to undefined|
-| **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
-
-
-### Return type
-
-**SnapshotManagerCredentials**
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | The snapshot manager credentials have been successfully regenerated. |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
@@ -1839,8 +1682,8 @@ const { status, data } = await apiInstance.updateOrganizationInvitation(
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
-# **updateOrganizationQuota**
-> updateOrganizationQuota(updateOrganizationQuota)
+# **updateOrganizationName**
+> Organization updateOrganizationName(updateOrganizationName)
 
 
 ### Example
@@ -1849,18 +1692,18 @@ const { status, data } = await apiInstance.updateOrganizationInvitation(
 import {
     OrganizationsApi,
     Configuration,
-    UpdateOrganizationQuota
+    UpdateOrganizationName
 } from './api';
 
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
 let organizationId: string; //Organization ID (default to undefined)
-let updateOrganizationQuota: UpdateOrganizationQuota; //
+let updateOrganizationName: UpdateOrganizationName; //
 
-const { status, data } = await apiInstance.updateOrganizationQuota(
+const { status, data } = await apiInstance.updateOrganizationName(
     organizationId,
-    updateOrganizationQuota
+    updateOrganizationName
 );
 ```
 
@@ -1868,13 +1711,13 @@ const { status, data } = await apiInstance.updateOrganizationQuota(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **updateOrganizationQuota** | **UpdateOrganizationQuota**|  | |
+| **updateOrganizationName** | **UpdateOrganizationName**|  | |
 | **organizationId** | [**string**] | Organization ID | defaults to undefined|
 
 
 ### Return type
 
-void (empty response body)
+**Organization**
 
 ### Authorization
 
@@ -1883,70 +1726,13 @@ void (empty response body)
 ### HTTP request headers
 
  - **Content-Type**: application/json
- - **Accept**: Not defined
+ - **Accept**: application/json
 
 
 ### HTTP response details
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
-|**204** | Organization quota updated successfully |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
-# **updateOrganizationRegionQuota**
-> updateOrganizationRegionQuota(updateOrganizationRegionQuota)
-
-
-### Example
-
-```typescript
-import {
-    OrganizationsApi,
-    Configuration,
-    UpdateOrganizationRegionQuota
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new OrganizationsApi(configuration);
-
-let organizationId: string; //Organization ID (default to undefined)
-let regionId: string; //ID of the region where the updated quota will be applied (default to undefined)
-let updateOrganizationRegionQuota: UpdateOrganizationRegionQuota; //
-
-const { status, data } = await apiInstance.updateOrganizationRegionQuota(
-    organizationId,
-    regionId,
-    updateOrganizationRegionQuota
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **updateOrganizationRegionQuota** | **UpdateOrganizationRegionQuota**|  | |
-| **organizationId** | [**string**] | Organization ID | defaults to undefined|
-| **regionId** | [**string**] | ID of the region where the updated quota will be applied | defaults to undefined|
-
-
-### Return type
-
-void (empty response body)
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: application/json
- - **Accept**: Not defined
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**204** | Region quota updated successfully |  -  |
+|**200** | Organization name updated successfully |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

@@ -62,8 +62,6 @@ type APIClient struct {
 
 	ConfigAPI ConfigAPI
 
-	DockerRegistryAPI DockerRegistryAPI
-
 	HealthAPI HealthAPI
 
 	JobsAPI JobsAPI
@@ -77,8 +75,6 @@ type APIClient struct {
 	RegionsAPI RegionsAPI
 
 	RunnersAPI RunnersAPI
-
-	SnapshotsAPI SnapshotsAPI
 
 	ToolboxAPI ToolboxAPI
 
@@ -113,7 +109,6 @@ func NewAPIClient(cfg *Configuration) *APIClient {
 	c.AuthAPI = (*AuthAPIService)(&c.common)
 	c.BoxAPI = (*BoxAPIService)(&c.common)
 	c.ConfigAPI = (*ConfigAPIService)(&c.common)
-	c.DockerRegistryAPI = (*DockerRegistryAPIService)(&c.common)
 	c.HealthAPI = (*HealthAPIService)(&c.common)
 	c.JobsAPI = (*JobsAPIService)(&c.common)
 	c.ObjectStorageAPI = (*ObjectStorageAPIService)(&c.common)
@@ -121,7 +116,6 @@ func NewAPIClient(cfg *Configuration) *APIClient {
 	c.PreviewAPI = (*PreviewAPIService)(&c.common)
 	c.RegionsAPI = (*RegionsAPIService)(&c.common)
 	c.RunnersAPI = (*RunnersAPIService)(&c.common)
-	c.SnapshotsAPI = (*SnapshotsAPIService)(&c.common)
 	c.ToolboxAPI = (*ToolboxAPIService)(&c.common)
 	c.UsersAPI = (*UsersAPIService)(&c.common)
 	c.VolumesAPI = (*VolumesAPIService)(&c.common)

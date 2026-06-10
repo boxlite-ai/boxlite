@@ -23,7 +23,6 @@ export const BoxDesiredState = {
     STARTED: 'started',
     STOPPED: 'stopped',
     RESIZED: 'resized',
-    ARCHIVED: 'archived',
     UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 

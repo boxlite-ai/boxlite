@@ -51,101 +51,11 @@ import type { ToolboxProxyUrl } from '../models';
 import type { TraceSpan } from '../models';
 // @ts-ignore
 import type { UpdateBoxStateDto } from '../models';
-// @ts-ignore
-import type { Url } from '../models';
 /**
  * BoxApi - axios parameter creator
  */
 export const BoxApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
-        /**
-         * 
-         * @summary Archive box
-         * @param {string} boxIdOrName 
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        archiveBox: async (boxIdOrName: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxIdOrName' is not null or undefined
-            assertParamExists('archiveBox', 'boxIdOrName', boxIdOrName)
-            const localVarPath = `/box/{boxIdOrName}/archive`
-                .replace('{boxIdOrName}', encodeURIComponent(String(boxIdOrName)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            if (xBoxLiteOrganizationID != null) {
-                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
-            }
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * 
-         * @summary Create box backup
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        createBackup: async (boxIdOrName: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxIdOrName' is not null or undefined
-            assertParamExists('createBackup', 'boxIdOrName', boxIdOrName)
-            const localVarPath = `/box/{boxIdOrName}/backup`
-                .replace('{boxIdOrName}', encodeURIComponent(String(boxIdOrName)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            if (xBoxLiteOrganizationID != null) {
-                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
-            }
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
         /**
          * 
          * @summary Create a new box
@@ -704,99 +614,6 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
             };
         },
         /**
-         * This endpoint is deprecated. Use `getBuildLogsUrl` instead.
-         * @summary Get build logs
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {boolean} [follow] Whether to follow the logs stream
-         * @param {*} [options] Override http request option.
-         * @deprecated
-         * @throws {RequiredError}
-         */
-        getBuildLogs: async (boxIdOrName: string, xBoxLiteOrganizationID?: string, follow?: boolean, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxIdOrName' is not null or undefined
-            assertParamExists('getBuildLogs', 'boxIdOrName', boxIdOrName)
-            const localVarPath = `/box/{boxIdOrName}/build-logs`
-                .replace('{boxIdOrName}', encodeURIComponent(String(boxIdOrName)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-            if (follow !== undefined) {
-                localVarQueryParameter['follow'] = follow;
-            }
-
-
-            if (xBoxLiteOrganizationID != null) {
-                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
-            }
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * 
-         * @summary Get build logs URL
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        getBuildLogsUrl: async (boxIdOrName: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxIdOrName' is not null or undefined
-            assertParamExists('getBuildLogsUrl', 'boxIdOrName', boxIdOrName)
-            const localVarPath = `/box/{boxIdOrName}/build-logs-url`
-                .replace('{boxIdOrName}', encodeURIComponent(String(boxIdOrName)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            if (xBoxLiteOrganizationID != null) {
-                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
-            }
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
          * 
          * @summary Get preview URL for a box port
          * @param {string} boxIdOrName ID or name of the box
@@ -1002,12 +819,11 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {number} [page] Page number of the results
          * @param {number} [limit] Number of results per page
-         * @param {string} [id] Filter by partial ID match
+         * @param {string} [id] Filter by partial Box ID, internal UUID, or name match
          * @param {string} [name] Filter by partial name match
          * @param {string} [labels] JSON encoded labels to filter by
          * @param {boolean} [includeErroredDeleted] Include results with errored state and deleted desired state
          * @param {Array<ListBoxesPaginatedStatesEnum>} [states] List of states to filter by
-         * @param {Array<string>} [snapshots] List of snapshot names to filter by
          * @param {Array<string>} [regions] List of regions to filter by
          * @param {number} [minCpu] Minimum CPU
          * @param {number} [maxCpu] Maximum CPU
@@ -1022,7 +838,7 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        listBoxesPaginated: async (xBoxLiteOrganizationID?: string, page?: number, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<ListBoxesPaginatedStatesEnum>, snapshots?: Array<string>, regions?: Array<string>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, lastEventAfter?: Date, lastEventBefore?: Date, sort?: ListBoxesPaginatedSortEnum, order?: ListBoxesPaginatedOrderEnum, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        listBoxesPaginated: async (xBoxLiteOrganizationID?: string, page?: number, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<ListBoxesPaginatedStatesEnum>, regions?: Array<string>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, lastEventAfter?: Date, lastEventBefore?: Date, sort?: ListBoxesPaginatedSortEnum, order?: ListBoxesPaginatedOrderEnum, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             const localVarPath = `/box/paginated`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -1067,10 +883,6 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
 
             if (states) {
                 localVarQueryParameter['states'] = states;
-            }
-
-            if (snapshots) {
-                localVarQueryParameter['snapshots'] = snapshots;
             }
 
             if (regions) {
@@ -1311,54 +1123,6 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
             if (token !== undefined) {
                 localVarQueryParameter['token'] = token;
             }
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            if (xBoxLiteOrganizationID != null) {
-                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
-            }
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * 
-         * @summary Set box auto-archive interval
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {number} interval Auto-archive interval in minutes (0 means the maximum interval will be used)
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        setAutoArchiveInterval: async (boxIdOrName: string, interval: number, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxIdOrName' is not null or undefined
-            assertParamExists('setAutoArchiveInterval', 'boxIdOrName', boxIdOrName)
-            // verify required parameter 'interval' is not null or undefined
-            assertParamExists('setAutoArchiveInterval', 'interval', interval)
-            const localVarPath = `/box/{boxIdOrName}/autoarchive/{interval}`
-                .replace('{boxIdOrName}', encodeURIComponent(String(boxIdOrName)))
-                .replace('{interval}', encodeURIComponent(String(interval)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
 
             localVarHeaderParameter['Accept'] = 'application/json';
 
@@ -1760,34 +1524,6 @@ export const BoxApiFp = function(configuration?: Configuration) {
     return {
         /**
          * 
-         * @summary Archive box
-         * @param {string} boxIdOrName 
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async archiveBox(boxIdOrName: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Box>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.archiveBox(boxIdOrName, xBoxLiteOrganizationID, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.archiveBox']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
-         * @summary Create box backup
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async createBackup(boxIdOrName: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Box>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.createBackup(boxIdOrName, xBoxLiteOrganizationID, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.createBackup']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
          * @summary Create a new box
          * @param {CreateBox} createBox 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -1946,36 +1682,6 @@ export const BoxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * This endpoint is deprecated. Use `getBuildLogsUrl` instead.
-         * @summary Get build logs
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {boolean} [follow] Whether to follow the logs stream
-         * @param {*} [options] Override http request option.
-         * @deprecated
-         * @throws {RequiredError}
-         */
-        async getBuildLogs(boxIdOrName: string, xBoxLiteOrganizationID?: string, follow?: boolean, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getBuildLogs(boxIdOrName, xBoxLiteOrganizationID, follow, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.getBuildLogs']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
-         * @summary Get build logs URL
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async getBuildLogsUrl(boxIdOrName: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Url>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getBuildLogsUrl(boxIdOrName, xBoxLiteOrganizationID, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.getBuildLogsUrl']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
          * 
          * @summary Get preview URL for a box port
          * @param {string} boxIdOrName ID or name of the box
@@ -2042,12 +1748,11 @@ export const BoxApiFp = function(configuration?: Configuration) {
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {number} [page] Page number of the results
          * @param {number} [limit] Number of results per page
-         * @param {string} [id] Filter by partial ID match
+         * @param {string} [id] Filter by partial Box ID, internal UUID, or name match
          * @param {string} [name] Filter by partial name match
          * @param {string} [labels] JSON encoded labels to filter by
          * @param {boolean} [includeErroredDeleted] Include results with errored state and deleted desired state
          * @param {Array<ListBoxesPaginatedStatesEnum>} [states] List of states to filter by
-         * @param {Array<string>} [snapshots] List of snapshot names to filter by
          * @param {Array<string>} [regions] List of regions to filter by
          * @param {number} [minCpu] Minimum CPU
          * @param {number} [maxCpu] Maximum CPU
@@ -2062,8 +1767,8 @@ export const BoxApiFp = function(configuration?: Configuration) {
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async listBoxesPaginated(xBoxLiteOrganizationID?: string, page?: number, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<ListBoxesPaginatedStatesEnum>, snapshots?: Array<string>, regions?: Array<string>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, lastEventAfter?: Date, lastEventBefore?: Date, sort?: ListBoxesPaginatedSortEnum, order?: ListBoxesPaginatedOrderEnum, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<PaginatedBoxes>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.listBoxesPaginated(xBoxLiteOrganizationID, page, limit, id, name, labels, includeErroredDeleted, states, snapshots, regions, minCpu, maxCpu, minMemoryGiB, maxMemoryGiB, minDiskGiB, maxDiskGiB, lastEventAfter, lastEventBefore, sort, order, options);
+        async listBoxesPaginated(xBoxLiteOrganizationID?: string, page?: number, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<ListBoxesPaginatedStatesEnum>, regions?: Array<string>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, lastEventAfter?: Date, lastEventBefore?: Date, sort?: ListBoxesPaginatedSortEnum, order?: ListBoxesPaginatedOrderEnum, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<PaginatedBoxes>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.listBoxesPaginated(xBoxLiteOrganizationID, page, limit, id, name, labels, includeErroredDeleted, states, regions, minCpu, maxCpu, minMemoryGiB, maxMemoryGiB, minDiskGiB, maxDiskGiB, lastEventAfter, lastEventBefore, sort, order, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['BoxApi.listBoxesPaginated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -2125,21 +1830,6 @@ export const BoxApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.revokeSshAccess(boxIdOrName, xBoxLiteOrganizationID, token, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['BoxApi.revokeSshAccess']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
-         * @summary Set box auto-archive interval
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {number} interval Auto-archive interval in minutes (0 means the maximum interval will be used)
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async setAutoArchiveInterval(boxIdOrName: string, interval: number, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Box>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.setAutoArchiveInterval(boxIdOrName, interval, xBoxLiteOrganizationID, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.setAutoArchiveInterval']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -2270,28 +1960,6 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
     return {
         /**
          * 
-         * @summary Archive box
-         * @param {string} boxIdOrName 
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        archiveBox(boxIdOrName: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Box> {
-            return localVarFp.archiveBox(boxIdOrName, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
-         * @summary Create box backup
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        createBackup(boxIdOrName: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Box> {
-            return localVarFp.createBackup(boxIdOrName, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
          * @summary Create a new box
          * @param {CreateBox} createBox 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -2420,30 +2088,6 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
             return localVarFp.getBoxesForRunner(xBoxLiteOrganizationID, states, skipReconcilingBoxes, options).then((request) => request(axios, basePath));
         },
         /**
-         * This endpoint is deprecated. Use `getBuildLogsUrl` instead.
-         * @summary Get build logs
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {boolean} [follow] Whether to follow the logs stream
-         * @param {*} [options] Override http request option.
-         * @deprecated
-         * @throws {RequiredError}
-         */
-        getBuildLogs(boxIdOrName: string, xBoxLiteOrganizationID?: string, follow?: boolean, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.getBuildLogs(boxIdOrName, xBoxLiteOrganizationID, follow, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
-         * @summary Get build logs URL
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        getBuildLogsUrl(boxIdOrName: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Url> {
-            return localVarFp.getBuildLogsUrl(boxIdOrName, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
-        },
-        /**
          * 
          * @summary Get preview URL for a box port
          * @param {string} boxIdOrName ID or name of the box
@@ -2498,12 +2142,11 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {number} [page] Page number of the results
          * @param {number} [limit] Number of results per page
-         * @param {string} [id] Filter by partial ID match
+         * @param {string} [id] Filter by partial Box ID, internal UUID, or name match
          * @param {string} [name] Filter by partial name match
          * @param {string} [labels] JSON encoded labels to filter by
          * @param {boolean} [includeErroredDeleted] Include results with errored state and deleted desired state
          * @param {Array<ListBoxesPaginatedStatesEnum>} [states] List of states to filter by
-         * @param {Array<string>} [snapshots] List of snapshot names to filter by
          * @param {Array<string>} [regions] List of regions to filter by
          * @param {number} [minCpu] Minimum CPU
          * @param {number} [maxCpu] Maximum CPU
@@ -2518,8 +2161,8 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        listBoxesPaginated(xBoxLiteOrganizationID?: string, page?: number, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<ListBoxesPaginatedStatesEnum>, snapshots?: Array<string>, regions?: Array<string>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, lastEventAfter?: Date, lastEventBefore?: Date, sort?: ListBoxesPaginatedSortEnum, order?: ListBoxesPaginatedOrderEnum, options?: RawAxiosRequestConfig): AxiosPromise<PaginatedBoxes> {
-            return localVarFp.listBoxesPaginated(xBoxLiteOrganizationID, page, limit, id, name, labels, includeErroredDeleted, states, snapshots, regions, minCpu, maxCpu, minMemoryGiB, maxMemoryGiB, minDiskGiB, maxDiskGiB, lastEventAfter, lastEventBefore, sort, order, options).then((request) => request(axios, basePath));
+        listBoxesPaginated(xBoxLiteOrganizationID?: string, page?: number, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<ListBoxesPaginatedStatesEnum>, regions?: Array<string>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, lastEventAfter?: Date, lastEventBefore?: Date, sort?: ListBoxesPaginatedSortEnum, order?: ListBoxesPaginatedOrderEnum, options?: RawAxiosRequestConfig): AxiosPromise<PaginatedBoxes> {
+            return localVarFp.listBoxesPaginated(xBoxLiteOrganizationID, page, limit, id, name, labels, includeErroredDeleted, states, regions, minCpu, maxCpu, minMemoryGiB, maxMemoryGiB, minDiskGiB, maxDiskGiB, lastEventAfter, lastEventBefore, sort, order, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -2567,18 +2210,6 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
          */
         revokeSshAccess(boxIdOrName: string, xBoxLiteOrganizationID?: string, token?: string, options?: RawAxiosRequestConfig): AxiosPromise<Box> {
             return localVarFp.revokeSshAccess(boxIdOrName, xBoxLiteOrganizationID, token, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
-         * @summary Set box auto-archive interval
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {number} interval Auto-archive interval in minutes (0 means the maximum interval will be used)
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        setAutoArchiveInterval(boxIdOrName: string, interval: number, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Box> {
-            return localVarFp.setAutoArchiveInterval(boxIdOrName, interval, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -2680,30 +2311,6 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
  * BoxApi - object-oriented interface
  */
 export class BoxApi extends BaseAPI {
-    /**
-     * 
-     * @summary Archive box
-     * @param {string} boxIdOrName 
-     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public archiveBox(boxIdOrName: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).archiveBox(boxIdOrName, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
-     * @summary Create box backup
-     * @param {string} boxIdOrName ID or name of the box
-     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public createBackup(boxIdOrName: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).createBackup(boxIdOrName, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
-    }
-
     /**
      * 
      * @summary Create a new box
@@ -2844,32 +2451,6 @@ export class BoxApi extends BaseAPI {
     }
 
     /**
-     * This endpoint is deprecated. Use `getBuildLogsUrl` instead.
-     * @summary Get build logs
-     * @param {string} boxIdOrName ID or name of the box
-     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {boolean} [follow] Whether to follow the logs stream
-     * @param {*} [options] Override http request option.
-     * @deprecated
-     * @throws {RequiredError}
-     */
-    public getBuildLogs(boxIdOrName: string, xBoxLiteOrganizationID?: string, follow?: boolean, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).getBuildLogs(boxIdOrName, xBoxLiteOrganizationID, follow, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
-     * @summary Get build logs URL
-     * @param {string} boxIdOrName ID or name of the box
-     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public getBuildLogsUrl(boxIdOrName: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).getBuildLogsUrl(boxIdOrName, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
      * 
      * @summary Get preview URL for a box port
      * @param {string} boxIdOrName ID or name of the box
@@ -2928,12 +2509,11 @@ export class BoxApi extends BaseAPI {
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {number} [page] Page number of the results
      * @param {number} [limit] Number of results per page
-     * @param {string} [id] Filter by partial ID match
+     * @param {string} [id] Filter by partial Box ID, internal UUID, or name match
      * @param {string} [name] Filter by partial name match
      * @param {string} [labels] JSON encoded labels to filter by
      * @param {boolean} [includeErroredDeleted] Include results with errored state and deleted desired state
      * @param {Array<ListBoxesPaginatedStatesEnum>} [states] List of states to filter by
-     * @param {Array<string>} [snapshots] List of snapshot names to filter by
      * @param {Array<string>} [regions] List of regions to filter by
      * @param {number} [minCpu] Minimum CPU
      * @param {number} [maxCpu] Maximum CPU
@@ -2948,8 +2528,8 @@ export class BoxApi extends BaseAPI {
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public listBoxesPaginated(xBoxLiteOrganizationID?: string, page?: number, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<ListBoxesPaginatedStatesEnum>, snapshots?: Array<string>, regions?: Array<string>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, lastEventAfter?: Date, lastEventBefore?: Date, sort?: ListBoxesPaginatedSortEnum, order?: ListBoxesPaginatedOrderEnum, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).listBoxesPaginated(xBoxLiteOrganizationID, page, limit, id, name, labels, includeErroredDeleted, states, snapshots, regions, minCpu, maxCpu, minMemoryGiB, maxMemoryGiB, minDiskGiB, maxDiskGiB, lastEventAfter, lastEventBefore, sort, order, options).then((request) => request(this.axios, this.basePath));
+    public listBoxesPaginated(xBoxLiteOrganizationID?: string, page?: number, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<ListBoxesPaginatedStatesEnum>, regions?: Array<string>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, lastEventAfter?: Date, lastEventBefore?: Date, sort?: ListBoxesPaginatedSortEnum, order?: ListBoxesPaginatedOrderEnum, options?: RawAxiosRequestConfig) {
+        return BoxApiFp(this.configuration).listBoxesPaginated(xBoxLiteOrganizationID, page, limit, id, name, labels, includeErroredDeleted, states, regions, minCpu, maxCpu, minMemoryGiB, maxMemoryGiB, minDiskGiB, maxDiskGiB, lastEventAfter, lastEventBefore, sort, order, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -3001,19 +2581,6 @@ export class BoxApi extends BaseAPI {
      */
     public revokeSshAccess(boxIdOrName: string, xBoxLiteOrganizationID?: string, token?: string, options?: RawAxiosRequestConfig) {
         return BoxApiFp(this.configuration).revokeSshAccess(boxIdOrName, xBoxLiteOrganizationID, token, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
-     * @summary Set box auto-archive interval
-     * @param {string} boxIdOrName ID or name of the box
-     * @param {number} interval Auto-archive interval in minutes (0 means the maximum interval will be used)
-     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public setAutoArchiveInterval(boxIdOrName: string, interval: number, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).setAutoArchiveInterval(boxIdOrName, interval, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -3127,11 +2694,7 @@ export const ListBoxesPaginatedStatesEnum = {
     STARTING: 'starting',
     STOPPING: 'stopping',
     ERROR: 'error',
-    BUILD_FAILED: 'build_failed',
-    PENDING_BUILD: 'pending_build',
-    BUILDING_SNAPSHOT: 'building_snapshot',
     UNKNOWN: 'unknown',
-    PULLING_SNAPSHOT: 'pulling_snapshot',
     ARCHIVED: 'archived',
     ARCHIVING: 'archiving',
     RESIZING: 'resizing',
@@ -3140,9 +2703,9 @@ export const ListBoxesPaginatedStatesEnum = {
 export type ListBoxesPaginatedStatesEnum = typeof ListBoxesPaginatedStatesEnum[keyof typeof ListBoxesPaginatedStatesEnum];
 export const ListBoxesPaginatedSortEnum = {
     ID: 'id',
+    BOX_ID: 'boxId',
     NAME: 'name',
     STATE: 'state',
-    SNAPSHOT: 'snapshot',
     REGION: 'region',
     UPDATED_AT: 'updatedAt',
     CREATED_AT: 'createdAt',

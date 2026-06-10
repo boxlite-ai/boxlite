@@ -99,18 +99,6 @@ type RunnersAPI interface {
 	GetRunnerFullByIdExecute(r RunnersAPIGetRunnerFullByIdRequest) (*RunnerFull, *http.Response, error)
 
 	/*
-	GetRunnersBySnapshotRef Get runners by snapshot ref
-
-	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@return RunnersAPIGetRunnersBySnapshotRefRequest
-	*/
-	GetRunnersBySnapshotRef(ctx context.Context) RunnersAPIGetRunnersBySnapshotRefRequest
-
-	// GetRunnersBySnapshotRefExecute executes the request
-	//  @return []RunnerSnapshotDto
-	GetRunnersBySnapshotRefExecute(r RunnersAPIGetRunnersBySnapshotRefRequest) ([]RunnerSnapshotDto, *http.Response, error)
-
-	/*
 	ListRunners List all runners
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
@@ -739,114 +727,6 @@ func (a *RunnersAPIService) GetRunnerFullByIdExecute(r RunnersAPIGetRunnerFullBy
 	localVarQueryParams := url.Values{}
 	localVarFormParams := url.Values{}
 
-	// to determine the Content-Type header
-	localVarHTTPContentTypes := []string{}
-
-	// set Content-Type header
-	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
-	if localVarHTTPContentType != "" {
-		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
-	}
-
-	// to determine the Accept header
-	localVarHTTPHeaderAccepts := []string{"application/json"}
-
-	// set Accept header
-	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
-	if localVarHTTPHeaderAccept != "" {
-		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
-	}
-	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
-	if err != nil {
-		return localVarReturnValue, nil, err
-	}
-
-	localVarHTTPResponse, err := a.client.callAPI(req)
-	if err != nil || localVarHTTPResponse == nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
-	localVarHTTPResponse.Body.Close()
-	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
-	if err != nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	if localVarHTTPResponse.StatusCode >= 300 {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: localVarHTTPResponse.Status,
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-	if err != nil {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: err.Error(),
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	return localVarReturnValue, localVarHTTPResponse, nil
-}
-
-type RunnersAPIGetRunnersBySnapshotRefRequest struct {
-	ctx context.Context
-	ApiService RunnersAPI
-	ref *string
-}
-
-// Snapshot ref
-func (r RunnersAPIGetRunnersBySnapshotRefRequest) Ref(ref string) RunnersAPIGetRunnersBySnapshotRefRequest {
-	r.ref = &ref
-	return r
-}
-
-func (r RunnersAPIGetRunnersBySnapshotRefRequest) Execute() ([]RunnerSnapshotDto, *http.Response, error) {
-	return r.ApiService.GetRunnersBySnapshotRefExecute(r)
-}
-
-/*
-GetRunnersBySnapshotRef Get runners by snapshot ref
-
- @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @return RunnersAPIGetRunnersBySnapshotRefRequest
-*/
-func (a *RunnersAPIService) GetRunnersBySnapshotRef(ctx context.Context) RunnersAPIGetRunnersBySnapshotRefRequest {
-	return RunnersAPIGetRunnersBySnapshotRefRequest{
-		ApiService: a,
-		ctx: ctx,
-	}
-}
-
-// Execute executes the request
-//  @return []RunnerSnapshotDto
-func (a *RunnersAPIService) GetRunnersBySnapshotRefExecute(r RunnersAPIGetRunnersBySnapshotRefRequest) ([]RunnerSnapshotDto, *http.Response, error) {
-	var (
-		localVarHTTPMethod   = http.MethodGet
-		localVarPostBody     interface{}
-		formFiles            []formFile
-		localVarReturnValue  []RunnerSnapshotDto
-	)
-
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "RunnersAPIService.GetRunnersBySnapshotRef")
-	if err != nil {
-		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
-	}
-
-	localVarPath := localBasePath + "/runners/by-snapshot-ref"
-
-	localVarHeaderParams := make(map[string]string)
-	localVarQueryParams := url.Values{}
-	localVarFormParams := url.Values{}
-	if r.ref == nil {
-		return localVarReturnValue, nil, reportError("ref is required and must be specified")
-	}
-
-	parameterAddToHeaderOrQuery(localVarQueryParams, "ref", r.ref, "form", "")
 	// to determine the Content-Type header
 	localVarHTTPContentTypes := []string{}
 

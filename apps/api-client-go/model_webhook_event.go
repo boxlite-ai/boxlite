@@ -22,9 +22,9 @@ type WebhookEvent string
 const (
 	WEBHOOKEVENT_BOX_CREATED WebhookEvent = "box.created"
 	WEBHOOKEVENT_BOX_STATE_UPDATED WebhookEvent = "box.state.updated"
-	WEBHOOKEVENT_SNAPSHOT_CREATED WebhookEvent = "snapshot.created"
-	WEBHOOKEVENT_SNAPSHOT_STATE_UPDATED WebhookEvent = "snapshot.state.updated"
-	WEBHOOKEVENT_SNAPSHOT_REMOVED WebhookEvent = "snapshot.removed"
+	WEBHOOKEVENT_TEMPLATE_CREATED WebhookEvent = "template.created"
+	WEBHOOKEVENT_TEMPLATE_STATE_UPDATED WebhookEvent = "template.state.updated"
+	WEBHOOKEVENT_TEMPLATE_REMOVED WebhookEvent = "template.removed"
 	WEBHOOKEVENT_VOLUME_CREATED WebhookEvent = "volume.created"
 	WEBHOOKEVENT_VOLUME_STATE_UPDATED WebhookEvent = "volume.state.updated"
 	WEBHOOKEVENT_UNKNOWN_DEFAULT_OPEN_API WebhookEvent = "unknown_default_open_api"
@@ -34,9 +34,9 @@ const (
 var AllowedWebhookEventEnumValues = []WebhookEvent{
 	"box.created",
 	"box.state.updated",
-	"snapshot.created",
-	"snapshot.state.updated",
-	"snapshot.removed",
+	"template.created",
+	"template.state.updated",
+	"template.removed",
 	"volume.created",
 	"volume.state.updated",
 	"unknown_default_open_api",

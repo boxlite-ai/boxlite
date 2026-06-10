@@ -29,11 +29,7 @@ const (
 	BOXSTATE_STARTING BoxState = "starting"
 	BOXSTATE_STOPPING BoxState = "stopping"
 	BOXSTATE_ERROR BoxState = "error"
-	BOXSTATE_BUILD_FAILED BoxState = "build_failed"
-	BOXSTATE_PENDING_BUILD BoxState = "pending_build"
-	BOXSTATE_BUILDING_SNAPSHOT BoxState = "building_snapshot"
 	BOXSTATE_UNKNOWN BoxState = "unknown"
-	BOXSTATE_PULLING_SNAPSHOT BoxState = "pulling_snapshot"
 	BOXSTATE_ARCHIVED BoxState = "archived"
 	BOXSTATE_ARCHIVING BoxState = "archiving"
 	BOXSTATE_RESIZING BoxState = "resizing"
@@ -51,11 +47,7 @@ var AllowedBoxStateEnumValues = []BoxState{
 	"starting",
 	"stopping",
 	"error",
-	"build_failed",
-	"pending_build",
-	"building_snapshot",
 	"unknown",
-	"pulling_snapshot",
 	"archived",
 	"archiving",
 	"resizing",

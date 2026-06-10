@@ -213,19 +213,6 @@ type OrganizationsAPI interface {
 	GetOrganizationOtelConfigByBoxAuthTokenExecute(r OrganizationsAPIGetOrganizationOtelConfigByBoxAuthTokenRequest) (*OtelConfig, *http.Response, error)
 
 	/*
-	GetOrganizationUsageOverview Get organization current usage overview
-
-	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param organizationId Organization ID
-	@return OrganizationsAPIGetOrganizationUsageOverviewRequest
-	*/
-	GetOrganizationUsageOverview(ctx context.Context, organizationId string) OrganizationsAPIGetOrganizationUsageOverviewRequest
-
-	// GetOrganizationUsageOverviewExecute executes the request
-	//  @return OrganizationUsageOverview
-	GetOrganizationUsageOverviewExecute(r OrganizationsAPIGetOrganizationUsageOverviewRequest) (*OrganizationUsageOverview, *http.Response, error)
-
-	/*
 	GetRegionById Get region by ID
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
@@ -237,19 +224,6 @@ type OrganizationsAPI interface {
 	// GetRegionByIdExecute executes the request
 	//  @return Region
 	GetRegionByIdExecute(r OrganizationsAPIGetRegionByIdRequest) (*Region, *http.Response, error)
-
-	/*
-	GetRegionQuotaByBoxId Get region quota by box ID
-
-	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param boxId Box ID
-	@return OrganizationsAPIGetRegionQuotaByBoxIdRequest
-	*/
-	GetRegionQuotaByBoxId(ctx context.Context, boxId string) OrganizationsAPIGetRegionQuotaByBoxIdRequest
-
-	// GetRegionQuotaByBoxIdExecute executes the request
-	//  @return RegionQuota
-	GetRegionQuotaByBoxIdExecute(r OrganizationsAPIGetRegionQuotaByBoxIdRequest) (*RegionQuota, *http.Response, error)
 
 	/*
 	LeaveOrganization Leave organization
@@ -350,19 +324,6 @@ type OrganizationsAPI interface {
 	// RegenerateProxyApiKeyExecute executes the request
 	//  @return RegenerateApiKeyResponse
 	RegenerateProxyApiKeyExecute(r OrganizationsAPIRegenerateProxyApiKeyRequest) (*RegenerateApiKeyResponse, *http.Response, error)
-
-	/*
-	RegenerateSnapshotManagerCredentials Regenerate snapshot manager credentials for a region
-
-	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param id Region ID
-	@return OrganizationsAPIRegenerateSnapshotManagerCredentialsRequest
-	*/
-	RegenerateSnapshotManagerCredentials(ctx context.Context, id string) OrganizationsAPIRegenerateSnapshotManagerCredentialsRequest
-
-	// RegenerateSnapshotManagerCredentialsExecute executes the request
-	//  @return SnapshotManagerCredentials
-	RegenerateSnapshotManagerCredentialsExecute(r OrganizationsAPIRegenerateSnapshotManagerCredentialsRequest) (*SnapshotManagerCredentials, *http.Response, error)
 
 	/*
 	RegenerateSshGatewayApiKey Regenerate SSH gateway API key for a region
@@ -466,29 +427,17 @@ type OrganizationsAPI interface {
 	UpdateOrganizationInvitationExecute(r OrganizationsAPIUpdateOrganizationInvitationRequest) (*OrganizationInvitation, *http.Response, error)
 
 	/*
-	UpdateOrganizationQuota Update organization quota
+	UpdateOrganizationName Update organization name
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param organizationId Organization ID
-	@return OrganizationsAPIUpdateOrganizationQuotaRequest
+	@return OrganizationsAPIUpdateOrganizationNameRequest
 	*/
-	UpdateOrganizationQuota(ctx context.Context, organizationId string) OrganizationsAPIUpdateOrganizationQuotaRequest
+	UpdateOrganizationName(ctx context.Context, organizationId string) OrganizationsAPIUpdateOrganizationNameRequest
 
-	// UpdateOrganizationQuotaExecute executes the request
-	UpdateOrganizationQuotaExecute(r OrganizationsAPIUpdateOrganizationQuotaRequest) (*http.Response, error)
-
-	/*
-	UpdateOrganizationRegionQuota Update organization region quota
-
-	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param organizationId Organization ID
-	@param regionId ID of the region where the updated quota will be applied
-	@return OrganizationsAPIUpdateOrganizationRegionQuotaRequest
-	*/
-	UpdateOrganizationRegionQuota(ctx context.Context, organizationId string, regionId string) OrganizationsAPIUpdateOrganizationRegionQuotaRequest
-
-	// UpdateOrganizationRegionQuotaExecute executes the request
-	UpdateOrganizationRegionQuotaExecute(r OrganizationsAPIUpdateOrganizationRegionQuotaRequest) (*http.Response, error)
+	// UpdateOrganizationNameExecute executes the request
+	//  @return Organization
+	UpdateOrganizationNameExecute(r OrganizationsAPIUpdateOrganizationNameRequest) (*Organization, *http.Response, error)
 
 	/*
 	UpdateOrganizationRole Update organization role
@@ -2033,107 +1982,6 @@ func (a *OrganizationsAPIService) GetOrganizationOtelConfigByBoxAuthTokenExecute
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
-type OrganizationsAPIGetOrganizationUsageOverviewRequest struct {
-	ctx context.Context
-	ApiService OrganizationsAPI
-	organizationId string
-}
-
-func (r OrganizationsAPIGetOrganizationUsageOverviewRequest) Execute() (*OrganizationUsageOverview, *http.Response, error) {
-	return r.ApiService.GetOrganizationUsageOverviewExecute(r)
-}
-
-/*
-GetOrganizationUsageOverview Get organization current usage overview
-
- @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param organizationId Organization ID
- @return OrganizationsAPIGetOrganizationUsageOverviewRequest
-*/
-func (a *OrganizationsAPIService) GetOrganizationUsageOverview(ctx context.Context, organizationId string) OrganizationsAPIGetOrganizationUsageOverviewRequest {
-	return OrganizationsAPIGetOrganizationUsageOverviewRequest{
-		ApiService: a,
-		ctx: ctx,
-		organizationId: organizationId,
-	}
-}
-
-// Execute executes the request
-//  @return OrganizationUsageOverview
-func (a *OrganizationsAPIService) GetOrganizationUsageOverviewExecute(r OrganizationsAPIGetOrganizationUsageOverviewRequest) (*OrganizationUsageOverview, *http.Response, error) {
-	var (
-		localVarHTTPMethod   = http.MethodGet
-		localVarPostBody     interface{}
-		formFiles            []formFile
-		localVarReturnValue  *OrganizationUsageOverview
-	)
-
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "OrganizationsAPIService.GetOrganizationUsageOverview")
-	if err != nil {
-		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
-	}
-
-	localVarPath := localBasePath + "/organizations/{organizationId}/usage"
-	localVarPath = strings.Replace(localVarPath, "{"+"organizationId"+"}", url.PathEscape(parameterValueToString(r.organizationId, "organizationId")), -1)
-
-	localVarHeaderParams := make(map[string]string)
-	localVarQueryParams := url.Values{}
-	localVarFormParams := url.Values{}
-
-	// to determine the Content-Type header
-	localVarHTTPContentTypes := []string{}
-
-	// set Content-Type header
-	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
-	if localVarHTTPContentType != "" {
-		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
-	}
-
-	// to determine the Accept header
-	localVarHTTPHeaderAccepts := []string{"application/json"}
-
-	// set Accept header
-	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
-	if localVarHTTPHeaderAccept != "" {
-		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
-	}
-	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
-	if err != nil {
-		return localVarReturnValue, nil, err
-	}
-
-	localVarHTTPResponse, err := a.client.callAPI(req)
-	if err != nil || localVarHTTPResponse == nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
-	localVarHTTPResponse.Body.Close()
-	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
-	if err != nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	if localVarHTTPResponse.StatusCode >= 300 {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: localVarHTTPResponse.Status,
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-	if err != nil {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: err.Error(),
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	return localVarReturnValue, localVarHTTPResponse, nil
-}
-
 type OrganizationsAPIGetRegionByIdRequest struct {
 	ctx context.Context
 	ApiService OrganizationsAPI
@@ -2207,107 +2055,6 @@ func (a *OrganizationsAPIService) GetRegionByIdExecute(r OrganizationsAPIGetRegi
 	}
 	if r.xBoxLiteOrganizationID != nil {
 		parameterAddToHeaderOrQuery(localVarHeaderParams, "X-BoxLite-Organization-ID", r.xBoxLiteOrganizationID, "simple", "")
-	}
-	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
-	if err != nil {
-		return localVarReturnValue, nil, err
-	}
-
-	localVarHTTPResponse, err := a.client.callAPI(req)
-	if err != nil || localVarHTTPResponse == nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
-	localVarHTTPResponse.Body.Close()
-	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
-	if err != nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	if localVarHTTPResponse.StatusCode >= 300 {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: localVarHTTPResponse.Status,
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-	if err != nil {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: err.Error(),
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	return localVarReturnValue, localVarHTTPResponse, nil
-}
-
-type OrganizationsAPIGetRegionQuotaByBoxIdRequest struct {
-	ctx context.Context
-	ApiService OrganizationsAPI
-	boxId string
-}
-
-func (r OrganizationsAPIGetRegionQuotaByBoxIdRequest) Execute() (*RegionQuota, *http.Response, error) {
-	return r.ApiService.GetRegionQuotaByBoxIdExecute(r)
-}
-
-/*
-GetRegionQuotaByBoxId Get region quota by box ID
-
- @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param boxId Box ID
- @return OrganizationsAPIGetRegionQuotaByBoxIdRequest
-*/
-func (a *OrganizationsAPIService) GetRegionQuotaByBoxId(ctx context.Context, boxId string) OrganizationsAPIGetRegionQuotaByBoxIdRequest {
-	return OrganizationsAPIGetRegionQuotaByBoxIdRequest{
-		ApiService: a,
-		ctx: ctx,
-		boxId: boxId,
-	}
-}
-
-// Execute executes the request
-//  @return RegionQuota
-func (a *OrganizationsAPIService) GetRegionQuotaByBoxIdExecute(r OrganizationsAPIGetRegionQuotaByBoxIdRequest) (*RegionQuota, *http.Response, error) {
-	var (
-		localVarHTTPMethod   = http.MethodGet
-		localVarPostBody     interface{}
-		formFiles            []formFile
-		localVarReturnValue  *RegionQuota
-	)
-
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "OrganizationsAPIService.GetRegionQuotaByBoxId")
-	if err != nil {
-		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
-	}
-
-	localVarPath := localBasePath + "/organizations/region-quota/by-box-id/{boxId}"
-	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
-
-	localVarHeaderParams := make(map[string]string)
-	localVarQueryParams := url.Values{}
-	localVarFormParams := url.Values{}
-
-	// to determine the Content-Type header
-	localVarHTTPContentTypes := []string{}
-
-	// set Content-Type header
-	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
-	if localVarHTTPContentType != "" {
-		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
-	}
-
-	// to determine the Accept header
-	localVarHTTPHeaderAccepts := []string{"application/json"}
-
-	// set Accept header
-	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
-	if localVarHTTPHeaderAccept != "" {
-		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
 	}
 	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
 	if err != nil {
@@ -3088,117 +2835,6 @@ func (a *OrganizationsAPIService) RegenerateProxyApiKeyExecute(r OrganizationsAP
 	}
 
 	localVarPath := localBasePath + "/regions/{id}/regenerate-proxy-api-key"
-	localVarPath = strings.Replace(localVarPath, "{"+"id"+"}", url.PathEscape(parameterValueToString(r.id, "id")), -1)
-
-	localVarHeaderParams := make(map[string]string)
-	localVarQueryParams := url.Values{}
-	localVarFormParams := url.Values{}
-
-	// to determine the Content-Type header
-	localVarHTTPContentTypes := []string{}
-
-	// set Content-Type header
-	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
-	if localVarHTTPContentType != "" {
-		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
-	}
-
-	// to determine the Accept header
-	localVarHTTPHeaderAccepts := []string{"application/json"}
-
-	// set Accept header
-	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
-	if localVarHTTPHeaderAccept != "" {
-		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
-	}
-	if r.xBoxLiteOrganizationID != nil {
-		parameterAddToHeaderOrQuery(localVarHeaderParams, "X-BoxLite-Organization-ID", r.xBoxLiteOrganizationID, "simple", "")
-	}
-	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
-	if err != nil {
-		return localVarReturnValue, nil, err
-	}
-
-	localVarHTTPResponse, err := a.client.callAPI(req)
-	if err != nil || localVarHTTPResponse == nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
-	localVarHTTPResponse.Body.Close()
-	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
-	if err != nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	if localVarHTTPResponse.StatusCode >= 300 {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: localVarHTTPResponse.Status,
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-	if err != nil {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: err.Error(),
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	return localVarReturnValue, localVarHTTPResponse, nil
-}
-
-type OrganizationsAPIRegenerateSnapshotManagerCredentialsRequest struct {
-	ctx context.Context
-	ApiService OrganizationsAPI
-	id string
-	xBoxLiteOrganizationID *string
-}
-
-// Use with JWT to specify the organization ID
-func (r OrganizationsAPIRegenerateSnapshotManagerCredentialsRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) OrganizationsAPIRegenerateSnapshotManagerCredentialsRequest {
-	r.xBoxLiteOrganizationID = &xBoxLiteOrganizationID
-	return r
-}
-
-func (r OrganizationsAPIRegenerateSnapshotManagerCredentialsRequest) Execute() (*SnapshotManagerCredentials, *http.Response, error) {
-	return r.ApiService.RegenerateSnapshotManagerCredentialsExecute(r)
-}
-
-/*
-RegenerateSnapshotManagerCredentials Regenerate snapshot manager credentials for a region
-
- @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param id Region ID
- @return OrganizationsAPIRegenerateSnapshotManagerCredentialsRequest
-*/
-func (a *OrganizationsAPIService) RegenerateSnapshotManagerCredentials(ctx context.Context, id string) OrganizationsAPIRegenerateSnapshotManagerCredentialsRequest {
-	return OrganizationsAPIRegenerateSnapshotManagerCredentialsRequest{
-		ApiService: a,
-		ctx: ctx,
-		id: id,
-	}
-}
-
-// Execute executes the request
-//  @return SnapshotManagerCredentials
-func (a *OrganizationsAPIService) RegenerateSnapshotManagerCredentialsExecute(r OrganizationsAPIRegenerateSnapshotManagerCredentialsRequest) (*SnapshotManagerCredentials, *http.Response, error) {
-	var (
-		localVarHTTPMethod   = http.MethodPost
-		localVarPostBody     interface{}
-		formFiles            []formFile
-		localVarReturnValue  *SnapshotManagerCredentials
-	)
-
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "OrganizationsAPIService.RegenerateSnapshotManagerCredentials")
-	if err != nil {
-		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
-	}
-
-	localVarPath := localBasePath + "/regions/{id}/regenerate-snapshot-manager-credentials"
 	localVarPath = strings.Replace(localVarPath, "{"+"id"+"}", url.PathEscape(parameterValueToString(r.id, "id")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -4094,31 +3730,31 @@ func (a *OrganizationsAPIService) UpdateOrganizationInvitationExecute(r Organiza
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
-type OrganizationsAPIUpdateOrganizationQuotaRequest struct {
+type OrganizationsAPIUpdateOrganizationNameRequest struct {
 	ctx context.Context
 	ApiService OrganizationsAPI
 	organizationId string
-	updateOrganizationQuota *UpdateOrganizationQuota
+	updateOrganizationName *UpdateOrganizationName
 }
 
-func (r OrganizationsAPIUpdateOrganizationQuotaRequest) UpdateOrganizationQuota(updateOrganizationQuota UpdateOrganizationQuota) OrganizationsAPIUpdateOrganizationQuotaRequest {
-	r.updateOrganizationQuota = &updateOrganizationQuota
+func (r OrganizationsAPIUpdateOrganizationNameRequest) UpdateOrganizationName(updateOrganizationName UpdateOrganizationName) OrganizationsAPIUpdateOrganizationNameRequest {
+	r.updateOrganizationName = &updateOrganizationName
 	return r
 }
 
-func (r OrganizationsAPIUpdateOrganizationQuotaRequest) Execute() (*http.Response, error) {
-	return r.ApiService.UpdateOrganizationQuotaExecute(r)
+func (r OrganizationsAPIUpdateOrganizationNameRequest) Execute() (*Organization, *http.Response, error) {
+	return r.ApiService.UpdateOrganizationNameExecute(r)
 }
 
 /*
-UpdateOrganizationQuota Update organization quota
+UpdateOrganizationName Update organization name
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param organizationId Organization ID
- @return OrganizationsAPIUpdateOrganizationQuotaRequest
+ @return OrganizationsAPIUpdateOrganizationNameRequest
 */
-func (a *OrganizationsAPIService) UpdateOrganizationQuota(ctx context.Context, organizationId string) OrganizationsAPIUpdateOrganizationQuotaRequest {
-	return OrganizationsAPIUpdateOrganizationQuotaRequest{
+func (a *OrganizationsAPIService) UpdateOrganizationName(ctx context.Context, organizationId string) OrganizationsAPIUpdateOrganizationNameRequest {
+	return OrganizationsAPIUpdateOrganizationNameRequest{
 		ApiService: a,
 		ctx: ctx,
 		organizationId: organizationId,
@@ -4126,26 +3762,28 @@ func (a *OrganizationsAPIService) UpdateOrganizationQuota(ctx context.Context, o
 }
 
 // Execute executes the request
-func (a *OrganizationsAPIService) UpdateOrganizationQuotaExecute(r OrganizationsAPIUpdateOrganizationQuotaRequest) (*http.Response, error) {
+//  @return Organization
+func (a *OrganizationsAPIService) UpdateOrganizationNameExecute(r OrganizationsAPIUpdateOrganizationNameRequest) (*Organization, *http.Response, error) {
 	var (
 		localVarHTTPMethod   = http.MethodPatch
 		localVarPostBody     interface{}
 		formFiles            []formFile
+		localVarReturnValue  *Organization
 	)
 
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "OrganizationsAPIService.UpdateOrganizationQuota")
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "OrganizationsAPIService.UpdateOrganizationName")
 	if err != nil {
-		return nil, &GenericOpenAPIError{error: err.Error()}
+		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/organizations/{organizationId}/quota"
+	localVarPath := localBasePath + "/organizations/{organizationId}/name"
 	localVarPath = strings.Replace(localVarPath, "{"+"organizationId"+"}", url.PathEscape(parameterValueToString(r.organizationId, "organizationId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
 	localVarFormParams := url.Values{}
-	if r.updateOrganizationQuota == nil {
-		return nil, reportError("updateOrganizationQuota is required and must be specified")
+	if r.updateOrganizationName == nil {
+		return localVarReturnValue, nil, reportError("updateOrganizationName is required and must be specified")
 	}
 
 	// to determine the Content-Type header
@@ -4158,7 +3796,7 @@ func (a *OrganizationsAPIService) UpdateOrganizationQuotaExecute(r Organizations
 	}
 
 	// to determine the Accept header
-	localVarHTTPHeaderAccepts := []string{}
+	localVarHTTPHeaderAccepts := []string{"application/json"}
 
 	// set Accept header
 	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
@@ -4166,22 +3804,22 @@ func (a *OrganizationsAPIService) UpdateOrganizationQuotaExecute(r Organizations
 		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
 	}
 	// body params
-	localVarPostBody = r.updateOrganizationQuota
+	localVarPostBody = r.updateOrganizationName
 	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
 	if err != nil {
-		return nil, err
+		return localVarReturnValue, nil, err
 	}
 
 	localVarHTTPResponse, err := a.client.callAPI(req)
 	if err != nil || localVarHTTPResponse == nil {
-		return localVarHTTPResponse, err
+		return localVarReturnValue, localVarHTTPResponse, err
 	}
 
 	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
 	localVarHTTPResponse.Body.Close()
 	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
 	if err != nil {
-		return localVarHTTPResponse, err
+		return localVarReturnValue, localVarHTTPResponse, err
 	}
 
 	if localVarHTTPResponse.StatusCode >= 300 {
@@ -4189,115 +3827,19 @@ func (a *OrganizationsAPIService) UpdateOrganizationQuotaExecute(r Organizations
 			body:  localVarBody,
 			error: localVarHTTPResponse.Status,
 		}
-		return localVarHTTPResponse, newErr
+		return localVarReturnValue, localVarHTTPResponse, newErr
 	}
 
-	return localVarHTTPResponse, nil
-}
-
-type OrganizationsAPIUpdateOrganizationRegionQuotaRequest struct {
-	ctx context.Context
-	ApiService OrganizationsAPI
-	organizationId string
-	regionId string
-	updateOrganizationRegionQuota *UpdateOrganizationRegionQuota
-}
-
-func (r OrganizationsAPIUpdateOrganizationRegionQuotaRequest) UpdateOrganizationRegionQuota(updateOrganizationRegionQuota UpdateOrganizationRegionQuota) OrganizationsAPIUpdateOrganizationRegionQuotaRequest {
-	r.updateOrganizationRegionQuota = &updateOrganizationRegionQuota
-	return r
-}
-
-func (r OrganizationsAPIUpdateOrganizationRegionQuotaRequest) Execute() (*http.Response, error) {
-	return r.ApiService.UpdateOrganizationRegionQuotaExecute(r)
-}
-
-/*
-UpdateOrganizationRegionQuota Update organization region quota
-
- @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param organizationId Organization ID
- @param regionId ID of the region where the updated quota will be applied
- @return OrganizationsAPIUpdateOrganizationRegionQuotaRequest
-*/
-func (a *OrganizationsAPIService) UpdateOrganizationRegionQuota(ctx context.Context, organizationId string, regionId string) OrganizationsAPIUpdateOrganizationRegionQuotaRequest {
-	return OrganizationsAPIUpdateOrganizationRegionQuotaRequest{
-		ApiService: a,
-		ctx: ctx,
-		organizationId: organizationId,
-		regionId: regionId,
-	}
-}
-
-// Execute executes the request
-func (a *OrganizationsAPIService) UpdateOrganizationRegionQuotaExecute(r OrganizationsAPIUpdateOrganizationRegionQuotaRequest) (*http.Response, error) {
-	var (
-		localVarHTTPMethod   = http.MethodPatch
-		localVarPostBody     interface{}
-		formFiles            []formFile
-	)
-
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "OrganizationsAPIService.UpdateOrganizationRegionQuota")
+	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
 	if err != nil {
-		return nil, &GenericOpenAPIError{error: err.Error()}
-	}
-
-	localVarPath := localBasePath + "/organizations/{organizationId}/quota/{regionId}"
-	localVarPath = strings.Replace(localVarPath, "{"+"organizationId"+"}", url.PathEscape(parameterValueToString(r.organizationId, "organizationId")), -1)
-	localVarPath = strings.Replace(localVarPath, "{"+"regionId"+"}", url.PathEscape(parameterValueToString(r.regionId, "regionId")), -1)
-
-	localVarHeaderParams := make(map[string]string)
-	localVarQueryParams := url.Values{}
-	localVarFormParams := url.Values{}
-	if r.updateOrganizationRegionQuota == nil {
-		return nil, reportError("updateOrganizationRegionQuota is required and must be specified")
-	}
-
-	// to determine the Content-Type header
-	localVarHTTPContentTypes := []string{"application/json"}
-
-	// set Content-Type header
-	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
-	if localVarHTTPContentType != "" {
-		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
-	}
-
-	// to determine the Accept header
-	localVarHTTPHeaderAccepts := []string{}
-
-	// set Accept header
-	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
-	if localVarHTTPHeaderAccept != "" {
-		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
-	}
-	// body params
-	localVarPostBody = r.updateOrganizationRegionQuota
-	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
-	if err != nil {
-		return nil, err
-	}
-
-	localVarHTTPResponse, err := a.client.callAPI(req)
-	if err != nil || localVarHTTPResponse == nil {
-		return localVarHTTPResponse, err
-	}
-
-	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
-	localVarHTTPResponse.Body.Close()
-	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
-	if err != nil {
-		return localVarHTTPResponse, err
-	}
-
-	if localVarHTTPResponse.StatusCode >= 300 {
 		newErr := &GenericOpenAPIError{
 			body:  localVarBody,
-			error: localVarHTTPResponse.Status,
+			error: err.Error(),
 		}
-		return localVarHTTPResponse, newErr
+		return localVarReturnValue, localVarHTTPResponse, newErr
 	}
 
-	return localVarHTTPResponse, nil
+	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
 type OrganizationsAPIUpdateOrganizationRoleRequest struct {

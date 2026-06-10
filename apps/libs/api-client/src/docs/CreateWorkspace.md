@@ -17,9 +17,7 @@ Name | Type | Description | Notes
 **memory** | **number** | Memory allocated to the workspace in GB | [optional] [default to undefined]
 **disk** | **number** | Disk space allocated to the workspace in GB | [optional] [default to undefined]
 **autoStopInterval** | **number** | Auto-stop interval in minutes (0 means disabled) | [optional] [default to undefined]
-**autoArchiveInterval** | **number** | Auto-archive interval in minutes (0 means the maximum interval will be used) | [optional] [default to undefined]
 **volumes** | [**Array&lt;BoxVolume&gt;**](BoxVolume.md) | Array of volumes to attach to the workspace | [optional] [default to undefined]
-**buildInfo** | [**CreateBuildInfo**](CreateBuildInfo.md) | Build information for the workspace | [optional] [default to undefined]
 
 ## Example
 
@@ -39,9 +37,7 @@ const instance: CreateWorkspace = {
     memory,
     disk,
     autoStopInterval,
-    autoArchiveInterval,
     volumes,
-    buildInfo,
 };
 ```
 

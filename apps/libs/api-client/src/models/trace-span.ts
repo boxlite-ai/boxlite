@@ -32,6 +32,14 @@ export interface TraceSpan {
      */
     'spanName': string;
     /**
+     * Emitting service name (e.g. boxlite-api, boxlite-runner, box-<id>)
+     */
+    'serviceName'?: string;
+    /**
+     * Resolved emitting layer: api | runner | ec2_host | box
+     */
+    'layer'?: string;
+    /**
      * Span start timestamp
      */
     'timestamp': string;

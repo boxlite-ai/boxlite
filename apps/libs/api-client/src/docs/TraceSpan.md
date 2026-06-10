@@ -9,6 +9,8 @@ Name | Type | Description | Notes
 **spanId** | **string** | Span identifier | [default to undefined]
 **parentSpanId** | **string** | Parent span identifier | [optional] [default to undefined]
 **spanName** | **string** | Span name | [default to undefined]
+**serviceName** | **string** | Emitting service name (e.g. boxlite-api, boxlite-runner, box-&lt;id&gt;) | [optional] [default to undefined]
+**layer** | **string** | Resolved emitting layer: api | runner | ec2_host | box | [optional] [default to undefined]
 **timestamp** | **string** | Span start timestamp | [default to undefined]
 **durationNs** | **number** | Span duration in nanoseconds | [default to undefined]
 **spanAttributes** | **{ [key: string]: string; }** | Span attributes | [default to undefined]
@@ -25,6 +27,8 @@ const instance: TraceSpan = {
     spanId,
     parentSpanId,
     spanName,
+    serviceName,
+    layer,
     timestamp,
     durationNs,
     spanAttributes,

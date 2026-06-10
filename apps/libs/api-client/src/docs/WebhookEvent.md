@@ -8,11 +8,11 @@ The type of event being sent
 
 * `BOX_STATE_UPDATED` (value: `'box.state.updated'`)
 
-* `SNAPSHOT_CREATED` (value: `'snapshot.created'`)
+* `TEMPLATE_CREATED` (value: `'template.created'`)
 
-* `SNAPSHOT_STATE_UPDATED` (value: `'snapshot.state.updated'`)
+* `TEMPLATE_STATE_UPDATED` (value: `'template.state.updated'`)
 
-* `SNAPSHOT_REMOVED` (value: `'snapshot.removed'`)
+* `TEMPLATE_REMOVED` (value: `'template.removed'`)
 
 * `VOLUME_CREATED` (value: `'volume.created'`)
 

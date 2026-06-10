@@ -27,13 +27,5 @@ export interface CreateRegionResponse {
      * SSH Gateway API key for the region
      */
     'sshGatewayApiKey'?: string | null;
-    /**
-     * Snapshot Manager username for the region
-     */
-    'snapshotManagerUsername'?: string | null;
-    /**
-     * Snapshot Manager password for the region
-     */
-    'snapshotManagerPassword'?: string | null;
 }
 

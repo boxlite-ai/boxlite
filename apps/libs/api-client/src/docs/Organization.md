@@ -8,7 +8,8 @@ Name | Type | Description | Notes
 **id** | **string** | Organization ID | [default to undefined]
 **name** | **string** | Organization name | [default to undefined]
 **createdBy** | **string** | User ID of the organization creator | [default to undefined]
-**personal** | **boolean** | Personal organization flag | [default to undefined]
+**isDefaultForAuthenticatedUser** | **boolean** | Whether this organization is the authenticated user default organization | [default to undefined]
+**personal** | **boolean** | Deprecated alias for isDefaultForAuthenticatedUser. Kept for backward compatibility with older REST clients. | [default to undefined]
 **createdAt** | **Date** | Creation timestamp | [default to undefined]
 **updatedAt** | **Date** | Last update timestamp | [default to undefined]
 **suspended** | **boolean** | Suspended flag | [default to undefined]
@@ -19,7 +20,7 @@ Name | Type | Description | Notes
 **maxCpuPerBox** | **number** | Max CPU per box | [default to undefined]
 **maxMemoryPerBox** | **number** | Max memory per box | [default to undefined]
 **maxDiskPerBox** | **number** | Max disk per box | [default to undefined]
-**snapshotDeactivationTimeoutMinutes** | **number** | Time in minutes before an unused snapshot is deactivated | [default to 20160]
+**templateDeactivationTimeoutMinutes** | **number** | Time in minutes before an unused template is deactivated | [default to 20160]
 **boxLimitedNetworkEgress** | **boolean** | Box default network block all | [default to undefined]
 **defaultRegionId** | **string** | Default region ID | [optional] [default to undefined]
 **authenticatedRateLimit** | **number** | Authenticated rate limit per minute | [default to undefined]
@@ -39,6 +40,7 @@ const instance: Organization = {
     id,
     name,
     createdBy,
+    isDefaultForAuthenticatedUser,
     personal,
     createdAt,
     updatedAt,
@@ -50,7 +52,7 @@ const instance: Organization = {
     maxCpuPerBox,
     maxMemoryPerBox,
     maxDiskPerBox,
-    snapshotDeactivationTimeoutMinutes,
+    templateDeactivationTimeoutMinutes,
     boxLimitedNetworkEgress,
     defaultRegionId,
     authenticatedRateLimit,

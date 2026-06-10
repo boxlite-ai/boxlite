@@ -13,9 +13,7 @@ Name | Type | Description | Notes
 **pylonAppId** | **string** | Pylon application ID | [optional] [default to undefined]
 **proxyTemplateUrl** | **string** | Proxy template URL | [default to undefined]
 **proxyToolboxUrl** | **string** | Toolbox template URL | [default to undefined]
-**defaultSnapshot** | **string** | Default snapshot for boxes | [default to undefined]
 **dashboardUrl** | **string** | Dashboard URL | [default to undefined]
-**maxAutoArchiveInterval** | **number** | Maximum auto-archive interval in minutes | [default to undefined]
 **maintananceMode** | **boolean** | Whether maintenance mode is enabled | [default to undefined]
 **environment** | **string** | Current environment | [default to undefined]
 **billingApiUrl** | **string** | Billing API URL | [optional] [default to undefined]
@@ -38,9 +36,7 @@ const instance: BoxliteConfiguration = {
     pylonAppId,
     proxyTemplateUrl,
     proxyToolboxUrl,
-    defaultSnapshot,
     dashboardUrl,
-    maxAutoArchiveInterval,
     maintananceMode,
     environment,
     billingApiUrl,

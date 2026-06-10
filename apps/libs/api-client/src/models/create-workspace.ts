@@ -16,9 +16,6 @@
 // May contain unused imports in some cases
 // @ts-ignore
 import type { BoxVolume } from './box-volume';
-// May contain unused imports in some cases
-// @ts-ignore
-import type { CreateBuildInfo } from './create-build-info';
 
 export interface CreateWorkspace {
     /**
@@ -70,17 +67,9 @@ export interface CreateWorkspace {
      */
     'autoStopInterval'?: number;
     /**
-     * Auto-archive interval in minutes (0 means the maximum interval will be used)
-     */
-    'autoArchiveInterval'?: number;
-    /**
      * Array of volumes to attach to the workspace
      */
     'volumes'?: Array<BoxVolume>;
-    /**
-     * Build information for the workspace
-     */
-    'buildInfo'?: CreateBuildInfo;
 }
 
 export const CreateWorkspaceClassEnum = {

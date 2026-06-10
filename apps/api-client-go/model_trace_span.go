@@ -29,6 +29,10 @@ type TraceSpan struct {
 	ParentSpanId *string `json:"parentSpanId,omitempty"`
 	// Span name
 	SpanName string `json:"spanName"`
+	// Emitting service name (e.g. boxlite-api, boxlite-runner, box-<id>)
+	ServiceName *string `json:"serviceName,omitempty"`
+	// Resolved emitting layer: api | runner | ec2_host | box
+	Layer *string `json:"layer,omitempty"`
 	// Span start timestamp
 	Timestamp string `json:"timestamp"`
 	// Span duration in nanoseconds
@@ -169,6 +173,70 @@ func (o *TraceSpan) GetSpanNameOk() (*string, bool) {
 // SetSpanName sets field value
 func (o *TraceSpan) SetSpanName(v string) {
 	o.SpanName = v
+}
+
+// GetServiceName returns the ServiceName field value if set, zero value otherwise.
+func (o *TraceSpan) GetServiceName() string {
+	if o == nil || IsNil(o.ServiceName) {
+		var ret string
+		return ret
+	}
+	return *o.ServiceName
+}
+
+// GetServiceNameOk returns a tuple with the ServiceName field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *TraceSpan) GetServiceNameOk() (*string, bool) {
+	if o == nil || IsNil(o.ServiceName) {
+		return nil, false
+	}
+	return o.ServiceName, true
+}
+
+// HasServiceName returns a boolean if a field has been set.
+func (o *TraceSpan) HasServiceName() bool {
+	if o != nil && !IsNil(o.ServiceName) {
+		return true
+	}
+
+	return false
+}
+
+// SetServiceName gets a reference to the given string and assigns it to the ServiceName field.
+func (o *TraceSpan) SetServiceName(v string) {
+	o.ServiceName = &v
+}
+
+// GetLayer returns the Layer field value if set, zero value otherwise.
+func (o *TraceSpan) GetLayer() string {
+	if o == nil || IsNil(o.Layer) {
+		var ret string
+		return ret
+	}
+	return *o.Layer
+}
+
+// GetLayerOk returns a tuple with the Layer field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *TraceSpan) GetLayerOk() (*string, bool) {
+	if o == nil || IsNil(o.Layer) {
+		return nil, false
+	}
+	return o.Layer, true
+}
+
+// HasLayer returns a boolean if a field has been set.
+func (o *TraceSpan) HasLayer() bool {
+	if o != nil && !IsNil(o.Layer) {
+		return true
+	}
+
+	return false
+}
+
+// SetLayer gets a reference to the given string and assigns it to the Layer field.
+func (o *TraceSpan) SetLayer(v string) {
+	o.Layer = &v
 }
 
 // GetTimestamp returns the Timestamp field value
@@ -323,6 +391,12 @@ func (o TraceSpan) ToMap() (map[string]interface{}, error) {
 		toSerialize["parentSpanId"] = o.ParentSpanId
 	}
 	toSerialize["spanName"] = o.SpanName
+	if !IsNil(o.ServiceName) {
+		toSerialize["serviceName"] = o.ServiceName
+	}
+	if !IsNil(o.Layer) {
+		toSerialize["layer"] = o.Layer
+	}
 	toSerialize["timestamp"] = o.Timestamp
 	toSerialize["durationNs"] = o.DurationNs
 	toSerialize["spanAttributes"] = o.SpanAttributes
@@ -384,6 +458,8 @@ func (o *TraceSpan) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "spanId")
 		delete(additionalProperties, "parentSpanId")
 		delete(additionalProperties, "spanName")
+		delete(additionalProperties, "serviceName")
+		delete(additionalProperties, "layer")
 		delete(additionalProperties, "timestamp")
 		delete(additionalProperties, "durationNs")
 		delete(additionalProperties, "spanAttributes")

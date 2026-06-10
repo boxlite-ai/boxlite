@@ -21,7 +21,6 @@ Name | Type | Description | Notes
 **currentAllocatedCpu** | **number** | Current allocated CPU | [optional] [default to undefined]
 **currentAllocatedMemoryGiB** | **number** | Current allocated memory in GiB | [optional] [default to undefined]
 **currentAllocatedDiskGiB** | **number** | Current allocated disk in GiB | [optional] [default to undefined]
-**currentSnapshotCount** | **number** | Current snapshot count | [optional] [default to undefined]
 **currentStartedBoxes** | **number** | Current number of started boxes | [optional] [default to undefined]
 **availabilityScore** | **number** | Runner availability score | [optional] [default to undefined]
 **region** | **string** | The region of the runner | [default to undefined]
@@ -59,7 +58,6 @@ const instance: RunnerFull = {
     currentAllocatedCpu,
     currentAllocatedMemoryGiB,
     currentAllocatedDiskGiB,
-    currentSnapshotCount,
     currentStartedBoxes,
     availabilityScore,
     region,

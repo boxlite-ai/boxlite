@@ -28,7 +28,10 @@ type Organization struct {
 	Name string `json:"name"`
 	// User ID of the organization creator
 	CreatedBy string `json:"createdBy"`
-	// Personal organization flag
+	// Whether this organization is the authenticated user default organization
+	IsDefaultForAuthenticatedUser bool `json:"isDefaultForAuthenticatedUser"`
+	// Deprecated alias for isDefaultForAuthenticatedUser. Kept for backward compatibility with older REST clients.
+	// Deprecated
 	Personal bool `json:"personal"`
 	// Creation timestamp
 	CreatedAt time.Time `json:"createdAt"`
@@ -50,8 +53,8 @@ type Organization struct {
 	MaxMemoryPerBox float32 `json:"maxMemoryPerBox"`
 	// Max disk per box
 	MaxDiskPerBox float32 `json:"maxDiskPerBox"`
-	// Time in minutes before an unused snapshot is deactivated
-	SnapshotDeactivationTimeoutMinutes float32 `json:"snapshotDeactivationTimeoutMinutes"`
+	// Time in minutes before an unused template is deactivated
+	TemplateDeactivationTimeoutMinutes float32 `json:"templateDeactivationTimeoutMinutes"`
 	// Box default network block all
 	BoxLimitedNetworkEgress bool `json:"boxLimitedNetworkEgress"`
 	// Default region ID
@@ -79,11 +82,12 @@ type _Organization Organization
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewOrganization(id string, name string, createdBy string, personal bool, createdAt time.Time, updatedAt time.Time, suspended bool, suspendedAt time.Time, suspensionReason string, suspendedUntil time.Time, suspensionCleanupGracePeriodHours float32, maxCpuPerBox float32, maxMemoryPerBox float32, maxDiskPerBox float32, snapshotDeactivationTimeoutMinutes float32, boxLimitedNetworkEgress bool, authenticatedRateLimit NullableFloat32, boxCreateRateLimit NullableFloat32, boxLifecycleRateLimit NullableFloat32, experimentalConfig map[string]interface{}, authenticatedRateLimitTtlSeconds NullableFloat32, boxCreateRateLimitTtlSeconds NullableFloat32, boxLifecycleRateLimitTtlSeconds NullableFloat32) *Organization {
+func NewOrganization(id string, name string, createdBy string, isDefaultForAuthenticatedUser bool, personal bool, createdAt time.Time, updatedAt time.Time, suspended bool, suspendedAt time.Time, suspensionReason string, suspendedUntil time.Time, suspensionCleanupGracePeriodHours float32, maxCpuPerBox float32, maxMemoryPerBox float32, maxDiskPerBox float32, templateDeactivationTimeoutMinutes float32, boxLimitedNetworkEgress bool, authenticatedRateLimit NullableFloat32, boxCreateRateLimit NullableFloat32, boxLifecycleRateLimit NullableFloat32, experimentalConfig map[string]interface{}, authenticatedRateLimitTtlSeconds NullableFloat32, boxCreateRateLimitTtlSeconds NullableFloat32, boxLifecycleRateLimitTtlSeconds NullableFloat32) *Organization {
 	this := Organization{}
 	this.Id = id
 	this.Name = name
 	this.CreatedBy = createdBy
+	this.IsDefaultForAuthenticatedUser = isDefaultForAuthenticatedUser
 	this.Personal = personal
 	this.CreatedAt = createdAt
 	this.UpdatedAt = updatedAt
@@ -95,7 +99,7 @@ func NewOrganization(id string, name string, createdBy string, personal bool, cr
 	this.MaxCpuPerBox = maxCpuPerBox
 	this.MaxMemoryPerBox = maxMemoryPerBox
 	this.MaxDiskPerBox = maxDiskPerBox
-	this.SnapshotDeactivationTimeoutMinutes = snapshotDeactivationTimeoutMinutes
+	this.TemplateDeactivationTimeoutMinutes = templateDeactivationTimeoutMinutes
 	this.BoxLimitedNetworkEgress = boxLimitedNetworkEgress
 	this.AuthenticatedRateLimit = authenticatedRateLimit
 	this.BoxCreateRateLimit = boxCreateRateLimit
@@ -112,8 +116,8 @@ func NewOrganization(id string, name string, createdBy string, personal bool, cr
 // but it doesn't guarantee that properties required by API are set
 func NewOrganizationWithDefaults() *Organization {
 	this := Organization{}
-	var snapshotDeactivationTimeoutMinutes float32 = 20160
-	this.SnapshotDeactivationTimeoutMinutes = snapshotDeactivationTimeoutMinutes
+	var templateDeactivationTimeoutMinutes float32 = 20160
+	this.TemplateDeactivationTimeoutMinutes = templateDeactivationTimeoutMinutes
 	return &this
 }
 
@@ -189,7 +193,32 @@ func (o *Organization) SetCreatedBy(v string) {
 	o.CreatedBy = v
 }
 
+// GetIsDefaultForAuthenticatedUser returns the IsDefaultForAuthenticatedUser field value
+func (o *Organization) GetIsDefaultForAuthenticatedUser() bool {
+	if o == nil {
+		var ret bool
+		return ret
+	}
+
+	return o.IsDefaultForAuthenticatedUser
+}
+
+// GetIsDefaultForAuthenticatedUserOk returns a tuple with the IsDefaultForAuthenticatedUser field value
+// and a boolean to check if the value has been set.
+func (o *Organization) GetIsDefaultForAuthenticatedUserOk() (*bool, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.IsDefaultForAuthenticatedUser, true
+}
+
+// SetIsDefaultForAuthenticatedUser sets field value
+func (o *Organization) SetIsDefaultForAuthenticatedUser(v bool) {
+	o.IsDefaultForAuthenticatedUser = v
+}
+
 // GetPersonal returns the Personal field value
+// Deprecated
 func (o *Organization) GetPersonal() bool {
 	if o == nil {
 		var ret bool
@@ -201,6 +230,7 @@ func (o *Organization) GetPersonal() bool {
 
 // GetPersonalOk returns a tuple with the Personal field value
 // and a boolean to check if the value has been set.
+// Deprecated
 func (o *Organization) GetPersonalOk() (*bool, bool) {
 	if o == nil {
 		return nil, false
@@ -209,6 +239,7 @@ func (o *Organization) GetPersonalOk() (*bool, bool) {
 }
 
 // SetPersonal sets field value
+// Deprecated
 func (o *Organization) SetPersonal(v bool) {
 	o.Personal = v
 }
@@ -453,28 +484,28 @@ func (o *Organization) SetMaxDiskPerBox(v float32) {
 	o.MaxDiskPerBox = v
 }
 
-// GetSnapshotDeactivationTimeoutMinutes returns the SnapshotDeactivationTimeoutMinutes field value
-func (o *Organization) GetSnapshotDeactivationTimeoutMinutes() float32 {
+// GetTemplateDeactivationTimeoutMinutes returns the TemplateDeactivationTimeoutMinutes field value
+func (o *Organization) GetTemplateDeactivationTimeoutMinutes() float32 {
 	if o == nil {
 		var ret float32
 		return ret
 	}
 
-	return o.SnapshotDeactivationTimeoutMinutes
+	return o.TemplateDeactivationTimeoutMinutes
 }
 
-// GetSnapshotDeactivationTimeoutMinutesOk returns a tuple with the SnapshotDeactivationTimeoutMinutes field value
+// GetTemplateDeactivationTimeoutMinutesOk returns a tuple with the TemplateDeactivationTimeoutMinutes field value
 // and a boolean to check if the value has been set.
-func (o *Organization) GetSnapshotDeactivationTimeoutMinutesOk() (*float32, bool) {
+func (o *Organization) GetTemplateDeactivationTimeoutMinutesOk() (*float32, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return &o.SnapshotDeactivationTimeoutMinutes, true
+	return &o.TemplateDeactivationTimeoutMinutes, true
 }
 
-// SetSnapshotDeactivationTimeoutMinutes sets field value
-func (o *Organization) SetSnapshotDeactivationTimeoutMinutes(v float32) {
-	o.SnapshotDeactivationTimeoutMinutes = v
+// SetTemplateDeactivationTimeoutMinutes sets field value
+func (o *Organization) SetTemplateDeactivationTimeoutMinutes(v float32) {
+	o.TemplateDeactivationTimeoutMinutes = v
 }
 
 // GetBoxLimitedNetworkEgress returns the BoxLimitedNetworkEgress field value
@@ -726,6 +757,7 @@ func (o Organization) ToMap() (map[string]interface{}, error) {
 	toSerialize["id"] = o.Id
 	toSerialize["name"] = o.Name
 	toSerialize["createdBy"] = o.CreatedBy
+	toSerialize["isDefaultForAuthenticatedUser"] = o.IsDefaultForAuthenticatedUser
 	toSerialize["personal"] = o.Personal
 	toSerialize["createdAt"] = o.CreatedAt
 	toSerialize["updatedAt"] = o.UpdatedAt
@@ -737,7 +769,7 @@ func (o Organization) ToMap() (map[string]interface{}, error) {
 	toSerialize["maxCpuPerBox"] = o.MaxCpuPerBox
 	toSerialize["maxMemoryPerBox"] = o.MaxMemoryPerBox
 	toSerialize["maxDiskPerBox"] = o.MaxDiskPerBox
-	toSerialize["snapshotDeactivationTimeoutMinutes"] = o.SnapshotDeactivationTimeoutMinutes
+	toSerialize["templateDeactivationTimeoutMinutes"] = o.TemplateDeactivationTimeoutMinutes
 	toSerialize["boxLimitedNetworkEgress"] = o.BoxLimitedNetworkEgress
 	if !IsNil(o.DefaultRegionId) {
 		toSerialize["defaultRegionId"] = o.DefaultRegionId
@@ -765,6 +797,7 @@ func (o *Organization) UnmarshalJSON(data []byte) (err error) {
 		"id",
 		"name",
 		"createdBy",
+		"isDefaultForAuthenticatedUser",
 		"personal",
 		"createdAt",
 		"updatedAt",
@@ -776,7 +809,7 @@ func (o *Organization) UnmarshalJSON(data []byte) (err error) {
 		"maxCpuPerBox",
 		"maxMemoryPerBox",
 		"maxDiskPerBox",
-		"snapshotDeactivationTimeoutMinutes",
+		"templateDeactivationTimeoutMinutes",
 		"boxLimitedNetworkEgress",
 		"authenticatedRateLimit",
 		"boxCreateRateLimit",
@@ -817,6 +850,7 @@ func (o *Organization) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "id")
 		delete(additionalProperties, "name")
 		delete(additionalProperties, "createdBy")
+		delete(additionalProperties, "isDefaultForAuthenticatedUser")
 		delete(additionalProperties, "personal")
 		delete(additionalProperties, "createdAt")
 		delete(additionalProperties, "updatedAt")
@@ -828,7 +862,7 @@ func (o *Organization) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "maxCpuPerBox")
 		delete(additionalProperties, "maxMemoryPerBox")
 		delete(additionalProperties, "maxDiskPerBox")
-		delete(additionalProperties, "snapshotDeactivationTimeoutMinutes")
+		delete(additionalProperties, "templateDeactivationTimeoutMinutes")
 		delete(additionalProperties, "boxLimitedNetworkEgress")
 		delete(additionalProperties, "defaultRegionId")
 		delete(additionalProperties, "authenticatedRateLimit")

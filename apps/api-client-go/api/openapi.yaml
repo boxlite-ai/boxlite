@@ -361,6 +361,40 @@ paths:
       summary: Create organization
       tags:
       - organizations
+  /organizations/{organizationId}/name:
+    patch:
+      operationId: updateOrganizationName
+      parameters:
+      - description: Organization ID
+        explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrganizationName"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Organization"
+          description: Organization name updated successfully
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Update organization name
+      tags:
+      - organizations
   /organizations/{organizationId}/default-region:
     patch:
       operationId: setOrganizationDefaultRegion
@@ -440,102 +474,6 @@ paths:
         - profile
         - email
       summary: Get organization by ID
-      tags:
-      - organizations
-  /organizations/{organizationId}/usage:
-    get:
-      operationId: getOrganizationUsageOverview
-      parameters:
-      - description: Organization ID
-        explode: false
-        in: path
-        name: organizationId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/OrganizationUsageOverview"
-          description: Current usage overview
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get organization current usage overview
-      tags:
-      - organizations
-  /organizations/{organizationId}/quota:
-    patch:
-      operationId: updateOrganizationQuota
-      parameters:
-      - description: Organization ID
-        explode: false
-        in: path
-        name: organizationId
-        required: true
-        schema:
-          type: string
-        style: simple
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UpdateOrganizationQuota"
-        required: true
-      responses:
-        "204":
-          description: Organization quota updated successfully
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Update organization quota
-      tags:
-      - organizations
-  /organizations/{organizationId}/quota/{regionId}:
-    patch:
-      operationId: updateOrganizationRegionQuota
-      parameters:
-      - description: Organization ID
-        explode: false
-        in: path
-        name: organizationId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: ID of the region where the updated quota will be applied
-        explode: false
-        in: path
-        name: regionId
-        required: true
-        schema:
-          type: string
-        style: simple
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UpdateOrganizationRegionQuota"
-        required: true
-      responses:
-        "204":
-          description: Region quota updated successfully
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Update organization region quota
       tags:
       - organizations
   /organizations/{organizationId}/leave:
@@ -642,34 +580,6 @@ paths:
         - profile
         - email
       summary: Get organization by box ID
-      tags:
-      - organizations
-  /organizations/region-quota/by-box-id/{boxId}:
-    get:
-      operationId: getRegionQuotaByBoxId
-      parameters:
-      - description: Box ID
-        explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/RegionQuota"
-          description: Region quota
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get region quota by box ID
       tags:
       - organizations
   /organizations/otel-config/by-box-auth-token/{authToken}:
@@ -1384,42 +1294,6 @@ paths:
       summary: Regenerate SSH gateway API key for a region
       tags:
       - organizations
-  /regions/{id}/regenerate-snapshot-manager-credentials:
-    post:
-      operationId: regenerateSnapshotManagerCredentials
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: Region ID
-        explode: false
-        in: path
-        name: id
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SnapshotManagerCredentials"
-          description: The snapshot manager credentials have been successfully regenerated.
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Regenerate snapshot manager credentials for a region
-      tags:
-      - organizations
   /users/me:
     get:
       operationId: getAuthenticatedUser
@@ -1801,7 +1675,7 @@ paths:
           minimum: 1
           type: number
         style: form
-      - description: Filter by partial ID match
+      - description: "Filter by partial Box ID, internal UUID, or name match"
         explode: true
         in: query
         name: id
@@ -1853,24 +1727,10 @@ paths:
             - starting
             - stopping
             - error
-            - build_failed
-            - pending_build
-            - building_snapshot
             - unknown
-            - pulling_snapshot
             - archived
             - archiving
             - resizing
-            type: string
-          type: array
-        style: form
-      - description: List of snapshot names to filter by
-        explode: true
-        in: query
-        name: snapshots
-        required: false
-        schema:
-          items:
             type: string
           type: array
         style: form
@@ -1967,9 +1827,9 @@ paths:
           default: createdAt
           enum:
           - id
+          - boxId
           - name
           - state
-          - snapshot
           - region
           - updatedAt
           - createdAt
@@ -2190,7 +2050,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Box"
-          description: Box has been started or is being restored from archived state
+          description: Box has been started
       security:
       - bearer: []
       - oauth2:
@@ -2366,42 +2226,6 @@ paths:
       summary: Update box state
       tags:
       - box
-  /box/{boxIdOrName}/backup:
-    post:
-      operationId: createBackup
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID or name of the box
-        explode: false
-        in: path
-        name: boxIdOrName
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Box"
-          description: Box backup has been initiated
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Create box backup
-      tags:
-      - box
   /box/{boxIdOrName}/public/{isPublic}:
     post:
       operationId: updatePublicStatus
@@ -2522,51 +2346,6 @@ paths:
       summary: Set box auto-stop interval
       tags:
       - box
-  /box/{boxIdOrName}/autoarchive/{interval}:
-    post:
-      operationId: setAutoArchiveInterval
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID or name of the box
-        explode: false
-        in: path
-        name: boxIdOrName
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Auto-archive interval in minutes (0 means the maximum interval
-          will be used)
-        explode: false
-        in: path
-        name: interval
-        required: true
-        schema:
-          type: number
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Box"
-          description: Auto-archive interval has been set
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Set box auto-archive interval
-      tags:
-      - box
   /box/{boxIdOrName}/autodelete/{interval}:
     post:
       operationId: setAutoDeleteInterval
@@ -2610,41 +2389,6 @@ paths:
         - profile
         - email
       summary: Set box auto-delete interval
-      tags:
-      - box
-  /box/{boxIdOrName}/archive:
-    post:
-      operationId: archiveBox
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - explode: false
-        in: path
-        name: boxIdOrName
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Box"
-          description: Box has been archived
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Archive box
       tags:
       - box
   /box/{boxIdOrName}/ports/{port}/preview-url:
@@ -2789,84 +2533,6 @@ paths:
         - profile
         - email
       summary: Expire signed preview URL for a box port
-      tags:
-      - box
-  /box/{boxIdOrName}/build-logs:
-    get:
-      deprecated: true
-      description: This endpoint is deprecated. Use `getBuildLogsUrl` instead.
-      operationId: getBuildLogs
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID or name of the box
-        explode: false
-        in: path
-        name: boxIdOrName
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Whether to follow the logs stream
-        explode: true
-        in: query
-        name: follow
-        required: false
-        schema:
-          type: boolean
-        style: form
-      responses:
-        "200":
-          description: Build logs stream
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get build logs
-      tags:
-      - box
-  /box/{boxIdOrName}/build-logs-url:
-    get:
-      operationId: getBuildLogsUrl
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID or name of the box
-        explode: false
-        in: path
-        name: boxIdOrName
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Url"
-          description: Build logs URL
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get build logs URL
       tags:
       - box
   /box/{boxIdOrName}/ssh-access:
@@ -3137,36 +2803,6 @@ paths:
         - profile
         - email
       summary: Get runner by box ID
-      tags:
-      - runners
-  /runners/by-snapshot-ref:
-    get:
-      operationId: getRunnersBySnapshotRef
-      parameters:
-      - description: Snapshot ref
-        explode: true
-        in: query
-        name: ref
-        required: true
-        schema:
-          type: string
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                items:
-                  $ref: "#/components/schemas/RunnerSnapshotDto"
-                type: array
-          description: ""
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get runners by snapshot ref
       tags:
       - runners
   /runners/{id}:
@@ -6396,423 +6032,6 @@ paths:
       summary: "[DEPRECATED] Get windows"
       tags:
       - toolbox
-  /snapshots:
-    get:
-      operationId: getAllSnapshots
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: Page number of the results
-        explode: true
-        in: query
-        name: page
-        required: false
-        schema:
-          default: 1
-          minimum: 1
-          type: number
-        style: form
-      - description: Number of results per page
-        explode: true
-        in: query
-        name: limit
-        required: false
-        schema:
-          default: 100
-          maximum: 200
-          minimum: 1
-          type: number
-        style: form
-      - description: Filter by partial name match
-        explode: true
-        in: query
-        name: name
-        required: false
-        schema:
-          example: abc123
-          type: string
-        style: form
-      - description: Field to sort by
-        explode: true
-        in: query
-        name: sort
-        required: false
-        schema:
-          default: lastUsedAt
-          enum:
-          - name
-          - state
-          - lastUsedAt
-          - createdAt
-          type: string
-        style: form
-      - description: Direction to sort by
-        explode: true
-        in: query
-        name: order
-        required: false
-        schema:
-          default: desc
-          enum:
-          - asc
-          - desc
-          type: string
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PaginatedSnapshots"
-          description: Paginated list of all snapshots
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: List all snapshots
-      tags:
-      - snapshots
-    post:
-      operationId: createSnapshot
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CreateSnapshot"
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SnapshotDto"
-          description: The snapshot has been successfully created.
-        "400":
-          description: Bad request - Snapshots with tag ":latest" are not allowed
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Create a new snapshot
-      tags:
-      - snapshots
-  /snapshots/can-cleanup-image:
-    get:
-      operationId: canCleanupImage
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: Image name with tag to check
-        explode: true
-        in: query
-        name: imageName
-        required: true
-        schema:
-          type: string
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                type: boolean
-          description: Boolean indicating if image can be cleaned up
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Check if an image can be cleaned up
-      tags:
-      - snapshots
-  /snapshots/{id}:
-    delete:
-      operationId: removeSnapshot
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: Snapshot ID
-        explode: false
-        in: path
-        name: id
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: Snapshot has been deleted
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Delete snapshot
-      tags:
-      - snapshots
-    get:
-      operationId: getSnapshot
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: Snapshot ID or name
-        explode: false
-        in: path
-        name: id
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SnapshotDto"
-          description: The snapshot
-        "404":
-          description: Snapshot not found
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get snapshot by ID or name
-      tags:
-      - snapshots
-  /snapshots/{id}/general:
-    patch:
-      operationId: setSnapshotGeneralStatus
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: Snapshot ID
-        explode: false
-        in: path
-        name: id
-        required: true
-        schema:
-          type: string
-        style: simple
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SetSnapshotGeneralStatusDto"
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SnapshotDto"
-          description: Snapshot general status has been set
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Set snapshot general status
-      tags:
-      - snapshots
-  /snapshots/{id}/build-logs:
-    get:
-      deprecated: true
-      description: This endpoint is deprecated. Use `getSnapshotBuildLogsUrl` instead.
-      operationId: getSnapshotBuildLogs
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: Snapshot ID
-        explode: false
-        in: path
-        name: id
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Whether to follow the logs stream
-        explode: true
-        in: query
-        name: follow
-        required: false
-        schema:
-          type: boolean
-        style: form
-      responses:
-        "200":
-          description: ""
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get snapshot build logs
-      tags:
-      - snapshots
-  /snapshots/{id}/build-logs-url:
-    get:
-      operationId: getSnapshotBuildLogsUrl
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: Snapshot ID
-        explode: false
-        in: path
-        name: id
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Url"
-          description: The snapshot build logs URL
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get snapshot build logs URL
-      tags:
-      - snapshots
-  /snapshots/{id}/activate:
-    post:
-      operationId: activateSnapshot
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: Snapshot ID
-        explode: false
-        in: path
-        name: id
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SnapshotDto"
-          description: The snapshot has been successfully activated.
-        "400":
-          description: "Bad request - Snapshot is already active, not in inactive\
-            \ state, or has associated snapshot runners"
-        "404":
-          description: Snapshot not found
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Activate a snapshot
-      tags:
-      - snapshots
-  /snapshots/{id}/deactivate:
-    post:
-      operationId: deactivateSnapshot
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: Snapshot ID
-        explode: false
-        in: path
-        name: id
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "204":
-          description: The snapshot has been successfully deactivated.
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Deactivate a snapshot
-      tags:
-      - snapshots
   /workspace:
     get:
       deprecated: true
@@ -7088,43 +6307,6 @@ paths:
       summary: "[DEPRECATED] Replace workspace labels"
       tags:
       - workspace
-  /workspace/{workspaceId}/backup:
-    post:
-      deprecated: true
-      operationId: createBackupWorkspace_deprecated
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID of the workspace
-        explode: false
-        in: path
-        name: workspaceId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Workspace"
-          description: Workspace backup has been initiated
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: "[DEPRECATED] Create workspace backup"
-      tags:
-      - workspace
   /workspace/{workspaceId}/public/{isPublic}:
     post:
       deprecated: true
@@ -7207,80 +6389,6 @@ paths:
       summary: "[DEPRECATED] Set workspace auto-stop interval"
       tags:
       - workspace
-  /workspace/{workspaceId}/autoarchive/{interval}:
-    post:
-      deprecated: true
-      operationId: setAutoArchiveIntervalWorkspace_deprecated
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID of the workspace
-        explode: false
-        in: path
-        name: workspaceId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Auto-archive interval in minutes (0 means the maximum interval
-          will be used)
-        explode: false
-        in: path
-        name: interval
-        required: true
-        schema:
-          type: number
-        style: simple
-      responses:
-        "200":
-          description: Auto-archive interval has been set
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: "[DEPRECATED] Set workspace auto-archive interval"
-      tags:
-      - workspace
-  /workspace/{workspaceId}/archive:
-    post:
-      deprecated: true
-      operationId: archiveWorkspace_deprecated
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - explode: false
-        in: path
-        name: workspaceId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: Workspace has been archived
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: "[DEPRECATED] Archive workspace"
-      tags:
-      - workspace
   /workspace/{workspaceId}/ports/{port}/preview-url:
     get:
       deprecated: true
@@ -7324,47 +6432,6 @@ paths:
         - profile
         - email
       summary: "[DEPRECATED] Get preview URL for a workspace port"
-      tags:
-      - workspace
-  /workspace/{workspaceId}/build-logs:
-    get:
-      deprecated: true
-      operationId: getBuildLogsWorkspace_deprecated
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID of the workspace
-        explode: false
-        in: path
-        name: workspaceId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Whether to follow the logs stream
-        explode: true
-        in: query
-        name: follow
-        required: false
-        schema:
-          type: boolean
-        style: form
-      responses:
-        "200":
-          description: Build logs stream
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: "[DEPRECATED] Get build logs"
       tags:
       - workspace
   /preview/{boxId}/public:
@@ -7811,250 +6878,6 @@ paths:
       summary: Update job status
       tags:
       - jobs
-  /docker-registry:
-    get:
-      operationId: listRegistries
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                items:
-                  $ref: "#/components/schemas/DockerRegistry"
-                type: array
-          description: List of all docker registries
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: List registries
-      tags:
-      - docker-registry
-    post:
-      operationId: createRegistry
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CreateDockerRegistry"
-        required: true
-      responses:
-        "201":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/DockerRegistry"
-          description: The docker registry has been successfully created.
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Create registry
-      tags:
-      - docker-registry
-  /docker-registry/registry-push-access:
-    get:
-      operationId: getTransientPushAccess
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID of the region where the snapshot will be available (defaults
-          to organization default region)
-        explode: true
-        in: query
-        name: regionId
-        required: false
-        schema:
-          type: string
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/RegistryPushAccessDto"
-          description: Temporary registry access has been generated
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get temporary registry access for pushing snapshots
-      tags:
-      - docker-registry
-  /docker-registry/{id}:
-    delete:
-      operationId: deleteRegistry
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID of the docker registry
-        explode: false
-        in: path
-        name: id
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "204":
-          description: The docker registry has been successfully deleted.
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Delete registry
-      tags:
-      - docker-registry
-    get:
-      operationId: getRegistry
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID of the docker registry
-        explode: false
-        in: path
-        name: id
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/DockerRegistry"
-          description: The docker registry
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get registry
-      tags:
-      - docker-registry
-    patch:
-      operationId: updateRegistry
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID of the docker registry
-        explode: false
-        in: path
-        name: id
-        required: true
-        schema:
-          type: string
-        style: simple
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UpdateDockerRegistry"
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/DockerRegistry"
-          description: The docker registry has been successfully updated.
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Update registry
-      tags:
-      - docker-registry
-  /docker-registry/{id}/set-default:
-    post:
-      operationId: setDefaultRegistry
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID of the docker registry
-        explode: false
-        in: path
-        name: id
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/DockerRegistry"
-          description: The docker registry has been set as default.
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Set default registry
-      tags:
-      - docker-registry
   /admin/runners:
     get:
       operationId: adminListRunners
@@ -8073,7 +6896,7 @@ paths:
             application/json:
               schema:
                 items:
-                  $ref: "#/components/schemas/RunnerFull"
+                  $ref: "#/components/schemas/AdminRunner"
                 type: array
           description: ""
       security:
@@ -8150,7 +6973,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/RunnerFull"
+                $ref: "#/components/schemas/AdminRunner"
           description: ""
       security:
       - bearer: []
@@ -8212,6 +7035,1093 @@ paths:
       summary: Recover box from error state as an admin
       tags:
       - admin
+  /admin/overview:
+    get:
+      operationId: adminGetOverview
+      parameters: []
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminOverview"
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Admin KPI summary
+      tags:
+      - admin
+  /admin/overview/users:
+    get:
+      operationId: adminListUsers
+      parameters: []
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/AdminUserItem"
+                type: array
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: List all users (cross-org)
+      tags:
+      - admin
+  /admin/overview/boxes:
+    get:
+      operationId: adminListBoxes
+      parameters: []
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/AdminBoxItem"
+                type: array
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: List all boxes (cross-org)
+      tags:
+      - admin
+  /admin/overview/runners:
+    get:
+      operationId: adminListRunnersOverview
+      parameters: []
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/AdminRunnerItem"
+                type: array
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: List all runners with full details
+      tags:
+      - admin
+  /admin/overview/machines:
+    get:
+      operationId: adminListMachines
+      parameters: []
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/AdminMachineItem"
+                type: array
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Runner-as-machine resource view
+      tags:
+      - admin
+  /admin/observability/status:
+    get:
+      operationId: adminGetObservabilityStatus
+      parameters: []
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminObservabilityStatusDto"
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get admin observability backend and layer status
+      tags:
+      - admin
+  /admin/observability/logs:
+    get:
+      operationId: adminGetObservabilityLogs
+      parameters:
+      - description: Start of time range (ISO 8601)
+        explode: true
+        in: query
+        name: from
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: End of time range (ISO 8601)
+        explode: true
+        in: query
+        name: to
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: Page number (1-indexed)
+        explode: true
+        in: query
+        name: page
+        required: false
+        schema:
+          default: 1
+          type: number
+        style: form
+      - description: Number of items per page
+        explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          default: 100
+          type: number
+        style: form
+      - description: Telemetry producer layer
+        explode: true
+        in: query
+        name: layer
+        required: false
+        schema:
+          enum:
+          - api
+          - runner
+          - ec2_host
+          - box
+          type: string
+        style: form
+      - description: OpenTelemetry service.name filter
+        explode: true
+        in: query
+        name: serviceName
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Organization ID filter
+        explode: true
+        in: query
+        name: orgId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: User ID filter
+        explode: true
+        in: query
+        name: userId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Box ID filter
+        explode: true
+        in: query
+        name: boxId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Runner ID filter
+        explode: true
+        in: query
+        name: runnerId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Machine or host ID filter
+        explode: true
+        in: query
+        name: machineId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Trace ID filter
+        explode: true
+        in: query
+        name: traceId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Request ID filter
+        explode: true
+        in: query
+        name: requestId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Operation ID filter
+        explode: true
+        in: query
+        name: operationId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Execution ID filter
+        explode: true
+        in: query
+        name: executionId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Job ID filter
+        explode: true
+        in: query
+        name: jobId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: "Filter by severity levels (DEBUG, INFO, WARN, ERROR)"
+        explode: true
+        in: query
+        name: severities
+        required: false
+        schema:
+          items:
+            type: string
+          type: array
+        style: form
+      - description: Search in log body
+        explode: true
+        in: query
+        name: search
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedLogs"
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get admin-scoped logs
+      tags:
+      - admin
+  /admin/observability/traces:
+    get:
+      operationId: adminGetObservabilityTraces
+      parameters:
+      - description: Start of time range (ISO 8601)
+        explode: true
+        in: query
+        name: from
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: End of time range (ISO 8601)
+        explode: true
+        in: query
+        name: to
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: Page number (1-indexed)
+        explode: true
+        in: query
+        name: page
+        required: false
+        schema:
+          default: 1
+          type: number
+        style: form
+      - description: Number of items per page
+        explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          default: 100
+          type: number
+        style: form
+      - description: Telemetry producer layer
+        explode: true
+        in: query
+        name: layer
+        required: false
+        schema:
+          enum:
+          - api
+          - runner
+          - ec2_host
+          - box
+          type: string
+        style: form
+      - description: OpenTelemetry service.name filter
+        explode: true
+        in: query
+        name: serviceName
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Organization ID filter
+        explode: true
+        in: query
+        name: orgId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: User ID filter
+        explode: true
+        in: query
+        name: userId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Box ID filter
+        explode: true
+        in: query
+        name: boxId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Runner ID filter
+        explode: true
+        in: query
+        name: runnerId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Machine or host ID filter
+        explode: true
+        in: query
+        name: machineId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Trace ID filter
+        explode: true
+        in: query
+        name: traceId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Request ID filter
+        explode: true
+        in: query
+        name: requestId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Operation ID filter
+        explode: true
+        in: query
+        name: operationId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Execution ID filter
+        explode: true
+        in: query
+        name: executionId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Job ID filter
+        explode: true
+        in: query
+        name: jobId
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedTraces"
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get admin-scoped traces
+      tags:
+      - admin
+  /admin/observability/traces/{traceId}:
+    get:
+      operationId: adminGetObservabilityTraceSpans
+      parameters:
+      - explode: false
+        in: path
+        name: traceId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: Start of time range (ISO 8601)
+        explode: true
+        in: query
+        name: from
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: End of time range (ISO 8601)
+        explode: true
+        in: query
+        name: to
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: Page number (1-indexed)
+        explode: true
+        in: query
+        name: page
+        required: false
+        schema:
+          default: 1
+          type: number
+        style: form
+      - description: Number of items per page
+        explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          default: 100
+          type: number
+        style: form
+      - description: Telemetry producer layer
+        explode: true
+        in: query
+        name: layer
+        required: false
+        schema:
+          enum:
+          - api
+          - runner
+          - ec2_host
+          - box
+          type: string
+        style: form
+      - description: OpenTelemetry service.name filter
+        explode: true
+        in: query
+        name: serviceName
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Organization ID filter
+        explode: true
+        in: query
+        name: orgId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: User ID filter
+        explode: true
+        in: query
+        name: userId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Box ID filter
+        explode: true
+        in: query
+        name: boxId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Runner ID filter
+        explode: true
+        in: query
+        name: runnerId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Machine or host ID filter
+        explode: true
+        in: query
+        name: machineId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Request ID filter
+        explode: true
+        in: query
+        name: requestId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Operation ID filter
+        explode: true
+        in: query
+        name: operationId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Execution ID filter
+        explode: true
+        in: query
+        name: executionId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Job ID filter
+        explode: true
+        in: query
+        name: jobId
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/TraceSpan"
+                type: array
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get admin-scoped trace spans
+      tags:
+      - admin
+  /admin/observability/metrics:
+    get:
+      operationId: adminGetObservabilityMetrics
+      parameters:
+      - description: Start of time range (ISO 8601)
+        explode: true
+        in: query
+        name: from
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: End of time range (ISO 8601)
+        explode: true
+        in: query
+        name: to
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: Page number (1-indexed)
+        explode: true
+        in: query
+        name: page
+        required: false
+        schema:
+          default: 1
+          type: number
+        style: form
+      - description: Number of items per page
+        explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          default: 100
+          type: number
+        style: form
+      - description: Telemetry producer layer
+        explode: true
+        in: query
+        name: layer
+        required: false
+        schema:
+          enum:
+          - api
+          - runner
+          - ec2_host
+          - box
+          type: string
+        style: form
+      - description: OpenTelemetry service.name filter
+        explode: true
+        in: query
+        name: serviceName
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Organization ID filter
+        explode: true
+        in: query
+        name: orgId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: User ID filter
+        explode: true
+        in: query
+        name: userId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Box ID filter
+        explode: true
+        in: query
+        name: boxId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Runner ID filter
+        explode: true
+        in: query
+        name: runnerId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Machine or host ID filter
+        explode: true
+        in: query
+        name: machineId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Trace ID filter
+        explode: true
+        in: query
+        name: traceId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Request ID filter
+        explode: true
+        in: query
+        name: requestId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Operation ID filter
+        explode: true
+        in: query
+        name: operationId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Execution ID filter
+        explode: true
+        in: query
+        name: executionId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Job ID filter
+        explode: true
+        in: query
+        name: jobId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Filter by metric names
+        explode: true
+        in: query
+        name: metricNames
+        required: false
+        schema:
+          items:
+            type: string
+          type: array
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetricsResponse"
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get admin-scoped metrics
+      tags:
+      - admin
+  /admin/observability/investigate:
+    get:
+      operationId: adminInvestigateObservability
+      parameters:
+      - description: Start of time range (ISO 8601)
+        explode: true
+        in: query
+        name: from
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: End of time range (ISO 8601)
+        explode: true
+        in: query
+        name: to
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: Page number (1-indexed)
+        explode: true
+        in: query
+        name: page
+        required: false
+        schema:
+          default: 1
+          type: number
+        style: form
+      - description: Number of items per page
+        explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          default: 100
+          type: number
+        style: form
+      - description: Telemetry producer layer
+        explode: true
+        in: query
+        name: layer
+        required: false
+        schema:
+          enum:
+          - api
+          - runner
+          - ec2_host
+          - box
+          type: string
+        style: form
+      - description: OpenTelemetry service.name filter
+        explode: true
+        in: query
+        name: serviceName
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Organization ID filter
+        explode: true
+        in: query
+        name: orgId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: User ID filter
+        explode: true
+        in: query
+        name: userId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Box ID filter
+        explode: true
+        in: query
+        name: boxId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Runner ID filter
+        explode: true
+        in: query
+        name: runnerId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Machine or host ID filter
+        explode: true
+        in: query
+        name: machineId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Trace ID filter
+        explode: true
+        in: query
+        name: traceId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Request ID filter
+        explode: true
+        in: query
+        name: requestId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Operation ID filter
+        explode: true
+        in: query
+        name: operationId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Execution ID filter
+        explode: true
+        in: query
+        name: executionId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Job ID filter
+        explode: true
+        in: query
+        name: jobId
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminObservabilityInvestigateResponse"
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Investigate related observability and platform state from trace or
+        resource identifiers
+      tags:
+      - admin
+  /audit:
+    get:
+      operationId: getAllAuditLogs
+      parameters:
+      - description: Page number of the results
+        explode: true
+        in: query
+        name: page
+        required: false
+        schema:
+          default: 1
+          minimum: 1
+          type: number
+        style: form
+      - description: Number of results per page
+        explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          default: 100
+          maximum: 200
+          minimum: 1
+          type: number
+        style: form
+      - description: From date (ISO 8601 format)
+        explode: true
+        in: query
+        name: from
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: To date (ISO 8601 format)
+        explode: true
+        in: query
+        name: to
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: "Token for cursor-based pagination. When provided, takes precedence\
+          \ over page parameter."
+        explode: true
+        in: query
+        name: nextToken
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedAuditLogs"
+          description: Paginated list of all audit logs
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get all audit logs
+      tags:
+      - audit
+  /audit/organizations/{organizationId}:
+    get:
+      operationId: getOrganizationAuditLogs
+      parameters:
+      - description: Organization ID
+        explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: Page number of the results
+        explode: true
+        in: query
+        name: page
+        required: false
+        schema:
+          default: 1
+          minimum: 1
+          type: number
+        style: form
+      - description: Number of results per page
+        explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          default: 100
+          maximum: 200
+          minimum: 1
+          type: number
+        style: form
+      - description: From date (ISO 8601 format)
+        explode: true
+        in: query
+        name: from
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: To date (ISO 8601 format)
+        explode: true
+        in: query
+        name: to
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: "Token for cursor-based pagination. When provided, takes precedence\
+          \ over page parameter."
+        explode: true
+        in: query
+        name: nextToken
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedAuditLogs"
+          description: Paginated list of organization audit logs
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get audit logs for organization
+      tags:
+      - audit
   /webhooks/organizations/{organizationId}/app-portal-access:
     post:
       operationId: WebhookController_getAppPortalAccess
@@ -8432,150 +8342,6 @@ paths:
       summary: Get temporary storage access for pushing objects
       tags:
       - object-storage
-  /audit:
-    get:
-      operationId: getAllAuditLogs
-      parameters:
-      - description: Page number of the results
-        explode: true
-        in: query
-        name: page
-        required: false
-        schema:
-          default: 1
-          minimum: 1
-          type: number
-        style: form
-      - description: Number of results per page
-        explode: true
-        in: query
-        name: limit
-        required: false
-        schema:
-          default: 100
-          maximum: 200
-          minimum: 1
-          type: number
-        style: form
-      - description: From date (ISO 8601 format)
-        explode: true
-        in: query
-        name: from
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: To date (ISO 8601 format)
-        explode: true
-        in: query
-        name: to
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: "Token for cursor-based pagination. When provided, takes precedence\
-          \ over page parameter."
-        explode: true
-        in: query
-        name: nextToken
-        required: false
-        schema:
-          type: string
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PaginatedAuditLogs"
-          description: Paginated list of all audit logs
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get all audit logs
-      tags:
-      - audit
-  /audit/organizations/{organizationId}:
-    get:
-      operationId: getOrganizationAuditLogs
-      parameters:
-      - description: Organization ID
-        explode: false
-        in: path
-        name: organizationId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Page number of the results
-        explode: true
-        in: query
-        name: page
-        required: false
-        schema:
-          default: 1
-          minimum: 1
-          type: number
-        style: form
-      - description: Number of results per page
-        explode: true
-        in: query
-        name: limit
-        required: false
-        schema:
-          default: 100
-          maximum: 200
-          minimum: 1
-          type: number
-        style: form
-      - description: From date (ISO 8601 format)
-        explode: true
-        in: query
-        name: from
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: To date (ISO 8601 format)
-        explode: true
-        in: query
-        name: to
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: "Token for cursor-based pagination. When provided, takes precedence\
-          \ over page parameter."
-        explode: true
-        in: query
-        name: nextToken
-        required: false
-        schema:
-          type: string
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PaginatedAuditLogs"
-          description: Paginated list of organization audit logs
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get audit logs for organization
-      tags:
-      - audit
   /health:
     get:
       operationId: HealthController_live
@@ -8976,9 +8742,7 @@ components:
         pylonAppId: pylon-app-123
         proxyTemplateUrl: "https://{{PORT}}-{{boxId}}.proxy.example.com"
         proxyToolboxUrl: https://proxy.example.com/toolbox
-        defaultSnapshot: ubuntu:22.04
         dashboardUrl: https://dashboard.example.com
-        maxAutoArchiveInterval: 43200
         maintananceMode: false
         environment: production
         billingApiUrl: https://billing.example.com
@@ -9024,18 +8788,10 @@ components:
           description: Toolbox template URL
           example: https://proxy.example.com/toolbox
           type: string
-        defaultSnapshot:
-          description: Default snapshot for boxes
-          example: ubuntu:22.04
-          type: string
         dashboardUrl:
           description: Dashboard URL
           example: https://dashboard.example.com
           type: string
-        maxAutoArchiveInterval:
-          description: Maximum auto-archive interval in minutes
-          example: 43200
-          type: number
         maintananceMode:
           description: Whether maintenance mode is enabled
           example: false
@@ -9067,11 +8823,9 @@ components:
       required:
       - announcements
       - dashboardUrl
-      - defaultSnapshot
       - environment
       - linkedAccountsEnabled
       - maintananceMode
-      - maxAutoArchiveInterval
       - oidc
       - proxyTemplateUrl
       - proxyToolboxUrl
@@ -9096,8 +8850,8 @@ components:
             enum:
             - write:registries
             - delete:registries
-            - write:snapshots
-            - delete:snapshots
+            - write:templates
+            - delete:templates
             - write:boxes
             - delete:boxes
             - read:volumes
@@ -9151,8 +8905,8 @@ components:
             enum:
             - write:registries
             - delete:registries
-            - write:snapshots
-            - delete:snapshots
+            - write:templates
+            - delete:templates
             - write:boxes
             - delete:boxes
             - read:volumes
@@ -9211,8 +8965,8 @@ components:
             enum:
             - write:registries
             - delete:registries
-            - write:snapshots
-            - delete:snapshots
+            - write:templates
+            - delete:templates
             - write:boxes
             - delete:boxes
             - read:volumes
@@ -9278,8 +9032,8 @@ components:
             enum:
             - write:registries
             - delete:registries
-            - write:snapshots
-            - delete:snapshots
+            - write:templates
+            - delete:templates
             - write:boxes
             - delete:boxes
             - read:volumes
@@ -9426,6 +9180,7 @@ components:
         id: id
         name: name
         createdBy: createdBy
+        isDefaultForAuthenticatedUser: true
         personal: true
         createdAt: 2000-01-23T04:56:07.000+00:00
         updatedAt: 2000-01-23T04:56:07.000+00:00
@@ -9437,7 +9192,7 @@ components:
         maxCpuPerBox: 6.027456183070403
         maxMemoryPerBox: 1.4658129805029452
         maxDiskPerBox: 5.962133916683182
-        snapshotDeactivationTimeoutMinutes: 5.637376656633329
+        templateDeactivationTimeoutMinutes: 5.637376656633329
         boxLimitedNetworkEgress: true
         defaultRegionId: defaultRegionId
         authenticatedRateLimit: 2.3021358869347655
@@ -9457,8 +9212,14 @@ components:
         createdBy:
           description: User ID of the organization creator
           type: string
+        isDefaultForAuthenticatedUser:
+          description: Whether this organization is the authenticated user default
+            organization
+          type: boolean
         personal:
-          description: Personal organization flag
+          deprecated: true
+          description: Deprecated alias for isDefaultForAuthenticatedUser. Kept for
+            backward compatibility with older REST clients.
           type: boolean
         createdAt:
           description: Creation timestamp
@@ -9494,9 +9255,9 @@ components:
         maxDiskPerBox:
           description: Max disk per box
           type: number
-        snapshotDeactivationTimeoutMinutes:
+        templateDeactivationTimeoutMinutes:
           default: 20160
-          description: Time in minutes before an unused snapshot is deactivated
+          description: Time in minutes before an unused template is deactivated
           type: number
         boxLimitedNetworkEgress:
           description: Box default network block all
@@ -9543,18 +9304,30 @@ components:
       - createdBy
       - experimentalConfig
       - id
+      - isDefaultForAuthenticatedUser
       - maxCpuPerBox
       - maxDiskPerBox
       - maxMemoryPerBox
       - name
       - personal
-      - snapshotDeactivationTimeoutMinutes
       - suspended
       - suspendedAt
       - suspendedUntil
       - suspensionCleanupGracePeriodHours
       - suspensionReason
+      - templateDeactivationTimeoutMinutes
       - updatedAt
+      type: object
+    UpdateOrganizationName:
+      example:
+        name: Default Organization
+      properties:
+        name:
+          description: The public name of the organization
+          example: Default Organization
+          type: string
+      required:
+      - name
       type: object
     UpdateOrganizationDefaultRegion:
       example:
@@ -9566,171 +9339,6 @@ components:
           type: string
       required:
       - defaultRegionId
-      type: object
-    RegionUsageOverview:
-      example:
-        regionId: regionId
-        totalCpuQuota: 0.8008281904610115
-        currentCpuUsage: 6.027456183070403
-        totalMemoryQuota: 1.4658129805029452
-        currentMemoryUsage: 5.962133916683182
-        totalDiskQuota: 5.637376656633329
-        currentDiskUsage: 2.3021358869347655
-      properties:
-        regionId:
-          type: string
-        totalCpuQuota:
-          type: number
-        currentCpuUsage:
-          type: number
-        totalMemoryQuota:
-          type: number
-        currentMemoryUsage:
-          type: number
-        totalDiskQuota:
-          type: number
-        currentDiskUsage:
-          type: number
-      required:
-      - currentCpuUsage
-      - currentDiskUsage
-      - currentMemoryUsage
-      - regionId
-      - totalCpuQuota
-      - totalDiskQuota
-      - totalMemoryQuota
-      type: object
-    OrganizationUsageOverview:
-      example:
-        regionUsage:
-        - regionId: regionId
-          totalCpuQuota: 0.8008281904610115
-          currentCpuUsage: 6.027456183070403
-          totalMemoryQuota: 1.4658129805029452
-          currentMemoryUsage: 5.962133916683182
-          totalDiskQuota: 5.637376656633329
-          currentDiskUsage: 2.3021358869347655
-        - regionId: regionId
-          totalCpuQuota: 0.8008281904610115
-          currentCpuUsage: 6.027456183070403
-          totalMemoryQuota: 1.4658129805029452
-          currentMemoryUsage: 5.962133916683182
-          totalDiskQuota: 5.637376656633329
-          currentDiskUsage: 2.3021358869347655
-        totalSnapshotQuota: 7.061401241503109
-        currentSnapshotUsage: 9.301444243932576
-        totalVolumeQuota: 3.616076749251911
-        currentVolumeUsage: 2.027123023002322
-      properties:
-        regionUsage:
-          items:
-            $ref: "#/components/schemas/RegionUsageOverview"
-          type: array
-        totalSnapshotQuota:
-          type: number
-        currentSnapshotUsage:
-          type: number
-        totalVolumeQuota:
-          type: number
-        currentVolumeUsage:
-          type: number
-      required:
-      - currentSnapshotUsage
-      - currentVolumeUsage
-      - regionUsage
-      - totalSnapshotQuota
-      - totalVolumeQuota
-      type: object
-    UpdateOrganizationQuota:
-      example:
-        maxCpuPerBox: 0.8008281904610115
-        maxMemoryPerBox: 6.027456183070403
-        maxDiskPerBox: 1.4658129805029452
-        snapshotQuota: 5.962133916683182
-        maxSnapshotSize: 5.637376656633329
-        volumeQuota: 2.3021358869347655
-        authenticatedRateLimit: 7.061401241503109
-        boxCreateRateLimit: 9.301444243932576
-        boxLifecycleRateLimit: 3.616076749251911
-        authenticatedRateLimitTtlSeconds: 2.027123023002322
-        boxCreateRateLimitTtlSeconds: 4.145608029883936
-        boxLifecycleRateLimitTtlSeconds: 7.386281948385884
-        snapshotDeactivationTimeoutMinutes: 1.2315135367772556
-      properties:
-        maxCpuPerBox:
-          nullable: true
-          type: number
-        maxMemoryPerBox:
-          nullable: true
-          type: number
-        maxDiskPerBox:
-          nullable: true
-          type: number
-        snapshotQuota:
-          nullable: true
-          type: number
-        maxSnapshotSize:
-          nullable: true
-          type: number
-        volumeQuota:
-          nullable: true
-          type: number
-        authenticatedRateLimit:
-          nullable: true
-          type: number
-        boxCreateRateLimit:
-          nullable: true
-          type: number
-        boxLifecycleRateLimit:
-          nullable: true
-          type: number
-        authenticatedRateLimitTtlSeconds:
-          nullable: true
-          type: number
-        boxCreateRateLimitTtlSeconds:
-          nullable: true
-          type: number
-        boxLifecycleRateLimitTtlSeconds:
-          nullable: true
-          type: number
-        snapshotDeactivationTimeoutMinutes:
-          description: Time in minutes before an unused snapshot is deactivated
-          nullable: true
-          type: number
-      required:
-      - authenticatedRateLimit
-      - authenticatedRateLimitTtlSeconds
-      - boxCreateRateLimit
-      - boxCreateRateLimitTtlSeconds
-      - boxLifecycleRateLimit
-      - boxLifecycleRateLimitTtlSeconds
-      - maxCpuPerBox
-      - maxDiskPerBox
-      - maxMemoryPerBox
-      - maxSnapshotSize
-      - snapshotDeactivationTimeoutMinutes
-      - snapshotQuota
-      - volumeQuota
-      type: object
-    UpdateOrganizationRegionQuota:
-      example:
-        totalCpuQuota: 0.8008281904610115
-        totalMemoryQuota: 6.027456183070403
-        totalDiskQuota: 1.4658129805029452
-      properties:
-        totalCpuQuota:
-          nullable: true
-          type: number
-        totalMemoryQuota:
-          nullable: true
-          type: number
-        totalDiskQuota:
-          nullable: true
-          type: number
-      required:
-      - totalCpuQuota
-      - totalDiskQuota
-      - totalMemoryQuota
       type: object
     OrganizationSuspension:
       example:
@@ -9752,31 +9360,6 @@ components:
       required:
       - reason
       - until
-      type: object
-    RegionQuota:
-      example:
-        organizationId: organizationId
-        regionId: regionId
-        totalCpuQuota: 0.8008281904610115
-        totalMemoryQuota: 6.027456183070403
-        totalDiskQuota: 1.4658129805029452
-      properties:
-        organizationId:
-          type: string
-        regionId:
-          type: string
-        totalCpuQuota:
-          type: number
-        totalMemoryQuota:
-          type: number
-        totalDiskQuota:
-          type: number
-      required:
-      - organizationId
-      - regionId
-      - totalCpuQuota
-      - totalDiskQuota
-      - totalMemoryQuota
       type: object
     OtelConfig:
       example:
@@ -9830,8 +9413,8 @@ components:
             enum:
             - write:registries
             - delete:registries
-            - write:snapshots
-            - delete:snapshots
+            - write:templates
+            - delete:templates
             - write:boxes
             - delete:boxes
             - read:volumes
@@ -9872,8 +9455,8 @@ components:
             enum:
             - write:registries
             - delete:registries
-            - write:snapshots
-            - delete:snapshots
+            - write:templates
+            - delete:templates
             - write:boxes
             - delete:boxes
             - read:volumes
@@ -9899,6 +9482,7 @@ components:
         name: name
         email: email
         role: owner
+        isDefaultForUser: true
         assignedRoles:
         - id: id
           name: name
@@ -9939,6 +9523,9 @@ components:
           - owner
           - member
           type: string
+        isDefaultForUser:
+          description: Whether this organization membership is the user default organization
+          type: boolean
         assignedRoles:
           description: Roles assigned to the user
           items:
@@ -9956,6 +9543,7 @@ components:
       - assignedRoles
       - createdAt
       - email
+      - isDefaultForUser
       - name
       - organizationId
       - role
@@ -10069,7 +9657,6 @@ components:
         updatedAt: 2023-01-01T00:00:00.000Z
         proxyUrl: https://proxy.example.com
         sshGatewayUrl: http://ssh-gateway.example.com
-        snapshotManagerUrl: http://snapshot-manager.example.com
       properties:
         id:
           description: Region ID
@@ -10107,11 +9694,6 @@ components:
           example: http://ssh-gateway.example.com
           nullable: true
           type: string
-        snapshotManagerUrl:
-          description: Snapshot Manager URL for the region
-          example: http://snapshot-manager.example.com
-          nullable: true
-          type: string
       required:
       - createdAt
       - id
@@ -10124,7 +9706,6 @@ components:
         name: us-east-1
         proxyUrl: https://proxy.example.com
         sshGatewayUrl: ssh://ssh-gateway.example.com
-        snapshotManagerUrl: https://snapshot-manager.example.com
       properties:
         name:
           description: Region name
@@ -10140,11 +9721,6 @@ components:
           example: ssh://ssh-gateway.example.com
           nullable: true
           type: string
-        snapshotManagerUrl:
-          description: Snapshot Manager URL for the region
-          example: https://snapshot-manager.example.com
-          nullable: true
-          type: string
       required:
       - name
       type: object
@@ -10153,8 +9729,6 @@ components:
         id: region_12345
         proxyApiKey: proxy-api-key-xyz
         sshGatewayApiKey: ssh-gateway-api-key-abc
-        snapshotManagerUsername: boxlite
-        snapshotManagerPassword: snapshotManagerPassword
       properties:
         id:
           description: ID of the created region
@@ -10168,15 +9742,6 @@ components:
         sshGatewayApiKey:
           description: SSH Gateway API key for the region
           example: ssh-gateway-api-key-abc
-          nullable: true
-          type: string
-        snapshotManagerUsername:
-          description: Snapshot Manager username for the region
-          example: boxlite
-          nullable: true
-          type: string
-        snapshotManagerPassword:
-          description: Snapshot Manager password for the region
           nullable: true
           type: string
       required:
@@ -10197,7 +9762,6 @@ components:
       example:
         proxyUrl: https://proxy.example.com
         sshGatewayUrl: ssh://ssh-gateway.example.com
-        snapshotManagerUrl: https://snapshot-manager.example.com
       properties:
         proxyUrl:
           description: Proxy URL for the region
@@ -10209,27 +9773,6 @@ components:
           example: ssh://ssh-gateway.example.com
           nullable: true
           type: string
-        snapshotManagerUrl:
-          description: Snapshot Manager URL for the region
-          example: https://snapshot-manager.example.com
-          nullable: true
-          type: string
-      type: object
-    SnapshotManagerCredentials:
-      example:
-        username: boxlite
-        password: password
-      properties:
-        username:
-          description: Snapshot Manager username for the region
-          example: boxlite
-          type: string
-        password:
-          description: Snapshot Manager password for the region
-          type: string
-      required:
-      - password
-      - username
       type: object
     UserPublicKey:
       example:
@@ -10283,52 +9826,12 @@ components:
       - name
       - publicKeys
       type: object
-    CreateOrganizationQuota:
-      example:
-        totalCpuQuota: 0.8008281904610115
-        totalMemoryQuota: 6.027456183070403
-        totalDiskQuota: 1.4658129805029452
-        maxCpuPerBox: 5.962133916683182
-        maxMemoryPerBox: 5.637376656633329
-        maxDiskPerBox: 2.3021358869347655
-        snapshotQuota: 7.061401241503109
-        maxSnapshotSize: 9.301444243932576
-        volumeQuota: 3.616076749251911
-      properties:
-        totalCpuQuota:
-          type: number
-        totalMemoryQuota:
-          type: number
-        totalDiskQuota:
-          type: number
-        maxCpuPerBox:
-          type: number
-        maxMemoryPerBox:
-          type: number
-        maxDiskPerBox:
-          type: number
-        snapshotQuota:
-          type: number
-        maxSnapshotSize:
-          type: number
-        volumeQuota:
-          type: number
-      type: object
     CreateUser:
       example:
         id: id
         name: name
         email: email
-        personalOrganizationQuota:
-          totalCpuQuota: 0.8008281904610115
-          totalMemoryQuota: 6.027456183070403
-          totalDiskQuota: 1.4658129805029452
-          maxCpuPerBox: 5.962133916683182
-          maxMemoryPerBox: 5.637376656633329
-          maxDiskPerBox: 2.3021358869347655
-          snapshotQuota: 7.061401241503109
-          maxSnapshotSize: 9.301444243932576
-          volumeQuota: 3.616076749251911
+        defaultOrganizationDefaultRegionId: defaultOrganizationDefaultRegionId
         personalOrganizationDefaultRegionId: personalOrganizationDefaultRegionId
         role: admin
         emailVerified: true
@@ -10339,9 +9842,11 @@ components:
           type: string
         email:
           type: string
-        personalOrganizationQuota:
-          $ref: "#/components/schemas/CreateOrganizationQuota"
+        defaultOrganizationDefaultRegionId:
+          type: string
         personalOrganizationDefaultRegionId:
+          deprecated: true
+          description: Deprecated alias for defaultOrganizationDefaultRegionId.
           type: string
         role:
           enum:
@@ -10394,11 +9899,7 @@ components:
       - starting
       - stopping
       - error
-      - build_failed
-      - pending_build
-      - building_snapshot
       - unknown
-      - pulling_snapshot
       - archived
       - archiving
       - resizing
@@ -10410,7 +9911,6 @@ components:
       - started
       - stopped
       - resized
-      - archived
       type: string
     BoxVolume:
       example:
@@ -10436,48 +9936,12 @@ components:
       - mountPath
       - volumeId
       type: object
-    BuildInfo:
-      properties:
-        dockerfileContent:
-          description: The Dockerfile content used for the build
-          example: |-
-            FROM node:14
-            WORKDIR /app
-            COPY . .
-            RUN npm install
-            CMD ["npm", "start"]
-          type: string
-        contextHashes:
-          description: The context hashes used for the build
-          example:
-          - hash1
-          - hash2
-          items:
-            type: string
-          type: array
-        createdAt:
-          description: The creation timestamp
-          format: date-time
-          type: string
-        updatedAt:
-          description: The last update timestamp
-          format: date-time
-          type: string
-        snapshotRef:
-          description: The snapshot reference
-          example: boxlite-ai/box:latest
-          type: string
-      required:
-      - createdAt
-      - snapshotRef
-      - updatedAt
-      type: object
     Box:
       example:
-        id: box123
+        id: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
+        boxId: aB3cD4eF5gH6
         organizationId: organization123
         name: MyBox
-        snapshot: boxlite-ai/box:latest
         user: boxlite
         env:
           NODE_ENV: production
@@ -10495,10 +9959,7 @@ components:
         desiredState: destroyed
         errorReason: The box is not running
         recoverable: true
-        backupState: None
-        backupCreatedAt: 2024-10-01T12:00:00Z
         autoStopInterval: 30
-        autoArchiveInterval: 10080
         autoDeleteInterval: 30
         volumes:
         - volumeId: volume123
@@ -10507,7 +9968,6 @@ components:
         - volumeId: volume123
           mountPath: /data
           subpath: users/alice
-        buildInfo: ""
         createdAt: 2024-10-01T12:00:00Z
         updatedAt: 2024-10-01T12:00:00Z
         class: small
@@ -10516,8 +9976,12 @@ components:
         toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
       properties:
         id:
-          description: The ID of the box
-          example: box123
+          description: The internal UUID of the box
+          example: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
+          type: string
+        boxId:
+          description: The public Box ID shown to users and SDK clients
+          example: aB3cD4eF5gH6
           type: string
         organizationId:
           description: The organization ID of the box
@@ -10526,10 +9990,6 @@ components:
         name:
           description: The name of the box
           example: MyBox
-          type: string
-        snapshot:
-          description: The snapshot used for the box
-          example: boxlite-ai/box:latest
           type: string
         user:
           description: The user associated with the project
@@ -10600,27 +10060,9 @@ components:
           description: Whether the box error is recoverable.
           example: true
           type: boolean
-        backupState:
-          description: The state of the backup
-          enum:
-          - None
-          - Pending
-          - InProgress
-          - Completed
-          - Error
-          example: None
-          type: string
-        backupCreatedAt:
-          description: The creation timestamp of the last backup
-          example: 2024-10-01T12:00:00Z
-          type: string
         autoStopInterval:
           description: Auto-stop interval in minutes (0 means disabled)
           example: 30
-          type: number
-        autoArchiveInterval:
-          description: Auto-archive interval in minutes
-          example: 10080
           type: number
         autoDeleteInterval:
           description: "Auto-delete interval in minutes (negative value means disabled,\
@@ -10632,10 +10074,6 @@ components:
           items:
             $ref: "#/components/schemas/BoxVolume"
           type: array
-        buildInfo:
-          allOf:
-          - $ref: "#/components/schemas/BuildInfo"
-          description: Build information for the box
         createdAt:
           description: The creation timestamp of the box
           example: 2024-10-01T12:00:00Z
@@ -10666,6 +10104,7 @@ components:
           example: https://proxy.app.boxlite.io/toolbox
           type: string
       required:
+      - boxId
       - cpu
       - disk
       - env
@@ -10684,10 +10123,10 @@ components:
     PaginatedBoxes:
       example:
         items:
-        - id: box123
+        - id: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
+          boxId: aB3cD4eF5gH6
           organizationId: organization123
           name: MyBox
-          snapshot: boxlite-ai/box:latest
           user: boxlite
           env:
             NODE_ENV: production
@@ -10705,10 +10144,7 @@ components:
           desiredState: destroyed
           errorReason: The box is not running
           recoverable: true
-          backupState: None
-          backupCreatedAt: 2024-10-01T12:00:00Z
           autoStopInterval: 30
-          autoArchiveInterval: 10080
           autoDeleteInterval: 30
           volumes:
           - volumeId: volume123
@@ -10717,17 +10153,16 @@ components:
           - volumeId: volume123
             mountPath: /data
             subpath: users/alice
-          buildInfo: ""
           createdAt: 2024-10-01T12:00:00Z
           updatedAt: 2024-10-01T12:00:00Z
           class: small
           daemonVersion: 1.0.0
           runnerId: runner123
           toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
-        - id: box123
+        - id: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
+          boxId: aB3cD4eF5gH6
           organizationId: organization123
           name: MyBox
-          snapshot: boxlite-ai/box:latest
           user: boxlite
           env:
             NODE_ENV: production
@@ -10745,10 +10180,7 @@ components:
           desiredState: destroyed
           errorReason: The box is not running
           recoverable: true
-          backupState: None
-          backupCreatedAt: 2024-10-01T12:00:00Z
           autoStopInterval: 30
-          autoArchiveInterval: 10080
           autoDeleteInterval: 30
           volumes:
           - volumeId: volume123
@@ -10757,7 +10189,6 @@ components:
           - volumeId: volume123
             mountPath: /data
             subpath: users/alice
-          buildInfo: ""
           createdAt: 2024-10-01T12:00:00Z
           updatedAt: 2024-10-01T12:00:00Z
           class: small
@@ -10784,32 +10215,9 @@ components:
       - total
       - totalPages
       type: object
-    CreateBuildInfo:
-      properties:
-        dockerfileContent:
-          description: The Dockerfile content used for the build
-          example: |-
-            FROM node:14
-            WORKDIR /app
-            COPY . .
-            RUN npm install
-            CMD ["npm", "start"]
-          type: string
-        contextHashes:
-          description: The context hashes used for the build
-          example:
-          - hash1
-          - hash2
-          items:
-            type: string
-          type: array
-      required:
-      - dockerfileContent
-      type: object
     CreateBox:
       example:
         name: MyBox
-        snapshot: ubuntu-4vcpu-8ram-100gb
         user: boxlite
         env:
           NODE_ENV: production
@@ -10825,7 +10233,6 @@ components:
         memory: 1
         disk: 3
         autoStopInterval: 30
-        autoArchiveInterval: 10080
         autoDeleteInterval: 30
         volumes:
         - volumeId: volume123
@@ -10834,16 +10241,11 @@ components:
         - volumeId: volume123
           mountPath: /data
           subpath: users/alice
-        buildInfo: ""
       properties:
         name:
           description: "The name of the box. If not provided, the box ID will be used\
             \ as the name"
           example: MyBox
-          type: string
-        snapshot:
-          description: The ID or name of the snapshot used for the box
-          example: ubuntu-4vcpu-8ram-100gb
           type: string
         user:
           description: The user associated with the project
@@ -10908,11 +10310,6 @@ components:
           description: Auto-stop interval in minutes (0 means disabled)
           example: 30
           type: integer
-        autoArchiveInterval:
-          description: Auto-archive interval in minutes (0 means the maximum interval
-            will be used)
-          example: 10080
-          type: integer
         autoDeleteInterval:
           description: "Auto-delete interval in minutes (negative value means disabled,\
             \ 0 means delete immediately upon stopping)"
@@ -10923,10 +10320,6 @@ components:
           items:
             $ref: "#/components/schemas/BoxVolume"
           type: array
-        buildInfo:
-          allOf:
-          - $ref: "#/components/schemas/CreateBuildInfo"
-          description: Build information for the box
       type: object
     ResizeBox:
       example:
@@ -10970,7 +10363,7 @@ components:
     UpdateBoxStateDto:
       example:
         state: started
-        errorReason: Failed to pull snapshot image
+        errorReason: Failed to pull artifact image
         recoverable: true
       properties:
         state:
@@ -10985,11 +10378,7 @@ components:
           - starting
           - stopping
           - error
-          - build_failed
-          - pending_build
-          - building_snapshot
           - unknown
-          - pulling_snapshot
           - archived
           - archiving
           - resizing
@@ -10997,7 +10386,7 @@ components:
           type: string
         errorReason:
           description: Optional error message when reporting an error state
-          example: Failed to pull snapshot image
+          example: Failed to pull artifact image
           type: string
         recoverable:
           description: Whether the box is recoverable
@@ -11056,16 +10445,6 @@ components:
       - boxId
       - port
       - token
-      - url
-      type: object
-    Url:
-      example:
-        url: url
-      properties:
-        url:
-          description: URL response
-          type: string
-      required:
       - url
       type: object
     SshAccessDto:
@@ -11210,7 +10589,6 @@ components:
         currentAllocatedCpu: 4000
         currentAllocatedMemoryGiB: 8000
         currentAllocatedDiskGiB: 50000
-        currentSnapshotCount: 12
         currentStartedBoxes: 5
         availabilityScore: 85
         region: us
@@ -11290,10 +10668,6 @@ components:
           description: Current allocated disk in GiB
           example: 50000
           type: number
-        currentSnapshotCount:
-          description: Current snapshot count
-          example: 12
-          type: number
         currentStartedBoxes:
           description: Current number of started boxes
           example: 5
@@ -11371,28 +10745,6 @@ components:
       - updatedAt
       - version
       type: object
-    RunnerSnapshotDto:
-      example:
-        runnerSnapshotId: 123e4567-e89b-12d3-a456-426614174000
-        runnerId: 123e4567-e89b-12d3-a456-426614174000
-        runnerDomain: runner.example.com
-      properties:
-        runnerSnapshotId:
-          description: Runner snapshot ID
-          example: 123e4567-e89b-12d3-a456-426614174000
-          type: string
-        runnerId:
-          description: Runner ID
-          example: 123e4567-e89b-12d3-a456-426614174000
-          type: string
-        runnerDomain:
-          description: Runner domain
-          example: runner.example.com
-          type: string
-      required:
-      - runnerId
-      - runnerSnapshotId
-      type: object
     Runner:
       example:
         id: runner123
@@ -11411,7 +10763,6 @@ components:
         currentAllocatedCpu: 4000
         currentAllocatedMemoryGiB: 8000
         currentAllocatedDiskGiB: 50000
-        currentSnapshotCount: 12
         currentStartedBoxes: 5
         availabilityScore: 85
         region: us
@@ -11488,10 +10839,6 @@ components:
         currentAllocatedDiskGiB:
           description: Current allocated disk in GiB
           example: 50000
-          type: number
-        currentSnapshotCount:
-          description: Current snapshot count
-          example: 12
           type: number
         currentStartedBoxes:
           description: Current number of started boxes
@@ -11590,10 +10937,6 @@ components:
           description: Currently allocated disk in GiB
           example: 100
           type: number
-        currentSnapshotCount:
-          description: Number of snapshots currently stored
-          example: 5
-          type: number
         currentStartedBoxes:
           description: Number of started boxes
           example: 10
@@ -11619,7 +10962,6 @@ components:
       - currentCpuUsagePercentage
       - currentDiskUsagePercentage
       - currentMemoryUsagePercentage
-      - currentSnapshotCount
       - currentStartedBoxes
       - diskGiB
       - memoryGiB
@@ -13123,258 +12465,6 @@ components:
       - count
       - windows
       type: object
-    CreateSnapshot:
-      example:
-        name: ubuntu-4vcpu-8ram-100gb
-        imageName: ubuntu:22.04
-        entrypoint: sleep infinity
-        general: true
-        cpu: 1
-        gpu: 0
-        memory: 1
-        disk: 3
-        buildInfo: ""
-        regionId: regionId
-      properties:
-        name:
-          description: The name of the snapshot
-          example: ubuntu-4vcpu-8ram-100gb
-          type: string
-        imageName:
-          description: The image name of the snapshot
-          example: ubuntu:22.04
-          type: string
-        entrypoint:
-          description: The entrypoint command for the snapshot
-          example: sleep infinity
-          items:
-            type: string
-          type: array
-        general:
-          description: Whether the snapshot is general
-          type: boolean
-        cpu:
-          description: CPU cores allocated to the resulting box
-          example: 1
-          type: integer
-        gpu:
-          description: GPU units allocated to the resulting box
-          example: 0
-          type: integer
-        memory:
-          description: Memory allocated to the resulting box in GB
-          example: 1
-          type: integer
-        disk:
-          description: Disk space allocated to the box in GB
-          example: 3
-          type: integer
-        buildInfo:
-          allOf:
-          - $ref: "#/components/schemas/CreateBuildInfo"
-          description: Build information for the snapshot
-        regionId:
-          description: ID of the region where the snapshot will be available. Defaults
-            to organization default region if not specified.
-          type: string
-      required:
-      - name
-      type: object
-    SnapshotState:
-      enum:
-      - building
-      - pending
-      - pulling
-      - active
-      - inactive
-      - error
-      - build_failed
-      - removing
-      type: string
-    SnapshotDto:
-      example:
-        id: id
-        organizationId: organizationId
-        general: true
-        name: name
-        imageName: imageName
-        state: ""
-        size: 0.8008281904610115
-        entrypoint:
-        - entrypoint
-        - entrypoint
-        cpu: 6.027456183070403
-        gpu: 1.4658129805029452
-        mem: 5.962133916683182
-        disk: 5.637376656633329
-        errorReason: errorReason
-        createdAt: 2000-01-23T04:56:07.000+00:00
-        updatedAt: 2000-01-23T04:56:07.000+00:00
-        lastUsedAt: 2000-01-23T04:56:07.000+00:00
-        buildInfo: ""
-        regionIds:
-        - regionIds
-        - regionIds
-        initialRunnerId: runner123
-        ref: boxlite-ai/box:latest
-      properties:
-        id:
-          type: string
-        organizationId:
-          type: string
-        general:
-          type: boolean
-        name:
-          type: string
-        imageName:
-          type: string
-        state:
-          allOf:
-          - $ref: "#/components/schemas/SnapshotState"
-        size:
-          nullable: true
-          type: number
-        entrypoint:
-          items:
-            type: string
-          nullable: true
-          type: array
-        cpu:
-          type: number
-        gpu:
-          type: number
-        mem:
-          type: number
-        disk:
-          type: number
-        errorReason:
-          nullable: true
-          type: string
-        createdAt:
-          format: date-time
-          type: string
-        updatedAt:
-          format: date-time
-          type: string
-        lastUsedAt:
-          format: date-time
-          nullable: true
-          type: string
-        buildInfo:
-          allOf:
-          - $ref: "#/components/schemas/BuildInfo"
-          description: Build information for the snapshot
-        regionIds:
-          description: IDs of regions where the snapshot is available
-          items:
-            type: string
-          type: array
-        initialRunnerId:
-          description: The initial runner ID of the snapshot
-          example: runner123
-          type: string
-        ref:
-          description: The snapshot reference
-          example: boxlite-ai/box:latest
-          type: string
-      required:
-      - cpu
-      - createdAt
-      - disk
-      - entrypoint
-      - errorReason
-      - general
-      - gpu
-      - id
-      - lastUsedAt
-      - mem
-      - name
-      - size
-      - state
-      - updatedAt
-      type: object
-    PaginatedSnapshots:
-      example:
-        items:
-        - id: id
-          organizationId: organizationId
-          general: true
-          name: name
-          imageName: imageName
-          state: ""
-          size: 0.8008281904610115
-          entrypoint:
-          - entrypoint
-          - entrypoint
-          cpu: 6.027456183070403
-          gpu: 1.4658129805029452
-          mem: 5.962133916683182
-          disk: 5.637376656633329
-          errorReason: errorReason
-          createdAt: 2000-01-23T04:56:07.000+00:00
-          updatedAt: 2000-01-23T04:56:07.000+00:00
-          lastUsedAt: 2000-01-23T04:56:07.000+00:00
-          buildInfo: ""
-          regionIds:
-          - regionIds
-          - regionIds
-          initialRunnerId: runner123
-          ref: boxlite-ai/box:latest
-        - id: id
-          organizationId: organizationId
-          general: true
-          name: name
-          imageName: imageName
-          state: ""
-          size: 0.8008281904610115
-          entrypoint:
-          - entrypoint
-          - entrypoint
-          cpu: 6.027456183070403
-          gpu: 1.4658129805029452
-          mem: 5.962133916683182
-          disk: 5.637376656633329
-          errorReason: errorReason
-          createdAt: 2000-01-23T04:56:07.000+00:00
-          updatedAt: 2000-01-23T04:56:07.000+00:00
-          lastUsedAt: 2000-01-23T04:56:07.000+00:00
-          buildInfo: ""
-          regionIds:
-          - regionIds
-          - regionIds
-          initialRunnerId: runner123
-          ref: boxlite-ai/box:latest
-        total: 2.3021358869347655
-        page: 7.061401241503109
-        totalPages: 9.301444243932576
-      properties:
-        items:
-          items:
-            $ref: "#/components/schemas/SnapshotDto"
-          type: array
-        total:
-          type: number
-        page:
-          type: number
-        totalPages:
-          type: number
-      required:
-      - items
-      - page
-      - total
-      - totalPages
-      type: object
-    SetSnapshotGeneralStatusDto:
-      example:
-        general: true
-      properties:
-        general:
-          description: Whether the snapshot is general
-          example: true
-          type: boolean
-      required:
-      - general
-      type: object
     BoxInfo:
       properties:
         created:
@@ -13397,10 +12487,10 @@ components:
       type: object
     Workspace:
       example:
-        id: box123
+        id: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
+        boxId: aB3cD4eF5gH6
         organizationId: organization123
         name: MyBox
-        snapshot: boxlite-ai/box:latest
         user: boxlite
         env:
           NODE_ENV: production
@@ -13418,10 +12508,7 @@ components:
         desiredState: destroyed
         errorReason: The box is not running
         recoverable: true
-        backupState: None
-        backupCreatedAt: 2024-10-01T12:00:00Z
         autoStopInterval: 30
-        autoArchiveInterval: 10080
         autoDeleteInterval: 30
         volumes:
         - volumeId: volume123
@@ -13430,7 +12517,6 @@ components:
         - volumeId: volume123
           mountPath: /data
           subpath: users/alice
-        buildInfo: ""
         createdAt: 2024-10-01T12:00:00Z
         updatedAt: 2024-10-01T12:00:00Z
         class: small
@@ -13438,13 +12524,15 @@ components:
         runnerId: runner123
         toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
         image: boxlite-ai/workspace:latest
-        snapshotState: None
-        snapshotCreatedAt: 2024-10-01T12:00:00Z
         info: ""
       properties:
         id:
-          description: The ID of the box
-          example: box123
+          description: The internal UUID of the box
+          example: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
+          type: string
+        boxId:
+          description: The public Box ID shown to users and SDK clients
+          example: aB3cD4eF5gH6
           type: string
         organizationId:
           description: The organization ID of the box
@@ -13453,10 +12541,6 @@ components:
         name:
           description: The name of the box
           example: MyBox
-          type: string
-        snapshot:
-          description: The snapshot used for the box
-          example: boxlite-ai/box:latest
           type: string
         user:
           description: The user associated with the project
@@ -13527,27 +12611,9 @@ components:
           description: Whether the box error is recoverable.
           example: true
           type: boolean
-        backupState:
-          description: The state of the backup
-          enum:
-          - None
-          - Pending
-          - InProgress
-          - Completed
-          - Error
-          example: None
-          type: string
-        backupCreatedAt:
-          description: The creation timestamp of the last backup
-          example: 2024-10-01T12:00:00Z
-          type: string
         autoStopInterval:
           description: Auto-stop interval in minutes (0 means disabled)
           example: 30
-          type: number
-        autoArchiveInterval:
-          description: Auto-archive interval in minutes
-          example: 10080
           type: number
         autoDeleteInterval:
           description: "Auto-delete interval in minutes (negative value means disabled,\
@@ -13559,10 +12625,6 @@ components:
           items:
             $ref: "#/components/schemas/BoxVolume"
           type: array
-        buildInfo:
-          allOf:
-          - $ref: "#/components/schemas/BuildInfo"
-          description: Build information for the box
         createdAt:
           description: The creation timestamp of the box
           example: 2024-10-01T12:00:00Z
@@ -13596,25 +12658,12 @@ components:
           description: The image used for the workspace
           example: boxlite-ai/workspace:latest
           type: string
-        snapshotState:
-          description: The state of the snapshot
-          enum:
-          - None
-          - Pending
-          - InProgress
-          - Completed
-          - Error
-          example: None
-          type: string
-        snapshotCreatedAt:
-          description: The creation timestamp of the last snapshot
-          example: 2024-10-01T12:00:00Z
-          type: string
         info:
           allOf:
           - $ref: "#/components/schemas/BoxInfo"
           description: Additional information about the box
       required:
+      - boxId
       - cpu
       - disk
       - env
@@ -13646,7 +12695,6 @@ components:
         memory: 1
         disk: 3
         autoStopInterval: 30
-        autoArchiveInterval: 10080
         volumes:
         - volumeId: volume123
           mountPath: /data
@@ -13654,7 +12702,6 @@ components:
         - volumeId: volume123
           mountPath: /data
           subpath: users/alice
-        buildInfo: ""
       properties:
         image:
           description: The image used for the workspace
@@ -13718,20 +12765,11 @@ components:
           description: Auto-stop interval in minutes (0 means disabled)
           example: 30
           type: integer
-        autoArchiveInterval:
-          description: Auto-archive interval in minutes (0 means the maximum interval
-            will be used)
-          example: 10080
-          type: integer
         volumes:
           description: Array of volumes to attach to the workspace
           items:
             $ref: "#/components/schemas/BoxVolume"
           type: array
-        buildInfo:
-          allOf:
-          - $ref: "#/components/schemas/CreateBuildInfo"
-          description: Build information for the workspace
       type: object
     WorkspacePortPreviewUrl:
       example:
@@ -13841,11 +12879,10 @@ components:
       - DESTROY_BOX
       - RESIZE_BOX
       - CREATE_BACKUP
-      - BUILD_SNAPSHOT
-      - PULL_SNAPSHOT
+      - PULL_ARTIFACT
       - RECOVER_BOX
-      - INSPECT_SNAPSHOT_IN_REGISTRY
-      - REMOVE_SNAPSHOT
+      - INSPECT_ARTIFACT_IN_REGISTRY
+      - REMOVE_ARTIFACT
       - UPDATE_BOX_NETWORK_SETTINGS
       type: string
     Job:
@@ -13880,13 +12917,12 @@ components:
           description: The type of resource this job operates on
           enum:
           - BOX
-          - SNAPSHOT
+          - ARTIFACT
           - BACKUP
           example: BOX
           type: string
         resourceId:
-          description: "The ID of the resource this job operates on (boxId, snapshotRef,\
-            \ etc.)"
+          description: "The ID of the resource this job operates on (boxId, etc.)"
           example: box123
           type: string
         payload:
@@ -14019,179 +13055,6 @@ components:
       required:
       - status
       type: object
-    CreateDockerRegistry:
-      example:
-        name: name
-        url: url
-        username: username
-        password: password
-        project: project
-        registryType: organization
-        isDefault: true
-      properties:
-        name:
-          description: Registry name
-          type: string
-        url:
-          description: Registry URL
-          type: string
-        username:
-          description: Registry username
-          type: string
-        password:
-          description: Registry password
-          type: string
-        project:
-          description: Registry project
-          type: string
-        registryType:
-          default: organization
-          description: Registry type
-          enum:
-          - internal
-          - organization
-          - transient
-          - backup
-          type: string
-        isDefault:
-          description: Set as default registry
-          type: boolean
-      required:
-      - name
-      - password
-      - registryType
-      - url
-      - username
-      type: object
-    DockerRegistry:
-      example:
-        id: 123e4567-e89b-12d3-a456-426614174000
-        name: My Docker Hub
-        url: https://registry.hub.docker.com
-        username: username
-        project: my-project
-        registryType: internal
-        createdAt: 2024-01-31T12:00:00Z
-        updatedAt: 2024-01-31T12:00:00Z
-      properties:
-        id:
-          description: Registry ID
-          example: 123e4567-e89b-12d3-a456-426614174000
-          type: string
-        name:
-          description: Registry name
-          example: My Docker Hub
-          type: string
-        url:
-          description: Registry URL
-          example: https://registry.hub.docker.com
-          type: string
-        username:
-          description: Registry username
-          example: username
-          type: string
-        project:
-          description: Registry project
-          example: my-project
-          type: string
-        registryType:
-          description: Registry type
-          enum:
-          - internal
-          - organization
-          - transient
-          - backup
-          example: internal
-          type: string
-        createdAt:
-          description: Creation timestamp
-          example: 2024-01-31T12:00:00Z
-          format: date-time
-          type: string
-        updatedAt:
-          description: Last update timestamp
-          example: 2024-01-31T12:00:00Z
-          format: date-time
-          type: string
-      required:
-      - createdAt
-      - id
-      - name
-      - project
-      - registryType
-      - updatedAt
-      - url
-      - username
-      type: object
-    RegistryPushAccessDto:
-      example:
-        username: temp-user-123
-        secret: eyJhbGciOiJIUzI1NiIs...
-        registryUrl: registry.example.com
-        registryId: 123e4567-e89b-12d3-a456-426614174000
-        project: library
-        expiresAt: 2023-12-31T23:59:59Z
-      properties:
-        username:
-          description: Temporary username for registry authentication
-          example: temp-user-123
-          type: string
-        secret:
-          description: Temporary secret for registry authentication
-          example: eyJhbGciOiJIUzI1NiIs...
-          type: string
-        registryUrl:
-          description: Registry URL
-          example: registry.example.com
-          type: string
-        registryId:
-          description: Registry ID
-          example: 123e4567-e89b-12d3-a456-426614174000
-          type: string
-        project:
-          description: Registry project ID
-          example: library
-          type: string
-        expiresAt:
-          description: Token expiration time in ISO format
-          example: 2023-12-31T23:59:59Z
-          type: string
-      required:
-      - expiresAt
-      - project
-      - registryId
-      - registryUrl
-      - secret
-      - username
-      type: object
-    UpdateDockerRegistry:
-      example:
-        name: name
-        url: url
-        username: username
-        password: password
-        project: project
-      properties:
-        name:
-          description: Registry name
-          type: string
-        url:
-          description: Registry URL
-          type: string
-        username:
-          description: Registry username
-          type: string
-        password:
-          description: Registry password
-          type: string
-        project:
-          description: Registry project
-          type: string
-      required:
-      - name
-      - url
-      - username
-      type: object
     AdminCreateRunner:
       example:
         regionId: regionId
@@ -14246,256 +13109,748 @@ components:
       - name
       - regionId
       type: object
-    WebhookAppPortalAccess:
+    AdminRunner:
       example:
-        token: appsk_...
-        url: https://app.svix.com/app_1234567890
-      properties:
-        token:
-          description: The authentication token for the Svix consumer app portal
-          example: appsk_...
-          type: string
-        url:
-          description: The URL to the webhook app portal
-          example: https://app.svix.com/app_1234567890
-          type: string
-      required:
-      - token
-      - url
-      type: object
-    WebhookEvent:
-      description: The type of event being sent
-      enum:
-      - box.created
-      - box.state.updated
-      - snapshot.created
-      - snapshot.state.updated
-      - snapshot.removed
-      - volume.created
-      - volume.state.updated
-      type: string
-    SendWebhookDto:
-      example:
-        eventType: box.created
-        payload:
-          id: box-123
-          name: My Box
-        eventId: evt_1234567890abcdef
-      properties:
-        eventType:
-          allOf:
-          - $ref: "#/components/schemas/WebhookEvent"
-          description: The type of event being sent
-          example: box.created
-        payload:
-          description: The payload data to send
-          example:
-            id: box-123
-            name: My Box
-          type: object
-        eventId:
-          description: Optional event ID for idempotency
-          example: evt_1234567890abcdef
-          type: string
-      required:
-      - eventType
-      - payload
-      type: object
-    WebhookInitializationStatus:
-      example:
-        organizationId: 123e4567-e89b-12d3-a456-426614174000
-        svixApplicationId: app_1234567890
-        lastError: Failed to create Svix application
-        retryCount: 3
-        createdAt: 2023-01-01T00:00:00.000Z
-        updatedAt: 2023-01-01T00:00:00.000Z
-      properties:
-        organizationId:
-          description: Organization ID
-          example: 123e4567-e89b-12d3-a456-426614174000
-          type: string
-        svixApplicationId:
-          description: The ID of the Svix application
-          example: app_1234567890
-          nullable: true
-          type: string
-        lastError:
-          description: The error reason for the last initialization attempt
-          example: Failed to create Svix application
-          nullable: true
-          type: string
-        retryCount:
-          description: The number of times the initialization has been attempted
-          example: 3
-          type: number
-        createdAt:
-          description: When the webhook initialization was created
-          example: 2023-01-01T00:00:00.000Z
-          type: string
-        updatedAt:
-          description: When the webhook initialization was last updated
-          example: 2023-01-01T00:00:00.000Z
-          type: string
-      required:
-      - createdAt
-      - lastError
-      - organizationId
-      - retryCount
-      - svixApplicationId
-      - updatedAt
-      type: object
-    StorageAccessDto:
-      example:
-        accessKey: temp-user-123
-        secret: abchbGciOiJIUzI1NiIs...
-        sessionToken: eyJhbGciOiJIUzI1NiIs...
-        storageUrl: storage.example.com
-        organizationId: 123e4567-e89b-12d3-a456-426614174000
-        bucket: boxlite
-      properties:
-        accessKey:
-          description: Access key for storage authentication
-          example: temp-user-123
-          type: string
-        secret:
-          description: Secret key for storage authentication
-          example: abchbGciOiJIUzI1NiIs...
-          type: string
-        sessionToken:
-          description: Session token for storage authentication
-          example: eyJhbGciOiJIUzI1NiIs...
-          type: string
-        storageUrl:
-          description: Storage URL
-          example: storage.example.com
-          type: string
-        organizationId:
-          description: Organization ID
-          example: 123e4567-e89b-12d3-a456-426614174000
-          type: string
-        bucket:
-          description: S3 bucket name
-          example: boxlite
-          type: string
-      required:
-      - accessKey
-      - bucket
-      - organizationId
-      - secret
-      - sessionToken
-      - storageUrl
-      type: object
-    AuditLog:
-      example:
-        id: id
-        actorId: actorId
-        actorEmail: actorEmail
-        organizationId: organizationId
-        action: action
-        targetType: targetType
-        targetId: targetId
-        statusCode: 0.8008281904610115
-        errorMessage: errorMessage
-        ipAddress: ipAddress
-        userAgent: userAgent
-        source: source
-        metadata:
-          key: ""
-        createdAt: 2000-01-23T04:56:07.000+00:00
+        id: runner123
+        domain: runner1.example.com
+        apiUrl: https://api.runner1.example.com
+        proxyUrl: https://proxy.runner1.example.com
+        cpu: 8
+        memory: 16
+        disk: 100
+        gpu: 1
+        gpuType: gpuType
+        class: small
+        currentCpuUsagePercentage: 45.6
+        currentMemoryUsagePercentage: 68.2
+        currentDiskUsagePercentage: 33.8
+        currentAllocatedCpu: 4000
+        currentAllocatedMemoryGiB: 8000
+        currentAllocatedDiskGiB: 50000
+        currentStartedBoxes: 5
+        availabilityScore: 85
+        region: us
+        name: runner1
+        state: initializing
+        lastChecked: 2024-10-01T12:00:00Z
+        unschedulable: false
+        createdAt: 2023-10-01T12:00:00Z
+        updatedAt: 2023-10-01T12:00:00Z
+        version: "0"
+        apiVersion: "0"
+        appVersion: v0.0.0-dev
+        regionType: shared
       properties:
         id:
+          description: The ID of the runner
+          example: runner123
           type: string
-        actorId:
+        domain:
+          description: The domain of the runner
+          example: runner1.example.com
           type: string
-        actorEmail:
+        apiUrl:
+          description: The API URL of the runner
+          example: https://api.runner1.example.com
+          type: string
+        proxyUrl:
+          description: The proxy URL of the runner
+          example: https://proxy.runner1.example.com
+          type: string
+        cpu:
+          description: The CPU capacity of the runner
+          example: 8
+          type: number
+        memory:
+          description: The memory capacity of the runner in GiB
+          example: 16
+          type: number
+        disk:
+          description: The disk capacity of the runner in GiB
+          example: 100
+          type: number
+        gpu:
+          description: The GPU capacity of the runner
+          example: 1
+          type: number
+        gpuType:
+          description: The type of GPU
+          type: string
+        class:
+          allOf:
+          - $ref: "#/components/schemas/BoxClass"
+          description: The class of the runner
+          example: small
+        currentCpuUsagePercentage:
+          description: Current CPU usage percentage
+          example: 45.6
+          type: number
+        currentMemoryUsagePercentage:
+          description: Current RAM usage percentage
+          example: 68.2
+          type: number
+        currentDiskUsagePercentage:
+          description: Current disk usage percentage
+          example: 33.8
+          type: number
+        currentAllocatedCpu:
+          description: Current allocated CPU
+          example: 4000
+          type: number
+        currentAllocatedMemoryGiB:
+          description: Current allocated memory in GiB
+          example: 8000
+          type: number
+        currentAllocatedDiskGiB:
+          description: Current allocated disk in GiB
+          example: 50000
+          type: number
+        currentStartedBoxes:
+          description: Current number of started boxes
+          example: 5
+          type: number
+        availabilityScore:
+          description: Runner availability score
+          example: 85
+          type: number
+        region:
+          description: The region of the runner
+          example: us
+          type: string
+        name:
+          description: The name of the runner
+          example: runner1
+          type: string
+        state:
+          allOf:
+          - $ref: "#/components/schemas/RunnerState"
+          description: The state of the runner
+          example: initializing
+        lastChecked:
+          description: The last time the runner was checked
+          example: 2024-10-01T12:00:00Z
+          type: string
+        unschedulable:
+          description: Whether the runner is unschedulable
+          example: false
+          type: boolean
+        createdAt:
+          description: The creation timestamp of the runner
+          example: 2023-10-01T12:00:00Z
+          type: string
+        updatedAt:
+          description: The last update timestamp of the runner
+          example: 2023-10-01T12:00:00Z
+          type: string
+        version:
+          deprecated: true
+          description: The version of the runner (deprecated in favor of apiVersion)
+          example: "0"
+          type: string
+        apiVersion:
+          deprecated: true
+          description: The api version of the runner
+          example: "0"
+          type: string
+        appVersion:
+          deprecated: true
+          description: The app version of the runner
+          example: v0.0.0-dev
+          type: string
+        regionType:
+          allOf:
+          - $ref: "#/components/schemas/RegionType"
+          description: The region type of the runner
+          example: shared
+      required:
+      - apiVersion
+      - class
+      - cpu
+      - createdAt
+      - disk
+      - id
+      - memory
+      - name
+      - region
+      - state
+      - unschedulable
+      - updatedAt
+      - version
+      type: object
+    AdminOverviewBoxes:
+      example:
+        total: 80
+        byState:
+          started: 15
+          error: 2
+          build_failed: 1
+          stopped: 62
+      properties:
+        total:
+          description: Total number of boxes across all states
+          example: 80
+          type: number
+        byState:
+          additionalProperties:
+            type: number
+          description: Box counts keyed by BoxState
+          example:
+            started: 15
+            error: 2
+            build_failed: 1
+            stopped: 62
+          type: object
+      required:
+      - byState
+      - total
+      type: object
+    AdminOverviewRunners:
+      example:
+        online: 3
+        total: 5
+        draining: 1
+      properties:
+        online:
+          description: Number of online (ready) runners
+          example: 3
+          type: number
+        total:
+          description: Total number of runners
+          example: 5
+          type: number
+        draining:
+          description: Number of draining runners
+          example: 1
+          type: number
+      required:
+      - draining
+      - online
+      - total
+      type: object
+    AdminOverviewCluster:
+      example:
+        cpuUtil: 0.42
+        oversell: 1.1
+      properties:
+        cpuUtil:
+          description: Average CPU utilisation across all runners (0–1)
+          example: 0.42
+          type: number
+        oversell:
+          description: Average CPU oversell ratio (allocated / capacity); 0 when no
+            capacity
+          example: 1.1
+          type: number
+      required:
+      - cpuUtil
+      - oversell
+      type: object
+    AdminOverview:
+      example:
+        users: 120
+        activeBoxes: 47
+        boxes:
+          total: 80
+          byState:
+            started: 15
+            error: 2
+            build_failed: 1
+            stopped: 62
+        runners:
+          online: 3
+          total: 5
+          draining: 1
+        cluster:
+          cpuUtil: 0.42
+          oversell: 1.1
+      properties:
+        users:
+          description: Total number of users
+          example: 120
+          type: number
+        activeBoxes:
+          description: Number of active (started) boxes
+          example: 47
+          type: number
+        boxes:
+          $ref: "#/components/schemas/AdminOverviewBoxes"
+        runners:
+          $ref: "#/components/schemas/AdminOverviewRunners"
+        cluster:
+          $ref: "#/components/schemas/AdminOverviewCluster"
+      required:
+      - activeBoxes
+      - boxes
+      - cluster
+      - runners
+      - users
+      type: object
+    SystemRole:
+      enum:
+      - admin
+      - user
+      type: string
+    AdminUserItem:
+      example:
+        id: usr_abc123
+        email: alice@example.com
+        name: Alice Smith
+        role: user
+      properties:
+        id:
+          description: User ID
+          example: usr_abc123
+          type: string
+        email:
+          description: User email
+          example: alice@example.com
+          type: string
+        name:
+          description: Display name
+          example: Alice Smith
+          type: string
+        role:
+          allOf:
+          - $ref: "#/components/schemas/SystemRole"
+          example: user
+      required:
+      - email
+      - id
+      - name
+      - role
+      type: object
+    AdminBoxOwner:
+      example:
+        userId: usr_abc123
+        name: Alice Smith
+        email: alice@example.com
+        orgName: Alice Personal
+        personal: true
+      properties:
+        userId:
+          description: Creator/user ID behind this owner group when available
+          example: usr_abc123
+          type: string
+        name:
+          description: Display name for the owner group
+          example: Alice Smith
+          type: string
+        email:
+          description: "Owner email for personal organizations, blank when unavailable"
+          example: alice@example.com
+          type: string
+        orgName:
+          description: Organization name backing this box
+          example: Alice Personal
+          type: string
+        personal:
+          description: Whether this is a personal organization
+          example: true
+          type: boolean
+      required:
+      - email
+      - name
+      - orgName
+      - personal
+      type: object
+    AdminBoxItem:
+      example:
+        id: box_abc123
+        boxId: abc123XYZ
+        organizationId: org_xyz
+        state: started
+        runnerId: runner-uuid
+        cpu: 2
+        memoryGiB: 4
+        createdAt: 2024-01-01T00:00:00Z
+        owner:
+          userId: usr_abc123
+          name: Alice Smith
+          email: alice@example.com
+          orgName: Alice Personal
+          personal: true
+      properties:
+        id:
+          description: Box ID
+          example: box_abc123
+          type: string
+        boxId:
+          description: Public box ID shown to users
+          example: abc123XYZ
           type: string
         organizationId:
+          description: Organization ID
+          example: org_xyz
           type: string
-        action:
+        state:
+          allOf:
+          - $ref: "#/components/schemas/BoxState"
+          example: started
+        runnerId:
+          description: Runner ID the box is assigned to
+          example: runner-uuid
           type: string
-        targetType:
-          type: string
-        targetId:
-          type: string
-        statusCode:
+        cpu:
+          description: Allocated CPU (vCPUs)
+          example: 2
           type: number
-        errorMessage:
-          type: string
-        ipAddress:
-          type: string
-        userAgent:
-          type: string
-        source:
-          type: string
-        metadata:
-          additionalProperties: true
-          type: object
+        memoryGiB:
+          description: Allocated memory in GiB
+          example: 4
+          type: number
         createdAt:
-          format: date-time
+          description: Creation timestamp
+          example: 2024-01-01T00:00:00Z
           type: string
+        owner:
+          $ref: "#/components/schemas/AdminBoxOwner"
       required:
-      - action
-      - actorEmail
-      - actorId
+      - cpu
       - createdAt
       - id
+      - organizationId
+      - owner
+      - state
       type: object
-    PaginatedAuditLogs:
+    AdminRunnerItem:
       example:
-        items:
-        - id: id
-          actorId: actorId
-          actorEmail: actorEmail
-          organizationId: organizationId
-          action: action
-          targetType: targetType
-          targetId: targetId
-          statusCode: 0.8008281904610115
-          errorMessage: errorMessage
-          ipAddress: ipAddress
-          userAgent: userAgent
-          source: source
-          metadata:
-            key: ""
-          createdAt: 2000-01-23T04:56:07.000+00:00
-        - id: id
-          actorId: actorId
-          actorEmail: actorEmail
-          organizationId: organizationId
-          action: action
-          targetType: targetType
-          targetId: targetId
-          statusCode: 0.8008281904610115
-          errorMessage: errorMessage
-          ipAddress: ipAddress
-          userAgent: userAgent
-          source: source
-          metadata:
-            key: ""
-          createdAt: 2000-01-23T04:56:07.000+00:00
-        total: 6.027456183070403
-        page: 1.4658129805029452
-        totalPages: 5.962133916683182
-        nextToken: nextToken
+        id: runner123
+        domain: runner1.example.com
+        apiUrl: https://api.runner1.example.com
+        proxyUrl: https://proxy.runner1.example.com
+        cpu: 8
+        memory: 16
+        disk: 100
+        gpu: 1
+        gpuType: gpuType
+        class: small
+        currentCpuUsagePercentage: 45.6
+        currentMemoryUsagePercentage: 68.2
+        currentDiskUsagePercentage: 33.8
+        currentAllocatedCpu: 4000
+        currentAllocatedMemoryGiB: 8000
+        currentAllocatedDiskGiB: 50000
+        currentStartedBoxes: 5
+        availabilityScore: 85
+        region: us
+        name: runner1
+        state: initializing
+        lastChecked: 2024-10-01T12:00:00Z
+        unschedulable: false
+        createdAt: 2023-10-01T12:00:00Z
+        updatedAt: 2023-10-01T12:00:00Z
+        version: "0"
+        apiVersion: "0"
+        appVersion: v0.0.0-dev
+        regionType: shared
+        draining: false
       properties:
-        items:
-          items:
-            $ref: "#/components/schemas/AuditLog"
-          type: array
-        total:
+        id:
+          description: The ID of the runner
+          example: runner123
+          type: string
+        domain:
+          description: The domain of the runner
+          example: runner1.example.com
+          type: string
+        apiUrl:
+          description: The API URL of the runner
+          example: https://api.runner1.example.com
+          type: string
+        proxyUrl:
+          description: The proxy URL of the runner
+          example: https://proxy.runner1.example.com
+          type: string
+        cpu:
+          description: The CPU capacity of the runner
+          example: 8
           type: number
-        page:
+        memory:
+          description: The memory capacity of the runner in GiB
+          example: 16
           type: number
-        totalPages:
+        disk:
+          description: The disk capacity of the runner in GiB
+          example: 100
           type: number
-        nextToken:
-          description: Token for next page in cursor-based pagination
+        gpu:
+          description: The GPU capacity of the runner
+          example: 1
+          type: number
+        gpuType:
+          description: The type of GPU
+          type: string
+        class:
+          allOf:
+          - $ref: "#/components/schemas/BoxClass"
+          description: The class of the runner
+          example: small
+        currentCpuUsagePercentage:
+          description: Current CPU usage percentage
+          example: 45.6
+          type: number
+        currentMemoryUsagePercentage:
+          description: Current RAM usage percentage
+          example: 68.2
+          type: number
+        currentDiskUsagePercentage:
+          description: Current disk usage percentage
+          example: 33.8
+          type: number
+        currentAllocatedCpu:
+          description: Current allocated CPU
+          example: 4000
+          type: number
+        currentAllocatedMemoryGiB:
+          description: Current allocated memory in GiB
+          example: 8000
+          type: number
+        currentAllocatedDiskGiB:
+          description: Current allocated disk in GiB
+          example: 50000
+          type: number
+        currentStartedBoxes:
+          description: Current number of started boxes
+          example: 5
+          type: number
+        availabilityScore:
+          description: Runner availability score
+          example: 85
+          type: number
+        region:
+          description: The region of the runner
+          example: us
+          type: string
+        name:
+          description: The name of the runner
+          example: runner1
+          type: string
+        state:
+          allOf:
+          - $ref: "#/components/schemas/RunnerState"
+          description: The state of the runner
+          example: initializing
+        lastChecked:
+          description: The last time the runner was checked
+          example: 2024-10-01T12:00:00Z
+          type: string
+        unschedulable:
+          description: Whether the runner is unschedulable
+          example: false
+          type: boolean
+        createdAt:
+          description: The creation timestamp of the runner
+          example: 2023-10-01T12:00:00Z
+          type: string
+        updatedAt:
+          description: The last update timestamp of the runner
+          example: 2023-10-01T12:00:00Z
+          type: string
+        version:
+          deprecated: true
+          description: The version of the runner (deprecated in favor of apiVersion)
+          example: "0"
+          type: string
+        apiVersion:
+          deprecated: true
+          description: The api version of the runner
+          example: "0"
+          type: string
+        appVersion:
+          deprecated: true
+          description: The app version of the runner
+          example: v0.0.0-dev
+          type: string
+        regionType:
+          allOf:
+          - $ref: "#/components/schemas/RegionType"
+          description: The region type of the runner
+          example: shared
+        draining:
+          description: Whether the runner is currently draining
+          example: false
+          type: boolean
+      required:
+      - apiVersion
+      - class
+      - cpu
+      - createdAt
+      - disk
+      - draining
+      - id
+      - memory
+      - name
+      - region
+      - state
+      - unschedulable
+      - updatedAt
+      - version
+      type: object
+    AdminMachineItem:
+      example:
+        host: runner-uuid
+        region: us-east-1
+        oversellCpu: 0.75
+        cpuWaterline: 45.6
+        memWaterline: 68.2
+        boxes: 5
+      properties:
+        host:
+          description: Runner / host ID
+          example: runner-uuid
+          type: string
+        region:
+          description: Region ID
+          example: us-east-1
+          type: string
+        oversellCpu:
+          description: CPU oversell ratio (allocatedCpu / totalCpu); 0 when capacity
+            is 0
+          example: 0.75
+          type: number
+        cpuWaterline:
+          description: CPU utilisation waterline (0–100)
+          example: 45.6
+          type: number
+        memWaterline:
+          description: Memory utilisation waterline (0–100)
+          example: 68.2
+          type: number
+        boxes:
+          description: Number of currently started boxes on this runner
+          example: 5
+          type: number
+      required:
+      - boxes
+      - cpuWaterline
+      - host
+      - memWaterline
+      - oversellCpu
+      - region
+      type: object
+    AdminObservabilityBackendStatusDto:
+      example:
+        configured: true
+        state: missing
+        message: message
+      properties:
+        configured:
+          description: Whether ClickHouse/ClickStack query configuration is present
+          type: boolean
+        state:
+          enum:
+          - missing
+          - configured
+          - receiving
+          - stale
+          - error
+          type: string
+        message:
           type: string
       required:
-      - items
-      - page
-      - total
-      - totalPages
+      - configured
+      - state
+      type: object
+    AdminObservabilityLayerSignalsDto:
+      example:
+        logs: missing
+        traces: missing
+        metrics: missing
+      properties:
+        logs:
+          enum:
+          - missing
+          - configured
+          - receiving
+          - stale
+          - error
+          type: string
+        traces:
+          enum:
+          - missing
+          - configured
+          - receiving
+          - stale
+          - error
+          type: string
+        metrics:
+          enum:
+          - missing
+          - configured
+          - receiving
+          - stale
+          - error
+          type: string
+      required:
+      - logs
+      - metrics
+      - traces
+      type: object
+    AdminObservabilityLayerStatusDto:
+      example:
+        layer: api
+        state: missing
+        signals:
+          logs: missing
+          traces: missing
+          metrics: missing
+        lastSeen: lastSeen
+      properties:
+        layer:
+          enum:
+          - api
+          - runner
+          - ec2_host
+          - box
+          type: string
+        state:
+          enum:
+          - missing
+          - configured
+          - receiving
+          - stale
+          - error
+          type: string
+        signals:
+          $ref: "#/components/schemas/AdminObservabilityLayerSignalsDto"
+        lastSeen:
+          type: string
+      required:
+      - layer
+      - signals
+      - state
+      type: object
+    AdminObservabilityStatusDto:
+      example:
+        backend:
+          configured: true
+          state: missing
+          message: message
+        layers:
+        - layer: api
+          state: missing
+          signals:
+            logs: missing
+            traces: missing
+            metrics: missing
+          lastSeen: lastSeen
+        - layer: api
+          state: missing
+          signals:
+            logs: missing
+            traces: missing
+            metrics: missing
+          lastSeen: lastSeen
+      properties:
+        backend:
+          $ref: "#/components/schemas/AdminObservabilityBackendStatusDto"
+        layers:
+          items:
+            $ref: "#/components/schemas/AdminObservabilityLayerStatusDto"
+          type: array
+      required:
+      - backend
+      - layers
       type: object
     LogEntry:
       example:
@@ -14685,6 +14040,8 @@ components:
         spanId: spanId
         parentSpanId: parentSpanId
         spanName: spanName
+        serviceName: serviceName
+        layer: layer
         timestamp: timestamp
         durationNs: 0.8008281904610115
         spanAttributes:
@@ -14703,6 +14060,12 @@ components:
           type: string
         spanName:
           description: Span name
+          type: string
+        serviceName:
+          description: "Emitting service name (e.g. boxlite-api, boxlite-runner, box-<id>)"
+          type: string
+        layer:
+          description: "Resolved emitting layer: api | runner | ec2_host | box"
           type: string
         timestamp:
           description: Span start timestamp
@@ -14788,6 +14151,1216 @@ components:
           type: array
       required:
       - series
+      type: object
+    AdminObservabilityResourceSummary:
+      example:
+        type: box
+        title: title
+        subtitle: subtitle
+        state: state
+        owner: owner
+        identifiers:
+          key: ""
+        timeRange:
+          key: ""
+      properties:
+        type:
+          enum:
+          - box
+          - runner
+          - machine
+          - trace
+          - request
+          - operation
+          - execution
+          - job
+          - org
+          - user
+          - unknown
+          type: string
+        title:
+          type: string
+        subtitle:
+          type: string
+        state:
+          type: string
+        owner:
+          type: string
+        identifiers:
+          additionalProperties: true
+          type: object
+        timeRange:
+          additionalProperties: true
+          type: object
+      required:
+      - title
+      - type
+      type: object
+    AdminObservabilityCorrelation:
+      example:
+        traceIds:
+        - traceIds
+        - traceIds
+        orgIds:
+        - orgIds
+        - orgIds
+        userIds:
+        - userIds
+        - userIds
+        boxIds:
+        - boxIds
+        - boxIds
+        runnerIds:
+        - runnerIds
+        - runnerIds
+        machineIds:
+        - machineIds
+        - machineIds
+        requestIds:
+        - requestIds
+        - requestIds
+        operationIds:
+        - operationIds
+        - operationIds
+        executionIds:
+        - executionIds
+        - executionIds
+        jobIds:
+        - jobIds
+        - jobIds
+        serviceNames:
+        - serviceNames
+        - serviceNames
+      properties:
+        traceIds:
+          items:
+            type: string
+          type: array
+        orgIds:
+          items:
+            type: string
+          type: array
+        userIds:
+          items:
+            type: string
+          type: array
+        boxIds:
+          items:
+            type: string
+          type: array
+        runnerIds:
+          items:
+            type: string
+          type: array
+        machineIds:
+          items:
+            type: string
+          type: array
+        requestIds:
+          items:
+            type: string
+          type: array
+        operationIds:
+          items:
+            type: string
+          type: array
+        executionIds:
+          items:
+            type: string
+          type: array
+        jobIds:
+          items:
+            type: string
+          type: array
+        serviceNames:
+          items:
+            type: string
+          type: array
+      required:
+      - boxIds
+      - executionIds
+      - jobIds
+      - machineIds
+      - operationIds
+      - orgIds
+      - requestIds
+      - runnerIds
+      - serviceNames
+      - traceIds
+      - userIds
+      type: object
+    AdminObservabilitySourceStatus:
+      example:
+        source: clickhouse
+        state: available
+        message: message
+        count: 0.8008281904610115
+      properties:
+        source:
+          enum:
+          - clickhouse
+          - clickstack
+          - postgres
+          - audit
+          - cloudwatch
+          - s3
+          - xlog
+          type: string
+        state:
+          enum:
+          - available
+          - missing
+          - stale
+          - not_configured
+          - error
+          type: string
+        message:
+          type: string
+        count:
+          type: number
+      required:
+      - source
+      - state
+      type: object
+    AdminObservabilityAuditLog:
+      example:
+        id: id
+        actorId: actorId
+        actorEmail: actorEmail
+        organizationId: organizationId
+        action: action
+        targetType: targetType
+        targetId: targetId
+        statusCode: 6.027456183070403
+        errorMessage: errorMessage
+        source: source
+        metadata:
+          key: ""
+        createdAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        id:
+          type: string
+        actorId:
+          type: string
+        actorEmail:
+          type: string
+        organizationId:
+          type: string
+        action:
+          type: string
+        targetType:
+          type: string
+        targetId:
+          type: string
+        statusCode:
+          type: number
+        errorMessage:
+          type: string
+        source:
+          type: string
+        metadata:
+          additionalProperties: true
+          type: object
+        createdAt:
+          format: date-time
+          type: string
+      required:
+      - action
+      - actorEmail
+      - actorId
+      - createdAt
+      - id
+      type: object
+    AdminObservabilityXLog:
+      example:
+        source: source
+        timestamp: timestamp
+        serviceName: serviceName
+        body: body
+        severityText: severityText
+        traceId: traceId
+        spanId: spanId
+        executionId: executionId
+        jobId: jobId
+        stream: stream
+        attributes:
+          key: ""
+      properties:
+        source:
+          type: string
+        timestamp:
+          type: string
+        serviceName:
+          type: string
+        body:
+          type: string
+        severityText:
+          type: string
+        traceId:
+          type: string
+        spanId:
+          type: string
+        executionId:
+          type: string
+        jobId:
+          type: string
+        stream:
+          type: string
+        attributes:
+          additionalProperties: true
+          type: object
+      required:
+      - body
+      - serviceName
+      - source
+      - timestamp
+      type: object
+    AdminObservabilityS3Object:
+      example:
+        bucket: bucket
+        key: key
+        size: 1.4658129805029452
+        lastModified: 2000-01-23T04:56:07.000+00:00
+        etag: etag
+        matchedBy: matchedBy
+      properties:
+        bucket:
+          type: string
+        key:
+          type: string
+        size:
+          type: number
+        lastModified:
+          format: date-time
+          type: string
+        etag:
+          type: string
+        matchedBy:
+          type: string
+      required:
+      - bucket
+      - key
+      type: object
+    AdminObservabilityTimelineEvent:
+      example:
+        timestamp: timestamp
+        source: source
+        title: title
+        detail: detail
+        severity: severity
+        identifiers:
+          key: ""
+      properties:
+        timestamp:
+          type: string
+        source:
+          type: string
+        title:
+          type: string
+        detail:
+          type: string
+        severity:
+          type: string
+        identifiers:
+          additionalProperties: true
+          type: object
+      required:
+      - source
+      - timestamp
+      - title
+      type: object
+    AdminObservabilityOperation:
+      example:
+        id: id
+        label: label
+        state: enabled
+        method: method
+        path: path
+        reason: reason
+        targetId: targetId
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        state:
+          enum:
+          - enabled
+          - disabled
+          - request_only
+          type: string
+        method:
+          type: string
+        path:
+          type: string
+        reason:
+          type: string
+        targetId:
+          type: string
+      required:
+      - id
+      - label
+      - method
+      - path
+      - reason
+      - state
+      type: object
+    AdminObservabilityCommands:
+      example:
+        api: api
+        aiAgentPrompt: aiAgentPrompt
+      properties:
+        api:
+          type: string
+        aiAgentPrompt:
+          type: string
+      required:
+      - aiAgentPrompt
+      - api
+      type: object
+    AdminObservabilityClickStackSourceSetup:
+      example:
+        kind: logs
+        envVar: envVar
+        name: name
+        dataType: dataType
+        database: database
+        table: table
+        timestampColumn: timestampColumn
+        defaultSelect: defaultSelect
+        fields:
+          key: ""
+        metricTables:
+          key: ""
+      properties:
+        kind:
+          enum:
+          - logs
+          - traces
+          - metrics
+          type: string
+        envVar:
+          type: string
+        name:
+          type: string
+        dataType:
+          type: string
+        database:
+          type: string
+        table:
+          type: string
+        timestampColumn:
+          type: string
+        defaultSelect:
+          type: string
+        fields:
+          additionalProperties: true
+          type: object
+        metricTables:
+          additionalProperties: true
+          type: object
+      required:
+      - dataType
+      - database
+      - envVar
+      - kind
+      - name
+      - timestampColumn
+      type: object
+    AdminObservabilityClickStackLinks:
+      example:
+        configured: true
+        message: message
+        missingSources:
+        - missingSources
+        - missingSources
+        sourceSetup:
+        - kind: logs
+          envVar: envVar
+          name: name
+          dataType: dataType
+          database: database
+          table: table
+          timestampColumn: timestampColumn
+          defaultSelect: defaultSelect
+          fields:
+            key: ""
+          metricTables:
+            key: ""
+        - kind: logs
+          envVar: envVar
+          name: name
+          dataType: dataType
+          database: database
+          table: table
+          timestampColumn: timestampColumn
+          defaultSelect: defaultSelect
+          fields:
+            key: ""
+          metricTables:
+            key: ""
+        logsUrl: logsUrl
+        dashboardUrl: dashboardUrl
+        tracesUrl: tracesUrl
+        metricsUrl: metricsUrl
+        query: query
+        queryContext:
+          key: ""
+      properties:
+        configured:
+          type: boolean
+        message:
+          type: string
+        missingSources:
+          items:
+            type: string
+          type: array
+        sourceSetup:
+          items:
+            $ref: "#/components/schemas/AdminObservabilityClickStackSourceSetup"
+          type: array
+        logsUrl:
+          type: string
+        dashboardUrl:
+          type: string
+        tracesUrl:
+          type: string
+        metricsUrl:
+          type: string
+        query:
+          type: string
+        queryContext:
+          additionalProperties: true
+          type: object
+      required:
+      - configured
+      type: object
+    AdminObservabilityExternalLinks:
+      example:
+        clickstack:
+          configured: true
+          message: message
+          missingSources:
+          - missingSources
+          - missingSources
+          sourceSetup:
+          - kind: logs
+            envVar: envVar
+            name: name
+            dataType: dataType
+            database: database
+            table: table
+            timestampColumn: timestampColumn
+            defaultSelect: defaultSelect
+            fields:
+              key: ""
+            metricTables:
+              key: ""
+          - kind: logs
+            envVar: envVar
+            name: name
+            dataType: dataType
+            database: database
+            table: table
+            timestampColumn: timestampColumn
+            defaultSelect: defaultSelect
+            fields:
+              key: ""
+            metricTables:
+              key: ""
+          logsUrl: logsUrl
+          dashboardUrl: dashboardUrl
+          tracesUrl: tracesUrl
+          metricsUrl: metricsUrl
+          query: query
+          queryContext:
+            key: ""
+      properties:
+        clickstack:
+          $ref: "#/components/schemas/AdminObservabilityClickStackLinks"
+      required:
+      - clickstack
+      type: object
+    AdminObservabilityInvestigateResponse:
+      example:
+        resource:
+          type: box
+          title: title
+          subtitle: subtitle
+          state: state
+          owner: owner
+          identifiers:
+            key: ""
+          timeRange:
+            key: ""
+        correlation:
+          traceIds:
+          - traceIds
+          - traceIds
+          orgIds:
+          - orgIds
+          - orgIds
+          userIds:
+          - userIds
+          - userIds
+          boxIds:
+          - boxIds
+          - boxIds
+          runnerIds:
+          - runnerIds
+          - runnerIds
+          machineIds:
+          - machineIds
+          - machineIds
+          requestIds:
+          - requestIds
+          - requestIds
+          operationIds:
+          - operationIds
+          - operationIds
+          executionIds:
+          - executionIds
+          - executionIds
+          jobIds:
+          - jobIds
+          - jobIds
+          serviceNames:
+          - serviceNames
+          - serviceNames
+        sources:
+        - source: clickhouse
+          state: available
+          message: message
+          count: 0.8008281904610115
+        - source: clickhouse
+          state: available
+          message: message
+          count: 0.8008281904610115
+        traceSpans:
+        - traceId: traceId
+          spanId: spanId
+          parentSpanId: parentSpanId
+          spanName: spanName
+          serviceName: serviceName
+          layer: layer
+          timestamp: timestamp
+          durationNs: 0.8008281904610115
+          spanAttributes:
+            key: spanAttributes
+          statusCode: statusCode
+          statusMessage: statusMessage
+        - traceId: traceId
+          spanId: spanId
+          parentSpanId: parentSpanId
+          spanName: spanName
+          serviceName: serviceName
+          layer: layer
+          timestamp: timestamp
+          durationNs: 0.8008281904610115
+          spanAttributes:
+            key: spanAttributes
+          statusCode: statusCode
+          statusMessage: statusMessage
+        logs:
+        - timestamp: timestamp
+          body: body
+          severityText: severityText
+          severityNumber: 0.8008281904610115
+          serviceName: serviceName
+          resourceAttributes:
+            key: resourceAttributes
+          logAttributes:
+            key: logAttributes
+          traceId: traceId
+          spanId: spanId
+        - timestamp: timestamp
+          body: body
+          severityText: severityText
+          severityNumber: 0.8008281904610115
+          serviceName: serviceName
+          resourceAttributes:
+            key: resourceAttributes
+          logAttributes:
+            key: logAttributes
+          traceId: traceId
+          spanId: spanId
+        metrics:
+          series:
+          - metricName: metricName
+            dataPoints:
+            - timestamp: timestamp
+              value: 0.8008281904610115
+            - timestamp: timestamp
+              value: 0.8008281904610115
+          - metricName: metricName
+            dataPoints:
+            - timestamp: timestamp
+              value: 0.8008281904610115
+            - timestamp: timestamp
+              value: 0.8008281904610115
+        boxes:
+        - id: box_abc123
+          boxId: abc123XYZ
+          organizationId: org_xyz
+          state: started
+          runnerId: runner-uuid
+          cpu: 2
+          memoryGiB: 4
+          createdAt: 2024-01-01T00:00:00Z
+          owner:
+            userId: usr_abc123
+            name: Alice Smith
+            email: alice@example.com
+            orgName: Alice Personal
+            personal: true
+        - id: box_abc123
+          boxId: abc123XYZ
+          organizationId: org_xyz
+          state: started
+          runnerId: runner-uuid
+          cpu: 2
+          memoryGiB: 4
+          createdAt: 2024-01-01T00:00:00Z
+          owner:
+            userId: usr_abc123
+            name: Alice Smith
+            email: alice@example.com
+            orgName: Alice Personal
+            personal: true
+        runners:
+        - id: runner123
+          domain: runner1.example.com
+          apiUrl: https://api.runner1.example.com
+          proxyUrl: https://proxy.runner1.example.com
+          cpu: 8
+          memory: 16
+          disk: 100
+          gpu: 1
+          gpuType: gpuType
+          class: small
+          currentCpuUsagePercentage: 45.6
+          currentMemoryUsagePercentage: 68.2
+          currentDiskUsagePercentage: 33.8
+          currentAllocatedCpu: 4000
+          currentAllocatedMemoryGiB: 8000
+          currentAllocatedDiskGiB: 50000
+          currentStartedBoxes: 5
+          availabilityScore: 85
+          region: us
+          name: runner1
+          state: initializing
+          lastChecked: 2024-10-01T12:00:00Z
+          unschedulable: false
+          createdAt: 2023-10-01T12:00:00Z
+          updatedAt: 2023-10-01T12:00:00Z
+          version: "0"
+          apiVersion: "0"
+          appVersion: v0.0.0-dev
+          regionType: shared
+          draining: false
+        - id: runner123
+          domain: runner1.example.com
+          apiUrl: https://api.runner1.example.com
+          proxyUrl: https://proxy.runner1.example.com
+          cpu: 8
+          memory: 16
+          disk: 100
+          gpu: 1
+          gpuType: gpuType
+          class: small
+          currentCpuUsagePercentage: 45.6
+          currentMemoryUsagePercentage: 68.2
+          currentDiskUsagePercentage: 33.8
+          currentAllocatedCpu: 4000
+          currentAllocatedMemoryGiB: 8000
+          currentAllocatedDiskGiB: 50000
+          currentStartedBoxes: 5
+          availabilityScore: 85
+          region: us
+          name: runner1
+          state: initializing
+          lastChecked: 2024-10-01T12:00:00Z
+          unschedulable: false
+          createdAt: 2023-10-01T12:00:00Z
+          updatedAt: 2023-10-01T12:00:00Z
+          version: "0"
+          apiVersion: "0"
+          appVersion: v0.0.0-dev
+          regionType: shared
+          draining: false
+        machines:
+        - host: runner-uuid
+          region: us-east-1
+          oversellCpu: 0.75
+          cpuWaterline: 45.6
+          memWaterline: 68.2
+          boxes: 5
+        - host: runner-uuid
+          region: us-east-1
+          oversellCpu: 0.75
+          cpuWaterline: 45.6
+          memWaterline: 68.2
+          boxes: 5
+        auditLogs:
+        - id: id
+          actorId: actorId
+          actorEmail: actorEmail
+          organizationId: organizationId
+          action: action
+          targetType: targetType
+          targetId: targetId
+          statusCode: 6.027456183070403
+          errorMessage: errorMessage
+          source: source
+          metadata:
+            key: ""
+          createdAt: 2000-01-23T04:56:07.000+00:00
+        - id: id
+          actorId: actorId
+          actorEmail: actorEmail
+          organizationId: organizationId
+          action: action
+          targetType: targetType
+          targetId: targetId
+          statusCode: 6.027456183070403
+          errorMessage: errorMessage
+          source: source
+          metadata:
+            key: ""
+          createdAt: 2000-01-23T04:56:07.000+00:00
+        xlogs:
+        - source: source
+          timestamp: timestamp
+          serviceName: serviceName
+          body: body
+          severityText: severityText
+          traceId: traceId
+          spanId: spanId
+          executionId: executionId
+          jobId: jobId
+          stream: stream
+          attributes:
+            key: ""
+        - source: source
+          timestamp: timestamp
+          serviceName: serviceName
+          body: body
+          severityText: severityText
+          traceId: traceId
+          spanId: spanId
+          executionId: executionId
+          jobId: jobId
+          stream: stream
+          attributes:
+            key: ""
+        s3Objects:
+        - bucket: bucket
+          key: key
+          size: 1.4658129805029452
+          lastModified: 2000-01-23T04:56:07.000+00:00
+          etag: etag
+          matchedBy: matchedBy
+        - bucket: bucket
+          key: key
+          size: 1.4658129805029452
+          lastModified: 2000-01-23T04:56:07.000+00:00
+          etag: etag
+          matchedBy: matchedBy
+        timeline:
+        - timestamp: timestamp
+          source: source
+          title: title
+          detail: detail
+          severity: severity
+          identifiers:
+            key: ""
+        - timestamp: timestamp
+          source: source
+          title: title
+          detail: detail
+          severity: severity
+          identifiers:
+            key: ""
+        operations:
+        - id: id
+          label: label
+          state: enabled
+          method: method
+          path: path
+          reason: reason
+          targetId: targetId
+        - id: id
+          label: label
+          state: enabled
+          method: method
+          path: path
+          reason: reason
+          targetId: targetId
+        commands:
+          api: api
+          aiAgentPrompt: aiAgentPrompt
+        externalLinks:
+          clickstack:
+            configured: true
+            message: message
+            missingSources:
+            - missingSources
+            - missingSources
+            sourceSetup:
+            - kind: logs
+              envVar: envVar
+              name: name
+              dataType: dataType
+              database: database
+              table: table
+              timestampColumn: timestampColumn
+              defaultSelect: defaultSelect
+              fields:
+                key: ""
+              metricTables:
+                key: ""
+            - kind: logs
+              envVar: envVar
+              name: name
+              dataType: dataType
+              database: database
+              table: table
+              timestampColumn: timestampColumn
+              defaultSelect: defaultSelect
+              fields:
+                key: ""
+              metricTables:
+                key: ""
+            logsUrl: logsUrl
+            dashboardUrl: dashboardUrl
+            tracesUrl: tracesUrl
+            metricsUrl: metricsUrl
+            query: query
+            queryContext:
+              key: ""
+      properties:
+        resource:
+          $ref: "#/components/schemas/AdminObservabilityResourceSummary"
+        correlation:
+          $ref: "#/components/schemas/AdminObservabilityCorrelation"
+        sources:
+          items:
+            $ref: "#/components/schemas/AdminObservabilitySourceStatus"
+          type: array
+        traceSpans:
+          items:
+            $ref: "#/components/schemas/TraceSpan"
+          type: array
+        logs:
+          items:
+            $ref: "#/components/schemas/LogEntry"
+          type: array
+        metrics:
+          $ref: "#/components/schemas/MetricsResponse"
+        boxes:
+          items:
+            $ref: "#/components/schemas/AdminBoxItem"
+          type: array
+        runners:
+          items:
+            $ref: "#/components/schemas/AdminRunnerItem"
+          type: array
+        machines:
+          items:
+            $ref: "#/components/schemas/AdminMachineItem"
+          type: array
+        auditLogs:
+          items:
+            $ref: "#/components/schemas/AdminObservabilityAuditLog"
+          type: array
+        xlogs:
+          items:
+            $ref: "#/components/schemas/AdminObservabilityXLog"
+          type: array
+        s3Objects:
+          items:
+            $ref: "#/components/schemas/AdminObservabilityS3Object"
+          type: array
+        timeline:
+          items:
+            $ref: "#/components/schemas/AdminObservabilityTimelineEvent"
+          type: array
+        operations:
+          items:
+            $ref: "#/components/schemas/AdminObservabilityOperation"
+          type: array
+        commands:
+          $ref: "#/components/schemas/AdminObservabilityCommands"
+        externalLinks:
+          $ref: "#/components/schemas/AdminObservabilityExternalLinks"
+      required:
+      - auditLogs
+      - boxes
+      - commands
+      - correlation
+      - externalLinks
+      - logs
+      - machines
+      - metrics
+      - operations
+      - resource
+      - runners
+      - s3Objects
+      - sources
+      - timeline
+      - traceSpans
+      - xlogs
+      type: object
+    AuditLog:
+      example:
+        id: id
+        actorId: actorId
+        actorEmail: actorEmail
+        organizationId: organizationId
+        action: action
+        targetType: targetType
+        targetId: targetId
+        statusCode: 0.8008281904610115
+        errorMessage: errorMessage
+        ipAddress: ipAddress
+        userAgent: userAgent
+        source: source
+        metadata:
+          key: ""
+        createdAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        id:
+          type: string
+        actorId:
+          type: string
+        actorEmail:
+          type: string
+        organizationId:
+          type: string
+        action:
+          type: string
+        targetType:
+          type: string
+        targetId:
+          type: string
+        statusCode:
+          type: number
+        errorMessage:
+          type: string
+        ipAddress:
+          type: string
+        userAgent:
+          type: string
+        source:
+          type: string
+        metadata:
+          additionalProperties: true
+          type: object
+        createdAt:
+          format: date-time
+          type: string
+      required:
+      - action
+      - actorEmail
+      - actorId
+      - createdAt
+      - id
+      type: object
+    PaginatedAuditLogs:
+      example:
+        items:
+        - id: id
+          actorId: actorId
+          actorEmail: actorEmail
+          organizationId: organizationId
+          action: action
+          targetType: targetType
+          targetId: targetId
+          statusCode: 0.8008281904610115
+          errorMessage: errorMessage
+          ipAddress: ipAddress
+          userAgent: userAgent
+          source: source
+          metadata:
+            key: ""
+          createdAt: 2000-01-23T04:56:07.000+00:00
+        - id: id
+          actorId: actorId
+          actorEmail: actorEmail
+          organizationId: organizationId
+          action: action
+          targetType: targetType
+          targetId: targetId
+          statusCode: 0.8008281904610115
+          errorMessage: errorMessage
+          ipAddress: ipAddress
+          userAgent: userAgent
+          source: source
+          metadata:
+            key: ""
+          createdAt: 2000-01-23T04:56:07.000+00:00
+        total: 6.027456183070403
+        page: 1.4658129805029452
+        totalPages: 5.962133916683182
+        nextToken: nextToken
+      properties:
+        items:
+          items:
+            $ref: "#/components/schemas/AuditLog"
+          type: array
+        total:
+          type: number
+        page:
+          type: number
+        totalPages:
+          type: number
+        nextToken:
+          description: Token for next page in cursor-based pagination
+          type: string
+      required:
+      - items
+      - page
+      - total
+      - totalPages
+      type: object
+    WebhookAppPortalAccess:
+      example:
+        token: appsk_...
+        url: https://app.svix.com/app_1234567890
+      properties:
+        token:
+          description: The authentication token for the Svix consumer app portal
+          example: appsk_...
+          type: string
+        url:
+          description: The URL to the webhook app portal
+          example: https://app.svix.com/app_1234567890
+          type: string
+      required:
+      - token
+      - url
+      type: object
+    WebhookEvent:
+      description: The type of event being sent
+      enum:
+      - box.created
+      - box.state.updated
+      - template.created
+      - template.state.updated
+      - template.removed
+      - volume.created
+      - volume.state.updated
+      type: string
+    SendWebhookDto:
+      example:
+        eventType: box.created
+        payload:
+          id: box-123
+          name: My Box
+        eventId: evt_1234567890abcdef
+      properties:
+        eventType:
+          allOf:
+          - $ref: "#/components/schemas/WebhookEvent"
+          description: The type of event being sent
+          example: box.created
+        payload:
+          description: The payload data to send
+          example:
+            id: box-123
+            name: My Box
+          type: object
+        eventId:
+          description: Optional event ID for idempotency
+          example: evt_1234567890abcdef
+          type: string
+      required:
+      - eventType
+      - payload
+      type: object
+    WebhookInitializationStatus:
+      example:
+        organizationId: 123e4567-e89b-12d3-a456-426614174000
+        svixApplicationId: app_1234567890
+        lastError: Failed to create Svix application
+        retryCount: 3
+        createdAt: 2023-01-01T00:00:00.000Z
+        updatedAt: 2023-01-01T00:00:00.000Z
+      properties:
+        organizationId:
+          description: Organization ID
+          example: 123e4567-e89b-12d3-a456-426614174000
+          type: string
+        svixApplicationId:
+          description: The ID of the Svix application
+          example: app_1234567890
+          nullable: true
+          type: string
+        lastError:
+          description: The error reason for the last initialization attempt
+          example: Failed to create Svix application
+          nullable: true
+          type: string
+        retryCount:
+          description: The number of times the initialization has been attempted
+          example: 3
+          type: number
+        createdAt:
+          description: When the webhook initialization was created
+          example: 2023-01-01T00:00:00.000Z
+          type: string
+        updatedAt:
+          description: When the webhook initialization was last updated
+          example: 2023-01-01T00:00:00.000Z
+          type: string
+      required:
+      - createdAt
+      - lastError
+      - organizationId
+      - retryCount
+      - svixApplicationId
+      - updatedAt
+      type: object
+    StorageAccessDto:
+      example:
+        accessKey: temp-user-123
+        secret: abchbGciOiJIUzI1NiIs...
+        sessionToken: eyJhbGciOiJIUzI1NiIs...
+        storageUrl: storage.example.com
+        organizationId: 123e4567-e89b-12d3-a456-426614174000
+        bucket: boxlite
+      properties:
+        accessKey:
+          description: Access key for storage authentication
+          example: temp-user-123
+          type: string
+        secret:
+          description: Secret key for storage authentication
+          example: abchbGciOiJIUzI1NiIs...
+          type: string
+        sessionToken:
+          description: Session token for storage authentication
+          example: eyJhbGciOiJIUzI1NiIs...
+          type: string
+        storageUrl:
+          description: Storage URL
+          example: storage.example.com
+          type: string
+        organizationId:
+          description: Organization ID
+          example: 123e4567-e89b-12d3-a456-426614174000
+          type: string
+        bucket:
+          description: S3 bucket name
+          example: boxlite
+          type: string
+      required:
+      - accessKey
+      - bucket
+      - organizationId
+      - secret
+      - sessionToken
+      - storageUrl
       type: object
     uploadFile_deprecated_request:
       properties:

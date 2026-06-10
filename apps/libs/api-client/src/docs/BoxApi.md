@@ -4,8 +4,6 @@ All URIs are relative to *http://localhost:3000*
 
 |Method | HTTP request | Description|
 |------------- | ------------- | -------------|
-|[**archiveBox**](#archivebox) | **POST** /box/{boxIdOrName}/archive | Archive box|
-|[**createBackup**](#createbackup) | **POST** /box/{boxIdOrName}/backup | Create box backup|
 |[**createBox**](#createbox) | **POST** /box | Create a new box|
 |[**createSshAccess**](#createsshaccess) | **POST** /box/{boxIdOrName}/ssh-access | Create SSH access for box|
 |[**deleteBox**](#deletebox) | **DELETE** /box/{boxIdOrName} | Delete box|
@@ -16,8 +14,6 @@ All URIs are relative to *http://localhost:3000*
 |[**getBoxTraceSpans**](#getboxtracespans) | **GET** /box/{boxId}/telemetry/traces/{traceId} | Get trace spans|
 |[**getBoxTraces**](#getboxtraces) | **GET** /box/{boxId}/telemetry/traces | Get box traces|
 |[**getBoxesForRunner**](#getboxesforrunner) | **GET** /box/for-runner | Get boxes for the authenticated runner|
-|[**getBuildLogs**](#getbuildlogs) | **GET** /box/{boxIdOrName}/build-logs | Get build logs|
-|[**getBuildLogsUrl**](#getbuildlogsurl) | **GET** /box/{boxIdOrName}/build-logs-url | Get build logs URL|
 |[**getPortPreviewUrl**](#getportpreviewurl) | **GET** /box/{boxIdOrName}/ports/{port}/preview-url | Get preview URL for a box port|
 |[**getSignedPortPreviewUrl**](#getsignedportpreviewurl) | **GET** /box/{boxIdOrName}/ports/{port}/signed-preview-url | Get signed preview URL for a box port|
 |[**getToolboxProxyUrl**](#gettoolboxproxyurl) | **GET** /box/{boxId}/toolbox-proxy-url | Get toolbox proxy URL for a box|
@@ -27,7 +23,6 @@ All URIs are relative to *http://localhost:3000*
 |[**replaceLabels**](#replacelabels) | **PUT** /box/{boxIdOrName}/labels | Replace box labels|
 |[**resizeBox**](#resizebox) | **POST** /box/{boxIdOrName}/resize | Resize box resources|
 |[**revokeSshAccess**](#revokesshaccess) | **DELETE** /box/{boxIdOrName}/ssh-access | Revoke SSH access for box|
-|[**setAutoArchiveInterval**](#setautoarchiveinterval) | **POST** /box/{boxIdOrName}/autoarchive/{interval} | Set box auto-archive interval|
 |[**setAutoDeleteInterval**](#setautodeleteinterval) | **POST** /box/{boxIdOrName}/autodelete/{interval} | Set box auto-delete interval|
 |[**setAutostopInterval**](#setautostopinterval) | **POST** /box/{boxIdOrName}/autostop/{interval} | Set box auto-stop interval|
 |[**startBox**](#startbox) | **POST** /box/{boxIdOrName}/start | Start box|
@@ -36,112 +31,6 @@ All URIs are relative to *http://localhost:3000*
 |[**updateLastActivity**](#updatelastactivity) | **POST** /box/{boxId}/last-activity | Update box last activity|
 |[**updatePublicStatus**](#updatepublicstatus) | **POST** /box/{boxIdOrName}/public/{isPublic} | Update public status|
 |[**validateSshAccess**](#validatesshaccess) | **GET** /box/ssh-access/validate | Validate SSH access for box|
-
-# **archiveBox**
-> Box archiveBox()
-
-
-### Example
-
-```typescript
-import {
-    BoxApi,
-    Configuration
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new BoxApi(configuration);
-
-let boxIdOrName: string; // (default to undefined)
-let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
-
-const { status, data } = await apiInstance.archiveBox(
-    boxIdOrName,
-    xBoxLiteOrganizationID
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **boxIdOrName** | [**string**] |  | defaults to undefined|
-| **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
-
-
-### Return type
-
-**Box**
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | Box has been archived |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
-# **createBackup**
-> Box createBackup()
-
-
-### Example
-
-```typescript
-import {
-    BoxApi,
-    Configuration
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new BoxApi(configuration);
-
-let boxIdOrName: string; //ID or name of the box (default to undefined)
-let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
-
-const { status, data } = await apiInstance.createBackup(
-    boxIdOrName,
-    xBoxLiteOrganizationID
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **boxIdOrName** | [**string**] | ID or name of the box | defaults to undefined|
-| **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
-
-
-### Return type
-
-**Box**
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | Box backup has been initiated |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **createBox**
 > Box createBox(createBox)
@@ -735,116 +624,6 @@ const { status, data } = await apiInstance.getBoxesForRunner(
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
-# **getBuildLogs**
-> getBuildLogs()
-
-This endpoint is deprecated. Use `getBuildLogsUrl` instead.
-
-### Example
-
-```typescript
-import {
-    BoxApi,
-    Configuration
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new BoxApi(configuration);
-
-let boxIdOrName: string; //ID or name of the box (default to undefined)
-let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
-let follow: boolean; //Whether to follow the logs stream (optional) (default to undefined)
-
-const { status, data } = await apiInstance.getBuildLogs(
-    boxIdOrName,
-    xBoxLiteOrganizationID,
-    follow
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **boxIdOrName** | [**string**] | ID or name of the box | defaults to undefined|
-| **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
-| **follow** | [**boolean**] | Whether to follow the logs stream | (optional) defaults to undefined|
-
-
-### Return type
-
-void (empty response body)
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: Not defined
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | Build logs stream |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
-# **getBuildLogsUrl**
-> Url getBuildLogsUrl()
-
-
-### Example
-
-```typescript
-import {
-    BoxApi,
-    Configuration
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new BoxApi(configuration);
-
-let boxIdOrName: string; //ID or name of the box (default to undefined)
-let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
-
-const { status, data } = await apiInstance.getBuildLogsUrl(
-    boxIdOrName,
-    xBoxLiteOrganizationID
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **boxIdOrName** | [**string**] | ID or name of the box | defaults to undefined|
-| **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
-
-
-### Return type
-
-**Url**
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | Build logs URL |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
 # **getPortPreviewUrl**
 > PortPreviewUrl getPortPreviewUrl()
 
@@ -1090,12 +869,11 @@ const apiInstance = new BoxApi(configuration);
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 let page: number; //Page number of the results (optional) (default to 1)
 let limit: number; //Number of results per page (optional) (default to 100)
-let id: string; //Filter by partial ID match (optional) (default to undefined)
+let id: string; //Filter by partial Box ID, internal UUID, or name match (optional) (default to undefined)
 let name: string; //Filter by partial name match (optional) (default to undefined)
 let labels: string; //JSON encoded labels to filter by (optional) (default to undefined)
 let includeErroredDeleted: boolean; //Include results with errored state and deleted desired state (optional) (default to false)
-let states: Array<'creating' | 'restoring' | 'destroying' | 'started' | 'stopped' | 'starting' | 'stopping' | 'error' | 'build_failed' | 'pending_build' | 'building_snapshot' | 'unknown' | 'pulling_snapshot' | 'archived' | 'archiving' | 'resizing'>; //List of states to filter by (optional) (default to undefined)
-let snapshots: Array<string>; //List of snapshot names to filter by (optional) (default to undefined)
+let states: Array<'creating' | 'restoring' | 'destroying' | 'started' | 'stopped' | 'starting' | 'stopping' | 'error' | 'unknown' | 'archived' | 'archiving' | 'resizing'>; //List of states to filter by (optional) (default to undefined)
 let regions: Array<string>; //List of regions to filter by (optional) (default to undefined)
 let minCpu: number; //Minimum CPU (optional) (default to undefined)
 let maxCpu: number; //Maximum CPU (optional) (default to undefined)
@@ -1105,7 +883,7 @@ let minDiskGiB: number; //Minimum disk space in GiB (optional) (default to undef
 let maxDiskGiB: number; //Maximum disk space in GiB (optional) (default to undefined)
 let lastEventAfter: Date; //Include items with last event after this timestamp (optional) (default to undefined)
 let lastEventBefore: Date; //Include items with last event before this timestamp (optional) (default to undefined)
-let sort: 'id' | 'name' | 'state' | 'snapshot' | 'region' | 'updatedAt' | 'createdAt'; //Field to sort by (optional) (default to 'createdAt')
+let sort: 'id' | 'boxId' | 'name' | 'state' | 'region' | 'updatedAt' | 'createdAt'; //Field to sort by (optional) (default to 'createdAt')
 let order: 'asc' | 'desc'; //Direction to sort by (optional) (default to 'desc')
 
 const { status, data } = await apiInstance.listBoxesPaginated(
@@ -1117,7 +895,6 @@ const { status, data } = await apiInstance.listBoxesPaginated(
     labels,
     includeErroredDeleted,
     states,
-    snapshots,
     regions,
     minCpu,
     maxCpu,
@@ -1139,12 +916,11 @@ const { status, data } = await apiInstance.listBoxesPaginated(
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 | **page** | [**number**] | Page number of the results | (optional) defaults to 1|
 | **limit** | [**number**] | Number of results per page | (optional) defaults to 100|
-| **id** | [**string**] | Filter by partial ID match | (optional) defaults to undefined|
+| **id** | [**string**] | Filter by partial Box ID, internal UUID, or name match | (optional) defaults to undefined|
 | **name** | [**string**] | Filter by partial name match | (optional) defaults to undefined|
 | **labels** | [**string**] | JSON encoded labels to filter by | (optional) defaults to undefined|
 | **includeErroredDeleted** | [**boolean**] | Include results with errored state and deleted desired state | (optional) defaults to false|
-| **states** | **Array<&#39;creating&#39; &#124; &#39;restoring&#39; &#124; &#39;destroying&#39; &#124; &#39;started&#39; &#124; &#39;stopped&#39; &#124; &#39;starting&#39; &#124; &#39;stopping&#39; &#124; &#39;error&#39; &#124; &#39;build_failed&#39; &#124; &#39;pending_build&#39; &#124; &#39;building_snapshot&#39; &#124; &#39;unknown&#39; &#124; &#39;pulling_snapshot&#39; &#124; &#39;archived&#39; &#124; &#39;archiving&#39; &#124; &#39;resizing&#39; &#124; &#39;11184809&#39;>** | List of states to filter by | (optional) defaults to undefined|
-| **snapshots** | **Array&lt;string&gt;** | List of snapshot names to filter by | (optional) defaults to undefined|
+| **states** | **Array<&#39;creating&#39; &#124; &#39;restoring&#39; &#124; &#39;destroying&#39; &#124; &#39;started&#39; &#124; &#39;stopped&#39; &#124; &#39;starting&#39; &#124; &#39;stopping&#39; &#124; &#39;error&#39; &#124; &#39;unknown&#39; &#124; &#39;archived&#39; &#124; &#39;archiving&#39; &#124; &#39;resizing&#39; &#124; &#39;11184809&#39;>** | List of states to filter by | (optional) defaults to undefined|
 | **regions** | **Array&lt;string&gt;** | List of regions to filter by | (optional) defaults to undefined|
 | **minCpu** | [**number**] | Minimum CPU | (optional) defaults to undefined|
 | **maxCpu** | [**number**] | Maximum CPU | (optional) defaults to undefined|
@@ -1154,7 +930,7 @@ const { status, data } = await apiInstance.listBoxesPaginated(
 | **maxDiskGiB** | [**number**] | Maximum disk space in GiB | (optional) defaults to undefined|
 | **lastEventAfter** | [**Date**] | Include items with last event after this timestamp | (optional) defaults to undefined|
 | **lastEventBefore** | [**Date**] | Include items with last event before this timestamp | (optional) defaults to undefined|
-| **sort** | [**&#39;id&#39; | &#39;name&#39; | &#39;state&#39; | &#39;snapshot&#39; | &#39;region&#39; | &#39;updatedAt&#39; | &#39;createdAt&#39;**]**Array<&#39;id&#39; &#124; &#39;name&#39; &#124; &#39;state&#39; &#124; &#39;snapshot&#39; &#124; &#39;region&#39; &#124; &#39;updatedAt&#39; &#124; &#39;createdAt&#39; &#124; &#39;11184809&#39;>** | Field to sort by | (optional) defaults to 'createdAt'|
+| **sort** | [**&#39;id&#39; | &#39;boxId&#39; | &#39;name&#39; | &#39;state&#39; | &#39;region&#39; | &#39;updatedAt&#39; | &#39;createdAt&#39;**]**Array<&#39;id&#39; &#124; &#39;boxId&#39; &#124; &#39;name&#39; &#124; &#39;state&#39; &#124; &#39;region&#39; &#124; &#39;updatedAt&#39; &#124; &#39;createdAt&#39; &#124; &#39;11184809&#39;>** | Field to sort by | (optional) defaults to 'createdAt'|
 | **order** | [**&#39;asc&#39; | &#39;desc&#39;**]**Array<&#39;asc&#39; &#124; &#39;desc&#39; &#124; &#39;11184809&#39;>** | Direction to sort by | (optional) defaults to 'desc'|
 
 
@@ -1402,62 +1178,6 @@ const { status, data } = await apiInstance.revokeSshAccess(
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
-# **setAutoArchiveInterval**
-> Box setAutoArchiveInterval()
-
-
-### Example
-
-```typescript
-import {
-    BoxApi,
-    Configuration
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new BoxApi(configuration);
-
-let boxIdOrName: string; //ID or name of the box (default to undefined)
-let interval: number; //Auto-archive interval in minutes (0 means the maximum interval will be used) (default to undefined)
-let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
-
-const { status, data } = await apiInstance.setAutoArchiveInterval(
-    boxIdOrName,
-    interval,
-    xBoxLiteOrganizationID
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **boxIdOrName** | [**string**] | ID or name of the box | defaults to undefined|
-| **interval** | [**number**] | Auto-archive interval in minutes (0 means the maximum interval will be used) | defaults to undefined|
-| **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
-
-
-### Return type
-
-**Box**
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | Auto-archive interval has been set |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
 # **setAutoDeleteInterval**
 > Box setAutoDeleteInterval()
 
@@ -1619,7 +1339,7 @@ const { status, data } = await apiInstance.startBox(
 ### HTTP response details
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
-|**200** | Box has been started or is being restored from archived state |  -  |
+|**200** | Box has been started |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

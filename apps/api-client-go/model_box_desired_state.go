@@ -24,7 +24,6 @@ const (
 	BOXDESIREDSTATE_STARTED BoxDesiredState = "started"
 	BOXDESIREDSTATE_STOPPED BoxDesiredState = "stopped"
 	BOXDESIREDSTATE_RESIZED BoxDesiredState = "resized"
-	BOXDESIREDSTATE_ARCHIVED BoxDesiredState = "archived"
 	BOXDESIREDSTATE_UNKNOWN_DEFAULT_OPEN_API BoxDesiredState = "unknown_default_open_api"
 )
 
@@ -34,7 +33,6 @@ var AllowedBoxDesiredStateEnumValues = []BoxDesiredState{
 	"started",
 	"stopped",
 	"resized",
-	"archived",
 	"unknown_default_open_api",
 }
 

@@ -25,15 +25,16 @@ import type { BoxState } from './box-state';
 // May contain unused imports in some cases
 // @ts-ignore
 import type { BoxVolume } from './box-volume';
-// May contain unused imports in some cases
-// @ts-ignore
-import type { BuildInfo } from './build-info';
 
 export interface Workspace {
     /**
-     * The ID of the box
+     * The internal UUID of the box
      */
     'id': string;
+    /**
+     * The public Box ID shown to users and SDK clients
+     */
+    'boxId': string;
     /**
      * The organization ID of the box
      */
@@ -42,10 +43,6 @@ export interface Workspace {
      * The name of the box
      */
     'name': string;
-    /**
-     * The snapshot used for the box
-     */
-    'snapshot'?: string;
     /**
      * The user associated with the project
      */
@@ -107,21 +104,9 @@ export interface Workspace {
      */
     'recoverable'?: boolean;
     /**
-     * The state of the backup
-     */
-    'backupState'?: WorkspaceBackupStateEnum;
-    /**
-     * The creation timestamp of the last backup
-     */
-    'backupCreatedAt'?: string;
-    /**
      * Auto-stop interval in minutes (0 means disabled)
      */
     'autoStopInterval'?: number;
-    /**
-     * Auto-archive interval in minutes
-     */
-    'autoArchiveInterval'?: number;
     /**
      * Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping)
      */
@@ -130,10 +115,6 @@ export interface Workspace {
      * Array of volumes attached to the box
      */
     'volumes'?: Array<BoxVolume>;
-    /**
-     * Build information for the box
-     */
-    'buildInfo'?: BuildInfo;
     /**
      * The creation timestamp of the box
      */
@@ -164,29 +145,11 @@ export interface Workspace {
      */
     'image'?: string;
     /**
-     * The state of the snapshot
-     */
-    'snapshotState'?: WorkspaceSnapshotStateEnum;
-    /**
-     * The creation timestamp of the last snapshot
-     */
-    'snapshotCreatedAt'?: string;
-    /**
      * Additional information about the box
      */
     'info'?: BoxInfo;
 }
 
-export const WorkspaceBackupStateEnum = {
-    NONE: 'None',
-    PENDING: 'Pending',
-    IN_PROGRESS: 'InProgress',
-    COMPLETED: 'Completed',
-    ERROR: 'Error',
-    UNKNOWN_DEFAULT_OPEN_API: '11184809',
-} as const;
-
-export type WorkspaceBackupStateEnum = typeof WorkspaceBackupStateEnum[keyof typeof WorkspaceBackupStateEnum];
 export const WorkspaceClassEnum = {
     SMALL: 'small',
     MEDIUM: 'medium',
@@ -195,15 +158,5 @@ export const WorkspaceClassEnum = {
 } as const;
 
 export type WorkspaceClassEnum = typeof WorkspaceClassEnum[keyof typeof WorkspaceClassEnum];
-export const WorkspaceSnapshotStateEnum = {
-    NONE: 'None',
-    PENDING: 'Pending',
-    IN_PROGRESS: 'InProgress',
-    COMPLETED: 'Completed',
-    ERROR: 'Error',
-    UNKNOWN_DEFAULT_OPEN_API: '11184809',
-} as const;
-
-export type WorkspaceSnapshotStateEnum = typeof WorkspaceSnapshotStateEnum[keyof typeof WorkspaceSnapshotStateEnum];
 
 

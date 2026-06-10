@@ -21,9 +21,9 @@
 export const WebhookEvent = {
     BOX_CREATED: 'box.created',
     BOX_STATE_UPDATED: 'box.state.updated',
-    SNAPSHOT_CREATED: 'snapshot.created',
-    SNAPSHOT_STATE_UPDATED: 'snapshot.state.updated',
-    SNAPSHOT_REMOVED: 'snapshot.removed',
+    TEMPLATE_CREATED: 'template.created',
+    TEMPLATE_STATE_UPDATED: 'template.state.updated',
+    TEMPLATE_REMOVED: 'template.removed',
     VOLUME_CREATED: 'volume.created',
     VOLUME_STATE_UPDATED: 'volume.state.updated',
     UNKNOWN_DEFAULT_OPEN_API: '11184809',

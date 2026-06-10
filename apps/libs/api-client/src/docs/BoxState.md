@@ -22,15 +22,7 @@ The state of the box
 
 * `ERROR` (value: `'error'`)
 
-* `BUILD_FAILED` (value: `'build_failed'`)
-
-* `PENDING_BUILD` (value: `'pending_build'`)
-
-* `BUILDING_SNAPSHOT` (value: `'building_snapshot'`)
-
 * `UNKNOWN` (value: `'unknown'`)
-
-* `PULLING_SNAPSHOT` (value: `'pulling_snapshot'`)
 
 * `ARCHIVED` (value: `'archived'`)
 

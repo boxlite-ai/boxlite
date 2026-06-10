@@ -10,7 +10,6 @@ All URIs are relative to *http://localhost:3000*
 |[**getRunnerByBoxId**](#getrunnerbyboxid) | **GET** /runners/by-box/{boxId} | Get runner by box ID|
 |[**getRunnerById**](#getrunnerbyid) | **GET** /runners/{id} | Get runner by ID|
 |[**getRunnerFullById**](#getrunnerfullbyid) | **GET** /runners/{id}/full | Get runner by ID|
-|[**getRunnersBySnapshotRef**](#getrunnersbysnapshotref) | **GET** /runners/by-snapshot-ref | Get runners by snapshot ref|
 |[**listRunners**](#listrunners) | **GET** /runners | List all runners|
 |[**runnerHealthcheck**](#runnerhealthcheck) | **POST** /runners/healthcheck | Runner healthcheck|
 |[**updateRunnerDraining**](#updaterunnerdraining) | **PATCH** /runners/{id}/draining | Update runner draining status|
@@ -301,56 +300,6 @@ const { status, data } = await apiInstance.getRunnerFullById(
 ### Return type
 
 **RunnerFull**
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** |  |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
-# **getRunnersBySnapshotRef**
-> Array<RunnerSnapshotDto> getRunnersBySnapshotRef()
-
-
-### Example
-
-```typescript
-import {
-    RunnersApi,
-    Configuration
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new RunnersApi(configuration);
-
-let ref: string; //Snapshot ref (default to undefined)
-
-const { status, data } = await apiInstance.getRunnersBySnapshotRef(
-    ref
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **ref** | [**string**] | Snapshot ref | defaults to undefined|
-
-
-### Return type
-
-**Array<RunnerSnapshotDto>**
 
 ### Authorization
 

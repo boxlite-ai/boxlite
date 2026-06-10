@@ -38,7 +38,7 @@ export interface Job {
      */
     'resourceType': JobResourceTypeEnum;
     /**
-     * The ID of the resource this job operates on (boxId, snapshotRef, etc.)
+     * The ID of the resource this job operates on (boxId, etc.)
      */
     'resourceId': string;
     /**
@@ -65,7 +65,7 @@ export interface Job {
 
 export const JobResourceTypeEnum = {
     BOX: 'BOX',
-    SNAPSHOT: 'SNAPSHOT',
+    ARTIFACT: 'ARTIFACT',
     BACKUP: 'BACKUP',
     UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;

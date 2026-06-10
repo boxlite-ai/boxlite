@@ -24,7 +24,9 @@ type CreateUser struct {
 	Id string `json:"id"`
 	Name string `json:"name"`
 	Email *string `json:"email,omitempty"`
-	PersonalOrganizationQuota *CreateOrganizationQuota `json:"personalOrganizationQuota,omitempty"`
+	DefaultOrganizationDefaultRegionId *string `json:"defaultOrganizationDefaultRegionId,omitempty"`
+	// Deprecated alias for defaultOrganizationDefaultRegionId.
+	// Deprecated
 	PersonalOrganizationDefaultRegionId *string `json:"personalOrganizationDefaultRegionId,omitempty"`
 	Role *string `json:"role,omitempty"`
 	EmailVerified *bool `json:"emailVerified,omitempty"`
@@ -132,39 +134,40 @@ func (o *CreateUser) SetEmail(v string) {
 	o.Email = &v
 }
 
-// GetPersonalOrganizationQuota returns the PersonalOrganizationQuota field value if set, zero value otherwise.
-func (o *CreateUser) GetPersonalOrganizationQuota() CreateOrganizationQuota {
-	if o == nil || IsNil(o.PersonalOrganizationQuota) {
-		var ret CreateOrganizationQuota
+// GetDefaultOrganizationDefaultRegionId returns the DefaultOrganizationDefaultRegionId field value if set, zero value otherwise.
+func (o *CreateUser) GetDefaultOrganizationDefaultRegionId() string {
+	if o == nil || IsNil(o.DefaultOrganizationDefaultRegionId) {
+		var ret string
 		return ret
 	}
-	return *o.PersonalOrganizationQuota
+	return *o.DefaultOrganizationDefaultRegionId
 }
 
-// GetPersonalOrganizationQuotaOk returns a tuple with the PersonalOrganizationQuota field value if set, nil otherwise
+// GetDefaultOrganizationDefaultRegionIdOk returns a tuple with the DefaultOrganizationDefaultRegionId field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *CreateUser) GetPersonalOrganizationQuotaOk() (*CreateOrganizationQuota, bool) {
-	if o == nil || IsNil(o.PersonalOrganizationQuota) {
+func (o *CreateUser) GetDefaultOrganizationDefaultRegionIdOk() (*string, bool) {
+	if o == nil || IsNil(o.DefaultOrganizationDefaultRegionId) {
 		return nil, false
 	}
-	return o.PersonalOrganizationQuota, true
+	return o.DefaultOrganizationDefaultRegionId, true
 }
 
-// HasPersonalOrganizationQuota returns a boolean if a field has been set.
-func (o *CreateUser) HasPersonalOrganizationQuota() bool {
-	if o != nil && !IsNil(o.PersonalOrganizationQuota) {
+// HasDefaultOrganizationDefaultRegionId returns a boolean if a field has been set.
+func (o *CreateUser) HasDefaultOrganizationDefaultRegionId() bool {
+	if o != nil && !IsNil(o.DefaultOrganizationDefaultRegionId) {
 		return true
 	}
 
 	return false
 }
 
-// SetPersonalOrganizationQuota gets a reference to the given CreateOrganizationQuota and assigns it to the PersonalOrganizationQuota field.
-func (o *CreateUser) SetPersonalOrganizationQuota(v CreateOrganizationQuota) {
-	o.PersonalOrganizationQuota = &v
+// SetDefaultOrganizationDefaultRegionId gets a reference to the given string and assigns it to the DefaultOrganizationDefaultRegionId field.
+func (o *CreateUser) SetDefaultOrganizationDefaultRegionId(v string) {
+	o.DefaultOrganizationDefaultRegionId = &v
 }
 
 // GetPersonalOrganizationDefaultRegionId returns the PersonalOrganizationDefaultRegionId field value if set, zero value otherwise.
+// Deprecated
 func (o *CreateUser) GetPersonalOrganizationDefaultRegionId() string {
 	if o == nil || IsNil(o.PersonalOrganizationDefaultRegionId) {
 		var ret string
@@ -175,6 +178,7 @@ func (o *CreateUser) GetPersonalOrganizationDefaultRegionId() string {
 
 // GetPersonalOrganizationDefaultRegionIdOk returns a tuple with the PersonalOrganizationDefaultRegionId field value if set, nil otherwise
 // and a boolean to check if the value has been set.
+// Deprecated
 func (o *CreateUser) GetPersonalOrganizationDefaultRegionIdOk() (*string, bool) {
 	if o == nil || IsNil(o.PersonalOrganizationDefaultRegionId) {
 		return nil, false
@@ -192,6 +196,7 @@ func (o *CreateUser) HasPersonalOrganizationDefaultRegionId() bool {
 }
 
 // SetPersonalOrganizationDefaultRegionId gets a reference to the given string and assigns it to the PersonalOrganizationDefaultRegionId field.
+// Deprecated
 func (o *CreateUser) SetPersonalOrganizationDefaultRegionId(v string) {
 	o.PersonalOrganizationDefaultRegionId = &v
 }
@@ -275,8 +280,8 @@ func (o CreateUser) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.Email) {
 		toSerialize["email"] = o.Email
 	}
-	if !IsNil(o.PersonalOrganizationQuota) {
-		toSerialize["personalOrganizationQuota"] = o.PersonalOrganizationQuota
+	if !IsNil(o.DefaultOrganizationDefaultRegionId) {
+		toSerialize["defaultOrganizationDefaultRegionId"] = o.DefaultOrganizationDefaultRegionId
 	}
 	if !IsNil(o.PersonalOrganizationDefaultRegionId) {
 		toSerialize["personalOrganizationDefaultRegionId"] = o.PersonalOrganizationDefaultRegionId
@@ -334,7 +339,7 @@ func (o *CreateUser) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "id")
 		delete(additionalProperties, "name")
 		delete(additionalProperties, "email")
-		delete(additionalProperties, "personalOrganizationQuota")
+		delete(additionalProperties, "defaultOrganizationDefaultRegionId")
 		delete(additionalProperties, "personalOrganizationDefaultRegionId")
 		delete(additionalProperties, "role")
 		delete(additionalProperties, "emailVerified")

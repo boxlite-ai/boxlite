@@ -32,6 +32,8 @@ type OrganizationUser struct {
 	Email string `json:"email"`
 	// Member role
 	Role string `json:"role"`
+	// Whether this organization membership is the user default organization
+	IsDefaultForUser bool `json:"isDefaultForUser"`
 	// Roles assigned to the user
 	AssignedRoles []OrganizationRole `json:"assignedRoles"`
 	// Creation timestamp
@@ -47,13 +49,14 @@ type _OrganizationUser OrganizationUser
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewOrganizationUser(userId string, organizationId string, name string, email string, role string, assignedRoles []OrganizationRole, createdAt time.Time, updatedAt time.Time) *OrganizationUser {
+func NewOrganizationUser(userId string, organizationId string, name string, email string, role string, isDefaultForUser bool, assignedRoles []OrganizationRole, createdAt time.Time, updatedAt time.Time) *OrganizationUser {
 	this := OrganizationUser{}
 	this.UserId = userId
 	this.OrganizationId = organizationId
 	this.Name = name
 	this.Email = email
 	this.Role = role
+	this.IsDefaultForUser = isDefaultForUser
 	this.AssignedRoles = assignedRoles
 	this.CreatedAt = createdAt
 	this.UpdatedAt = updatedAt
@@ -188,6 +191,30 @@ func (o *OrganizationUser) SetRole(v string) {
 	o.Role = v
 }
 
+// GetIsDefaultForUser returns the IsDefaultForUser field value
+func (o *OrganizationUser) GetIsDefaultForUser() bool {
+	if o == nil {
+		var ret bool
+		return ret
+	}
+
+	return o.IsDefaultForUser
+}
+
+// GetIsDefaultForUserOk returns a tuple with the IsDefaultForUser field value
+// and a boolean to check if the value has been set.
+func (o *OrganizationUser) GetIsDefaultForUserOk() (*bool, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.IsDefaultForUser, true
+}
+
+// SetIsDefaultForUser sets field value
+func (o *OrganizationUser) SetIsDefaultForUser(v bool) {
+	o.IsDefaultForUser = v
+}
+
 // GetAssignedRoles returns the AssignedRoles field value
 func (o *OrganizationUser) GetAssignedRoles() []OrganizationRole {
 	if o == nil {
@@ -275,6 +302,7 @@ func (o OrganizationUser) ToMap() (map[string]interface{}, error) {
 	toSerialize["name"] = o.Name
 	toSerialize["email"] = o.Email
 	toSerialize["role"] = o.Role
+	toSerialize["isDefaultForUser"] = o.IsDefaultForUser
 	toSerialize["assignedRoles"] = o.AssignedRoles
 	toSerialize["createdAt"] = o.CreatedAt
 	toSerialize["updatedAt"] = o.UpdatedAt
@@ -296,6 +324,7 @@ func (o *OrganizationUser) UnmarshalJSON(data []byte) (err error) {
 		"name",
 		"email",
 		"role",
+		"isDefaultForUser",
 		"assignedRoles",
 		"createdAt",
 		"updatedAt",
@@ -333,6 +362,7 @@ func (o *OrganizationUser) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "name")
 		delete(additionalProperties, "email")
 		delete(additionalProperties, "role")
+		delete(additionalProperties, "isDefaultForUser")
 		delete(additionalProperties, "assignedRoles")
 		delete(additionalProperties, "createdAt")
 		delete(additionalProperties, "updatedAt")

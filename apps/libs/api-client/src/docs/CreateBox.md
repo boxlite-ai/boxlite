@@ -6,7 +6,6 @@
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **name** | **string** | The name of the box. If not provided, the box ID will be used as the name | [optional] [default to undefined]
-**snapshot** | **string** | The ID or name of the snapshot used for the box | [optional] [default to undefined]
 **user** | **string** | The user associated with the project | [optional] [default to undefined]
 **env** | **{ [key: string]: string; }** | Environment variables for the box | [optional] [default to undefined]
 **labels** | **{ [key: string]: string; }** | Labels for the box | [optional] [default to undefined]
@@ -20,10 +19,8 @@ Name | Type | Description | Notes
 **memory** | **number** | Memory allocated to the box in GB | [optional] [default to undefined]
 **disk** | **number** | Disk space allocated to the box in GB | [optional] [default to undefined]
 **autoStopInterval** | **number** | Auto-stop interval in minutes (0 means disabled) | [optional] [default to undefined]
-**autoArchiveInterval** | **number** | Auto-archive interval in minutes (0 means the maximum interval will be used) | [optional] [default to undefined]
 **autoDeleteInterval** | **number** | Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping) | [optional] [default to undefined]
 **volumes** | [**Array&lt;BoxVolume&gt;**](BoxVolume.md) | Array of volumes to attach to the box | [optional] [default to undefined]
-**buildInfo** | [**CreateBuildInfo**](CreateBuildInfo.md) | Build information for the box | [optional] [default to undefined]
 
 ## Example
 
@@ -32,7 +29,6 @@ import { CreateBox } from './api';
 
 const instance: CreateBox = {
     name,
-    snapshot,
     user,
     env,
     labels,
@@ -46,10 +42,8 @@ const instance: CreateBox = {
     memory,
     disk,
     autoStopInterval,
-    autoArchiveInterval,
     autoDeleteInterval,
     volumes,
-    buildInfo,
 };
 ```
 

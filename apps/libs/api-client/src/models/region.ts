@@ -50,10 +50,6 @@ export interface Region {
      * SSH Gateway URL for the region
      */
     'sshGatewayUrl'?: string | null;
-    /**
-     * Snapshot Manager URL for the region
-     */
-    'snapshotManagerUrl'?: string | null;
 }
 
 
