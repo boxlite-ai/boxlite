@@ -285,8 +285,8 @@ impl ExecProtocol {
                     // cut, doubling visible columns and desyncing TUI cursor
                     // math (see https://github.com/.../issues/...). Holding
                     // the trailing partial across chunks fixes this.
-                    let mut stdout_decoder = Utf8StreamDecoder::default();
-                    let mut stderr_decoder = Utf8StreamDecoder::default();
+                    let mut stdout = DecodedStream::new(stdout_tx);
+                    let mut stderr = DecodedStream::new(stderr_tx);
 
                     loop {
                         // Use select! to handle cancellation while streaming
@@ -298,12 +298,8 @@ impl ExecProtocol {
                                     message_count,
                                     "Attach stream cancelled during shutdown"
                                 );
-                                Self::flush_decoders(
-                                    &stdout_tx,
-                                    &stderr_tx,
-                                    &mut stdout_decoder,
-                                    &mut stderr_decoder,
-                                );
+                                stdout.flush();
+                                stderr.flush();
                                 break;
                             }
                             msg = stream.message() => msg,
@@ -312,13 +308,7 @@ impl ExecProtocol {
                         match output.transpose() {
                             Some(Ok(output)) => {
                                 message_count += 1;
-                                Self::route_output(
-                                    output,
-                                    &stdout_tx,
-                                    &stderr_tx,
-                                    &mut stdout_decoder,
-                                    &mut stderr_decoder,
-                                );
+                                Self::route_output(output, &mut stdout, &mut stderr);
                             }
                             Some(Err(e)) => {
                                 tracing::debug!(
@@ -331,13 +321,9 @@ impl ExecProtocol {
                                 // the held-over partial bytes (as U+FFFD)
                                 // arrive in correct order ahead of the
                                 // synthesized "Attach stream error: …" line.
-                                Self::flush_decoders(
-                                    &stdout_tx,
-                                    &stderr_tx,
-                                    &mut stdout_decoder,
-                                    &mut stderr_decoder,
-                                );
-                                let _ = stderr_tx.send(format!("Attach stream error: {}", e));
+                                stdout.flush();
+                                stderr.flush();
+                                let _ = stderr.tx.send(format!("Attach stream error: {}", e));
                                 break;
                             }
                             None => {
@@ -345,12 +331,8 @@ impl ExecProtocol {
                                 // bytes still in the decoders as U+FFFD,
                                 // matching `from_utf8_lossy` semantics for
                                 // a truncated input at EOF.
-                                Self::flush_decoders(
-                                    &stdout_tx,
-                                    &stderr_tx,
-                                    &mut stdout_decoder,
-                                    &mut stderr_decoder,
-                                );
+                                stdout.flush();
+                                stderr.flush();
                                 break;
                             }
                         }
@@ -370,49 +352,17 @@ impl ExecProtocol {
         });
     }
 
-    fn route_output(
-        output: ExecOutput,
-        stdout_tx: &mpsc::UnboundedSender<String>,
-        stderr_tx: &mpsc::UnboundedSender<String>,
-        stdout_decoder: &mut Utf8StreamDecoder,
-        stderr_decoder: &mut Utf8StreamDecoder,
-    ) {
+    fn route_output(output: ExecOutput, stdout: &mut DecodedStream, stderr: &mut DecodedStream) {
         match output.event {
             Some(exec_output::Event::Stdout(chunk)) => {
-                let stdout_data = stdout_decoder.decode(&chunk.data);
-                tracing::trace!(?stdout_data, "Received exec stdout");
-                if !stdout_data.is_empty() {
-                    let _ = stdout_tx.send(stdout_data);
-                }
+                tracing::trace!(len = chunk.data.len(), "Received exec stdout");
+                stdout.send_bytes(chunk.data);
             }
             Some(exec_output::Event::Stderr(chunk)) => {
-                let stderr_data = stderr_decoder.decode(&chunk.data);
-                tracing::trace!(?stderr_data, "Received exec stderr");
-                if !stderr_data.is_empty() {
-                    let _ = stderr_tx.send(stderr_data);
-                }
+                tracing::trace!(len = chunk.data.len(), "Received exec stderr");
+                stderr.send_bytes(chunk.data);
             }
             None => {}
-        }
-    }
-
-    /// Drain held-over partial UTF-8 bytes from both decoders before the
-    /// attach loop exits. Called from every loop-exit path (clean EOF,
-    /// transport error, shutdown cancellation) so trailing bytes never
-    /// silently disappear depending on how the stream terminated.
-    fn flush_decoders(
-        stdout_tx: &mpsc::UnboundedSender<String>,
-        stderr_tx: &mpsc::UnboundedSender<String>,
-        stdout_decoder: &mut Utf8StreamDecoder,
-        stderr_decoder: &mut Utf8StreamDecoder,
-    ) {
-        let stdout_tail = stdout_decoder.flush();
-        if !stdout_tail.is_empty() {
-            let _ = stdout_tx.send(stdout_tail);
-        }
-        let stderr_tail = stderr_decoder.flush();
-        if !stderr_tail.is_empty() {
-            let _ = stderr_tx.send(stderr_tail);
         }
     }
 
@@ -527,9 +477,11 @@ impl ExecProtocol {
 /// chunks bytes at arbitrary offsets (gRPC frames, network reads), a
 /// multi-byte codepoint can land split across two chunks and each side gets
 /// replaced with U+FFFD. This decoder holds back the trailing 1-3 bytes of
-/// an incomplete sequence and prepends them to the next chunk before
-/// decoding, so a single split codepoint emits as one character (or one
-/// U+FFFD for genuinely invalid bytes), not two.
+/// an incomplete sequence and splices them onto the next chunk, so a single
+/// split codepoint emits as one character (or one U+FFFD for genuinely
+/// invalid bytes), not two. The partial lives in a fixed 4-byte buffer — the
+/// same shape as the `utf-8` crate's `Incomplete` and vte's `partial_utf8` —
+/// so the decoder never heap-allocates for its own state.
 ///
 /// `flush()` returns U+FFFD for any bytes still held when the stream ends —
 /// matches `from_utf8_lossy` semantics for a truncated tail.
@@ -538,43 +490,110 @@ struct Utf8StreamDecoder {
     /// 1-3 trailing bytes from the previous chunk that form the start of an
     /// incomplete-but-valid multi-byte codepoint, held until the continuation
     /// bytes arrive. Definitively invalid bytes are emitted as U+FFFD
-    /// immediately rather than held, so this never accumulates garbage and is
-    /// bounded by the 4-byte max codepoint length.
-    holdover: Vec<u8>,
+    /// immediately rather than held, so this never accumulates garbage; a
+    /// codepoint is at most 4 bytes, so 4 slots always suffice.
+    partial: [u8; 4],
+    /// How many of `partial`'s leading bytes are currently held (0-3).
+    partial_len: u8,
 }
 
 impl Utf8StreamDecoder {
-    /// Decode `chunk`, prepending any held-over bytes from the previous call.
-    /// Returns the longest valid UTF-8 prefix as a String; bytes that form
-    /// the start of a possibly-incomplete codepoint at the end are held for
-    /// the next call.
-    fn decode(&mut self, chunk: &[u8]) -> String {
-        use std::borrow::Cow;
+    /// Decode `chunk`, splicing any held-over bytes from the previous call
+    /// onto its front. Returns the decoded text; bytes that form the start of
+    /// a possibly-incomplete codepoint at the end are held for the next call.
+    ///
+    /// Takes the chunk by value so the hot path — no held partial and the
+    /// whole chunk valid (clean boundaries, ASCII traffic) — can hand the
+    /// allocation straight to the returned `String` without copying.
+    fn decode(&mut self, chunk: Vec<u8>) -> String {
+        if self.partial_len == 0 {
+            return match String::from_utf8(chunk) {
+                Ok(text) => text,
+                Err(e) => {
+                    let bytes = e.into_bytes();
+                    let mut out = String::with_capacity(bytes.len());
+                    self.scan_into(&mut out, &bytes);
+                    out
+                }
+            };
+        }
 
-        // Fast path: with no held-over bytes (the common case — clean chunk
-        // boundaries), scan `chunk` in place. Only when a partial codepoint
-        // was held do we allocate to splice it onto the front of `chunk`.
-        let buf: Cow<[u8]> = if self.holdover.is_empty() {
-            Cow::Borrowed(chunk)
-        } else {
-            let mut joined = std::mem::take(&mut self.holdover);
-            joined.extend_from_slice(chunk);
-            Cow::Owned(joined)
-        };
+        let mut out = String::with_capacity(chunk.len() + self.partial.len());
+        let consumed = self.complete_partial(&mut out, &chunk);
+        self.scan_into(&mut out, &chunk[consumed..]);
+        out
+    }
 
-        // Walk the buffer, emitting valid runs and one U+FFFD per definitively
-        // invalid sequence, until only an incomplete-but-valid tail remains.
-        // Resuming *after* each error (rather than lossy-decoding the whole
-        // remainder in one shot) is what lets an invalid byte sit immediately
-        // before a codepoint that splits at the chunk boundary without
-        // flattening that still-incomplete codepoint into spurious U+FFFD.
-        let mut out = String::new();
-        let mut rest: &[u8] = &buf;
+    /// Resolve the held partial codepoint against the start of `input`,
+    /// returning how many `input` bytes were consumed. At most one codepoint
+    /// is completed here; everything past it goes back to the caller's bulk
+    /// scan. Mirrors the `utf-8` crate's `Incomplete::try_complete` / vte's
+    /// `advance_partial_utf8`.
+    fn complete_partial(&mut self, out: &mut String, input: &[u8]) -> usize {
+        let old = self.partial_len as usize;
+        let to_copy = input.len().min(self.partial.len() - old);
+        self.partial[old..old + to_copy].copy_from_slice(&input[..to_copy]);
+        let len = old + to_copy;
+
+        match std::str::from_utf8(&self.partial[..len]) {
+            // Whole buffer valid: the held codepoint completed (plus any
+            // chunk bytes that rode along in the copy).
+            Ok(text) => {
+                out.push_str(text);
+                self.partial_len = 0;
+                to_copy
+            }
+            Err(e) => {
+                let valid_up_to = e.valid_up_to();
+                if valid_up_to > 0 {
+                    // Completed mid-buffer; the bytes after it (whatever made
+                    // from_utf8 stop) are re-scanned by the caller, so count
+                    // only the chunk bytes inside the valid prefix.
+                    // SAFETY: bytes [0..valid_up_to] are valid UTF-8 by the
+                    // definition of `valid_up_to`.
+                    out.push_str(unsafe {
+                        std::str::from_utf8_unchecked(&self.partial[..valid_up_to])
+                    });
+                    self.partial_len = 0;
+                    valid_up_to - old
+                } else {
+                    match e.error_len() {
+                        // The held prefix turned out to be a dead end (e.g. a
+                        // lead byte whose continuation never came): one U+FFFD
+                        // covers the whole invalid sequence; the chunk byte
+                        // that disproved it is re-scanned by the caller.
+                        Some(bad) => {
+                            out.push('\u{FFFD}');
+                            self.partial_len = 0;
+                            bad - old
+                        }
+                        // Still a valid-but-incomplete prefix: keep waiting.
+                        // (`input` was shorter than the free space, so all of
+                        // it was absorbed.)
+                        None => {
+                            self.partial_len = len as u8;
+                            to_copy
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Walk `rest`, emitting valid runs and one U+FFFD per definitively
+    /// invalid sequence, until only an incomplete-but-valid tail remains.
+    /// Resuming *after* each error (rather than lossy-decoding the whole
+    /// remainder in one shot) is what lets an invalid byte sit immediately
+    /// before a codepoint that splits at the chunk boundary without
+    /// flattening that still-incomplete codepoint into spurious U+FFFD.
+    ///
+    /// Caller must have resolved any previous partial (`partial_len == 0`).
+    fn scan_into(&mut self, out: &mut String, mut rest: &[u8]) {
         loop {
             match std::str::from_utf8(rest) {
                 Ok(valid) => {
                     out.push_str(valid);
-                    break;
+                    return;
                 }
                 Err(e) => {
                     let valid_up_to = e.valid_up_to();
@@ -591,24 +610,60 @@ impl Utf8StreamDecoder {
                         // Slice ended mid-codepoint: hold the (<= 3 byte) tail
                         // for the next chunk.
                         None => {
-                            self.holdover.extend_from_slice(&rest[valid_up_to..]);
-                            break;
+                            let tail = &rest[valid_up_to..];
+                            self.partial[..tail.len()].copy_from_slice(tail);
+                            self.partial_len = tail.len() as u8;
+                            return;
                         }
                     }
                 }
             }
         }
-        out
     }
 
     /// Drain any held-over partial codepoint as U+FFFD. Call when the stream
-    /// ends so callers don't silently lose trailing invalid bytes.
+    /// ends so callers don't silently lose trailing invalid bytes. The held
+    /// bytes are always a single incomplete codepoint prefix, so this is
+    /// exactly one replacement char — same as `from_utf8_lossy` on the tail.
     fn flush(&mut self) -> String {
-        if self.holdover.is_empty() {
+        if self.partial_len == 0 {
             return String::new();
         }
-        let tail = std::mem::take(&mut self.holdover);
-        String::from_utf8_lossy(&tail).into_owned()
+        self.partial_len = 0;
+        "\u{FFFD}".to_string()
+    }
+}
+
+/// One output stream's channel sender paired with its UTF-8 decoder state,
+/// so the two can't drift apart across the attach loop's branches (the same
+/// co-location tungstenite uses in `StringCollector`).
+struct DecodedStream {
+    tx: mpsc::UnboundedSender<String>,
+    decoder: Utf8StreamDecoder,
+}
+
+impl DecodedStream {
+    fn new(tx: mpsc::UnboundedSender<String>) -> Self {
+        Self {
+            tx,
+            decoder: Utf8StreamDecoder::default(),
+        }
+    }
+
+    /// Decode a wire chunk and forward any completed text to the receiver.
+    fn send_bytes(&mut self, data: Vec<u8>) {
+        let text = self.decoder.decode(data);
+        if !text.is_empty() {
+            let _ = self.tx.send(text);
+        }
+    }
+
+    /// Drain a held partial codepoint as U+FFFD when the stream ends.
+    fn flush(&mut self) {
+        let tail = self.decoder.flush();
+        if !tail.is_empty() {
+            let _ = self.tx.send(tail);
+        }
     }
 }
 
@@ -881,8 +936,8 @@ mod tests {
     fn utf8_decoder_joins_3byte_split_across_chunks() {
         let mut d = Utf8StreamDecoder::default();
         // "─" is E2 94 80. Split into [E2] and [94 80].
-        let a = d.decode(&[0xE2]);
-        let b = d.decode(&[0x94, 0x80]);
+        let a = d.decode(vec![0xE2]);
+        let b = d.decode(vec![0x94, 0x80]);
         assert_eq!(a, "");
         assert_eq!(b, "─");
     }
@@ -895,8 +950,8 @@ mod tests {
         let bytes = "👋".as_bytes();
         for cut in 1..bytes.len() {
             let mut d = Utf8StreamDecoder::default();
-            let head = d.decode(&bytes[..cut]);
-            let tail = d.decode(&bytes[cut..]);
+            let head = d.decode(bytes[..cut].to_vec());
+            let tail = d.decode(bytes[cut..].to_vec());
             assert_eq!(
                 format!("{head}{tail}"),
                 "👋",
@@ -911,10 +966,10 @@ mod tests {
     fn utf8_decoder_joins_4byte_split_one_byte_per_chunk() {
         let mut d = Utf8StreamDecoder::default();
         let bytes = "👋".as_bytes();
-        let r1 = d.decode(&[bytes[0]]);
-        let r2 = d.decode(&[bytes[1]]);
-        let r3 = d.decode(&[bytes[2]]);
-        let r4 = d.decode(&[bytes[3]]);
+        let r1 = d.decode(vec![bytes[0]]);
+        let r2 = d.decode(vec![bytes[1]]);
+        let r3 = d.decode(vec![bytes[2]]);
+        let r4 = d.decode(vec![bytes[3]]);
         assert_eq!(r1, "");
         assert_eq!(r2, "");
         assert_eq!(r3, "");
@@ -927,8 +982,8 @@ mod tests {
     fn utf8_decoder_emits_ascii_prefix_and_holds_partial_tail() {
         let mut d = Utf8StreamDecoder::default();
         // "hi─" = 68 69 + E2 94 80; deliver [68 69 E2] then [94 80].
-        let r1 = d.decode(&[0x68, 0x69, 0xE2]);
-        let r2 = d.decode(&[0x94, 0x80]);
+        let r1 = d.decode(vec![0x68, 0x69, 0xE2]);
+        let r2 = d.decode(vec![0x94, 0x80]);
         assert_eq!(r1, "hi");
         assert_eq!(r2, "─");
     }
@@ -939,7 +994,7 @@ mod tests {
     fn utf8_decoder_emits_replacement_for_definitively_invalid_bytes() {
         let mut d = Utf8StreamDecoder::default();
         // 0xFF is never valid in UTF-8.
-        let out = d.decode(&[b'a', 0xFF, b'b']);
+        let out = d.decode(vec![b'a', 0xFF, b'b']);
         assert_eq!(out, "a\u{FFFD}b");
     }
 
@@ -952,14 +1007,14 @@ mod tests {
     fn utf8_decoder_holds_split_codepoint_after_invalid_byte() {
         // 3-byte "─" (E2 94 80) preceded by a stray 0xFF, split at the cut.
         let mut d = Utf8StreamDecoder::default();
-        let a = d.decode(&[0xFF, 0xE2]);
-        let b = d.decode(&[0x94, 0x80]);
+        let a = d.decode(vec![0xFF, 0xE2]);
+        let b = d.decode(vec![0x94, 0x80]);
         assert_eq!(format!("{a}{b}"), "\u{FFFD}─");
 
         // 4-byte "👋" (F0 9F 91 8B) preceded by two stray 0xFF bytes.
         let mut d = Utf8StreamDecoder::default();
-        let a = d.decode(&[0xFF, 0xFF, 0xF0, 0x9F]);
-        let b = d.decode(&[0x91, 0x8B]);
+        let a = d.decode(vec![0xFF, 0xFF, 0xF0, 0x9F]);
+        let b = d.decode(vec![0x91, 0x8B]);
         assert_eq!(format!("{a}{b}"), "\u{FFFD}\u{FFFD}👋");
     }
 
@@ -969,7 +1024,7 @@ mod tests {
     fn utf8_decoder_flush_emits_replacement_for_truncated_tail() {
         let mut d = Utf8StreamDecoder::default();
         // Send only the first byte of "─" then "EOF".
-        let mid = d.decode(&[0xE2]);
+        let mid = d.decode(vec![0xE2]);
         let tail = d.flush();
         assert_eq!(mid, "");
         assert_eq!(tail, "\u{FFFD}");
@@ -982,9 +1037,52 @@ mod tests {
     #[test]
     fn utf8_decoder_passthrough_for_pure_ascii() {
         let mut d = Utf8StreamDecoder::default();
-        assert_eq!(d.decode(b"hello"), "hello");
-        assert_eq!(d.decode(b" world\n"), " world\n");
+        assert_eq!(d.decode(b"hello".to_vec()), "hello");
+        assert_eq!(d.decode(b" world\n".to_vec()), " world\n");
         assert_eq!(d.flush(), "");
+    }
+
+    /// A truncated surrogate prefix (ED A0) can never complete into a valid
+    /// char (UTF-8 excludes U+D800..U+DFFF), and std classifies it as
+    /// definitively invalid (`error_len() == Some`) rather than incomplete —
+    /// so it must be replaced immediately, never held. (CPython's stateful
+    /// decoder notably defers this exact case to the next chunk; we follow
+    /// std/WHATWG: ED and A0 are two separate maximal invalid sequences,
+    /// hence two U+FFFD.)
+    #[test]
+    fn utf8_decoder_replaces_truncated_surrogate_prefix_immediately() {
+        let mut d = Utf8StreamDecoder::default();
+        assert_eq!(d.decode(vec![0xED, 0xA0]), "\u{FFFD}\u{FFFD}");
+        // Nothing was held: the next chunk decodes independently.
+        assert_eq!(d.decode(b"ok".to_vec()), "ok");
+    }
+
+    /// The shape that bit E2B in production (their PR #505): a large read
+    /// whose final byte is the lead of a 3-byte char (0xE2 landing exactly
+    /// on the 8 KiB boundary), continuation arriving in the next chunk. The
+    /// valid prefix must emit immediately and the split char must reassemble.
+    #[test]
+    fn utf8_decoder_handles_large_chunk_ending_mid_codepoint() {
+        let mut chunk = vec![b'x'; 8191];
+        chunk.push(0xE2);
+        let mut d = Utf8StreamDecoder::default();
+        let head = d.decode(chunk);
+        assert_eq!(head.len(), 8191);
+        assert!(head.bytes().all(|b| b == b'x'));
+        assert_eq!(d.decode(vec![0x94, 0x80]), "─");
+    }
+
+    /// decode() takes the chunk by value so the hot path (no holdover, fully
+    /// valid bytes) hands the chunk's allocation straight to the returned
+    /// String. Pointer equality proves no copy happened.
+    #[test]
+    fn utf8_decoder_reuses_allocation_on_clean_chunks() {
+        let chunk = "clean utf-8 ─ line\n".as_bytes().to_vec();
+        let ptr = chunk.as_ptr();
+        let mut d = Utf8StreamDecoder::default();
+        let out = d.decode(chunk);
+        assert_eq!(out, "clean utf-8 ─ line\n");
+        assert_eq!(out.as_ptr(), ptr);
     }
 
     /// route_output uses the decoder; verify it doesn't double-emit U+FFFD
@@ -996,28 +1094,16 @@ mod tests {
 
         let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
         let (stderr_tx, mut stderr_rx) = mpsc::unbounded_channel::<String>();
-        let mut stdout_decoder = Utf8StreamDecoder::default();
-        let mut stderr_decoder = Utf8StreamDecoder::default();
+        let mut stdout = DecodedStream::new(stdout_tx);
+        let mut stderr = DecodedStream::new(stderr_tx);
 
         let mk_stdout = |bytes: Vec<u8>| ExecOutput {
             event: Some(exec_output::Event::Stdout(StdoutMsg { data: bytes })),
         };
 
         // "─" split into [E2] and [94 80] across two messages.
-        ExecProtocol::route_output(
-            mk_stdout(vec![0xE2]),
-            &stdout_tx,
-            &stderr_tx,
-            &mut stdout_decoder,
-            &mut stderr_decoder,
-        );
-        ExecProtocol::route_output(
-            mk_stdout(vec![0x94, 0x80]),
-            &stdout_tx,
-            &stderr_tx,
-            &mut stdout_decoder,
-            &mut stderr_decoder,
-        );
+        ExecProtocol::route_output(mk_stdout(vec![0xE2]), &mut stdout, &mut stderr);
+        ExecProtocol::route_output(mk_stdout(vec![0x94, 0x80]), &mut stdout, &mut stderr);
 
         // First message: holdover only, no emission.
         // Second message: complete "─" emitted.
@@ -1029,43 +1115,37 @@ mod tests {
         assert!(stderr_rx.try_recv().is_err());
     }
 
-    /// flush_decoders must drain held-over bytes from both decoders, leave
-    /// them in a valid drained state, and be idempotent. The attach loop
-    /// calls this helper from every exit path (clean EOF, transport error,
+    /// Flushing a DecodedStream must drain held-over bytes, leave the
+    /// decoder in a valid drained state, and be idempotent. The attach loop
+    /// flushes both streams on every exit path (clean EOF, transport error,
     /// shutdown cancellation) so trailing partial UTF-8 bytes are never
     /// silently dropped — keeping the helper correct keeps all three paths
     /// correct.
     #[test]
-    fn flush_decoders_drains_held_bytes_on_any_exit_path() {
+    fn decoded_stream_flush_drains_held_bytes_on_any_exit_path() {
         let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
         let (stderr_tx, mut stderr_rx) = mpsc::unbounded_channel::<String>();
-        let mut stdout_decoder = Utf8StreamDecoder::default();
-        let mut stderr_decoder = Utf8StreamDecoder::default();
+        let mut stdout = DecodedStream::new(stdout_tx);
+        let mut stderr = DecodedStream::new(stderr_tx);
 
-        // Seed each decoder with the first byte of a 3-byte codepoint so it
+        // Seed each stream with the first byte of a 3-byte codepoint so it
         // has held-over bytes that would be lost without an explicit flush.
-        assert_eq!(stdout_decoder.decode(&[0xE2]), "");
-        assert_eq!(stderr_decoder.decode(&[0xE2]), "");
+        stdout.send_bytes(vec![0xE2]);
+        stderr.send_bytes(vec![0xE2]);
+        assert!(stdout_rx.try_recv().is_err());
+        assert!(stderr_rx.try_recv().is_err());
 
-        ExecProtocol::flush_decoders(
-            &stdout_tx,
-            &stderr_tx,
-            &mut stdout_decoder,
-            &mut stderr_decoder,
-        );
+        stdout.flush();
+        stderr.flush();
 
         // Both channels must receive U+FFFD (matches from_utf8_lossy on a
-        // truncated tail). Without the fix, error/shutdown paths silently
+        // truncated tail). Without the flush, error/shutdown paths silently
         // dropped these bytes.
         assert_eq!(stdout_rx.try_recv().ok(), Some("\u{FFFD}".to_string()));
         assert_eq!(stderr_rx.try_recv().ok(), Some("\u{FFFD}".to_string()));
         // Idempotent: a second flush is a no-op (channels stay empty).
-        ExecProtocol::flush_decoders(
-            &stdout_tx,
-            &stderr_tx,
-            &mut stdout_decoder,
-            &mut stderr_decoder,
-        );
+        stdout.flush();
+        stderr.flush();
         assert!(stdout_rx.try_recv().is_err());
         assert!(stderr_rx.try_recv().is_err());
     }
