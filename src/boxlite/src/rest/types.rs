@@ -337,6 +337,8 @@ pub(crate) struct ExecRequest {
     pub timeout_seconds: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub working_dir: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
     #[serde(default)]
     pub tty: bool,
 }
@@ -355,6 +357,7 @@ impl ExecRequest {
             env,
             timeout_seconds,
             working_dir: cmd.working_dir.clone(),
+            user: cmd.user.clone(),
             tty: cmd.tty,
         }
     }

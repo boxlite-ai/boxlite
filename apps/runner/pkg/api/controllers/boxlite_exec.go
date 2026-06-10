@@ -19,7 +19,11 @@ type ExecRequest struct {
 	Env            map[string]string `json:"env"`
 	TimeoutSeconds *float64          `json:"timeout_seconds"`
 	WorkingDir     *string           `json:"working_dir"`
-	TTY            bool              `json:"tty"`
+	// User to run the command as (format: <name|uid>[:<group|gid>], same
+	// shape as `docker exec --user`). Optional; nil/empty inherits the
+	// container's default user from image config.
+	User *string `json:"user"`
+	TTY  bool   `json:"tty"`
 }
 
 type ExecResponse struct {
@@ -64,6 +68,9 @@ func BoxliteExec(ctx *gin.Context) {
 	}
 	if req.WorkingDir != nil {
 		startOpts.WorkingDir = *req.WorkingDir
+	}
+	if req.User != nil {
+		startOpts.User = *req.User
 	}
 	if req.TimeoutSeconds != nil {
 		// The Rust C-FFI treats `timeout_secs <= 0` as unbounded (see

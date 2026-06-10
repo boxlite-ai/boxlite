@@ -26,6 +26,13 @@ export class ExecRequestDto {
   @IsString()
   working_dir?: string
 
+  // User to run the command as (format: <name|uid>[:<group|gid>], same as
+  // `docker exec --user`). Forwarded to the runner unchanged; the runner
+  // resolves user/group against the guest's /etc/passwd before exec.
+  @IsOptional()
+  @IsString()
+  user?: string
+
   @IsOptional()
   @IsBoolean()
   tty?: boolean

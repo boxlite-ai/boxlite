@@ -341,8 +341,12 @@ type StartOptions struct {
 	Args       []string
 	Env        map[string]string
 	WorkingDir string
-	Timeout    time.Duration
-	TTY        bool
+	// User is the per-exec uid/gid override forwarded to the guest
+	// (format: <name|uid>[:<group|gid>], same as `docker exec --user`).
+	// Empty inherits the container's default user.
+	User    string
+	Timeout time.Duration
+	TTY     bool
 }
 
 func (m *ExecManager) Start(ctx context.Context, bx *boxlite.Box, boxID string, opts StartOptions) (string, error) {
@@ -375,6 +379,7 @@ func (m *ExecManager) Start(ctx context.Context, bx *boxlite.Box, boxID string, 
 		Stderr:     exec.stderrBus,
 		Env:        opts.Env,
 		WorkingDir: opts.WorkingDir,
+		User:       opts.User,
 		Timeout:    opts.Timeout,
 	})
 	if err != nil {

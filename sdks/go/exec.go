@@ -65,6 +65,12 @@ type ExecutionOptions struct {
 	// WorkingDir is the directory the process starts in. Empty inherits
 	// the container default.
 	WorkingDir string
+	// User overrides the uid/gid this execution runs as
+	// (format: <name|uid>[:<group|gid>], same as `docker exec --user`).
+	// Empty inherits the container's default user (image's USER directive
+	// or root). The C side parses this string against the guest's
+	// /etc/passwd before the exec syscall.
+	User string
 	// Timeout bounds the wall-clock lifetime of the execution. Zero
 	// means no timeout (the C side treats `timeout_secs <= 0` as
 	// unbounded — see `sdks/c/src/exec/command.rs`).
@@ -217,6 +223,12 @@ func (b *Box) StartExecution(_ context.Context, name string, args []string, opts
 		defer C.free(unsafe.Pointer(cWorkdir))
 	}
 
+	var cUser *C.char
+	if cfg.User != "" {
+		cUser = toCString(cfg.User)
+		defer C.free(unsafe.Pointer(cUser))
+	}
+
 	cCommand := C.BoxliteCommand{
 		command:      cCmd,
 		args:         cArgs,
@@ -224,7 +236,7 @@ func (b *Box) StartExecution(_ context.Context, name string, args []string, opts
 		env_pairs:    envPairs,
 		env_count:    C.int(envCount),
 		workdir:      cWorkdir,
-		user:         nil,
+		user:         cUser,
 		timeout_secs: C.double(cfg.Timeout.Seconds()),
 		tty:          boolToCInt(cfg.TTY),
 	}
