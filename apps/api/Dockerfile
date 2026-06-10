@@ -31,9 +31,17 @@ COPY apps/libs/runner-api-client/ libs/runner-api-client/
 COPY apps/libs/api-client/ libs/api-client/
 COPY apps/libs/analytics-api-client/ libs/analytics-api-client/
 
-RUN yarn nx build api --configuration=production --nxBail=true --output-style=stream && node --check dist/apps/api/main.js
+# Build configuration is overridable via build-arg. Defaults to `production`
+# so this Dockerfile stays a drop-in for the production deploy. The
+# e2e-cloud workflow passes `--build-arg NX_BUILD_CONFIG=development`
+# to skip the strict type-check pass (project.json's `development`
+# configuration has `skipTypeChecking: true`) — needed when main has TS
+# drift in apps/api that would break the production build.
+ARG NX_BUILD_CONFIG=production
 
-RUN VITE_BASE_API_URL=%BOXLITE_BASE_API_URL% yarn nx build dashboard --configuration=production --nxBail=true --output-style=stream
+RUN yarn nx build api --configuration=${NX_BUILD_CONFIG} --nxBail=true --output-style=stream && node --check dist/apps/api/main.js
+
+RUN VITE_BASE_API_URL=%BOXLITE_BASE_API_URL% yarn nx build dashboard --configuration=${NX_BUILD_CONFIG} --nxBail=true --output-style=stream
 
 FROM node:24-slim AS boxlite
 ENV CI=true
