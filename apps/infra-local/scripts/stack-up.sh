@@ -112,12 +112,25 @@ start_api() {
   #   - RUNNER_DISK_PENALTY_THRESHOLD=95        (prod default 75)
   # Set BEFORE sourcing apps/.env so anything explicitly set there still
   # wins (set -a + . ./.env exports .env values).
+  #
+  # The two buildTargetOptions keep apps/api/webpack.config.js unmodified:
+  #   - generatePackageJson=false: @nx/webpack's GeneratePackageJsonPlugin
+  #     crashes in this workspace (yarn4 + gitignored lockfile leaves npm
+  #     deps out of the project graph: "Cannot read properties of undefined
+  #     (reading 'data')").
+  #   - skipTypeChecking=true: ForkTsCheckerWebpackPlugin fails on a
+  #     pre-existing type-only @opentelemetry/otlp-exporter-base version
+  #     skew (the exporters work at runtime).
+  # Local serve invocation only — CI/prod builds keep both plugins.
   ( cd "${APPS_DIR}" && \
     export RUNNER_AVAILABILITY_SCORE_THRESHOLD=5 \
            RUNNER_MEMORY_PENALTY_THRESHOLD=95 \
            RUNNER_DISK_PENALTY_THRESHOLD=95 && \
     set -a && . ./.env && set +a && \
-    nohup corepack yarn nx serve api > "$(log_file api)" 2>&1 & \
+    nohup corepack yarn nx serve api \
+      --buildTargetOptions.generatePackageJson=false \
+      --buildTargetOptions.skipTypeChecking=true \
+      > "$(log_file api)" 2>&1 & \
     echo $! > "$(pid_file api)" )
   if wait_http "http://localhost:${PORT_API}/api/health" 180; then
     ok "api up on :${PORT_API}"

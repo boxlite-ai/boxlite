@@ -119,7 +119,7 @@ the **Terminal** tab → **Connect** → you should see `root@boxlite:~#`.
 | Change | How to handle it |
 |---|---|
 | Edit `*.entity.ts` (DB schema) | Write a migration at `apps/api/src/migrations/<ts>-name-migration.ts`; the restart runs it automatically |
-| Edit `.env` | Ctrl-C + re-run `set -a; source .env; set +a; corepack yarn nx serve api` |
+| Edit `.env` | Ctrl-C + re-run via `make stack-restart COMPONENTS=api` (or copy the full `nx serve api --buildTargetOptions.*` invocation from `scripts/stack-up.sh`) |
 | Edit OpenAPI (controller `@Api*` decorators) | `yarn nx run api:openapi` regenerates `dist/apps/api/openapi.json` → SDK client regenerates → restart dashboard |
 
 ## 4. Runner development loop
