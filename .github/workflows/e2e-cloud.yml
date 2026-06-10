@@ -385,6 +385,15 @@ jobs:
       # string). Required so tests exercise the code under review.
       # ──────────────────────────────────────────────────────────────────
       - name: Build & install Python SDK from this checkout
+        # BOXLITE_DEPS_STUB=1 skips the vendor-submodule builds
+        # (bubblewrap, libkrun, e2fsprogs) — those are needed only by the
+        # runner inside the EC2 host, not by the Python SDK / pytest
+        # client. The repo's src/deps/*-sys build.rs files all honor
+        # this env var and emit a no-op `/nonexistent` linker hint.
+        # Avoids needing `git submodule update --init --recursive` +
+        # meson/ninja in the GHA runner image.
+        env:
+          BOXLITE_DEPS_STUB: "1"
         run: |
           set -euo pipefail
           cd sdks/python
