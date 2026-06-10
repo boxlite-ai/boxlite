@@ -146,18 +146,6 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		boxController.Any("/:boxId/toolbox/*path", controllers.ProxyRequest(boxControllerLogger))
 	}
 
-	artifactControllerLogger := a.logger.With(slog.String("component", "artifact_controller"))
-	artifactController := protected.Group("/artifacts")
-	{
-		artifactController.POST("/pull", controllers.PullArtifact(ctx, artifactControllerLogger))
-		artifactController.POST("/tag", controllers.TagImage)
-		artifactController.GET("/exists", controllers.ArtifactExists)
-		artifactController.GET("/info", controllers.GetArtifactInfo)
-		artifactController.POST("/remove", controllers.RemoveArtifact(artifactControllerLogger))
-		artifactController.GET("/logs", controllers.GetBuildLogs(artifactControllerLogger))
-		artifactController.POST("/inspect", controllers.InspectArtifactInRegistry)
-	}
-
 	// BoxLite REST API — exec, files, metrics
 	boxliteApi := protected.Group("/v1/boxes")
 	{

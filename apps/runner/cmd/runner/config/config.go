@@ -60,7 +60,6 @@ type Config struct {
 	BuildMemoryGB                      int64         `envconfig:"BUILD_MEMORY_GB" default:"8" validate:"min=1"`
 	ApiVersion                         int           `envconfig:"API_VERSION" default:"2"`
 	InitializeDaemonTelemetry          bool          `envconfig:"INITIALIZE_DAEMON_TELEMETRY" default:"true"`
-	ArtifactErrorCacheRetention        time.Duration `envconfig:"ARTIFACT_ERROR_CACHE_RETENTION" default:"10m" validate:"min=5m"`
 	BuildEngine                        string        `envconfig:"BUILD_ENGINE" default:"buildkit" validate:"oneof=buildkit legacy"`
 	BoxliteHomeDir                     string        `envconfig:"BOXLITE_HOME_DIR"`
 	InsecureRegistries                 string        `envconfig:"INSECURE_REGISTRIES"`

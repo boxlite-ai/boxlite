@@ -163,12 +163,11 @@ func run() int {
 	metricsCollector.Start(ctx)
 
 	_, err = runner.GetInstance(&runner.RunnerInstanceConfig{
-		Logger:             logger,
-		BackupInfoCache:    backupInfoCache,
-		ArtifactErrorCache: cache.NewArtifactErrorCache(ctx, cfg.ArtifactErrorCacheRetention),
-		Boxlite:            boxliteClient,
-		BoxService:         boxService,
-		MetricsCollector:   metricsCollector,
+		Logger:           logger,
+		BackupInfoCache:  backupInfoCache,
+		Boxlite:          boxliteClient,
+		BoxService:       boxService,
+		MetricsCollector: metricsCollector,
 	})
 	if err != nil {
 		logger.Error("Failed to initialize runner instance", "error", err)

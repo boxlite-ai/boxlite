@@ -116,22 +116,6 @@ func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.Re
 	return err
 }
 
-// GetImageInfo returns metadata about a cached image.
-func (c *Client) GetImageInfo(ctx context.Context, imageName string) (*ImageInfo, error) {
-	img, err := c.GetImageInfoFromCache(ctx, imageName)
-	if err != nil {
-		return nil, err
-	}
-	var sizeGB float64
-	if img.SizeBytes != nil {
-		sizeGB = float64(*img.SizeBytes) / (1024 * 1024 * 1024)
-	}
-	return &ImageInfo{
-		Size: int64(sizeGB * 1024 * 1024 * 1024),
-		Hash: img.ID,
-	}, nil
-}
-
 // UpdateNetworkSettings updates the network allowlist/blocklist for a box.
 // TODO: Implement when BoxLite Go SDK exposes network configuration.
 func (c *Client) UpdateNetworkSettings(ctx context.Context, boxId string, settings dto.UpdateNetworkSettingsDTO) error {
@@ -139,33 +123,7 @@ func (c *Client) UpdateNetworkSettings(ctx context.Context, boxId string, settin
 	return errdefs.ErrNotImplemented.WithMessage("live network settings update is not supported by the BoxLite Go SDK")
 }
 
-// TagImage tags a local image with a new name.
-func (c *Client) TagImage(ctx context.Context, sourceImage string, targetImage string) error {
-	c.logger.Warn("tag image not yet implemented in BoxLite", "source", sourceImage, "target", targetImage)
-	return errdefs.ErrNotImplemented.WithMessage("image tagging is not supported by the BoxLite Go SDK")
-}
-
-// PushImage pushes a local image to a remote registry.
-func (c *Client) PushImage(ctx context.Context, imageName string, reg *dto.RegistryDTO) error {
-	c.logger.Warn("push image not yet implemented in BoxLite", "image", imageName)
-	return errdefs.ErrNotImplemented.WithMessage("image push is not supported by the BoxLite Go SDK")
-}
-
 // GetDaemonVersion returns the version of the in-box daemon.
 func (c *Client) GetDaemonVersion(ctx context.Context, boxId string) (string, error) {
 	return "boxlite", nil
-}
-
-// ImageInfo holds metadata about an image.
-type ImageInfo struct {
-	Size       int64
-	Entrypoint []string
-	Cmd        []string
-	Hash       string
-}
-
-// ImageDigest holds a registry image's digest.
-type ImageDigest struct {
-	Digest string
-	Size   int64
 }

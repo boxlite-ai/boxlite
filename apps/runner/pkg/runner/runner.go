@@ -18,21 +18,19 @@ import (
 )
 
 type RunnerInstanceConfig struct {
-	Logger             *slog.Logger
-	BackupInfoCache    *cache.BackupInfoCache
-	ArtifactErrorCache *cache.ArtifactErrorCache
-	Boxlite            *blclient.Client
-	MetricsCollector   *metrics.Collector
-	BoxService         *services.BoxService
+	Logger           *slog.Logger
+	BackupInfoCache  *cache.BackupInfoCache
+	Boxlite          *blclient.Client
+	MetricsCollector *metrics.Collector
+	BoxService       *services.BoxService
 }
 
 type Runner struct {
-	Logger             *slog.Logger
-	BackupInfoCache    *cache.BackupInfoCache
-	ArtifactErrorCache *cache.ArtifactErrorCache
-	Boxlite            *blclient.Client
-	MetricsCollector   *metrics.Collector
-	BoxService         *services.BoxService
+	Logger           *slog.Logger
+	BackupInfoCache  *cache.BackupInfoCache
+	Boxlite          *blclient.Client
+	MetricsCollector *metrics.Collector
+	BoxService       *services.BoxService
 }
 
 var runner *Runner
@@ -53,12 +51,11 @@ func GetInstance(config *RunnerInstanceConfig) (*Runner, error) {
 		}
 
 		runner = &Runner{
-			Logger:             logger.With(slog.String("component", "runner")),
-			BackupInfoCache:    config.BackupInfoCache,
-			ArtifactErrorCache: config.ArtifactErrorCache,
-			Boxlite:            config.Boxlite,
-			BoxService:         config.BoxService,
-			MetricsCollector:   config.MetricsCollector,
+			Logger:           logger.With(slog.String("component", "runner")),
+			BackupInfoCache:  config.BackupInfoCache,
+			Boxlite:          config.Boxlite,
+			BoxService:       config.BoxService,
+			MetricsCollector: config.MetricsCollector,
 		}
 	}
 

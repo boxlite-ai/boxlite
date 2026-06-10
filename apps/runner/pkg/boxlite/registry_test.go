@@ -3,11 +3,7 @@
 
 package boxlite
 
-import (
-	"testing"
-
-	"github.com/boxlite-ai/runner/pkg/api/dto"
-)
+import "testing"
 
 func TestNormalizeRegistryHosts(t *testing.T) {
 	hosts := normalizeRegistryHosts([]string{
@@ -25,66 +21,5 @@ func TestNormalizeRegistryHosts(t *testing.T) {
 		if hosts[i] != want[i] {
 			t.Fatalf("host %d: expected %q, got %q", i, want[i], hosts[i])
 		}
-	}
-}
-
-func TestParseReferenceUsesConfiguredInsecureRegistry(t *testing.T) {
-	client := &Client{
-		insecureRegistries: normalizeRegistryHosts([]string{"registry.local:5000"}),
-	}
-
-	ref, err := client.parseReference("registry.local:5000/project/image:tag", &dto.RegistryDTO{
-		Url: "registry.local:5000",
-	})
-	if err != nil {
-		t.Fatalf("parse reference: %v", err)
-	}
-
-	if got := ref.Context().Registry.Scheme(); got != "http" {
-		t.Fatalf("expected insecure registry scheme http, got %q", got)
-	}
-}
-
-func TestParseReferenceUsesHttpRegistryURLAsInsecure(t *testing.T) {
-	client := &Client{}
-
-	ref, err := client.parseReference("registry.local:5000/project/image:tag", &dto.RegistryDTO{
-		Url: "http://registry.local:5000",
-	})
-	if err != nil {
-		t.Fatalf("parse reference: %v", err)
-	}
-
-	if got := ref.Context().Registry.Scheme(); got != "http" {
-		t.Fatalf("expected http registry URL to force scheme http, got %q", got)
-	}
-}
-
-func TestSanitizeImageReferenceStripsScheme(t *testing.T) {
-	got := sanitizeImageReference("https://registry.local:5000/project/image:tag")
-	want := "registry.local:5000/project/image:tag"
-
-	if got != want {
-		t.Fatalf("expected %q, got %q", want, got)
-	}
-}
-
-func TestLinuxArchitectureForGoarch(t *testing.T) {
-	tests := []struct {
-		name   string
-		goarch string
-		want   string
-	}{
-		{name: "apple silicon runner uses arm64 image manifests", goarch: "arm64", want: "arm64"},
-		{name: "x86 runner uses amd64 image manifests", goarch: "amd64", want: "amd64"},
-		{name: "unknown goarch passes through", goarch: "riscv64", want: "riscv64"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := linuxArchitectureForGoarch(tt.goarch); got != tt.want {
-				t.Fatalf("linuxArchitectureForGoarch(%q) = %q, want %q", tt.goarch, got, tt.want)
-			}
-		})
 	}
 }
