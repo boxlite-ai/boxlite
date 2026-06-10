@@ -114,6 +114,33 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     }
   }
 
+  async createBox(box: Box, artifactRef: string): Promise<void> {
+    // Hand-built payload: keys MUST match the Go dto.CreateBoxDTO json tags
+    // (apps/runner/pkg/api/dto/box.go). The image ref is passed as `artifactRef` —
+    // the runner uses it directly in runtime.Create (NOT `snapshot`).
+    const payload = {
+      id: box.id,
+      boxId: box.boxId,
+      userId: box.organizationId,
+      artifactRef,
+      osUser: box.osUser,
+      cpuQuota: box.cpu,
+      gpuQuota: box.gpu,
+      memoryQuota: box.mem,
+      storageQuota: box.disk,
+      env: box.env,
+      networkBlockAll: box.networkBlockAll,
+      networkAllowList: box.networkAllowList,
+      authToken: box.authToken,
+      organizationId: box.organizationId,
+      regionId: box.region,
+    }
+
+    await this.jobService.createJob(null, JobType.CREATE_BOX, this.runner.id, ResourceType.BOX, box.id, payload)
+
+    this.logger.debug(`Created CREATE_BOX job for box ${box.id} on runner ${this.runner.id}`)
+  }
+
   async startBox(
     boxId: string,
     authToken: string,

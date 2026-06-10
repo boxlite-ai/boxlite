@@ -18,6 +18,7 @@ import { BoxError } from '../../exceptions/box-error.exception'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
+import { BOX_IMAGE_REF_LABEL, resolveCuratedImageRef } from '../constants/curated-images.constant'
 import { BoxWarmPoolService } from './box-warm-pool.service'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
 import { WarmPoolEvents } from '../constants/warmpool-events.constants'
@@ -150,13 +151,17 @@ export class BoxService {
     try {
       const boxClass = this.getValidatedOrDefaultClass(createBoxDto.class)
 
-      // TODO(image-rewrite): box_template lookup + artifact resolution removed; boxes can no
-      // longer resolve an image at create time. Resource sizing falls back to request values
-      // (or Box entity defaults). Rebuild image/template resolution here.
+      // TODO(image-rewrite): box_template-based resource sizing removed; sizing falls back to
+      // request values (or Box entity defaults). Image resolution itself is handled below via
+      // the curated-image allowlist.
       const cpu = createBoxDto.cpu ?? DEFAULT_BOX_CPU
       const mem = createBoxDto.memory ?? DEFAULT_BOX_MEM
       const disk = createBoxDto.disk ?? DEFAULT_BOX_DISK
       const gpu = createBoxDto.gpu ?? DEFAULT_BOX_GPU
+
+      // Resolve the curated image key (default 'base') to its pinned OCI ref. Rejects any
+      // key outside the curated allowlist at the request boundary.
+      const artifactRef = resolveCuratedImageRef(createBoxDto.image)
 
       this.organizationService.assertOrganizationIsNotSuspended(organization)
 
@@ -180,7 +185,9 @@ export class BoxService {
       //  TODO: default user should be configurable
       box.osUser = createBoxDto.user || 'boxlite'
       box.env = createBoxDto.env || {}
-      box.labels = createBoxDto.labels || {}
+      // Stash the resolved OCI ref under a reserved label so the start action can pass it
+      // to the runner as artifactRef. Merge into user labels; don't clobber them.
+      box.labels = { ...(createBoxDto.labels || {}), [BOX_IMAGE_REF_LABEL]: artifactRef }
 
       box.cpu = cpu
       box.gpu = gpu

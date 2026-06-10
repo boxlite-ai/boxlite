@@ -27,6 +27,7 @@ export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
 export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): CreateBoxDto {
   const createDto = new CreateBoxDto()
   createDto.name = dto.name
+  createDto.image = dto.image
   createDto.user = dto.user
   createDto.env = dto.env
   createDto.cpu = dto.cpus
