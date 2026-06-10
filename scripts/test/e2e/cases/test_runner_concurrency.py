@@ -2,7 +2,7 @@
 
 Local-FFI tests can't exercise these — they run in a single Python process
 against an in-process Boxlite. The runner is a separate Go daemon that
-shares state (exec_manager.execs map, sandbox_sync.go reconcile loop,
+shares state (exec_manager.execs map, box_sync.go reconcile loop,
 attach session tracking) across all REST clients; bugs here only surface
 when two REST clients hit it at the same instant.
 """
@@ -68,7 +68,7 @@ async def test_two_concurrent_execs_on_same_box(rt, image):
 @pytest.mark.asyncio
 async def test_parallel_box_creates(rt, image):
     """Three boxes created in parallel must all reach Running with unique
-    IDs. Failure mode: ID generation collision, or sandbox_sync reconcile
+    IDs. Failure mode: ID generation collision, or box_sync reconcile
     races corrupting two parallel creates."""
     N = 3
 
@@ -96,10 +96,10 @@ async def test_parallel_box_creates(rt, image):
         "Production bug: POST /v1/{prefix}/boxes/{id}/exec on a removed box "
         "leaks HTTP 500 instead of 404. The API's box lookup ("
         "apps/api/src/boxlite-rest/boxlite-proxy.controller.ts) succeeds against "
-        "the sandbox table (the row is soft-deleted not purged), then the "
+        "the box table (the row is soft-deleted not purged), then the "
         "request reaches the runner which tries to spawn against a freed "
         "Boxlite handle and errors with 'spawn_failed: build failed'. Fix: "
-        "either reject at API by checking sandbox.state == DESTROYED, or "
+        "either reject at API by checking box.state == DESTROYED, or "
         "ensure the runner translates spawn-after-destroy into ErrNotFound."
     ),
 )

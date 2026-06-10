@@ -7,7 +7,7 @@ The check is two-part:
       inspecting the runtime's BoxliteRestOptions before any work runs.
 
   (2) After one round-trip exec, the runner journal contains the box id.
-      Runner journal entries (`CREATE_SANDBOX` / `created box id=…
+      Runner journal entries (`CREATE_BOX` / `created box id=…
       name=<uuid>`) only ever appear when the API queued the job, which
       only happens when the SDK POSTed to the API on :3000. So a single
       runner-journal hit is sufficient evidence for the whole chain.

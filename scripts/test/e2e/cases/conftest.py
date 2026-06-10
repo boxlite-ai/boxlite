@@ -112,7 +112,7 @@ async def verify_runner_saw_all_boxes(rt):
     yield
 
     # Give the runner a brief window to flush its log buffer. The
-    # CREATE_SANDBOX journal entry is written as the job completes —
+    # CREATE_BOX journal entry is written as the job completes —
     # if we check immediately we can race the journald write.
     created = list(rt._created)
     if not created:

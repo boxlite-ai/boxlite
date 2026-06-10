@@ -1,10 +1,14 @@
 name: API client drift
 
 # Regenerates the OpenAPI spec and the generated product clients
-# (apps/libs/api-client, apps/api-client-go, apps/libs/analytics-api-client)
-# and fails if the committed clients differ — the committed clients must
-# always match their specs (apps/api source for the product clients,
-# apps/libs/analytics-api-client/swagger.json for the analytics client).
+# (apps/libs/api-client, apps/api-client-go, apps/libs/analytics-api-client,
+# apps/libs/toolbox-api-client) and fails if the committed clients differ —
+# the committed clients must always match their specs (apps/api source for
+# the product clients, apps/libs/analytics-api-client/swagger.json for the
+# analytics client, apps/daemon/pkg/toolbox/docs/swagger.json for the
+# toolbox client). The toolbox regen uses --excludeTaskDependencies so the
+# committed daemon swagger is the contract (daemon Go source ↔ swagger
+# drift is not gated here; that regen needs the swag toolchain).
 # Ported from daytonaio/daytona's `format-lint-api-clients` PR check.
 
 on:
@@ -69,12 +73,13 @@ jobs:
           yarn nx run api-client:generate:api-client
           yarn nx run api-client-go:generate:api-client
           yarn nx run analytics-api-client:generate:api-client
+          yarn nx run toolbox-api-client:generate:api-client --excludeTaskDependencies
 
       - name: Fail on drift
         run: |
-          if [ -n "$(git status --porcelain -- libs/api-client api-client-go libs/analytics-api-client)" ]; then
-            git status --porcelain -- libs/api-client api-client-go libs/analytics-api-client
-            git diff -- libs/api-client api-client-go libs/analytics-api-client | head -200
-            echo "::error::Generated API clients are stale. Run 'yarn nx run api-client:generate:api-client && yarn nx run api-client-go:generate:api-client && yarn nx run analytics-api-client:generate:api-client' in apps/ and commit the result."
+          if [ -n "$(git status --porcelain -- libs/api-client api-client-go libs/analytics-api-client libs/toolbox-api-client)" ]; then
+            git status --porcelain -- libs/api-client api-client-go libs/analytics-api-client libs/toolbox-api-client
+            git diff -- libs/api-client api-client-go libs/analytics-api-client libs/toolbox-api-client | head -200
+            echo "::error::Generated API clients are stale. Run 'yarn nx run api-client:generate:api-client && yarn nx run api-client-go:generate:api-client && yarn nx run analytics-api-client:generate:api-client && yarn nx run toolbox-api-client:generate:api-client --excludeTaskDependencies' in apps/ and commit the result."
             exit 1
           fi

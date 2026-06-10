@@ -102,7 +102,7 @@ start_api() {
   # actually own. On a dev laptop sharing RAM with VS Code, Chrome, Docker
   # Desktop, and the L1 dev stack itself, those metrics easily push the
   # runner's availabilityScore below the prod-default threshold of 10,
-  # and the API rejects sandbox-create with "No available runners" — even
+  # and the API rejects box-create with "No available runners" — even
   # though the runner is actually idle. The overrides below relax the
   # penalty thresholds + lower the availability cutoff so a single-runner
   # dev box stays schedulable. Safe because there's only one runner here
@@ -213,7 +213,7 @@ start_dashboard() {
   # VITE_API_URL=/api tells the @boxlite-ai/sdk client to use the Vite dev
   # proxy (configured in vite.config.mts to forward /api → localhost:3001)
   # rather than the hard-coded prod default `https://app.boxlite.io/api`.
-  # Without this, dashboard SDK calls (e.g. create-sandbox) escape to prod
+  # Without this, dashboard SDK calls (e.g. create-box) escape to prod
   # and fail with ERR_CONNECTION_CLOSED.
   ( cd "${APPS_DIR}" && \
     VITE_API_URL=/api nohup corepack yarn nx serve dashboard \
@@ -241,8 +241,8 @@ done
 echo
 # If api + runner just started, ensure init data is in place + wait for
 # default snapshot. This is the chain dashboard needs to actually let a
-# user click "+ Create Sandbox" successfully. Without it, the page works
-# but the first sandbox-create call 400s ("Snapshot ubuntu:22.04 not
+# user click "Create Box" successfully. Without it, the page works
+# but the first box-create call 400s ("Snapshot ubuntu:22.04 not
 # found"). Idempotent — skips work that's done.
 case " ${COMPONENTS[*]} " in
   *" api "*|*" runner "*)

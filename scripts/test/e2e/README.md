@@ -66,7 +66,7 @@ This:
 
 - Registers `alpine:3.23` snapshot via the API admin endpoint
 - Waits for the snapshot to reach `active` state (runner pulls + pushes to local registry)
-- Sets reasonable per-sandbox quotas on the admin org
+- Sets reasonable per-box quotas on the admin org
 - Adds a `[profiles.p1]` entry in `~/.boxlite/credentials.toml` pointing at the local API
 
 ## Running

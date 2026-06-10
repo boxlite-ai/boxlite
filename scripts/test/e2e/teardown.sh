@@ -7,7 +7,7 @@
 # and probably used by other things on the host).
 #
 # With --wipe-data: ALSO drops the boxlite_dev database AND deletes
-# /var/lib/boxlite (sandbox state + qcow2 disks). Use this when you
+# /var/lib/boxlite (box state + qcow2 disks). Use this when you
 # want a clean reset for the next bootstrap.
 #
 # With --full: --wipe-data PLUS removes /etc/boxlite-secrets.env (the
@@ -76,7 +76,7 @@ case "$mode" in
     basic)
         echo "Postgres role/db, /var/lib/boxlite, and secrets file are KEPT."
         echo "Re-run scripts/test/e2e/bootstrap.sh to bring things back up."
-        echo "Use --wipe-data to also drop DB + sandbox state."
+        echo "Use --wipe-data to also drop DB + box state."
         ;;
     wipe)
         echo "DB and /var/lib/boxlite are GONE. Secrets file kept; next"

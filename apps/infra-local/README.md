@@ -14,11 +14,11 @@ single Apple Silicon Mac. It owns two layers:
   Dashboard (`:3000`). Driven by `make stack-*` wrapper scripts under
   [`scripts/`](scripts/).
 
-User sandboxes (L3) are spawned by the L2 Runner as libkrun microVMs
+User boxes (L3) are spawned by the L2 Runner as libkrun microVMs
 under `~/.boxlite-runner/`.
 
 Cold-start to
-working sandbox + browser terminal in ~80 s. Daily dev workflow
+working box + browser terminal in ~80 s. Daily dev workflow
 documented in the [Usage guide](#usage-guide) below.
 Known limitations: see [§Known limitations](#known-limitations).
 
@@ -121,7 +121,7 @@ After `make stack-up` you have 10 L1 daemon boxes + 1 one-shot bootstrap
 | otel HTTP     | `http://127.0.0.1:24318/v1/traces`                     | OTLP receiver → forwards traces to Jaeger |
 | otel gRPC     | `127.0.0.1:24317`                                      |                             |
 | otel health   | `http://127.0.0.1:23133/`                              |                             |
-| **caddy**     | `http://127.0.0.1:28080/`                              | reverse proxy to all of the above + sandbox port-preview |
+| **caddy**     | `http://127.0.0.1:28080/`                              | reverse proxy to all of the above + box port-preview |
 
 ### L2 — native application processes
 
@@ -129,7 +129,7 @@ After `make stack-up` you have 10 L1 daemon boxes + 1 one-shot bootstrap
 |---|---|---|
 | Dashboard (Vite) | `http://127.0.0.1:3000/`   | React + OIDC login flow                  |
 | API (NestJS)     | `http://127.0.0.1:3001/api`| Reads `apps/.env` (→ `apps/api/.env`, seeded on first `stack-up` from `configs/api.env`); auto-seeds admin org + default region |
-| Proxy (Go)       | `http://127.0.0.1:4000`    | Sandbox port-preview `<port>-<token>.localhost:28080` reverse-proxy target |
+| Proxy (Go)       | `http://127.0.0.1:4000`    | Box port-preview `<port>-<token>.localhost:28080` reverse-proxy target |
 | Runner (Go)      | `http://127.0.0.1:3003`    | Native arm64; spawns L3 microVMs in `~/.boxlite-runner/` |
 
 See [`CONNECTIONS.md`](CONNECTIONS.md) for full credentials, env vars,
@@ -451,7 +451,7 @@ preseeded accounts (see [`apps/infra-local/CONNECTIONS.md` §4](CONNECTIONS.md))
 - `admin@boxlite.dev` / `password` (admin user)
 - `test01@boxlite.dev` / `password` (normal user)
 
-Then click **+ Create Sandbox** → pick region `us` → **Create** → open
+Then click **Create Box** → pick region `us` → **Create** → open
 the **Terminal** tab → **Connect** → you should see `root@boxlite:~#`.
 
 ### 2. Day-to-day dashboard development loop
@@ -492,7 +492,7 @@ cd apps/runner && go build -o /tmp/boxlite-runner ./cmd/runner && cd -
 # Re-run it (use the cheatsheet in the status doc)
 ```
 
-Runner holds state in memory (box handles, heartbeat state, etc.) — restarting **briefly loses it**. The user's sandboxes are reclaimed ~10 s later by the API reconcile cron.
+Runner holds state in memory (box handles, heartbeat state, etc.) — restarting **briefly loses it**. The user's boxes are reclaimed ~10 s later by the API reconcile cron.
 
 ### 5. Database reset (common during development)
 
@@ -505,7 +505,7 @@ cd -
 
 # Or just truncate user data, preserving schema / migrations state
 PGPASSWORD=boxlite psql -h 127.0.0.1 -p 25432 -U boxlite -d boxlite -c "
-  TRUNCATE TABLE sandbox, snapshot, snapshot_runner, runner, region, 
+  TRUNCATE TABLE box, snapshot, snapshot_runner, runner, region, 
                  organization, organization_user, organization_role, 
                  api_key, audit_log CASCADE;
 "
@@ -513,7 +513,7 @@ PGPASSWORD=boxlite psql -h 127.0.0.1 -p 25432 -U boxlite -d boxlite -c "
 # Then restart the API so it re-seeds default region + default runner
 ```
 
-`~/.boxlite-runner/` must also be cleared, otherwise the runner still thinks the old sandboxes exist:
+`~/.boxlite-runner/` must also be cleared, otherwise the runner still thinks the old boxes exist:
 
 ```bash
 pkill -9 -f boxlite-runner
@@ -560,7 +560,7 @@ make stack-reset && make stack-up
 
 Differences from ⑤ — this one **preserves**: L1 boxes, PG schema, image cache, historical logs. It only clears PG **user data** + `~/.boxlite-runner/` runtime state.
 
-**When to use it:** mid-iteration the data got dirty and you want to clear sandbox/org/user; testing "fresh DB" behavior.
+**When to use it:** mid-iteration the data got dirty and you want to clear box/org/user; testing "fresh DB" behavior.
 
 #### Scenario 3: **Partial reset → partial up** (tiers ①②, 90 % of daily work)
 
@@ -601,7 +601,7 @@ http://localhost:3000  → pick admin / user to log in (dex static users)
 curl -sS \
   -H "Authorization: Bearer local-dev-admin-key" \
   -H "X-BoxLite-Organization-ID: <org-uuid>" \
-  http://localhost:3001/api/sandbox/paginated | jq
+  http://localhost:3001/api/box/paginated | jq
 
 # Use an OIDC token (simulates a user)
 # 1. Log in via the browser, then grab access_token from DevTools sessionStorage
@@ -623,13 +623,13 @@ pytest tests/
 #### 6.4 Direct DB queries (read-only — won't collide with the runner's lock)
 
 ```bash
-# Inspect sandbox state
+# Inspect box state
 sqlite3 ~/.boxlite-runner/db/boxlite.db -header -column \
   "SELECT id, image, status FROM boxes WHERE status='running';"
 
 # Inspect the API primary DB
 PGPASSWORD=boxlite psql -h 127.0.0.1 -p 25432 -U boxlite -d boxlite -c "
-  SELECT s.name, s.state, r.name as runner FROM sandbox s
+  SELECT s.name, s.state, r.name as runner FROM box s
   LEFT JOIN runner r ON r.id = s.\"runnerId\" 
   ORDER BY s.\"createdAt\" DESC LIMIT 10;
 "
@@ -646,7 +646,7 @@ PGPASSWORD=boxlite psql -h 127.0.0.1 -p 25432 -U boxlite -d boxlite -c "
 boxlite logs boxlite-local-postgres
 boxlite logs boxlite-local-caddy
 
-# Sandbox microVM-internal logs (managed by the runner)
+# Box microVM-internal logs (managed by the runner)
 ls -lt ~/.boxlite-runner/boxes/<id>/logs/
 ```
 
@@ -655,14 +655,14 @@ ls -lt ~/.boxlite-runner/boxes/<id>/logs/
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | All API calls return 401 | `SSH_GATEWAY_API_KEY` or `PROXY_API_KEY` not set | Check `apps/api/.env` — both must be non-empty |
-| Sandbox stuck in PENDING | snapshot has not finished PULLING | Wait 30-60 s; if still stuck, check runner log for image-pull errors |
-| Sandbox reaches STARTED but the terminal is blank + `Connection closed` | image is amd64 but runner runs an arm64 microVM | Already fixed (`runner/registry.go` uses `runtime.GOARCH`) — clear the old image cache and re-pull |
-| "+ Create Sandbox" missing in the dashboard | Expected: PostHog isn't configured locally, so flag-gated UI stays hidden (no local flag bootstrap) | Use `POST /api/sandbox` directly, or set `POSTHOG_API_KEY`/`POSTHOG_HOST` in `apps/api/.env` with the flags enabled in PostHog |
+| Box stuck in PENDING | snapshot has not finished PULLING | Wait 30-60 s; if still stuck, check runner log for image-pull errors |
+| Box reaches STARTED but the terminal is blank + `Connection closed` | image is amd64 but runner runs an arm64 microVM | Already fixed (`runner/registry.go` uses `runtime.GOARCH`) — clear the old image cache and re-pull |
+| "Create Box" missing in the dashboard | Expected: PostHog isn't configured locally, so flag-gated UI stays hidden (no local flag bootstrap) | Use `POST /api/box` directly, or set `POSTHOG_API_KEY`/`POSTHOG_HOST` in `apps/api/.env` with the flags enabled in PostHog |
 | `POST /api/regions` → 404 "Cannot POST" | Expected: same — flag-gated admin routes stay hidden without a configured PostHog | Same as above; the seed path (`seed-init-data.sh`) doesn't need these routes |
 | Boxlite-runner hits `Another BoxliteRuntime is already using directory` | Another runner process is holding `~/.boxlite-runner/.lock` | `lsof ~/.boxlite-runner/.lock` to find the PID; decide whether to kill it or that you've used the wrong home dir |
 | Terminal `Connection closed` and won't reconnect | signed-url expired (default 300 s) | Click Connect again; the dashboard re-fetches a fresh URL |
 | Dashboard loads `Unauthorized` / `401` even just after OIDC login | **Dex SQLite session db cached an old grant** and the new login reuses a stale token (common after a box SIGKILL or long idle). Diagnostic: decode the token; `accessTokenIat` is days old | `make stack-rebuild-l1-box BOX=dex` + `sessionStorage.clear()` in the browser + log in again |
-| Sandbox `pulling` is stuck for several minutes | **Registry box TCP still listens but the internal registry process is hung** (SIGKILL side-effect). Confirm: `curl http://127.0.0.1:25000/v2/_catalog` times out after 5 s | `make stack-rebuild-l1-box BOX=registry`; the stuck pull recovers automatically |
+| Box `pulling` is stuck for several minutes | **Registry box TCP still listens but the internal registry process is hung** (SIGKILL side-effect). Confirm: `curl http://127.0.0.1:25000/v2/_catalog` times out after 5 s | `make stack-rebuild-l1-box BOX=registry`; the stuck pull recovers automatically |
 | Any L1 box (pgadmin / jaeger / minio / ...) behaves weirdly | Same as above — the box's stateful internal process is broken | `make stack-rebuild-l1-box BOX=<name>` blows it away and rebuilds in one shot |
 
 ### 8. Local "release" workflow (MVP internal demo / self-test)

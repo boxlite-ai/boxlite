@@ -30,11 +30,11 @@
       "!{projectRoot}/src/test-setup.[jt]s",
       "!{projectRoot}/test-setup.[jt]s"
     ],
-    "goProduction": ["default", "{workspaceRoot}/apps/go.work", "{workspaceRoot}/apps/go.work.sum", "sharedGlobals"],
+    "goProduction": ["default", "{workspaceRoot}/go.work", "{workspaceRoot}/go.work.sum", "sharedGlobals"],
     "sharedGlobals": ["{workspaceRoot}/.github/workflows/ci.yml"],
     "apiClient": [
       "{workspaceRoot}/dist/apps/api/openapi.json",
-      "{workspaceRoot}/apps/daemon/pkg/toolbox/docs/swagger.json",
+      "{workspaceRoot}/daemon/pkg/toolbox/docs/swagger.json",
       { "env": "DEFAULT_PACKAGE_VERSION" },
       { "dependentTasksOutputFiles": "**/*", "transitive": true }
     ],

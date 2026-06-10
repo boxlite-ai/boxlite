@@ -365,10 +365,7 @@ export function Sidebar({ isBannerVisible, billingEnabled, version: _version }: 
     >
       <div className="mx-auto flex h-14 w-full max-w-[1440px] items-center gap-3 px-4 sm:px-5 2xl:px-0">
         <div className="flex min-w-0 items-center gap-6">
-          <Link
-            to={RoutePath.BOXES}
-            className="shrink-0 text-[1.15rem] font-semibold tracking-tight text-foreground"
-          >
+          <Link to={RoutePath.BOXES} className="shrink-0 text-[1.15rem] font-semibold tracking-tight text-foreground">
             <LogoText />
           </Link>
 

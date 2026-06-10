@@ -283,7 +283,7 @@ sent to the collector show up in the Jaeger UI. **metrics** and
 
 | Route | Target |
 |---|---|
-| Host `^<port>-<token>.…` (regexp) | Proxy (`host:4000`) — sandbox port-preview URLs |
+| Host `^<port>-<token>.…` (regexp) | Proxy (`host:4000`) — box port-preview URLs |
 | `/pgadmin/*` | pgAdmin (25051) |
 | `/jaeger/*` | Jaeger UI (26686) |
 | `/dex/*` | Dex (25556) |
@@ -314,7 +314,7 @@ started + supervised by the `stack-*` Makefile targets under
 | Dashboard (React + Vite) | `corepack yarn nx serve dashboard` | `3000` |
 | API (NestJS) | `corepack yarn nx serve api --buildTargetOptions.generatePackageJson=false --buildTargetOptions.skipTypeChecking=true` (CWD: `apps/`; flags explained in `scripts/stack-up.sh`) | `3001` |
 | Proxy (Go) | `/tmp/boxlite-proxy` | `4000` |
-| Runner (Go) | `/tmp/boxlite-runner` (native arm64; spawns sandbox microVMs in `~/.boxlite-runner/`) | `3003` (API_PORT) |
+| Runner (Go) | `/tmp/boxlite-runner` (native arm64; spawns box microVMs in `~/.boxlite-runner/`) | `3003` (API_PORT) |
 
 Lifecycle wrappers — see [README.md](README.md#make-targets) for the full surface:
 
@@ -335,7 +335,7 @@ runner host that's a correct signal. On a dev MacBook sharing RAM with
 VS Code, Chrome, Docker Desktop, and the L1 dev stack itself, those
 metrics easily exceed prod's 75 % penalty threshold and drag the
 runner's `availabilityScore` below 10, at which point the API rejects
-sandbox creates with `"No available runners"` — even though the runner
+box creates with `"No available runners"` — even though the runner
 is idle.
 
 `stack-up.sh` exports the following overrides before booting the API so

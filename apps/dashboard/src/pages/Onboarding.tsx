@@ -175,8 +175,8 @@ const Onboarding: React.FC = () => {
                   <h2 className="text-xl font-semibold mb-4">Create an API Key</h2>
                   <p className="mb-4">
                     This API key will have permissions to only{' '}
-                    {apiKeyPermissions.includes(CreateApiKeyPermissionsEnum.DELETE_BOXES) ? 'manage' : 'create'}{' '}
-                    Boxes. For full API permissions, head to the{' '}
+                    {apiKeyPermissions.includes(CreateApiKeyPermissionsEnum.DELETE_BOXES) ? 'manage' : 'create'} Boxes.
+                    For full API permissions, head to the{' '}
                     <button
                       onClick={() => navigate(RoutePath.KEYS)}
                       className="underline cursor-pointer hover:text-muted-foreground"

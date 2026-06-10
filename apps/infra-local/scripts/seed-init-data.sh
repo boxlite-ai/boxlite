@@ -144,7 +144,7 @@ done
 if [ "${1:-}" = "--no-wait" ] || [ "${2:-}" = "--no-wait" ]; then
   log "skipping snapshot wait (--no-wait)"
 else
-  wait_for_default_snapshot || warn "default snapshot not ready — dashboard create-sandbox will 400 until it is"
+  wait_for_default_snapshot || warn "default snapshot not ready — dashboard create-box will 400 until it is"
 fi
 
 ok "init data ready"

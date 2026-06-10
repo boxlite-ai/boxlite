@@ -237,12 +237,12 @@ async def test_execution_invalid_command_returns_422(rt, image):
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "Production bug: no per-sandbox quota enforcement at the API "
+        "Production bug: no per-box quota enforcement at the API "
         "create boundary. cpus=999 is silently clamped to the org default "
         "(cpus=1) and HTTP 201 returned, instead of HTTP 429 ResourceExhausted "
         "(or HTTP 400 InvalidArgument). The DTO has @Min(1) but no @Max(); "
-        "fixture_setup sets max_cpu_per_sandbox=4 in the organization table "
-        "but nothing in apps/api/src/sandbox/services/sandbox.service.ts:"
+        "fixture_setup sets max_cpu_per_box=4 in the organization table "
+        "but nothing in apps/api/src/box/services/box.service.ts:"
         "createFromSnapshot consults that limit."
     ),
 )

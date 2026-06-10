@@ -5,7 +5,7 @@ Idempotent. Safe to re-run after bootstrap.sh.
 
 Configures:
   1. Required snapshots active (alpine:3.23, ubuntu:22.04)
-  2. Admin org has non-zero per-sandbox quotas
+  2. Admin org has non-zero per-box quotas
   3. `[profiles.p1]` in ~/.boxlite/credentials.toml points at the local API
 """
 from __future__ import annotations

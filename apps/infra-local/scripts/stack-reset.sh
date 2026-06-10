@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Wipe L2 runtime state. Keeps L1 boxes alive (db schema preserved by default).
 #
-# Usage: stack-reset.sh             # clear sandboxes/snapshots, KEEP users+orgs
+# Usage: stack-reset.sh             # clear boxes/snapshots, KEEP users+orgs
 #                                     → browser stays logged in, no re-login
 #        stack-reset.sh --hard      # wipe PG schema entirely (rebuilds it by
 #                                     re-running migrations) → identity gone, re-login needed
@@ -32,7 +32,7 @@ if [ "$MODE" = "soft" ]; then
     #   user, organization, organization_user, organization_role,
     #   region, runner, api_key
     # CLEAR only runtime/user-created state:
-    #   sandbox, snapshot, snapshot_runner, audit_log (+ CASCADE children
+    #   box, snapshot, snapshot_runner, audit_log (+ CASCADE children
     #   like ssh_access). The API re-seeds the default snapshot on next
     #   boot (initializeDefaultSnapshot finds the preserved admin org),
     #   and the runner re-registers via heartbeat (matched by apiKey).
@@ -42,7 +42,7 @@ if [ "$MODE" = "soft" ]; then
     # the seed cycle consistent AND keeps OIDC sessions alive. For a true
     # from-scratch identity wipe use --hard.
     PGPASSWORD=boxlite psql -h 127.0.0.1 -p 25432 -U boxlite -d boxlite -v ON_ERROR_STOP=1 -c "
-      TRUNCATE TABLE sandbox, snapshot, snapshot_runner, audit_log
+      TRUNCATE TABLE box, snapshot, snapshot_runner, audit_log
                      RESTART IDENTITY CASCADE;
     " 2>&1 | tail -2 || warn "truncate had errors (some tables may not exist on fresh schema)"
   else
