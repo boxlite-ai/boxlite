@@ -19,7 +19,6 @@ import { BoxDto } from '../box/dto/box.dto'
 import { CreateBoxDto } from '../box/dto/create-box.dto'
 import { Request } from 'express'
 import { CreateOrganizationDto } from '../organization/dto/create-organization.dto'
-import { UpdateOrganizationQuotaDto } from '../organization/dto/update-organization-quota.dto'
 import { OrganizationDto } from '../organization/dto/organization.dto'
 import { UpdateOrganizationMemberAccessDto } from '../organization/dto/update-organization-member-access.dto'
 import { CreateOrganizationRoleDto } from '../organization/dto/create-organization-role.dto'
@@ -32,7 +31,6 @@ import { VolumeDto } from '../box/dto/volume.dto'
 import { CreateWorkspaceDto } from '../box/dto/create-workspace.deprecated.dto'
 import { WorkspaceDto } from '../box/dto/workspace.deprecated.dto'
 import { TypedConfigService } from '../config/typed-config.service'
-import { UpdateOrganizationRegionQuotaDto } from '../organization/dto/update-organization-region-quota.dto'
 import { UpdateOrganizationDefaultRegionDto } from '../organization/dto/update-organization-default-region.dto'
 
 type RequestWithUser = Request & {
@@ -271,17 +269,6 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
         switch (request.route.path) {
           case '/api/organizations/:organizationId/default-region':
             this.captureSetOrganizationDefaultRegion(props, request.params.organizationId, request.body)
-            break
-          case '/api/organizations/:organizationId/quota':
-            this.captureUpdateOrganizationQuota(props, request.params.organizationId, request.body)
-            break
-          case '/api/organizations/:organizationId/quota/:regionId':
-            this.captureUpdateOrganizationRegionQuota(
-              props,
-              request.params.organizationId,
-              request.params.regionId,
-              request.body,
-            )
             break
         }
         break
@@ -642,37 +629,6 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
     this.capture('api_organization_default_region_set', props, 'api_organization_default_region_set_failed', {
       organization_id: organizationId,
       organization_default_region_id: request.defaultRegionId,
-    })
-  }
-
-  private captureUpdateOrganizationQuota(
-    props: CommonCaptureProps,
-    organizationId: string,
-    request: UpdateOrganizationQuotaDto,
-  ) {
-    this.capture('api_organization_quota_updated', props, 'api_organization_quota_update_failed', {
-      organization_id: organizationId,
-      organization_max_cpu_per_box: request.maxCpuPerBox,
-      organization_max_memory_per_box_mb: request.maxMemoryPerBox ? request.maxMemoryPerBox * 1024 : null,
-      organization_max_disk_per_box_gb: request.maxDiskPerBox,
-      organization_template_quota: request.templateQuota,
-      organization_max_template_size_mb: request.maxTemplateSize ? request.maxTemplateSize * 1024 : null,
-      organization_volume_quota: request.volumeQuota,
-    })
-  }
-
-  private captureUpdateOrganizationRegionQuota(
-    props: CommonCaptureProps,
-    organizationId: string,
-    regionId: string,
-    request: UpdateOrganizationRegionQuotaDto,
-  ) {
-    this.capture('api_organization_region_quota_updated', props, 'api_organization_region_quota_update_failed', {
-      organization_id: organizationId,
-      organization_region_id: regionId,
-      organization_region_total_cpu_quota: request.totalCpuQuota,
-      organization_region_total_memory_quota_mb: request.totalMemoryQuota ? request.totalMemoryQuota * 1024 : null,
-      organization_region_total_disk_quota_gb: request.totalDiskQuota,
     })
   }
 

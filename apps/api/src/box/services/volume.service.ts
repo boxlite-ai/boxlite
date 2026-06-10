@@ -6,7 +6,6 @@
 
 import {
   ConflictException,
-  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -24,7 +23,6 @@ import { OnEvent } from '@nestjs/event-emitter'
 import { BoxEvents } from '../constants/box-events.constants'
 import { BoxCreatedEvent } from '../events/box-create.event'
 import { OrganizationService } from '../../organization/services/organization.service'
-import { OrganizationUsageService } from '../../organization/services/organization-usage.service'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { RedisLockProvider } from '../common/redis-lock.provider'
 import { BoxRepository } from '../repositories/box.repository'
@@ -39,97 +37,44 @@ export class VolumeService {
     private readonly volumeRepository: Repository<Volume>,
     private readonly boxRepository: BoxRepository,
     private readonly organizationService: OrganizationService,
-    private readonly organizationUsageService: OrganizationUsageService,
     private readonly configService: TypedConfigService,
     private readonly redisLockProvider: RedisLockProvider,
   ) {}
-
-  private async validateOrganizationQuotas(
-    organization: Organization,
-    addedVolumeCount: number,
-  ): Promise<{
-    pendingVolumeCountIncremented: boolean
-  }> {
-    // validate usage quotas
-    await this.organizationUsageService.incrementPendingVolumeUsage(organization.id, addedVolumeCount)
-
-    const usageOverview = await this.organizationUsageService.getVolumeUsageOverview(organization.id)
-
-    try {
-      if (usageOverview.currentVolumeUsage + usageOverview.pendingVolumeUsage > organization.volumeQuota) {
-        throw new ForbiddenException(`Volume quota exceeded. Maximum allowed: ${organization.volumeQuota}`)
-      }
-    } catch (error) {
-      await this.rollbackPendingUsage(organization.id, addedVolumeCount)
-      throw error
-    }
-
-    return {
-      pendingVolumeCountIncremented: true,
-    }
-  }
-
-  async rollbackPendingUsage(organizationId: string, pendingVolumeCountIncrement?: number): Promise<void> {
-    if (!pendingVolumeCountIncrement) {
-      return
-    }
-
-    try {
-      await this.organizationUsageService.decrementPendingVolumeUsage(organizationId, pendingVolumeCountIncrement)
-    } catch (error) {
-      this.logger.error(`Error rolling back pending volume usage: ${error}`)
-    }
-  }
 
   async create(organization: Organization, createVolumeDto: CreateVolumeDto): Promise<Volume> {
     if (!this.configService.get('s3.endpoint')) {
       throw new ServiceUnavailableException('Object storage is not configured')
     }
 
-    let pendingVolumeCountIncrement: number | undefined
+    this.organizationService.assertOrganizationIsNotSuspended(organization)
 
-    try {
-      this.organizationService.assertOrganizationIsNotSuspended(organization)
+    const volume = new Volume()
 
-      const newVolumeCount = 1
+    // Generate ID
+    volume.id = uuidv4()
 
-      const { pendingVolumeCountIncremented } = await this.validateOrganizationQuotas(organization, newVolumeCount)
+    // Set name from DTO or use ID as default
+    volume.name = createVolumeDto.name || volume.id
 
-      if (pendingVolumeCountIncremented) {
-        pendingVolumeCountIncrement = newVolumeCount
-      }
+    // Check if volume with same name already exists for organization
+    const existingVolume = await this.volumeRepository.findOne({
+      where: {
+        organizationId: organization.id,
+        name: volume.name,
+        state: Not(VolumeState.DELETED),
+      },
+    })
 
-      const volume = new Volume()
-
-      // Generate ID
-      volume.id = uuidv4()
-
-      // Set name from DTO or use ID as default
-      volume.name = createVolumeDto.name || volume.id
-
-      // Check if volume with same name already exists for organization
-      const existingVolume = await this.volumeRepository.findOne({
-        where: {
-          organizationId: organization.id,
-          name: volume.name,
-          state: Not(VolumeState.DELETED),
-        },
-      })
-
-      if (existingVolume) {
-        throw new BadRequestError(`Volume with name ${volume.name} already exists`)
-      }
-
-      volume.organizationId = organization.id
-      volume.state = VolumeState.PENDING_CREATE
-
-      const savedVolume = await this.volumeRepository.save(volume)
-      this.logger.debug(`Created volume ${savedVolume.id} for organization ${organization.id}`)
-      return savedVolume
-    } catch (error) {
-      await this.rollbackPendingUsage(organization.id, pendingVolumeCountIncrement)
-      throw error
+    if (existingVolume) {
+      throw new BadRequestError(`Volume with name ${volume.name} already exists`)
     }
+
+    volume.organizationId = organization.id
+    volume.state = VolumeState.PENDING_CREATE
+
+    const savedVolume = await this.volumeRepository.save(volume)
+    this.logger.debug(`Created volume ${savedVolume.id} for organization ${organization.id}`)
+    return savedVolume
   }
 
   async delete(volumeId: string): Promise<void> {

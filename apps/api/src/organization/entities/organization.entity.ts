@@ -8,7 +8,6 @@ import { Column, CreateDateColumn, Entity, OneToMany, PrimaryGeneratedColumn, Up
 import { OrganizationUser } from './organization-user.entity'
 import { OrganizationRole } from './organization-role.entity'
 import { OrganizationInvitation } from './organization-invitation.entity'
-import { RegionQuota } from './region-quota.entity'
 
 @Entity()
 export class Organization {
@@ -52,20 +51,6 @@ export class Organization {
 
   @Column({
     type: 'int',
-    default: 20,
-    name: 'max_template_size',
-  })
-  maxTemplateSize: number
-
-  @Column({
-    type: 'int',
-    default: 100,
-    name: 'volume_quota',
-  })
-  volumeQuota: number
-
-  @Column({
-    type: 'int',
     nullable: true,
     name: 'authenticated_rate_limit',
   })
@@ -105,12 +90,6 @@ export class Organization {
     name: 'box_lifecycle_rate_limit_ttl_seconds',
   })
   boxLifecycleRateLimitTtlSeconds: number | null
-
-  @OneToMany(() => RegionQuota, (quota) => quota.organization, {
-    cascade: true,
-    onDelete: 'CASCADE',
-  })
-  regionQuotas: RegionQuota[]
 
   @OneToMany(() => OrganizationRole, (organizationRole) => organizationRole.organization, {
     cascade: true,

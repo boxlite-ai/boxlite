@@ -10,15 +10,6 @@ const { AppService } = require('./app.service') as typeof import('./app.service'
 describe('AppService admin bootstrap', () => {
   it('syncs existing admin organization quota from config', async () => {
     const configValues: Record<string, unknown> = {
-      'admin.totalCpuQuota': 10,
-      'admin.totalMemoryQuota': 40,
-      'admin.totalDiskQuota': 100,
-      'admin.maxCpuPerBox': 4,
-      'admin.maxMemoryPerBox': 8,
-      'admin.maxDiskPerBox': 10,
-      'admin.templateQuota': 100,
-      'admin.maxTemplateSize': 100,
-      'admin.volumeQuota': 100,
       'admin.apiKey': 'boxlite-local-admin-key',
       'defaultRegion.id': 'us',
     }
@@ -38,7 +29,6 @@ describe('AppService admin bootstrap', () => {
     }
     const organizationService = {
       findDefaultForUser: jest.fn().mockResolvedValue({ id: 'org-1' }),
-      updateQuota: jest.fn().mockResolvedValue(undefined),
     }
     const apiKeyService = {
       ensureApiKeyValue: jest.fn().mockResolvedValue({ value: 'boxlite-local-admin-key' }),
@@ -61,14 +51,6 @@ describe('AppService admin bootstrap', () => {
     await service.initializeAdminUser()
 
     expect(userService.create).not.toHaveBeenCalled()
-    expect(organizationService.updateQuota).toHaveBeenCalledWith('org-1', {
-      maxCpuPerBox: 4,
-      maxMemoryPerBox: 8,
-      maxDiskPerBox: 10,
-      templateQuota: 100,
-      maxTemplateSize: 100,
-      volumeQuota: 100,
-    })
     expect(apiKeyService.ensureApiKeyValue).toHaveBeenCalledWith(
       'org-1',
       'boxlite-admin',

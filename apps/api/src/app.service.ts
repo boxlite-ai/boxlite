@@ -162,23 +162,12 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
       user = await this.userService.create({
         id: BOXLITE_ADMIN_USER_ID,
         name: 'BoxLite Admin',
-        defaultOrganizationQuota: {
-          totalCpuQuota: this.configService.getOrThrow('admin.totalCpuQuota'),
-          totalMemoryQuota: this.configService.getOrThrow('admin.totalMemoryQuota'),
-          totalDiskQuota: this.configService.getOrThrow('admin.totalDiskQuota'),
-          maxCpuPerBox: this.configService.getOrThrow('admin.maxCpuPerBox'),
-          maxMemoryPerBox: this.configService.getOrThrow('admin.maxMemoryPerBox'),
-          maxDiskPerBox: this.configService.getOrThrow('admin.maxDiskPerBox'),
-          maxTemplateSize: this.configService.getOrThrow('admin.maxTemplateSize'),
-          volumeQuota: this.configService.getOrThrow('admin.volumeQuota'),
-        },
         defaultOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
         role: SystemRole.ADMIN,
       })
     }
 
     const defaultOrg = await this.organizationService.findDefaultForUser(user.id)
-    await this.ensureAdminOrganizationQuota(defaultOrg.id)
     const { value } = await this.apiKeyService.ensureApiKeyValue(
       defaultOrg.id,
       user.id,
@@ -194,16 +183,6 @@ Admin API key ensured: ${this.maskApiKeyForLog(value)}
 =========================================
 =========================================`,
     )
-  }
-
-  private async ensureAdminOrganizationQuota(organizationId: string): Promise<void> {
-    await this.organizationService.updateQuota(organizationId, {
-      maxCpuPerBox: this.configService.getOrThrow('admin.maxCpuPerBox'),
-      maxMemoryPerBox: this.configService.getOrThrow('admin.maxMemoryPerBox'),
-      maxDiskPerBox: this.configService.getOrThrow('admin.maxDiskPerBox'),
-      maxTemplateSize: this.configService.getOrThrow('admin.maxTemplateSize'),
-      volumeQuota: this.configService.getOrThrow('admin.volumeQuota'),
-    })
   }
 
   private maskApiKeyForLog(value: string): string {

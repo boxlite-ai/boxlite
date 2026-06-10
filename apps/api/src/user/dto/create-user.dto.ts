@@ -7,7 +7,6 @@
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { IsBoolean, IsEnum, IsOptional, IsString } from 'class-validator'
 import { SystemRole } from '../enums/system-role.enum'
-import { CreateOrganizationQuotaDto } from '../../organization/dto/create-organization-quota.dto'
 
 @ApiSchema({ name: 'CreateUser' })
 export class CreateUserDto {
@@ -23,17 +22,6 @@ export class CreateUserDto {
   @IsString()
   @IsOptional()
   email?: string
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  defaultOrganizationQuota?: CreateOrganizationQuotaDto
-
-  @ApiPropertyOptional({
-    description: 'Deprecated alias for defaultOrganizationQuota.',
-    deprecated: true,
-  })
-  @IsOptional()
-  personalOrganizationQuota?: CreateOrganizationQuotaDto
 
   @ApiPropertyOptional()
   @IsString()

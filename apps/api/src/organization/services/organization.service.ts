@@ -17,7 +17,6 @@ import {
 import { InjectRepository } from '@nestjs/typeorm'
 import { EntityManager, In, Not, Repository } from 'typeorm'
 import { CreateOrganizationInternalDto } from '../dto/create-organization.internal.dto'
-import { UpdateOrganizationQuotaDto } from '../dto/update-organization-quota.dto'
 import { Organization } from '../entities/organization.entity'
 import { OrganizationUser } from '../entities/organization-user.entity'
 import { OrganizationMemberRole } from '../enums/organization-member-role.enum'
@@ -28,7 +27,6 @@ import { UserDeletedEvent } from '../../user/events/user-deleted.event'
 import { BoxState } from '../../box/enums/box-state.enum'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { OrganizationEvents } from '../constants/organization-events.constant'
-import { CreateOrganizationQuotaDto } from '../dto/create-organization-quota.dto'
 import { UserEmailVerifiedEvent } from '../../user/events/user-email-verified.event'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { RedisLockProvider } from '../../box/common/redis-lock.provider'
@@ -41,11 +39,8 @@ import { setTimeout } from 'timers/promises'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
-import { RegionQuota } from '../entities/region-quota.entity'
-import { UpdateOrganizationRegionQuotaDto } from '../dto/update-organization-region-quota.dto'
 import { RegionService } from '../../region/services/region.service'
 import { Region } from '../../region/entities/region.entity'
-import { RegionQuotaDto } from '../dto/region-quota.dto'
 import { RegionType } from '../../region/enums/region-type.enum'
 import { RegionDto } from '../../region/dto/region.dto'
 import { EncryptionService } from '../../encryption/encryption.service'
@@ -59,7 +54,6 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
 
   activeJobs = new Set<string>()
   private readonly logger = new Logger(OrganizationService.name)
-  private defaultOrganizationQuota: CreateOrganizationQuotaDto
   private defaultBoxLimitedNetworkEgress: boolean
 
   constructor(
@@ -69,14 +63,11 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     private readonly eventEmitter: EventEmitter2,
     private readonly configService: TypedConfigService,
     private readonly redisLockProvider: RedisLockProvider,
-    @InjectRepository(RegionQuota)
-    private readonly regionQuotaRepository: Repository<RegionQuota>,
     @InjectRepository(Region)
     private readonly regionRepository: Repository<Region>,
     private readonly regionService: RegionService,
     private readonly encryptionService: EncryptionService,
   ) {
-    this.defaultOrganizationQuota = this.configService.getOrThrow('defaultOrganizationQuota')
     this.defaultBoxLimitedNetworkEgress = this.configService.getOrThrow('organizationBoxDefaultLimitedNetworkEgress')
   }
 
@@ -210,72 +201,6 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     return this.organizationRepository.save(organization)
   }
 
-  async updateQuota(organizationId: string, updateDto: UpdateOrganizationQuotaDto): Promise<void> {
-    const organization = await this.organizationRepository.findOne({ where: { id: organizationId } })
-    if (!organization) {
-      throw new NotFoundException(`Organization with ID ${organizationId} not found`)
-    }
-
-    organization.maxCpuPerBox = updateDto.maxCpuPerBox ?? organization.maxCpuPerBox
-    organization.maxMemoryPerBox = updateDto.maxMemoryPerBox ?? organization.maxMemoryPerBox
-    organization.maxDiskPerBox = updateDto.maxDiskPerBox ?? organization.maxDiskPerBox
-    organization.maxTemplateSize = updateDto.maxTemplateSize ?? organization.maxTemplateSize
-    organization.volumeQuota = updateDto.volumeQuota ?? organization.volumeQuota
-    organization.authenticatedRateLimit = updateDto.authenticatedRateLimit ?? organization.authenticatedRateLimit
-    organization.boxCreateRateLimit = updateDto.boxCreateRateLimit ?? organization.boxCreateRateLimit
-    organization.boxLifecycleRateLimit = updateDto.boxLifecycleRateLimit ?? organization.boxLifecycleRateLimit
-    organization.authenticatedRateLimitTtlSeconds =
-      updateDto.authenticatedRateLimitTtlSeconds ?? organization.authenticatedRateLimitTtlSeconds
-    organization.boxCreateRateLimitTtlSeconds =
-      updateDto.boxCreateRateLimitTtlSeconds ?? organization.boxCreateRateLimitTtlSeconds
-    organization.boxLifecycleRateLimitTtlSeconds =
-      updateDto.boxLifecycleRateLimitTtlSeconds ?? organization.boxLifecycleRateLimitTtlSeconds
-    organization.templateDeactivationTimeoutMinutes =
-      updateDto.templateDeactivationTimeoutMinutes ?? organization.templateDeactivationTimeoutMinutes
-
-    await this.organizationRepository.save(organization)
-  }
-
-  async updateRegionQuota(
-    organizationId: string,
-    regionId: string,
-    updateDto: UpdateOrganizationRegionQuotaDto,
-  ): Promise<void> {
-    const regionQuota = await this.regionQuotaRepository.findOne({ where: { organizationId, regionId } })
-    if (!regionQuota) {
-      throw new NotFoundException('Region not found')
-    }
-
-    regionQuota.totalCpuQuota = updateDto.totalCpuQuota ?? regionQuota.totalCpuQuota
-    regionQuota.totalMemoryQuota = updateDto.totalMemoryQuota ?? regionQuota.totalMemoryQuota
-    regionQuota.totalDiskQuota = updateDto.totalDiskQuota ?? regionQuota.totalDiskQuota
-
-    await this.regionQuotaRepository.save(regionQuota)
-  }
-
-  async getRegionQuotas(organizationId: string): Promise<RegionQuotaDto[]> {
-    const regionQuotas = await this.regionQuotaRepository.find({ where: { organizationId } })
-    return regionQuotas.map((regionQuota) => new RegionQuotaDto(regionQuota))
-  }
-
-  async getRegionQuota(organizationId: string, regionId: string): Promise<RegionQuotaDto | null> {
-    const regionQuota = await this.regionQuotaRepository.findOne({ where: { organizationId, regionId } })
-    if (!regionQuota) {
-      return null
-    }
-    return new RegionQuotaDto(regionQuota)
-  }
-
-  async getRegionQuotaByBoxId(boxId: string): Promise<RegionQuotaDto | null> {
-    const box = await this.boxRepository.findOne({
-      where: { id: boxId },
-    })
-    if (!box) {
-      return null
-    }
-    return this.getRegionQuota(box.organizationId, box.region)
-  }
-
   /**
    * Lists all available regions for the organization.
    *
@@ -381,23 +306,8 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       throw new ConflictException('Organization already has a default region set')
     }
 
-    const defaultRegion = await this.validateOrganizationDefaultRegion(defaultRegionId)
+    await this.validateOrganizationDefaultRegion(defaultRegionId)
     organization.defaultRegionId = defaultRegionId
-
-    if (defaultRegion.enforceQuotas) {
-      const regionQuota = new RegionQuota(
-        organization.id,
-        defaultRegionId,
-        this.defaultOrganizationQuota.totalCpuQuota,
-        this.defaultOrganizationQuota.totalMemoryQuota,
-        this.defaultOrganizationQuota.totalDiskQuota,
-      )
-      if (organization.regionQuotas) {
-        organization.regionQuotas = [...organization.regionQuotas, regionQuota]
-      } else {
-        organization.regionQuotas = [regionQuota]
-      }
-    }
 
     await this.organizationRepository.save(organization)
   }
@@ -499,7 +409,6 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     createdBy: string,
     creatorEmailVerified: boolean,
     defaultForCreator = false,
-    quota: CreateOrganizationQuotaDto = this.defaultOrganizationQuota,
     boxLimitedNetworkEgress: boolean = this.defaultBoxLimitedNetworkEgress,
   ): Promise<Organization> {
     if (defaultForCreator) {
@@ -527,12 +436,6 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     organization.name = createOrganizationDto.name
     organization.createdBy = createdBy
 
-    organization.maxCpuPerBox = quota.maxCpuPerBox
-    organization.maxMemoryPerBox = quota.maxMemoryPerBox
-    organization.maxDiskPerBox = quota.maxDiskPerBox
-    organization.maxTemplateSize = quota.maxTemplateSize
-    organization.volumeQuota = quota.volumeQuota
-
     if (!creatorEmailVerified && !this.configService.get('skipUserEmailVerification')) {
       organization.suspended = true
       organization.suspendedAt = new Date()
@@ -553,18 +456,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     organization.users = [owner]
 
     if (createOrganizationDto.defaultRegionId) {
-      const defaultRegion = await this.validateOrganizationDefaultRegion(createOrganizationDto.defaultRegionId)
-
-      if (defaultRegion.enforceQuotas) {
-        const regionQuota = new RegionQuota(
-          organization.id,
-          createOrganizationDto.defaultRegionId,
-          quota.totalCpuQuota,
-          quota.totalMemoryQuota,
-          quota.totalDiskQuota,
-        )
-        organization.regionQuotas = [regionQuota]
-      }
+      await this.validateOrganizationDefaultRegion(createOrganizationDto.defaultRegionId)
     }
 
     await entityManager.transaction(async (em) => {
@@ -709,7 +601,6 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       payload.user.id,
       payload.user.role === SystemRole.ADMIN ? true : payload.user.emailVerified,
       true,
-      payload.defaultOrganizationQuota,
       payload.user.role === SystemRole.ADMIN ? false : undefined,
     )
   }

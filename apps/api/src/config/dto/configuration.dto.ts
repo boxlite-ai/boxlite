@@ -187,13 +187,6 @@ export class ConfigurationDto {
   proxyToolboxUrl: string
 
   @ApiProperty({
-    description: 'Default template for boxes',
-    example: 'ubuntu:22.04',
-  })
-  @IsString()
-  defaultTemplate: string
-
-  @ApiProperty({
     description: 'Dashboard URL',
     example: 'https://dashboard.example.com',
   })
@@ -274,7 +267,6 @@ export class ConfigurationDto {
     this.linkedAccountsEnabled = configService.get('oidc.managementApi.enabled')
     this.proxyTemplateUrl = configService.getOrThrow('proxy.templateUrl')
     this.proxyToolboxUrl = configService.getOrThrow('proxy.toolboxUrl')
-    this.defaultTemplate = configService.getOrThrow('defaultTemplate')
     this.dashboardUrl = configService.getOrThrow('dashboardUrl')
     this.maintananceMode = configService.getOrThrow('maintananceMode')
     this.environment = configService.getOrThrow('environment')

@@ -37,7 +37,6 @@ import { WarmPool } from '../entities/warm-pool.entity'
 import { BoxDto, BoxVolume } from '../dto/box.dto'
 import { RunnerAdapterFactory } from '../runner-adapter/runnerAdapter'
 import { validateNetworkAllowList } from '../utils/network-validation.util'
-import { OrganizationUsageService } from '../../organization/services/organization-usage.service'
 import { SshAccess } from '../entities/ssh-access.entity'
 import { SshAccessDto, SshAccessValidationDto } from '../dto/ssh-access.dto'
 import { VolumeService } from './volume.service'
@@ -50,11 +49,6 @@ import {
 } from '../dto/list-boxes-query.dto'
 import { createRangeFilter } from '../../common/utils/range-filter'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
-import {
-  UPGRADE_TIER_MESSAGE,
-  STORAGE_LIMIT_MESSAGE,
-  PER_BOX_LIMIT_MESSAGE,
-} from '../../common/constants/error-messages'
 import { RedisLockProvider } from '../common/redis-lock.provider'
 import { customAlphabet as customNanoid, nanoid, urlAlphabet } from 'nanoid'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
@@ -62,7 +56,6 @@ import { validateMountPaths, validateSubpaths } from '../utils/volume-mount-path
 import { BoxRepository } from '../repositories/box.repository'
 import { PortPreviewUrlDto, SignedPortPreviewUrlDto } from '../dto/port-preview-url.dto'
 import { RegionService } from '../../region/services/region.service'
-import { RegionType } from '../../region/enums/region-type.enum'
 import { BoxCreatedEvent } from '../events/box-create.event'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
@@ -106,7 +99,6 @@ export class BoxService {
     private readonly eventEmitter: EventEmitter2,
     private readonly organizationService: OrganizationService,
     private readonly runnerAdapterFactory: RunnerAdapterFactory,
-    private readonly organizationUsageService: OrganizationUsageService,
     private readonly redisLockProvider: RedisLockProvider,
     @InjectRedis() private readonly redis: Redis,
     private readonly regionService: RegionService,
@@ -121,138 +113,6 @@ export class BoxService {
   private assertBoxNotErrored(box: Box): void {
     if (box.state === BoxState.ERROR) {
       throw new BoxError('Box is in an errored state')
-    }
-  }
-
-  private async validateOrganizationQuotas(
-    organization: Organization,
-    region: Region,
-    cpu: number,
-    memory: number,
-    disk: number,
-    excludeBoxId?: string,
-  ): Promise<{
-    pendingCpuIncremented: boolean
-    pendingMemoryIncremented: boolean
-    pendingDiskIncremented: boolean
-  }> {
-    // validate per-box quotas
-    if (cpu > organization.maxCpuPerBox) {
-      throw new ForbiddenException(
-        `CPU request ${cpu} exceeds maximum allowed per box (${organization.maxCpuPerBox}).\n${PER_BOX_LIMIT_MESSAGE}`,
-      )
-    }
-    if (memory > organization.maxMemoryPerBox) {
-      throw new ForbiddenException(
-        `Memory request ${memory}GB exceeds maximum allowed per box (${organization.maxMemoryPerBox}GB).\n${PER_BOX_LIMIT_MESSAGE}`,
-      )
-    }
-    if (disk > organization.maxDiskPerBox) {
-      throw new ForbiddenException(
-        `Disk request ${disk}GB exceeds maximum allowed per box (${organization.maxDiskPerBox}GB).\n${PER_BOX_LIMIT_MESSAGE}`,
-      )
-    }
-
-    // e.g. region belonging to an organization
-    if (!region.enforceQuotas) {
-      return {
-        pendingCpuIncremented: false,
-        pendingMemoryIncremented: false,
-        pendingDiskIncremented: false,
-      }
-    }
-
-    const regionQuota = await this.organizationService.getRegionQuota(organization.id, region.id)
-
-    if (!regionQuota) {
-      if (region.regionType === RegionType.SHARED) {
-        // region is public, but the organization does not have a quota for it
-        throw new ForbiddenException(`Region ${region.id} is not available to the organization`)
-      } else {
-        // region is not public, respond as if the region was not found
-        throw new NotFoundException('Region not found')
-      }
-    }
-
-    // validate usage quotas
-    const {
-      cpuIncremented: pendingCpuIncremented,
-      memoryIncremented: pendingMemoryIncremented,
-      diskIncremented: pendingDiskIncremented,
-    } = await this.organizationUsageService.incrementPendingBoxUsage(
-      organization.id,
-      region.id,
-      cpu,
-      memory,
-      disk,
-      excludeBoxId,
-    )
-
-    const usageOverview = await this.organizationUsageService.getBoxUsageOverview(
-      organization.id,
-      region.id,
-      excludeBoxId,
-    )
-
-    try {
-      const upgradeTierMessage = UPGRADE_TIER_MESSAGE(this.configService.getOrThrow('dashboardUrl'))
-
-      if (usageOverview.currentCpuUsage + usageOverview.pendingCpuUsage > regionQuota.totalCpuQuota) {
-        throw new ForbiddenException(
-          `Total CPU limit exceeded. Maximum allowed: ${regionQuota.totalCpuQuota}.\n${upgradeTierMessage}`,
-        )
-      }
-
-      if (usageOverview.currentMemoryUsage + usageOverview.pendingMemoryUsage > regionQuota.totalMemoryQuota) {
-        throw new ForbiddenException(
-          `Total memory limit exceeded. Maximum allowed: ${regionQuota.totalMemoryQuota}GiB.\n${upgradeTierMessage}`,
-        )
-      }
-
-      if (usageOverview.currentDiskUsage + usageOverview.pendingDiskUsage > regionQuota.totalDiskQuota) {
-        throw new ForbiddenException(
-          `Total disk limit exceeded. Maximum allowed: ${regionQuota.totalDiskQuota}GiB.\n${STORAGE_LIMIT_MESSAGE}\n${upgradeTierMessage}`,
-        )
-      }
-    } catch (error) {
-      await this.rollbackPendingUsage(
-        organization.id,
-        region.id,
-        pendingCpuIncremented ? cpu : undefined,
-        pendingMemoryIncremented ? memory : undefined,
-        pendingDiskIncremented ? disk : undefined,
-      )
-      throw error
-    }
-
-    return {
-      pendingCpuIncremented,
-      pendingMemoryIncremented,
-      pendingDiskIncremented,
-    }
-  }
-
-  async rollbackPendingUsage(
-    organizationId: string,
-    regionId: string,
-    pendingCpuIncrement?: number,
-    pendingMemoryIncrement?: number,
-    pendingDiskIncrement?: number,
-  ): Promise<void> {
-    if (!pendingCpuIncrement && !pendingMemoryIncrement && !pendingDiskIncrement) {
-      return
-    }
-
-    try {
-      await this.organizationUsageService.decrementPendingBoxUsage(
-        organizationId,
-        regionId,
-        pendingCpuIncrement,
-        pendingMemoryIncrement,
-        pendingDiskIncrement,
-      )
-    } catch (error) {
-      this.logger.error(`Error rolling back pending box usage: ${error}`)
     }
   }
 
@@ -285,10 +145,6 @@ export class BoxService {
   }
 
   private async createBoxInternal(createBoxDto: CreateBoxDto, organization: Organization): Promise<BoxDto> {
-    let pendingCpuIncrement: number | undefined
-    let pendingMemoryIncrement: number | undefined
-    let pendingDiskIncrement: number | undefined
-
     const region = await this.getValidatedOrDefaultRegion(organization, createBoxDto.target)
 
     try {
@@ -303,19 +159,6 @@ export class BoxService {
       const gpu = createBoxDto.gpu ?? DEFAULT_BOX_GPU
 
       this.organizationService.assertOrganizationIsNotSuspended(organization)
-
-      const { pendingCpuIncremented, pendingMemoryIncremented, pendingDiskIncremented } =
-        await this.validateOrganizationQuotas(organization, region, cpu, mem, disk)
-
-      if (pendingCpuIncremented) {
-        pendingCpuIncrement = cpu
-      }
-      if (pendingMemoryIncremented) {
-        pendingMemoryIncrement = mem
-      }
-      if (pendingDiskIncremented) {
-        pendingDiskIncrement = disk
-      }
 
       // TODO(image-rewrite): warm-pool reuse path removed with box_template; rebuild here.
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
@@ -377,14 +220,6 @@ export class BoxService {
 
       return this.toBoxDto(insertedBox)
     } catch (error) {
-      await this.rollbackPendingUsage(
-        organization.id,
-        region.id,
-        pendingCpuIncrement,
-        pendingMemoryIncrement,
-        pendingDiskIncrement,
-      )
-
       if (error.code === '23505') {
         throw new ConflictException(`Box with name ${createBoxDto.name} already exists`)
       }
@@ -934,10 +769,6 @@ export class BoxService {
   }
 
   async start(boxIdOrName: string, organization: Organization): Promise<Box> {
-    let pendingCpuIncrement: number | undefined
-    let pendingMemoryIncrement: number | undefined
-    let pendingDiskIncrement: number | undefined
-
     const box = await this.findOneByIdOrName(boxIdOrName, organization.id)
 
     const region = await this.regionService.findOne(box.region)
@@ -945,64 +776,40 @@ export class BoxService {
       throw new NotFoundException(`Region with ID ${box.region} not found`)
     }
 
-    try {
-      if (box.state === BoxState.STARTED && box.desiredState === BoxDesiredState.STARTED) {
-        return box
-      }
-
-      this.assertBoxNotErrored(box)
-
-      if (String(box.state) !== String(box.desiredState)) {
-        throw new BoxError('State change in progress')
-      }
-
-      if (box.state !== BoxState.STOPPED) {
-        throw new BoxError('Box is not in valid state')
-      }
-
-      if (box.pending) {
-        throw new BoxError('Box state change in progress')
-      }
-
-      this.organizationService.assertOrganizationIsNotSuspended(organization)
-
-      const { pendingCpuIncremented, pendingMemoryIncremented, pendingDiskIncremented } =
-        await this.validateOrganizationQuotas(organization, region, box.cpu, box.mem, box.disk, box.id)
-
-      if (pendingCpuIncremented) {
-        pendingCpuIncrement = box.cpu
-      }
-      if (pendingMemoryIncremented) {
-        pendingMemoryIncrement = box.mem
-      }
-      if (pendingDiskIncremented) {
-        pendingDiskIncrement = box.disk
-      }
-
-      const updateData: Partial<Box> = {
-        pending: true,
-        desiredState: BoxDesiredState.STARTED,
-        authToken: nanoid(32).toLocaleLowerCase(),
-      }
-
-      const updatedBox = await this.boxRepository.updateWhere(box.id, {
-        updateData,
-        whereCondition: { pending: false, state: box.state },
-      })
-
-      this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updatedBox))
-
-      return updatedBox
-    } catch (error) {
-      await this.rollbackPendingUsage(
-        organization.id,
-        box.region,
-        pendingCpuIncrement,
-        pendingMemoryIncrement,
-        pendingDiskIncrement,
-      )
-      throw error
+    if (box.state === BoxState.STARTED && box.desiredState === BoxDesiredState.STARTED) {
+      return box
     }
+
+    this.assertBoxNotErrored(box)
+
+    if (String(box.state) !== String(box.desiredState)) {
+      throw new BoxError('State change in progress')
+    }
+
+    if (box.state !== BoxState.STOPPED) {
+      throw new BoxError('Box is not in valid state')
+    }
+
+    if (box.pending) {
+      throw new BoxError('Box state change in progress')
+    }
+
+    this.organizationService.assertOrganizationIsNotSuspended(organization)
+
+    const updateData: Partial<Box> = {
+      pending: true,
+      desiredState: BoxDesiredState.STARTED,
+      authToken: nanoid(32).toLocaleLowerCase(),
+    }
+
+    const updatedBox = await this.boxRepository.updateWhere(box.id, {
+      updateData,
+      whereCondition: { pending: false, state: box.state },
+    })
+
+    this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updatedBox))
+
+    return updatedBox
   }
 
   async stop(boxIdOrName: string, organizationId?: string, force?: boolean): Promise<Box> {
@@ -1108,10 +915,6 @@ export class BoxService {
   }
 
   async resize(boxIdOrName: string, resizeDto: ResizeBoxDto, organization: Organization): Promise<Box> {
-    let pendingCpuIncrement: number | undefined
-    let pendingMemoryIncrement: number | undefined
-    let pendingDiskIncrement: number | undefined
-
     const box = await this.findOneByIdOrName(boxIdOrName, organization.id)
 
     const region = await this.regionService.findOne(box.region)
@@ -1119,163 +922,93 @@ export class BoxService {
       throw new NotFoundException(`Region with ID ${box.region} not found`)
     }
 
+    // Validate box is in a valid state for resize
+    if (box.state !== BoxState.STARTED && box.state !== BoxState.STOPPED) {
+      throw new BadRequestError('Box must be in started or stopped state to resize')
+    }
+
+    if (box.pending) {
+      throw new BoxError('Box state change in progress')
+    }
+
+    // If no resize parameters provided, throw error
+    if (resizeDto.cpu === undefined && resizeDto.memory === undefined && resizeDto.disk === undefined) {
+      throw new BadRequestError('No resource changes specified - box is already at the desired configuration')
+    }
+
+    // Disk resize requires stopped box (cold resize only)
+    if (resizeDto.disk !== undefined && box.state !== BoxState.STOPPED) {
+      throw new BadRequestError('Disk resize can only be performed on a stopped box')
+    }
+
+    // Hot resize (box is running): only CPU and memory can be increased
+    const isHotResize = box.state === BoxState.STARTED
+
+    // Validate hot resize constraints
+    if (isHotResize) {
+      if (resizeDto.cpu !== undefined && resizeDto.cpu < box.cpu) {
+        throw new BadRequestError('Box must be in stopped state to decrease the number of CPU cores')
+      }
+
+      if (resizeDto.memory !== undefined && resizeDto.memory < box.mem) {
+        throw new BadRequestError('Box must be in stopped state to decrease memory')
+      }
+    }
+
+    // Disk can only be increased (never decreased)
+    if (resizeDto.disk !== undefined && resizeDto.disk < box.disk) {
+      throw new BadRequestError('Box disk size cannot be decreased')
+    }
+
+    // Calculate new resource values
+    const newCpu = resizeDto.cpu ?? box.cpu
+    const newMem = resizeDto.memory ?? box.mem
+    const newDisk = resizeDto.disk ?? box.disk
+
+    // Throw if nothing actually changes
+    if (newCpu === box.cpu && newMem === box.mem && newDisk === box.disk) {
+      throw new BadRequestError('No resource changes specified - box is already at the desired configuration')
+    }
+
+    this.organizationService.assertOrganizationIsNotSuspended(organization)
+
+    // Get runner and validate before changing state
+    if (!box.runnerId) {
+      throw new BadRequestError('Box has no runner assigned')
+    }
+
+    const runner = await this.runnerService.findOneOrFail(box.runnerId)
+
+    // Capture the previous state before transitioning to RESIZING (STARTED or STOPPED)
+    const previousState =
+      box.state === BoxState.STARTED ? BoxState.STARTED : box.state === BoxState.STOPPED ? BoxState.STOPPED : null
+
+    if (!previousState) {
+      throw new BadRequestError('Box must be in started or stopped state to resize')
+    }
+
+    // Now transition to RESIZING state
+    const updateData: Partial<Box> = {
+      state: BoxState.RESIZING,
+    }
+
+    await this.boxRepository.updateWhere(box.id, {
+      updateData,
+      whereCondition: { pending: false, state: previousState },
+    })
+
     try {
-      // Validate box is in a valid state for resize
-      if (box.state !== BoxState.STARTED && box.state !== BoxState.STOPPED) {
-        throw new BadRequestError('Box must be in started or stopped state to resize')
-      }
+      const runnerAdapter = await this.runnerAdapterFactory.create(runner)
 
-      if (box.pending) {
-        throw new BoxError('Box state change in progress')
-      }
+      await runnerAdapter.resizeBox(box.id, resizeDto.cpu, resizeDto.memory, resizeDto.disk)
 
-      // If no resize parameters provided, throw error
-      if (resizeDto.cpu === undefined && resizeDto.memory === undefined && resizeDto.disk === undefined) {
-        throw new BadRequestError('No resource changes specified - box is already at the desired configuration')
-      }
-
-      // Disk resize requires stopped box (cold resize only)
-      if (resizeDto.disk !== undefined && box.state !== BoxState.STOPPED) {
-        throw new BadRequestError('Disk resize can only be performed on a stopped box')
-      }
-
-      // Hot resize (box is running): only CPU and memory can be increased
-      const isHotResize = box.state === BoxState.STARTED
-
-      // Validate hot resize constraints
-      if (isHotResize) {
-        if (resizeDto.cpu !== undefined && resizeDto.cpu < box.cpu) {
-          throw new BadRequestError('Box must be in stopped state to decrease the number of CPU cores')
-        }
-
-        if (resizeDto.memory !== undefined && resizeDto.memory < box.mem) {
-          throw new BadRequestError('Box must be in stopped state to decrease memory')
-        }
-      }
-
-      // Disk can only be increased (never decreased)
-      if (resizeDto.disk !== undefined && resizeDto.disk < box.disk) {
-        throw new BadRequestError('Box disk size cannot be decreased')
-      }
-
-      // Calculate new resource values
-      const newCpu = resizeDto.cpu ?? box.cpu
-      const newMem = resizeDto.memory ?? box.mem
-      const newDisk = resizeDto.disk ?? box.disk
-
-      // Throw if nothing actually changes
-      if (newCpu === box.cpu && newMem === box.mem && newDisk === box.disk) {
-        throw new BadRequestError('No resource changes specified - box is already at the desired configuration')
-      }
-
-      // Validate organization quotas for the new resource values
-      this.organizationService.assertOrganizationIsNotSuspended(organization)
-
-      // Validate per-box quotas with total new values
-      if (newCpu > organization.maxCpuPerBox) {
-        throw new ForbiddenException(
-          `CPU request ${newCpu} exceeds maximum allowed per box (${organization.maxCpuPerBox}).\n${PER_BOX_LIMIT_MESSAGE}`,
-        )
-      }
-      if (newMem > organization.maxMemoryPerBox) {
-        throw new ForbiddenException(
-          `Memory request ${newMem}GB exceeds maximum allowed per box (${organization.maxMemoryPerBox}GB).\n${PER_BOX_LIMIT_MESSAGE}`,
-        )
-      }
-      if (newDisk > organization.maxDiskPerBox) {
-        throw new ForbiddenException(
-          `Disk request ${newDisk}GB exceeds maximum allowed per box (${organization.maxDiskPerBox}GB).\n${PER_BOX_LIMIT_MESSAGE}`,
-        )
-      }
-
-      // For cold resize, cpu/memory don't affect quota until box is STARTED.
-      // For hot resize, track all deltas (positive reserves quota, negative frees quota for others).
-      const cpuDeltaForQuota = isHotResize ? newCpu - box.cpu : 0
-      const memDeltaForQuota = isHotResize ? newMem - box.mem : 0
-      const diskDeltaForQuota = newDisk - box.disk // Disk only increases (validated at start of method)
-
-      // Validate and track pending for any non-zero quota changes
-      if (cpuDeltaForQuota !== 0 || memDeltaForQuota !== 0 || diskDeltaForQuota !== 0) {
-        const { pendingCpuIncremented, pendingMemoryIncremented, pendingDiskIncremented } =
-          await this.validateOrganizationQuotas(
-            organization,
-            region,
-            cpuDeltaForQuota,
-            memDeltaForQuota,
-            diskDeltaForQuota,
-          )
-
-        if (pendingCpuIncremented) {
-          pendingCpuIncrement = cpuDeltaForQuota
-        }
-        if (pendingMemoryIncremented) {
-          pendingMemoryIncrement = memDeltaForQuota
-        }
-        if (pendingDiskIncremented) {
-          pendingDiskIncrement = diskDeltaForQuota
-        }
-      }
-
-      // Get runner and validate before changing state
-      if (!box.runnerId) {
-        throw new BadRequestError('Box has no runner assigned')
-      }
-
-      const runner = await this.runnerService.findOneOrFail(box.runnerId)
-
-      // Capture the previous state before transitioning to RESIZING (STARTED or STOPPED)
-      const previousState =
-        box.state === BoxState.STARTED ? BoxState.STARTED : box.state === BoxState.STOPPED ? BoxState.STOPPED : null
-
-      if (!previousState) {
-        throw new BadRequestError('Box must be in started or stopped state to resize')
-      }
-
-      // Now transition to RESIZING state
-      const updateData: Partial<Box> = {
-        state: BoxState.RESIZING,
-      }
-
-      await this.boxRepository.updateWhere(box.id, {
-        updateData,
-        whereCondition: { pending: false, state: previousState },
-      })
-
-      try {
-        const runnerAdapter = await this.runnerAdapterFactory.create(runner)
-
-        await runnerAdapter.resizeBox(box.id, resizeDto.cpu, resizeDto.memory, resizeDto.disk)
-
-        // For V0 runners, update resources immediately (subscriber emits STATE_UPDATED)
-        // For V2 runners, job handler will update resources on completion
-        if (runner.apiVersion === '0') {
-          const updateData: Partial<Box> = {
-            cpu: newCpu,
-            mem: newMem,
-            disk: newDisk,
-            state: previousState,
-          }
-
-          await this.boxRepository.updateWhere(box.id, {
-            updateData,
-            whereCondition: { state: BoxState.RESIZING },
-          })
-
-          // Apply the usage change (increments current, decrements pending)
-          // Only apply deltas for quotas that were validated/pending-incremented
-          await this.organizationUsageService.applyResizeUsageChange(
-            organization.id,
-            box.region,
-            cpuDeltaForQuota,
-            memDeltaForQuota,
-            diskDeltaForQuota,
-          )
-        }
-
-        return await this.findOneByIdOrName(box.id, organization.id)
-      } catch (error) {
-        // Return to previous state on error
+      // For V0 runners, update resources immediately (subscriber emits STATE_UPDATED)
+      // For V2 runners, job handler will update resources on completion
+      if (runner.apiVersion === '0') {
         const updateData: Partial<Box> = {
+          cpu: newCpu,
+          mem: newMem,
+          disk: newDisk,
           state: previousState,
         }
 
@@ -1283,17 +1016,20 @@ export class BoxService {
           updateData,
           whereCondition: { state: BoxState.RESIZING },
         })
-
-        throw error
       }
+
+      return await this.findOneByIdOrName(box.id, organization.id)
     } catch (error) {
-      await this.rollbackPendingUsage(
-        organization.id,
-        box.region,
-        pendingCpuIncrement,
-        pendingMemoryIncrement,
-        pendingDiskIncrement,
-      )
+      // Return to previous state on error
+      const updateData: Partial<Box> = {
+        state: previousState,
+      }
+
+      await this.boxRepository.updateWhere(box.id, {
+        updateData,
+        whereCondition: { state: BoxState.RESIZING },
+      })
+
       throw error
     }
   }

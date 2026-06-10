@@ -70,7 +70,6 @@ const configuration = {
     secure: process.env.SMTP_SECURE === 'true',
     from: process.env.SMTP_EMAIL_FROM || 'noreply@mail.boxlite.io',
   },
-  defaultTemplate: process.env.DEFAULT_TEMPLATE,
   dashboardUrl: process.env.DASHBOARD_URL,
   // Default to empty string - dashboard will then hit '/api'
   dashboardBaseApiUrl: process.env.DASHBOARD_BASE_API_URL || '',
@@ -272,16 +271,6 @@ const configuration = {
       enabled: process.env.LOG_REQUESTS_ENABLED === 'true',
     },
   },
-  defaultOrganizationQuota: {
-    totalCpuQuota: parseInt(process.env.DEFAULT_ORG_QUOTA_TOTAL_CPU_QUOTA || '10', 10),
-    totalMemoryQuota: parseInt(process.env.DEFAULT_ORG_QUOTA_TOTAL_MEMORY_QUOTA || '10', 10),
-    totalDiskQuota: parseInt(process.env.DEFAULT_ORG_QUOTA_TOTAL_DISK_QUOTA || '30', 10),
-    maxCpuPerBox: parseInt(process.env.DEFAULT_ORG_QUOTA_MAX_CPU_PER_BOX || '4', 10),
-    maxMemoryPerBox: parseInt(process.env.DEFAULT_ORG_QUOTA_MAX_MEMORY_PER_BOX || '8', 10),
-    maxDiskPerBox: parseInt(process.env.DEFAULT_ORG_QUOTA_MAX_DISK_PER_BOX || '10', 10),
-    maxTemplateSize: parseInt(process.env.DEFAULT_ORG_QUOTA_MAX_TEMPLATE_SIZE || '20', 10),
-    volumeQuota: parseInt(process.env.DEFAULT_ORG_QUOTA_VOLUME_QUOTA || '100', 10),
-  },
   defaultRegion: {
     id: process.env.DEFAULT_REGION_ID || 'us',
     name: process.env.DEFAULT_REGION_NAME || 'us',
@@ -289,14 +278,6 @@ const configuration = {
   },
   admin: {
     apiKey: process.env.ADMIN_API_KEY,
-    totalCpuQuota: parseInt(process.env.ADMIN_TOTAL_CPU_QUOTA || '0', 10),
-    totalMemoryQuota: parseInt(process.env.ADMIN_TOTAL_MEMORY_QUOTA || '0', 10),
-    totalDiskQuota: parseInt(process.env.ADMIN_TOTAL_DISK_QUOTA || '0', 10),
-    maxCpuPerBox: parseInt(process.env.ADMIN_MAX_CPU_PER_BOX || '0', 10),
-    maxMemoryPerBox: parseInt(process.env.ADMIN_MAX_MEMORY_PER_BOX || '0', 10),
-    maxDiskPerBox: parseInt(process.env.ADMIN_MAX_DISK_PER_BOX || '0', 10),
-    maxTemplateSize: parseInt(process.env.ADMIN_MAX_TEMPLATE_SIZE || '100', 10),
-    volumeQuota: parseInt(process.env.ADMIN_VOLUME_QUOTA || '0', 10),
   },
   skipUserEmailVerification: process.env.SKIP_USER_EMAIL_VERIFICATION === 'true',
   apiKey: {

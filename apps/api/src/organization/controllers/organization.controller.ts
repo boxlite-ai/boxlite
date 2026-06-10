@@ -24,8 +24,6 @@ import { RequiredOrganizationMemberRole } from '../decorators/required-organizat
 import { CreateOrganizationDto } from '../dto/create-organization.dto'
 import { OrganizationDto } from '../dto/organization.dto'
 import { OrganizationInvitationDto } from '../dto/organization-invitation.dto'
-import { OrganizationUsageOverviewDto } from '../dto/organization-usage-overview.dto'
-import { UpdateOrganizationQuotaDto } from '../dto/update-organization-quota.dto'
 import { OrganizationMemberRole } from '../enums/organization-member-role.enum'
 import { OrganizationActionGuard } from '../guards/organization-action.guard'
 import { OrganizationService } from '../services/organization.service'
@@ -43,14 +41,11 @@ import { Audit, TypedRequest } from '../../audit/decorators/audit.decorator'
 import { AuditAction } from '../../audit/enums/audit-action.enum'
 import { AuditTarget } from '../../audit/enums/audit-target.enum'
 import { EmailUtils } from '../../common/utils/email.util'
-import { OrganizationUsageService } from '../services/organization-usage.service'
 import { OrganizationBoxDefaultLimitedNetworkEgressDto } from '../dto/organization-box-default-limited-network-egress.dto'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { AuthenticatedRateLimitGuard } from '../../common/guards/authenticated-rate-limit.guard'
-import { UpdateOrganizationRegionQuotaDto } from '../dto/update-organization-region-quota.dto'
 import { UpdateOrganizationDefaultRegionDto } from '../dto/update-organization-default-region.dto'
 import { UpdateOrganizationNameDto } from '../dto/update-organization-name.dto'
-import { RegionQuotaDto } from '../dto/region-quota.dto'
 import { RequireFlagsEnabled } from '@openfeature/nestjs-sdk'
 import { OrGuard } from '../../auth/or.guard'
 import { OtelCollectorGuard } from '../../auth/otel-collector.guard'
@@ -67,7 +62,6 @@ export class OrganizationController {
     private readonly organizationService: OrganizationService,
     private readonly organizationUserService: OrganizationUserService,
     private readonly organizationInvitationService: OrganizationInvitationService,
-    private readonly organizationUsageService: OrganizationUsageService,
     private readonly userService: UserService,
     private readonly configService: TypedConfigService,
   ) {}
@@ -357,109 +351,6 @@ export class OrganizationController {
     return this.organizationService.delete(organizationId)
   }
 
-  @Get('/:organizationId/usage')
-  @ApiOperation({
-    summary: 'Get organization current usage overview',
-    operationId: 'getOrganizationUsageOverview',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Current usage overview',
-    type: OrganizationUsageOverviewDto,
-  })
-  @ApiParam({
-    name: 'organizationId',
-    description: 'Organization ID',
-    type: 'string',
-  })
-  @UseGuards(AuthGuard('jwt'), OrganizationActionGuard)
-  async getUsageOverview(@Param('organizationId') organizationId: string): Promise<OrganizationUsageOverviewDto> {
-    return this.organizationUsageService.getUsageOverview(organizationId)
-  }
-
-  @Patch('/:organizationId/quota')
-  @HttpCode(204)
-  @ApiOperation({
-    summary: 'Update organization quota',
-    operationId: 'updateOrganizationQuota',
-  })
-  @ApiResponse({
-    status: 204,
-    description: 'Organization quota updated successfully',
-  })
-  @ApiParam({
-    name: 'organizationId',
-    description: 'Organization ID',
-    type: 'string',
-  })
-  @RequiredSystemRole(SystemRole.ADMIN)
-  @UseGuards(CombinedAuthGuard, AuthenticatedRateLimitGuard, SystemActionGuard)
-  @Audit({
-    action: AuditAction.UPDATE_QUOTA,
-    targetType: AuditTarget.ORGANIZATION,
-    targetIdFromRequest: (req) => req.params.organizationId,
-    requestMetadata: {
-      body: (req: TypedRequest<UpdateOrganizationQuotaDto>) => ({
-        maxCpuPerBox: req.body?.maxCpuPerBox,
-        maxMemoryPerBox: req.body?.maxMemoryPerBox,
-        maxDiskPerBox: req.body?.maxDiskPerBox,
-        maxTemplateSize: req.body?.maxTemplateSize,
-        volumeQuota: req.body?.volumeQuota,
-      }),
-    },
-  })
-  async updateOrganizationQuota(
-    @Param('organizationId') organizationId: string,
-    @Body() updateDto: UpdateOrganizationQuotaDto,
-  ): Promise<void> {
-    await this.organizationService.updateQuota(organizationId, updateDto)
-  }
-
-  @Patch('/:organizationId/quota/:regionId')
-  @HttpCode(204)
-  @ApiOperation({
-    summary: 'Update organization region quota',
-    operationId: 'updateOrganizationRegionQuota',
-  })
-  @ApiResponse({
-    status: 204,
-    description: 'Region quota updated successfully',
-  })
-  @ApiParam({
-    name: 'organizationId',
-    description: 'Organization ID',
-    type: 'string',
-  })
-  @ApiParam({
-    name: 'regionId',
-    description: 'ID of the region where the updated quota will be applied',
-    type: 'string',
-  })
-  @RequiredSystemRole(SystemRole.ADMIN)
-  @UseGuards(CombinedAuthGuard, AuthenticatedRateLimitGuard, SystemActionGuard)
-  @Audit({
-    action: AuditAction.UPDATE_REGION_QUOTA,
-    targetType: AuditTarget.ORGANIZATION,
-    targetIdFromRequest: (req) => req.params.organizationId,
-    requestMetadata: {
-      params: (req) => ({
-        regionId: req.params.regionId,
-      }),
-      body: (req: TypedRequest<UpdateOrganizationRegionQuotaDto>) => ({
-        totalCpuQuota: req.body?.totalCpuQuota,
-        totalMemoryQuota: req.body?.totalMemoryQuota,
-        totalDiskQuota: req.body?.totalDiskQuota,
-      }),
-    },
-  })
-  async updateOrganizationRegionQuota(
-    @Param('organizationId') organizationId: string,
-    @Param('regionId') regionId: string,
-    @Body() updateDto: UpdateOrganizationRegionQuotaDto,
-  ): Promise<void> {
-    await this.organizationService.updateRegionQuota(organizationId, regionId, updateDto)
-  }
-
   @Post('/:organizationId/leave')
   @ApiOperation({
     summary: 'Leave organization',
@@ -577,32 +468,6 @@ export class OrganizationController {
     }
 
     return OrganizationDto.fromOrganization(organization)
-  }
-
-  @Get('/region-quota/by-box-id/:boxId')
-  @ApiOperation({
-    summary: 'Get region quota by box ID',
-    operationId: 'getRegionQuotaByBoxId',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Region quota',
-    type: RegionQuotaDto,
-  })
-  @ApiParam({
-    name: 'boxId',
-    description: 'Box ID',
-    type: 'string',
-  })
-  @RequiredApiRole([SystemRole.ADMIN, 'proxy'])
-  @UseGuards(CombinedAuthGuard, AuthenticatedRateLimitGuard, SystemActionGuard)
-  async getRegionQuotaByBoxId(@Param('boxId') boxId: string): Promise<RegionQuotaDto> {
-    const regionQuota = await this.organizationService.getRegionQuotaByBoxId(boxId)
-    if (!regionQuota) {
-      throw new NotFoundException(`Region quota for box with ID ${boxId} not found`)
-    }
-
-    return regionQuota
   }
 
   @Get('/otel-config/by-box-auth-token/:authToken')

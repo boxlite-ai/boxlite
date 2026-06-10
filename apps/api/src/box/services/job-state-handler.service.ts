@@ -11,7 +11,6 @@ import { JobType } from '../enums/job-type.enum'
 import { Job } from '../entities/job.entity'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { sanitizeBoxError } from '../utils/sanitize-error.util'
-import { OrganizationUsageService } from '../../organization/services/organization-usage.service'
 import { BoxRepository } from '../repositories/box.repository'
 import { Box } from '../entities/box.entity'
 import { RedisLockProvider } from '../common/redis-lock.provider'
@@ -28,7 +27,6 @@ export class JobStateHandlerService {
 
   constructor(
     private readonly boxRepository: BoxRepository,
-    private readonly organizationUsageService: OrganizationUsageService,
     private readonly redisLockProvider: RedisLockProvider,
   ) {}
 
@@ -306,14 +304,7 @@ export class JobStateHandlerService {
         return
       }
 
-      // Calculate deltas before updating box
       const payload = job.payload as { cpu?: number; memory?: number; disk?: number }
-
-      // For cold resize (previousState === STOPPED), cpu/memory don't affect org quota.
-      const isHotResize = previousState === BoxState.STARTED
-      const cpuDeltaForQuota = isHotResize ? (payload.cpu ?? box.cpu) - box.cpu : 0
-      const memDeltaForQuota = isHotResize ? (payload.memory ?? box.mem) - box.mem : 0
-      const diskDeltaForQuota = (payload.disk ?? box.disk) - box.disk // Disk only increases
 
       const updateData: Partial<Box> = {}
 
@@ -325,27 +316,9 @@ export class JobStateHandlerService {
         updateData.mem = payload.memory ?? box.mem
         updateData.disk = payload.disk ?? box.disk
         updateData.state = previousState
-
-        // Apply usage change (handles both positive and negative deltas)
-        await this.organizationUsageService.applyResizeUsageChange(
-          box.organizationId,
-          box.region,
-          cpuDeltaForQuota,
-          memDeltaForQuota,
-          diskDeltaForQuota,
-        )
         return
       } else if (job.status === JobStatus.FAILED) {
         this.logger.error(`RESIZE_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
-
-        // Rollback pending usage (all deltas were tracked, including negative)
-        await this.organizationUsageService.decrementPendingBoxUsage(
-          box.organizationId,
-          box.region,
-          cpuDeltaForQuota !== 0 ? cpuDeltaForQuota : undefined,
-          memDeltaForQuota !== 0 ? memDeltaForQuota : undefined,
-          diskDeltaForQuota !== 0 ? diskDeltaForQuota : undefined,
-        )
 
         updateData.state = previousState
       }
