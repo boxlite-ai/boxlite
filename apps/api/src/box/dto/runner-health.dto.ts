@@ -59,23 +59,6 @@ export class RunnerHealthMetricsDto {
   @IsNumber()
   currentAllocatedDiskGiB: number
 
-  @ApiPropertyOptional({
-    description: 'Number of artifacts currently stored. Old runners may send currentSnapshotCount instead.',
-    example: 5,
-  })
-  @IsOptional()
-  @IsNumber()
-  currentArtifactCount?: number
-
-  @ApiPropertyOptional({
-    description: 'Deprecated alias for currentArtifactCount used by old runners',
-    example: 5,
-    deprecated: true,
-  })
-  @IsOptional()
-  @IsNumber()
-  currentSnapshotCount?: number
-
   @ApiProperty({
     description: 'Number of started boxes',
     example: 10,

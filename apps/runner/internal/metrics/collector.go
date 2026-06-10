@@ -59,7 +59,6 @@ type Metrics struct {
 	AllocatedCPU          float32
 	AllocatedMemoryGiB    float32
 	AllocatedDiskGiB      float32
-	ArtifactCount         float32
 	TotalCPU              float32
 	TotalRAMGiB           float32
 	TotalDiskGiB          float32
@@ -140,13 +139,6 @@ func (c *Collector) collect(ctx context.Context) (*Metrics, error) {
 	}
 	metrics.DiskUsagePercentage = float32(diskStats.UsedPercent)
 	metrics.TotalDiskGiB = float32(diskStats.Total) / (1024 * 1024 * 1024)
-
-	images, err := c.boxlite.ListImages(ctx)
-	if err != nil {
-		c.log.WarnContext(ctx, "Failed to get image count", "error", err)
-	} else {
-		metrics.ArtifactCount = float32(len(images))
-	}
 
 	c.resourcesMutex.RLock()
 	metrics.AllocatedCPU = c.allocatedCPU

@@ -121,12 +121,6 @@ export class RunnerDto {
   currentAllocatedDiskGiB: number
 
   @ApiPropertyOptional({
-    description: 'Current artifact count',
-    example: 12,
-  })
-  currentArtifactCount: number
-
-  @ApiPropertyOptional({
     description: 'Current number of started boxes',
     example: 5,
   })
@@ -225,7 +219,6 @@ export class RunnerDto {
       currentAllocatedCpu: runner.currentAllocatedCpu,
       currentAllocatedMemoryGiB: runner.currentAllocatedMemoryGiB,
       currentAllocatedDiskGiB: runner.currentAllocatedDiskGiB,
-      currentArtifactCount: runner.currentArtifactCount,
       currentStartedBoxes: runner.currentStartedBoxes,
       availabilityScore: runner.availabilityScore,
       region: runner.region,

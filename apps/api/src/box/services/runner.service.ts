@@ -364,8 +364,6 @@ export class RunnerService {
       currentAllocatedCpu?: number
       currentAllocatedMemoryGiB?: number
       currentAllocatedDiskGiB?: number
-      currentArtifactCount?: number
-      currentSnapshotCount?: number
       currentStartedBoxes?: number
       cpu?: number
       memoryGiB?: number
@@ -429,7 +427,6 @@ export class RunnerService {
       updateData.currentAllocatedCpu = metrics.currentAllocatedCpu || 0
       updateData.currentAllocatedMemoryGiB = metrics.currentAllocatedMemoryGiB || 0
       updateData.currentAllocatedDiskGiB = metrics.currentAllocatedDiskGiB || 0
-      updateData.currentArtifactCount = metrics.currentArtifactCount ?? metrics.currentSnapshotCount ?? 0
       updateData.currentStartedBoxes = metrics.currentStartedBoxes || 0
       updateData.cpu = metrics.cpu
       updateData.memoryGiB = metrics.memoryGiB

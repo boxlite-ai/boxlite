@@ -47,7 +47,6 @@ describe('AdminOverviewService', () => {
         currentAllocatedCpu: 1,
         currentAllocatedMemoryGiB: 1,
         currentAllocatedDiskGiB: 1,
-        currentArtifactCount: 0,
         currentStartedSandboxes: 0,
         availabilityScore: 100,
         region: 'us',
