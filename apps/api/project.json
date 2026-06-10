@@ -49,11 +49,12 @@
       "options": {
         "commands": [
           "mkdir -p dist/apps/api",
-          "yarn ts-node apps/api/src/generate-openapi.ts -o dist/apps/api/openapi.json"
+          "yarn ts-node api/src/generate-openapi.ts -o dist/apps/api/openapi.json"
         ],
         "parallel": false,
         "env": {
-          "TS_NODE_PROJECT": "apps/api/tsconfig.app.json",
+          "TS_NODE_PROJECT": "api/tsconfig.app.json",
+          "TS_NODE_TRANSPILE_ONLY": "true",
           "NODE_OPTIONS": "--require tsconfig-paths/register",
           "SKIP_CONNECTIONS": "true"
         }

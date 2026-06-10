@@ -17,7 +17,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common'
-import { ApiTags, ApiBearerAuth } from '@nestjs/swagger'
+import { ApiTags, ApiBearerAuth, ApiExcludeController } from '@nestjs/swagger'
 import { createProxyMiddleware, fixRequestBody, Options } from 'http-proxy-middleware'
 import { Request, Response, NextFunction } from 'express'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
@@ -27,6 +27,9 @@ import { OrganizationAuthContext } from '../common/interfaces/auth-context.inter
 import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
 
+// Spec-first surface (openapi/box.openapi.yaml). Must stay out of the product
+// spec: @All() expands to the SEARCH verb, which OpenAPI 3.0 cannot express.
+@ApiExcludeController()
 @ApiTags('BoxLite REST')
 @Controller('v1/:prefix/boxes')
 @UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard)

@@ -81,6 +81,7 @@ yarn-error.log*
 .env
 .env.*
 !/openapi/reference-server/.env.example
+!/apps/api/.env.example
 
 # ============================================================================
 # Go SDK

@@ -19,7 +19,7 @@ import {
   NotFoundException,
   Res,
 } from '@nestjs/common'
-import { ApiTags, ApiBearerAuth } from '@nestjs/swagger'
+import { ApiTags, ApiBearerAuth, ApiExcludeController } from '@nestjs/swagger'
 import { Response } from 'express'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
@@ -37,6 +37,9 @@ import { Audit, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/aud
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 
+// Spec-first surface: the contract is openapi/box.openapi.yaml, not the
+// generated product spec (which `:prefix` routes would render invalid).
+@ApiExcludeController()
 @ApiTags('BoxLite REST')
 @Controller('v1/:prefix/boxes')
 @UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard)

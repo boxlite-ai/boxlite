@@ -5,7 +5,7 @@
  */
 
 import { Controller, Get, UseGuards } from '@nestjs/common'
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
+import { ApiBearerAuth, ApiTags, ApiExcludeController } from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { AuthContext as AuthCtx } from '../common/interfaces/auth-context.interface'
@@ -22,6 +22,7 @@ import { PrincipalDto } from './dto/principal.dto'
  *
  * Spec: `openapi/box.openapi.yaml` § GET /me.
  */
+@ApiExcludeController()
 @ApiTags('BoxLite REST')
 @Controller('v1')
 @UseGuards(CombinedAuthGuard)
