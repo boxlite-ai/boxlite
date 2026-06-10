@@ -59,7 +59,7 @@ export class AdminOverviewController {
   @Get('boxes')
   @HttpCode(200)
   @ApiOperation({
-    summary: 'List all sandboxes (cross-org)',
+    summary: 'List all boxes (cross-org)',
     operationId: 'adminListBoxes',
   })
   @ApiResponse({

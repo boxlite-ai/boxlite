@@ -151,7 +151,7 @@ func (s *server) initTelemetry(ctx context.Context, serviceName, entrypointLogFi
 	s.telemetry.LoggerProvider = lp
 
 	// Make the box's telemetry join the api->runner traceId (instead of rooting a fresh trace).
-	seedBootSpanFromTraceParent(ctx, tp.Tracer("boxlite.sandbox"), traceParent)
+	seedBootSpanFromTraceParent(ctx, tp.Tracer("boxlite.box"), traceParent)
 
 	s.logger.InfoContext(ctx, "Telemetry initialized successfully")
 	return nil

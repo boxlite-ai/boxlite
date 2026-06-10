@@ -129,7 +129,6 @@ describe('AdminObservabilityService', () => {
       serviceName: 'boxlite-box',
       orgId: 'org-1',
       userId: 'user-1',
-      sandboxId: 'sandbox-1',
       boxId: 'box-1',
       runnerId: 'runner-1',
       machineId: 'machine-1',
@@ -148,11 +147,9 @@ describe('AdminObservabilityService', () => {
     expect(countQuery).toContain("LogAttributes['boxlite.org_id'] = {orgId:String}")
     expect(countQuery).toContain("ResourceAttributes['boxlite.user_id'] = {userId:String}")
     expect(countQuery).toContain("LogAttributes['boxlite.user_id'] = {userId:String}")
-    expect(countQuery).toContain("ResourceAttributes['boxlite.sandbox_id'] = {sandboxId:String}")
-    expect(countQuery).toContain("LogAttributes['boxlite.sandbox_id'] = {sandboxId:String}")
-    expect(countQuery).toContain('ServiceName = {sandboxServiceName:String}')
     expect(countQuery).toContain("ResourceAttributes['boxlite.box_id'] = {boxId:String}")
     expect(countQuery).toContain("LogAttributes['boxlite.box_id'] = {boxId:String}")
+    expect(countQuery).toContain('ServiceName = {boxServiceName:String}')
     expect(countQuery).toContain("ResourceAttributes['boxlite.runner_id'] = {runnerId:String}")
     expect(countQuery).toContain("LogAttributes['boxlite.runner_id'] = {runnerId:String}")
     expect(countQuery).toContain("ResourceAttributes['boxlite.machine_id'] = {machineId:String}")
@@ -164,11 +161,10 @@ describe('AdminObservabilityService', () => {
       serviceName: 'boxlite-box',
       orgId: 'org-1',
       userId: 'user-1',
-      sandboxId: 'sandbox-1',
       boxId: 'box-1',
       runnerId: 'runner-1',
       machineId: 'machine-1',
-      sandboxServiceName: 'sandbox-sandbox-1',
+      boxServiceName: 'box-box-1',
       severities: ['error'],
       search: '%entrypoint%',
       offset: 25,
@@ -187,7 +183,6 @@ describe('AdminObservabilityService', () => {
       limit: 25,
       orgId: 'org-1',
       userId: 'user-1',
-      sandboxId: 'sandbox-1',
       boxId: 'box-1',
       runnerId: 'runner-1',
       machineId: 'machine-1',
@@ -200,11 +195,9 @@ describe('AdminObservabilityService', () => {
     expect(countQuery).toContain("SpanAttributes['boxlite.org_id'] = {orgId:String}")
     expect(countQuery).toContain("ResourceAttributes['boxlite.user_id'] = {userId:String}")
     expect(countQuery).toContain("SpanAttributes['boxlite.user_id'] = {userId:String}")
-    expect(countQuery).toContain("ResourceAttributes['boxlite.sandbox_id'] = {sandboxId:String}")
-    expect(countQuery).toContain("SpanAttributes['boxlite.sandbox_id'] = {sandboxId:String}")
-    expect(countQuery).toContain('ServiceName = {sandboxServiceName:String}')
     expect(countQuery).toContain("ResourceAttributes['boxlite.box_id'] = {boxId:String}")
     expect(countQuery).toContain("SpanAttributes['boxlite.box_id'] = {boxId:String}")
+    expect(countQuery).toContain('ServiceName = {boxServiceName:String}')
     expect(countQuery).toContain("ResourceAttributes['boxlite.runner_id'] = {runnerId:String}")
     expect(countQuery).toContain("SpanAttributes['boxlite.runner_id'] = {runnerId:String}")
     expect(countQuery).toContain("ResourceAttributes['boxlite.machine_id'] = {machineId:String}")
@@ -213,9 +206,8 @@ describe('AdminObservabilityService', () => {
     expect(countParams).toMatchObject({
       orgId: 'org-1',
       userId: 'user-1',
-      sandboxId: 'sandbox-1',
-      sandboxServiceName: 'sandbox-sandbox-1',
       boxId: 'box-1',
+      boxServiceName: 'box-box-1',
       runnerId: 'runner-1',
       machineId: 'machine-1',
     })
@@ -233,7 +225,7 @@ describe('AdminObservabilityService', () => {
           SpanName: 'GET /x',
           Timestamp: '2026-06-08 07:00:00',
           Duration: 1000,
-          ServiceName: 'sandbox-abc',
+          ServiceName: 'box-abc',
           ResourceAttributes: {},
           SpanAttributes: {},
           StatusCode: 'Error',
@@ -253,7 +245,7 @@ describe('AdminObservabilityService', () => {
     expect(spansQuery).toContain('ServiceName')
     expect(spans[0]).toMatchObject({
       spanId: 'span-1',
-      serviceName: 'sandbox-abc',
+      serviceName: 'box-abc',
       layer: 'box',
     })
   })
@@ -337,7 +329,7 @@ describe('AdminObservabilityService', () => {
       queryRows: [
         {
           timestamp: '2026-06-05T00:00:00.000Z',
-          MetricName: 'boxlite.runner.started_sandboxes',
+          MetricName: 'boxlite.runner.started_boxes',
           layer: 'runner',
           value: 3,
         },
@@ -351,12 +343,12 @@ describe('AdminObservabilityService', () => {
         page: 1,
         limit: 100,
         layer: 'runner',
-        metricNames: ['boxlite.runner.started_sandboxes'],
+        metricNames: ['boxlite.runner.started_boxes'],
       }),
     ).resolves.toEqual({
       series: [
         {
-          metricName: 'boxlite.runner.started_sandboxes',
+          metricName: 'boxlite.runner.started_boxes',
           layer: 'runner',
           dataPoints: [{ timestamp: '2026-06-05T00:00:00.000Z', value: 3 }],
         },
@@ -372,11 +364,11 @@ describe('AdminObservabilityService', () => {
     expect(metricsQuery).toContain('MetricName IN ({metricNames:Array(String)})')
     expect(metricsParams).toMatchObject({
       layer: 'runner',
-      metricNames: ['boxlite.runner.started_sandboxes'],
+      metricNames: ['boxlite.runner.started_boxes'],
     })
   })
 
-  it('derives box correlation from sandbox service names when resource attributes are not present', async () => {
+  it('derives box correlation from box service names when resource attributes are not present', async () => {
     const { service, clickhouseService, overviewService, cloudWatchLogReader, s3ObjectReader } = buildService({
       configured: true,
     })
@@ -390,7 +382,7 @@ describe('AdminObservabilityService', () => {
             SpanName: 'GET /version',
             Timestamp: '2026-06-05T00:00:00.000Z',
             Duration: 1_000_000,
-            ServiceName: 'sandbox-sandbox-1',
+            ServiceName: 'box-box-1',
             ResourceAttributes: {},
             SpanAttributes: {},
             StatusCode: 'STATUS_CODE_OK',
@@ -405,7 +397,7 @@ describe('AdminObservabilityService', () => {
     })
     overviewService.listBoxes.mockResolvedValue([
       {
-        id: 'sandbox-1',
+        id: 'box-1',
         boxId: 'public-box-1',
         organizationId: 'org-1',
         state: 'started',
@@ -415,7 +407,7 @@ describe('AdminObservabilityService', () => {
         createdAt: '2026-06-05T00:00:00.000Z',
       },
       {
-        id: 'sandbox-2',
+        id: 'box-2',
         boxId: 'public-box-2',
         organizationId: 'org-1',
         state: 'started',
@@ -426,7 +418,7 @@ describe('AdminObservabilityService', () => {
       },
     ])
     overviewService.listRunners.mockResolvedValue([{ id: 'runner-1', state: 'ready', draining: false }])
-    overviewService.listMachines.mockResolvedValue([{ host: 'runner-1', region: 'us-east-1', sandboxes: 1 }])
+    overviewService.listMachines.mockResolvedValue([{ host: 'runner-1', region: 'us-east-1', boxes: 1 }])
 
     const result = await service.investigate({
       from: '2026-06-05T00:00:00.000Z',
@@ -437,30 +429,29 @@ describe('AdminObservabilityService', () => {
     expect(result.correlation).toMatchObject({
       traceIds: ['trace-box-1'],
       orgIds: ['org-1'],
-      sandboxIds: ['sandbox-1'],
-      boxIds: ['public-box-1'],
+      boxIds: ['box-1', 'public-box-1'],
       runnerIds: ['runner-1'],
       machineIds: ['runner-1'],
-      serviceNames: ['sandbox-sandbox-1'],
+      serviceNames: ['box-box-1'],
     })
-    expect(result.boxes.map((box) => box.id)).toEqual(['sandbox-1'])
+    expect(result.boxes.map((box) => box.id)).toEqual(['box-1'])
     expect(result.boxes.map((box) => box.boxId)).toEqual(['public-box-1'])
     expect(result.runners.map((runner) => runner.id)).toEqual(['runner-1'])
     expect(result.machines.map((machine) => machine.host)).toEqual(['runner-1'])
     expect(cloudWatchLogReader.getRelatedLogs).toHaveBeenCalledWith(
       expect.any(Object),
       expect.objectContaining({
-        sandboxIds: ['sandbox-1'],
+        boxIds: ['box-1', 'public-box-1'],
       }),
     )
     expect(s3ObjectReader.listRelatedObjects).toHaveBeenCalledWith(
       expect.objectContaining({
-        sandboxIds: ['sandbox-1'],
+        boxIds: ['box-1', 'public-box-1'],
       }),
     )
   })
 
-  it('does not narrow related logs by a correlated orgId when a specific sandbox is targeted', async () => {
+  it('does not narrow related logs by a correlated orgId when a specific box is targeted', async () => {
     const { service, clickhouseService, overviewService } = buildService({ configured: true })
     clickhouseService.query.mockImplementation(async (query: string) => {
       if (query.includes('FROM otel_traces') && query.includes('ResourceAttributes')) {
@@ -487,7 +478,7 @@ describe('AdminObservabilityService', () => {
     })
     overviewService.listBoxes.mockResolvedValue([
       {
-        id: 'sandbox-1',
+        id: 'box-1',
         boxId: 'public-box-1',
         organizationId: 'org-1',
         state: 'started',
@@ -502,21 +493,21 @@ describe('AdminObservabilityService', () => {
       from: '2026-06-05T00:00:00.000Z',
       to: '2026-06-05T01:00:00.000Z',
       traceId: 'trace-box-1',
-      sandboxId: 'sandbox-1',
+      boxId: 'box-1',
     })
 
     const relatedLogQueries = clickhouseService.query.mock.calls
       .map((call) => call[0] as string)
       .filter((sql) => sql.includes('FROM otel_logs') && !sql.includes('count() as count'))
 
-    // org filter must NOT be AND-ed in: box self-logs carry ServiceName=sandbox-<id> but
+    // org filter must NOT be AND-ed in: box self-logs carry ServiceName=box-<id> but
     // no dot-namespaced boxlite.org_id, so an org clause would silently drop them.
     expect(relatedLogQueries.length).toBeGreaterThan(0)
     for (const sql of relatedLogQueries) {
       expect(sql).not.toContain('boxlite.org_id')
     }
-    // the sandbox is still scoped via its service name match
-    expect(relatedLogQueries.some((sql) => sql.includes('ServiceName = {sandboxServiceName:String}'))).toBe(true)
+    // the box is still scoped via its service name match
+    expect(relatedLogQueries.some((sql) => sql.includes('ServiceName = {boxServiceName:String}'))).toBe(true)
   })
 
   it('investigates one trace across telemetry, platform state, CloudWatch, S3, audit, and xLog', async () => {
@@ -544,7 +535,6 @@ describe('AdminObservabilityService', () => {
               'boxlite.layer': 'api',
               'boxlite.org_id': 'org-1',
               'boxlite.user_id': 'user-1',
-              'boxlite.sandbox_id': 'sandbox-1',
               'boxlite.box_id': 'box-1',
               'boxlite.runner_id': 'runner-1',
               'boxlite.machine_id': 'machine-1',
@@ -602,7 +592,7 @@ describe('AdminObservabilityService', () => {
     })
     overviewService.listBoxes.mockResolvedValue([
       {
-        id: 'sandbox-1',
+        id: 'box-internal-1',
         boxId: 'box-1',
         organizationId: 'org-1',
         state: 'started',
@@ -612,7 +602,7 @@ describe('AdminObservabilityService', () => {
         createdAt: '2026-06-05T00:00:00.000Z',
       },
       {
-        id: 'sandbox-2',
+        id: 'box-internal-2',
         organizationId: 'org-1',
         state: 'started',
         runnerId: 'runner-2',
@@ -622,7 +612,7 @@ describe('AdminObservabilityService', () => {
       },
     ])
     overviewService.listRunners.mockResolvedValue([{ id: 'runner-1', state: 'ready', draining: false }])
-    overviewService.listMachines.mockResolvedValue([{ host: 'machine-1', region: 'us-east-1', sandboxes: 1 }])
+    overviewService.listMachines.mockResolvedValue([{ host: 'machine-1', region: 'us-east-1', boxes: 1 }])
     auditService.getAllLogs.mockResolvedValue({
       items: [
         {
@@ -631,8 +621,8 @@ describe('AdminObservabilityService', () => {
           actorEmail: 'admin@example.com',
           organizationId: 'org-1',
           action: 'create',
-          targetType: 'sandbox',
-          targetId: 'sandbox-1',
+          targetType: 'box',
+          targetId: 'box-1',
           createdAt: new Date('2026-06-05T00:00:02.000Z'),
         },
       ],
@@ -667,9 +657,9 @@ describe('AdminObservabilityService', () => {
       objects: [
         {
           bucket: 'bucket-1',
-          key: 'sandbox-1/xlog.txt',
+          key: 'box-1/xlog.txt',
           size: 12,
-          matchedBy: 'sandbox:sandbox-1',
+          matchedBy: 'box:box-1',
         },
       ],
       status: { source: 's3', state: 'available', count: 1 },
@@ -685,8 +675,7 @@ describe('AdminObservabilityService', () => {
       traceIds: expect.arrayContaining(['trace-1']),
       orgIds: expect.arrayContaining(['org-1']),
       userIds: expect.arrayContaining(['user-1']),
-      sandboxIds: expect.arrayContaining(['sandbox-1']),
-      boxIds: expect.arrayContaining(['box-1']),
+      boxIds: expect.arrayContaining(['box-1', 'box-internal-1']),
       runnerIds: expect.arrayContaining(['runner-1']),
       machineIds: expect.arrayContaining(['machine-1']),
       requestIds: expect.arrayContaining(['req-1']),
@@ -698,7 +687,7 @@ describe('AdminObservabilityService', () => {
     expect(result.traceSpans).toHaveLength(1)
     expect(result.logs).toHaveLength(2)
     expect(result.metrics.series).toHaveLength(1)
-    expect(result.boxes.map((box) => box.id)).toEqual(['sandbox-1'])
+    expect(result.boxes.map((box) => box.id)).toEqual(['box-internal-1'])
     expect(result.runners.map((runner) => runner.id)).toEqual(['runner-1'])
     expect(result.machines.map((machine) => machine.host)).toEqual(['machine-1'])
     expect(result.auditLogs.map((log) => log.id)).toEqual(['audit-1'])
@@ -721,8 +710,8 @@ describe('AdminObservabilityService', () => {
     expect(result.s3Objects).toEqual([
       expect.objectContaining({
         bucket: 'bucket-1',
-        key: 'sandbox-1/xlog.txt',
-        matchedBy: 'sandbox:sandbox-1',
+        key: 'box-1/xlog.txt',
+        matchedBy: 'box:box-1',
       }),
     ])
     expect(result.resource).toMatchObject({
@@ -782,24 +771,22 @@ describe('AdminObservabilityService', () => {
     })
     expect(result.operations).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: 'recover:sandbox-1', state: 'disabled' }),
+        expect.objectContaining({ id: 'recover:box-internal-1', state: 'disabled' }),
         expect.objectContaining({ id: 'cordon:runner-1', state: 'enabled' }),
         expect.objectContaining({ id: 'drain:runner-1', state: 'enabled' }),
-        expect.objectContaining({ id: 'resize:sandbox-1', state: 'request_only' }),
+        expect.objectContaining({ id: 'resize:box-internal-1', state: 'request_only' }),
       ]),
     )
     expect(cloudWatchLogReader.getRelatedLogs).toHaveBeenCalledWith(
       expect.any(Object),
       expect.objectContaining({
         traceIds: ['trace-1'],
-        sandboxIds: ['sandbox-1'],
-        boxIds: ['box-1'],
+        boxIds: ['box-1', 'box-internal-1'],
       }),
     )
     expect(s3ObjectReader.listRelatedObjects).toHaveBeenCalledWith(
       expect.objectContaining({
-        sandboxIds: ['sandbox-1'],
-        boxIds: ['box-1'],
+        boxIds: ['box-1', 'box-internal-1'],
         executionIds: ['exec-1'],
       }),
     )
@@ -821,7 +808,7 @@ describe('AdminObservabilityService', () => {
 
     overviewService.listBoxes.mockResolvedValue([
       {
-        id: 'sandbox-1',
+        id: 'box-internal-1',
         boxId: 'box-public-1',
         organizationId: 'org-1',
         state: 'stopped',
@@ -833,7 +820,7 @@ describe('AdminObservabilityService', () => {
       },
     ])
     overviewService.listRunners.mockResolvedValue([{ id: 'runner-1', state: 'ready', draining: false }])
-    overviewService.listMachines.mockResolvedValue([{ host: 'runner-1', region: 'us', sandboxes: 1 }])
+    overviewService.listMachines.mockResolvedValue([{ host: 'runner-1', region: 'us', boxes: 1 }])
     auditService.getAllLogs.mockResolvedValue({
       items: [
         {
@@ -848,13 +835,13 @@ describe('AdminObservabilityService', () => {
           createdAt: new Date('2026-06-05T00:00:02.000Z'),
         },
         {
-          id: 'audit-prefixed-sandbox',
+          id: 'audit-prefixed-box-internal',
           actorId: 'agent-1',
           actorEmail: 'agent@example.com',
           organizationId: 'admin-org',
           action: 'read',
           targetType: 'observability',
-          targetId: 'sandboxId:sandbox-1',
+          targetId: 'boxId:box-internal-1',
           source: 'agent',
           createdAt: new Date('2026-06-05T00:00:03.000Z'),
         },
@@ -878,13 +865,12 @@ describe('AdminObservabilityService', () => {
     const result = await service.investigate({
       from: '2026-06-05T00:00:00.000Z',
       to: '2026-06-05T01:00:00.000Z',
-      sandboxId: 'sandbox-1',
       boxId: 'box-public-1',
       runnerId: 'runner-1',
       machineId: 'runner-1',
     })
 
-    expect(result.auditLogs.map((log) => log.id)).toEqual(['audit-prefixed-box', 'audit-prefixed-sandbox'])
+    expect(result.auditLogs.map((log) => log.id)).toEqual(['audit-prefixed-box', 'audit-prefixed-box-internal'])
     expect(result.sources).toEqual(
       expect.arrayContaining([expect.objectContaining({ source: 'audit', state: 'available', count: 2 })]),
     )
@@ -900,7 +886,7 @@ describe('AdminObservabilityService', () => {
 
     overviewService.listBoxes.mockResolvedValue([
       {
-        id: 'sandbox-1',
+        id: 'box-internal-1',
         boxId: 'box-1',
         organizationId: 'org-1',
         state: 'started',
@@ -946,7 +932,7 @@ describe('AdminObservabilityService', () => {
       title: 'User user-1',
       identifiers: expect.objectContaining({ userId: 'user-1', orgId: 'org-1' }),
     })
-    expect(userResult.boxes.map((box) => box.id)).toEqual(['sandbox-1'])
+    expect(userResult.boxes.map((box) => box.id)).toEqual(['box-internal-1'])
     expect(userResult.auditLogs.map((log) => log.id)).toEqual(['audit-user-actor'])
     expect(userResult.externalLinks.clickstack.query).toContain('boxlite.user_id')
     expect(userResult.commands.api).toContain('userId=user-1')

@@ -118,7 +118,6 @@ export class AdminS3ObjectReader {
       .map((prefix) => ({ prefix: this.normalizePrefix(prefix), matchedBy: 'configured-prefix' }))
     const correlated = [
       ...correlation.orgIds.map((id) => ({ prefix: `${id}/`, matchedBy: `org:${id}` })),
-      ...correlation.sandboxIds.map((id) => ({ prefix: `${id}/`, matchedBy: `sandbox:${id}` })),
       ...correlation.boxIds.map((id) => ({ prefix: `${id}/`, matchedBy: `box:${id}` })),
       ...correlation.executionIds.map((id) => ({ prefix: `${id}/`, matchedBy: `execution:${id}` })),
       ...correlation.jobIds.map((id) => ({ prefix: `${id}/`, matchedBy: `job:${id}` })),

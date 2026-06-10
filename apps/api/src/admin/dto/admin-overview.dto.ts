@@ -6,9 +6,9 @@
 
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { RegionType } from '../../region/enums/region-type.enum'
-import { RunnerDto } from '../../sandbox/dto/runner.dto'
+import { RunnerDto } from '../../box/dto/runner.dto'
 import { SystemRole } from '../../user/enums/system-role.enum'
-import { SandboxState } from '../../sandbox/enums/sandbox-state.enum'
+import { BoxState } from '../../box/enums/box-state.enum'
 
 // ─── KPI summary ────────────────────────────────────────────────────────────
 
@@ -35,11 +35,11 @@ export class AdminOverviewClusterDto {
 
 @ApiSchema({ name: 'AdminOverviewBoxes' })
 export class AdminOverviewBoxesDto {
-  @ApiProperty({ description: 'Total number of sandboxes across all states', example: 80 })
+  @ApiProperty({ description: 'Total number of boxes across all states', example: 80 })
   total: number
 
   @ApiProperty({
-    description: 'Sandbox counts keyed by SandboxState',
+    description: 'Box counts keyed by BoxState',
     example: { started: 15, error: 2, build_failed: 1, stopped: 62 },
     additionalProperties: { type: 'number' },
   })
@@ -51,7 +51,7 @@ export class AdminOverviewDto {
   @ApiProperty({ description: 'Total number of users', example: 120 })
   users: number
 
-  @ApiProperty({ description: 'Number of active (started) sandboxes', example: 47 })
+  @ApiProperty({ description: 'Number of active (started) boxes', example: 47 })
   activeBoxes: number
 
   @ApiProperty({ type: AdminOverviewBoxesDto })
@@ -81,7 +81,7 @@ export class AdminUserItemDto {
   role: SystemRole
 }
 
-// ─── Sandbox list ────────────────────────────────────────────────────────────
+// ─── Box list ────────────────────────────────────────────────────────────────
 
 @ApiSchema({ name: 'AdminBoxOwner' })
 export class AdminBoxOwnerDto {
@@ -106,7 +106,7 @@ export class AdminBoxOwnerDto {
 
 @ApiSchema({ name: 'AdminBoxItem' })
 export class AdminBoxItemDto {
-  @ApiProperty({ description: 'Sandbox ID', example: 'sb_abc123' })
+  @ApiProperty({ description: 'Box ID', example: 'box_abc123' })
   id: string
 
   @ApiPropertyOptional({ description: 'Public box ID shown to users', example: 'abc123XYZ' })
@@ -115,10 +115,10 @@ export class AdminBoxItemDto {
   @ApiProperty({ description: 'Organization ID', example: 'org_xyz' })
   organizationId: string
 
-  @ApiProperty({ enum: SandboxState, enumName: 'SandboxState', example: SandboxState.STARTED })
-  state: SandboxState
+  @ApiProperty({ enum: BoxState, enumName: 'BoxState', example: BoxState.STARTED })
+  state: BoxState
 
-  @ApiPropertyOptional({ description: 'Runner ID the sandbox is assigned to', example: 'runner-uuid' })
+  @ApiPropertyOptional({ description: 'Runner ID the box is assigned to', example: 'runner-uuid' })
   runnerId?: string
 
   @ApiProperty({ description: 'Allocated CPU (vCPUs)', example: 2 })
@@ -172,6 +172,6 @@ export class AdminMachineItemDto {
   @ApiProperty({ description: 'Memory utilisation waterline (0–100)', example: 68.2 })
   memWaterline: number
 
-  @ApiProperty({ description: 'Number of currently started sandboxes on this runner', example: 5 })
-  sandboxes: number
+  @ApiProperty({ description: 'Number of currently started boxes on this runner', example: 5 })
+  boxes: number
 }

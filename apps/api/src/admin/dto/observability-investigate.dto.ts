@@ -5,9 +5,9 @@
  */
 
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
-import { LogEntryDto } from '../../sandbox-telemetry/dto/log-entry.dto'
-import { MetricsResponseDto } from '../../sandbox-telemetry/dto/metrics-response.dto'
-import { TraceSpanDto } from '../../sandbox-telemetry/dto/trace-span.dto'
+import { LogEntryDto } from '../../box-telemetry/dto/log-entry.dto'
+import { MetricsResponseDto } from '../../box-telemetry/dto/metrics-response.dto'
+import { TraceSpanDto } from '../../box-telemetry/dto/trace-span.dto'
 import { AdminBoxItemDto, AdminMachineItemDto, AdminRunnerItemDto } from './admin-overview.dto'
 import { AdminObservabilityQueryParamsDto } from './observability-query.dto'
 
@@ -38,9 +38,6 @@ export class AdminObservabilityCorrelationDto {
 
   @ApiProperty({ type: [String] })
   userIds: string[]
-
-  @ApiProperty({ type: [String] })
-  sandboxIds: string[]
 
   @ApiProperty({ type: [String] })
   boxIds: string[]

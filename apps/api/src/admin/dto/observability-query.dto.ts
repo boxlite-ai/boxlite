@@ -56,12 +56,7 @@ export class AdminObservabilityQueryParamsDto {
   @IsString()
   userId?: string
 
-  @ApiPropertyOptional({ type: String, description: 'Sandbox ID filter' })
-  @IsOptional()
-  @IsString()
-  sandboxId?: string
-
-  @ApiPropertyOptional({ type: String, description: 'Public box ID filter' })
+  @ApiPropertyOptional({ type: String, description: 'Box ID filter' })
   @IsOptional()
   @IsString()
   boxId?: string

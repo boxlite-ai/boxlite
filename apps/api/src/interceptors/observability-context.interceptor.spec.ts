@@ -37,7 +37,6 @@ describe('ObservabilityContextInterceptor', () => {
     const request = {
       params: {
         traceId: 'trace-path-1',
-        sandboxId: 'sandbox-path-1',
       },
       query: {
         orgId: 'org-query-1',
@@ -62,7 +61,6 @@ describe('ObservabilityContextInterceptor', () => {
           'boxlite.trace_id': 'trace-path-1',
           'boxlite.org_id': 'org-query-1',
           'boxlite.user_id': 'user-query-1',
-          'boxlite.sandbox_id': 'sandbox-path-1',
           'boxlite.box_id': 'box-query-1',
           'boxlite.runner_id': 'runner-query-1',
           'boxlite.machine_id': 'machine-query-1',
@@ -79,12 +77,12 @@ describe('ObservabilityContextInterceptor', () => {
     })
   })
 
-  it('maps sandboxIdOrName route params to sandbox correlation attributes', (done) => {
+  it('maps boxIdOrName route params to box correlation attributes', (done) => {
     const span = { setAttributes: jest.fn() }
     getActiveSpan.mockReturnValue(span)
     const request = {
       params: {
-        sandboxIdOrName: 'sandbox-or-name-1',
+        boxIdOrName: 'box-or-name-1',
       },
       query: {},
       get: () => undefined,
@@ -96,7 +94,7 @@ describe('ObservabilityContextInterceptor', () => {
       next: () => {
         try {
           expect(span.setAttributes).toHaveBeenCalledWith({
-            'boxlite.sandbox_id': 'sandbox-or-name-1',
+            'boxlite.box_id': 'box-or-name-1',
           })
           done()
         } catch (error) {

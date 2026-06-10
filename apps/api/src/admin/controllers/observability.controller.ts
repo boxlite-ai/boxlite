@@ -13,10 +13,10 @@ import { AuditTarget } from '../../audit/enums/audit-target.enum'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { SystemActionGuard } from '../../auth/system-action.guard'
 import { RequiredApiRole } from '../../common/decorators/required-role.decorator'
-import { MetricsResponseDto } from '../../sandbox-telemetry/dto/metrics-response.dto'
-import { PaginatedLogsDto } from '../../sandbox-telemetry/dto/paginated-logs.dto'
-import { PaginatedTracesDto } from '../../sandbox-telemetry/dto/paginated-traces.dto'
-import { TraceSpanDto } from '../../sandbox-telemetry/dto/trace-span.dto'
+import { MetricsResponseDto } from '../../box-telemetry/dto/metrics-response.dto'
+import { PaginatedLogsDto } from '../../box-telemetry/dto/paginated-logs.dto'
+import { PaginatedTracesDto } from '../../box-telemetry/dto/paginated-traces.dto'
+import { TraceSpanDto } from '../../box-telemetry/dto/trace-span.dto'
 import { SystemRole } from '../../user/enums/system-role.enum'
 import {
   AdminObservabilityLogsQueryParamsDto,
@@ -39,7 +39,6 @@ const OBSERVABILITY_AUDIT_QUERY_KEYS = [
   'serviceName',
   'orgId',
   'userId',
-  'sandboxId',
   'boxId',
   'runnerId',
   'machineId',
@@ -56,7 +55,6 @@ const OBSERVABILITY_TARGET_ID_KEYS = [
   'traceId',
   'userId',
   'boxId',
-  'sandboxId',
   'runnerId',
   'machineId',
   'executionId',

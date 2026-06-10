@@ -6,10 +6,10 @@
 
 import { Injectable } from '@nestjs/common'
 import { UserService } from '../../user/user.service'
-import { RunnerService } from '../../sandbox/services/runner.service'
-import { SandboxRepository } from '../../sandbox/repositories/sandbox.repository'
-import { RunnerState } from '../../sandbox/enums/runner-state.enum'
-import { SandboxState } from '../../sandbox/enums/sandbox-state.enum'
+import { RunnerService } from '../../box/services/runner.service'
+import { BoxRepository } from '../../box/repositories/box.repository'
+import { RunnerState } from '../../box/enums/runner-state.enum'
+import { BoxState } from '../../box/enums/box-state.enum'
 import { OrganizationService } from '../../organization/services/organization.service'
 import {
   AdminBoxOwnerDto,
@@ -25,12 +25,12 @@ import {
 // service method — the draining set is always a small subset of runners.
 const ALL_DRAINING_TAKE = 10_000
 
-type SandboxStateCountRow = {
-  state: SandboxState
+type BoxStateCountRow = {
+  state: BoxState
   count: string | number
 }
 
-type SandboxWithOwnerInput = {
+type BoxWithOwnerInput = {
   organizationId: string
 }
 
@@ -39,7 +39,7 @@ export class AdminOverviewService {
   constructor(
     private readonly userService: UserService,
     private readonly runnerService: RunnerService,
-    private readonly sandboxRepository: SandboxRepository,
+    private readonly boxRepository: BoxRepository,
     private readonly organizationService: OrganizationService,
   ) {}
 
@@ -67,7 +67,7 @@ export class AdminOverviewService {
 
     return {
       users: users.length,
-      activeBoxes: boxes.byState[SandboxState.STARTED] ?? 0,
+      activeBoxes: boxes.byState[BoxState.STARTED] ?? 0,
       boxes,
       runners: {
         online: onlineCount,
@@ -82,12 +82,12 @@ export class AdminOverviewService {
   }
 
   private async getBoxStateBreakdown() {
-    const rows = await this.sandboxRepository
-      .createQueryBuilder('sandbox')
-      .select('sandbox.state', 'state')
+    const rows = await this.boxRepository
+      .createQueryBuilder('box')
+      .select('box.state', 'state')
       .addSelect('COUNT(*)', 'count')
-      .groupBy('sandbox.state')
-      .getRawMany<SandboxStateCountRow>()
+      .groupBy('box.state')
+      .getRawMany<BoxStateCountRow>()
 
     const byState = rows.reduce<Record<string, number>>((acc, row) => {
       acc[row.state] = Number(row.count)
@@ -111,10 +111,10 @@ export class AdminOverviewService {
   }
 
   async listBoxes(): Promise<AdminBoxItemDto[]> {
-    const sandboxes = await this.sandboxRepository.find()
-    const ownersByOrganizationId = await this.resolveBoxOwners(sandboxes)
+    const boxes = await this.boxRepository.find()
+    const ownersByOrganizationId = await this.resolveBoxOwners(boxes)
 
-    return sandboxes.map((s) => ({
+    return boxes.map((s) => ({
       id: s.id,
       boxId: s.boxId,
       organizationId: s.organizationId,
@@ -127,8 +127,8 @@ export class AdminOverviewService {
     }))
   }
 
-  private async resolveBoxOwners(sandboxes: SandboxWithOwnerInput[]): Promise<Map<string, AdminBoxOwnerDto>> {
-    const organizationIds = Array.from(new Set(sandboxes.map((sandbox) => sandbox.organizationId).filter(Boolean)))
+  private async resolveBoxOwners(boxes: BoxWithOwnerInput[]): Promise<Map<string, AdminBoxOwnerDto>> {
+    const organizationIds = Array.from(new Set(boxes.map((box) => box.organizationId).filter(Boolean)))
     const organizations = await this.organizationService.findByIds(organizationIds)
     const creatorIds = Array.from(new Set(organizations.map((organization) => organization.createdBy).filter(Boolean)))
     const users = await this.userService.findByIds(creatorIds)
@@ -195,7 +195,7 @@ export class AdminOverviewService {
     currentAllocatedCpu: number
     currentCpuUsagePercentage: number
     currentMemoryUsagePercentage: number
-    currentStartedSandboxes: number
+    currentStartedBoxes: number
   }): AdminMachineItemDto {
     // Guard divide-by-zero: if runner has no cpu capacity, oversell = 0
     const oversellCpu = r.cpu > 0 ? r.currentAllocatedCpu / r.cpu : 0
@@ -205,7 +205,7 @@ export class AdminOverviewService {
       oversellCpu,
       cpuWaterline: r.currentCpuUsagePercentage,
       memWaterline: r.currentMemoryUsagePercentage,
-      sandboxes: r.currentStartedSandboxes,
+      boxes: r.currentStartedBoxes,
     }
   }
 

@@ -20,7 +20,7 @@ func TestSeedBootSpanFromTraceParentJoinsApiTraceId(t *testing.T) {
 	defer func() { _ = tp.Shutdown(context.Background()) }()
 
 	traceParent := "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
-	seedBootSpanFromTraceParent(context.Background(), tp.Tracer("boxlite.sandbox"), &traceParent)
+	seedBootSpanFromTraceParent(context.Background(), tp.Tracer("boxlite.box"), &traceParent)
 
 	spans := exp.GetSpans()
 	if len(spans) != 1 {
@@ -43,9 +43,9 @@ func TestSeedBootSpanFromTraceParentNoopWhenAbsent(t *testing.T) {
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp))
 	defer func() { _ = tp.Shutdown(context.Background()) }()
 
-	seedBootSpanFromTraceParent(context.Background(), tp.Tracer("boxlite.sandbox"), nil)
+	seedBootSpanFromTraceParent(context.Background(), tp.Tracer("boxlite.box"), nil)
 	empty := ""
-	seedBootSpanFromTraceParent(context.Background(), tp.Tracer("boxlite.sandbox"), &empty)
+	seedBootSpanFromTraceParent(context.Background(), tp.Tracer("boxlite.box"), &empty)
 
 	if n := len(exp.GetSpans()); n != 0 {
 		t.Fatalf("expected no boot span when traceparent absent, got %d", n)

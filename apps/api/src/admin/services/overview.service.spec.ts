@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { SandboxClass } from '../../sandbox/enums/sandbox-class.enum'
-import { RunnerState } from '../../sandbox/enums/runner-state.enum'
+import { BoxClass } from '../../box/enums/box-class.enum'
+import { RunnerState } from '../../box/enums/runner-state.enum'
 import { AdminOverviewService } from './overview.service'
 
 jest.mock('uuid', () => ({
@@ -40,14 +40,14 @@ describe('AdminOverviewService', () => {
         diskGiB: 100,
         gpu: 0,
         gpuType: '',
-        class: SandboxClass.SMALL,
+        class: BoxClass.SMALL,
         currentCpuUsagePercentage: 1,
         currentMemoryUsagePercentage: 2,
         currentDiskUsagePercentage: 3,
         currentAllocatedCpu: 1,
         currentAllocatedMemoryGiB: 1,
         currentAllocatedDiskGiB: 1,
-        currentStartedSandboxes: 0,
+        currentStartedBoxes: 0,
         availabilityScore: 100,
         region: 'us',
         name: 'runner-1',

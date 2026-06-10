@@ -37,7 +37,6 @@ describe('AdminS3ObjectReader', () => {
       traceIds: [],
       orgIds: [],
       userIds: [],
-      sandboxIds: [],
       boxIds: [],
       runnerIds: [],
       machineIds: [],

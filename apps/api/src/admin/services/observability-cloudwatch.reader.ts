@@ -7,7 +7,7 @@
 import { Injectable } from '@nestjs/common'
 import { CloudWatchLogsClient, DescribeLogGroupsCommand, FilterLogEventsCommand } from '@aws-sdk/client-cloudwatch-logs'
 import { TypedConfigService } from '../../config/typed-config.service'
-import { LogEntryDto } from '../../sandbox-telemetry/dto/log-entry.dto'
+import { LogEntryDto } from '../../box-telemetry/dto/log-entry.dto'
 import {
   AdminObservabilityCorrelationDto,
   AdminObservabilityInvestigateQueryParamsDto,
@@ -268,7 +268,6 @@ export class AdminCloudWatchLogReader {
           query.operationId,
           query.executionId,
           query.jobId,
-          query.sandboxId,
           query.boxId,
           query.runnerId,
           query.machineId,
@@ -278,7 +277,6 @@ export class AdminCloudWatchLogReader {
           ...correlation.operationIds,
           ...correlation.executionIds,
           ...correlation.jobIds,
-          ...correlation.sandboxIds,
           ...correlation.boxIds,
           ...correlation.runnerIds,
           ...correlation.machineIds,

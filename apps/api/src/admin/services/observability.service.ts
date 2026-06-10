@@ -7,16 +7,16 @@
 import { Inject, Injectable, ServiceUnavailableException } from '@nestjs/common'
 import { ClickHouseService } from '../../clickhouse/clickhouse.service'
 import { TypedConfigService } from '../../config/typed-config.service'
-import { LogEntryDto } from '../../sandbox-telemetry/dto/log-entry.dto'
+import { LogEntryDto } from '../../box-telemetry/dto/log-entry.dto'
 import {
   MetricsResponseDto,
   MetricDataPointDto,
   MetricSeriesDto,
-} from '../../sandbox-telemetry/dto/metrics-response.dto'
-import { PaginatedLogsDto } from '../../sandbox-telemetry/dto/paginated-logs.dto'
-import { PaginatedTracesDto } from '../../sandbox-telemetry/dto/paginated-traces.dto'
-import { TraceSpanDto } from '../../sandbox-telemetry/dto/trace-span.dto'
-import { TraceSummaryDto } from '../../sandbox-telemetry/dto/trace-summary.dto'
+} from '../../box-telemetry/dto/metrics-response.dto'
+import { PaginatedLogsDto } from '../../box-telemetry/dto/paginated-logs.dto'
+import { PaginatedTracesDto } from '../../box-telemetry/dto/paginated-traces.dto'
+import { TraceSpanDto } from '../../box-telemetry/dto/trace-span.dto'
+import { TraceSummaryDto } from '../../box-telemetry/dto/trace-summary.dto'
 import { AdminBoxItemDto, AdminMachineItemDto, AdminRunnerItemDto } from '../dto/admin-overview.dto'
 import {
   AdminObservabilityAuditLogDto,
@@ -157,7 +157,7 @@ const LAYER_EXPRESSION_SQL = `
     ServiceName = 'boxlite-api', 'api',
     ServiceName = 'boxlite-runner', 'runner',
     ServiceName = 'boxlite-runner-host', 'ec2_host',
-    startsWith(ServiceName, 'sandbox-'), 'box',
+    startsWith(ServiceName, 'box-'), 'box',
     ''
   )
 `
@@ -171,7 +171,7 @@ function resolveSpanLayer(serviceName?: string, resourceAttributes?: Record<stri
   if (serviceName === 'boxlite-api') return 'api'
   if (serviceName === 'boxlite-runner') return 'runner'
   if (serviceName === 'boxlite-runner-host') return 'ec2_host'
-  if (serviceName.startsWith('sandbox-')) return 'box'
+  if (serviceName.startsWith('box-')) return 'box'
   return ''
 }
 const SCALAR_METRICS_SOURCE_SQL = `
@@ -602,7 +602,7 @@ export class AdminObservabilityService {
       },
     }
 
-    const hasObjectTarget = Boolean(query.sandboxId || query.boxId || query.runnerId || query.machineId)
+    const hasObjectTarget = Boolean(query.boxId || query.runnerId || query.machineId)
     const hasEventTarget = Boolean(
       query.traceId || query.requestId || query.operationId || query.executionId || query.jobId,
     )
@@ -630,7 +630,7 @@ export class AdminObservabilityService {
       return {
         ...base,
         type: 'box',
-        title: box.boxId ? `Box ${box.boxId}` : `Sandbox ${box.id}`,
+        title: box.boxId ? `Box ${box.boxId}` : `Box ${box.id}`,
         subtitle: box.id,
         state: box.state,
         owner: box.owner?.email || box.owner?.name,
@@ -713,7 +713,6 @@ export class AdminObservabilityService {
       ['traceId', correlation.traceIds[0]],
       ['orgId', correlation.orgIds[0]],
       ['userId', correlation.userIds[0]],
-      ['sandboxId', correlation.sandboxIds[0]],
       ['boxId', correlation.boxIds[0]],
       ['runnerId', correlation.runnerIds[0]],
       ['machineId', correlation.machineIds[0]],
@@ -799,7 +798,7 @@ export class AdminObservabilityService {
         label: 'Recover box',
         state: canRecover ? 'enabled' : 'disabled',
         method: 'POST',
-        path: `/admin/sandbox/${box.id}/recover`,
+        path: `/admin/box/${box.id}/recover`,
         targetId: box.id,
         reason: canRecover ? 'Box is in a recoverable failure state' : 'Recover is only enabled for failed boxes',
       })
@@ -808,7 +807,7 @@ export class AdminObservabilityService {
         label: 'Resize box',
         state: 'request_only',
         method: 'POST',
-        path: `/admin/sandbox/${box.id}/resize-request`,
+        path: `/admin/box/${box.id}/resize-request`,
         targetId: box.id,
         reason: 'Resize requires an explicit request flow; direct resize is disabled in first phase',
       })
@@ -1170,8 +1169,7 @@ export class AdminObservabilityService {
       ...this.attributeQueryClauses('boxlite.org_id', correlation.orgIds[0], eventAttributesColumn),
       ...this.attributeQueryClauses('boxlite.user_id', correlation.userIds[0], eventAttributesColumn),
       ...this.attributeQueryClauses('boxlite.box_id', correlation.boxIds[0], eventAttributesColumn),
-      ...this.attributeQueryClauses('boxlite.sandbox_id', correlation.sandboxIds[0], eventAttributesColumn),
-      this.queryClause('ServiceName', this.sandboxServiceName(correlation.sandboxIds[0])),
+      this.queryClause('ServiceName', this.boxServiceName(correlation.boxIds[0])),
       ...this.attributeQueryClauses('boxlite.runner_id', correlation.runnerIds[0], eventAttributesColumn),
       ...this.attributeQueryClauses('boxlite.machine_id', correlation.machineIds[0], eventAttributesColumn),
       ...this.attributeQueryClauses('boxlite.execution_id', correlation.executionIds[0], eventAttributesColumn),
@@ -1324,13 +1322,13 @@ export class AdminObservabilityService {
     query: AdminObservabilityInvestigateQueryParamsDto,
     correlation: AdminObservabilityCorrelationDto,
   ): AdminObservabilityLogsQueryParamsDto & AdminObservabilityMetricsQueryParamsDto {
-    // When the caller targets a specific resource (sandbox/box/runner/machine), do NOT
+    // When the caller targets a specific resource (box/runner/machine), do NOT
     // narrow related logs/metrics by an org/user id harvested from correlated API spans.
-    // Self-emitted box/runner telemetry carries ServiceName (sandbox-<id>) + underscore
+    // Self-emitted box/runner telemetry carries ServiceName (box-<id>) + underscore
     // attrs, not the dot-namespaced boxlite.org_id the org filter matches, so an AND-ed
     // org clause silently drops exactly those rows. The resource id is already org-scoped,
     // so omitting the harvested org filter does not broaden results across orgs.
-    const resourceTargeted = Boolean(query.sandboxId || query.boxId || query.runnerId || query.machineId)
+    const resourceTargeted = Boolean(query.boxId || query.runnerId || query.machineId)
     return {
       ...query,
       page: 1,
@@ -1338,7 +1336,6 @@ export class AdminObservabilityService {
       traceId: query.traceId ?? correlation.traceIds[0],
       orgId: resourceTargeted ? query.orgId : (query.orgId ?? correlation.orgIds[0]),
       userId: resourceTargeted ? query.userId : (query.userId ?? correlation.userIds[0]),
-      sandboxId: query.sandboxId ?? correlation.sandboxIds[0],
       boxId: query.boxId ?? correlation.boxIds[0],
       runnerId: query.runnerId ?? correlation.runnerIds[0],
       machineId: query.machineId ?? correlation.machineIds[0],
@@ -1354,7 +1351,6 @@ export class AdminObservabilityService {
       traceIds: [],
       orgIds: [],
       userIds: [],
-      sandboxIds: [],
       boxIds: [],
       runnerIds: [],
       machineIds: [],
@@ -1373,7 +1369,6 @@ export class AdminObservabilityService {
     this.addUnique(correlation.traceIds, query.traceId)
     this.addUnique(correlation.orgIds, query.orgId)
     this.addUnique(correlation.userIds, query.userId)
-    this.addUnique(correlation.sandboxIds, query.sandboxId)
     this.addUnique(correlation.boxIds, query.boxId)
     this.addUnique(correlation.runnerIds, query.runnerId)
     this.addUnique(correlation.machineIds, query.machineId)
@@ -1479,7 +1474,6 @@ export class AdminObservabilityService {
     }
     this.addUnique(correlation.orgIds, attributes['boxlite.org_id'])
     this.addUnique(correlation.userIds, this.readAttribute(attributes, ['boxlite.user_id', 'user_id', 'user.id']))
-    this.addUnique(correlation.sandboxIds, attributes['boxlite.sandbox_id'])
     this.addUnique(correlation.boxIds, attributes['boxlite.box_id'])
     this.addUnique(correlation.runnerIds, attributes['boxlite.runner_id'])
     this.addUnique(correlation.machineIds, attributes['boxlite.machine_id'])
@@ -1491,15 +1485,15 @@ export class AdminObservabilityService {
 
   private collectServiceNameCorrelation(correlation: AdminObservabilityCorrelationDto, serviceName?: string) {
     this.addUnique(correlation.serviceNames, serviceName)
-    this.addUnique(correlation.sandboxIds, this.sandboxIdFromServiceName(serviceName))
+    this.addUnique(correlation.boxIds, this.boxIdFromServiceName(serviceName))
   }
 
-  private sandboxIdFromServiceName(serviceName?: string): string | undefined {
-    if (!serviceName?.startsWith('sandbox-')) {
+  private boxIdFromServiceName(serviceName?: string): string | undefined {
+    if (!serviceName?.startsWith('box-')) {
       return undefined
     }
-    const sandboxId = serviceName.slice('sandbox-'.length).trim()
-    return sandboxId || undefined
+    const boxId = serviceName.slice('box-'.length).trim()
+    return boxId || undefined
   }
 
   private readAttribute(attributes: Record<string, unknown>, names: string[]): string | undefined {
@@ -1528,7 +1522,7 @@ export class AdminObservabilityService {
       const boxes = allBoxes.filter((box) => this.matchesBox(box, correlation))
       for (const box of boxes) {
         this.addUnique(correlation.orgIds, box.organizationId)
-        this.addUnique(correlation.sandboxIds, box.id)
+        this.addUnique(correlation.boxIds, box.id)
         this.addUnique(correlation.boxIds, box.boxId)
         this.addUnique(correlation.runnerIds, box.runnerId)
       }
@@ -1633,7 +1627,6 @@ export class AdminObservabilityService {
     const targetIds = new Set<string>()
     this.addAuditTargetIds(targetIds, correlation.orgIds, 'orgId')
     this.addAuditTargetIds(targetIds, correlation.userIds, 'userId')
-    this.addAuditTargetIds(targetIds, correlation.sandboxIds, 'sandboxId')
     this.addAuditTargetIds(targetIds, correlation.boxIds, 'boxId')
     this.addAuditTargetIds(targetIds, correlation.runnerIds, 'runnerId')
     this.addAuditTargetIds(targetIds, correlation.machineIds, 'machineId')
@@ -1687,15 +1680,11 @@ export class AdminObservabilityService {
   }
 
   private matchesBox(box: AdminBoxItemDto, correlation: AdminObservabilityCorrelationDto): boolean {
-    if (
-      correlation.sandboxIds.includes(box.id) ||
-      correlation.boxIds.includes(box.id) ||
-      (box.boxId && correlation.boxIds.includes(box.boxId))
-    ) {
+    if (correlation.boxIds.includes(box.id) || (box.boxId && correlation.boxIds.includes(box.boxId))) {
       return true
     }
 
-    if (correlation.sandboxIds.length > 0 || correlation.boxIds.length > 0) {
+    if (correlation.boxIds.length > 0) {
       return false
     }
 
@@ -1764,15 +1753,7 @@ export class AdminObservabilityService {
       query.userId,
       options.eventAttributesColumn,
     )
-    this.pushSandboxIdFilter(whereClause, params, query.sandboxId, options.eventAttributesColumn)
-    this.pushResourceAttributeFilter(
-      whereClause,
-      params,
-      'boxlite.box_id',
-      'boxId',
-      query.boxId,
-      options.eventAttributesColumn,
-    )
+    this.pushBoxIdFilter(whereClause, params, query.boxId, options.eventAttributesColumn)
     this.pushResourceAttributeFilter(
       whereClause,
       params,
@@ -1812,27 +1793,27 @@ export class AdminObservabilityService {
     params[paramName] = value
   }
 
-  private pushSandboxIdFilter(
+  private pushBoxIdFilter(
     whereClause: string[],
     params: Record<string, unknown>,
-    sandboxId?: string,
+    boxId?: string,
     eventAttributesColumn?: 'LogAttributes' | 'SpanAttributes',
   ) {
-    if (!sandboxId) {
+    if (!boxId) {
       return
     }
-    const clauses = [`ResourceAttributes['boxlite.sandbox_id'] = {sandboxId:String}`]
+    const clauses = [`ResourceAttributes['boxlite.box_id'] = {boxId:String}`]
     if (eventAttributesColumn) {
-      clauses.push(`${eventAttributesColumn}['boxlite.sandbox_id'] = {sandboxId:String}`)
+      clauses.push(`${eventAttributesColumn}['boxlite.box_id'] = {boxId:String}`)
     }
-    clauses.push('ServiceName = {sandboxServiceName:String}')
+    clauses.push('ServiceName = {boxServiceName:String}')
     whereClause.push(`(${clauses.join(' OR ')})`)
-    params.sandboxId = sandboxId
-    params.sandboxServiceName = this.sandboxServiceName(sandboxId)
+    params.boxId = boxId
+    params.boxServiceName = this.boxServiceName(boxId)
   }
 
-  private sandboxServiceName(sandboxId?: string): string | undefined {
-    return sandboxId ? `sandbox-${sandboxId}` : undefined
+  private boxServiceName(boxId?: string): string | undefined {
+    return boxId ? `box-${boxId}` : undefined
   }
 
   private pushTraceIdFilter(whereClause: string[], params: Record<string, unknown>, traceId?: string) {
