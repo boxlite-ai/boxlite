@@ -10,11 +10,7 @@ describe('dashboard feature gates', () => {
 
   it('only exposes the VNC tab when VNC is enabled', () => {
     expect(getBoxContentTabs({ experimentsEnabled: false, vncEnabled: false })).toEqual(['overview', 'terminal'])
-    expect(getBoxContentTabs({ experimentsEnabled: false, vncEnabled: true })).toEqual([
-      'overview',
-      'terminal',
-      'vnc',
-    ])
+    expect(getBoxContentTabs({ experimentsEnabled: false, vncEnabled: true })).toEqual(['overview', 'terminal', 'vnc'])
   })
 
   it('keeps experiment tabs independent from the VNC feature gate', () => {

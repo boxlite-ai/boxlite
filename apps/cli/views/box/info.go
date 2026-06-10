@@ -114,8 +114,6 @@ func getStateLabel(state apiclient.BoxState) string {
 		return common.StoppedStyle.Render("ARCHIVED")
 	case apiclient.BOXSTATE_ERROR:
 		return common.ErrorStyle.Render("ERROR")
-	case apiclient.BOXSTATE_BUILD_FAILED:
-		return common.ErrorStyle.Render("BUILD FAILED")
 	case apiclient.BOXSTATE_UNKNOWN:
 		return common.UndefinedStyle.Render("UNKNOWN")
 	default:

@@ -15,7 +15,6 @@ import {
   ApiKeysApi,
   AuditApi,
   Configuration,
-  DockerRegistryApi,
   OrganizationsApi,
   RegionsApi,
   RunnersApi,
@@ -33,7 +32,6 @@ export class ApiClient {
   private _boxApi: BoxApi
   private _userApi: UsersApi
   private _apiKeyApi: ApiKeysApi
-  private _dockerRegistryApi: DockerRegistryApi
   private _organizationsApi: OrganizationsApi
   private _billingApi: BillingApiClient
   private _volumeApi: VolumesApi
@@ -80,7 +78,6 @@ export class ApiClient {
     this._boxApi = new BoxApi(this.config, undefined, axiosInstance)
     this._userApi = new UsersApi(this.config, undefined, axiosInstance)
     this._apiKeyApi = new ApiKeysApi(this.config, undefined, axiosInstance)
-    this._dockerRegistryApi = new DockerRegistryApi(this.config, undefined, axiosInstance)
     this._organizationsApi = new OrganizationsApi(this.config, undefined, axiosInstance)
     this._billingApi = new BillingApiClient(config.billingApiUrl || window.location.origin, accessToken)
     this._volumeApi = new VolumesApi(this.config, undefined, axiosInstance)
@@ -122,10 +119,6 @@ export class ApiClient {
 
   public get apiKeyApi() {
     return this._apiKeyApi
-  }
-
-  public get dockerRegistryApi() {
-    return this._dockerRegistryApi
   }
 
   public get organizationsApi() {

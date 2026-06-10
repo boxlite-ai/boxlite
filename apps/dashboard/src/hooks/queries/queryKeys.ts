@@ -56,10 +56,6 @@ export const queryKeys = {
       ] as const,
   },
   // TODO(image-rewrite): template query keys removed with the image/template subsystem.
-  registries: {
-    all: ['registries'] as const,
-    list: (organizationId: string) => [...queryKeys.registries.all, organizationId, 'list'] as const,
-  },
   volumes: {
     all: ['volumes'] as const,
     list: (organizationId: string) => [...queryKeys.volumes.all, organizationId, 'list'] as const,
@@ -109,8 +105,6 @@ export const queryKeys = {
     all: ['analytics'] as const,
     aggregatedUsage: (organizationId: string, params: object) =>
       [...queryKeys.analytics.all, organizationId, 'aggregated-usage', params] as const,
-    usageChart: (organizationId: string, params: object) =>
-      [...queryKeys.analytics.all, organizationId, 'usage-chart', params] as const,
     boxesUsage: (organizationId: string, params: object) =>
       [...queryKeys.analytics.all, organizationId, 'boxes-usage', params] as const,
     boxUsagePeriods: (organizationId: string, boxId: string, params: object) =>

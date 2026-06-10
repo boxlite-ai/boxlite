@@ -11,9 +11,9 @@ import (
 
 	"github.com/boxlite-ai/boxlite/cli/cmd"
 	"github.com/boxlite-ai/boxlite/cli/cmd/auth"
+	"github.com/boxlite-ai/boxlite/cli/cmd/box"
 	"github.com/boxlite-ai/boxlite/cli/cmd/mcp"
 	"github.com/boxlite-ai/boxlite/cli/cmd/organization"
-	"github.com/boxlite-ai/boxlite/cli/cmd/box"
 	"github.com/boxlite-ai/boxlite/cli/cmd/volume"
 	"github.com/boxlite-ai/boxlite/cli/internal"
 	"github.com/joho/godotenv"

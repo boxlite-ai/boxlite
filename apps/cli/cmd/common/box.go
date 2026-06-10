@@ -43,8 +43,6 @@ func RequireStartedState(box *apiclient.Box) error {
 		return fmt.Errorf("box has been destroyed")
 	case apiclient.BOXSTATE_ERROR:
 		return fmt.Errorf("box is in an error state")
-	case apiclient.BOXSTATE_BUILD_FAILED:
-		return fmt.Errorf("box build failed")
 	default:
 		return fmt.Errorf("box is not running (state: %s)", state)
 	}

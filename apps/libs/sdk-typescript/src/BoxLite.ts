@@ -8,7 +8,6 @@ import {
   Configuration,
   ObjectStorageApi,
   BoxApi,
-  BoxState,
   VolumesApi,
   BoxVolume,
   ConfigApi,
@@ -22,7 +21,6 @@ import { Image } from './Image'
 import { Box, PaginatedBoxes } from './Box'
 import { VolumeService } from './Volume'
 import * as packageJson from '../package.json'
-import { processStreamingResponse } from './utils/Stream'
 import { BoxliteEnvReader, RUNTIME, Runtime } from './utils/Runtime'
 import { WithInstrumentation } from './utils/otel.decorator'
 import { context, trace, propagation, SpanStatusCode } from '@opentelemetry/api'
@@ -180,10 +178,11 @@ export type CreateBoxFromImageParams = CreateBoxBaseParams & {
 }
 
 /**
- * Parameters for creating a new Box from a template.
+ * Parameters for creating a new Box.
  *
  * @interface
  * @property {string} [templateId] - ID or name of the template to use for the Box.
+ *   @deprecated Box templates were removed from the API; setting this throws a BoxliteError.
  * @property {TemplateResources} [resources] - Optional CPU, memory, and disk overrides for the Box.
  */
 export type CreateBoxFromTemplateParams = CreateBoxBaseParams & {
@@ -377,46 +376,21 @@ export class BoxLite implements AsyncDisposable {
    */
   public async create(params?: CreateBoxFromTemplateParams, options?: { timeout?: number }): Promise<Box>
   /**
-   * Creates Boxes from specified image available on some registry or declarative BoxLite Image. You can specify various parameters,
-   * including resources, language, image, environment variables, and volumes. BoxLite creates runtime build material from
-   * provided image and uses it to create Box.
+   * Creates Boxes from specified image available on some registry or declarative BoxLite Image.
+   *
+   * @deprecated The API no longer supports image-based box creation (dynamic builds were
+   * removed). Calling create() with an `image` param throws a BoxliteError.
    *
    * @param {CreateBoxFromImageParams} [params] - Parameters for Box creation from image
    * @param {object} [options] - Options for the create operation
    * @param {number} [options.timeout] - Timeout in seconds (0 means no timeout, default is 60)
-   * @param {function} [options.onTemplateCreateLogs] - Callback function to handle template creation logs.
    * @returns {Promise<Box>} The created Box instance
-   *
-   * @example
-   * const box = await boxlite.create({ image: 'debian:12.9' }, { timeout: 90, onTemplateCreateLogs: console.log });
-   *
-   * @example
-   * // Create a custom box
-   * const image = Image.base('alpine:3.18').pipInstall('numpy');
-   * const params: CreateBoxFromImageParams = {
-   *     language: 'typescript',
-   *     image,
-   *     envVars: {
-   *         NODE_ENV: 'development',
-   *         DEBUG: 'true'
-   *     },
-   *     resources: {
-   *         cpu: 2,
-   *         memory: 4 // 4GB RAM
-   *     },
-   *     autoStopInterval: 60,
-   *     autoDeleteInterval: 120
-   * };
-   * const box = await boxlite.create(params, { timeout: 100, onTemplateCreateLogs: console.log });
    */
-  public async create(
-    params?: CreateBoxFromImageParams,
-    options?: { onTemplateCreateLogs?: (chunk: string) => void; timeout?: number },
-  ): Promise<Box>
+  public async create(params?: CreateBoxFromImageParams, options?: { timeout?: number }): Promise<Box>
   @WithInstrumentation()
   public async create(
     params?: CreateBoxFromTemplateParams | CreateBoxFromImageParams,
-    options: { onTemplateCreateLogs?: (chunk: string) => void; timeout?: number } = { timeout: 60 },
+    options: { timeout?: number } = { timeout: 60 },
   ): Promise<Box> {
     const startTime = Date.now()
 
@@ -456,45 +430,31 @@ export class BoxLite implements AsyncDisposable {
 
     const codeToolbox = this.getCodeToolbox(params.language as CodeLanguage)
 
+    // The API removed image- and template-based creation (boxes use the
+    // standard runtime). Fail loudly instead of silently ignoring the params.
+    if ('image' in params) {
+      throw new BoxliteError('Image-based box creation is no longer supported by the API.')
+    }
+    if ('templateId' in params && params.templateId !== undefined) {
+      throw new BoxliteError('Box templates were removed from the API; remove the templateId parameter.')
+    }
+
     try {
-      let buildInfo: any | undefined
-      let templateId: string | undefined
       let resources: Resources | undefined
-      let gpu: number | undefined
-
-      if ('templateId' in params) {
-        templateId = params.templateId
-      }
-
-      if ('image' in params) {
-        if (typeof params.image === 'string') {
-          buildInfo = {
-            dockerfileContent: Image.base(params.image).dockerfile,
-          }
-        } else if (params.image instanceof Image) {
-          buildInfo = {
-            dockerfileContent: params.image.dockerfile,
-          }
-        }
-      }
 
       if ('resources' in params) {
         resources = params.resources as Resources | undefined
-        gpu = 'image' in params ? resources?.gpu : undefined
       }
 
       const response = await this.boxApi.createBox(
         {
           name: params.name,
-          templateId,
-          buildInfo,
           user: params.user,
           env: params.envVars || {},
           labels: labels,
           public: params.public,
           target: this.target,
           cpu: resources?.cpu,
-          gpu,
           memory: resources?.memory,
           disk: resources?.disk,
           autoStopInterval: params.autoStopInterval,
@@ -509,44 +469,7 @@ export class BoxLite implements AsyncDisposable {
         },
       )
 
-      let boxInstance = response.data
-
-      if (boxInstance.state === BoxState.PENDING_BUILD && options.onTemplateCreateLogs) {
-        const terminalStates: BoxState[] = [
-          BoxState.STARTED,
-          BoxState.STARTING,
-          BoxState.ERROR,
-          BoxState.BUILD_FAILED,
-        ]
-
-        while (boxInstance.state === BoxState.PENDING_BUILD) {
-          if (options.timeout) {
-            const elapsed = (Date.now() - startTime) / 1000
-            if (elapsed > options.timeout) {
-              throw new BoxliteError(
-                `Box build has been pending for more than ${options.timeout} seconds. Please check the box state again later.`,
-              )
-            }
-          }
-          await new Promise((resolve) => setTimeout(resolve, 1000))
-          boxInstance = (await this.boxApi.getBox(boxInstance.id)).data
-        }
-
-        const response = await this.boxApi.getBuildLogsUrl(boxInstance.id)
-
-        await processStreamingResponse(
-          () =>
-            fetch(response.data.url + '?follow=true', {
-              method: 'GET',
-              headers: this.clientConfig.baseOptions.headers,
-            }),
-          (chunk) => options.onTemplateCreateLogs?.(chunk.trimEnd()),
-          async () => {
-            boxInstance = (await this.boxApi.getBox(boxInstance.id)).data
-            return boxInstance.state !== undefined && terminalStates.includes(boxInstance.state)
-          },
-        )
-      }
+      const boxInstance = response.data
 
       const box = new Box(
         boxInstance,

@@ -21,7 +21,6 @@ export interface BoxFilters {
   labels?: Record<string, string>
   includeErroredDeleted?: boolean
   states?: ListBoxesPaginatedStatesEnum[]
-  templates?: string[]
   regions?: string[]
   minCpu?: number
   maxCpu?: number
@@ -89,7 +88,6 @@ export function useBoxes(queryKey: QueryKey, params: BoxQueryParams) {
         filters.labels ? JSON.stringify(filters.labels) : undefined,
         filters.includeErroredDeleted,
         filters.states,
-        filters.templates,
         filters.regions,
         filters.minCpu,
         filters.maxCpu,

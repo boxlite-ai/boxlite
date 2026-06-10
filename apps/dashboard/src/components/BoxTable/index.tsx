@@ -190,12 +190,7 @@ export function BoxTable({
 
   return (
     <>
-      <BoxTableHeader
-        table={table}
-        onRefresh={handleRefresh}
-        isRefreshing={isRefreshing}
-        headerAction={headerAction}
-      />
+      <BoxTableHeader table={table} onRefresh={handleRefresh} isRefreshing={isRefreshing} headerAction={headerAction} />
 
       {useCompactList ? (
         loading ? (

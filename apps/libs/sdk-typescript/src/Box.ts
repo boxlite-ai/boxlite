@@ -11,8 +11,6 @@ import {
   PaginatedBoxes as PaginatedBoxesDto,
   PortPreviewUrl,
   BoxVolume,
-  BuildInfo,
-  BoxBackupStateEnum,
   Configuration,
   SshAccessDto,
   SshAccessValidationDto,
@@ -60,7 +58,6 @@ export interface BoxCodeToolbox {
  * @property {string} id - Unique identifier for the Box
  * @property {string} boxId - Public Box ID shown to users and SDK clients
  * @property {string} organizationId - Organization ID of the Box
- * @property {string} [template] - BoxLite template used to create the Box
  * @property {string} user - OS user running in the Box
  * @property {Record<string, string>} env - Environment variables set in the Box
  * @property {Record<string, string>} labels - Custom labels attached to the Box
@@ -73,12 +70,9 @@ export interface BoxCodeToolbox {
  * @property {BoxState} state - Current state of the Box (e.g., "started", "stopped")
  * @property {string} [errorReason] - Error message if Box is in error state
  * @property {boolean} [recoverable] - Whether the Box error is recoverable.
- * @property {BoxBackupStateEnum} [backupState] - Current state of Box backup
- * @property {string} [backupCreatedAt] - When the backup was created
  * @property {number} [autoStopInterval] - Auto-stop interval in minutes
  * @property {number} [autoDeleteInterval] - Auto-delete interval in minutes
  * @property {Array<BoxVolume>} [volumes] - Volumes attached to the Box
- * @property {BuildInfo} [buildInfo] - Build information for the Box if it was created from dynamic build
  * @property {string} [createdAt] - When the Box was created
  * @property {string} [updatedAt] - When the Box was last updated
  * @property {boolean} networkBlockAll - Whether to block all network access for the Box
@@ -97,7 +91,6 @@ export class Box implements BoxDto {
   public boxId!: string
   public name!: string
   public organizationId!: string
-  public template?: string
   public user!: string
   public env!: Record<string, string>
   public labels!: Record<string, string>
@@ -110,12 +103,9 @@ export class Box implements BoxDto {
   public state?: BoxState
   public errorReason?: string
   public recoverable?: boolean
-  public backupState?: BoxBackupStateEnum
-  public backupCreatedAt?: string
   public autoStopInterval?: number
   public autoDeleteInterval?: number
   public volumes?: Array<BoxVolume>
-  public buildInfo?: BuildInfo
   public createdAt?: string
   public updatedAt?: string
   public networkBlockAll!: boolean
@@ -678,7 +668,6 @@ export class Box implements BoxDto {
     this.boxId = boxDto.boxId
     this.name = boxDto.name
     this.organizationId = boxDto.organizationId
-    this.template = boxDto.template
     this.user = boxDto.user
     this.env = boxDto.env
     this.labels = boxDto.labels
@@ -691,12 +680,9 @@ export class Box implements BoxDto {
     this.state = boxDto.state
     this.errorReason = boxDto.errorReason
     this.recoverable = boxDto.recoverable
-    this.backupState = boxDto.backupState
-    this.backupCreatedAt = boxDto.backupCreatedAt
     this.autoStopInterval = boxDto.autoStopInterval
     this.autoDeleteInterval = boxDto.autoDeleteInterval
     this.volumes = boxDto.volumes
-    this.buildInfo = boxDto.buildInfo
     this.createdAt = boxDto.createdAt
     this.updatedAt = boxDto.updatedAt
     this.networkBlockAll = boxDto.networkBlockAll

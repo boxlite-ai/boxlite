@@ -4,27 +4,20 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { LiveIndicator } from '@/components/LiveIndicator'
 import { PageContent, PageHeader, PageLayout, PageTitle } from '@/components/PageLayout'
 import { TierComparisonTable, TierComparisonTableSkeleton } from '@/components/TierComparisonTable'
 import { TierUpgradeCard } from '@/components/TierUpgradeCard'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { UsageOverview, UsageOverviewSkeleton } from '@/components/UsageOverview'
 import { RoutePath } from '@/enums/RoutePath'
 import { useOwnerTierQuery, useOwnerWalletQuery } from '@/hooks/queries/billingQueries'
-import { useOrganizationUsageOverviewQuery } from '@/hooks/queries/useOrganizationUsageOverviewQuery'
 import { useTiersQuery } from '@/hooks/queries/useTiersQuery'
 import { useConfig } from '@/hooks/useConfig'
-import { useRegions } from '@/hooks/useRegions'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { cn } from '@/lib/utils'
-import type { RegionUsageOverview } from '@boxlite-ai/api-client'
-import { keepPreviousData } from '@tanstack/react-query'
 import { RefreshCcw } from 'lucide-react'
-import { ReactNode, useEffect, useMemo, useState } from 'react'
+import { ReactNode, useEffect } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { useNavigate } from 'react-router-dom'
 
@@ -39,8 +32,6 @@ export default function Limits() {
   const tiers = tiersQuery.data?.sort((a, b) => a.tier - b.tier)
   const wallet = walletQuery.data
 
-  const { getRegionName } = useRegions()
-  const [selectedRegionId, setSelectedRegionId] = useState<string | undefined>(undefined)
   const config = useConfig()
   const navigate = useNavigate()
 
@@ -50,41 +41,12 @@ export default function Limits() {
     }
   }, [navigate, selectedOrganization])
 
-  const { data: usageOverview, ...usageOverviewQuery } = useOrganizationUsageOverviewQuery(
-    {
-      organizationId: selectedOrganization?.id || '',
-    },
-    {
-      placeholderData: keepPreviousData,
-      refetchInterval: 10_000,
-      refetchIntervalInBackground: true,
-      staleTime: 0,
-    },
-  )
-
-  useEffect(() => {
-    if (usageOverview && usageOverview.regionUsage.length > 0 && !selectedRegionId) {
-      const regionIds = usageOverview.regionUsage.map((usage) => usage.regionId)
-      const regionId = regionIds.find((regionId) => regionId === selectedOrganization?.defaultRegionId) || regionIds[0]
-      setSelectedRegionId(regionId)
-    }
-  }, [usageOverview, selectedOrganization?.defaultRegionId, selectedRegionId])
-
-  const currentRegionUsageOverview = useMemo<RegionUsageOverview | null>(() => {
-    if (!usageOverview || !selectedRegionId) {
-      return null
-    }
-    return usageOverview.regionUsage.find((usage) => usage.regionId === selectedRegionId) || null
-  }, [usageOverview, selectedRegionId])
-
   const isLoading = organizationTierQuery.isLoading || tiersQuery.isLoading || walletQuery.isLoading
-  const isError =
-    organizationTierQuery.isError || tiersQuery.isError || usageOverviewQuery.isError || walletQuery.isError
+  const isError = organizationTierQuery.isError || tiersQuery.isError || walletQuery.isError
 
   const handleRetry = () => {
     organizationTierQuery.refetch()
     tiersQuery.refetch()
-    usageOverviewQuery.refetch()
     walletQuery.refetch()
   }
 
@@ -123,27 +85,6 @@ export default function Limits() {
                       )}
                     </div>
                   </CardTitle>
-                  {usageOverview && usageOverview.regionUsage.length > 0 && (
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-muted-foreground">Region:</span>
-                      <Select value={selectedRegionId} onValueChange={setSelectedRegionId}>
-                        <SelectTrigger
-                          size="xs"
-                          disabled={usageOverview.regionUsage.length === 1}
-                          className={`uppercase w-auto min-w-12 max-w-48 gap-x-2 ${usageOverview.regionUsage.length === 1 ? 'pointer-events-none select-none [&>svg]:hidden min-w-10 disabled:opacity-100' : ''}`}
-                        >
-                          <SelectValue placeholder="Select region" />
-                        </SelectTrigger>
-                        <SelectContent className="min-w-24 max-w-48" align="end">
-                          {usageOverview.regionUsage.map((usage) => (
-                            <SelectItem key={usage.regionId} value={usage.regionId} className="uppercase">
-                              {getRegionName(usage.regionId) ?? usage.regionId}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  )}
                 </div>
                 <CardDescription>
                   Limits help us mitigate misuse and manage infrastructure resources. <br /> Ensuring fair and stable
@@ -151,24 +92,6 @@ export default function Limits() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="p-0 flex flex-col">
-                {usageOverviewQuery.isLoading ? (
-                  <UsageOverviewSkeleton />
-                ) : (
-                  usageOverview &&
-                  currentRegionUsageOverview && (
-                    <div className="p-4 border-t border-border flex flex-col gap-2">
-                      <div className="flex items-center gap-4">
-                        <div className="text-sm font-medium">Resources</div>
-                        <LiveIndicator
-                          isUpdating={usageOverviewQuery.isFetching}
-                          intervalMs={10_000}
-                          lastUpdatedAt={usageOverviewQuery.dataUpdatedAt || 0}
-                        />
-                      </div>
-                      <UsageOverview usageOverview={currentRegionUsageOverview} />
-                    </div>
-                  )
-                )}
                 <RateLimits
                   title="Box Limits"
                   description="Resources limit per box."

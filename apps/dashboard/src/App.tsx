@@ -46,7 +46,6 @@ import { BoxSessionProvider } from './providers/BoxSessionProvider'
 
 const HIDDEN_DASHBOARD_ROUTES = [
   RoutePath.IMAGES,
-  RoutePath.REGISTRIES,
   RoutePath.VOLUMES,
   RoutePath.LIMITS,
   RoutePath.BILLING_SPENDING,

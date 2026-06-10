@@ -16,9 +16,7 @@ import { DateRangePicker, QuickRangesConfig } from '@/components/ui/date-range-p
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Separator } from '@/components/ui/separator'
 import { FeatureFlags } from '@/enums/FeatureFlags'
-import { UsageTimelineChart } from '@/components/spending/UsageTimelineChart'
-import { useAggregatedUsage, useBoxesUsage, useUsageChart } from '@/hooks/queries/useAnalyticsUsage'
-import { useOrganizationUsageOverviewQuery } from '@/hooks/queries/useOrganizationUsageOverviewQuery'
+import { useAggregatedUsage, useBoxesUsage } from '@/hooks/queries/useAnalyticsUsage'
 import { useOrganizationUsageQuery } from '@/hooks/queries/useOrganizationUsageQuery'
 import { usePastOrganizationUsageQuery } from '@/hooks/queries/usePastOrganizationUsageQuery'
 import { useConfig } from '@/hooks/useConfig'
@@ -26,7 +24,7 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { addDays, differenceInCalendarDays, subDays } from 'date-fns'
 import { AlertCircle, BarChart3, RefreshCw } from 'lucide-react'
 import { useFeatureFlagEnabled } from 'posthog-js/react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { DateRange } from 'react-day-picker'
 
 const analyticsQuickRanges: QuickRangesConfig = {
@@ -56,9 +54,6 @@ const Spending = () => {
     setAnalyticsDateRange(range)
   }, [])
 
-  const [selectedChartRegion, setSelectedChartRegion] = useState<string | undefined>(undefined)
-  const hasDefaultedRegion = useRef(false)
-
   const analyticsParams = {
     from: analyticsDateRange.from ?? subDays(new Date(), 30),
     to: analyticsDateRange.to ?? new Date(),
@@ -77,29 +72,6 @@ const Spending = () => {
     isError: boxesError,
     refetch: refetchBoxes,
   } = useBoxesUsage(analyticsParams)
-  const { data: usageChartPoints, isLoading: chartLoading } = useUsageChart({
-    ...analyticsParams,
-    region: selectedChartRegion,
-  })
-
-  const { data: usageOverview } = useOrganizationUsageOverviewQuery({
-    organizationId: selectedOrganization?.id ?? '',
-  })
-
-  // Default chart region to the organization's default region (only once)
-  useEffect(() => {
-    if (hasDefaultedRegion.current) return
-    const regionUsage = usageOverview?.regionUsage
-    if (!regionUsage?.length) return
-    hasDefaultedRegion.current = true
-    const defaultRegionId = selectedOrganization?.defaultRegionId
-    if (defaultRegionId && regionUsage.some((r) => r.regionId === defaultRegionId)) {
-      setSelectedChartRegion(defaultRegionId)
-    } else {
-      setSelectedChartRegion(regionUsage[0].regionId)
-    }
-  }, [usageOverview?.regionUsage, selectedOrganization?.defaultRegionId])
-
   const {
     data: currentOrganizationUsage,
     isLoading: currentUsageLoading,
@@ -192,15 +164,6 @@ const Spending = () => {
                 <AggregatedUsageChart data={aggregatedUsage} isLoading={aggregatedLoading} />
                 <Separator />
                 <ResourceUsageBreakdown data={aggregatedUsage} />
-                <Separator />
-                <UsageTimelineChart
-                  data={usageChartPoints}
-                  isLoading={chartLoading}
-                  regionUsage={usageOverview?.regionUsage}
-                  selectedRegion={selectedChartRegion}
-                  onRegionChange={setSelectedChartRegion}
-                  dateRange={{ from: analyticsParams.from, to: analyticsParams.to }}
-                />
               </>
             )}
             <Separator />

@@ -22,7 +22,7 @@ func AwaitBoxState(ctx context.Context, apiClient *apiclient.APIClient, targetBo
 
 		if box.State != nil && *box.State == state {
 			return nil
-		} else if box.State != nil && (*box.State == apiclient.BOXSTATE_ERROR || *box.State == apiclient.BOXSTATE_BUILD_FAILED) {
+		} else if box.State != nil && *box.State == apiclient.BOXSTATE_ERROR {
 			if box.ErrorReason == nil {
 				return fmt.Errorf("box processing failed")
 			}
