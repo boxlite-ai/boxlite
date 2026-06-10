@@ -17,6 +17,7 @@ import { TypedConfigService } from '../../../config/typed-config.service'
 import { LockCode, RedisLockProvider } from '../../common/redis-lock.provider'
 import { WithSpan } from '../../../common/decorators/otel.decorator'
 import { BoxActivityService } from '../../services/box-activity.service'
+import { BOX_IMAGE_REF_LABEL } from '../../constants/curated-images.constant'
 
 @Injectable()
 export class BoxStartAction extends BoxAction {
@@ -56,24 +57,32 @@ export class BoxStartAction extends BoxAction {
     return DONT_SYNC_AGAIN
   }
 
-  // TODO(image-rewrite): the box boot pipeline (image resolution, runner artifact scheduling,
-  // pull orchestration, and runner createBox) was removed with the box_template subsystem. Boxes
-  // can no longer be booted until the image resolution layer is rebuilt; this handler fails the
-  // box explicitly instead.
+  //  A freshly created box (UNKNOWN state, desired STARTED) boots from the curated image ref
+  //  stashed on its labels at create time. Enqueue a CREATE_BOX job and move to CREATING; the
+  //  job-completion path then drives CREATING -> STARTED.
   private async handleRunnerBoxUnknownStateOnDesiredStateStart(box: Box, lockCode: LockCode): Promise<SyncState> {
     const runner = await this.runnerService.findOneOrFail(box.runnerId)
     if (runner.state !== RunnerState.READY) {
       return DONT_SYNC_AGAIN
     }
 
-    await this.updateBoxState(
-      box,
-      BoxState.ERROR,
-      lockCode,
-      undefined,
-      'Box image resolution is unavailable: the image/template subsystem was removed',
-    )
-    return DONT_SYNC_AGAIN
+    const artifactRef = box.labels?.[BOX_IMAGE_REF_LABEL]
+    if (!artifactRef) {
+      await this.updateBoxState(
+        box,
+        BoxState.ERROR,
+        lockCode,
+        undefined,
+        `Box has no image ref (missing label ${BOX_IMAGE_REF_LABEL})`,
+      )
+      return DONT_SYNC_AGAIN
+    }
+
+    const runnerAdapter = await this.runnerAdapterFactory.create(runner)
+    await runnerAdapter.createBox(box, artifactRef)
+
+    await this.updateBoxState(box, BoxState.CREATING, lockCode)
+    return SYNC_AGAIN
   }
 
   private async handleRunnerBoxStoppedStateOnDesiredStateStart(box: Box, lockCode: LockCode): Promise<SyncState> {
