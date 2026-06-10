@@ -1,4 +1,4 @@
-# Source-mode Dockerfile for e2e-cloud — runs TypeScript directly via tsx,
+# Source-mode Dockerfile for e2e-cloud — runs TypeScript directly via ts-node,
 # no webpack build, no dashboard build, no strict type check.
 #
 # Why a separate Dockerfile:
@@ -9,16 +9,22 @@
 #   exporter type mismatch in tracing.ts), unrelated to this PR's scope.
 # - The e2e-cloud workflow needs an Api image to deploy to Tokyo + run
 #   the e2e suite against, even when the prod build is broken.
-# - tsx (≥4.20, already in apps/package.json) transpiles TS to JS at
-#   import time, never type-checks → bypasses the build-time gate while
-#   keeping runtime semantics identical (same NestJS app, same routes).
+# - ts-node uses tsc, which honors `emitDecoratorMetadata: true` from
+#   apps/api/tsconfig.app.json. TypeORM entity decorators
+#   (@PrimaryColumn / @Column / @Entity / etc.) need reflect-metadata at
+#   runtime; tsx (esbuild-based) does NOT emit decorator metadata, so
+#   the container crashes immediately with:
+#       ColumnTypeUndefinedError: Column type for User#id is not defined
+#       and cannot be guessed.
+#   ts-node honors the tsconfig and emits the metadata calls, so the
+#   entities load correctly.
 #
 # Dashboard (Vite frontend) is omitted entirely: e2e tests hit the API
 # directly, no static-file serving from dashboard is required by the
 # pytest cases under scripts/test/e2e/cases/.
 #
 # Trade-offs vs production Dockerfile:
-# - Slower cold start (tsx parses TS on first import; ~5-15s extra)
+# - Slower cold start (ts-node compiles TS on first import; ~10-30s extra)
 # - Higher resident memory (no tree-shaking)
 # - Type errors become RUNTIME errors instead of build errors (acceptable
 #   for an e2e smoke test against deployed code)
@@ -37,9 +43,9 @@ RUN yarn install --immutable
 
 COPY apps/nx.json apps/tsconfig.base.json apps/NOTICE ./
 
-# tsx auto-discovers tsconfig.json in cwd — symlink so the path-alias
-# definitions in apps/tsconfig.base.json (the `@boxlite-ai/*` mappings)
-# resolve at import time without needing an explicit --tsconfig flag.
+# ts-node defaults to looking at ./tsconfig.json. Symlink so the path
+# aliases in apps/tsconfig.base.json (the `@boxlite-ai/*` mappings
+# consumed by `-r tsconfig-paths/register`) resolve at import time.
 RUN ln -sf tsconfig.base.json tsconfig.json
 
 ENV NX_DAEMON=false
@@ -59,5 +65,12 @@ ENV VERSION=${VERSION}
 
 HEALTHCHECK CMD [ "curl", "-f", "http://localhost:3000/api/config" ]
 
-# Run the NestJS entry point through tsx (no compile, no bundle).
-ENTRYPOINT ["yarn", "tsx", "apps/api/src/main.ts"]
+# Run the NestJS entry point through ts-node:
+# - --project: point at apps/api/tsconfig.app.json so emitDecoratorMetadata
+#   and experimentalDecorators are picked up (TypeORM entities need this).
+# - --transpile-only: skip type-checking at startup (faster cold boot;
+#   the prod webpack build is the source-of-truth type gate, and that's
+#   already known to fail with 160 errors on main — see header).
+# - -r tsconfig-paths/register: resolve the `@boxlite-ai/*` path aliases
+#   defined in tsconfig.base.json at module-load time.
+ENTRYPOINT ["yarn", "ts-node", "--project", "apps/api/tsconfig.app.json", "--transpile-only", "-r", "tsconfig-paths/register", "apps/api/src/main.ts"]
