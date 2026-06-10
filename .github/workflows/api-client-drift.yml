@@ -36,20 +36,23 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # corepack must be enabled before setup-node's yarn cache probe runs
+      - name: Enable corepack (yarn 4)
+        run: corepack enable
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: yarn
+          cache-dependency-path: apps/yarn.lock
 
       - uses: actions/setup-java@v4
         with:
           java-version: 21
           distribution: temurin
 
-      - name: Enable corepack (yarn 4)
-        run: corepack enable
-
       - name: Install dependencies
-        run: yarn install
+        run: yarn install --immutable
 
       - name: Prepare offline app env
         run: |
