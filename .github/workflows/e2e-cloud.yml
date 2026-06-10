@@ -392,10 +392,14 @@ jobs:
         # this env var and emit a no-op `/nonexistent` linker hint.
         # Avoids needing `git submodule update --init --recursive` +
         # meson/ninja in the GHA runner image.
+        #
+        # protoc is required by boxlite-shared's build.rs (gRPC proto
+        # compilation); ubuntu-latest doesn't preinstall it.
         env:
           BOXLITE_DEPS_STUB: "1"
         run: |
           set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends protobuf-compiler
           cd sdks/python
           pip install --break-system-packages --quiet maturin
           maturin build --release
