@@ -14,13 +14,14 @@
 
 
 
-export interface ModelsTraceSummary {
-    'endTime'?: string;
-    'rootSpanName'?: string;
-    'spanCount'?: number;
-    'startTime'?: string;
-    'statusCode'?: string;
-    'totalDurationMs'?: number;
-    'traceId'?: string;
+export interface ModelsBoxUsage {
+    'boxId'?: string;
+    'firstStart'?: string;
+    'lastEnd'?: string;
+    'totalCPUSeconds'?: number;
+    'totalDiskGBSeconds'?: number;
+    'totalGPUSeconds'?: number;
+    'totalPrice'?: number;
+    'totalRAMGBSeconds'?: number;
 }
 
