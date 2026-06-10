@@ -5,8 +5,8 @@
  */
 
 export enum WebhookEvent {
-  SANDBOX_CREATED = 'sandbox.created',
-  SANDBOX_STATE_UPDATED = 'sandbox.state.updated',
+  BOX_CREATED = 'box.created',
+  BOX_STATE_UPDATED = 'box.state.updated',
   TEMPLATE_CREATED = 'template.created',
   TEMPLATE_STATE_UPDATED = 'template.state.updated',
   TEMPLATE_REMOVED = 'template.removed',

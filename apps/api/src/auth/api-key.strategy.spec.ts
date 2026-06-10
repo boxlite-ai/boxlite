@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-jest.mock('../sandbox/services/runner.service', () => ({
+jest.mock('../box/services/runner.service', () => ({
   RunnerService: class RunnerService {},
 }))
 jest.mock('../region/services/region.service', () => ({

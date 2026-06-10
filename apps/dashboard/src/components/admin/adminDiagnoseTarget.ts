@@ -44,8 +44,7 @@ export function createBoxDiagnoseTarget(box: AdminBox): AdminDiagnoseTarget {
     box,
     params: {
       orgId: box.organizationId,
-      sandboxId: box.id,
-      boxId: box.boxId,
+      boxId: box.id,
       runnerId: box.runnerId ?? undefined,
     },
     details: [
@@ -98,7 +97,7 @@ export function createRunnerDiagnoseTarget(runner: AdminRunner): AdminDiagnoseTa
       { label: 'runner', value: runner.id },
       { label: 'state', value: runner.state },
       { label: 'scheduling', value: runner.unschedulable ? 'cordoned' : runner.draining ? 'draining' : 'accepting' },
-      { label: 'boxes', value: String(runner.currentStartedSandboxes) },
+      { label: 'boxes', value: String(runner.currentStartedBoxes) },
       { label: 'cpu alloc', value: `${runner.currentAllocatedCpu}/${runner.cpu}` },
       { label: 'mem alloc', value: `${runner.currentAllocatedMemoryGiB.toFixed(1)}/${runner.memory.toFixed(1)} GiB` },
     ],
@@ -118,7 +117,7 @@ export function createMachineDiagnoseTarget(machine: AdminMachine): AdminDiagnos
     details: [
       { label: 'host', value: machine.host },
       { label: 'region', value: machine.region },
-      { label: 'boxes', value: String(machine.sandboxes) },
+      { label: 'boxes', value: String(machine.boxes) },
       { label: 'oversell cpu', value: `${machine.oversellCpu.toFixed(1)}x` },
       { label: 'cpu waterline', value: `${machine.cpuWaterline.toFixed(1)}%` },
       { label: 'mem waterline', value: `${machine.memWaterline.toFixed(1)}%` },

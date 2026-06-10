@@ -58,7 +58,7 @@ export abstract class BoxAction {
     }
 
     if (!box.pending) {
-      const err = new Error(`sandbox ${box.id} is not in a pending state`)
+      const err = new Error(`box ${box.id} is not in a pending state`)
       this.logger.error(err)
       return
     }

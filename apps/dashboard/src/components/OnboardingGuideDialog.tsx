@@ -85,7 +85,7 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange, pr
   const [createdApiKey, setCreatedApiKey] = useState<ApiKeyResponse | null>(null)
   const [isApiKeyCopied, setIsApiKeyCopied] = useState(false)
   const [isLoadingCreateKey, setIsLoadingCreateKey] = useState(false)
-  const canCreateApiKey = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_SANDBOXES)
+  const canCreateApiKey = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
   const codeExamples = getOnboardingCodeExamples()
   const activeExample = codeExamples[language]
   const renderedExample = useMemo(
@@ -96,9 +96,9 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange, pr
   const apiKeyPermissions = useMemo(() => {
     if (!canCreateApiKey) return []
 
-    const permissions: CreateApiKeyPermissionsEnum[] = [CreateApiKeyPermissionsEnum.WRITE_SANDBOXES]
-    if (authenticatedUserHasPermission(OrganizationRolePermissionsEnum.DELETE_SANDBOXES)) {
-      permissions.push(CreateApiKeyPermissionsEnum.DELETE_SANDBOXES)
+    const permissions: CreateApiKeyPermissionsEnum[] = [CreateApiKeyPermissionsEnum.WRITE_BOXES]
+    if (authenticatedUserHasPermission(OrganizationRolePermissionsEnum.DELETE_BOXES)) {
+      permissions.push(CreateApiKeyPermissionsEnum.DELETE_BOXES)
     }
 
     return permissions

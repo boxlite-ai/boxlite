@@ -21,7 +21,7 @@ import (
 //	@Tags			box
 //	@Summary		Create a box
 //	@Description	Create a box
-//	@Param			box	body	dto.CreateBoxDTO	true	"Create sandbox"
+//	@Param			box	body	dto.CreateBoxDTO	true	"Create box"
 //	@Produce		json
 //	@Success		201	{object}	dto.StartBoxResponse
 //	@Failure		400	{object}	common_errors.ErrorResponse
@@ -77,7 +77,7 @@ func Create(ctx *gin.Context) {
 //
 //	@id				Destroy
 func Destroy(ctx *gin.Context) {
-	boxId := ctx.Param("sandboxId")
+	boxId := ctx.Param("boxId")
 
 	runner, err := runner.GetInstance(nil)
 	if err != nil {
@@ -104,7 +104,7 @@ func Destroy(ctx *gin.Context) {
 //	@Description	Resize box
 //	@Produce		json
 //	@Param			boxId	path		string					true	"Box ID"
-//	@Param			box		body		dto.ResizeBoxDTO	true	"Resize sandbox"
+//	@Param			box		body		dto.ResizeBoxDTO	true	"Resize box"
 //	@Success		200			{string}	string					"Box resized"
 //	@Failure		400			{object}	common_errors.ErrorResponse
 //	@Failure		401			{object}	common_errors.ErrorResponse
@@ -122,7 +122,7 @@ func Resize(ctx *gin.Context) {
 		return
 	}
 
-	boxId := ctx.Param("sandboxId")
+	boxId := ctx.Param("boxId")
 
 	runner, err := runner.GetInstance(nil)
 	if err != nil {
@@ -167,7 +167,7 @@ func UpdateNetworkSettings(ctx *gin.Context) {
 		return
 	}
 
-	boxId := ctx.Param("sandboxId")
+	boxId := ctx.Param("boxId")
 	runner, err := runner.GetInstance(nil)
 	if err != nil {
 		ctx.Error(err)
@@ -201,7 +201,7 @@ func UpdateNetworkSettings(ctx *gin.Context) {
 //	@id				GetNetworkSettings
 func GetNetworkSettings(ctx *gin.Context) {
 	// TODO: Implement GetNetworkSettings in Docker client
-	// boxId := ctx.Param("sandboxId")
+	// boxId := ctx.Param("boxId")
 	// runner := runner.GetInstance(nil)
 	// networkSettings, err := runner.Boxlite.GetNetworkSettings(ctx.Request.Context(), boxId)
 	// if err != nil {
@@ -237,7 +237,7 @@ func GetNetworkSettings(ctx *gin.Context) {
 //
 //	@id				Start
 func Start(ctx *gin.Context) {
-	boxId := ctx.Param("sandboxId")
+	boxId := ctx.Param("boxId")
 
 	runner, err := runner.GetInstance(nil)
 	if err != nil {
@@ -276,7 +276,7 @@ func Start(ctx *gin.Context) {
 //	@Description	Stop box
 //	@Produce		json
 //	@Param			boxId	path		string				true	"Box ID"
-//	@Param			box		body		dto.StopBoxDTO	false	"Stop sandbox"
+//	@Param			box		body		dto.StopBoxDTO	false	"Stop box"
 //	@Success		200			{string}	string				"Box stopped"
 //	@Failure		400			{object}	common_errors.ErrorResponse
 //	@Failure		401			{object}	common_errors.ErrorResponse
@@ -287,7 +287,7 @@ func Start(ctx *gin.Context) {
 //
 //	@id				Stop
 func Stop(ctx *gin.Context) {
-	boxId := ctx.Param("sandboxId")
+	boxId := ctx.Param("boxId")
 
 	var stopDto dto.StopBoxDTO
 	// Allow empty body for backwards compatibility
@@ -325,7 +325,7 @@ func Stop(ctx *gin.Context) {
 //
 //	@id				Info
 func Info(ctx *gin.Context) {
-	boxId := ctx.Param("sandboxId")
+	boxId := ctx.Param("boxId")
 
 	runner, err := runner.GetInstance(nil)
 	if err != nil {
@@ -384,7 +384,7 @@ func Recover(ctx *gin.Context) {
 		return
 	}
 
-	boxId := ctx.Param("sandboxId")
+	boxId := ctx.Param("boxId")
 	runner, err := runner.GetInstance(nil)
 	if err != nil {
 		ctx.Error(err)
@@ -403,7 +403,7 @@ func Recover(ctx *gin.Context) {
 // IsRecoverable godoc
 //
 //	@Summary		Check if box error is recoverable
-//	@Description	Check if the sandbox's error reason indicates a recoverable error
+//	@Description	Check if the box's error reason indicates a recoverable error
 //	@Tags			box
 //	@Accept			json
 //	@Produce		json

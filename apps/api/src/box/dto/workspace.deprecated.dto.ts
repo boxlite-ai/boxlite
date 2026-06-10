@@ -18,7 +18,7 @@ export class BoxInfoDto {
   created: string
 
   @ApiProperty({
-    description: 'Deprecated: The name of the sandbox',
+    description: 'Deprecated: The name of the box',
     example: 'MyBox',
     deprecated: true,
     default: '',
@@ -43,7 +43,7 @@ export class WorkspaceDto extends BoxDto {
   image: string
 
   @ApiPropertyOptional({
-    description: 'Additional information about the sandbox',
+    description: 'Additional information about the box',
     type: BoxInfoDto,
     required: false,
   })

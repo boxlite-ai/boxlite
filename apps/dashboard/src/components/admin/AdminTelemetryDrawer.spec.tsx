@@ -42,7 +42,7 @@ const investigateMock = vi.hoisted(() => {
       },
     },
     commands: {
-      api: '/admin/observability/investigate?sandboxId=box-test-001',
+      api: '/admin/observability/investigate?boxId=box-test-001',
       aiAgentPrompt: 'Use the BoxLite Admin API with X-BoxLite-Source=agent.',
     },
     operations: [],

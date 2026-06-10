@@ -13,23 +13,23 @@ import { ResourceType } from '../enums/resource-type.enum'
  * resourceType is an array of allowed ResourceTypes - the user can supply any of them
  */
 export interface JobTypeMap {
-  [JobType.CREATE_SANDBOX]: {
-    resourceType: [ResourceType.SANDBOX]
+  [JobType.CREATE_BOX]: {
+    resourceType: [ResourceType.BOX]
   }
-  [JobType.START_SANDBOX]: {
-    resourceType: [ResourceType.SANDBOX]
+  [JobType.START_BOX]: {
+    resourceType: [ResourceType.BOX]
   }
-  [JobType.STOP_SANDBOX]: {
-    resourceType: [ResourceType.SANDBOX]
+  [JobType.STOP_BOX]: {
+    resourceType: [ResourceType.BOX]
   }
-  [JobType.DESTROY_SANDBOX]: {
-    resourceType: [ResourceType.SANDBOX]
+  [JobType.DESTROY_BOX]: {
+    resourceType: [ResourceType.BOX]
   }
-  [JobType.RESIZE_SANDBOX]: {
-    resourceType: [ResourceType.SANDBOX]
+  [JobType.RESIZE_BOX]: {
+    resourceType: [ResourceType.BOX]
   }
   [JobType.CREATE_BACKUP]: {
-    resourceType: [ResourceType.SANDBOX]
+    resourceType: [ResourceType.BOX]
   }
   [JobType.PULL_ARTIFACT]: {
     resourceType: [ResourceType.ARTIFACT]
@@ -37,14 +37,14 @@ export interface JobTypeMap {
   [JobType.REMOVE_ARTIFACT]: {
     resourceType: [ResourceType.ARTIFACT]
   }
-  [JobType.UPDATE_SANDBOX_NETWORK_SETTINGS]: {
-    resourceType: [ResourceType.SANDBOX]
+  [JobType.UPDATE_BOX_NETWORK_SETTINGS]: {
+    resourceType: [ResourceType.BOX]
   }
   [JobType.INSPECT_ARTIFACT_IN_REGISTRY]: {
     resourceType: [ResourceType.ARTIFACT]
   }
-  [JobType.RECOVER_SANDBOX]: {
-    resourceType: [ResourceType.SANDBOX]
+  [JobType.RECOVER_BOX]: {
+    resourceType: [ResourceType.BOX]
   }
 }
 

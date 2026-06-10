@@ -5,13 +5,13 @@
  */
 
 export const BoxEvents = {
-  ARCHIVED: 'sandbox.archived',
-  STATE_UPDATED: 'sandbox.state.updated',
-  DESIRED_STATE_UPDATED: 'sandbox.desired-state.updated',
-  CREATED: 'sandbox.created',
-  STARTED: 'sandbox.started',
-  STOPPED: 'sandbox.stopped',
-  DESTROYED: 'sandbox.destroyed',
-  PUBLIC_STATUS_UPDATED: 'sandbox.public-status.updated',
-  ORGANIZATION_UPDATED: 'sandbox.organization.updated',
+  ARCHIVED: 'box.archived',
+  STATE_UPDATED: 'box.state.updated',
+  DESIRED_STATE_UPDATED: 'box.desired-state.updated',
+  CREATED: 'box.created',
+  STARTED: 'box.started',
+  STOPPED: 'box.stopped',
+  DESTROYED: 'box.destroyed',
+  PUBLIC_STATUS_UPDATED: 'box.public-status.updated',
+  ORGANIZATION_UPDATED: 'box.organization.updated',
 } as const

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { DEFAULT_SANDBOX_SORTING, BoxFilters, BoxSorting } from '@/hooks/useBoxes'
+import { DEFAULT_BOX_SORTING, BoxFilters, BoxSorting } from '@/hooks/useBoxes'
 import {
   ListBoxesPaginatedOrderEnum,
   ListBoxesPaginatedSortEnum,
@@ -82,7 +82,7 @@ export interface FacetedFilterOption {
 
 export const convertTableSortingToApiSorting = (sorting: SortingState): BoxSorting => {
   if (!sorting.length) {
-    return DEFAULT_SANDBOX_SORTING
+    return DEFAULT_BOX_SORTING
   }
 
   const sort = sorting[0]

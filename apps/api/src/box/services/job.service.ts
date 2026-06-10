@@ -313,7 +313,7 @@ export class JobService {
   }
 
   async findJobsByBoxId(boxId: string): Promise<Job[]> {
-    return this.findJobsByResourceId(ResourceType.SANDBOX, boxId)
+    return this.findJobsByResourceId(ResourceType.BOX, boxId)
   }
 
   async findJobsByResourceId(resourceType: ResourceType, resourceId: string): Promise<Job[]> {

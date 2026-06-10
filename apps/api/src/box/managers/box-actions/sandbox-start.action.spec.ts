@@ -22,7 +22,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
   it('restarts a stopped box on its own runner (no cross-runner reassignment)', async () => {
     const ownRunnerId = 'runner-own-1'
 
-    const box = new Box('region-1', 'my-sandbox')
+    const box = new Box('region-1', 'my-box')
     box.runnerId = ownRunnerId
     box.state = BoxState.STOPPED
     box.desiredState = BoxDesiredState.STARTED
@@ -81,7 +81,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
     // The action started the box on its OWN runner, not a different one.
     expect(runnerUsedForStart?.id).toBe(ownRunnerId)
     expect(startBox).toHaveBeenCalledWith(box.id, box.authToken, expect.any(Object))
-    // findOneOrFail was only ever asked about the sandbox's own runner.
+    // findOneOrFail was only ever asked about the box's own runner.
     for (const call of runnerService.findOneOrFail.mock.calls) {
       expect(call[0]).toBe(ownRunnerId)
     }
@@ -90,7 +90,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
   })
 
   it('moves a stopped box with no runner to ERROR (cross-runner recovery is not supported)', async () => {
-    const box = new Box('region-1', 'orphan-sandbox')
+    const box = new Box('region-1', 'orphan-box')
     box.runnerId = null
     box.state = BoxState.STOPPED
     box.desiredState = BoxDesiredState.STARTED

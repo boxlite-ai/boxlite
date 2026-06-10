@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-export type TelemetryScope = 'sandbox' | 'admin-platform'
+export type TelemetryScope = 'box' | 'admin-platform'
 
 export const adminTelemetryPaths = {
   logs: '/admin/observability/logs',

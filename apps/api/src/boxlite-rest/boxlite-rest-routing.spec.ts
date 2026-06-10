@@ -10,8 +10,8 @@ import type { INestApplication } from '@nestjs/common'
 import type { AddressInfo } from 'net'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
-import { SandboxService } from '../sandbox/services/sandbox.service'
-import { SandboxStateWaiterService } from '../sandbox/services/sandbox-state-waiter.service'
+import { BoxService } from '../box/services/box.service'
+import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
@@ -29,14 +29,14 @@ describe('BoxLite REST routing', () => {
       controllers: [BoxliteBoxController],
       providers: [
         {
-          provide: SandboxService,
+          provide: BoxService,
           useValue: {
             findAllDeprecated: jest.fn().mockResolvedValue([]),
-            toSandboxDtos: jest.fn().mockResolvedValue([]),
+            toBoxDtos: jest.fn().mockResolvedValue([]),
           },
         },
         {
-          provide: SandboxStateWaiterService,
+          provide: BoxStateWaiterService,
           useValue: {},
         },
       ],

@@ -52,7 +52,7 @@ func ProxyRequest(logger *slog.Logger) gin.HandlerFunc {
 			return
 		}
 
-		boxId := ctx.Param("sandboxId")
+		boxId := ctx.Param("boxId")
 		path := normalizeToolboxPath(ctx.Param("path"))
 
 		if strings.EqualFold(ctx.Request.Header.Get("Upgrade"), "websocket") {
@@ -102,9 +102,9 @@ func proxyToBoxToolbox(
 ) {
 	hostPort, err := portResolver.ToolboxHostPort(boxId)
 	if err != nil {
-		logger.WarnContext(ctx.Request.Context(), "sandbox toolbox host port not found", "sandbox", boxId, "error", err)
+		logger.WarnContext(ctx.Request.Context(), "box toolbox host port not found", "box", boxId, "error", err)
 		ctx.JSON(http.StatusBadGateway, gin.H{
-			"error": "sandbox toolbox port is not available; recreate the box after the runner update",
+			"error": "box toolbox port is not available; recreate the box after the runner update",
 		})
 		return
 	}
@@ -125,8 +125,8 @@ func proxyToBoxToolbox(
 		req.Header.Set("X-Forwarded-Host", ctx.Request.Host)
 	}
 	proxy.ErrorHandler = func(res http.ResponseWriter, req *http.Request, proxyErr error) {
-		logger.WarnContext(req.Context(), "sandbox toolbox proxy failed", "sandbox", boxId, "path", path, "error", proxyErr)
-		http.Error(res, "sandbox toolbox proxy failed", http.StatusBadGateway)
+		logger.WarnContext(req.Context(), "box toolbox proxy failed", "box", boxId, "path", path, "error", proxyErr)
+		http.Error(res, "box toolbox proxy failed", http.StatusBadGateway)
 	}
 
 	proxy.ServeHTTP(ctx.Writer, ctx.Request)
@@ -189,7 +189,7 @@ func handleWebSocketTerminal(ctx *gin.Context, r *runner.Runner, boxId string, l
 	shellCmd, shellArgs := shellutil.DefaultInteractiveShell()
 	execution, err := r.Boxlite.StartExecution(ctx.Request.Context(), boxId, shellCmd, shellArgs, wsWriter, wsWriter, true)
 	if err != nil {
-		logger.Warn("failed to start terminal execution", "sandbox", boxId, "error", err)
+		logger.Warn("failed to start terminal execution", "box", boxId, "error", err)
 		writeMu.Lock()
 		_ = ws.WriteControl(
 			websocket.CloseMessage,

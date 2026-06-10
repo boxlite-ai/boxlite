@@ -21,13 +21,13 @@ describe('BoxliteProxyController', () => {
     jest.clearAllMocks()
   })
 
-  it('rewrites public box ids to internal sandbox ids before proxying exec requests to the runner', async () => {
+  it('rewrites public box ids to internal box ids before proxying exec requests to the runner', async () => {
     const proxyHandler = jest.fn()
     jest.mocked(createProxyMiddleware).mockReturnValue(proxyHandler as never)
 
-    const sandboxService = {
+    const boxService = {
       findOneByIdOrName: jest.fn().mockResolvedValue({
-        id: 'sandbox-uuid',
+        id: 'box-uuid',
         runnerId: 'runner-1',
       }),
       updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
@@ -39,7 +39,7 @@ describe('BoxliteProxyController', () => {
       }),
     }
 
-    const controller = new BoxliteProxyController(sandboxService as never, runnerService as never)
+    const controller = new BoxliteProxyController(boxService as never, runnerService as never)
     const req = { url: '/api/v1/boxes/public-box/exec' }
     const res = {}
     const next = jest.fn()
@@ -48,8 +48,8 @@ describe('BoxliteProxyController', () => {
 
     const proxyOptions = jest.mocked(createProxyMiddleware).mock.calls[0][0]
     const pathRewrite = proxyOptions.pathRewrite as (path: string, req: unknown) => string
-    expect(pathRewrite('/api/v1/boxes/public-box/exec', req)).toBe('/v1/boxes/sandbox-uuid/exec')
-    expect(sandboxService.findOneByIdOrName).toHaveBeenCalledWith('public-box', 'org-1')
+    expect(pathRewrite('/api/v1/boxes/public-box/exec', req)).toBe('/v1/boxes/box-uuid/exec')
+    expect(boxService.findOneByIdOrName).toHaveBeenCalledWith('public-box', 'org-1')
     expect(proxyHandler).toHaveBeenCalledWith(req, res, next)
   })
 })

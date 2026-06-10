@@ -45,7 +45,7 @@ import {
   readOnboardingProgress,
   type OnboardingProgress,
 } from '@/lib/onboarding-progress'
-import { isStoppable, isTransitioning } from '@/lib/utils/sandbox'
+import { isStoppable, isTransitioning } from '@/lib/utils/box'
 import { OrganizationRolePermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { isAxiosError } from 'axios'
 import { Code2, Container, GripVertical, ListChecks, RefreshCw } from 'lucide-react'
@@ -186,8 +186,8 @@ export default function BoxDetails() {
   const recoverMutation = useRecoverBoxMutation()
   const deleteMutation = useDeleteBoxMutation()
 
-  const writePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_SANDBOXES)
-  const deletePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.DELETE_SANDBOXES)
+  const writePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
+  const deletePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.DELETE_BOXES)
   const transitioning = box ? isTransitioning(box) : false
   const anyMutating =
     startMutation.isPending || stopMutation.isPending || recoverMutation.isPending || deleteMutation.isPending

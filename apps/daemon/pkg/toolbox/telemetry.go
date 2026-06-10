@@ -15,8 +15,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// seedBootSpanFromTraceParent starts+ends one "sandbox.boot" span parented on the propagated
-// W3C traceparent (BOXLITE_TRACEPARENT, injected by the runner at sandbox create) so the box's
+// seedBootSpanFromTraceParent starts+ends one "box.boot" span parented on the propagated
+// W3C traceparent (BOXLITE_TRACEPARENT, injected by the runner at box create) so the box's
 // telemetry joins the SAME traceId as the api->runner spans instead of rooting a fresh trace.
 // No-op when traceParent is nil/empty, so behavior is unchanged unless a trace was propagated.
 // Pure (takes the tracer) so it is unit-testable with an in-memory TracerProvider.
@@ -25,7 +25,7 @@ func seedBootSpanFromTraceParent(ctx context.Context, tracer trace.Tracer, trace
 		return
 	}
 	bootCtx := propagation.TraceContext{}.Extract(ctx, propagation.MapCarrier{"traceparent": *traceParent})
-	_, bootSpan := tracer.Start(bootCtx, "sandbox.boot")
+	_, bootSpan := tracer.Start(bootCtx, "box.boot")
 	bootSpan.End()
 }
 

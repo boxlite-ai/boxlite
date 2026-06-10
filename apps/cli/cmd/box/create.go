@@ -20,11 +20,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const SANDBOX_TERMINAL_PORT = 22222
+const BOX_TERMINAL_PORT = 22222
 
 var CreateCmd = &cobra.Command{
 	Use:     "create [flags]",
-	Short:   "Create a new sandbox",
+	Short:   "Create a new box",
 	Args:    cobra.NoArgs,
 	Aliases: common.GetAliases("create"),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -169,7 +169,7 @@ var CreateCmd = &cobra.Command{
 			stopLogs()
 		}
 
-		previewUrl, res, err := apiClient.BoxAPI.GetPortPreviewUrl(ctx, box.Id, SANDBOX_TERMINAL_PORT).Execute()
+		previewUrl, res, err := apiClient.BoxAPI.GetPortPreviewUrl(ctx, box.Id, BOX_TERMINAL_PORT).Execute()
 		if err != nil {
 			return apiclient_cli.HandleErrorResponse(res, err)
 		}
@@ -206,16 +206,16 @@ var (
 )
 
 func init() {
-	CreateCmd.Flags().StringVar(&snapshotFlag, "snapshot", "", "Snapshot to use for the sandbox")
-	CreateCmd.Flags().StringVar(&nameFlag, "name", "", "Name of the sandbox")
-	CreateCmd.Flags().StringVar(&userFlag, "user", "", "User associated with the sandbox")
+	CreateCmd.Flags().StringVar(&snapshotFlag, "snapshot", "", "Snapshot to use for the box")
+	CreateCmd.Flags().StringVar(&nameFlag, "name", "", "Name of the box")
+	CreateCmd.Flags().StringVar(&userFlag, "user", "", "User associated with the box")
 	CreateCmd.Flags().StringArrayVarP(&envFlag, "env", "e", []string{}, "Environment variables (format: KEY=VALUE)")
 	CreateCmd.Flags().StringArrayVarP(&labelsFlag, "label", "l", []string{}, "Labels (format: KEY=VALUE)")
 	CreateCmd.Flags().BoolVar(&publicFlag, "public", false, "Make box publicly accessible")
 	CreateCmd.Flags().StringVar(&classFlag, "class", "", "Box class type (small, medium, large)")
 	CreateCmd.Flags().StringVar(&targetFlag, "target", "", "Target region (eu, us)")
-	CreateCmd.Flags().Int32Var(&cpuFlag, "cpu", 0, "CPU cores allocated to the sandbox")
-	CreateCmd.Flags().Int32Var(&gpuFlag, "gpu", 0, "GPU units allocated to the sandbox")
+	CreateCmd.Flags().Int32Var(&cpuFlag, "cpu", 0, "CPU cores allocated to the box")
+	CreateCmd.Flags().Int32Var(&gpuFlag, "gpu", 0, "GPU units allocated to the box")
 	CreateCmd.Flags().Int32Var(&memoryFlag, "memory", 0, "Memory allocated to the box in MB")
 	CreateCmd.Flags().Int32Var(&diskFlag, "disk", 0, "Disk space allocated to the box in GB")
 	CreateCmd.Flags().Int32Var(&autoStopFlag, "auto-stop", 15, "Auto-stop interval in minutes (0 means disabled)")
@@ -223,8 +223,8 @@ func init() {
 	CreateCmd.Flags().StringArrayVarP(&volumesFlag, "volume", "v", []string{}, "Volumes to mount (format: VOLUME_NAME:MOUNT_PATH)")
 	CreateCmd.Flags().StringVarP(&dockerfileFlag, "dockerfile", "f", "", "Path to Dockerfile for box build")
 	CreateCmd.Flags().StringArrayVarP(&contextFlag, "context", "c", []string{}, "Files or directories to include in the build context (can be specified multiple times)")
-	CreateCmd.Flags().BoolVar(&networkBlockAllFlag, "network-block-all", false, "Whether to block all network access for the sandbox")
-	CreateCmd.Flags().StringVar(&networkAllowListFlag, "network-allow-list", "", "Comma-separated list of allowed CIDR network addresses for the sandbox")
+	CreateCmd.Flags().BoolVar(&networkBlockAllFlag, "network-block-all", false, "Whether to block all network access for the box")
+	CreateCmd.Flags().StringVar(&networkAllowListFlag, "network-allow-list", "", "Comma-separated list of allowed CIDR network addresses for the box")
 
 	CreateCmd.MarkFlagsMutuallyExclusive("snapshot", "dockerfile")
 	CreateCmd.MarkFlagsMutuallyExclusive("snapshot", "context")

@@ -342,7 +342,7 @@ export class OrganizationUsageService {
     }
 
     // Check cache staleness for current usage
-    const isStale = await this.isCacheStale(organizationId, 'sandbox', regionId)
+    const isStale = await this.isCacheStale(organizationId, 'box', regionId)
 
     if (isStale) {
       return null
@@ -606,14 +606,14 @@ export class OrganizationUsageService {
       used_mem: number
       used_disk: number
     } = await this.boxRepository
-      .createQueryBuilder('sandbox')
+      .createQueryBuilder('box')
       .select([
         `SUM(CASE WHEN box.state IN (:...statesConsumingCompute) OR (box.state = :resizingState AND box."desiredState" = :startedDesiredState) THEN box.cpu ELSE 0 END) as used_cpu`,
         `SUM(CASE WHEN box.state IN (:...statesConsumingCompute) OR (box.state = :resizingState AND box."desiredState" = :startedDesiredState) THEN box.mem ELSE 0 END) as used_mem`,
         'SUM(CASE WHEN box.state IN (:...statesConsumingDisk) THEN box.disk ELSE 0 END) as used_disk',
       ])
-      .where('sandbox.organizationId = :organizationId', { organizationId })
-      .andWhere('sandbox.region = :regionId', { regionId })
+      .where('box.organizationId = :organizationId', { organizationId })
+      .andWhere('box.region = :regionId', { regionId })
       .setParameter('statesConsumingCompute', BOX_STATES_CONSUMING_COMPUTE)
       .setParameter('statesConsumingDisk', BOX_STATES_CONSUMING_DISK)
       .setParameter('resizingState', BoxState.RESIZING)
@@ -636,7 +636,7 @@ export class OrganizationUsageService {
       .setex(diskCacheKey, this.CACHE_TTL_SECONDS, diskUsage)
       .exec()
 
-    await this.resetCacheStaleness(organizationId, 'sandbox', regionId)
+    await this.resetCacheStaleness(organizationId, 'box', regionId)
 
     return {
       currentCpuUsage: cpuUsage,
@@ -1139,7 +1139,7 @@ export class OrganizationUsageService {
   /**
    * Reset the timestamp of the last time the cached usage of organization quotas for a given resource type was populated from the database.
    */
-  private resetCacheStaleness(organizationId: string, resourceType: 'sandbox', regionId: string): Promise<void>
+  private resetCacheStaleness(organizationId: string, resourceType: 'box', regionId: string): Promise<void>
   private resetCacheStaleness(organizationId: string, resourceType: 'template' | 'volume'): Promise<void>
   private async resetCacheStaleness(
     organizationId: string,
@@ -1155,7 +1155,7 @@ export class OrganizationUsageService {
    *
    * @returns `true` if the cached usage is stale, `false` otherwise
    */
-  private async isCacheStale(organizationId: string, resourceType: 'sandbox', regionId: string): Promise<boolean>
+  private async isCacheStale(organizationId: string, resourceType: 'box', regionId: string): Promise<boolean>
   private async isCacheStale(organizationId: string, resourceType: 'template' | 'volume'): Promise<boolean>
   private async isCacheStale(
     organizationId: string,
@@ -1179,7 +1179,7 @@ export class OrganizationUsageService {
 
   @OnEvent(BoxEvents.CREATED)
   async handleBoxCreated(event: BoxCreatedEvent) {
-    const lockKey = `sandbox:${event.box.id}:quota-usage-update`
+    const lockKey = `box:${event.box.id}:quota-usage-update`
     await this.redisLockProvider.waitForLock(lockKey, 60)
 
     try {
@@ -1202,7 +1202,7 @@ export class OrganizationUsageService {
       return
     }
 
-    const lockKey = `sandbox:${event.box.id}:quota-usage-update`
+    const lockKey = `box:${event.box.id}:quota-usage-update`
     await this.redisLockProvider.waitForLock(lockKey, 60)
 
     // Special case for warm pool boxes (otherwise the quota usage deltas would be 0 due to the "unchanged" state)

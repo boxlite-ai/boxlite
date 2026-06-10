@@ -129,19 +129,19 @@ func (e *Executor) executeJob(ctx context.Context, job *apiclient.Job) (any, err
 	var resultMetadata any
 	var err error
 	switch job.GetType() {
-	case apiclient.JOBTYPE_CREATE_SANDBOX:
+	case apiclient.JOBTYPE_CREATE_BOX:
 		resultMetadata, err = e.createBox(ctx, job)
-	case apiclient.JOBTYPE_START_SANDBOX:
+	case apiclient.JOBTYPE_START_BOX:
 		resultMetadata, err = e.startBox(ctx, job)
-	case apiclient.JOBTYPE_STOP_SANDBOX:
+	case apiclient.JOBTYPE_STOP_BOX:
 		resultMetadata, err = e.stopBox(ctx, job)
-	case apiclient.JOBTYPE_DESTROY_SANDBOX:
+	case apiclient.JOBTYPE_DESTROY_BOX:
 		resultMetadata, err = e.destroyBox(ctx, job)
-	case apiclient.JOBTYPE_RESIZE_SANDBOX:
+	case apiclient.JOBTYPE_RESIZE_BOX:
 		resultMetadata, err = e.resizeBox(ctx, job)
-	case apiclient.JOBTYPE_UPDATE_SANDBOX_NETWORK_SETTINGS:
+	case apiclient.JOBTYPE_UPDATE_BOX_NETWORK_SETTINGS:
 		resultMetadata, err = e.updateNetworkSettings(ctx, job)
-	case apiclient.JOBTYPE_RECOVER_SANDBOX:
+	case apiclient.JOBTYPE_RECOVER_BOX:
 		resultMetadata, err = e.recoverBox(ctx, job)
 	default:
 		err = fmt.Errorf("unknown job type: %s", job.GetType())

@@ -5,7 +5,7 @@
 
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { isTransitioning } from '@/lib/utils/sandbox'
+import { isTransitioning } from '@/lib/utils/box'
 import { useQuery } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
 import { queryKeys } from './queryKeys'
@@ -23,8 +23,8 @@ export const useBoxQuery = (boxId: string) => {
     enabled: !!boxId && !!selectedOrganization?.id,
     staleTime: 1000 * 10,
     refetchInterval: (query) => {
-      const sandbox = query.state.data
-      return sandbox && isTransitioning(sandbox) ? 3000 : false
+      const box = query.state.data
+      return box && isTransitioning(box) ? 3000 : false
     },
     retry: (failureCount, error) => {
       if (isAxiosError(error.cause) && error.cause?.status === 404) return false

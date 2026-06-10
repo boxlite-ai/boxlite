@@ -16,14 +16,14 @@ import BoxManagementParameters from './Management'
 import BoxProcessCodeExecution from './ProcessCodeExecution'
 
 const boxParametersSectionsData = [
-  { value: BoxParametersSections.SANDBOX_MANAGEMENT, label: 'Management' },
+  { value: BoxParametersSections.BOX_MANAGEMENT, label: 'Management' },
   { value: BoxParametersSections.FILE_SYSTEM, label: 'File System' },
   { value: BoxParametersSections.GIT_OPERATIONS, label: 'Git Operations' },
   { value: BoxParametersSections.PROCESS_CODE_EXECUTION, label: 'Process & Code Execution' },
 ]
 
 const sectionIcons = {
-  [BoxParametersSections.SANDBOX_MANAGEMENT]: <BoltIcon strokeWidth={1.5} />,
+  [BoxParametersSections.BOX_MANAGEMENT]: <BoltIcon strokeWidth={1.5} />,
   [BoxParametersSections.GIT_OPERATIONS]: <GitBranchIcon strokeWidth={1.5} />,
   [BoxParametersSections.FILE_SYSTEM]: <FolderIcon strokeWidth={1.5} />,
   [BoxParametersSections.PROCESS_CODE_EXECUTION]: <SquareTerminalIcon strokeWidth={1.5} />,
@@ -48,7 +48,7 @@ const BoxParameters = ({ className }: { className?: string }) => {
         onValueChange={(sections) => setOpenedParametersSections(sections as BoxParametersSections[])}
       >
         {boxParametersSectionsData.map((section) => {
-          const isManagement = section.value === BoxParametersSections.SANDBOX_MANAGEMENT
+          const isManagement = section.value === BoxParametersSections.BOX_MANAGEMENT
           const isEnabled = enabledSections.includes(section.value as BoxParametersSections)
           const isExpanded = openedParametersSections.includes(section.value as BoxParametersSections)
           return (
@@ -91,7 +91,7 @@ const BoxParameters = ({ className }: { className?: string }) => {
                   <div className="space-y-4">
                     {section.value === BoxParametersSections.FILE_SYSTEM && <BoxFileSystem />}
                     {section.value === BoxParametersSections.GIT_OPERATIONS && <BoxGitOperations />}
-                    {section.value === BoxParametersSections.SANDBOX_MANAGEMENT && (
+                    {section.value === BoxParametersSections.BOX_MANAGEMENT && (
                       <BoxManagementParameters templatesData={[]} templatesLoading={false} />
                     )}
                     {section.value === BoxParametersSections.PROCESS_CODE_EXECUTION && <BoxProcessCodeExecution />}

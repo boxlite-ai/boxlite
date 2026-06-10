@@ -61,7 +61,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     // Query for any incomplete jobs for this box to determine transitional state
     const incompleteJob = await this.jobRepository.findOne({
       where: {
-        resourceType: ResourceType.SANDBOX,
+        resourceType: ResourceType.BOX,
         resourceId: boxId,
         completedAt: IsNull(),
       },
@@ -80,7 +80,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       // Look for latest job for this box
       const latestJob = await this.jobRepository.findOne({
         where: {
-          resourceType: ResourceType.SANDBOX,
+          resourceType: ResourceType.BOX,
           resourceId: boxId,
         },
         order: { createdAt: 'DESC' },
@@ -100,13 +100,13 @@ export class RunnerAdapterV2 implements RunnerAdapter {
   private inferStateFromJob(job: Job, box: Box): BoxState {
     // Map job types to transitional states
     switch (job.type) {
-      case JobType.CREATE_SANDBOX:
+      case JobType.CREATE_BOX:
         return job.status === JobStatus.COMPLETED ? BoxState.STARTED : BoxState.CREATING
-      case JobType.START_SANDBOX:
+      case JobType.START_BOX:
         return job.status === JobStatus.COMPLETED ? BoxState.STARTED : BoxState.STARTING
-      case JobType.STOP_SANDBOX:
+      case JobType.STOP_BOX:
         return job.status === JobStatus.COMPLETED ? BoxState.STOPPED : BoxState.STOPPING
-      case JobType.DESTROY_SANDBOX:
+      case JobType.DESTROY_BOX:
         return job.status === JobStatus.COMPLETED ? BoxState.DESTROYED : BoxState.DESTROYING
       default:
         // For other job types (backup, etc.), return current box state
@@ -119,29 +119,29 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     authToken: string,
     metadata?: { [key: string]: string },
   ): Promise<StartBoxResponse | undefined> {
-    await this.jobService.createJob(null, JobType.START_SANDBOX, this.runner.id, ResourceType.SANDBOX, boxId, {
+    await this.jobService.createJob(null, JobType.START_BOX, this.runner.id, ResourceType.BOX, boxId, {
       authToken,
       metadata,
     })
 
-    this.logger.debug(`Created START_SANDBOX job for box ${boxId} on runner ${this.runner.id}`)
+    this.logger.debug(`Created START_BOX job for box ${boxId} on runner ${this.runner.id}`)
 
     // Daemon version will be set in the job result metadata
     return undefined
   }
 
   async stopBox(boxId: string, force?: boolean): Promise<void> {
-    await this.jobService.createJob(null, JobType.STOP_SANDBOX, this.runner.id, ResourceType.SANDBOX, boxId, {
+    await this.jobService.createJob(null, JobType.STOP_BOX, this.runner.id, ResourceType.BOX, boxId, {
       force,
     })
 
-    this.logger.debug(`Created STOP_SANDBOX job for box ${boxId} on runner ${this.runner.id}`)
+    this.logger.debug(`Created STOP_BOX job for box ${boxId} on runner ${this.runner.id}`)
   }
 
   async destroyBox(boxId: string): Promise<void> {
-    await this.jobService.createJob(null, JobType.DESTROY_SANDBOX, this.runner.id, ResourceType.SANDBOX, boxId)
+    await this.jobService.createJob(null, JobType.DESTROY_BOX, this.runner.id, ResourceType.BOX, boxId)
 
-    this.logger.debug(`Created DESTROY_SANDBOX job for box ${boxId} on runner ${this.runner.id}`)
+    this.logger.debug(`Created DESTROY_BOX job for box ${boxId} on runner ${this.runner.id}`)
   }
 
   async recoverBox(box: Box): Promise<void> {
@@ -164,14 +164,14 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     }
     await this.jobService.createJob(
       null,
-      JobType.RECOVER_SANDBOX,
+      JobType.RECOVER_BOX,
       this.runner.id,
-      ResourceType.SANDBOX,
+      ResourceType.BOX,
       box.id,
       recoverBoxDTO,
     )
 
-    this.logger.debug(`Created RECOVER_SANDBOX job for box ${box.id} on runner ${this.runner.id}`)
+    this.logger.debug(`Created RECOVER_BOX job for box ${box.id} on runner ${this.runner.id}`)
   }
 
   async updateNetworkSettings(
@@ -188,23 +188,23 @@ export class RunnerAdapterV2 implements RunnerAdapter {
 
     await this.jobService.createJob(
       null,
-      JobType.UPDATE_SANDBOX_NETWORK_SETTINGS,
+      JobType.UPDATE_BOX_NETWORK_SETTINGS,
       this.runner.id,
-      ResourceType.SANDBOX,
+      ResourceType.BOX,
       boxId,
       payload,
     )
 
-    this.logger.debug(`Created UPDATE_SANDBOX_NETWORK_SETTINGS job for box ${boxId} on runner ${this.runner.id}`)
+    this.logger.debug(`Created UPDATE_BOX_NETWORK_SETTINGS job for box ${boxId} on runner ${this.runner.id}`)
   }
 
   async resizeBox(boxId: string, cpu?: number, memory?: number, disk?: number): Promise<void> {
-    await this.jobService.createJob(null, JobType.RESIZE_SANDBOX, this.runner.id, ResourceType.SANDBOX, boxId, {
+    await this.jobService.createJob(null, JobType.RESIZE_BOX, this.runner.id, ResourceType.BOX, boxId, {
       cpu,
       memory,
       disk,
     })
 
-    this.logger.debug(`Created RESIZE_SANDBOX job for box ${boxId} on runner ${this.runner.id}`)
+    this.logger.debug(`Created RESIZE_BOX job for box ${boxId} on runner ${this.runner.id}`)
   }
 }

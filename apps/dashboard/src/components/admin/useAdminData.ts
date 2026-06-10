@@ -81,13 +81,13 @@ export function useAdminActions() {
   })
 
   const recover = useMutation({
-    mutationFn: (sandboxId: string) =>
-      axiosInstance.post(`/admin/sandbox/${sandboxId}/recover`, undefined, { headers: ADMIN_UI_HEADERS }),
+    mutationFn: (boxId: string) =>
+      axiosInstance.post(`/admin/box/${boxId}/recover`, undefined, { headers: ADMIN_UI_HEADERS }),
     onSuccess: () => {
-      toast.success('Sandbox recovery initiated')
+      toast.success('Box recovery initiated')
       queryClient.invalidateQueries({ queryKey: ['admin', 'boxes'] })
     },
-    onError: (error) => handleApiError(error, 'Failed to recover sandbox'),
+    onError: (error) => handleApiError(error, 'Failed to recover box'),
   })
 
   return { cordon, drain, recover }

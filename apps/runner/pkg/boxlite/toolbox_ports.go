@@ -23,16 +23,16 @@ const (
 )
 
 type toolboxPortRecord struct {
-	SandboxID string `json:"sandboxId"`
+	BoxID string `json:"boxId"`
 	GuestPort int    `json:"guestPort"`
 	HostPort  int    `json:"hostPort"`
 }
 
-func (c *Client) reserveToolboxHostPort(ctx context.Context, sandboxID string) (int, error) {
+func (c *Client) reserveToolboxHostPort(ctx context.Context, boxID string) (int, error) {
 	c.toolboxPortMutex.Lock()
 	defer c.toolboxPortMutex.Unlock()
 
-	if port, err := c.readToolboxHostPort(sandboxID); err == nil {
+	if port, err := c.readToolboxHostPort(boxID); err == nil {
 		return port, nil
 	}
 
@@ -42,7 +42,7 @@ func (c *Client) reserveToolboxHostPort(ctx context.Context, sandboxID string) (
 	}
 
 	record := toolboxPortRecord{
-		SandboxID: sandboxID,
+		BoxID: boxID,
 		GuestPort: ToolboxGuestPort,
 		HostPort:  port,
 	}
@@ -50,22 +50,22 @@ func (c *Client) reserveToolboxHostPort(ctx context.Context, sandboxID string) (
 		return 0, err
 	}
 
-	c.logger.InfoContext(ctx, "reserved toolbox host port", "sandbox", sandboxID, "guestPort", ToolboxGuestPort, "hostPort", port)
+	c.logger.InfoContext(ctx, "reserved toolbox host port", "box", boxID, "guestPort", ToolboxGuestPort, "hostPort", port)
 	return port, nil
 }
 
-// ToolboxHostPort returns the host port that forwards to the sandbox toolbox.
-func (c *Client) ToolboxHostPort(sandboxID string) (int, error) {
+// ToolboxHostPort returns the host port that forwards to the box toolbox.
+func (c *Client) ToolboxHostPort(boxID string) (int, error) {
 	c.toolboxPortMutex.Lock()
 	defer c.toolboxPortMutex.Unlock()
 
-	return c.readToolboxHostPort(sandboxID)
+	return c.readToolboxHostPort(boxID)
 }
 
-func (c *Client) waitForToolboxReady(ctx context.Context, sandboxID string) error {
-	hostPort, err := c.ToolboxHostPort(sandboxID)
+func (c *Client) waitForToolboxReady(ctx context.Context, boxID string) error {
+	hostPort, err := c.ToolboxHostPort(boxID)
 	if err != nil {
-		return fmt.Errorf("toolbox host port not available for sandbox %s: %w", sandboxID, err)
+		return fmt.Errorf("toolbox host port not available for box %s: %w", boxID, err)
 	}
 
 	timeout := c.toolboxReadyTimeout
@@ -92,7 +92,7 @@ func (c *Client) waitForToolboxReady(ctx context.Context, sandboxID string) erro
 			_, _ = io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				c.logger.InfoContext(ctx, "sandbox toolbox is ready", "sandbox", sandboxID, "hostPort", hostPort)
+				c.logger.InfoContext(ctx, "box toolbox is ready", "box", boxID, "hostPort", hostPort)
 				return nil
 			}
 			lastErr = fmt.Errorf("unexpected status %d from %s", resp.StatusCode, url)
@@ -103,29 +103,29 @@ func (c *Client) waitForToolboxReady(ctx context.Context, sandboxID string) erro
 		select {
 		case <-readyCtx.Done():
 			if lastErr != nil {
-				return fmt.Errorf("sandbox toolbox not ready after %s (sandbox=%s hostPort=%d): %w", timeout, sandboxID, hostPort, lastErr)
+				return fmt.Errorf("box toolbox not ready after %s (box=%s hostPort=%d): %w", timeout, boxID, hostPort, lastErr)
 			}
-			return fmt.Errorf("sandbox toolbox not ready after %s (sandbox=%s hostPort=%d)", timeout, sandboxID, hostPort)
+			return fmt.Errorf("box toolbox not ready after %s (box=%s hostPort=%d)", timeout, boxID, hostPort)
 		case <-ticker.C:
 		}
 	}
 }
 
-func (c *Client) removeToolboxPortRecord(ctx context.Context, sandboxID string) error {
+func (c *Client) removeToolboxPortRecord(ctx context.Context, boxID string) error {
 	c.toolboxPortMutex.Lock()
 	defer c.toolboxPortMutex.Unlock()
 
-	path := c.toolboxPortRecordPath(sandboxID)
+	path := c.toolboxPortRecordPath(boxID)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 
-	c.logger.DebugContext(ctx, "removed toolbox port record", "sandbox", sandboxID)
+	c.logger.DebugContext(ctx, "removed toolbox port record", "box", boxID)
 	return nil
 }
 
-func (c *Client) readToolboxHostPort(sandboxID string) (int, error) {
-	data, err := os.ReadFile(c.toolboxPortRecordPath(sandboxID))
+func (c *Client) readToolboxHostPort(boxID string) (int, error) {
+	data, err := os.ReadFile(c.toolboxPortRecordPath(boxID))
 	if err != nil {
 		return 0, err
 	}
@@ -135,8 +135,8 @@ func (c *Client) readToolboxHostPort(sandboxID string) (int, error) {
 		return 0, err
 	}
 
-	if record.SandboxID != sandboxID {
-		return 0, fmt.Errorf("toolbox port record sandbox mismatch: got %q, want %q", record.SandboxID, sandboxID)
+	if record.BoxID != boxID {
+		return 0, fmt.Errorf("toolbox port record box mismatch: got %q, want %q", record.BoxID, boxID)
 	}
 	if record.GuestPort != ToolboxGuestPort {
 		return 0, fmt.Errorf("toolbox port record guest port mismatch: got %d, want %d", record.GuestPort, ToolboxGuestPort)
@@ -159,7 +159,7 @@ func (c *Client) writeToolboxPortRecord(record toolboxPortRecord) error {
 		return err
 	}
 
-	path := c.toolboxPortRecordPath(record.SandboxID)
+	path := c.toolboxPortRecordPath(record.BoxID)
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return err
@@ -167,8 +167,8 @@ func (c *Client) writeToolboxPortRecord(record toolboxPortRecord) error {
 	return os.Rename(tmp, path)
 }
 
-func (c *Client) toolboxPortRecordPath(sandboxID string) string {
-	return filepath.Join(c.toolboxPortRecordDir(), safeRecordName(sandboxID)+".json")
+func (c *Client) toolboxPortRecordPath(boxID string) string {
+	return filepath.Join(c.toolboxPortRecordDir(), safeRecordName(boxID)+".json")
 }
 
 func (c *Client) toolboxPortRecordDir() string {

@@ -24,8 +24,7 @@ const AdminPlatformTelemetryView: React.FC<AdminPlatformTelemetryViewProps> = ({
 }) => {
   const preset = contextBox
     ? {
-        sandboxId: contextBox.id,
-        boxId: contextBox.boxId,
+        boxId: contextBox.id,
         runnerId: contextBox.runnerId ?? undefined,
       }
     : undefined

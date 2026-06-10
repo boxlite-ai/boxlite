@@ -1,7 +1,7 @@
-jest.mock('./sandbox/services/runner.service', () => ({
+jest.mock('./box/services/runner.service', () => ({
   RunnerService: class RunnerService {},
 }))
-jest.mock('./sandbox/runner-adapter/runnerAdapter', () => ({
+jest.mock('./box/runner-adapter/runnerAdapter', () => ({
   RunnerAdapterFactory: class RunnerAdapterFactory {},
 }))
 
@@ -13,9 +13,9 @@ describe('AppService admin bootstrap', () => {
       'admin.totalCpuQuota': 10,
       'admin.totalMemoryQuota': 40,
       'admin.totalDiskQuota': 100,
-      'admin.maxCpuPerSandbox': 4,
-      'admin.maxMemoryPerSandbox': 8,
-      'admin.maxDiskPerSandbox': 10,
+      'admin.maxCpuPerBox': 4,
+      'admin.maxMemoryPerBox': 8,
+      'admin.maxDiskPerBox': 10,
       'admin.templateQuota': 100,
       'admin.maxTemplateSize': 100,
       'admin.volumeQuota': 100,
@@ -62,9 +62,9 @@ describe('AppService admin bootstrap', () => {
 
     expect(userService.create).not.toHaveBeenCalled()
     expect(organizationService.updateQuota).toHaveBeenCalledWith('org-1', {
-      maxCpuPerSandbox: 4,
-      maxMemoryPerSandbox: 8,
-      maxDiskPerSandbox: 10,
+      maxCpuPerBox: 4,
+      maxMemoryPerBox: 8,
+      maxDiskPerBox: 10,
       templateQuota: 100,
       maxTemplateSize: 100,
       volumeQuota: 100,

@@ -59,7 +59,7 @@ const AdminFleetView: React.FC<AdminFleetViewProps> = ({
       return (
         runner.id.toLowerCase().includes(normalizedQuery) ||
         runner.state.toLowerCase().includes(normalizedQuery) ||
-        String(runner.currentStartedSandboxes).includes(normalizedQuery)
+        String(runner.currentStartedBoxes).includes(normalizedQuery)
       )
     })
   }, [runnersQuery.data, normalizedQuery])
@@ -119,13 +119,13 @@ const AdminFleetView: React.FC<AdminFleetViewProps> = ({
               {r.currentAllocatedMemoryGiB.toFixed(1)}/{r.memory.toFixed(1)} GiB
             </TableCell>
             <TableCell>
-              {r.currentStartedSandboxes > 0 ? (
+              {r.currentStartedBoxes > 0 ? (
                 <button
                   type="button"
                   className="tabular-nums text-primary hover:underline"
                   onClick={() => onShowRunnerBoxes(r.id)}
                 >
-                  {r.currentStartedSandboxes}
+                  {r.currentStartedBoxes}
                 </button>
               ) : (
                 <span className="tabular-nums text-muted-foreground">0</span>
@@ -144,8 +144,8 @@ const AdminFleetView: React.FC<AdminFleetViewProps> = ({
                     setConfirm({
                       title: r.unschedulable ? 'Un-cordon runner' : 'Cordon runner',
                       description: r.unschedulable
-                        ? `Allow runner ${r.id} to accept new sandboxes again?`
-                        : `Prevent runner ${r.id} from accepting new sandboxes? Existing sandboxes keep running.`,
+                        ? `Allow runner ${r.id} to accept new boxes again?`
+                        : `Prevent runner ${r.id} from accepting new boxes? Existing boxes keep running.`,
                       confirmLabel: r.unschedulable ? 'Un-cordon runner' : 'Cordon runner',
                       onConfirm: () => cordon.mutate(r),
                     })
@@ -161,7 +161,7 @@ const AdminFleetView: React.FC<AdminFleetViewProps> = ({
                     onClick={() =>
                       setConfirm({
                         title: 'Drain runner',
-                        description: `Drain runner ${r.id}? Scheduling stops immediately and existing sandboxes are migrated away.`,
+                        description: `Drain runner ${r.id}? Scheduling stops immediately and existing boxes are migrated away.`,
                         confirmLabel: 'Drain runner',
                         onConfirm: () => drain.mutate(r.id),
                       })
@@ -274,7 +274,7 @@ const AdminFleetView: React.FC<AdminFleetViewProps> = ({
                       </TableCell>
                       <TableCell className="tabular-nums">{m.cpuWaterline.toFixed(1)}%</TableCell>
                       <TableCell className="tabular-nums">{m.memWaterline.toFixed(1)}%</TableCell>
-                      <TableCell className="tabular-nums">{m.sandboxes}</TableCell>
+                      <TableCell className="tabular-nums">{m.boxes}</TableCell>
                       <TableCell className="text-right">
                         <Button size="sm" variant="ghost" onClick={() => onDiagnoseMachine(m)}>
                           Diagnose

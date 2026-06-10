@@ -659,10 +659,10 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       .andWhere(`"suspendedAt" > NOW() - INTERVAL '7 day'`)
       .andWhereExists(
         this.boxRepository
-          .createQueryBuilder('sandbox')
+          .createQueryBuilder('box')
           .select('1')
           .where(
-            `"sandbox"."organizationId" = "organization"."id" AND "sandbox"."desiredState" = '${BoxDesiredState.STARTED}' and "sandbox"."state" NOT IN ('${BoxState.ERROR}')`,
+            `"box"."organizationId" = "organization"."id" AND "box"."desiredState" = '${BoxDesiredState.STARTED}' and "box"."state" NOT IN ('${BoxState.ERROR}')`,
           ),
       )
       .take(100)
@@ -686,7 +686,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
 
     boxes.map((box) =>
       this.eventEmitter.emitAsync(
-        OrganizationEvents.SUSPENDED_SANDBOX_STOPPED,
+        OrganizationEvents.SUSPENDED_BOX_STOPPED,
         new OrganizationSuspendedBoxStoppedEvent(box.id),
       ),
     )

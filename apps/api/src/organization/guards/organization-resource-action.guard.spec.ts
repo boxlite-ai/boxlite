@@ -16,7 +16,7 @@ import { OrGuard } from '../../auth/or.guard'
 import { RunnerAuthGuard } from '../../auth/runner-auth.guard'
 import { OrganizationResourceActionGuard } from './organization-resource-action.guard'
 
-class SandboxAccessGuard {
+class BoxAccessGuard {
   canActivate() {
     return true
   }
@@ -74,13 +74,13 @@ describe('OrganizationResourceActionGuard', () => {
     expect(organizationUserService.findOne).not.toHaveBeenCalled()
   })
 
-  it('lets runner-authenticated sandbox resource routes defer access checks to SandboxAccessGuard', async () => {
+  it('lets runner-authenticated box resource routes defer access checks to BoxAccessGuard', async () => {
     const { guard, organizationService, organizationUserService } = createGuard()
-    const handler = function sandboxHandler() {}
-    Reflect.defineMetadata(GUARDS_METADATA, [SandboxAccessGuard], handler)
+    const handler = function boxHandler() {}
+    Reflect.defineMetadata(GUARDS_METADATA, [BoxAccessGuard], handler)
 
     const request = {
-      params: { sandboxId: 'sandbox-1' },
+      params: { boxId: 'box-1' },
       user: {
         role: 'runner',
         runnerId: 'runner-1',
@@ -94,13 +94,13 @@ describe('OrganizationResourceActionGuard', () => {
     expect(organizationUserService.findOne).not.toHaveBeenCalled()
   })
 
-  it('unwraps OrGuard metadata so runner activity updates reach SandboxAccessGuard', async () => {
+  it('unwraps OrGuard metadata so runner activity updates reach BoxAccessGuard', async () => {
     const { guard, organizationService, organizationUserService } = createGuard()
     const handler = function runnerActivityHandler() {}
-    Reflect.defineMetadata(GUARDS_METADATA, [OrGuard([SandboxAccessGuard])], handler)
+    Reflect.defineMetadata(GUARDS_METADATA, [OrGuard([BoxAccessGuard])], handler)
 
     const request = {
-      params: { sandboxId: 'sandbox-1' },
+      params: { boxId: 'box-1' },
       user: {
         role: 'runner',
         runnerId: 'runner-1',

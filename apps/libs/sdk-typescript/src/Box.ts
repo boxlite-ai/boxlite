@@ -263,7 +263,7 @@ export class Box implements BoxDto {
    * @throws {BoxliteError} - `BoxliteError` - If Box fails to start or times out
    *
    * @example
-   * const box = await boxlite.getCurrentBox('my-sandbox');
+   * const box = await boxlite.getCurrentBox('my-box');
    * await box.start(40);  // Wait up to 40 seconds
    * console.log('Box started successfully');
    */
@@ -445,7 +445,7 @@ export class Box implements BoxDto {
   /**
    * Refreshes the box activity to reset the timer for automated lifecycle management actions.
    *
-   * This method updates the sandbox's last activity timestamp without changing its state.
+   * This method updates the box's last activity timestamp without changing its state.
    * It is useful for keeping long-running sessions alive while there is still user activity.
    *
    * @returns {Promise<void>}

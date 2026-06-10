@@ -18,7 +18,7 @@ import { RunnerAuthGuard } from '../../auth/runner-auth.guard'
 import { isRunnerContext } from '../../common/interfaces/runner-context.interface'
 import { OR_GUARD_INNER_GUARDS } from '../../auth/or.guard'
 
-const RUNNER_COMPATIBLE_RESOURCE_GUARD_NAMES = new Set(['RunnerAuthGuard', 'SandboxAccessGuard'])
+const RUNNER_COMPATIBLE_RESOURCE_GUARD_NAMES = new Set(['RunnerAuthGuard', 'BoxAccessGuard'])
 
 @Injectable()
 export class OrganizationResourceActionGuard extends OrganizationAccessGuard {

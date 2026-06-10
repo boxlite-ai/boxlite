@@ -18,7 +18,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { getBoxDisplayName, getBoxPublicId, getBoxPublicIdLabel } from '@/lib/box-identity'
-import { isRecoverable, isSshAccessible, isStartable, isStoppable } from '@/lib/utils/sandbox'
+import { isRecoverable, isSshAccessible, isStartable, isStoppable } from '@/lib/utils/box'
 import { Box } from '@boxlite-ai/api-client'
 import { ArrowLeft, MoreHorizontal, Play, RefreshCw, Square, Terminal, Wrench } from 'lucide-react'
 

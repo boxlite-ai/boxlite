@@ -9,5 +9,5 @@ export const UPGRADE_TIER_MESSAGE = (dashboardUrl: string) =>
 
 export const STORAGE_LIMIT_MESSAGE = 'Consider deleting unused Boxes or increasing your storage limit.'
 
-export const PER_SANDBOX_LIMIT_MESSAGE =
+export const PER_BOX_LIMIT_MESSAGE =
   'Need higher resource limits per-box? Contact us at support@boxlite.io and let us know about your use case.'

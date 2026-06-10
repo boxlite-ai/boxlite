@@ -5,12 +5,12 @@
  */
 
 export type OrganizationUsageQuotaType = 'cpu' | 'memory' | 'disk' | 'template_count' | 'volume_count'
-export type OrganizationUsageResourceType = 'sandbox' | 'template' | 'volume'
+export type OrganizationUsageResourceType = 'box' | 'template' | 'volume'
 
 const QUOTA_TO_RESOURCE_MAP: Record<OrganizationUsageQuotaType, OrganizationUsageResourceType> = {
-  cpu: 'sandbox',
-  memory: 'sandbox',
-  disk: 'sandbox',
+  cpu: 'box',
+  memory: 'box',
+  disk: 'box',
   template_count: 'template',
   volume_count: 'volume',
 } as const

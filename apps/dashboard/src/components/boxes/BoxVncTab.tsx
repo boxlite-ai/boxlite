@@ -13,7 +13,7 @@ import { useVncInitialStatusQuery, useVncPollStatusQuery } from '@/hooks/queries
 import { useVncSessionQuery } from '@/hooks/queries/useVncSessionQuery'
 import { getBoxRouteId } from '@/lib/box-identity'
 import { cn } from '@/lib/utils'
-import { isStoppable } from '@/lib/utils/sandbox'
+import { isStoppable } from '@/lib/utils/box'
 import { Box } from '@boxlite-ai/api-client'
 import { Spinner } from '@/components/ui/spinner'
 import { Maximize2, Monitor, Play, RefreshCw } from 'lucide-react'

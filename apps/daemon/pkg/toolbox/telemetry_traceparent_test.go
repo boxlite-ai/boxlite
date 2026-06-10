@@ -26,8 +26,8 @@ func TestSeedBootSpanFromTraceParentJoinsApiTraceId(t *testing.T) {
 	if len(spans) != 1 {
 		t.Fatalf("want exactly 1 boot span, got %d", len(spans))
 	}
-	if spans[0].Name != "sandbox.boot" {
-		t.Fatalf("boot span name = %q, want sandbox.boot", spans[0].Name)
+	if spans[0].Name != "box.boot" {
+		t.Fatalf("boot span name = %q, want box.boot", spans[0].Name)
 	}
 	if got := spans[0].SpanContext.TraceID().String(); got != "0af7651916cd43dd8448eb211c80319c" {
 		t.Fatalf("boot span traceID = %s, want api traceID 0af7651916cd43dd8448eb211c80319c", got)

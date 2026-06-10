@@ -34,8 +34,8 @@ export class WebhookEventHandlerService {
     }
 
     try {
-      const payload = BoxCreatedWebhookDto.fromEvent(event, WebhookEvent.SANDBOX_CREATED)
-      await this.webhookService.sendWebhook(event.box.organizationId, WebhookEvent.SANDBOX_CREATED, payload)
+      const payload = BoxCreatedWebhookDto.fromEvent(event, WebhookEvent.BOX_CREATED)
+      await this.webhookService.sendWebhook(event.box.organizationId, WebhookEvent.BOX_CREATED, payload)
     } catch (error) {
       this.logger.error(`Failed to send webhook for box created: ${error.message}`)
     }
@@ -48,8 +48,8 @@ export class WebhookEventHandlerService {
     }
 
     try {
-      const payload = BoxStateUpdatedWebhookDto.fromEvent(event, WebhookEvent.SANDBOX_STATE_UPDATED)
-      await this.webhookService.sendWebhook(event.box.organizationId, WebhookEvent.SANDBOX_STATE_UPDATED, payload)
+      const payload = BoxStateUpdatedWebhookDto.fromEvent(event, WebhookEvent.BOX_STATE_UPDATED)
+      await this.webhookService.sendWebhook(event.box.organizationId, WebhookEvent.BOX_STATE_UPDATED, payload)
     } catch (error) {
       this.logger.error(`Failed to send webhook for box state updated: ${error.message}`)
     }

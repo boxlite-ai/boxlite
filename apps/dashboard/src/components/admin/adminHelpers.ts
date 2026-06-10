@@ -47,7 +47,7 @@ export interface AdminRunner {
   memory: number
   currentAllocatedCpu: number
   currentAllocatedMemoryGiB: number
-  currentStartedSandboxes: number
+  currentStartedBoxes: number
   availabilityScore: number
   draining: boolean
   unschedulable: boolean
@@ -59,7 +59,7 @@ export interface AdminMachine {
   oversellCpu: number
   cpuWaterline: number
   memWaterline: number
-  sandboxes: number
+  boxes: number
 }
 
 // ─── state → visual ───────────────────────────────────────────────────────────

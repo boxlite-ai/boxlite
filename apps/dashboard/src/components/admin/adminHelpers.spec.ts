@@ -35,7 +35,7 @@ function runner(partial: Partial<AdminRunner> & Pick<AdminRunner, 'id' | 'state'
     memory: 8,
     currentAllocatedCpu: 0,
     currentAllocatedMemoryGiB: 0,
-    currentStartedSandboxes: 0,
+    currentStartedBoxes: 0,
     availabilityScore: 1,
     draining: false,
     unschedulable: false,

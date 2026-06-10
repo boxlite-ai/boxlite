@@ -80,7 +80,7 @@ func networkSpec(blockAll *bool, allowList *string) boxlite.NetworkSpec {
 
 func daemonBoxEnv(ctx context.Context, boxDto dto.CreateBoxDTO) map[string]string {
 	env := map[string]string{
-		"BOXLITE_SANDBOX_ID": boxDto.Id,
+		"BOXLITE_BOX_ID": boxDto.Id,
 	}
 	if boxDto.OtelEndpoint != nil && *boxDto.OtelEndpoint != "" {
 		env["BOXLITE_OTEL_ENDPOINT"] = *boxDto.OtelEndpoint
@@ -273,11 +273,11 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	if err != nil {
 		if len(volumeMounts) > 0 {
 			if cleanupErr := c.removeBoxVolumeMountRecord(ctx, boxDto.Id); cleanupErr != nil {
-				c.logger.WarnContext(ctx, "failed to remove box volume mount record after create failure", "sandbox", boxDto.Id, "error", cleanupErr)
+				c.logger.WarnContext(ctx, "failed to remove box volume mount record after create failure", "box", boxDto.Id, "error", cleanupErr)
 			}
 		}
 		if cleanupErr := c.removeToolboxPortRecord(ctx, boxDto.Id); cleanupErr != nil {
-			c.logger.WarnContext(ctx, "failed to remove toolbox port record after create failure", "sandbox", boxDto.Id, "error", cleanupErr)
+			c.logger.WarnContext(ctx, "failed to remove toolbox port record after create failure", "box", boxDto.Id, "error", cleanupErr)
 		}
 		return "", "", fmt.Errorf("failed to create box: %w", err)
 	}
@@ -290,7 +290,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		"created box",
 		"id",
 		bx.ID(),
-		"sandboxId",
+		"boxId",
 		boxDto.Id,
 		"boxId",
 		publicBoxId,
@@ -361,10 +361,10 @@ func (c *Client) Destroy(ctx context.Context, boxId string) error {
 	}
 
 	if err := c.removeBoxVolumeMountRecord(ctx, boxId); err != nil {
-		c.logger.WarnContext(ctx, "failed to remove box volume mount record", "sandbox", boxId, "error", err)
+		c.logger.WarnContext(ctx, "failed to remove box volume mount record", "box", boxId, "error", err)
 	}
 	if err := c.removeToolboxPortRecord(ctx, boxId); err != nil {
-		c.logger.WarnContext(ctx, "failed to remove toolbox port record", "sandbox", boxId, "error", err)
+		c.logger.WarnContext(ctx, "failed to remove toolbox port record", "box", boxId, "error", err)
 	}
 	c.CleanupOrphanedVolumeMounts(ctx)
 

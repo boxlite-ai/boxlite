@@ -128,7 +128,7 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		infoController.GET("", controllers.RunnerInfo)
 	}
 
-	boxControllerLogger := a.logger.With(slog.String("component", "sandbox_controller"))
+	boxControllerLogger := a.logger.With(slog.String("component", "box_controller"))
 	boxController := protected.Group("/boxes")
 	{
 		boxController.POST("", controllers.Create)

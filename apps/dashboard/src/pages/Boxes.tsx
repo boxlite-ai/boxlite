@@ -30,7 +30,7 @@ import { useConfig } from '@/hooks/useConfig'
 import { useNotificationSocket } from '@/hooks/useNotificationSocket'
 import { useRegions } from '@/hooks/useRegions'
 import {
-  DEFAULT_SANDBOX_SORTING,
+  DEFAULT_BOX_SORTING,
   getBoxesQueryKey,
   BoxFilters,
   BoxQueryParams,
@@ -128,7 +128,7 @@ const Boxes: React.FC = () => {
 
   // Sorting
 
-  const [sorting, setSorting] = useState<BoxSorting>(DEFAULT_SANDBOX_SORTING)
+  const [sorting, setSorting] = useState<BoxSorting>(DEFAULT_BOX_SORTING)
 
   const handleSortingChange = useCallback((sorting: BoxSorting) => {
     setSorting(sorting)
@@ -304,7 +304,7 @@ const Boxes: React.FC = () => {
       const isFirstPage = paginationParams.pageIndex === 0
       const isDefaultFilters = Object.keys(filters).length === 0
       const isDefaultSorting =
-        sorting.field === DEFAULT_SANDBOX_SORTING.field && sorting.direction === DEFAULT_SANDBOX_SORTING.direction
+        sorting.field === DEFAULT_BOX_SORTING.field && sorting.direction === DEFAULT_BOX_SORTING.direction
 
       const shouldRefetchActiveQueries = isFirstPage && isDefaultFilters && isDefaultSorting
 
@@ -361,14 +361,14 @@ const Boxes: React.FC = () => {
       return
     }
 
-    notificationSocket.on('sandbox.created', handleBoxCreatedEvent)
-    notificationSocket.on('sandbox.state.updated', handleBoxStateUpdatedEvent)
-    notificationSocket.on('sandbox.desired-state.updated', handleBoxDesiredStateUpdatedEvent)
+    notificationSocket.on('box.created', handleBoxCreatedEvent)
+    notificationSocket.on('box.state.updated', handleBoxStateUpdatedEvent)
+    notificationSocket.on('box.desired-state.updated', handleBoxDesiredStateUpdatedEvent)
 
     return () => {
-      notificationSocket.off('sandbox.created', handleBoxCreatedEvent)
-      notificationSocket.off('sandbox.state.updated', handleBoxStateUpdatedEvent)
-      notificationSocket.off('sandbox.desired-state.updated', handleBoxDesiredStateUpdatedEvent)
+      notificationSocket.off('box.created', handleBoxCreatedEvent)
+      notificationSocket.off('box.state.updated', handleBoxStateUpdatedEvent)
+      notificationSocket.off('box.desired-state.updated', handleBoxDesiredStateUpdatedEvent)
     }
   }, [
     filters,
@@ -854,7 +854,7 @@ const Boxes: React.FC = () => {
           getRegionName={getRegionName}
           handleScreenRecordings={handleScreenRecordings}
           headerAction={
-            authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_SANDBOXES) ? (
+            authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES) ? (
               <CreateBoxSheet
                 open={createBoxOpen}
                 onOpenChange={setCreateBoxOpen}

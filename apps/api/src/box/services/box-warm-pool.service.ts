@@ -95,19 +95,19 @@ export class BoxWarmPoolService {
         .andWhere('(runner.unschedulable = true OR runner.availabilityScore < :scoreThreshold)')
 
       const queryBuilder = this.boxRepository
-        .createQueryBuilder('sandbox')
-        .where('sandbox.class = :class', { class: warmPoolItem.class })
-        .andWhere('sandbox.cpu = :cpu', { cpu: warmPoolItem.cpu })
-        .andWhere('sandbox.mem = :mem', { mem: warmPoolItem.mem })
-        .andWhere('sandbox.disk = :disk', { disk: warmPoolItem.disk })
-        .andWhere('sandbox.osUser = :osUser', { osUser: warmPoolItem.osUser })
-        .andWhere('sandbox.env = :env', { env: warmPoolItem.env })
-        .andWhere('sandbox.organizationId = :organizationId', {
+        .createQueryBuilder('box')
+        .where('box.class = :class', { class: warmPoolItem.class })
+        .andWhere('box.cpu = :cpu', { cpu: warmPoolItem.cpu })
+        .andWhere('box.mem = :mem', { mem: warmPoolItem.mem })
+        .andWhere('box.disk = :disk', { disk: warmPoolItem.disk })
+        .andWhere('box.osUser = :osUser', { osUser: warmPoolItem.osUser })
+        .andWhere('box.env = :env', { env: warmPoolItem.env })
+        .andWhere('box.organizationId = :organizationId', {
           organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
         })
-        .andWhere('sandbox.region = :region', { region: warmPoolItem.target })
-        .andWhere('sandbox.state = :state', { state: BoxState.STARTED })
-        .andWhere(`sandbox.runnerId NOT IN (${excludedRunnersSubquery.getQuery()})`)
+        .andWhere('box.region = :region', { region: warmPoolItem.target })
+        .andWhere('box.state = :state', { state: BoxState.STARTED })
+        .andWhere(`box.runnerId NOT IN (${excludedRunnersSubquery.getQuery()})`)
         .setParameters({
           region: warmPoolItem.target,
           scoreThreshold: availabilityScoreThreshold,
@@ -119,7 +119,7 @@ export class BoxWarmPoolService {
       //  make sure we only release warm pool box once
       let warmPoolBox: Box | null = null
       for (const box of warmPoolBoxes) {
-        const lockKey = `sandbox-warm-pool-${box.id}`
+        const lockKey = `box-warm-pool-${box.id}`
         if (!(await this.redisLockProvider.lock(lockKey, 10))) {
           continue
         }

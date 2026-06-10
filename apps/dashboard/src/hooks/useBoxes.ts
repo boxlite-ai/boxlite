@@ -7,7 +7,7 @@
 import { QueryKey, useQuery } from '@tanstack/react-query'
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { isTransitioning } from '@/lib/utils/sandbox'
+import { isTransitioning } from '@/lib/utils/box'
 import {
   ListBoxesPaginatedOrderEnum,
   ListBoxesPaginatedSortEnum,
@@ -38,7 +38,7 @@ export interface BoxSorting {
   direction?: ListBoxesPaginatedOrderEnum
 }
 
-export const DEFAULT_SANDBOX_SORTING: BoxSorting = {
+export const DEFAULT_BOX_SORTING: BoxSorting = {
   field: ListBoxesPaginatedSortEnum.UPDATED_AT,
   direction: ListBoxesPaginatedOrderEnum.DESC,
 }

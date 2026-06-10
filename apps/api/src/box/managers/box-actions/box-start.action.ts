@@ -131,17 +131,17 @@ export class BoxStartAction extends BoxAction {
         return DONT_SYNC_AGAIN
       }
       case BoxState.STARTING:
-        if (await this.checkTimeoutError(box, 5, 'Timeout while starting sandbox')) {
+        if (await this.checkTimeoutError(box, 5, 'Timeout while starting box')) {
           return DONT_SYNC_AGAIN
         }
         break
       case BoxState.RESTORING:
-        if (await this.checkTimeoutError(box, 30, 'Timeout while starting sandbox')) {
+        if (await this.checkTimeoutError(box, 30, 'Timeout while starting box')) {
           return DONT_SYNC_AGAIN
         }
         break
       case BoxState.CREATING: {
-        if (await this.checkTimeoutError(box, 15, 'Timeout while creating sandbox')) {
+        if (await this.checkTimeoutError(box, 15, 'Timeout while creating box')) {
           return DONT_SYNC_AGAIN
         }
         break

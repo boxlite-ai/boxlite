@@ -28,7 +28,7 @@ export class CreateBoxDto {
   user?: string
 
   @ApiPropertyOptional({
-    description: 'Environment variables for the sandbox',
+    description: 'Environment variables for the box',
     type: 'object',
     additionalProperties: { type: 'string' },
     example: { NODE_ENV: 'production' },
@@ -38,7 +38,7 @@ export class CreateBoxDto {
   env?: { [key: string]: string }
 
   @ApiPropertyOptional({
-    description: 'Labels for the sandbox',
+    description: 'Labels for the box',
     type: 'object',
     additionalProperties: { type: 'string' },
     example: { 'boxlite.io/public': 'true' },
@@ -56,7 +56,7 @@ export class CreateBoxDto {
   public?: boolean
 
   @ApiPropertyOptional({
-    description: 'Whether to block all network access for the sandbox',
+    description: 'Whether to block all network access for the box',
     example: false,
   })
   @IsOptional()
@@ -64,7 +64,7 @@ export class CreateBoxDto {
   networkBlockAll?: boolean
 
   @ApiPropertyOptional({
-    description: 'Comma-separated list of allowed CIDR network addresses for the sandbox',
+    description: 'Comma-separated list of allowed CIDR network addresses for the box',
     example: '192.168.1.0/16,10.0.0.0/24',
   })
   @IsOptional()
@@ -89,7 +89,7 @@ export class CreateBoxDto {
   target?: string
 
   @ApiPropertyOptional({
-    description: 'CPU cores allocated to the sandbox',
+    description: 'CPU cores allocated to the box',
     example: 2,
     type: 'integer',
   })
@@ -98,7 +98,7 @@ export class CreateBoxDto {
   cpu?: number
 
   @ApiPropertyOptional({
-    description: 'GPU units allocated to the sandbox',
+    description: 'GPU units allocated to the box',
     example: 1,
     type: 'integer',
   })
@@ -144,7 +144,7 @@ export class CreateBoxDto {
   autoDeleteInterval?: number
 
   @ApiPropertyOptional({
-    description: 'Array of volumes to attach to the sandbox',
+    description: 'Array of volumes to attach to the box',
     type: [BoxVolume],
     required: false,
   })

@@ -11,20 +11,20 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-func TestDaemonSandboxEnvIncludesRequiredSandboxIdentity(t *testing.T) {
+func TestDaemonBoxEnvIncludesRequiredBoxIdentity(t *testing.T) {
 	organizationID := "org-1"
 	regionID := "region-1"
 	otelEndpoint := "http://otel.local:4318"
 
-	got := daemonSandboxEnv(context.Background(), dto.CreateSandboxDTO{
-		Id:             "sandbox-1",
+	got := daemonBoxEnv(context.Background(), dto.CreateBoxDTO{
+		Id:             "box-1",
 		OrganizationId: &organizationID,
 		RegionId:       &regionID,
 		OtelEndpoint:   &otelEndpoint,
 	})
 
 	want := map[string]string{
-		"BOXLITE_SANDBOX_ID":      "sandbox-1",
+		"BOXLITE_BOX_ID":      "box-1",
 		"BOXLITE_ORGANIZATION_ID": "org-1",
 		"BOXLITE_REGION_ID":       "region-1",
 		"BOXLITE_OTEL_ENDPOINT":   "http://otel.local:4318",
@@ -40,11 +40,11 @@ func TestDaemonSandboxEnvIncludesRequiredSandboxIdentity(t *testing.T) {
 	}
 }
 
-func TestDaemonSandboxEnvOmitsEmptyOptionalValues(t *testing.T) {
+func TestDaemonBoxEnvOmitsEmptyOptionalValues(t *testing.T) {
 	empty := ""
 
-	got := daemonSandboxEnv(context.Background(), dto.CreateSandboxDTO{
-		Id:             "sandbox-1",
+	got := daemonBoxEnv(context.Background(), dto.CreateBoxDTO{
+		Id:             "box-1",
 		OrganizationId: &empty,
 		RegionId:       &empty,
 		OtelEndpoint:   &empty,
@@ -53,15 +53,15 @@ func TestDaemonSandboxEnvOmitsEmptyOptionalValues(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("expected only required daemon env, got %#v", got)
 	}
-	if got["BOXLITE_SANDBOX_ID"] != "sandbox-1" {
-		t.Fatalf("BOXLITE_SANDBOX_ID = %q, want sandbox-1", got["BOXLITE_SANDBOX_ID"])
+	if got["BOXLITE_BOX_ID"] != "box-1" {
+		t.Fatalf("BOXLITE_BOX_ID = %q, want box-1", got["BOXLITE_BOX_ID"])
 	}
 }
 
-// With an active (remote) span in context, daemonSandboxEnv must propagate it as a W3C
+// With an active (remote) span in context, daemonBoxEnv must propagate it as a W3C
 // BOXLITE_TRACEPARENT env so the in-box daemon joins the same traceId. The value crosses
 // propagation.TraceContext{}.Inject (production code), so this is non-tautological.
-func TestDaemonSandboxEnvPropagatesTraceparentWhenSpanActive(t *testing.T) {
+func TestDaemonBoxEnvPropagatesTraceparentWhenSpanActive(t *testing.T) {
 	traceID, err := trace.TraceIDFromHex("0af7651916cd43dd8448eb211c80319c")
 	if err != nil {
 		t.Fatalf("trace id: %v", err)
@@ -78,7 +78,7 @@ func TestDaemonSandboxEnvPropagatesTraceparentWhenSpanActive(t *testing.T) {
 	})
 	ctx := trace.ContextWithSpanContext(context.Background(), sc)
 
-	got := daemonSandboxEnv(ctx, dto.CreateSandboxDTO{Id: "sandbox-1"})
+	got := daemonBoxEnv(ctx, dto.CreateBoxDTO{Id: "box-1"})
 
 	wantTP := "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
 	if got["BOXLITE_TRACEPARENT"] != wantTP {
@@ -88,8 +88,8 @@ func TestDaemonSandboxEnvPropagatesTraceparentWhenSpanActive(t *testing.T) {
 
 // With no active span, BOXLITE_TRACEPARENT must be absent (behavior identical to before the
 // propagation change), so the fix is safe to ship dark.
-func TestDaemonSandboxEnvOmitsTraceparentWhenNoSpan(t *testing.T) {
-	got := daemonSandboxEnv(context.Background(), dto.CreateSandboxDTO{Id: "sandbox-1"})
+func TestDaemonBoxEnvOmitsTraceparentWhenNoSpan(t *testing.T) {
+	got := daemonBoxEnv(context.Background(), dto.CreateBoxDTO{Id: "box-1"})
 
 	if _, ok := got["BOXLITE_TRACEPARENT"]; ok {
 		t.Fatalf("BOXLITE_TRACEPARENT must be absent without an active span, got %#v", got)

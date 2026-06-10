@@ -1,8 +1,8 @@
-import { TabValue } from '@/components/sandboxes/SearchParams'
+import { TabValue } from '@/components/boxes/SearchParams'
 
 const EXPERIMENT_TABS: TabValue[] = ['logs', 'traces', 'metrics', 'spending']
 
-interface SandboxContentTabsOptions {
+interface BoxContentTabsOptions {
   experimentsEnabled?: boolean
   vncEnabled: boolean
 }
@@ -11,7 +11,7 @@ export function isDashboardVncEnabled(flagValue: boolean | undefined): boolean {
   return flagValue === true
 }
 
-export function getSandboxContentTabs({ experimentsEnabled, vncEnabled }: SandboxContentTabsOptions): TabValue[] {
+export function getBoxContentTabs({ experimentsEnabled, vncEnabled }: BoxContentTabsOptions): TabValue[] {
   return [
     'overview',
     ...(experimentsEnabled ? EXPERIMENT_TABS : []),
@@ -20,6 +20,6 @@ export function getSandboxContentTabs({ experimentsEnabled, vncEnabled }: Sandbo
   ]
 }
 
-export function isSandboxContentTabAvailable(tab: TabValue, options: SandboxContentTabsOptions): boolean {
-  return getSandboxContentTabs(options).includes(tab)
+export function isBoxContentTabAvailable(tab: TabValue, options: BoxContentTabsOptions): boolean {
+  return getBoxContentTabs(options).includes(tab)
 }

@@ -14,7 +14,7 @@ import { useTerminalSessionQuery } from '@/hooks/queries/useTerminalSessionQuery
 import { useBoxSessionContext } from '@/hooks/useBoxSessionContext'
 import { useBoxWsSync } from '@/hooks/useBoxWsSync'
 import { getBoxDisplayName, getBoxPublicId } from '@/lib/box-identity'
-import { isStoppable } from '@/lib/utils/sandbox'
+import { isStoppable } from '@/lib/utils/box'
 import { Container, Play, RefreshCw, TerminalSquare } from 'lucide-react'
 import { BoxFullscreenShell } from './BoxFullscreenShell'
 import { BoxTerminalFrame } from './BoxTerminalFrame'

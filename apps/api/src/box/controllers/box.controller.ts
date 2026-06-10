@@ -73,8 +73,8 @@ import { RequireFlagsEnabled } from '@openfeature/nestjs-sdk'
 import { FeatureFlags } from '../../common/constants/feature-flags'
 import { RegionBoxAccessGuard } from '../guards/region-box-access.guard'
 
-@ApiTags('sandbox')
-@Controller('sandbox')
+@ApiTags('box')
+@Controller('box')
 @ApiHeader(CustomHeaders.ORGANIZATION_ID)
 @UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard, AuthenticatedRateLimitGuard)
 @ApiOAuth2(['openid', 'profile', 'email'])
@@ -219,9 +219,9 @@ export class BoxController {
   @HttpCode(200) //  for BoxLite Api compatibility
   @UseInterceptors(ContentTypeInterceptor)
   @SkipThrottle({ authenticated: true })
-  @ThrottlerScope('sandbox-create')
+  @ThrottlerScope('box-create')
   @ApiOperation({
-    summary: 'Create a new sandbox',
+    summary: 'Create a new box',
     operationId: 'createBox',
   })
   @ApiResponse({
@@ -323,8 +323,8 @@ export class BoxController {
     operationId: 'getBox',
   })
   @ApiParam({
-    name: 'sandboxIdOrName',
-    description: 'ID or name of the sandbox',
+    name: 'boxIdOrName',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiQuery({
@@ -341,7 +341,7 @@ export class BoxController {
   @UseGuards(BoxAccessGuard)
   async getBox(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Param('sandboxIdOrName') boxIdOrName: string,
+    @Param('boxIdOrName') boxIdOrName: string,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     @Query('verbose') verbose?: boolean,
   ): Promise<BoxDto> {
@@ -352,14 +352,14 @@ export class BoxController {
 
   @Delete(':boxIdOrName')
   @SkipThrottle({ authenticated: true })
-  @ThrottlerScope('sandbox-lifecycle')
+  @ThrottlerScope('box-lifecycle')
   @ApiOperation({
-    summary: 'Delete sandbox',
+    summary: 'Delete box',
     operationId: 'deleteBox',
   })
   @ApiParam({
-    name: 'sandboxIdOrName',
-    description: 'ID or name of the sandbox',
+    name: 'boxIdOrName',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiResponse({
@@ -377,7 +377,7 @@ export class BoxController {
   })
   async deleteBox(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Param('sandboxIdOrName') boxIdOrName: string,
+    @Param('boxIdOrName') boxIdOrName: string,
   ): Promise<BoxDto> {
     const box = await this.boxService.destroy(boxIdOrName, authContext.organizationId)
     return this.boxService.toBoxDto(box)
@@ -386,14 +386,14 @@ export class BoxController {
   @Post(':boxIdOrName/recover')
   @HttpCode(200)
   @SkipThrottle({ authenticated: true })
-  @ThrottlerScope('sandbox-lifecycle')
+  @ThrottlerScope('box-lifecycle')
   @ApiOperation({
     summary: 'Recover box from error state',
     operationId: 'recoverBox',
   })
   @ApiParam({
-    name: 'sandboxIdOrName',
-    description: 'ID or name of the sandbox',
+    name: 'boxIdOrName',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiResponse({
@@ -411,7 +411,7 @@ export class BoxController {
   })
   async recoverBox(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Param('sandboxIdOrName') boxIdOrName: string,
+    @Param('boxIdOrName') boxIdOrName: string,
   ): Promise<BoxDto> {
     const recoveredBox = await this.boxService.recover(boxIdOrName, authContext.organization)
     let boxDto = await this.boxService.toBoxDto(recoveredBox)
@@ -426,14 +426,14 @@ export class BoxController {
   @Post(':boxIdOrName/start')
   @HttpCode(200)
   @SkipThrottle({ authenticated: true })
-  @ThrottlerScope('sandbox-lifecycle')
+  @ThrottlerScope('box-lifecycle')
   @ApiOperation({
-    summary: 'Start sandbox',
+    summary: 'Start box',
     operationId: 'startBox',
   })
   @ApiParam({
-    name: 'sandboxIdOrName',
-    description: 'ID or name of the sandbox',
+    name: 'boxIdOrName',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiResponse({
@@ -451,7 +451,7 @@ export class BoxController {
   })
   async startBox(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Param('sandboxIdOrName') boxIdOrName: string,
+    @Param('boxIdOrName') boxIdOrName: string,
   ): Promise<BoxDto> {
     const sbx = await this.boxService.start(boxIdOrName, authContext.organization)
     let box = await this.boxService.toBoxDto(sbx)
@@ -466,14 +466,14 @@ export class BoxController {
   @Post(':boxIdOrName/stop')
   @HttpCode(200) //  for BoxLite Api compatibility
   @SkipThrottle({ authenticated: true })
-  @ThrottlerScope('sandbox-lifecycle')
+  @ThrottlerScope('box-lifecycle')
   @ApiOperation({
-    summary: 'Stop sandbox',
+    summary: 'Stop box',
     operationId: 'stopBox',
   })
   @ApiParam({
-    name: 'sandboxIdOrName',
-    description: 'ID or name of the sandbox',
+    name: 'boxIdOrName',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiQuery({
@@ -502,7 +502,7 @@ export class BoxController {
   })
   async stopBox(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Param('sandboxIdOrName') boxIdOrName: string,
+    @Param('boxIdOrName') boxIdOrName: string,
     @Query('force', new ParseBoolPipe({ optional: true })) force?: boolean,
   ): Promise<BoxDto> {
     const box = await this.boxService.stop(boxIdOrName, authContext.organizationId, force)
@@ -513,14 +513,14 @@ export class BoxController {
   @HttpCode(200)
   @UseInterceptors(ContentTypeInterceptor)
   @SkipThrottle({ authenticated: true })
-  @ThrottlerScope('sandbox-lifecycle')
+  @ThrottlerScope('box-lifecycle')
   @ApiOperation({
     summary: 'Resize box resources',
     operationId: 'resizeBox',
   })
   @ApiParam({
-    name: 'sandboxIdOrName',
-    description: 'ID or name of the sandbox',
+    name: 'boxIdOrName',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiResponse({
@@ -546,7 +546,7 @@ export class BoxController {
   })
   async resizeBox(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Param('sandboxIdOrName') boxIdOrName: string,
+    @Param('boxIdOrName') boxIdOrName: string,
     @Body() resizeBoxDto: ResizeBoxDto,
   ): Promise<BoxDto> {
     const box = await this.boxService.resize(boxIdOrName, resizeBoxDto, authContext.organization)
@@ -560,8 +560,8 @@ export class BoxController {
     operationId: 'replaceLabels',
   })
   @ApiParam({
-    name: 'sandboxIdOrName',
-    description: 'ID or name of the sandbox',
+    name: 'boxIdOrName',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiResponse({
@@ -584,7 +584,7 @@ export class BoxController {
   })
   async replaceLabels(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Param('sandboxIdOrName') boxIdOrName: string,
+    @Param('boxIdOrName') boxIdOrName: string,
     @Body() labelsDto: BoxLabelsDto,
   ): Promise<BoxDto> {
     const box = await this.boxService.replaceLabels(boxIdOrName, labelsDto.labels, authContext.organizationId)
@@ -599,7 +599,7 @@ export class BoxController {
   })
   @ApiParam({
     name: 'boxId',
-    description: 'ID of the sandbox',
+    description: 'ID of the box',
     type: 'string',
   })
   @ApiResponse({
@@ -623,8 +623,8 @@ export class BoxController {
     operationId: 'updatePublicStatus',
   })
   @ApiParam({
-    name: 'sandboxIdOrName',
-    description: 'ID or name of the sandbox',
+    name: 'boxIdOrName',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiParam({
@@ -652,7 +652,7 @@ export class BoxController {
   })
   async updatePublicStatus(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Param('sandboxIdOrName') boxIdOrName: string,
+    @Param('boxIdOrName') boxIdOrName: string,
     @Param('isPublic') isPublic: boolean,
   ): Promise<BoxDto> {
     const box = await this.boxService.updatePublicStatus(boxIdOrName, isPublic, authContext.organizationId)
@@ -666,7 +666,7 @@ export class BoxController {
   })
   @ApiParam({
     name: 'boxId',
-    description: 'ID of the sandbox',
+    description: 'ID of the box',
     type: 'string',
   })
   @ApiResponse({
@@ -684,8 +684,8 @@ export class BoxController {
     operationId: 'setAutostopInterval',
   })
   @ApiParam({
-    name: 'sandboxIdOrName',
-    description: 'ID or name of the sandbox',
+    name: 'boxIdOrName',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiParam({
@@ -713,7 +713,7 @@ export class BoxController {
   })
   async setAutostopInterval(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Param('sandboxIdOrName') boxIdOrName: string,
+    @Param('boxIdOrName') boxIdOrName: string,
     @Param('interval') interval: number,
   ): Promise<BoxDto> {
     const box = await this.boxService.setAutostopInterval(boxIdOrName, interval, authContext.organizationId)
@@ -726,8 +726,8 @@ export class BoxController {
     operationId: 'setAutoDeleteInterval',
   })
   @ApiParam({
-    name: 'sandboxIdOrName',
-    description: 'ID or name of the sandbox',
+    name: 'boxIdOrName',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiParam({
@@ -756,7 +756,7 @@ export class BoxController {
   })
   async setAutoDeleteInterval(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Param('sandboxIdOrName') boxIdOrName: string,
+    @Param('boxIdOrName') boxIdOrName: string,
     @Param('interval') interval: number,
   ): Promise<BoxDto> {
     const box = await this.boxService.setAutoDeleteInterval(boxIdOrName, interval, authContext.organizationId)
@@ -770,8 +770,8 @@ export class BoxController {
   //   operationId: 'updateNetworkSettings',
   // })
   // @ApiParam({
-  //   name: 'sandboxIdOrName',
-  //   description: 'ID or name of the sandbox',
+  //   name: 'boxIdOrName',
+  //   description: 'ID or name of the box',
   //   type: 'string',
   // })
   // @ApiResponse({
@@ -795,7 +795,7 @@ export class BoxController {
   // })
   // async updateNetworkSettings(
   //   @AuthContext() authContext: OrganizationAuthContext,
-  //   @Param('sandboxIdOrName') boxIdOrName: string,
+  //   @Param('boxIdOrName') boxIdOrName: string,
   //   @Body() networkSettings: UpdateBoxNetworkSettingsDto,
   // ): Promise<BoxDto> {
   //   const box = await this.boxService.updateNetworkSettings(
@@ -813,8 +813,8 @@ export class BoxController {
     operationId: 'getPortPreviewUrl',
   })
   @ApiParam({
-    name: 'sandboxIdOrName',
-    description: 'ID or name of the sandbox',
+    name: 'boxIdOrName',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiParam({
@@ -830,7 +830,7 @@ export class BoxController {
   @UseGuards(BoxAccessGuard)
   async getPortPreviewUrl(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Param('sandboxIdOrName') boxIdOrName: string,
+    @Param('boxIdOrName') boxIdOrName: string,
     @Param('port') port: number,
   ): Promise<PortPreviewUrlDto> {
     return this.boxService.getPortPreviewUrl(boxIdOrName, authContext.organizationId, port)
@@ -842,8 +842,8 @@ export class BoxController {
     operationId: 'getSignedPortPreviewUrl',
   })
   @ApiParam({
-    name: 'sandboxIdOrName',
-    description: 'ID or name of the sandbox',
+    name: 'boxIdOrName',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiParam({
@@ -865,7 +865,7 @@ export class BoxController {
   @UseGuards(BoxAccessGuard)
   async getSignedPortPreviewUrl(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Param('sandboxIdOrName') boxIdOrName: string,
+    @Param('boxIdOrName') boxIdOrName: string,
     @Param('port') port: number,
     @Query('expiresInSeconds') expiresInSeconds?: number,
   ): Promise<SignedPortPreviewUrlDto> {
@@ -878,8 +878,8 @@ export class BoxController {
     operationId: 'expireSignedPortPreviewUrl',
   })
   @ApiParam({
-    name: 'sandboxIdOrName',
-    description: 'ID or name of the sandbox',
+    name: 'boxIdOrName',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiParam({
@@ -899,7 +899,7 @@ export class BoxController {
   @UseGuards(BoxAccessGuard)
   async expireSignedPortPreviewUrl(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Param('sandboxIdOrName') boxIdOrName: string,
+    @Param('boxIdOrName') boxIdOrName: string,
     @Param('port') port: number,
     @Param('token') token: string,
   ): Promise<void> {
@@ -909,12 +909,12 @@ export class BoxController {
   @Post(':boxIdOrName/ssh-access')
   @HttpCode(200)
   @ApiOperation({
-    summary: 'Create SSH access for sandbox',
+    summary: 'Create SSH access for box',
     operationId: 'createSshAccess',
   })
   @ApiParam({
-    name: 'sandboxIdOrName',
-    description: 'ID or name of the sandbox',
+    name: 'boxIdOrName',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiQuery({
@@ -943,7 +943,7 @@ export class BoxController {
   })
   async createSshAccess(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Param('sandboxIdOrName') boxIdOrName: string,
+    @Param('boxIdOrName') boxIdOrName: string,
     @Query('expiresInMinutes') expiresInMinutes?: number,
   ): Promise<SshAccessDto> {
     return await this.boxService.createSshAccess(boxIdOrName, expiresInMinutes, authContext.organizationId)
@@ -952,12 +952,12 @@ export class BoxController {
   @Delete(':boxIdOrName/ssh-access')
   @HttpCode(200)
   @ApiOperation({
-    summary: 'Revoke SSH access for sandbox',
+    summary: 'Revoke SSH access for box',
     operationId: 'revokeSshAccess',
   })
   @ApiParam({
-    name: 'sandboxIdOrName',
-    description: 'ID or name of the sandbox',
+    name: 'boxIdOrName',
+    description: 'ID or name of the box',
     type: 'string',
   })
   @ApiQuery({
@@ -986,7 +986,7 @@ export class BoxController {
   })
   async revokeSshAccess(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Param('sandboxIdOrName') boxIdOrName: string,
+    @Param('boxIdOrName') boxIdOrName: string,
     @Query('token') token?: string,
   ): Promise<BoxDto> {
     const box = await this.boxService.revokeSshAccess(boxIdOrName, token, authContext.organizationId)
@@ -995,7 +995,7 @@ export class BoxController {
 
   @Get('ssh-access/validate')
   @ApiOperation({
-    summary: 'Validate SSH access for sandbox',
+    summary: 'Validate SSH access for box',
     operationId: 'validateSshAccess',
   })
   @ApiQuery({
@@ -1016,17 +1016,17 @@ export class BoxController {
 
   @Get(':boxId/toolbox-proxy-url')
   @ApiOperation({
-    summary: 'Get toolbox proxy URL for a sandbox',
+    summary: 'Get toolbox proxy URL for a box',
     operationId: 'getToolboxProxyUrl',
   })
   @ApiParam({
     name: 'boxId',
-    description: 'ID of the sandbox',
+    description: 'ID of the box',
     type: 'string',
   })
   @ApiResponse({
     status: 200,
-    description: 'Toolbox proxy URL for the specified sandbox',
+    description: 'Toolbox proxy URL for the specified box',
     type: ToolboxProxyUrlDto,
   })
   @UseGuards(BoxAccessGuard)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getSandboxContentTabs, isDashboardVncEnabled } from './dashboard-features'
+import { getBoxContentTabs, isDashboardVncEnabled } from './dashboard-features'
 
 describe('dashboard feature gates', () => {
   it('fails closed when the VNC feature flag is unavailable or disabled', () => {
@@ -9,8 +9,8 @@ describe('dashboard feature gates', () => {
   })
 
   it('only exposes the VNC tab when VNC is enabled', () => {
-    expect(getSandboxContentTabs({ experimentsEnabled: false, vncEnabled: false })).toEqual(['overview', 'terminal'])
-    expect(getSandboxContentTabs({ experimentsEnabled: false, vncEnabled: true })).toEqual([
+    expect(getBoxContentTabs({ experimentsEnabled: false, vncEnabled: false })).toEqual(['overview', 'terminal'])
+    expect(getBoxContentTabs({ experimentsEnabled: false, vncEnabled: true })).toEqual([
       'overview',
       'terminal',
       'vnc',
@@ -18,7 +18,7 @@ describe('dashboard feature gates', () => {
   })
 
   it('keeps experiment tabs independent from the VNC feature gate', () => {
-    expect(getSandboxContentTabs({ experimentsEnabled: true, vncEnabled: false })).toEqual([
+    expect(getBoxContentTabs({ experimentsEnabled: true, vncEnabled: false })).toEqual([
       'overview',
       'logs',
       'traces',

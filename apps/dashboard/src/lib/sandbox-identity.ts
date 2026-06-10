@@ -4,35 +4,35 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Sandbox, SandboxDesiredState } from '@boxlite-ai/api-client'
+import { Box, BoxDesiredState } from '@boxlite-ai/api-client'
 
-type SandboxIdentity = Pick<Sandbox, 'id' | 'name'> & Partial<Pick<Sandbox, 'boxId' | 'desiredState'>>
+type BoxIdentity = Pick<Box, 'id' | 'name'> & Partial<Pick<Box, 'boxId' | 'desiredState'>>
 
 export const MISSING_BOX_ID_LABEL = 'Not available'
 
-export function getSandboxPublicId(sandbox: Partial<Pick<Sandbox, 'boxId'>> | undefined): string {
-  return sandbox?.boxId || ''
+export function getBoxPublicId(box: Partial<Pick<Box, 'boxId'>> | undefined): string {
+  return box?.boxId || ''
 }
 
-export function getSandboxPublicIdLabel(sandbox: Partial<Pick<Sandbox, 'boxId'>> | undefined): string {
-  return getSandboxPublicId(sandbox) || MISSING_BOX_ID_LABEL
+export function getBoxPublicIdLabel(box: Partial<Pick<Box, 'boxId'>> | undefined): string {
+  return getBoxPublicId(box) || MISSING_BOX_ID_LABEL
 }
 
-export function getSandboxRouteId(sandbox: Partial<Pick<Sandbox, 'boxId' | 'id'>> | undefined): string {
-  return sandbox?.boxId || sandbox?.id || ''
+export function getBoxRouteId(box: Partial<Pick<Box, 'boxId' | 'id'>> | undefined): string {
+  return box?.boxId || box?.id || ''
 }
 
-export function getSandboxDisplayName(sandbox: SandboxIdentity): string {
-  const name = getNormalizedSandboxName(sandbox)
-  if (name && name !== sandbox.id && !isUuidLike(name)) {
+export function getBoxDisplayName(box: BoxIdentity): string {
+  const name = getNormalizedBoxName(box)
+  if (name && name !== box.id && !isUuidLike(name)) {
     return name
   }
-  return getSandboxPublicId(sandbox) || 'Box'
+  return getBoxPublicId(box) || 'Box'
 }
 
-function getNormalizedSandboxName(sandbox: SandboxIdentity): string {
-  if (sandbox.desiredState === SandboxDesiredState.DESTROYED && sandbox.name.startsWith('DESTROYED_')) {
-    const withoutPrefix = sandbox.name.substring(10)
+function getNormalizedBoxName(box: BoxIdentity): string {
+  if (box.desiredState === BoxDesiredState.DESTROYED && box.name.startsWith('DESTROYED_')) {
+    const withoutPrefix = box.name.substring(10)
     const lastUnderscoreIndex = withoutPrefix.lastIndexOf('_')
     if (lastUnderscoreIndex !== -1) {
       return withoutPrefix.substring(0, lastUnderscoreIndex)
@@ -40,7 +40,7 @@ function getNormalizedSandboxName(sandbox: SandboxIdentity): string {
     return withoutPrefix
   }
 
-  return sandbox.name
+  return box.name
 }
 
 function isUuidLike(value: string): boolean {

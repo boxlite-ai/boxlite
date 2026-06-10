@@ -9,7 +9,7 @@ import { useCommandPaletteAnalytics } from '@/hooks/useCommandPaletteAnalytics'
 import { useIsCompactScreen } from '@/hooks/use-mobile'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { cn } from '@/lib/utils'
-import { filterDeletable, filterStartable, filterStoppable, getBulkActionCounts } from '@/lib/utils/sandbox'
+import { filterDeletable, filterStartable, filterStoppable, getBulkActionCounts } from '@/lib/utils/box'
 import { OrganizationRolePermissionsEnum, Box, BoxState } from '@boxlite-ai/api-client'
 import { flexRender } from '@tanstack/react-table'
 import { Container } from 'lucide-react'
@@ -74,8 +74,8 @@ export function BoxTable({
   const navigate = useNavigate()
   const useCompactList = useIsCompactScreen()
   const { authenticatedUserHasPermission } = useSelectedOrganization()
-  const writePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_SANDBOXES)
-  const deletePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.DELETE_SANDBOXES)
+  const writePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
+  const deletePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.DELETE_BOXES)
 
   const { table } = useBoxTable({
     data,
@@ -161,7 +161,7 @@ export function BoxTable({
   const { setIsOpen } = useCommandPaletteActions()
   const { trackOpened } = useCommandPaletteAnalytics()
   const handleOpenCommandPalette = () => {
-    trackOpened('sandbox_selection_toast')
+    trackOpened('box_selection_toast')
     setIsOpen(true)
   }
 

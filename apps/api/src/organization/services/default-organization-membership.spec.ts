@@ -20,9 +20,9 @@ const defaultQuota: CreateOrganizationQuotaDto = {
   totalCpuQuota: 10,
   totalMemoryQuota: 40,
   totalDiskQuota: 100,
-  maxCpuPerSandbox: 4,
-  maxMemoryPerSandbox: 8,
-  maxDiskPerSandbox: 10,
+  maxCpuPerBox: 4,
+  maxMemoryPerBox: 8,
+  maxDiskPerBox: 10,
   templateQuota: 100,
   maxTemplateSize: 100,
   volumeQuota: 100,
@@ -50,7 +50,7 @@ function createOrganizationService() {
     get: jest.fn(() => undefined),
     getOrThrow: jest.fn((key: string) => {
       if (key === 'defaultOrganizationQuota') return defaultQuota
-      if (key === 'organizationSandboxDefaultLimitedNetworkEgress') return false
+      if (key === 'organizationBoxDefaultLimitedNetworkEgress') return false
       throw new Error(`Unexpected config key: ${key}`)
     }),
   }
@@ -79,17 +79,17 @@ describe('default organization membership semantics', () => {
         createdAt: new Date('2026-06-08T00:00:00.000Z'),
         updatedAt: new Date('2026-06-08T00:00:00.000Z'),
         suspended: false,
-        maxCpuPerSandbox: 4,
-        maxMemoryPerSandbox: 8,
-        maxDiskPerSandbox: 10,
+        maxCpuPerBox: 4,
+        maxMemoryPerBox: 8,
+        maxDiskPerBox: 10,
         templateDeactivationTimeoutMinutes: 20160,
-        sandboxLimitedNetworkEgress: false,
+        boxLimitedNetworkEgress: false,
         authenticatedRateLimit: null,
-        sandboxCreateRateLimit: null,
-        sandboxLifecycleRateLimit: null,
+        boxCreateRateLimit: null,
+        boxLifecycleRateLimit: null,
         authenticatedRateLimitTtlSeconds: null,
-        sandboxCreateRateLimitTtlSeconds: null,
-        sandboxLifecycleRateLimitTtlSeconds: null,
+        boxCreateRateLimitTtlSeconds: null,
+        boxLifecycleRateLimitTtlSeconds: null,
       } as never,
       true,
     )

@@ -6,7 +6,7 @@
 
 import { Tooltip } from '@/components/Tooltip'
 import { Label } from '@/components/ui/label'
-import { SANDBOX_TEMPLATE_DEFAULT_VALUE } from '@/constants/Playground'
+import { BOX_TEMPLATE_DEFAULT_VALUE } from '@/constants/Playground'
 import { NumberParameterFormItem, ParameterFormItem } from '@/contexts/PlaygroundContext'
 import { usePlayground } from '@/hooks/usePlayground'
 import { getLanguageCodeToRun } from '@/lib/playground'
@@ -80,7 +80,7 @@ const BoxManagementParameters: React.FC<BoxManagementParametersProps> = ({ templ
     })
   }, [boxParametersState.language, setBoxParameterValue])
 
-  const nonDefaultTemplateSelected = boxTemplateName && boxTemplateName !== SANDBOX_TEMPLATE_DEFAULT_VALUE
+  const nonDefaultTemplateSelected = boxTemplateName && boxTemplateName !== BOX_TEMPLATE_DEFAULT_VALUE
 
   return (
     <>
@@ -97,7 +97,7 @@ const BoxManagementParameters: React.FC<BoxManagementParametersProps> = ({ templ
       {/* <StackedInputFormControl formItem={boxTemplateFormData}>
         <FormSelectInput
           selectOptions={[
-            { value: SANDBOX_TEMPLATE_DEFAULT_VALUE, label: 'Default' },
+            { value: BOX_TEMPLATE_DEFAULT_VALUE, label: 'Default' },
             ...templatesData.map((template) => ({
               value: template.name,
               label: template.name,

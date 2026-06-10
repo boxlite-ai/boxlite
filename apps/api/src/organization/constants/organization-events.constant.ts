@@ -10,7 +10,7 @@ export const OrganizationEvents = {
   INVITATION_DECLINED: 'invitation.declined',
   INVITATION_CANCELLED: 'invitation.cancelled',
   CREATED: 'organization.created',
-  SUSPENDED_SANDBOX_STOPPED: 'organization.suspended-box-stopped',
+  SUSPENDED_BOX_STOPPED: 'organization.suspended-box-stopped',
   SUSPENDED_TEMPLATE_DEACTIVATED: 'organization.suspended-template-deactivated',
   PERMISSIONS_UNASSIGNED: 'permissions.unassigned',
 } as const

@@ -42,7 +42,6 @@ export interface AdminObservabilityBaseParams {
   serviceName?: string
   orgId?: string
   userId?: string
-  sandboxId?: string
   boxId?: string
   runnerId?: string
   machineId?: string
@@ -125,7 +124,6 @@ export interface AdminObservabilityCorrelation {
   traceIds: string[]
   orgIds: string[]
   userIds: string[]
-  sandboxIds: string[]
   boxIds: string[]
   runnerIds: string[]
   machineIds: string[]
@@ -313,7 +311,7 @@ export function buildAdminObservabilitySearchParams(
   appendIfPresent(searchParams, 'serviceName', params.serviceName)
   appendIfPresent(searchParams, 'orgId', params.orgId)
   appendIfPresent(searchParams, 'userId', params.userId)
-  appendIfPresent(searchParams, 'sandboxId', params.sandboxId)
+  appendIfPresent(searchParams, 'boxId', params.boxId)
   appendIfPresent(searchParams, 'boxId', params.boxId)
   appendIfPresent(searchParams, 'runnerId', params.runnerId)
   appendIfPresent(searchParams, 'machineId', params.machineId)

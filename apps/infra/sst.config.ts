@@ -413,8 +413,8 @@ export default $config({
                 CLICKHOUSE_PROTOCOL: envOr('CLICKHOUSE_READER_PROTOCOL', envOr('CLICKHOUSE_PROTOCOL', 'https')),
               }
             : {}),
-        SANDBOX_OTEL_ENDPOINT_URL: envOr(
-          'SANDBOX_OTEL_ENDPOINT_URL',
+        BOX_OTEL_ENDPOINT_URL: envOr(
+          'BOX_OTEL_ENDPOINT_URL',
           envOr('OTEL_EXPORTER_OTLP_ENDPOINT', otelCollectorOtlpHttpUrl),
         ),
         ADMIN_OBSERVABILITY_CLOUDWATCH_REGION: envOr('ADMIN_OBSERVABILITY_CLOUDWATCH_REGION', REGION),
@@ -477,7 +477,7 @@ export default $config({
     })
 
     // ─── 7. EDGE SERVICES ────────────────────────────────────────────────────
-    // Proxy: routes `<port>-<sandboxid>.proxy.<stack>` to the box port.
+    // Proxy: routes `<port>-<boxid>.proxy.<stack>` to the box port.
     // Wildcard cert covers *.proxy.<stack>; Cloudflare serves wildcard DNS.
     const proxyDomain = `proxy.${stackDomain}`
     new sst.aws.Service('Proxy', {

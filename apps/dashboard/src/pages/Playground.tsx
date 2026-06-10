@@ -31,7 +31,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useResizeObserver } from 'usehooks-ts'
 
 const playgroundCategoriesData = [
-  { value: PlaygroundCategories.SANDBOX, label: 'Box' },
+  { value: PlaygroundCategories.BOX, label: 'Box' },
   { value: PlaygroundCategories.TERMINAL, label: 'Terminal' },
   { value: PlaygroundCategories.VNC, label: 'VNC' },
 ]
@@ -51,7 +51,7 @@ const SlideLeftRight = ({ children, direction }: { children: React.ReactNode; di
 
 const Playground: React.FC = () => {
   const vncEnabled = isDashboardVncEnabled(useFeatureFlagEnabled(FeatureFlags.DASHBOARD_VNC))
-  const [playgroundCategory, setPlaygroundCategory] = useState<PlaygroundCategories>(PlaygroundCategories.SANDBOX)
+  const [playgroundCategory, setPlaygroundCategory] = useState<PlaygroundCategories>(PlaygroundCategories.BOX)
   const availableCategories = useMemo(
     () => playgroundCategoriesData.filter((category) => vncEnabled || category.value !== PlaygroundCategories.VNC),
     [vncEnabled],
@@ -85,7 +85,7 @@ const Playground: React.FC = () => {
 
   useEffect(() => {
     if (!vncEnabled && playgroundCategory === PlaygroundCategories.VNC) {
-      setPlaygroundCategory(PlaygroundCategories.SANDBOX)
+      setPlaygroundCategory(PlaygroundCategories.BOX)
       setDrawerOpen(null)
     }
   }, [playgroundCategory, vncEnabled])
@@ -97,7 +97,7 @@ const Playground: React.FC = () => {
   }, [availableCategories, playgroundCategory])
 
   const sidePanel = useMemo(() => {
-    if (playgroundCategory === PlaygroundCategories.SANDBOX) return <BoxParameters />
+    if (playgroundCategory === PlaygroundCategories.BOX) return <BoxParameters />
     if (playgroundCategory === PlaygroundCategories.TERMINAL) return <TerminalDescription />
     if (playgroundCategory === PlaygroundCategories.VNC) return <VNCInteractionOptions />
     return null
@@ -159,7 +159,7 @@ const Playground: React.FC = () => {
                     </DrawerContent>
                   </Drawer>
                   <PlaygroundLayoutContent className="[&>*]:w-full [&>*]:max-w-[min(90%,1024px)]">
-                    {playgroundCategory === PlaygroundCategories.SANDBOX && <BoxCodeSnippetsResponse />}
+                    {playgroundCategory === PlaygroundCategories.BOX && <BoxCodeSnippetsResponse />}
                     {playgroundCategory === PlaygroundCategories.TERMINAL && <WebTerminal />}
                     {playgroundCategory === PlaygroundCategories.VNC && <VNCDesktopWindowResponse />}
                   </PlaygroundLayoutContent>

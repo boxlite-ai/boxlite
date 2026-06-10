@@ -53,7 +53,7 @@ const BoxDetailsSheet: React.FC<BoxDetailsSheetProps> = ({
 }) => {
   const [terminalUrl, setTerminalUrl] = useState<string | null>(null)
   const experimentsEnabled = useFeatureFlagEnabled(FeatureFlags.ORGANIZATION_EXPERIMENTS)
-  const spendingEnabled = useFeatureFlagEnabled(FeatureFlags.SANDBOX_SPENDING)
+  const spendingEnabled = useFeatureFlagEnabled(FeatureFlags.BOX_SPENDING)
   const config = useConfig()
   const spendingTabAvailable = spendingEnabled && !!config.analyticsApiUrl
 

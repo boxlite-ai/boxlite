@@ -15,7 +15,7 @@ import (
 func TestReserveToolboxHostPortPersistsRecord(t *testing.T) {
 	client := &Client{homeDir: t.TempDir(), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 
-	first, err := client.reserveToolboxHostPort(t.Context(), "sandbox-1")
+	first, err := client.reserveToolboxHostPort(t.Context(), "box-1")
 	if err != nil {
 		t.Fatalf("reserveToolboxHostPort first: %v", err)
 	}
@@ -23,7 +23,7 @@ func TestReserveToolboxHostPortPersistsRecord(t *testing.T) {
 		t.Fatalf("reserved invalid port %d", first)
 	}
 
-	second, err := client.reserveToolboxHostPort(t.Context(), "sandbox-1")
+	second, err := client.reserveToolboxHostPort(t.Context(), "box-1")
 	if err != nil {
 		t.Fatalf("reserveToolboxHostPort second: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestReserveToolboxHostPortPersistsRecord(t *testing.T) {
 		t.Fatalf("expected persisted port %d, got %d", first, second)
 	}
 
-	readBack, err := client.ToolboxHostPort("sandbox-1")
+	readBack, err := client.ToolboxHostPort("box-1")
 	if err != nil {
 		t.Fatalf("ToolboxHostPort: %v", err)
 	}
@@ -42,15 +42,15 @@ func TestReserveToolboxHostPortPersistsRecord(t *testing.T) {
 
 func TestRemoveToolboxPortRecord(t *testing.T) {
 	client := &Client{homeDir: t.TempDir(), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	if _, err := client.reserveToolboxHostPort(t.Context(), "sandbox-1"); err != nil {
+	if _, err := client.reserveToolboxHostPort(t.Context(), "box-1"); err != nil {
 		t.Fatalf("reserveToolboxHostPort: %v", err)
 	}
 
-	if err := client.removeToolboxPortRecord(t.Context(), "sandbox-1"); err != nil {
+	if err := client.removeToolboxPortRecord(t.Context(), "box-1"); err != nil {
 		t.Fatalf("removeToolboxPortRecord: %v", err)
 	}
 
-	if _, err := client.ToolboxHostPort("sandbox-1"); err == nil {
+	if _, err := client.ToolboxHostPort("box-1"); err == nil {
 		t.Fatal("expected missing toolbox port record after removal")
 	}
 }
@@ -78,14 +78,14 @@ func TestWaitForToolboxReadyReturnsAfterVersionEndpointResponds(t *testing.T) {
 		toolboxReadyTimeout: time.Second,
 	}
 	if err := client.writeToolboxPortRecord(toolboxPortRecord{
-		SandboxID: "sandbox-1",
+		BoxID: "box-1",
 		GuestPort: ToolboxGuestPort,
 		HostPort:  port,
 	}); err != nil {
 		t.Fatalf("writeToolboxPortRecord: %v", err)
 	}
 
-	if err := client.waitForToolboxReady(t.Context(), "sandbox-1"); err != nil {
+	if err := client.waitForToolboxReady(t.Context(), "box-1"); err != nil {
 		t.Fatalf("waitForToolboxReady: %v", err)
 	}
 }
@@ -101,14 +101,14 @@ func TestWaitForToolboxReadyTimesOutWhenEndpointDoesNotRespond(t *testing.T) {
 		toolboxReadyTimeout: 20 * time.Millisecond,
 	}
 	if err := client.writeToolboxPortRecord(toolboxPortRecord{
-		SandboxID: "sandbox-1",
+		BoxID: "box-1",
 		GuestPort: ToolboxGuestPort,
 		HostPort:  port,
 	}); err != nil {
 		t.Fatalf("writeToolboxPortRecord: %v", err)
 	}
 
-	if err := client.waitForToolboxReady(t.Context(), "sandbox-1"); err == nil {
+	if err := client.waitForToolboxReady(t.Context(), "box-1"); err == nil {
 		t.Fatal("expected waitForToolboxReady to time out")
 	}
 }
