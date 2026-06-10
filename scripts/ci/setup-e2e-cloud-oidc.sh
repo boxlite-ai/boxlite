@@ -161,7 +161,10 @@ PERMISSIONS_POLICY=$(cat <<EOF
             "Sid": "EcsExecApiTask",
             "Effect": "Allow",
             "Action": "ecs:ExecuteCommand",
-            "Resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task/${STACK_PREFIX}-*/*"
+            "Resource": [
+                "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task/${STACK_PREFIX}-*/*",
+                "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${STACK_PREFIX}-*"
+            ]
         },
         {
             "Sid": "EcsExecChannel",
