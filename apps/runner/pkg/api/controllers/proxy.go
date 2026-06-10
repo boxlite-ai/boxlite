@@ -8,6 +8,10 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,8 +41,9 @@ const (
 )
 
 // ProxyRequest handles toolbox/terminal requests.
-// For WebSocket: bridges to an interactive TTY session via BoxLite exec.
-// For HTTP GET: serves the xterm.js terminal page (loaded in an iframe by the dashboard).
+// For terminal preview requests: serves the xterm.js page and bridges WS to BoxLite exec.
+// For all other toolbox requests: forwards to the box daemon toolbox through the
+// per-box host port created by the BoxLite runner.
 func ProxyRequest(logger *slog.Logger) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		r, err := runner.GetInstance(nil)
@@ -47,15 +52,84 @@ func ProxyRequest(logger *slog.Logger) gin.HandlerFunc {
 			return
 		}
 
-		boxId := ctx.Param("boxId")
+		boxId := ctx.Param("sandboxId")
+		path := normalizeToolboxPath(ctx.Param("path"))
 
-		if ctx.Request.Header.Get("Upgrade") == "websocket" {
-			handleWebSocketTerminal(ctx, r, boxId, logger)
+		if strings.EqualFold(ctx.Request.Header.Get("Upgrade"), "websocket") {
+			if isTerminalToolboxPath(path) {
+				handleWebSocketTerminal(ctx, r, boxId, logger)
+				return
+			}
+
+			ctx.JSON(http.StatusNotImplemented, gin.H{"error": "websocket toolbox proxy is only available for terminal sessions"})
 			return
 		}
 
-		ctx.Data(http.StatusOK, "text/html; charset=utf-8", []byte(terminalHTML))
+		if isTerminalToolboxPath(path) {
+			ctx.Data(http.StatusOK, "text/html; charset=utf-8", []byte(terminalHTML))
+			return
+		}
+
+		proxyToBoxToolbox(ctx, r.Boxlite, boxId, path, logger)
 	}
+}
+
+type toolboxHostPortResolver interface {
+	ToolboxHostPort(boxID string) (int, error)
+}
+
+func normalizeToolboxPath(path string) string {
+	if path == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(path, "/") {
+		return "/" + path
+	}
+	return path
+}
+
+func isTerminalToolboxPath(path string) bool {
+	path = normalizeToolboxPath(path)
+	return path == "/" || path == "/proxy/22222" || strings.HasPrefix(path, "/proxy/22222/")
+}
+
+func proxyToBoxToolbox(
+	ctx *gin.Context,
+	portResolver toolboxHostPortResolver,
+	boxId string,
+	path string,
+	logger *slog.Logger,
+) {
+	hostPort, err := portResolver.ToolboxHostPort(boxId)
+	if err != nil {
+		logger.WarnContext(ctx.Request.Context(), "sandbox toolbox host port not found", "sandbox", boxId, "error", err)
+		ctx.JSON(http.StatusBadGateway, gin.H{
+			"error": "sandbox toolbox port is not available; recreate the box after the runner update",
+		})
+		return
+	}
+
+	target, err := url.Parse("http://127.0.0.1")
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	target.Host = "127.0.0.1:" + strconv.Itoa(hostPort)
+
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalDirector(req)
+		req.URL.Path = path
+		req.Host = target.Host
+		req.Header.Set("X-Forwarded-Host", ctx.Request.Host)
+	}
+	proxy.ErrorHandler = func(res http.ResponseWriter, req *http.Request, proxyErr error) {
+		logger.WarnContext(req.Context(), "sandbox toolbox proxy failed", "sandbox", boxId, "path", path, "error", proxyErr)
+		http.Error(res, "sandbox toolbox proxy failed", http.StatusBadGateway)
+	}
+
+	proxy.ServeHTTP(ctx.Writer, ctx.Request)
 }
 
 const terminalHTML = `<!DOCTYPE html>
@@ -115,7 +189,7 @@ func handleWebSocketTerminal(ctx *gin.Context, r *runner.Runner, boxId string, l
 	shellCmd, shellArgs := shellutil.DefaultInteractiveShell()
 	execution, err := r.Boxlite.StartExecution(ctx.Request.Context(), boxId, shellCmd, shellArgs, wsWriter, wsWriter, true)
 	if err != nil {
-		logger.Warn("failed to start terminal execution", "box", boxId, "error", err)
+		logger.Warn("failed to start terminal execution", "sandbox", boxId, "error", err)
 		writeMu.Lock()
 		_ = ws.WriteControl(
 			websocket.CloseMessage,

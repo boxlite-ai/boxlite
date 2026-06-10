@@ -5,8 +5,8 @@
  */
 
 import { pluralize } from '@/lib/utils'
-import { BulkActionCounts } from '@/lib/utils/box'
-import { ArchiveIcon, CheckSquare2Icon, MinusSquareIcon, PlayIcon, SquareIcon, TrashIcon } from 'lucide-react'
+import { BulkActionCounts } from '@/lib/utils/sandbox'
+import { CheckSquare2Icon, MinusSquareIcon, PlayIcon, SquareIcon, TrashIcon } from 'lucide-react'
 import { useMemo } from 'react'
 import { CommandConfig, useRegisterCommands } from '../CommandPalette'
 
@@ -21,7 +21,6 @@ interface UseBoxCommandsProps {
   onDelete: () => void
   onStart: () => void
   onStop: () => void
-  onArchive: () => void
 }
 
 export function useBoxCommands({
@@ -35,7 +34,6 @@ export function useBoxCommands({
   onDelete,
   onStart,
   onStop,
-  onArchive,
 }: UseBoxCommandsProps) {
   const rootCommands: CommandConfig[] = useMemo(() => {
     const commands: CommandConfig[] = []
@@ -78,15 +76,6 @@ export function useBoxCommands({
       })
     }
 
-    if (writePermitted && bulkActionCounts.archivable > 0) {
-      commands.push({
-        id: 'archive-boxes',
-        label: `Archive ${pluralize(bulkActionCounts.archivable, 'Box', 'Boxes')}`,
-        icon: <ArchiveIcon className="w-4 h-4" />,
-        onSelect: onArchive,
-      })
-    }
-
     if (deletePermitted && bulkActionCounts.deletable > 0) {
       commands.push({
         id: 'delete-boxes',
@@ -107,7 +96,6 @@ export function useBoxCommands({
     onDelete,
     onStart,
     onStop,
-    onArchive,
   ])
 
   useRegisterCommands(rootCommands, { groupId: 'box-actions', groupLabel: 'Box actions', groupOrder: 0 })

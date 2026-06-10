@@ -12,6 +12,7 @@ import {
   OnModuleInit,
   OnApplicationShutdown,
   ConflictException,
+  BadRequestException,
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { EntityManager, In, Not, Repository } from 'typeorm'
@@ -24,7 +25,6 @@ import { OnAsyncEvent } from '../../common/decorators/on-async-event.decorator'
 import { UserEvents } from '../../user/constants/user-events.constant'
 import { UserCreatedEvent } from '../../user/events/user-created.event'
 import { UserDeletedEvent } from '../../user/events/user-deleted.event'
-import { Snapshot } from '../../box/entities/snapshot.entity'
 import { BoxState } from '../../box/enums/box-state.enum'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { OrganizationEvents } from '../constants/organization-events.constant'
@@ -35,8 +35,6 @@ import { RedisLockProvider } from '../../box/common/redis-lock.provider'
 import { OrganizationSuspendedBoxStoppedEvent } from '../events/organization-suspended-box-stopped.event'
 import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 import { SystemRole } from '../../user/enums/system-role.enum'
-import { SnapshotState } from '../../box/enums/snapshot-state.enum'
-import { OrganizationSuspendedSnapshotDeactivatedEvent } from '../events/organization-suspended-snapshot-deactivated.event'
 import { TrackJobExecution } from '../../common/decorators/track-job-execution.decorator'
 import { TrackableJobExecutions } from '../../common/interfaces/trackable-job-executions'
 import { setTimeout } from 'timers/promises'
@@ -57,6 +55,8 @@ import { BoxRepository } from '../../box/repositories/box.repository'
 
 @Injectable()
 export class OrganizationService implements OnModuleInit, TrackableJobExecutions, OnApplicationShutdown {
+  private static readonly DEFAULT_ORGANIZATION_NAME = 'Default Organization'
+
   activeJobs = new Set<string>()
   private readonly logger = new Logger(OrganizationService.name)
   private defaultOrganizationQuota: CreateOrganizationQuotaDto
@@ -66,8 +66,6 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     @InjectRepository(Organization)
     private readonly organizationRepository: Repository<Organization>,
     private readonly boxRepository: BoxRepository,
-    @InjectRepository(Snapshot)
-    private readonly snapshotRepository: Repository<Snapshot>,
     private readonly eventEmitter: EventEmitter2,
     private readonly configService: TypedConfigService,
     private readonly redisLockProvider: RedisLockProvider,
@@ -97,7 +95,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
   async create(
     createOrganizationDto: CreateOrganizationInternalDto,
     createdBy: string,
-    personal = false,
+    defaultForCreator = false,
     creatorEmailVerified = false,
   ): Promise<Organization> {
     return this.createWithEntityManager(
@@ -105,7 +103,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       createOrganizationDto,
       createdBy,
       creatorEmailVerified,
-      personal,
+      defaultForCreator,
     )
   }
 
@@ -122,6 +120,16 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
   async findOne(organizationId: string): Promise<Organization | null> {
     return this.organizationRepository.findOne({
       where: { id: organizationId },
+    })
+  }
+
+  async findByIds(organizationIds: string[]): Promise<Organization[]> {
+    if (organizationIds.length === 0) {
+      return []
+    }
+
+    return this.organizationRepository.find({
+      where: { id: In(organizationIds) },
     })
   }
 
@@ -153,8 +161,27 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     return this.organizationRepository.findOne({ where: { id: box.organizationId } })
   }
 
-  async findPersonal(userId: string): Promise<Organization> {
-    return this.findPersonalWithEntityManager(this.organizationRepository.manager, userId)
+  async findDefaultForUser(userId: string): Promise<Organization> {
+    return this.findDefaultForUserWithEntityManager(this.organizationRepository.manager, userId)
+  }
+
+  async findByUserWithDefaultFlag(
+    userId: string,
+  ): Promise<{ organization: Organization; isDefaultForAuthenticatedUser: boolean }[]> {
+    const memberships = await this.organizationRepository.manager.find(OrganizationUser, {
+      where: { userId },
+      relations: {
+        organization: true,
+      },
+      order: {
+        createdAt: 'ASC',
+      },
+    })
+
+    return memberships.map((membership) => ({
+      organization: membership.organization,
+      isDefaultForAuthenticatedUser: membership.isDefaultForUser,
+    }))
   }
 
   async delete(organizationId: string): Promise<void> {
@@ -167,6 +194,22 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     return this.removeWithEntityManager(this.organizationRepository.manager, organization)
   }
 
+  async updateName(organizationId: string, name: string): Promise<Organization> {
+    const organization = await this.organizationRepository.findOne({ where: { id: organizationId } })
+    if (!organization) {
+      throw new NotFoundException(`Organization with ID ${organizationId} not found`)
+    }
+
+    const trimmedName = name.trim()
+    if (!trimmedName) {
+      throw new BadRequestException('Organization name is required')
+    }
+
+    organization.name = trimmedName
+
+    return this.organizationRepository.save(organization)
+  }
+
   async updateQuota(organizationId: string, updateDto: UpdateOrganizationQuotaDto): Promise<void> {
     const organization = await this.organizationRepository.findOne({ where: { id: organizationId } })
     if (!organization) {
@@ -176,9 +219,9 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     organization.maxCpuPerBox = updateDto.maxCpuPerBox ?? organization.maxCpuPerBox
     organization.maxMemoryPerBox = updateDto.maxMemoryPerBox ?? organization.maxMemoryPerBox
     organization.maxDiskPerBox = updateDto.maxDiskPerBox ?? organization.maxDiskPerBox
-    organization.maxSnapshotSize = updateDto.maxSnapshotSize ?? organization.maxSnapshotSize
+    organization.maxTemplateSize = updateDto.maxTemplateSize ?? organization.maxTemplateSize
     organization.volumeQuota = updateDto.volumeQuota ?? organization.volumeQuota
-    organization.snapshotQuota = updateDto.snapshotQuota ?? organization.snapshotQuota
+    organization.templateQuota = updateDto.templateQuota ?? organization.templateQuota
     organization.authenticatedRateLimit = updateDto.authenticatedRateLimit ?? organization.authenticatedRateLimit
     organization.boxCreateRateLimit = updateDto.boxCreateRateLimit ?? organization.boxCreateRateLimit
     organization.boxLifecycleRateLimit = updateDto.boxLifecycleRateLimit ?? organization.boxLifecycleRateLimit
@@ -188,8 +231,8 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       updateDto.boxCreateRateLimitTtlSeconds ?? organization.boxCreateRateLimitTtlSeconds
     organization.boxLifecycleRateLimitTtlSeconds =
       updateDto.boxLifecycleRateLimitTtlSeconds ?? organization.boxLifecycleRateLimitTtlSeconds
-    organization.snapshotDeactivationTimeoutMinutes =
-      updateDto.snapshotDeactivationTimeoutMinutes ?? organization.snapshotDeactivationTimeoutMinutes
+    organization.templateDeactivationTimeoutMinutes =
+      updateDto.templateDeactivationTimeoutMinutes ?? organization.templateDeactivationTimeoutMinutes
 
     await this.organizationRepository.save(organization)
   }
@@ -456,16 +499,19 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     createOrganizationDto: CreateOrganizationInternalDto,
     createdBy: string,
     creatorEmailVerified: boolean,
-    personal = false,
+    defaultForCreator = false,
     quota: CreateOrganizationQuotaDto = this.defaultOrganizationQuota,
     boxLimitedNetworkEgress: boolean = this.defaultBoxLimitedNetworkEgress,
   ): Promise<Organization> {
-    if (personal) {
-      const count = await entityManager.count(Organization, {
-        where: { createdBy, personal: true },
+    if (defaultForCreator) {
+      const count = await entityManager.count(OrganizationUser, {
+        where: {
+          userId: createdBy,
+          isDefaultForUser: true,
+        },
       })
       if (count > 0) {
-        throw new ForbiddenException('Personal organization already exists')
+        throw new ForbiddenException('Default organization already exists for user')
       }
     }
 
@@ -481,20 +527,19 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
 
     organization.name = createOrganizationDto.name
     organization.createdBy = createdBy
-    organization.personal = personal
 
     organization.maxCpuPerBox = quota.maxCpuPerBox
     organization.maxMemoryPerBox = quota.maxMemoryPerBox
     organization.maxDiskPerBox = quota.maxDiskPerBox
-    organization.snapshotQuota = quota.snapshotQuota
-    organization.maxSnapshotSize = quota.maxSnapshotSize
+    organization.templateQuota = quota.templateQuota
+    organization.maxTemplateSize = quota.maxTemplateSize
     organization.volumeQuota = quota.volumeQuota
 
     if (!creatorEmailVerified && !this.configService.get('skipUserEmailVerification')) {
       organization.suspended = true
       organization.suspendedAt = new Date()
       organization.suspensionReason = 'Please verify your email address'
-    } else if (this.configService.get('billingApiUrl') && !personal) {
+    } else if (this.configService.get('billingApiUrl') && !defaultForCreator) {
       organization.suspended = true
       organization.suspendedAt = new Date()
       organization.suspensionReason = 'Payment method required'
@@ -505,6 +550,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     const owner = new OrganizationUser()
     owner.userId = createdBy
     owner.role = OrganizationMemberRole.OWNER
+    owner.isDefaultForUser = defaultForCreator
 
     organization.users = [owner]
 
@@ -537,15 +583,22 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     force = false,
   ): Promise<void> {
     if (!force) {
-      if (organization.personal) {
-        throw new ForbiddenException('Cannot delete personal organization')
+      const defaultMembershipsCount = await entityManager.count(OrganizationUser, {
+        where: {
+          organizationId: organization.id,
+          isDefaultForUser: true,
+        },
+      })
+
+      if (defaultMembershipsCount > 0) {
+        throw new ForbiddenException("Cannot delete an organization while it is a user's default organization")
       }
     }
     await entityManager.remove(organization)
   }
 
-  private async unsuspendPersonalWithEntityManager(entityManager: EntityManager, userId: string): Promise<void> {
-    const organization = await this.findPersonalWithEntityManager(entityManager, userId)
+  private async unsuspendDefaultForUserWithEntityManager(entityManager: EntityManager, userId: string): Promise<void> {
+    const organization = await this.findDefaultForUserWithEntityManager(entityManager, userId)
 
     organization.suspended = false
     organization.suspendedAt = null
@@ -554,16 +607,25 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     await entityManager.save(organization)
   }
 
-  private async findPersonalWithEntityManager(entityManager: EntityManager, userId: string): Promise<Organization> {
-    const organization = await entityManager.findOne(Organization, {
-      where: { createdBy: userId, personal: true },
+  private async findDefaultForUserWithEntityManager(
+    entityManager: EntityManager,
+    userId: string,
+  ): Promise<Organization> {
+    const membership = await entityManager.findOne(OrganizationUser, {
+      where: {
+        userId,
+        isDefaultForUser: true,
+      },
+      relations: {
+        organization: true,
+      },
     })
 
-    if (!organization) {
-      throw new NotFoundException(`Personal organization for user ${userId} not found`)
+    if (!membership?.organization) {
+      throw new NotFoundException(`Default organization for user ${userId} not found`)
     }
 
-    return organization
+    return membership.organization
   }
 
   /**
@@ -597,10 +659,10 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       .andWhere(`"suspendedAt" > NOW() - INTERVAL '7 day'`)
       .andWhereExists(
         this.boxRepository
-          .createQueryBuilder('box')
+          .createQueryBuilder('sandbox')
           .select('1')
           .where(
-            `"box"."organizationId" = "organization"."id" AND "box"."desiredState" = '${BoxDesiredState.STARTED}' and "box"."state" NOT IN ('${BoxState.ERROR}', '${BoxState.BUILD_FAILED}')`,
+            `"sandbox"."organizationId" = "organization"."id" AND "sandbox"."desiredState" = '${BoxDesiredState.STARTED}' and "sandbox"."state" NOT IN ('${BoxState.ERROR}')`,
           ),
       )
       .take(100)
@@ -618,13 +680,13 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       where: {
         organizationId: In(suspendedOrganizationIds),
         desiredState: BoxDesiredState.STARTED,
-        state: Not(In([BoxState.ERROR, BoxState.BUILD_FAILED])),
+        state: Not(In([BoxState.ERROR])),
       },
     })
 
     boxes.map((box) =>
       this.eventEmitter.emitAsync(
-        OrganizationEvents.SUSPENDED_BOX_STOPPED,
+        OrganizationEvents.SUSPENDED_SANDBOX_STOPPED,
         new OrganizationSuspendedBoxStoppedEvent(box.id),
       ),
     )
@@ -632,62 +694,8 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     await this.redisLockProvider.unlock(lockKey)
   }
 
-  @Cron(CronExpression.EVERY_MINUTE, { name: 'deactivate-suspended-organization-snapshots' })
-  @TrackJobExecution()
-  @LogExecution('deactivate-suspended-organization-snapshots')
-  @WithInstrumentation()
-  async deactivateSuspendedOrganizationSnapshots(): Promise<void> {
-    //  lock the sync to only run one instance at a time
-    const lockKey = 'deactivate-suspended-organization-snapshots'
-    if (!(await this.redisLockProvider.lock(lockKey, 60))) {
-      return
-    }
-
-    const queryResult = await this.organizationRepository
-      .createQueryBuilder('organization')
-      .select('id')
-      .where('suspended = true')
-      .andWhere(`"suspendedAt" < NOW() - INTERVAL '1 hour' * "suspensionCleanupGracePeriodHours"`)
-      .andWhere(`"suspendedAt" > NOW() - INTERVAL '7 day'`)
-      .andWhereExists(
-        this.snapshotRepository
-          .createQueryBuilder('snapshot')
-          .select('1')
-          .where('snapshot.organizationId = organization.id')
-          .andWhere(`snapshot.state = '${SnapshotState.ACTIVE}'`)
-          .andWhere(`snapshot.general = false`),
-      )
-      .take(100)
-      .getRawMany()
-
-    const suspendedOrganizationIds = queryResult.map((result) => result.id)
-
-    // Skip if no suspended organizations found to avoid empty IN clause
-    if (suspendedOrganizationIds.length === 0) {
-      await this.redisLockProvider.unlock(lockKey)
-      return
-    }
-
-    const snapshotQueryResult = await this.snapshotRepository
-      .createQueryBuilder('snapshot')
-      .select('id')
-      .where('snapshot.organizationId IN (:...suspendedOrgIds)', { suspendedOrgIds: suspendedOrganizationIds })
-      .andWhere(`snapshot.state = '${SnapshotState.ACTIVE}'`)
-      .andWhere(`snapshot.general = false`)
-      .take(100)
-      .getRawMany()
-
-    const snapshotIds = snapshotQueryResult.map((result) => result.id)
-
-    snapshotIds.map((id) =>
-      this.eventEmitter.emitAsync(
-        OrganizationEvents.SUSPENDED_SNAPSHOT_DEACTIVATED,
-        new OrganizationSuspendedSnapshotDeactivatedEvent(id),
-      ),
-    )
-
-    await this.redisLockProvider.unlock(lockKey)
-  }
+  // TODO(image-rewrite): deactivateSuspendedOrganizationTemplates cron removed with box_template;
+  // rebuild suspended-org template cleanup once the image/template model lands.
 
   @OnAsyncEvent({
     event: UserEvents.CREATED,
@@ -697,13 +705,13 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     return this.createWithEntityManager(
       payload.entityManager,
       {
-        name: 'Personal',
-        defaultRegionId: payload.personalOrganizationDefaultRegionId,
+        name: OrganizationService.DEFAULT_ORGANIZATION_NAME,
+        defaultRegionId: payload.defaultOrganizationDefaultRegionId,
       },
       payload.user.id,
       payload.user.role === SystemRole.ADMIN ? true : payload.user.emailVerified,
       true,
-      payload.personalOrganizationQuota,
+      payload.defaultOrganizationQuota,
       payload.user.role === SystemRole.ADMIN ? false : undefined,
     )
   }
@@ -713,7 +721,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
   })
   @TrackJobExecution()
   async handleUserEmailVerifiedEvent(payload: UserEmailVerifiedEvent): Promise<void> {
-    await this.unsuspendPersonalWithEntityManager(payload.entityManager, payload.userId)
+    await this.unsuspendDefaultForUserWithEntityManager(payload.entityManager, payload.userId)
   }
 
   @OnAsyncEvent({
@@ -721,9 +729,57 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
   })
   @TrackJobExecution()
   async handleUserDeletedEvent(payload: UserDeletedEvent): Promise<void> {
-    const organization = await this.findPersonalWithEntityManager(payload.entityManager, payload.userId)
+    const organization = await this.findDefaultForUserWithEntityManager(payload.entityManager, payload.userId)
+    const membersCount = await payload.entityManager.count(OrganizationUser, {
+      where: {
+        organizationId: organization.id,
+      },
+    })
 
-    await this.removeWithEntityManager(payload.entityManager, organization, true)
+    if (membersCount <= 1) {
+      await this.removeWithEntityManager(payload.entityManager, organization, true)
+      return
+    }
+
+    const deletedUserMembership = await payload.entityManager.findOne(OrganizationUser, {
+      where: {
+        organizationId: organization.id,
+        userId: payload.userId,
+      },
+    })
+
+    if (!deletedUserMembership) {
+      return
+    }
+
+    if (deletedUserMembership.role === OrganizationMemberRole.OWNER) {
+      const otherOwnersCount = await payload.entityManager.count(OrganizationUser, {
+        where: {
+          organizationId: organization.id,
+          role: OrganizationMemberRole.OWNER,
+          userId: Not(payload.userId),
+        },
+      })
+
+      if (otherOwnersCount === 0) {
+        const fallbackOwner = await payload.entityManager.findOne(OrganizationUser, {
+          where: {
+            organizationId: organization.id,
+            userId: Not(payload.userId),
+          },
+          order: {
+            createdAt: 'ASC',
+          },
+        })
+
+        if (fallbackOwner) {
+          fallbackOwner.role = OrganizationMemberRole.OWNER
+          await payload.entityManager.save(fallbackOwner)
+        }
+      }
+    }
+
+    await payload.entityManager.remove(deletedUserMembership)
   }
 
   assertOrganizationIsNotSuspended(organization: Organization): void {

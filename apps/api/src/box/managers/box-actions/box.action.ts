@@ -10,7 +10,6 @@ import { RunnerAdapterFactory } from '../../runner-adapter/runnerAdapter'
 import { Box } from '../../entities/box.entity'
 import { BoxRepository } from '../../repositories/box.repository'
 import { BoxState } from '../../enums/box-state.enum'
-import { BackupState } from '../../enums/backup-state.enum'
 import { getStateChangeLockKey } from '../../utils/lock-key.util'
 import { LockCode, RedisLockProvider } from '../../common/redis-lock.provider'
 
@@ -38,7 +37,6 @@ export abstract class BoxAction {
     runnerId?: string | null | undefined,
     errorReason?: string,
     daemonVersion?: string,
-    backupState?: BackupState,
     recoverable?: boolean,
   ) {
     //  check if the lock code is still valid
@@ -59,8 +57,8 @@ export abstract class BoxAction {
       return
     }
 
-    if (state !== BoxState.ARCHIVED && !box.pending) {
-      const err = new Error(`box ${box.id} is not in a pending state`)
+    if (!box.pending) {
+      const err = new Error(`sandbox ${box.id} is not in a pending state`)
       this.logger.error(err)
       return
     }
@@ -87,14 +85,6 @@ export abstract class BoxAction {
 
     if (daemonVersion !== undefined) {
       updateData.daemonVersion = daemonVersion
-    }
-
-    if (state == BoxState.DESTROYED) {
-      updateData.backupState = BackupState.NONE
-    }
-
-    if (backupState !== undefined) {
-      Object.assign(updateData, Box.getBackupStateUpdate(box, backupState))
     }
 
     if (recoverable !== undefined) {

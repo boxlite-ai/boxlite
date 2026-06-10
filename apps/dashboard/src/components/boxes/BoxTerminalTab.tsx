@@ -10,7 +10,8 @@ import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
 import { RoutePath } from '@/enums/RoutePath'
 import { useTerminalSessionQuery } from '@/hooks/queries/useTerminalSessionQuery'
 import { useBoxSessionContext } from '@/hooks/useBoxSessionContext'
-import { isStoppable } from '@/lib/utils/box'
+import { getBoxRouteId } from '@/lib/box-identity'
+import { isStoppable } from '@/lib/utils/sandbox'
 import { Box } from '@boxlite-ai/api-client'
 import { Spinner } from '@/components/ui/spinner'
 import { Play, RefreshCw, TerminalSquare } from 'lucide-react'
@@ -115,7 +116,7 @@ export function BoxTerminalTab({ box }: { box: Box }) {
   }
 
   // Active session
-  const fullscreenHref = RoutePath.BOX_TERMINAL.replace(':boxId', box.id)
+  const fullscreenHref = RoutePath.BOX_TERMINAL.replace(':boxId', getBoxRouteId(box))
   return (
     <div className="flex-1 flex flex-col p-2 sm:p-4">
       <div className="relative flex-1 min-h-0 rounded-md border border-border bg-black overflow-hidden p-1">

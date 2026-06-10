@@ -11,15 +11,12 @@ import {
   RunnerAdapter,
   RunnerInfo,
   RunnerBoxInfo,
-  RunnerSnapshotInfo,
   StartBoxResponse,
-  SnapshotDigestResponse,
+  ArtifactDigestResponse,
 } from './runnerAdapter'
 import { Runner } from '../entities/runner.entity'
 import { Box } from '../entities/box.entity'
 import { Job } from '../entities/job.entity'
-import { BuildInfo } from '../entities/build-info.entity'
-import { DockerRegistry } from '../../docker-registry/entities/docker-registry.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { JobType } from '../enums/job-type.enum'
 import { JobStatus } from '../enums/job-status.enum'
@@ -28,14 +25,10 @@ import { JobService } from '../services/job.service'
 import { BoxRepository } from '../repositories/box.repository'
 import {
   CreateBoxDTO,
-  CreateBackupDTO,
-  BuildSnapshotRequestDTO,
-  PullSnapshotRequestDTO,
   UpdateNetworkSettingsDTO,
-  InspectSnapshotInRegistryRequest,
+  InspectArtifactInRegistryRequest,
   RecoverBoxDTO,
 } from '@boxlite-ai/runner-api-client'
-import { SnapshotStateError } from '../errors/snapshot-state-error'
 
 /**
  * RunnerAdapterV2 implements RunnerAdapter for v2 runners.
@@ -79,7 +72,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     // Query for any incomplete jobs for this box to determine transitional state
     const incompleteJob = await this.jobRepository.findOne({
       where: {
-        resourceType: ResourceType.BOX,
+        resourceType: ResourceType.SANDBOX,
         resourceId: boxId,
         completedAt: IsNull(),
       },
@@ -98,7 +91,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       // Look for latest job for this box
       const latestJob = await this.jobRepository.findOne({
         where: {
-          resourceType: ResourceType.BOX,
+          resourceType: ResourceType.SANDBOX,
           resourceId: boxId,
         },
         order: { createdAt: 'DESC' },
@@ -111,8 +104,6 @@ export class RunnerAdapterV2 implements RunnerAdapter {
 
     return {
       state,
-      backupState: box.backupState,
-      backupErrorReason: box.backupErrorReason,
       daemonVersion,
     }
   }
@@ -120,13 +111,13 @@ export class RunnerAdapterV2 implements RunnerAdapter {
   private inferStateFromJob(job: Job, box: Box): BoxState {
     // Map job types to transitional states
     switch (job.type) {
-      case JobType.CREATE_BOX:
+      case JobType.CREATE_SANDBOX:
         return job.status === JobStatus.COMPLETED ? BoxState.STARTED : BoxState.CREATING
-      case JobType.START_BOX:
+      case JobType.START_SANDBOX:
         return job.status === JobStatus.COMPLETED ? BoxState.STARTED : BoxState.STARTING
-      case JobType.STOP_BOX:
+      case JobType.STOP_SANDBOX:
         return job.status === JobStatus.COMPLETED ? BoxState.STOPPED : BoxState.STOPPING
-      case JobType.DESTROY_BOX:
+      case JobType.DESTROY_SANDBOX:
         return job.status === JobStatus.COMPLETED ? BoxState.DESTROYED : BoxState.DESTROYING
       default:
         // For other job types (backup, etc.), return current box state
@@ -136,8 +127,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
 
   async createBox(
     box: Box,
-    snapshotRef: string,
-    registry?: DockerRegistry,
+    artifactRef: string,
     entrypoint?: string[],
     metadata?: { [key: string]: string },
     otelEndpoint?: string,
@@ -145,22 +135,15 @@ export class RunnerAdapterV2 implements RunnerAdapter {
   ): Promise<StartBoxResponse | undefined> {
     const payload: CreateBoxDTO = {
       id: box.id,
+      boxId: box.boxId,
       userId: box.organizationId,
-      snapshot: snapshotRef,
+      artifactRef,
       osUser: box.osUser,
       cpuQuota: box.cpu,
       gpuQuota: box.gpu,
       memoryQuota: box.mem,
       storageQuota: box.disk,
       env: box.env,
-      registry: registry
-        ? {
-            project: registry.project,
-            url: registry.url.replace(/^(https?:\/\/)/, ''),
-            username: registry.username,
-            password: registry.password,
-          }
-        : undefined,
       entrypoint: entrypoint,
       volumes: box.volumes?.map((volume) => ({
         volumeId: volume.volumeId,
@@ -169,7 +152,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       })),
       networkBlockAll: box.networkBlockAll,
       networkAllowList: box.networkAllowList,
-      metadata: metadata,
+      metadata: { ...(metadata ?? {}), boxId: box.boxId },
       authToken: box.authToken,
       otelEndpoint: otelEndpoint,
       skipStart: skipStart,
@@ -177,9 +160,9 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       regionId: box.region,
     }
 
-    await this.jobService.createJob(null, JobType.CREATE_BOX, this.runner.id, ResourceType.BOX, box.id, payload)
+    await this.jobService.createJob(null, JobType.CREATE_SANDBOX, this.runner.id, ResourceType.SANDBOX, box.id, payload)
 
-    this.logger.debug(`Created CREATE_BOX job for box ${box.id} on runner ${this.runner.id}`)
+    this.logger.debug(`Created CREATE_SANDBOX job for box ${box.id} on runner ${this.runner.id}`)
 
     // Daemon version will be set in the job result metadata
     return undefined
@@ -190,35 +173,35 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     authToken: string,
     metadata?: { [key: string]: string },
   ): Promise<StartBoxResponse | undefined> {
-    await this.jobService.createJob(null, JobType.START_BOX, this.runner.id, ResourceType.BOX, boxId, {
+    await this.jobService.createJob(null, JobType.START_SANDBOX, this.runner.id, ResourceType.SANDBOX, boxId, {
       authToken,
       metadata,
     })
 
-    this.logger.debug(`Created START_BOX job for box ${boxId} on runner ${this.runner.id}`)
+    this.logger.debug(`Created START_SANDBOX job for box ${boxId} on runner ${this.runner.id}`)
 
     // Daemon version will be set in the job result metadata
     return undefined
   }
 
   async stopBox(boxId: string, force?: boolean): Promise<void> {
-    await this.jobService.createJob(null, JobType.STOP_BOX, this.runner.id, ResourceType.BOX, boxId, {
+    await this.jobService.createJob(null, JobType.STOP_SANDBOX, this.runner.id, ResourceType.SANDBOX, boxId, {
       force,
     })
 
-    this.logger.debug(`Created STOP_BOX job for box ${boxId} on runner ${this.runner.id}`)
+    this.logger.debug(`Created STOP_SANDBOX job for box ${boxId} on runner ${this.runner.id}`)
   }
 
   async destroyBox(boxId: string): Promise<void> {
-    await this.jobService.createJob(null, JobType.DESTROY_BOX, this.runner.id, ResourceType.BOX, boxId)
+    await this.jobService.createJob(null, JobType.DESTROY_SANDBOX, this.runner.id, ResourceType.SANDBOX, boxId)
 
-    this.logger.debug(`Created DESTROY_BOX job for box ${boxId} on runner ${this.runner.id}`)
+    this.logger.debug(`Created DESTROY_SANDBOX job for box ${boxId} on runner ${this.runner.id}`)
   }
 
   async recoverBox(box: Box): Promise<void> {
     const recoverBoxDTO: RecoverBoxDTO = {
       userId: box.organizationId,
-      snapshot: box.snapshot,
+      snapshot: box.template,
       osUser: box.osUser,
       cpuQuota: box.cpu,
       gpuQuota: box.gpu,
@@ -233,242 +216,89 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       networkBlockAll: box.networkBlockAll,
       networkAllowList: box.networkAllowList,
       errorReason: box.errorReason,
-      backupErrorReason: box.backupErrorReason,
     }
-    await this.jobService.createJob(null, JobType.RECOVER_BOX, this.runner.id, ResourceType.BOX, box.id, recoverBoxDTO)
-
-    this.logger.debug(`Created RECOVER_BOX job for box ${box.id} on runner ${this.runner.id}`)
-  }
-
-  async createBackup(box: Box, backupSnapshotName: string, registry?: DockerRegistry): Promise<void> {
-    const payload: CreateBackupDTO = {
-      snapshot: backupSnapshotName,
-      registry: undefined,
-    }
-
-    if (registry) {
-      payload.registry = {
-        project: registry.project,
-        url: registry.url.replace(/^(https?:\/\/)/, ''),
-        username: registry.username,
-        password: registry.password,
-      }
-    }
-
-    await this.jobService.createJob(null, JobType.CREATE_BACKUP, this.runner.id, ResourceType.BOX, box.id, payload)
-
-    this.logger.debug(`Created CREATE_BACKUP job for box ${box.id} on runner ${this.runner.id}`)
-  }
-
-  async buildSnapshot(
-    buildInfo: BuildInfo,
-    organizationId?: string,
-    sourceRegistries?: DockerRegistry[],
-    registry?: DockerRegistry,
-    pushToInternalRegistry?: boolean,
-  ): Promise<void> {
-    const payload: BuildSnapshotRequestDTO = {
-      snapshot: buildInfo.snapshotRef,
-      dockerfile: buildInfo.dockerfileContent,
-      organizationId: organizationId,
-      context: buildInfo.contextHashes,
-      pushToInternalRegistry: pushToInternalRegistry,
-    }
-
-    if (sourceRegistries) {
-      payload.sourceRegistries = sourceRegistries.map((sourceRegistry) => ({
-        project: sourceRegistry.project,
-        url: sourceRegistry.url.replace(/^(https?:\/\/)/, ''),
-        username: sourceRegistry.username,
-        password: sourceRegistry.password,
-      }))
-    }
-
-    if (registry) {
-      payload.registry = {
-        project: registry.project,
-        url: registry.url.replace(/^(https?:\/\/)/, ''),
-        username: registry.username,
-        password: registry.password,
-      }
-    }
-
     await this.jobService.createJob(
       null,
-      JobType.BUILD_SNAPSHOT,
+      JobType.RECOVER_SANDBOX,
       this.runner.id,
-      ResourceType.SNAPSHOT,
-      buildInfo.snapshotRef,
-      payload,
+      ResourceType.SANDBOX,
+      box.id,
+      recoverBoxDTO,
     )
 
-    this.logger.debug(`Created BUILD_SNAPSHOT job for ${buildInfo.snapshotRef} on runner ${this.runner.id}`)
+    this.logger.debug(`Created RECOVER_SANDBOX job for box ${box.id} on runner ${this.runner.id}`)
   }
 
-  async pullSnapshot(
-    snapshotName: string,
-    registry?: DockerRegistry,
-    destinationRegistry?: DockerRegistry,
-    destinationRef?: string,
-    newTag?: string,
-  ): Promise<void> {
-    const payload: PullSnapshotRequestDTO = {
-      snapshot: snapshotName,
-      newTag,
-    }
+  // TODO(image-rewrite): pullArtifact removed with runner_artifact_cache + box_template.
 
-    if (registry) {
-      payload.registry = {
-        project: registry.project,
-        url: registry.url.replace(/^(https?:\/\/)/, ''),
-        username: registry.username,
-        password: registry.password,
-      }
-    }
+  async removeArtifact(artifactRef: string): Promise<void> {
+    await this.jobService.createJob(null, JobType.REMOVE_ARTIFACT, this.runner.id, ResourceType.ARTIFACT, artifactRef)
 
-    if (destinationRegistry) {
-      payload.destinationRegistry = {
-        project: destinationRegistry.project,
-        url: destinationRegistry.url.replace(/^(https?:\/\/)/, ''),
-        username: destinationRegistry.username,
-        password: destinationRegistry.password,
-      }
-    }
-
-    if (destinationRef) {
-      payload.destinationRef = destinationRef
-    }
-
-    await this.jobService.createJob(
-      null,
-      JobType.PULL_SNAPSHOT,
-      this.runner.id,
-      ResourceType.SNAPSHOT,
-      destinationRef || snapshotName,
-      payload,
-    )
-
-    this.logger.debug(`Created PULL_SNAPSHOT job for ${snapshotName} on runner ${this.runner.id}`)
+    this.logger.debug(`Created REMOVE_ARTIFACT job for ${artifactRef} on runner ${this.runner.id}`)
   }
 
-  async removeSnapshot(snapshotName: string): Promise<void> {
-    await this.jobService.createJob(null, JobType.REMOVE_SNAPSHOT, this.runner.id, ResourceType.SNAPSHOT, snapshotName)
-
-    this.logger.debug(`Created REMOVE_SNAPSHOT job for ${snapshotName} on runner ${this.runner.id}`)
-  }
-
-  async snapshotExists(snapshotRef: string): Promise<boolean> {
-    // Find the latest job for this snapshot on this runner
-    // Do not include INSPECT_SNAPSHOT_IN_REGISTRY
+  async artifactExists(artifactRef: string): Promise<boolean> {
+    // Find the latest artifact job for this runner.
+    // Do not include INSPECT_ARTIFACT_IN_REGISTRY
     const latestJob = await this.jobRepository.findOne({
       where: [
         {
           runnerId: this.runner.id,
-          resourceType: ResourceType.SNAPSHOT,
-          resourceId: snapshotRef,
-          type: Not(JobType.INSPECT_SNAPSHOT_IN_REGISTRY),
+          resourceType: ResourceType.ARTIFACT,
+          resourceId: artifactRef,
+          type: Not(JobType.INSPECT_ARTIFACT_IN_REGISTRY),
         },
       ],
       order: { createdAt: 'DESC' },
     })
 
-    // If no job exists, snapshot doesn't exist
+    // If no job exists, the artifact doesn't exist.
     if (!latestJob) {
       return false
     }
 
-    // If the latest job is a REMOVE_SNAPSHOT, the snapshot no longer exists
-    if (latestJob.type === JobType.REMOVE_SNAPSHOT) {
+    // If the latest job is a REMOVE_ARTIFACT, the artifact no longer exists.
+    if (latestJob.type === JobType.REMOVE_ARTIFACT) {
       return false
     }
 
-    // If the latest job is PULL_SNAPSHOT or BUILD_SNAPSHOT, check if it completed successfully
-    if (latestJob.type === JobType.PULL_SNAPSHOT || latestJob.type === JobType.BUILD_SNAPSHOT) {
+    // If the latest job is PULL_ARTIFACT, check if it completed successfully
+    if (latestJob.type === JobType.PULL_ARTIFACT) {
       return latestJob.status === JobStatus.COMPLETED
     }
 
-    // For any other job type, snapshot doesn't exist
+    // For any other job type, the artifact doesn't exist.
     return false
   }
 
-  async getSnapshotInfo(snapshotRef: string): Promise<RunnerSnapshotInfo> {
-    const latestJob = await this.jobRepository.findOne({
-      where: [
-        {
-          runnerId: this.runner.id,
-          resourceType: ResourceType.SNAPSHOT,
-          resourceId: snapshotRef,
-          type: Not(JobType.INSPECT_SNAPSHOT_IN_REGISTRY),
-        },
-      ],
-      order: { createdAt: 'DESC' },
-    })
+  // TODO(image-rewrite): getArtifactInfo removed with runner_artifact_cache + box_template.
 
-    if (!latestJob) {
-      throw new Error(`Snapshot ${snapshotRef} not found on runner ${this.runner.id}`)
-    }
-
-    const metadata = latestJob.getResultMetadata()
-
-    switch (latestJob.status) {
-      case JobStatus.COMPLETED:
-        if (latestJob.type === JobType.PULL_SNAPSHOT || latestJob.type === JobType.BUILD_SNAPSHOT) {
-          return {
-            name: latestJob.resourceId,
-            sizeGB: metadata?.sizeGB,
-            entrypoint: metadata?.entrypoint,
-            cmd: metadata?.cmd,
-            hash: metadata?.hash,
-          }
-        }
-        throw new Error(
-          `Snapshot ${snapshotRef} is in an unknown state (${latestJob.status}) on runner ${this.runner.id}`,
-        )
-      case JobStatus.FAILED:
-        throw new SnapshotStateError(
-          latestJob.errorMessage || `Snapshot ${snapshotRef} failed on runner ${this.runner.id}`,
-        )
-      default:
-        throw new Error(
-          `Snapshot ${snapshotRef} is in an unknown state (${latestJob.status}) on runner ${this.runner.id}`,
-        )
-    }
-  }
-
-  async inspectSnapshotInRegistry(snapshotName: string, registry?: DockerRegistry): Promise<SnapshotDigestResponse> {
-    const payload: InspectSnapshotInRegistryRequest = {
-      snapshot: snapshotName,
-      registry: registry
-        ? {
-            project: registry.project,
-            url: registry.url.replace(/^(https?:\/\/)/, ''),
-            username: registry.username,
-            password: registry.password,
-          }
-        : undefined,
+  async inspectArtifactInRegistry(artifactRef: string): Promise<ArtifactDigestResponse> {
+    const payload: InspectArtifactInRegistryRequest = {
+      artifactRef,
     }
 
     const job = await this.jobService.createJob(
       null,
-      JobType.INSPECT_SNAPSHOT_IN_REGISTRY,
+      JobType.INSPECT_ARTIFACT_IN_REGISTRY,
       this.runner.id,
-      ResourceType.SNAPSHOT,
-      snapshotName,
+      ResourceType.ARTIFACT,
+      artifactRef,
       payload,
     )
 
-    this.logger.debug(`Created INSPECT_SNAPSHOT_IN_REGISTRY job for ${snapshotName} on runner ${this.runner.id}`)
+    this.logger.debug(`Created INSPECT_ARTIFACT_IN_REGISTRY job for ${artifactRef} on runner ${this.runner.id}`)
 
     const waitTimeout = 30 * 1000 // 30 seconds
     const completedJob = await this.jobService.waitJobCompletion(job.id, waitTimeout)
 
     if (!completedJob) {
-      throw new Error(`Snapshot ${snapshotName} not found in registry on runner ${this.runner.id}`)
+      throw new Error(`Runtime artifact ${artifactRef} not found in registry on runner ${this.runner.id}`)
     }
 
     if (completedJob.status !== JobStatus.COMPLETED) {
       throw new Error(
-        `Snapshot ${snapshotName} failed to inspect in registry on runner ${this.runner.id}. Error: ${completedJob.errorMessage}`,
+        `Runtime artifact ${artifactRef} failed to inspect in registry on runner ${this.runner.id}. Error: ${completedJob.errorMessage}`,
       )
     }
 
@@ -494,23 +324,23 @@ export class RunnerAdapterV2 implements RunnerAdapter {
 
     await this.jobService.createJob(
       null,
-      JobType.UPDATE_BOX_NETWORK_SETTINGS,
+      JobType.UPDATE_SANDBOX_NETWORK_SETTINGS,
       this.runner.id,
-      ResourceType.BOX,
+      ResourceType.SANDBOX,
       boxId,
       payload,
     )
 
-    this.logger.debug(`Created UPDATE_BOX_NETWORK_SETTINGS job for box ${boxId} on runner ${this.runner.id}`)
+    this.logger.debug(`Created UPDATE_SANDBOX_NETWORK_SETTINGS job for box ${boxId} on runner ${this.runner.id}`)
   }
 
   async resizeBox(boxId: string, cpu?: number, memory?: number, disk?: number): Promise<void> {
-    await this.jobService.createJob(null, JobType.RESIZE_BOX, this.runner.id, ResourceType.BOX, boxId, {
+    await this.jobService.createJob(null, JobType.RESIZE_SANDBOX, this.runner.id, ResourceType.SANDBOX, boxId, {
       cpu,
       memory,
       disk,
     })
 
-    this.logger.debug(`Created RESIZE_BOX job for box ${boxId} on runner ${this.runner.id}`)
+    this.logger.debug(`Created RESIZE_SANDBOX job for box ${boxId} on runner ${this.runner.id}`)
   }
 }

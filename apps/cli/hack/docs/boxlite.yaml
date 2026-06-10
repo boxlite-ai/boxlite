@@ -1,6 +1,6 @@
 name: boxlite
 synopsis: BoxLite CLI
-description: Command line interface for BoxLite Boxes
+description: Command line interface for BoxLite Sandboxes
 usage: boxlite [flags]
 options:
   - name: help
@@ -11,22 +11,21 @@ options:
     default_value: 'false'
     usage: Display the version of BoxLite
 see_also:
-  - boxlite archive - Archive a box
   - boxlite autocomplete - Adds a completion script for your shell environment
-  - boxlite create - Create a new box
-  - boxlite delete - Delete a box
+  - boxlite create - Create a new sandbox
+  - boxlite delete - Delete a sandbox
   - boxlite docs - Opens the BoxLite documentation in your default browser.
-  - boxlite exec - Execute a command in a box
-  - boxlite info - Get box info
-  - boxlite list - List boxes
+  - boxlite exec - Execute a command in a sandbox
+  - boxlite info - Get sandbox info
+  - boxlite list - List sandboxes
   - boxlite login - Log in to BoxLite
   - boxlite logout - Logout from BoxLite
   - boxlite mcp - Manage BoxLite MCP Server
   - boxlite organization - Manage BoxLite organizations
-  - boxlite preview-url - Get signed preview URL for a box port
+  - boxlite preview-url - Get signed preview URL for a sandbox port
   - boxlite snapshot - Manage BoxLite snapshots
-  - boxlite ssh - SSH into a box
-  - boxlite start - Start a box
-  - boxlite stop - Stop a box
+  - boxlite ssh - SSH into a sandbox
+  - boxlite start - Start a sandbox
+  - boxlite stop - Stop a sandbox
   - boxlite version - Print the version number
   - boxlite volume - Manage BoxLite volumes

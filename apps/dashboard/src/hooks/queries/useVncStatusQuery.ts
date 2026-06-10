@@ -8,6 +8,14 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useQuery } from '@tanstack/react-query'
 import { queryKeys } from './queryKeys'
 
+const parseVncStatus = (data: { status?: unknown }) => {
+  if (typeof data.status !== 'string' || data.status.length === 0) {
+    throw new Error('Unexpected VNC status response')
+  }
+
+  return data.status
+}
+
 export const useVncInitialStatusQuery = (boxId: string, enabled: boolean) => {
   const { toolboxApi } = useApi()
   const { selectedOrganization } = useSelectedOrganization()
@@ -16,7 +24,7 @@ export const useVncInitialStatusQuery = (boxId: string, enabled: boolean) => {
     queryKey: queryKeys.boxes.vncInitialStatus(boxId),
     queryFn: async () => {
       const { data } = await toolboxApi.getComputerUseStatusDeprecated(boxId, selectedOrganization?.id)
-      return data.status as string
+      return parseVncStatus(data)
     },
     enabled: enabled && !!boxId && !!selectedOrganization?.id,
     retry: false,
@@ -32,11 +40,12 @@ export const useVncPollStatusQuery = (boxId: string, enabled: boolean) => {
     queryKey: queryKeys.boxes.vncPollStatus(boxId),
     queryFn: async () => {
       const { data } = await toolboxApi.getComputerUseStatusDeprecated(boxId, selectedOrganization?.id)
-      if (data.status !== 'active') throw new Error(`VNC not ready: ${data.status}`)
-      return data.status as string
+      const status = parseVncStatus(data)
+      if (status !== 'active') throw new Error(`VNC not ready: ${status}`)
+      return status
     },
     enabled: enabled && !!boxId && !!selectedOrganization?.id,
-    retry: 10,
+    retry: 30,
     retryDelay: 2000,
   })
 }

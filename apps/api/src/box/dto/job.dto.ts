@@ -28,7 +28,7 @@ export class JobDto {
     description: 'The type of the job',
     enum: JobType,
     enumName: 'JobType',
-    example: JobType.CREATE_BOX,
+    example: JobType.CREATE_SANDBOX,
   })
   @IsEnum(JobType)
   type: JobType
@@ -45,14 +45,14 @@ export class JobDto {
   @ApiProperty({
     description: 'The type of resource this job operates on',
     enum: ResourceType,
-    example: ResourceType.BOX,
+    example: ResourceType.SANDBOX,
   })
   @IsEnum(ResourceType)
   resourceType: ResourceType
 
   @ApiProperty({
-    description: 'The ID of the resource this job operates on (boxId, snapshotRef, etc.)',
-    example: 'box123',
+    description: 'The ID of the resource this job operates on (boxId, artifactRef, etc.)',
+    example: 'sandbox123',
   })
   @IsString()
   resourceId: string
@@ -75,7 +75,7 @@ export class JobDto {
 
   @ApiPropertyOptional({
     description: 'Error message if the job failed',
-    example: 'Failed to create box',
+    example: 'Failed to create sandbox',
   })
   @IsOptional()
   @IsString()
@@ -181,7 +181,7 @@ export class UpdateJobStatusDto {
 
   @ApiPropertyOptional({
     description: 'Error message if the job failed',
-    example: 'Failed to create box',
+    example: 'Failed to create sandbox',
   })
   @IsOptional()
   @IsString()

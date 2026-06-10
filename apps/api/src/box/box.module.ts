@@ -15,27 +15,17 @@ import { RunnerService } from './services/runner.service'
 import { Runner } from './entities/runner.entity'
 import { RunnerController } from './controllers/runner.controller'
 import { ToolboxService } from './services/toolbox.deprecated.service'
-import { DockerRegistryModule } from '../docker-registry/docker-registry.module'
 import { BoxManager } from './managers/box.manager'
 import { ToolboxController } from './controllers/toolbox.deprecated.controller'
-import { Snapshot } from './entities/snapshot.entity'
-import { SnapshotController } from './controllers/snapshot.controller'
-import { SnapshotService } from './services/snapshot.service'
-import { SnapshotManager } from './managers/snapshot.manager'
-import { SnapshotRunner } from './entities/snapshot-runner.entity'
-import { DockerRegistry } from '../docker-registry/entities/docker-registry.entity'
 import { RedisLockProvider } from './common/redis-lock.provider'
 import { OrganizationModule } from '../organization/organization.module'
 import { BoxWarmPoolService } from './services/box-warm-pool.service'
 import { WarmPool } from './entities/warm-pool.entity'
 import { PreviewController } from './controllers/preview.controller'
-import { SnapshotSubscriber } from './subscribers/snapshot.subscriber'
 import { VolumeController } from './controllers/volume.controller'
 import { VolumeService } from './services/volume.service'
 import { VolumeManager } from './managers/volume.manager'
 import { Volume } from './entities/volume.entity'
-import { BuildInfo } from './entities/build-info.entity'
-import { BackupManager } from './managers/backup.manager'
 import { VolumeSubscriber } from './subscribers/volume.subscriber'
 import { RunnerSubscriber } from './subscribers/runner.subscriber'
 import { WorkspaceController } from './controllers/workspace.deprecated.controller'
@@ -43,13 +33,10 @@ import { RunnerAdapterFactory } from './runner-adapter/runnerAdapter'
 import { BoxStartAction } from './managers/box-actions/box-start.action'
 import { BoxStopAction } from './managers/box-actions/box-stop.action'
 import { BoxDestroyAction } from './managers/box-actions/box-destroy.action'
-import { BoxArchiveAction } from './managers/box-actions/box-archive.action'
 import { SshAccess } from './entities/ssh-access.entity'
 import { BoxRepository } from './repositories/box.repository'
-import { ProxyCacheInvalidationService } from './services/proxy-cache-invalidation.service'
 import { RegionModule } from '../region/region.module'
 import { Region } from '../region/entities/region.entity'
-import { SnapshotRegion } from './entities/snapshot-region.entity'
 import { JobController } from './controllers/job.controller'
 import { JobService } from './services/job.service'
 import { JobStateHandlerService } from './services/job-state-handler.service'
@@ -69,17 +56,11 @@ import { BoxStateWaiterService } from './services/box-state-waiter.service'
 @Module({
   imports: [
     UserModule,
-    DockerRegistryModule,
     OrganizationModule,
     RegionModule,
     TypeOrmModule.forFeature([
       Box,
       Runner,
-      Snapshot,
-      BuildInfo,
-      SnapshotRunner,
-      SnapshotRegion,
-      DockerRegistry,
       WarmPool,
       Volume,
       SshAccess,
@@ -92,7 +73,6 @@ import { BoxStateWaiterService } from './services/box-state-waiter.service'
     BoxController,
     RunnerController,
     ToolboxController,
-    SnapshotController,
     WorkspaceController,
     PreviewController,
     VolumeController,
@@ -101,16 +81,11 @@ import { BoxStateWaiterService } from './services/box-state-waiter.service'
   providers: [
     BoxService,
     BoxManager,
-    BackupManager,
     BoxWarmPoolService,
     RunnerService,
     ToolboxService,
-    SnapshotService,
-    ProxyCacheInvalidationService,
     BoxLookupCacheInvalidationService,
-    SnapshotManager,
     RedisLockProvider,
-    SnapshotSubscriber,
     VolumeService,
     VolumeManager,
     VolumeSubscriber,
@@ -119,7 +94,6 @@ import { BoxStateWaiterService } from './services/box-state-waiter.service'
     BoxStartAction,
     BoxStopAction,
     BoxDestroyAction,
-    BoxArchiveAction,
     JobService,
     JobStateHandlerService,
     BoxActivityService,
@@ -144,7 +118,6 @@ import { BoxStateWaiterService } from './services/box-state-waiter.service'
     BoxService,
     RunnerService,
     RedisLockProvider,
-    SnapshotService,
     VolumeService,
     VolumeManager,
     BoxRepository,

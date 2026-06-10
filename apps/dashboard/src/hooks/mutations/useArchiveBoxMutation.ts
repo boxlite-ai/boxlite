@@ -8,23 +8,29 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { queryKeys } from '@/hooks/queries/queryKeys'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 
-interface ArchiveBoxVariables {
+interface StopBoxVariables {
   boxId: string
+  detailRef?: string
 }
 
-export const useArchiveBoxMutation = () => {
+export const useStopBoxMutation = () => {
   const { boxApi } = useApi()
   const { selectedOrganization } = useSelectedOrganization()
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ boxId }: ArchiveBoxVariables) => {
-      await boxApi.archiveBox(boxId, selectedOrganization?.id)
+    mutationFn: async ({ boxId }: StopBoxVariables) => {
+      await boxApi.stopBox(boxId, selectedOrganization?.id)
     },
-    onSuccess: (_, { boxId }) => {
+    onSuccess: (_, { boxId, detailRef }) => {
       queryClient.invalidateQueries({
         queryKey: queryKeys.boxes.detail(selectedOrganization?.id ?? '', boxId),
       })
+      if (detailRef && detailRef !== boxId) {
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.boxes.detail(selectedOrganization?.id ?? '', detailRef),
+        })
+      }
     },
   })
 }

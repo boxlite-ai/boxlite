@@ -22,7 +22,7 @@ import {
   ComputerUse,
   CreateBoxBaseParams,
   CreateBoxFromImageParams,
-  CreateBoxFromSnapshotParams,
+  CreateBoxFromTemplateParams,
   Resources,
   ScreenshotOptions,
   ScreenshotRegion,
@@ -186,7 +186,7 @@ export type ProcessCodeExecutionOperationsActionFormData<T extends CodeRunParams
 
 export interface BoxParams {
   language?: CodeLanguage
-  snapshotName?: string
+  templateName?: string
   resources: Resources
   createBoxBaseParams: CreateBoxBaseParams
   // File system operations params
@@ -277,13 +277,12 @@ export type BoxParametersInfo = {
   useResourcesDisk: boolean
   createBoxParamsExist: boolean
   useAutoStopInterval: boolean
-  useAutoArchiveInterval: boolean
   useAutoDeleteInterval: boolean
   useBoxCreateParams: boolean
-  useCustomBoxSnapshotName: boolean
+  useCustomImageName: boolean
   createBoxFromImage: boolean
-  createBoxFromSnapshot: boolean
-  createBoxParams: CreateBoxBaseParams | CreateBoxFromImageParams | CreateBoxFromSnapshotParams
+  createBoxFromTemplate: boolean
+  createBoxParams: CreateBoxBaseParams | CreateBoxFromImageParams | CreateBoxFromTemplateParams
 }
 
 export interface IPlaygroundContext {

@@ -6,8 +6,7 @@
 
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { BoxDto } from './box.dto'
-import { IsEnum, IsOptional } from 'class-validator'
-import { BackupState as SnapshotState } from '../enums/backup-state.enum'
+import { IsOptional } from 'class-validator'
 import { Box } from '../entities/box.entity'
 
 @ApiSchema({ name: 'BoxInfo' })
@@ -19,7 +18,7 @@ export class BoxInfoDto {
   created: string
 
   @ApiProperty({
-    description: 'Deprecated: The name of the box',
+    description: 'Deprecated: The name of the sandbox',
     example: 'MyBox',
     deprecated: true,
     default: '',
@@ -44,23 +43,7 @@ export class WorkspaceDto extends BoxDto {
   image: string
 
   @ApiPropertyOptional({
-    description: 'The state of the snapshot',
-    enum: SnapshotState,
-    example: Object.values(SnapshotState)[0],
-    required: false,
-  })
-  @IsEnum(SnapshotState)
-  snapshotState?: SnapshotState
-
-  @ApiPropertyOptional({
-    description: 'The creation timestamp of the last snapshot',
-    example: '2024-10-01T12:00:00Z',
-    required: false,
-  })
-  snapshotCreatedAt?: string
-
-  @ApiPropertyOptional({
-    description: 'Additional information about the box',
+    description: 'Additional information about the sandbox',
     type: BoxInfoDto,
     required: false,
   })
@@ -80,9 +63,7 @@ export class WorkspaceDto extends BoxDto {
   static fromBoxDto(boxDto: BoxDto): WorkspaceDto {
     return {
       ...boxDto,
-      image: boxDto.snapshot,
-      snapshotState: boxDto.backupState,
-      snapshotCreatedAt: boxDto.backupCreatedAt,
+      image: boxDto.template,
       info: {
         name: boxDto.name,
         created: boxDto.createdAt,
@@ -91,13 +72,11 @@ export class WorkspaceDto extends BoxDto {
           region: boxDto.target,
           class: boxDto.class,
           updatedAt: boxDto.updatedAt,
-          lastSnapshot: boxDto.backupCreatedAt,
           cpu: boxDto.cpu,
           gpu: boxDto.gpu,
           memory: boxDto.memory,
           disk: boxDto.disk,
           autoStopInterval: boxDto.autoStopInterval,
-          autoArchiveInterval: boxDto.autoArchiveInterval,
           daemonVersion: boxDto.daemonVersion,
         }),
       },

@@ -4,6 +4,13 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+function csvEnv(value?: string): string[] {
+  return (value ?? '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
 const configuration = {
   production: process.env.NODE_ENV === 'production',
   version: process.env.VERSION || '0.0.0-dev',
@@ -63,21 +70,16 @@ const configuration = {
     secure: process.env.SMTP_SECURE === 'true',
     from: process.env.SMTP_EMAIL_FROM || 'noreply@mail.boxlite.io',
   },
-  defaultSnapshot: process.env.DEFAULT_SNAPSHOT,
+  defaultTemplate: process.env.DEFAULT_TEMPLATE,
   dashboardUrl: process.env.DASHBOARD_URL,
   // Default to empty string - dashboard will then hit '/api'
   dashboardBaseApiUrl: process.env.DASHBOARD_BASE_API_URL || '',
-  transientRegistry: {
-    url: process.env.TRANSIENT_REGISTRY_URL,
-    admin: process.env.TRANSIENT_REGISTRY_ADMIN,
-    password: process.env.TRANSIENT_REGISTRY_PASSWORD,
-    projectId: process.env.TRANSIENT_REGISTRY_PROJECT_ID,
-  },
-  internalRegistry: {
-    url: process.env.INTERNAL_REGISTRY_URL,
-    admin: process.env.INTERNAL_REGISTRY_ADMIN,
-    password: process.env.INTERNAL_REGISTRY_PASSWORD,
-    projectId: process.env.INTERNAL_REGISTRY_PROJECT_ID,
+  systemSourceRegistry: {
+    name: process.env.BOXLITE_SYSTEM_SOURCE_REGISTRY_NAME || 'BoxLite System Source Registry',
+    url: process.env.BOXLITE_SYSTEM_SOURCE_REGISTRY_URL,
+    username: process.env.BOXLITE_SYSTEM_SOURCE_REGISTRY_USERNAME,
+    password: process.env.BOXLITE_SYSTEM_SOURCE_REGISTRY_PASSWORD,
+    projectId: process.env.BOXLITE_SYSTEM_SOURCE_REGISTRY_PROJECT_ID || '',
   },
   s3: {
     endpoint: process.env.S3_ENDPOINT,
@@ -91,7 +93,6 @@ const configuration = {
   },
   notificationGatewayDisabled: process.env.NOTIFICATION_GATEWAY_DISABLED === 'true',
   skipConnections: process.env.SKIP_CONNECTIONS === 'true',
-  maxAutoArchiveInterval: parseInt(process.env.MAX_AUTO_ARCHIVE_INTERVAL || '43200', 10),
   maintananceMode: process.env.MAINTENANCE_MODE === 'true',
   disableCronJobs: process.env.DISABLE_CRON_JOBS === 'true',
   appRole: process.env.APP_ROLE || 'all',
@@ -159,7 +160,8 @@ const configuration = {
     publicKey: process.env.SSH_GATEWAY_PUBLIC_KEY,
     url: process.env.SSH_GATEWAY_URL,
   },
-  organizationBoxDefaultLimitedNetworkEgress: process.env.ORGANIZATION_BOX_DEFAULT_LIMITED_NETWORK_EGRESS === 'true',
+  organizationBoxDefaultLimitedNetworkEgress:
+    process.env.ORGANIZATION_SANDBOX_DEFAULT_LIMITED_NETWORK_EGRESS === 'true',
   pylonAppId: process.env.PYLON_APP_ID,
   billingApiUrl: process.env.BILLING_API_URL,
   analyticsApiUrl: process.env.ANALYTICS_API_URL,
@@ -187,7 +189,7 @@ const configuration = {
       allocatedCpu: parseFloat(process.env.RUNNER_ALLOCATED_CPU_WEIGHT || '0.03'),
       allocatedMemory: parseFloat(process.env.RUNNER_ALLOCATED_MEMORY_WEIGHT || '0.03'),
       allocatedDisk: parseFloat(process.env.RUNNER_ALLOCATED_DISK_WEIGHT || '0.03'),
-      startedBoxes: parseFloat(process.env.RUNNER_STARTED_BOXES_WEIGHT || '0.1'),
+      startedBoxes: parseFloat(process.env.RUNNER_STARTED_SANDBOXES_WEIGHT || '0.1'),
     },
     penalty: {
       exponents: {
@@ -212,7 +214,7 @@ const configuration = {
         allocCpu: parseInt(process.env.RUNNER_OPTIMAL_ALLOC_CPU || '100', 10),
         allocMem: parseInt(process.env.RUNNER_OPTIMAL_ALLOC_MEM || '100', 10),
         allocDisk: parseInt(process.env.RUNNER_OPTIMAL_ALLOC_DISK || '100', 10),
-        startedBoxes: parseInt(process.env.RUNNER_OPTIMAL_STARTED_BOXES || '0', 10),
+        startedBoxes: parseInt(process.env.RUNNER_OPTIMAL_STARTED_SANDBOXES || '0', 10),
       },
       critical: {
         cpu: parseInt(process.env.RUNNER_CRITICAL_CPU || '100', 10),
@@ -221,7 +223,7 @@ const configuration = {
         allocCpu: parseInt(process.env.RUNNER_CRITICAL_ALLOC_CPU || '500', 10),
         allocMem: parseInt(process.env.RUNNER_CRITICAL_ALLOC_MEM || '500', 10),
         allocDisk: parseInt(process.env.RUNNER_CRITICAL_ALLOC_DISK || '500', 10),
-        startedBoxes: parseInt(process.env.RUNNER_CRITICAL_STARTED_BOXES || '100', 10),
+        startedBoxes: parseInt(process.env.RUNNER_CRITICAL_STARTED_SANDBOXES || '100', 10),
       },
     },
   },
@@ -245,17 +247,19 @@ const configuration = {
         : undefined,
     },
     boxCreate: {
-      ttl: process.env.RATE_LIMIT_BOX_CREATE_TTL ? parseInt(process.env.RATE_LIMIT_BOX_CREATE_TTL, 10) : undefined,
-      limit: process.env.RATE_LIMIT_BOX_CREATE_LIMIT
-        ? parseInt(process.env.RATE_LIMIT_BOX_CREATE_LIMIT, 10)
+      ttl: process.env.RATE_LIMIT_SANDBOX_CREATE_TTL
+        ? parseInt(process.env.RATE_LIMIT_SANDBOX_CREATE_TTL, 10)
+        : undefined,
+      limit: process.env.RATE_LIMIT_SANDBOX_CREATE_LIMIT
+        ? parseInt(process.env.RATE_LIMIT_SANDBOX_CREATE_LIMIT, 10)
         : undefined,
     },
     boxLifecycle: {
-      ttl: process.env.RATE_LIMIT_BOX_LIFECYCLE_TTL
-        ? parseInt(process.env.RATE_LIMIT_BOX_LIFECYCLE_TTL, 10)
+      ttl: process.env.RATE_LIMIT_SANDBOX_LIFECYCLE_TTL
+        ? parseInt(process.env.RATE_LIMIT_SANDBOX_LIFECYCLE_TTL, 10)
         : undefined,
-      limit: process.env.RATE_LIMIT_BOX_LIFECYCLE_LIMIT
-        ? parseInt(process.env.RATE_LIMIT_BOX_LIFECYCLE_LIMIT, 10)
+      limit: process.env.RATE_LIMIT_SANDBOX_LIFECYCLE_LIMIT
+        ? parseInt(process.env.RATE_LIMIT_SANDBOX_LIFECYCLE_LIMIT, 10)
         : undefined,
     },
   },
@@ -272,11 +276,11 @@ const configuration = {
     totalCpuQuota: parseInt(process.env.DEFAULT_ORG_QUOTA_TOTAL_CPU_QUOTA || '10', 10),
     totalMemoryQuota: parseInt(process.env.DEFAULT_ORG_QUOTA_TOTAL_MEMORY_QUOTA || '10', 10),
     totalDiskQuota: parseInt(process.env.DEFAULT_ORG_QUOTA_TOTAL_DISK_QUOTA || '30', 10),
-    maxCpuPerBox: parseInt(process.env.DEFAULT_ORG_QUOTA_MAX_CPU_PER_BOX || '4', 10),
-    maxMemoryPerBox: parseInt(process.env.DEFAULT_ORG_QUOTA_MAX_MEMORY_PER_BOX || '8', 10),
-    maxDiskPerBox: parseInt(process.env.DEFAULT_ORG_QUOTA_MAX_DISK_PER_BOX || '10', 10),
-    snapshotQuota: parseInt(process.env.DEFAULT_ORG_QUOTA_SNAPSHOT_QUOTA || '100', 10),
-    maxSnapshotSize: parseInt(process.env.DEFAULT_ORG_QUOTA_MAX_SNAPSHOT_SIZE || '20', 10),
+    maxCpuPerBox: parseInt(process.env.DEFAULT_ORG_QUOTA_MAX_CPU_PER_SANDBOX || '4', 10),
+    maxMemoryPerBox: parseInt(process.env.DEFAULT_ORG_QUOTA_MAX_MEMORY_PER_SANDBOX || '8', 10),
+    maxDiskPerBox: parseInt(process.env.DEFAULT_ORG_QUOTA_MAX_DISK_PER_SANDBOX || '10', 10),
+    templateQuota: parseInt(process.env.DEFAULT_ORG_QUOTA_TEMPLATE_QUOTA || '100', 10),
+    maxTemplateSize: parseInt(process.env.DEFAULT_ORG_QUOTA_MAX_TEMPLATE_SIZE || '20', 10),
     volumeQuota: parseInt(process.env.DEFAULT_ORG_QUOTA_VOLUME_QUOTA || '100', 10),
   },
   defaultRegion: {
@@ -289,11 +293,11 @@ const configuration = {
     totalCpuQuota: parseInt(process.env.ADMIN_TOTAL_CPU_QUOTA || '0', 10),
     totalMemoryQuota: parseInt(process.env.ADMIN_TOTAL_MEMORY_QUOTA || '0', 10),
     totalDiskQuota: parseInt(process.env.ADMIN_TOTAL_DISK_QUOTA || '0', 10),
-    maxCpuPerBox: parseInt(process.env.ADMIN_MAX_CPU_PER_BOX || '0', 10),
-    maxMemoryPerBox: parseInt(process.env.ADMIN_MAX_MEMORY_PER_BOX || '0', 10),
-    maxDiskPerBox: parseInt(process.env.ADMIN_MAX_DISK_PER_BOX || '0', 10),
-    snapshotQuota: parseInt(process.env.ADMIN_SNAPSHOT_QUOTA || '100', 10),
-    maxSnapshotSize: parseInt(process.env.ADMIN_MAX_SNAPSHOT_SIZE || '100', 10),
+    maxCpuPerBox: parseInt(process.env.ADMIN_MAX_CPU_PER_SANDBOX || '0', 10),
+    maxMemoryPerBox: parseInt(process.env.ADMIN_MAX_MEMORY_PER_SANDBOX || '0', 10),
+    maxDiskPerBox: parseInt(process.env.ADMIN_MAX_DISK_PER_SANDBOX || '0', 10),
+    templateQuota: parseInt(process.env.ADMIN_TEMPLATE_QUOTA || '100', 10),
+    maxTemplateSize: parseInt(process.env.ADMIN_MAX_TEMPLATE_SIZE || '100', 10),
     volumeQuota: parseInt(process.env.ADMIN_VOLUME_QUOTA || '0', 10),
   },
   skipUserEmailVerification: process.env.SKIP_USER_EMAIL_VERIFICATION === 'true',
@@ -307,12 +311,13 @@ const configuration = {
     candidateLimit: parseInt(process.env.WARM_POOL_CANDIDATE_LIMIT || '300', 10),
   },
   boxOtel: {
-    endpointUrl: process.env.BOX_OTEL_ENDPOINT_URL,
+    endpointUrl: process.env.SANDBOX_OTEL_ENDPOINT_URL,
   },
   otelCollector: {
     apiKey: process.env.OTEL_COLLECTOR_API_KEY,
   },
   clickhouse: {
+    url: process.env.CLICKHOUSE_READER_URL || process.env.CLICKHOUSE_URL,
     host: process.env.CLICKHOUSE_HOST,
     port: parseInt(process.env.CLICKHOUSE_PORT || '8123', 10),
     database: process.env.CLICKHOUSE_DATABASE || 'otel',
@@ -320,16 +325,39 @@ const configuration = {
     password: process.env.CLICKHOUSE_PASSWORD,
     protocol: process.env.CLICKHOUSE_PROTOCOL || 'https',
   },
+  adminObservability: {
+    cloudwatch: {
+      region: process.env.ADMIN_OBSERVABILITY_CLOUDWATCH_REGION || process.env.AWS_REGION || process.env.S3_REGION,
+      logGroups: csvEnv(process.env.ADMIN_OBSERVABILITY_CLOUDWATCH_LOG_GROUPS),
+      logGroupPrefix: process.env.ADMIN_OBSERVABILITY_CLOUDWATCH_LOG_GROUP_PREFIX,
+      maxLogGroups: parseInt(process.env.ADMIN_OBSERVABILITY_CLOUDWATCH_MAX_LOG_GROUPS || '20', 10),
+      limitPerGroup: parseInt(process.env.ADMIN_OBSERVABILITY_CLOUDWATCH_LIMIT_PER_GROUP || '25', 10),
+    },
+    s3: {
+      region: process.env.ADMIN_OBSERVABILITY_S3_REGION || process.env.S3_REGION,
+      endpoint: process.env.ADMIN_OBSERVABILITY_S3_ENDPOINT || process.env.S3_ENDPOINT,
+      accessKey: process.env.ADMIN_OBSERVABILITY_S3_ACCESS_KEY || process.env.S3_ACCESS_KEY,
+      secretKey: process.env.ADMIN_OBSERVABILITY_S3_SECRET_KEY || process.env.S3_SECRET_KEY,
+      buckets: csvEnv(process.env.ADMIN_OBSERVABILITY_S3_BUCKETS || process.env.S3_DEFAULT_BUCKET),
+      prefixes: csvEnv(process.env.ADMIN_OBSERVABILITY_S3_PREFIXES),
+      maxObjects: parseInt(process.env.ADMIN_OBSERVABILITY_S3_MAX_OBJECTS || '25', 10),
+    },
+  },
+  observability: {
+    clickstackBaseUrl: process.env.ADMIN_OBSERVABILITY_CLICKSTACK_URL,
+    clickstackDashboardUrl: process.env.ADMIN_OBSERVABILITY_CLICKSTACK_DASHBOARD_URL,
+    clickstackLogSourceId: process.env.ADMIN_OBSERVABILITY_CLICKSTACK_LOG_SOURCE_ID,
+    clickstackTraceSourceId: process.env.ADMIN_OBSERVABILITY_CLICKSTACK_TRACE_SOURCE_ID,
+    clickstackMetricSourceId: process.env.ADMIN_OBSERVABILITY_CLICKSTACK_METRIC_SOURCE_ID,
+  },
   boxActivity: {
-    throttleTtlSeconds: parseInt(process.env.BOX_ACTIVITY_THROTTLE_TTL_SECONDS || '5', 10),
-    flushBatchSize: parseInt(process.env.BOX_ACTIVITY_FLUSH_BATCH_SIZE || '1000', 10),
+    throttleTtlSeconds: parseInt(process.env.SANDBOX_ACTIVITY_THROTTLE_TTL_SECONDS || '5', 10),
+    flushBatchSize: parseInt(process.env.SANDBOX_ACTIVITY_FLUSH_BATCH_SIZE || '1000', 10),
   },
   encryption: {
     key: process.env.ENCRYPTION_KEY,
     salt: process.env.ENCRYPTION_SALT,
   },
-  failedSnapshotRunnerRetentionHours: parseInt(process.env.FAILED_SNAPSHOT_RUNNER_RETENTION_HOURS || '3', 10),
-  buildInfoSnapshotRunnerStalenessDays: parseInt(process.env.BUILDINFO_SNAPSHOT_RUNNER_STALENESS_DAYS || '7', 10),
 }
 
 export { configuration }

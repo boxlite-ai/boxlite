@@ -10,6 +10,5 @@ use (
 	./otel-collector/exporter
 	./proxy
 	./runner
-	./snapshot-manager
 	./ssh-gateway
 )

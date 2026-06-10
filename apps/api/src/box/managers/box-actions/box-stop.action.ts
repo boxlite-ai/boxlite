@@ -8,7 +8,6 @@ import { Injectable } from '@nestjs/common'
 import { Box } from '../../entities/box.entity'
 import { BoxState } from '../../enums/box-state.enum'
 import { DONT_SYNC_AGAIN, BoxAction, SyncState, SYNC_AGAIN } from './box.action'
-import { BackupState } from '../../enums/backup-state.enum'
 import { RunnerState } from '../../enums/runner-state.enum'
 import { RunnerService } from '../../services/runner.service'
 import { RunnerAdapterFactory } from '../../runner-adapter/runnerAdapter'
@@ -52,7 +51,7 @@ export class BoxStopAction extends BoxAction {
     const boxInfo = await runnerAdapter.boxInfo(box.id)
 
     if (boxInfo.state === BoxState.STOPPED) {
-      await this.updateBoxState(box, BoxState.STOPPED, lockCode, undefined, undefined, undefined, BackupState.NONE)
+      await this.updateBoxState(box, BoxState.STOPPED, lockCode)
       return DONT_SYNC_AGAIN
     } else if (boxInfo.state === BoxState.ERROR) {
       await this.updateBoxState(box, BoxState.ERROR, lockCode, undefined, 'Box is in error state on runner')

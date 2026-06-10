@@ -20,6 +20,7 @@ import {
 } from '@nestjs/common'
 import { ApiBearerAuth, ApiOAuth2, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger'
 import { AdminCreateRunnerDto } from '../dto/create-runner.dto'
+import { AdminRunnerDto } from '../dto/admin-overview.dto'
 import { Audit, MASKED_AUDIT_VALUE, TypedRequest } from '../../audit/decorators/audit.decorator'
 import { AuditAction } from '../../audit/enums/audit-action.enum'
 import { AuditTarget } from '../../audit/enums/audit-target.enum'
@@ -28,7 +29,6 @@ import { SystemActionGuard } from '../../auth/system-action.guard'
 import { RequiredApiRole } from '../../common/decorators/required-role.decorator'
 import { RegionService } from '../../region/services/region.service'
 import { CreateRunnerResponseDto } from '../../box/dto/create-runner-response.dto'
-import { RunnerFullDto } from '../../box/dto/runner-full.dto'
 import { RunnerDto } from '../../box/dto/runner.dto'
 import { RunnerService } from '../../box/services/runner.service'
 import { SystemRole } from '../../user/enums/system-role.enum'
@@ -102,15 +102,15 @@ export class AdminRunnerController {
   })
   @ApiResponse({
     status: 200,
-    type: RunnerFullDto,
+    type: AdminRunnerDto,
   })
   @ApiParam({
     name: 'id',
     description: 'Runner ID',
     type: String,
   })
-  async getRunnerById(@Param('id', ParseUUIDPipe) id: string): Promise<RunnerFullDto> {
-    return this.runnerService.findOneFullOrFail(id)
+  async getRunnerById(@Param('id', ParseUUIDPipe) id: string): Promise<AdminRunnerDto> {
+    return this.toAdminRunnerDto(await this.runnerService.findOneFullOrFail(id))
   }
 
   @Get()
@@ -121,7 +121,7 @@ export class AdminRunnerController {
   })
   @ApiResponse({
     status: 200,
-    type: [RunnerFullDto],
+    type: [AdminRunnerDto],
   })
   @ApiQuery({
     name: 'regionId',
@@ -129,11 +129,11 @@ export class AdminRunnerController {
     type: String,
     required: false,
   })
-  async findAll(@Query('regionId') regionId?: string): Promise<RunnerFullDto[]> {
+  async findAll(@Query('regionId') regionId?: string): Promise<AdminRunnerDto[]> {
     if (regionId) {
-      return this.runnerService.findAllByRegionFull(regionId)
+      return (await this.runnerService.findAllByRegionFull(regionId)).map((runner) => this.toAdminRunnerDto(runner))
     }
-    return this.runnerService.findAllFull()
+    return (await this.runnerService.findAllFull()).map((runner) => this.toAdminRunnerDto(runner))
   }
 
   @Patch(':id/scheduling')
@@ -183,5 +183,10 @@ export class AdminRunnerController {
   })
   async delete(@Param('id', ParseUUIDPipe) id: string): Promise<void> {
     return this.runnerService.remove(id)
+  }
+
+  private toAdminRunnerDto(runner: AdminRunnerDto & { apiKey?: string }): AdminRunnerDto {
+    const { apiKey: _apiKey, ...safeRunner } = runner
+    return safeRunner
   }
 }

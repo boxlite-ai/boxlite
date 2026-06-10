@@ -7,9 +7,10 @@
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { getBoxPublicId, getBoxPublicIdLabel, getBoxRouteId } from '@/lib/box-identity'
 import { formatDuration, formatTimestamp, getRelativeTimeString } from '@/lib/utils'
 import { Box, BoxState } from '@boxlite-ai/api-client'
-import { Archive, Play, Tag, Trash, Wrench, X } from 'lucide-react'
+import { Play, Tag, Trash, Wrench, X } from 'lucide-react'
 import React, { useState } from 'react'
 import { Link, generatePath } from 'react-router-dom'
 import { RoutePath } from '@/enums/RoutePath'
@@ -31,9 +32,7 @@ interface BoxDetailsSheetProps {
   handleStart: (id: string) => void
   handleStop: (id: string) => void
   handleDelete: (id: string) => void
-  handleArchive: (id: string) => void
   getWebTerminalUrl: (id: string) => Promise<string | null>
-  getRegionName: (regionId: string) => string | undefined
   writePermitted: boolean
   deletePermitted: boolean
   handleRecover: (id: string) => void
@@ -47,16 +46,14 @@ const BoxDetailsSheet: React.FC<BoxDetailsSheetProps> = ({
   handleStart,
   handleStop,
   handleDelete,
-  handleArchive,
   getWebTerminalUrl,
-  getRegionName,
   writePermitted,
   deletePermitted,
   handleRecover,
 }) => {
   const [terminalUrl, setTerminalUrl] = useState<string | null>(null)
   const experimentsEnabled = useFeatureFlagEnabled(FeatureFlags.ORGANIZATION_EXPERIMENTS)
-  const spendingEnabled = useFeatureFlagEnabled(FeatureFlags.BOX_SPENDING)
+  const spendingEnabled = useFeatureFlagEnabled(FeatureFlags.SANDBOX_SPENDING)
   const config = useConfig()
   const spendingTabAvailable = spendingEnabled && !!config.analyticsApiUrl
 
@@ -76,6 +73,8 @@ const BoxDetailsSheet: React.FC<BoxDetailsSheetProps> = ({
   // }, [box?.id, getWebTerminalUrl])
 
   if (!box) return null
+  // TODO(image-rewrite): image display formatting removed with the image/template subsystem; show raw value.
+  const publicBoxId = getBoxPublicId(box)
 
   const getLastEvent = (box: Box): { date: Date; relativeTimeString: string } => {
     return getRelativeTimeString(box.updatedAt)
@@ -88,7 +87,7 @@ const BoxDetailsSheet: React.FC<BoxDetailsSheetProps> = ({
           <SheetTitle className="text-2xl font-medium">Box Details</SheetTitle>
           <div className="flex gap-2 items-center">
             <Button variant="link" asChild>
-              <Link to={generatePath(RoutePath.BOX_DETAILS, { boxId: box.id })}>View</Link>
+              <Link to={generatePath(RoutePath.BOX_DETAILS, { boxId: getBoxRouteId(box) })}>View</Link>
             </Button>
             {writePermitted && (
               <>
@@ -97,7 +96,7 @@ const BoxDetailsSheet: React.FC<BoxDetailsSheetProps> = ({
                     Stop
                   </Button>
                 )}
-                {(box.state === BoxState.STOPPED || box.state === BoxState.ARCHIVED) && !box.recoverable && (
+                {box.state === BoxState.STOPPED && !box.recoverable && (
                   <Button variant="outline" onClick={() => handleStart(box.id)} disabled={boxIsLoading[box.id]}>
                     <Play className="w-4 h-4" />
                     Start
@@ -107,36 +106,6 @@ const BoxDetailsSheet: React.FC<BoxDetailsSheetProps> = ({
                   <Button variant="outline" onClick={() => handleRecover(box.id)} disabled={boxIsLoading[box.id]}>
                     <Wrench className="w-4 h-4" />
                     Recover
-                  </Button>
-                )}
-                {/* {(box.state === BoxState.STOPPED || box.state === BoxState.ARCHIVED) && (
-                  <Button
-                    variant="outline"
-                    onClick={() => handleFork(box.id)}
-                    disabled={boxIsLoading[box.id]}
-                  >
-                    <GitFork className="w-4 h-4" />
-                    Fork
-                  </Button>
-                )}
-                {(box.state === BoxState.STOPPED || box.state === BoxState.ARCHIVED) && (
-                  <Button
-                    variant="outline"
-                    onClick={() => handleSnapshot(box.id)}
-                    disabled={boxIsLoading[box.id]}
-                  >
-                    <Camera className="w-4 h-4" />
-                    Snapshot
-                  </Button>
-                )} */}
-                {box.state === BoxState.STOPPED && (
-                  <Button
-                    variant="outline"
-                    className="w-8 h-8"
-                    onClick={() => handleArchive(box.id)}
-                    disabled={boxIsLoading[box.id]}
-                  >
-                    <Archive className="w-4 h-4" />
                   </Button>
                 )}
               </>
@@ -210,15 +179,15 @@ const BoxDetailsSheet: React.FC<BoxDetailsSheetProps> = ({
                 </div>
               </div>
               <div>
-                <h3 className="text-sm text-muted-foreground">UUID</h3>
+                <h3 className="text-sm text-muted-foreground">Box ID</h3>
                 <div className="mt-1 flex items-center gap-2">
-                  <p className="text-sm font-medium truncate">{box.id}</p>
-                  <CopyButton value={box.id} tooltipText="Copy UUID" size="icon-xs" />
+                  <p className="text-sm font-mono font-medium truncate">{getBoxPublicIdLabel(box)}</p>
+                  {publicBoxId && <CopyButton value={publicBoxId} tooltipText="Copy Box ID" size="icon-xs" />}
                 </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div>
                 <h3 className="text-sm text-muted-foreground">State</h3>
                 <div className="mt-1 text-sm">
@@ -226,17 +195,12 @@ const BoxDetailsSheet: React.FC<BoxDetailsSheetProps> = ({
                 </div>
               </div>
               <div>
-                <h3 className="text-sm text-muted-foreground">Snapshot</h3>
+                <h3 className="text-sm text-muted-foreground">Image</h3>
                 <div className="mt-1 flex items-center gap-2">
-                  <p className="text-sm font-medium truncate">{box.snapshot || '-'}</p>
-                  {box.snapshot && <CopyButton value={box.snapshot} tooltipText="Copy snapshot" size="icon-xs" />}
-                </div>
-              </div>
-              <div>
-                <h3 className="text-sm text-muted-foreground">Region</h3>
-                <div className="mt-1 flex items-center gap-2">
-                  <p className="text-sm font-medium truncate">{getRegionName(box.target) ?? box.target}</p>
-                  <CopyButton value={box.target} tooltipText="Copy region" size="icon-xs" />
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{box.template || '-'}</p>
+                  </div>
+                  {box.template && <CopyButton value={box.template} tooltipText="Copy image" size="icon-xs" />}
                 </div>
               </div>
             </div>
@@ -260,12 +224,6 @@ const BoxDetailsSheet: React.FC<BoxDetailsSheetProps> = ({
                 <h3 className="text-sm text-muted-foreground">Auto-stop</h3>
                 <p className="mt-1 text-sm font-medium">
                   {box.autoStopInterval ? formatDuration(box.autoStopInterval) : 'Disabled'}
-                </p>
-              </div>
-              <div>
-                <h3 className="text-sm text-muted-foreground">Auto-archive</h3>
-                <p className="mt-1 text-sm font-medium">
-                  {box.autoArchiveInterval ? formatDuration(box.autoArchiveInterval) : 'Disabled'}
                 </p>
               </div>
               <div>

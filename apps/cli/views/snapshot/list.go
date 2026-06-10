@@ -14,25 +14,25 @@ import (
 )
 
 type RowData struct {
-	Name    string
-	State   string
-	Size    string
-	Created string
+	Name     string
+	State    string
+	Resource string
+	Created  string
 }
 
-func ListSnapshots(snapshotList []apiclient.SnapshotDto, activeOrganizationName *string) {
-	if len(snapshotList) == 0 {
-		util.NotifyEmptySnapshotList(true)
+func ListTemplates(templateList []apiclient.BoxTemplateDto, activeOrganizationName *string) {
+	if len(templateList) == 0 {
+		util.NotifyEmptyTemplateList(true)
 		return
 	}
 
-	SortSnapshots(&snapshotList)
+	SortTemplates(&templateList)
 
-	headers := []string{"Snapshot", "State", "Size", "Created"}
+	headers := []string{"Template", "State", "Resources", "Created"}
 
 	data := [][]string{}
 
-	for _, img := range snapshotList {
+	for _, img := range templateList {
 		var rowData *RowData
 		var row []string
 
@@ -42,44 +42,39 @@ func ListSnapshots(snapshotList []apiclient.SnapshotDto, activeOrganizationName 
 	}
 
 	table := util.GetTableView(data, headers, activeOrganizationName, func() {
-		renderUnstyledList(snapshotList)
+		renderUnstyledList(templateList)
 	})
 
 	fmt.Println(table)
 }
 
-func SortSnapshots(snapshotList *[]apiclient.SnapshotDto) {
-	sort.Slice(*snapshotList, func(i, j int) bool {
-		pi, pj := getStateSortPriorities((*snapshotList)[i].State, (*snapshotList)[j].State)
+func SortTemplates(templateList *[]apiclient.BoxTemplateDto) {
+	sort.Slice(*templateList, func(i, j int) bool {
+		pi, pj := getStateSortPriorities((*templateList)[i].State, (*templateList)[j].State)
 		if pi != pj {
 			return pi < pj
 		}
 
-		// If two snapshots have the same state priority, compare the UpdatedAt property
-		return (*snapshotList)[i].CreatedAt.After((*snapshotList)[j].CreatedAt)
+		// If two templates have the same state priority, compare the UpdatedAt property
+		return (*templateList)[i].CreatedAt.After((*templateList)[j].CreatedAt)
 	})
 }
 
-func getTableRowData(snapshot apiclient.SnapshotDto) *RowData {
+func getTableRowData(template apiclient.BoxTemplateDto) *RowData {
 	rowData := RowData{"", "", "", ""}
-	rowData.Name = snapshot.Name + util.AdditionalPropertyPadding
-	rowData.State = getStateLabel(snapshot.State)
+	rowData.Name = template.DisplayName + util.AdditionalPropertyPadding
+	rowData.State = getStateLabel(template.State)
+	rowData.Resource = fmt.Sprintf("%.0f CPU / %.0f GB / %.0f GB", template.DefaultResources.Cpu, template.DefaultResources.Memory, template.DefaultResources.Disk)
 
-	if snapshot.Size.IsSet() && snapshot.Size.Get() != nil {
-		rowData.Size = fmt.Sprintf("%.2f GB", *snapshot.Size.Get())
-	} else {
-		rowData.Size = "-"
-	}
-
-	rowData.Created = util.GetTimeSinceLabel(snapshot.CreatedAt)
+	rowData.Created = util.GetTimeSinceLabel(template.CreatedAt)
 	return &rowData
 }
 
-func renderUnstyledList(snapshotList []apiclient.SnapshotDto) {
-	for _, snapshot := range snapshotList {
-		RenderInfo(&snapshot, true)
+func renderUnstyledList(templateList []apiclient.BoxTemplateDto) {
+	for _, template := range templateList {
+		RenderInfo(&template, true)
 
-		if snapshot.Id != snapshotList[len(snapshotList)-1].Id {
+		if template.Id != templateList[len(templateList)-1].Id {
 			fmt.Printf("\n%s\n\n", common.SeparatorString)
 		}
 	}
@@ -89,19 +84,19 @@ func getRowFromRowData(rowData RowData) []string {
 	row := []string{
 		common.NameStyle.Render(rowData.Name),
 		rowData.State,
-		common.DefaultRowDataStyle.Render(rowData.Size),
+		common.DefaultRowDataStyle.Render(rowData.Resource),
 		common.DefaultRowDataStyle.Render(rowData.Created),
 	}
 
 	return row
 }
 
-func getStateSortPriorities(state1, state2 apiclient.SnapshotState) (int, int) {
-	pi, ok := snapshotListStatePriorities[state1]
+func getStateSortPriorities(state1, state2 apiclient.BoxTemplateState) (int, int) {
+	pi, ok := templateListStatePriorities[state1]
 	if !ok {
 		pi = 99
 	}
-	pj, ok2 := snapshotListStatePriorities[state2]
+	pj, ok2 := templateListStatePriorities[state2]
 	if !ok2 {
 		pj = 99
 	}
@@ -109,11 +104,11 @@ func getStateSortPriorities(state1, state2 apiclient.SnapshotState) (int, int) {
 	return pi, pj
 }
 
-// snapshots that have actions being performed on them have a higher priority when listing
-var snapshotListStatePriorities = map[apiclient.SnapshotState]int{
-	apiclient.SNAPSHOTSTATE_PENDING:  1,
-	apiclient.SNAPSHOTSTATE_PULLING:  1,
-	apiclient.SNAPSHOTSTATE_ERROR:    2,
-	apiclient.SNAPSHOTSTATE_ACTIVE:   3,
-	apiclient.SNAPSHOTSTATE_REMOVING: 4,
+// templates that have actions being performed on them have a higher priority when listing
+var templateListStatePriorities = map[apiclient.BoxTemplateState]int{
+	apiclient.BOXTEMPLATESTATE_PENDING:  1,
+	apiclient.BOXTEMPLATESTATE_PULLING:  1,
+	apiclient.BOXTEMPLATESTATE_ERROR:    2,
+	apiclient.BOXTEMPLATESTATE_ACTIVE:   3,
+	apiclient.BOXTEMPLATESTATE_REMOVING: 4,
 }

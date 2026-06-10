@@ -12,7 +12,7 @@ export class UserCreatedEvent {
   constructor(
     public readonly entityManager: EntityManager,
     public readonly user: User,
-    public readonly personalOrganizationQuota?: CreateOrganizationQuotaDto,
-    public readonly personalOrganizationDefaultRegionId?: string,
+    public readonly defaultOrganizationQuota?: CreateOrganizationQuotaDto,
+    public readonly defaultOrganizationDefaultRegionId?: string,
   ) {}
 }

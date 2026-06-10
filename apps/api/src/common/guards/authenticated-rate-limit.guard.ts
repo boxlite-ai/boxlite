@@ -12,6 +12,16 @@ import { getRedisConnectionToken } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
 import { OrganizationService } from '../../organization/services/organization.service'
 import { THROTTLER_SCOPE_KEY } from '../decorators/throttler-scope.decorator'
+import { AuthContextType } from '../interfaces/auth-context.interface'
+
+type RateLimitAuthContext = AuthContextType & {
+  organizationId?: string
+  userId?: string
+}
+
+type AuthenticatedRequest = Request & {
+  user?: RateLimitAuthContext
+}
 
 @Injectable()
 export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
@@ -28,7 +38,7 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
   }
 
   protected async getTracker(req: Request): Promise<string> {
-    const user = req.user as any
+    const user = (req as AuthenticatedRequest).user
 
     // Track by organization ID when available (shared quota per org)
     if (user?.organizationId) {
@@ -53,7 +63,7 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
 
   async handleRequest(requestProps: ThrottlerRequest): Promise<boolean> {
     const { context, throttler } = requestProps
-    const request = context.switchToHttp().getRequest<Request>()
+    const request = context.switchToHttp().getRequest<AuthenticatedRequest>()
     const isAuthenticated = request.user && this.isValidAuthContext(request.user)
 
     // Skip rate limiting for M2M system roles (checked AFTER auth runs)
@@ -93,7 +103,7 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
           }
         }
 
-        const user = request.user as any
+        const user = request.user
         const orgId = user?.organizationId
         if (orgId) {
           const orgLimits = await this.getCachedOrganizationRateLimits(orgId)
@@ -141,11 +151,11 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
     return true
   }
 
-  private isValidAuthContext(user: any): boolean {
-    return user && (user.userId || user.role)
+  private isValidAuthContext(user: RateLimitAuthContext | undefined): boolean {
+    return Boolean(user && (user.userId || user.role))
   }
 
-  private isSystemRole(user: any): boolean {
+  private isSystemRole(user: RateLimitAuthContext | undefined): boolean {
     // Skip rate limiting for M2M system roles (proxy, runner, ssh-gateway)
     return user?.role === 'ssh-gateway' || user?.role === 'proxy' || user?.role === 'runner'
   }

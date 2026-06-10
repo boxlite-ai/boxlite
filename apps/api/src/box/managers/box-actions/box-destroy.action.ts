@@ -32,7 +32,7 @@ export class BoxDestroyAction extends BoxAction {
       return DONT_SYNC_AGAIN
     }
 
-    if (box.state === BoxState.ARCHIVED || box.state === BoxState.PENDING_BUILD) {
+    if (box.state === BoxState.ARCHIVED) {
       await this.updateBoxState(box, BoxState.DESTROYED, lockCode)
       return DONT_SYNC_AGAIN
     }

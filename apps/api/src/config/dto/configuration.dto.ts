@@ -187,11 +187,11 @@ export class ConfigurationDto {
   proxyToolboxUrl: string
 
   @ApiProperty({
-    description: 'Default snapshot for boxes',
+    description: 'Default template for boxes',
     example: 'ubuntu:22.04',
   })
   @IsString()
-  defaultSnapshot: string
+  defaultTemplate: string
 
   @ApiProperty({
     description: 'Dashboard URL',
@@ -199,13 +199,6 @@ export class ConfigurationDto {
   })
   @IsString()
   dashboardUrl: string
-
-  @ApiProperty({
-    description: 'Maximum auto-archive interval in minutes',
-    example: 43200,
-  })
-  @IsNumber()
-  maxAutoArchiveInterval: number
 
   @ApiProperty({
     description: 'Whether maintenance mode is enabled',
@@ -281,9 +274,8 @@ export class ConfigurationDto {
     this.linkedAccountsEnabled = configService.get('oidc.managementApi.enabled')
     this.proxyTemplateUrl = configService.getOrThrow('proxy.templateUrl')
     this.proxyToolboxUrl = configService.getOrThrow('proxy.toolboxUrl')
-    this.defaultSnapshot = configService.getOrThrow('defaultSnapshot')
+    this.defaultTemplate = configService.getOrThrow('defaultTemplate')
     this.dashboardUrl = configService.getOrThrow('dashboardUrl')
-    this.maxAutoArchiveInterval = configService.getOrThrow('maxAutoArchiveInterval')
     this.maintananceMode = configService.getOrThrow('maintananceMode')
     this.environment = configService.getOrThrow('environment')
 

@@ -21,6 +21,7 @@ type Config struct {
 	RecordingsDir            string        `envconfig:"BOXLITE_RECORDINGS_DIR"`
 	OrganizationId           *string       `envconfig:"BOXLITE_ORGANIZATION_ID"`
 	RegionId                 *string       `envconfig:"BOXLITE_REGION_ID"`
+	TraceParent              *string       `envconfig:"BOXLITE_TRACEPARENT"`
 }
 
 var defaultDaemonLogFilePath = "/tmp/boxlite-daemon.log"

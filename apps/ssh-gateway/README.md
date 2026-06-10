@@ -44,14 +44,14 @@ Where:
 | Variable           | Description                           | Default                 | Required |
 | ------------------ | ------------------------------------- | ----------------------- | -------- |
 | `SSH_GATEWAY_PORT` | Port for the SSH gateway to listen on | `2222`                  | No       |
-| `API_URL`          | BoxLite API base URL                  | `http://localhost:3000` | No       |
+| `API_URL`          | BoxLite API base URL, including `/api` when the API is mounted there | `http://localhost:3000` | No       |
 | `API_KEY`          | BoxLite API authentication key        | -                       | **Yes**  |
 
 ### Example Environment
 
 ```bash
 export SSH_GATEWAY_PORT=2222
-export API_URL=https://api.boxlite.example.com
+export API_URL=https://api.boxlite.example.com/api
 export API_KEY=your-api-key-here
 ```
 
@@ -82,7 +82,7 @@ docker build -t ssh-gateway .
 
 ```bash
 docker run -p 2222:2222 \
-  -e API_URL=https://api.boxlite.example.com \
+  -e API_URL=https://api.boxlite.example.com/api \
   -e API_KEY=your-api-key-here \
   ssh-gateway
 ```

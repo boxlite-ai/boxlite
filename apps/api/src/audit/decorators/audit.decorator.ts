@@ -13,11 +13,13 @@ export type TypedRequest<T> = Omit<Request, 'body'> & { body: T }
 
 export const MASKED_AUDIT_VALUE = '********'
 
+export type AuditTargetId = string | string[] | null | undefined
+
 export interface AuditContext {
   action: AuditAction
   targetType?: AuditTarget
-  targetIdFromRequest?: (req: Request) => string | null | undefined
-  targetIdFromResult?: (result: any) => string | null | undefined
+  targetIdFromRequest?: (req: Request) => AuditTargetId
+  targetIdFromResult?: (result: any) => AuditTargetId
   requestMetadata?: Record<string, (req: Request) => any>
 }
 

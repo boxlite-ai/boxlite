@@ -29,8 +29,8 @@ type ReadLogParams struct {
 type ResourceType string
 
 const (
-	ResourceTypeBox      ResourceType = "box"
-	ResourceTypeSnapshot ResourceType = "snapshots"
+	ResourceTypeBox      ResourceType = "sandbox"
+	ResourceTypeTemplate ResourceType = "templates"
 )
 
 func ReadBuildLogs(ctx context.Context, params ReadLogParams) {

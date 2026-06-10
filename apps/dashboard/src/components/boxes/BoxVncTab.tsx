@@ -11,8 +11,9 @@ import { RoutePath } from '@/enums/RoutePath'
 import { useStartVncMutation } from '@/hooks/mutations/useStartVncMutation'
 import { useVncInitialStatusQuery, useVncPollStatusQuery } from '@/hooks/queries/useVncStatusQuery'
 import { useVncSessionQuery } from '@/hooks/queries/useVncSessionQuery'
+import { getBoxRouteId } from '@/lib/box-identity'
 import { cn } from '@/lib/utils'
-import { isStoppable } from '@/lib/utils/box'
+import { isStoppable } from '@/lib/utils/sandbox'
 import { Box } from '@boxlite-ai/api-client'
 import { Spinner } from '@/components/ui/spinner'
 import { Maximize2, Monitor, Play, RefreshCw } from 'lucide-react'
@@ -63,8 +64,20 @@ export function BoxVncTab({ box, variant = 'tab' }: { box: Box; variant?: 'tab' 
     (vncReady && sessionLoading)
 
   const unavailable = isMissingDeps || startMissingDeps
+  const initialError = !isMissingDeps ? initialStatusQuery.error?.message : undefined
   const pollError = pollStatusQuery.error?.message
-  const anyError = startError && !startMissingDeps ? startError : pollError
+  const anyError = initialError || (startError && !startMissingDeps ? startError : pollError)
+  const retryVncConnection = () => {
+    reset()
+    startMutation.reset()
+
+    if (alreadyActive) {
+      void initialStatusQuery.refetch()
+      return
+    }
+
+    startMutation.mutate()
+  }
 
   if (!running) {
     return renderPanel(
@@ -116,31 +129,6 @@ export function BoxVncTab({ box, variant = 'tab' }: { box: Box; variant?: 'tab' 
     )
   }
 
-  // Not yet started - show start button
-  if (!vncReady && !isStarting) {
-    return renderPanel(
-      <Empty className="border-0">
-        <EmptyHeader>
-          <EmptyMedia variant="icon">
-            <Monitor className="size-4" />
-          </EmptyMedia>
-          <EmptyTitle>VNC Desktop</EmptyTitle>
-          <EmptyDescription>
-            Start the VNC server to access a graphical desktop.{' '}
-            <a href={`${BOXLITE_DOCS_URL}/en/vnc-access`} target="_blank" rel="noopener noreferrer">
-              Learn more
-            </a>
-            .
-          </EmptyDescription>
-        </EmptyHeader>
-        <Button onClick={() => startMutation.mutate()}>
-          <Play className="size-4" />
-          Start VNC
-        </Button>
-      </Empty>,
-    )
-  }
-
   // Starting / polling / getting URL
   if (isStarting) {
     return renderPanel(
@@ -166,7 +154,7 @@ export function BoxVncTab({ box, variant = 'tab' }: { box: Box; variant?: 'tab' 
           <EmptyTitle>Failed to connect</EmptyTitle>
           <EmptyDescription>{anyError || 'Something went wrong while connecting to VNC.'}</EmptyDescription>
         </EmptyHeader>
-        <Button variant="outline" size="sm" onClick={reset}>
+        <Button variant="outline" size="sm" onClick={retryVncConnection}>
           <RefreshCw className="size-4" />
           Retry
         </Button>
@@ -174,9 +162,34 @@ export function BoxVncTab({ box, variant = 'tab' }: { box: Box; variant?: 'tab' 
     )
   }
 
+  // Not yet started - show start button
+  if (!vncReady) {
+    return renderPanel(
+      <Empty className="border-0">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <Monitor className="size-4" />
+          </EmptyMedia>
+          <EmptyTitle>VNC Desktop</EmptyTitle>
+          <EmptyDescription>
+            Start the VNC server to access a graphical desktop.{' '}
+            <a href={`${BOXLITE_DOCS_URL}/en/vnc-access`} target="_blank" rel="noopener noreferrer">
+              Learn more
+            </a>
+            .
+          </EmptyDescription>
+        </EmptyHeader>
+        <Button onClick={() => startMutation.mutate()}>
+          <Play className="size-4" />
+          Start VNC
+        </Button>
+      </Empty>,
+    )
+  }
+
   // Active session
   if (session) {
-    const fullscreenHref = RoutePath.BOX_VNC.replace(':boxId', box.id)
+    const fullscreenHref = RoutePath.BOX_VNC.replace(':boxId', getBoxRouteId(box))
     return renderPanel(
       <>
         <iframe

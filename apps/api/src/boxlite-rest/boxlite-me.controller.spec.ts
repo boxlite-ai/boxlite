@@ -13,7 +13,7 @@ describe('BoxliteMeController', () => {
   // resolvePathPrefix only touches OrganizationService on the user-session path;
   // API-key contexts short-circuit on apiKey.organizationId.
   function makeController(orgFindByUser: jest.Mock = jest.fn()): BoxliteMeController {
-    const organizationService = { findByUser: orgFindByUser } as unknown as OrganizationService
+    const organizationService = { findByUserWithDefaultFlag: orgFindByUser } as unknown as OrganizationService
     return new BoxliteMeController(organizationService)
   }
 

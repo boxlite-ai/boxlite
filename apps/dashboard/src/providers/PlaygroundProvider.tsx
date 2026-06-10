@@ -8,7 +8,7 @@ import {
   DEFAULT_CPU_RESOURCES,
   DEFAULT_DISK_RESOURCES,
   DEFAULT_MEMORY_RESOURCES,
-  BOX_SNAPSHOT_DEFAULT_VALUE,
+  SANDBOX_TEMPLATE_DEFAULT_VALUE,
 } from '@/constants/Playground'
 import {
   ActionRuntimeError,
@@ -28,7 +28,7 @@ import {
 } from '@/contexts/PlaygroundContext'
 import { MouseButton, MouseScrollDirection, BoxParametersSections, ScreenshotFormatOption } from '@/enums/Playground'
 import { getLanguageCodeToRun, objectHasAnyValue } from '@/lib/playground'
-import { CreateBoxBaseParams, CreateBoxFromImageParams, CreateBoxFromSnapshotParams, Image } from '@boxlite-ai/sdk'
+import { CreateBoxBaseParams, CreateBoxFromImageParams, CreateBoxFromTemplateParams, Image } from '@boxlite-ai/sdk'
 import { useCallback, useState } from 'react'
 
 const PARAM_SECTION_MAP: Partial<Record<keyof BoxParams, BoxParametersSections>> = {
@@ -44,10 +44,10 @@ const PARAM_SECTION_MAP: Partial<Record<keyof BoxParams, BoxParametersSections>>
 
 export const PlaygroundProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [openedParametersSections, setOpenedParametersSections] = useState<BoxParametersSections[]>([
-    BoxParametersSections.BOX_MANAGEMENT,
+    BoxParametersSections.SANDBOX_MANAGEMENT,
   ])
   const [enabledSections, setEnabledSections] = useState<BoxParametersSections[]>([
-    BoxParametersSections.BOX_MANAGEMENT,
+    BoxParametersSections.SANDBOX_MANAGEMENT,
   ])
   const [pendingScrollSection, setPendingScrollSection] = useState<BoxParametersSections | null>(null)
 
@@ -65,7 +65,7 @@ export const PlaygroundProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const clearPendingScrollSection = useCallback(() => setPendingScrollSection(null), [])
 
   const [boxParametersState, setBoxParametersState] = useState<BoxParams>({
-    snapshotName: BOX_SNAPSHOT_DEFAULT_VALUE,
+    templateName: SANDBOX_TEMPLATE_DEFAULT_VALUE,
     resources: {
       cpu: DEFAULT_CPU_RESOURCES,
       memory: DEFAULT_MEMORY_RESOURCES,
@@ -73,7 +73,6 @@ export const PlaygroundProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     },
     createBoxBaseParams: {
       autoStopInterval: 5,
-      autoArchiveInterval: 5,
       autoDeleteInterval: 0,
     },
     listFilesParams: {
@@ -295,27 +294,25 @@ export const PlaygroundProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     const createBoxParamsExist = objectHasAnyValue(boxParametersState['createBoxBaseParams'])
     const useAutoStopInterval =
       createBoxParamsExist && boxParametersState['createBoxBaseParams']['autoStopInterval'] !== undefined
-    const useAutoArchiveInterval =
-      createBoxParamsExist && boxParametersState['createBoxBaseParams']['autoArchiveInterval'] !== undefined
     const useAutoDeleteInterval =
       createBoxParamsExist && boxParametersState['createBoxBaseParams']['autoDeleteInterval'] !== undefined
 
     const createBoxFromImageParams: CreateBoxFromImageParams = { image: Image.debianSlim('3.13') } // Default and fixed image if CreateBoxFromImageParams are used
-    const snapshotName = boxParametersState['snapshotName']
-    const useCustomBoxSnapshotName = snapshotName !== undefined && snapshotName !== BOX_SNAPSHOT_DEFAULT_VALUE
-    const createBoxFromSnapshotParams: CreateBoxFromSnapshotParams = {
-      snapshot: useCustomBoxSnapshotName ? snapshotName : undefined,
+    const templateName = boxParametersState['templateName']
+    const useCustomImageName = templateName !== undefined && templateName !== SANDBOX_TEMPLATE_DEFAULT_VALUE
+    const createBoxFromTemplateParams: CreateBoxFromTemplateParams = {
+      templateId: useCustomImageName ? templateName : undefined,
     }
-    const createBoxFromSnapshot = useCustomBoxSnapshotName || useDefaultResourceValues
+    const createBoxFromTemplate = useCustomImageName || useDefaultResourceValues
 
-    // Create from base image if default resource values are not used
-    // Snapshot parameter has precedence over resources and createBoxFromImage
-    const createBoxFromImage = !useDefaultResourceValues && !useCustomBoxSnapshotName
+    // SDK/API still use templateId for persisted dashboard Images. That
+    // template-backed path takes precedence over ad-hoc image/resource params.
+    const createBoxFromImage = !useDefaultResourceValues && !useCustomImageName
 
-    // We specify resources for box creation if there is any specified resource value which has value different from the default one and useCustomBoxSnapshotName is false
-    const useResources = !useCustomBoxSnapshotName && resourceValuesExist && !useDefaultResourceValues
+    // We specify resources for box creation if there is any specified resource value which has value different from the default one and useCustomImageName is false
+    const useResources = !useCustomImageName && resourceValuesExist && !useDefaultResourceValues
     const useBoxCreateParams =
-      useLanguageParam || useResources || createBoxParamsExist || useCustomBoxSnapshotName || createBoxFromImage
+      useLanguageParam || useResources || createBoxParamsExist || useCustomImageName || createBoxFromImage
 
     if (createBoxFromImage) {
       // Set CreateBoxFromImageParams specific params
@@ -326,15 +323,13 @@ export const PlaygroundProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         if (useResourcesDisk) createBoxFromImageParams.resources.disk = boxParametersState['resources']['disk']
       }
     }
-    let createBoxParams: CreateBoxBaseParams | CreateBoxFromImageParams | CreateBoxFromSnapshotParams = {}
-    if (createBoxFromSnapshot) createBoxParams = createBoxFromSnapshotParams
+    let createBoxParams: CreateBoxBaseParams | CreateBoxFromImageParams | CreateBoxFromTemplateParams = {}
+    if (createBoxFromTemplate) createBoxParams = createBoxFromTemplateParams
     else if (createBoxFromImage) createBoxParams = createBoxFromImageParams
     // Set CreateBoxBaseParams params which are common for both params types
     if (useLanguageParam) createBoxParams.language = boxParametersState['language']
     if (useAutoStopInterval)
       createBoxParams.autoStopInterval = boxParametersState['createBoxBaseParams']['autoStopInterval']
-    if (useAutoArchiveInterval)
-      createBoxParams.autoArchiveInterval = boxParametersState['createBoxBaseParams']['autoArchiveInterval']
     if (useAutoDeleteInterval)
       createBoxParams.autoDeleteInterval = boxParametersState['createBoxBaseParams']['autoDeleteInterval']
     createBoxParams.labels = { 'boxlite-playground': 'true' }
@@ -348,12 +343,11 @@ export const PlaygroundProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       useResourcesDisk,
       createBoxParamsExist,
       useAutoStopInterval,
-      useAutoArchiveInterval,
       useAutoDeleteInterval,
       useBoxCreateParams,
-      useCustomBoxSnapshotName,
+      useCustomImageName,
       createBoxFromImage,
-      createBoxFromSnapshot,
+      createBoxFromTemplate,
       createBoxParams,
     }
   }, [boxParametersState])

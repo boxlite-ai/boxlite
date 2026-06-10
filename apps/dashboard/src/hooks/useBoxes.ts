@@ -7,6 +7,7 @@
 import { QueryKey, useQuery } from '@tanstack/react-query'
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
+import { isTransitioning } from '@/lib/utils/sandbox'
 import {
   ListBoxesPaginatedOrderEnum,
   ListBoxesPaginatedSortEnum,
@@ -20,7 +21,7 @@ export interface BoxFilters {
   labels?: Record<string, string>
   includeErroredDeleted?: boolean
   states?: ListBoxesPaginatedStatesEnum[]
-  snapshots?: string[]
+  templates?: string[]
   regions?: string[]
   minCpu?: number
   maxCpu?: number
@@ -37,7 +38,7 @@ export interface BoxSorting {
   direction?: ListBoxesPaginatedOrderEnum
 }
 
-export const DEFAULT_BOX_SORTING: BoxSorting = {
+export const DEFAULT_SANDBOX_SORTING: BoxSorting = {
   field: ListBoxesPaginatedSortEnum.UPDATED_AT,
   direction: ListBoxesPaginatedOrderEnum.DESC,
 }
@@ -88,7 +89,7 @@ export function useBoxes(queryKey: QueryKey, params: BoxQueryParams) {
         filters.labels ? JSON.stringify(filters.labels) : undefined,
         filters.includeErroredDeleted,
         filters.states,
-        filters.snapshots,
+        filters.templates,
         filters.regions,
         filters.minCpu,
         filters.maxCpu,
@@ -128,6 +129,10 @@ export function useBoxes(queryKey: QueryKey, params: BoxQueryParams) {
     },
     enabled: !!selectedOrganization,
     staleTime: 1000 * 10, // 10 seconds
+    refetchInterval: (query) => {
+      const boxes = query.state.data?.items
+      return boxes?.some(isTransitioning) ? 3000 : false
+    },
     gcTime: 1000 * 60 * 5, // 5 minutes,
   })
 }

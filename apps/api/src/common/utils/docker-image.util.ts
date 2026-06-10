@@ -16,6 +16,8 @@ export interface DockerImageInfo {
   repository: string
   /** The tag or digest (e.g. 'latest' or 'sha256:123...') */
   tag?: string
+  /** The digest (e.g. 'sha256:123...') */
+  digest?: string
   /** The full original image name */
   originalName: string
 }
@@ -25,6 +27,7 @@ export class DockerImage implements DockerImageInfo {
   project?: string
   repository: string
   tag?: string
+  digest?: string
   originalName: string
 
   constructor(info: DockerImageInfo) {
@@ -32,6 +35,7 @@ export class DockerImage implements DockerImageInfo {
     this.project = info.project
     this.repository = info.repository
     this.tag = info.tag
+    this.digest = info.digest
     this.originalName = info.originalName
   }
 
@@ -46,6 +50,9 @@ export class DockerImage implements DockerImageInfo {
     if (this.tag) {
       name = `${name}:${this.tag}`
     }
+    if (this.digest) {
+      name = `${name}@${this.digest}`
+    }
     return name
   }
 }
@@ -58,6 +65,7 @@ export class DockerImage implements DockerImageInfo {
  *
  * Examples:
  * - registry:5000/test/image:latest -> { registry: 'registry:5000', project: 'test', repository: 'image', tag: 'latest' }
+ * - ghcr.io/test/image@sha256:abc... -> { registry: 'ghcr.io', project: 'test', repository: 'image', digest: 'sha256:abc...' }
  * - docker.io/library/ubuntu:20.04 -> { registry: 'docker.io', project: 'library', repository: 'ubuntu', tag: '20.04' }
  * - ubuntu:20.04 -> { registry: undefined, project: undefined, repository: 'ubuntu', tag: '20.04' }
  * - ubuntu -> { registry: undefined, project: undefined, repository: 'ubuntu', tag: undefined }
@@ -80,7 +88,7 @@ export function parseDockerImage(imageName: string): DockerImage {
     if (!nameWithoutDigest || !digest || !/^[a-f0-9]{64}$/.test(digest)) {
       throw new Error('Invalid digest format. Must be image@sha256:64_hex_characters')
     }
-    result.tag = `sha256:${digest}`
+    result.digest = `sha256:${digest}`
     // Split remaining parts
     parts = nameWithoutDigest.split('/')
 

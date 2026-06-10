@@ -4,11 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
 import { OrganizationSuspendedError } from '@/api/errors'
-import { PageContent, PageHeader, PageLayout, PageTitle } from '@/components/PageLayout'
+import { OnboardingGuideDialog } from '@/components/OnboardingGuideDialog'
+import { PageContent, PageLayout } from '@/components/PageLayout'
 import { CreateBoxSheet } from '@/components/Box/CreateBoxSheet'
-import BoxDetailsSheet from '@/components/BoxDetailsSheet'
 import { BoxTable } from '@/components/BoxTable'
 import {
   AlertDialog,
@@ -22,18 +21,16 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
-import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
 import { DEFAULT_PAGE_SIZE } from '@/constants/Pagination'
 import { LocalStorageKey } from '@/enums/LocalStorageKey'
 import { RoutePath } from '@/enums/RoutePath'
-import { SnapshotFilters, SnapshotQueryParams, useSnapshotsQuery } from '@/hooks/queries/useSnapshotsQuery'
 import { CopyableValue } from '@/components/ui/copyable-value'
 import { useApi } from '@/hooks/useApi'
 import { useConfig } from '@/hooks/useConfig'
 import { useNotificationSocket } from '@/hooks/useNotificationSocket'
 import { useRegions } from '@/hooks/useRegions'
 import {
-  DEFAULT_BOX_SORTING,
+  DEFAULT_SANDBOX_SORTING,
   getBoxesQueryKey,
   BoxFilters,
   BoxQueryParams,
@@ -44,23 +41,70 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { createBulkActionToast } from '@/lib/bulk-action-toast'
 import { handleApiError } from '@/lib/error-handling'
 import { getLocalStorageItem, setLocalStorageItem } from '@/lib/local-storage'
+import {
+  ONBOARDING_ENTRY_HIGHLIGHT_EVENT,
+  ONBOARDING_OPEN_EVENT,
+  mergeOnboardingProgress,
+  ONBOARDING_PROGRESS_EVENT,
+  readOnboardingProgress,
+  type OnboardingProgress,
+} from '@/lib/onboarding-progress'
+import { getBoxRouteId } from '@/lib/box-identity'
 import { formatDuration, pluralize } from '@/lib/utils'
-import { OrganizationUserRoleEnum, Box, BoxDesiredState, BoxState, SshAccessDto } from '@boxlite-ai/api-client'
+import {
+  OrganizationRolePermissionsEnum,
+  OrganizationUserRoleEnum,
+  Box,
+  BoxDesiredState,
+  BoxState,
+  SshAccessDto,
+} from '@boxlite-ai/api-client'
 import { QueryKey, useQueryClient } from '@tanstack/react-query'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from 'react-oidc-context'
-import { useNavigate } from 'react-router-dom'
+import { generatePath, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
+interface BoxesLocationState {
+  openCreateBox?: boolean
+}
+
 const Boxes: React.FC = () => {
-  const { boxApi, apiKeyApi, toolboxApi } = useApi()
+  const { boxApi } = useApi()
   const { user } = useAuth()
+  const userId = user?.profile.sub
   const navigate = useNavigate()
+  const location = useLocation()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { notificationSocket } = useNotificationSocket()
   const config = useConfig()
   const queryClient = useQueryClient()
   const { selectedOrganization, authenticatedUserOrganizationMember, authenticatedUserHasPermission } =
     useSelectedOrganization()
+  const [createBoxOpen, setCreateBoxOpen] = useState(false)
+  const [showOnboardingDialog, setShowOnboardingDialog] = useState(false)
+  const [onboardingProgress, setOnboardingProgress] = useState<OnboardingProgress>(() => readOnboardingProgress(userId))
+
+  const updateOnboardingProgress = useCallback(
+    (progress: OnboardingProgress) => {
+      setOnboardingProgress(mergeOnboardingProgress(userId, progress))
+    },
+    [userId],
+  )
+
+  useEffect(() => {
+    setOnboardingProgress(readOnboardingProgress(userId))
+  }, [userId])
+
+  useEffect(() => {
+    const handleOnboardingProgress = (event: Event) => {
+      const progress = (event as CustomEvent<OnboardingProgress>).detail
+      setOnboardingProgress(progress ?? readOnboardingProgress(userId))
+    }
+
+    window.addEventListener(ONBOARDING_PROGRESS_EVENT, handleOnboardingProgress)
+    return () => window.removeEventListener(ONBOARDING_PROGRESS_EVENT, handleOnboardingProgress)
+  }, [userId])
 
   // Pagination
 
@@ -84,7 +128,7 @@ const Boxes: React.FC = () => {
 
   // Sorting
 
-  const [sorting, setSorting] = useState<BoxSorting>(DEFAULT_BOX_SORTING)
+  const [sorting, setSorting] = useState<BoxSorting>(DEFAULT_SANDBOX_SORTING)
 
   const handleSortingChange = useCallback((sorting: BoxSorting) => {
     setSorting(sorting)
@@ -116,6 +160,7 @@ const Boxes: React.FC = () => {
     error: boxesDataError,
     refetch: refetchBoxesData,
   } = useBoxes(queryKey, queryParams)
+  const hasBoxes = (boxesData?.items.length ?? 0) > 0 || (boxesData?.total ?? 0) > 0
 
   useEffect(() => {
     if (boxesDataError) {
@@ -126,10 +171,25 @@ const Boxes: React.FC = () => {
   const updateBoxInCache = useCallback(
     (boxId: string, updates: Partial<Box>) => {
       queryClient.setQueryData(queryKey, (oldData: any) => {
-        if (!oldData) return oldData
+        if (!oldData?.items) return oldData
         return {
           ...oldData,
           items: oldData.items.map((box: Box) => (box.id === boxId ? { ...box, ...updates } : box)),
+        }
+      })
+    },
+    [queryClient, queryKey],
+  )
+
+  const removeBoxFromCache = useCallback(
+    (boxId: string) => {
+      queryClient.setQueryData(queryKey, (oldData: any) => {
+        if (!oldData?.items) return oldData
+        const nextItems = oldData.items.filter((box: Box) => box.id !== boxId)
+        return {
+          ...oldData,
+          items: nextItems,
+          total: Math.max((oldData.total ?? nextItems.length) - 1, nextItems.length),
         }
       })
     },
@@ -203,38 +263,11 @@ const Boxes: React.FC = () => {
   const [boxToDelete, setBoxToDelete] = useState<string | null>(null)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
 
-  // Box Details Drawer
-
-  const [selectedBox, setSelectedBox] = useState<Box | null>(null)
-  const [showBoxDetails, setShowBoxDetails] = useState(false)
-
-  useEffect(() => {
-    if (!selectedBox || !boxesData?.items) {
-      return
-    }
-
-    const selectedBoxInData = boxesData.items.find((s) => s.id === selectedBox.id)
-
-    if (!selectedBoxInData) {
-      setSelectedBox(null)
-      setShowBoxDetails(false)
-      return
-    }
-
-    if (selectedBoxInData !== selectedBox) {
-      setSelectedBox(selectedBoxInData)
-    }
-  }, [boxesData?.items, selectedBox])
-
   const performBoxStateOptimisticUpdate = useCallback(
     (boxId: string, newState: BoxState) => {
       updateBoxInCache(boxId, { state: newState })
-
-      if (selectedBox?.id === boxId) {
-        setSelectedBox((prev) => (prev ? { ...prev, state: newState } : null))
-      }
     },
-    [updateBoxInCache, selectedBox?.id],
+    [updateBoxInCache],
   )
 
   const revertBoxStateOptimisticUpdate = useCallback(
@@ -244,12 +277,8 @@ const Boxes: React.FC = () => {
       }
 
       updateBoxInCache(boxId, { state: previousState })
-
-      if (selectedBox?.id === boxId) {
-        setSelectedBox((prev) => (prev ? { ...prev, state: previousState } : null))
-      }
     },
-    [updateBoxInCache, selectedBox?.id],
+    [updateBoxInCache],
   )
 
   // SSH Access Dialogs
@@ -262,51 +291,20 @@ const Boxes: React.FC = () => {
   const [sshBoxId, setSshBoxId] = useState<string>('')
   const [copied, setCopied] = useState<string | null>(null)
 
-  // Snapshot Filter
+  // TODO(image-rewrite): template/image listing removed with the image/template subsystem.
 
-  const [snapshotFilters, setSnapshotFilters] = useState<SnapshotFilters>({})
-
-  const handleSnapshotFiltersChange = useCallback((filters: Partial<SnapshotFilters>) => {
-    setSnapshotFilters((prev) => ({ ...prev, ...filters }))
-  }, [])
-
-  const snapshotsQueryParams = useMemo<SnapshotQueryParams>(
-    () => ({
-      page: 1,
-      pageSize: 100,
-      filters: snapshotFilters,
-    }),
-    [snapshotFilters],
-  )
-
-  const {
-    data: snapshotsData,
-    isLoading: snapshotsDataIsLoading,
-    error: snapshotsDataError,
-  } = useSnapshotsQuery(snapshotsQueryParams)
-
-  const snapshotsDataHasMore = useMemo(() => {
-    return snapshotsData && snapshotsData.totalPages > 1
-  }, [snapshotsData])
-
-  useEffect(() => {
-    if (snapshotsDataError) {
-      handleApiError(snapshotsDataError, 'Failed to fetch snapshots')
-    }
-  }, [snapshotsDataError])
-
-  // Region Filter
-
-  const { availableRegions: regionsData, loadingAvailableRegions: regionsDataIsLoading, getRegionName } = useRegions()
+  const { getRegionName } = useRegions()
 
   // Subscribe to Box Events
 
   useEffect(() => {
-    const handleBoxCreatedEvent = (box: Box) => {
+    const handleBoxCreatedEvent = () => {
+      updateOnboardingProgress({ boxCreated: true })
+
       const isFirstPage = paginationParams.pageIndex === 0
       const isDefaultFilters = Object.keys(filters).length === 0
       const isDefaultSorting =
-        sorting.field === DEFAULT_BOX_SORTING.field && sorting.direction === DEFAULT_BOX_SORTING.direction
+        sorting.field === DEFAULT_SANDBOX_SORTING.field && sorting.direction === DEFAULT_SANDBOX_SORTING.direction
 
       const shouldRefetchActiveQueries = isFirstPage && isDefaultFilters && isDefaultSorting
 
@@ -316,7 +314,7 @@ const Boxes: React.FC = () => {
     const handleBoxStateUpdatedEvent = (data: { box: Box; oldState: BoxState; newState: BoxState }) => {
       // warm pool boxes
       if (data.oldState === data.newState && data.newState === BoxState.STARTED) {
-        handleBoxCreatedEvent(data.box)
+        handleBoxCreatedEvent()
         return
       }
 
@@ -330,7 +328,11 @@ const Boxes: React.FC = () => {
         updatedState = BoxState.DESTROYED
       }
 
-      performBoxStateOptimisticUpdate(data.box.id, updatedState)
+      if (updatedState === BoxState.DESTROYED) {
+        removeBoxFromCache(data.box.id)
+      } else {
+        performBoxStateOptimisticUpdate(data.box.id, updatedState)
+      }
 
       markAllBoxQueriesAsStale()
     }
@@ -350,7 +352,7 @@ const Boxes: React.FC = () => {
         return
       }
 
-      performBoxStateOptimisticUpdate(data.box.id, BoxState.DESTROYED)
+      removeBoxFromCache(data.box.id)
 
       markAllBoxQueriesAsStale()
     }
@@ -359,14 +361,14 @@ const Boxes: React.FC = () => {
       return
     }
 
-    notificationSocket.on('box.created', handleBoxCreatedEvent)
-    notificationSocket.on('box.state.updated', handleBoxStateUpdatedEvent)
-    notificationSocket.on('box.desired-state.updated', handleBoxDesiredStateUpdatedEvent)
+    notificationSocket.on('sandbox.created', handleBoxCreatedEvent)
+    notificationSocket.on('sandbox.state.updated', handleBoxStateUpdatedEvent)
+    notificationSocket.on('sandbox.desired-state.updated', handleBoxDesiredStateUpdatedEvent)
 
     return () => {
-      notificationSocket.off('box.created', handleBoxCreatedEvent)
-      notificationSocket.off('box.state.updated', handleBoxStateUpdatedEvent)
-      notificationSocket.off('box.desired-state.updated', handleBoxDesiredStateUpdatedEvent)
+      notificationSocket.off('sandbox.created', handleBoxCreatedEvent)
+      notificationSocket.off('sandbox.state.updated', handleBoxStateUpdatedEvent)
+      notificationSocket.off('sandbox.desired-state.updated', handleBoxDesiredStateUpdatedEvent)
     }
   }, [
     filters,
@@ -374,9 +376,17 @@ const Boxes: React.FC = () => {
     notificationSocket,
     paginationParams.pageIndex,
     performBoxStateOptimisticUpdate,
+    removeBoxFromCache,
     sorting.direction,
     sorting.field,
+    updateOnboardingProgress,
   ])
+
+  useEffect(() => {
+    if (hasBoxes && !onboardingProgress.boxCreated) {
+      updateOnboardingProgress({ boxCreated: true })
+    }
+  }, [hasBoxes, onboardingProgress.boxCreated, updateOnboardingProgress])
 
   // Box Action Handlers
 
@@ -485,42 +495,13 @@ const Boxes: React.FC = () => {
       await boxApi.deleteBox(id, selectedOrganization?.id)
       setBoxToDelete(null)
       setShowDeleteDialog(false)
+      removeBoxFromCache(id)
 
-      if (selectedBox?.id === id) {
-        setShowBoxDetails(false)
-        setSelectedBox(null)
-      }
-
-      toast.success(`Deleting box with ID:  ${id}`)
+      toast.success(`Deleting box with ID: ${id}`)
 
       await markAllBoxQueriesAsStale()
     } catch (error) {
       handleApiError(error, 'Failed to delete box')
-      revertBoxStateOptimisticUpdate(id, previousState)
-    } finally {
-      setBoxIsLoading((prev) => ({ ...prev, [id]: false }))
-      setTimeout(() => {
-        setBoxStateIsTransitioning((prev) => ({ ...prev, [id]: false }))
-      }, 2000)
-    }
-  }
-
-  const handleArchive = async (id: string) => {
-    setBoxIsLoading((prev) => ({ ...prev, [id]: true }))
-    setBoxStateIsTransitioning((prev) => ({ ...prev, [id]: true }))
-
-    const boxToArchive = boxesData?.items.find((s) => s.id === id)
-    const previousState = boxToArchive?.state
-
-    await cancelQueryRefetches(queryKey)
-    performBoxStateOptimisticUpdate(id, BoxState.ARCHIVING)
-
-    try {
-      await boxApi.archiveBox(id, selectedOrganization?.id)
-      toast.success(`Archiving box with ID: ${id}`)
-      await markAllBoxQueriesAsStale()
-    } catch (error) {
-      handleApiError(error, 'Failed to archive box')
       revertBoxStateOptimisticUpdate(id, previousState)
     } finally {
       setBoxIsLoading((prev) => ({ ...prev, [id]: false }))
@@ -558,6 +539,7 @@ const Boxes: React.FC = () => {
       let processedCount = 0
       let successCount = 0
       let failureCount = 0
+      const successfulIds: string[] = []
 
       const totalLabel = pluralize(ids.length, 'box', 'boxes')
       const onCancel = () => {
@@ -584,6 +566,7 @@ const Boxes: React.FC = () => {
           try {
             await apiCall(id)
             successCount += 1
+            successfulIds.push(id)
           } catch (error) {
             failureCount += 1
             revertBoxStateOptimisticUpdate(id, previousStatesById.get(id))
@@ -603,7 +586,7 @@ const Boxes: React.FC = () => {
         bulkToast.error(`${actionName} boxes failed.`)
       }
 
-      return { successCount, failureCount }
+      return { successCount, failureCount, successfulIds }
     },
     [
       cancelQueryRefetches,
@@ -611,6 +594,7 @@ const Boxes: React.FC = () => {
       boxesData?.items,
       performBoxStateOptimisticUpdate,
       revertBoxStateOptimisticUpdate,
+      removeBoxFromCache,
       markAllBoxQueriesAsStale,
     ],
   )
@@ -643,24 +627,8 @@ const Boxes: React.FC = () => {
       },
     })
 
-  const handleBulkArchive = (ids: string[]) =>
-    executeBulkAction({
-      ids,
-      actionName: 'Archiving',
-      optimisticState: BoxState.ARCHIVING,
-      apiCall: (id) => boxApi.archiveBox(id, selectedOrganization?.id),
-      toastMessages: {
-        successTitle: `${pluralize(ids.length, 'box', 'boxes')} archived.`,
-        errorTitle: `Failed to archive ${pluralize(ids.length, 'box', 'boxes')}.`,
-        warningTitle: 'Failed to archive some boxes.',
-        canceledTitle: 'Archive canceled.',
-      },
-    })
-
   const handleBulkDelete = async (ids: string[]) => {
-    const selectedBoxInBulk = selectedBox && ids.includes(selectedBox.id)
-
-    await executeBulkAction({
+    const result = await executeBulkAction({
       ids,
       actionName: 'Deleting',
       optimisticState: BoxState.DESTROYING,
@@ -672,11 +640,7 @@ const Boxes: React.FC = () => {
         canceledTitle: 'Delete canceled.',
       },
     })
-
-    if (selectedBoxInBulk) {
-      setShowBoxDetails(false)
-      setSelectedBox(null)
-    }
+    result.successfulIds.forEach(removeBoxFromCache)
   }
 
   const getPortPreviewUrl = useCallback(
@@ -691,98 +655,8 @@ const Boxes: React.FC = () => {
     [boxApi, selectedOrganization],
   )
 
-  const getVncUrl = async (boxId: string): Promise<string | null> => {
-    try {
-      const portPreviewUrl = await getPortPreviewUrl(boxId, 6080)
-      return portPreviewUrl + '/vnc.html'
-    } catch (error) {
-      handleApiError(error, 'Failed to construct VNC URL')
-      return null
-    }
-  }
-
   const handleVnc = async (id: string) => {
-    setBoxIsLoading((prev) => ({ ...prev, [id]: true }))
-
-    // Notify user immediately that we're checking VNC status
-    toast.info('Checking VNC desktop status...')
-
-    try {
-      // First, check if computer use is already started
-      const statusResponse = await toolboxApi.getComputerUseStatusDeprecated(id, selectedOrganization?.id)
-      const status = statusResponse.data.status
-
-      // Check if computer use is active (all processes running)
-      if (status === 'active') {
-        const vncUrl = await getVncUrl(id)
-        if (vncUrl) {
-          window.open(vncUrl, '_blank')
-          toast.success('Opening VNC desktop...')
-        }
-      } else {
-        // Computer use is not active, try to start it
-        try {
-          await toolboxApi.startComputerUseDeprecated(id, selectedOrganization?.id)
-          toast.success('Starting VNC desktop...')
-
-          // Wait a moment for processes to start, then open VNC
-          await new Promise((resolve) => setTimeout(resolve, 5000))
-
-          try {
-            const newStatusResponse = await toolboxApi.getComputerUseStatusDeprecated(id, selectedOrganization?.id)
-            const newStatus = newStatusResponse.data.status
-
-            if (newStatus === 'active') {
-              const vncUrl = await getVncUrl(id)
-
-              if (vncUrl) {
-                window.open(vncUrl, '_blank')
-                toast.success('VNC desktop is ready!', {
-                  action: (
-                    <Button variant="secondary" onClick={() => window.open(vncUrl, '_blank')}>
-                      Open in new tab
-                    </Button>
-                  ),
-                })
-              }
-            } else {
-              toast.error(`VNC desktop failed to start. Status: ${newStatus}`)
-            }
-          } catch (error) {
-            handleApiError(error, 'Failed to check VNC status after start')
-          }
-        } catch (startError: any) {
-          // Check if this is a computer-use availability error
-          const errorMessage = startError?.response?.data?.message || startError?.message || String(startError)
-
-          if (errorMessage === 'Computer-use functionality is not available') {
-            toast.error('Computer-use functionality is not available', {
-              description: (
-                <div>
-                  <div>Computer-use dependencies are missing in the runtime environment.</div>
-                  <div className="mt-2">
-                    <a
-                      href={`${BOXLITE_DOCS_URL}/getting-started/computer-use`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-primary hover:underline"
-                    >
-                      See documentation on how to configure the runtime for computer-use
-                    </a>
-                  </div>
-                </div>
-              ),
-            })
-          } else {
-            handleApiError(startError, 'Failed to start VNC desktop')
-          }
-        }
-      }
-    } catch (error) {
-      handleApiError(error, 'Failed to check VNC status')
-    } finally {
-      setBoxIsLoading((prev) => ({ ...prev, [id]: false }))
-    }
+    navigate(generatePath(RoutePath.BOX_VNC, { boxId: id }))
   }
 
   const getWebTerminalUrl = useCallback(
@@ -872,61 +746,76 @@ const Boxes: React.FC = () => {
     }
   }
 
-  // Redirect user to the onboarding page if they haven't created an api key yet
-  // Perform only once per user
-
   useEffect(() => {
-    const onboardIfNeeded = async () => {
-      if (!selectedOrganization) {
-        return
-      }
-
-      const skipOnboardingKey = `${LocalStorageKey.SkipOnboardingPrefix}${user?.profile.sub}`
-      const shouldSkipOnboarding = getLocalStorageItem(skipOnboardingKey) === 'true'
-
-      if (shouldSkipOnboarding) {
-        return
-      }
-
-      try {
-        const keys = (await apiKeyApi.listApiKeys(selectedOrganization.id)).data
-        if (keys.length === 0) {
-          setLocalStorageItem(skipOnboardingKey, 'true')
-          navigate(RoutePath.ONBOARDING)
-        } else {
-          setLocalStorageItem(skipOnboardingKey, 'true')
-        }
-      } catch (error) {
-        console.error('Failed to check if user needs onboarding', error)
-      }
+    if (!selectedOrganization || !user?.profile.sub) {
+      return
     }
 
-    onboardIfNeeded()
-  }, [navigate, user, selectedOrganization, apiKeyApi])
+    const skipOnboardingKey = `${LocalStorageKey.SkipOnboardingPrefix}${user.profile.sub}`
+    const shouldOpenFromUrl = searchParams.get('onboarding') === '1'
+    const shouldSkipOnboarding = getLocalStorageItem(skipOnboardingKey) === 'true'
+
+    if (shouldOpenFromUrl || !shouldSkipOnboarding) {
+      setShowOnboardingDialog(true)
+    }
+  }, [searchParams, selectedOrganization, user?.profile.sub])
+
+  useEffect(() => {
+    const handleOpenOnboarding = (event: Event) => {
+      event.preventDefault()
+      setShowOnboardingDialog(true)
+    }
+
+    window.addEventListener(ONBOARDING_OPEN_EVENT, handleOpenOnboarding)
+    return () => window.removeEventListener(ONBOARDING_OPEN_EVENT, handleOpenOnboarding)
+  }, [])
+
+  const clearOnboardingUrlParam = useCallback(() => {
+    if (searchParams.get('onboarding') !== '1') {
+      return
+    }
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.delete('onboarding')
+    setSearchParams(nextParams, { replace: true })
+  }, [searchParams, setSearchParams])
+
+  const closeOnboardingDialog = useCallback(() => {
+    if (userId) {
+      setLocalStorageItem(`${LocalStorageKey.SkipOnboardingPrefix}${userId}`, 'true')
+    }
+    setShowOnboardingDialog(false)
+    window.setTimeout(() => {
+      window.dispatchEvent(new Event(ONBOARDING_ENTRY_HIGHLIGHT_EVENT))
+      clearOnboardingUrlParam()
+    }, 220)
+  }, [clearOnboardingUrlParam, userId])
+
+  useEffect(() => {
+    const state = location.state as BoxesLocationState | null
+    if (!state?.openCreateBox) {
+      return
+    }
+
+    setShowOnboardingDialog(false)
+    setCreateBoxOpen(true)
+    navigate({ pathname: location.pathname, search: location.search }, { replace: true, state: null })
+  }, [location.pathname, location.search, location.state, navigate])
 
   return (
     <PageLayout>
-      <PageHeader size="full">
-        <PageTitle>Boxes</PageTitle>
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          {!boxesDataIsLoading && (!boxesData?.items || boxesData.items.length === 0) && (
-            <>
-              <Button variant="link" className="text-primary" onClick={() => navigate(RoutePath.ONBOARDING)} size="sm">
-                Onboarding guide
-              </Button>
-              <Button variant="link" className="text-primary" asChild size="sm">
-                <a href={BOXLITE_DOCS_URL} target="_blank" rel="noopener noreferrer" className="text-primary">
-                  Docs
-                </a>
-              </Button>
-            </>
-          )}
-          {authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES) && (
-            <CreateBoxSheet triggerClassName="w-auto" />
-          )}
-        </div>
-      </PageHeader>
-      <PageContent size="full" className="min-h-0 flex-1 gap-3 max-h-[calc(100vh-65px)]">
+      <OnboardingGuideDialog
+        open={showOnboardingDialog}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) {
+            closeOnboardingDialog()
+          } else {
+            setShowOnboardingDialog(true)
+          }
+        }}
+        onProgressChange={updateOnboardingProgress}
+        progress={onboardingProgress}
+      />
+      <PageContent size="full" className="min-h-0 flex-1 gap-3 max-h-[calc(100vh-65px)] pt-4">
         <BoxTable
           boxIsLoading={boxIsLoading}
           boxStateIsTransitioning={boxStateIsTransitioning}
@@ -939,8 +828,6 @@ const Boxes: React.FC = () => {
           handleBulkDelete={handleBulkDelete}
           handleBulkStart={handleBulkStart}
           handleBulkStop={handleBulkStop}
-          handleBulkArchive={handleBulkArchive}
-          handleArchive={handleArchive}
           handleVnc={handleVnc}
           getWebTerminalUrl={getWebTerminalUrl}
           handleCreateSshAccess={openCreateSshDialog}
@@ -949,15 +836,8 @@ const Boxes: React.FC = () => {
           isRefreshing={boxDataIsRefreshing}
           data={boxesData?.items || []}
           loading={boxesDataIsLoading}
-          snapshots={snapshotsData?.items || []}
-          snapshotsDataIsLoading={snapshotsDataIsLoading}
-          snapshotsDataHasMore={snapshotsDataHasMore}
-          onChangeSnapshotSearchValue={(name?: string) => handleSnapshotFiltersChange({ name })}
-          regionsData={regionsData || []}
-          regionsDataIsLoading={regionsDataIsLoading}
           onRowClick={(box: Box) => {
-            setSelectedBox(box)
-            setShowBoxDetails(true)
+            navigate(generatePath(RoutePath.BOX_DETAILS, { boxId: getBoxRouteId(box) }))
           }}
           pageCount={boxesData?.totalPages || 0}
           totalItems={boxesData?.total || 0}
@@ -973,6 +853,19 @@ const Boxes: React.FC = () => {
           handleRecover={handleRecover}
           getRegionName={getRegionName}
           handleScreenRecordings={handleScreenRecordings}
+          headerAction={
+            authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_SANDBOXES) ? (
+              <CreateBoxSheet
+                open={createBoxOpen}
+                onOpenChange={setCreateBoxOpen}
+                onCreated={() => {
+                  updateOnboardingProgress({ boxCreated: true })
+                  setShowOnboardingDialog(false)
+                }}
+                triggerClassName="w-full sm:w-auto"
+              />
+            ) : null
+          }
         />
 
         {boxToDelete && (
@@ -1114,26 +1007,6 @@ const Boxes: React.FC = () => {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
-
-        <BoxDetailsSheet
-          box={selectedBox}
-          open={showBoxDetails}
-          onOpenChange={setShowBoxDetails}
-          boxIsLoading={boxIsLoading}
-          handleStart={handleStart}
-          handleStop={handleStop}
-          handleDelete={(id) => {
-            setBoxToDelete(id)
-            setShowDeleteDialog(true)
-            setShowBoxDetails(false)
-          }}
-          handleArchive={handleArchive}
-          getWebTerminalUrl={getWebTerminalUrl}
-          writePermitted={authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER}
-          deletePermitted={authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER}
-          handleRecover={handleRecover}
-          getRegionName={getRegionName}
-        />
       </PageContent>
     </PageLayout>
   )

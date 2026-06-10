@@ -9,7 +9,6 @@ boxlite create [flags]
 ### Options
 
 ```
-      --auto-archive int32          Auto-archive interval in minutes (0 means the maximum interval will be used) (default 10080)
       --auto-delete int32           Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping) (default -1)
       --auto-stop int32             Auto-stop interval in minutes (0 means disabled) (default 15)
       --class string                Box class type (small, medium, large)

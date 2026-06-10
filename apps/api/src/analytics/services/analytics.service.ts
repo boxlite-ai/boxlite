@@ -78,11 +78,7 @@ export class AnalyticsService {
   @OnAsyncEvent({
     event: OrganizationEvents.CREATED,
   })
-  async handlePersonalOrganizationCreatedEvent(payload: Organization) {
-    if (!payload.personal) {
-      return
-    }
-
+  async handleOrganizationCreatedEvent(payload: Organization) {
     if (!this.posthog) {
       return
     }
@@ -91,10 +87,12 @@ export class AnalyticsService {
       groupType: 'organization',
       groupKey: payload.id,
       properties: {
-        name: `Personal - ${payload.createdBy}`,
+        name: payload.name,
         created_at: payload.createdAt,
         created_by: payload.createdBy,
-        personal: payload.personal,
+        is_default_for_creator: payload.users?.some(
+          (user) => user.userId === payload.createdBy && user.isDefaultForUser,
+        ),
         environment: this.configService.get('posthog.environment'),
       },
     })

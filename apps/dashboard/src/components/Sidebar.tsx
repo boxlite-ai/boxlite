@@ -8,6 +8,7 @@ import { LogoText } from '@/assets/Logo'
 import { OrganizationPicker } from '@/components/Organizations/OrganizationPicker'
 import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -16,53 +17,48 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from '@/constants/ExternalLinks'
-import { useTheme } from '@/contexts/ThemeContext'
-import { FeatureFlags } from '@/enums/FeatureFlags'
+import { Theme, useTheme } from '@/contexts/ThemeContext'
 import { RoutePath } from '@/enums/RoutePath'
+import { useApi } from '@/hooks/useApi'
 import { useIsCompactScreen } from '@/hooks/use-mobile'
-import { useWebhookAppPortalAccessQuery } from '@/hooks/queries/useWebhookAppPortalAccessQuery'
-import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { useUserOrganizationInvitations } from '@/hooks/useUserOrganizationInvitations'
-import { useWebhooks } from '@/hooks/useWebhooks'
+import {
+  ONBOARDING_OPEN_EVENT,
+  ONBOARDING_ENTRY_HIGHLIGHT_EVENT,
+  getOnboardingCoreProgress,
+  ONBOARDING_PROGRESS_EVENT,
+  readOnboardingProgress,
+  type OnboardingProgress,
+} from '@/lib/onboarding-progress'
 import { cn, getMetaKey } from '@/lib/utils'
-import { usePylon, usePylonCommands } from '@/vendor/pylon'
-import { OrganizationRolePermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import {
   ArrowRightIcon,
   BookOpen,
-  Box,
-  ChartColumn,
+  ChevronDown,
   Container,
-  CreditCard,
-  FlaskConical,
-  HardDrive,
-  Joystick,
   KeyRound,
-  LifeBuoyIcon,
   ListChecks,
-  LockKeyhole,
   LogOut,
-  Mail,
-  MapPinned,
   Menu,
   MessageCircle,
+  Monitor,
   MoreHorizontal,
   MoonIcon,
-  PackageOpen,
+  ReceiptText,
   SearchIcon,
-  Server,
-  Settings,
+  ShieldCheck,
   SquareUserRound,
   SunIcon,
-  TextSearch,
-  Users,
 } from 'lucide-react'
-import { useFeatureFlagEnabled, usePostHog } from 'posthog-js/react'
-import React, { useMemo } from 'react'
+import { usePostHog } from 'posthog-js/react'
+import { useQuery } from '@tanstack/react-query'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { CommandConfig, useCommandPaletteActions, useRegisterCommands } from './CommandPalette'
+
+const ADMIN_UI_HEADERS = { 'X-BoxLite-Source': 'ui' } as const
 
 interface SidebarProps {
   isBannerVisible: boolean
@@ -80,6 +76,41 @@ interface SidebarItem {
 interface SidebarGroup {
   label: string
   items: SidebarItem[]
+}
+
+const themeOptions: { value: Theme; label: string; icon: React.ReactElement }[] = [
+  { value: 'system', label: 'System', icon: <Monitor className="size-4" /> },
+  { value: 'light', label: 'Light', icon: <SunIcon className="size-4" /> },
+  { value: 'dark', label: 'Dark', icon: <MoonIcon className="size-4" /> },
+]
+
+function ThemeMenuItems({ theme, setTheme }: { theme: Theme; setTheme: (theme: Theme) => void }) {
+  return (
+    <div className="px-2 pb-2">
+      <ToggleGroup
+        type="single"
+        value={theme}
+        onValueChange={(value) => {
+          if (value) setTheme(value as Theme)
+        }}
+        variant="outline"
+        size="sm"
+        className="grid w-full grid-cols-3 gap-1 rounded-md border bg-muted/40 p-1"
+      >
+        {themeOptions.map((option) => (
+          <ToggleGroupItem
+            key={option.value}
+            value={option.value}
+            aria-label={`Use ${option.label.toLowerCase()} theme`}
+            className="h-8 justify-center gap-1.5 rounded-sm border border-transparent text-xs text-muted-foreground transition-all hover:bg-muted/70 hover:text-foreground data-[state=on]:border-transparent data-[state=on]:bg-muted-foreground/20 data-[state=on]:text-foreground data-[state=on]:shadow-sm dark:data-[state=on]:bg-muted-foreground/30"
+          >
+            {option.icon}
+            <span>{option.label}</span>
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
+    </div>
+  )
 }
 
 const useNavCommands = (items: { label: string; path: RoutePath | string; onClick?: () => void }[]) => {
@@ -102,229 +133,114 @@ const useNavCommands = (items: { label: string; path: RoutePath | string; onClic
   useRegisterCommands(navCommands, { groupId: 'navigation', groupLabel: 'Navigation', groupOrder: 1 })
 }
 
-export function Sidebar({ isBannerVisible, billingEnabled, version: _version }: SidebarProps) {
+export function Sidebar({ isBannerVisible }: SidebarProps) {
   const isCompactScreen = useIsCompactScreen()
   const posthog = usePostHog()
+  const { axiosInstance } = useApi()
   const { theme, setTheme } = useTheme()
   const { user, signoutRedirect } = useAuth()
+  const userId = user?.profile.sub
   const { pathname } = useLocation()
-  const { selectedOrganization, authenticatedUserOrganizationMember, authenticatedUserHasPermission } =
-    useSelectedOrganization()
-  const { count: organizationInvitationsCount } = useUserOrganizationInvitations()
-  const { isInitialized: webhooksInitialized } = useWebhooks()
-  const webhooksAccess = useWebhookAppPortalAccessQuery(selectedOrganization?.id)
-  const orgInfraEnabled = useFeatureFlagEnabled(FeatureFlags.ORGANIZATION_INFRASTRUCTURE)
-  const organizationExperimentsEnabled = useFeatureFlagEnabled(FeatureFlags.ORGANIZATION_EXPERIMENTS)
-  const playgroundEnabled = useFeatureFlagEnabled(FeatureFlags.DASHBOARD_PLAYGROUND)
-  const webhooksEnabled = useFeatureFlagEnabled(FeatureFlags.DASHBOARD_WEBHOOKS)
+  const navigate = useNavigate()
+  const [highlightOnboardingEntry, setHighlightOnboardingEntry] = useState(false)
+  const [onboardingProgress, setOnboardingProgress] = useState<OnboardingProgress>(() => readOnboardingProgress(userId))
 
-  const primaryItems = useMemo(() => {
-    const arr: SidebarItem[] = [
+  useEffect(() => {
+    setOnboardingProgress(readOnboardingProgress(userId))
+  }, [userId])
+
+  useEffect(() => {
+    const handleOnboardingProgress = (event: Event) => {
+      const progress = (event as CustomEvent<OnboardingProgress>).detail
+      setOnboardingProgress(progress ?? readOnboardingProgress(userId))
+    }
+
+    window.addEventListener(ONBOARDING_PROGRESS_EVENT, handleOnboardingProgress)
+    return () => window.removeEventListener(ONBOARDING_PROGRESS_EVENT, handleOnboardingProgress)
+  }, [userId])
+
+  const onboardingCoreProgress = getOnboardingCoreProgress(onboardingProgress)
+  const adminAccessQuery = useQuery({
+    queryKey: ['admin', 'sidebar-access'],
+    queryFn: async () => {
+      await axiosInstance.get('/admin/overview', { headers: ADMIN_UI_HEADERS })
+      return true
+    },
+    enabled: !!user,
+    retry: false,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  })
+  const canViewAdmin = adminAccessQuery.data === true
+
+  useEffect(() => {
+    const handleHighlight = () => {
+      setHighlightOnboardingEntry(true)
+      window.setTimeout(() => setHighlightOnboardingEntry(false), 3200)
+    }
+
+    window.addEventListener(ONBOARDING_ENTRY_HIGHLIGHT_EVENT, handleHighlight)
+    return () => window.removeEventListener(ONBOARDING_ENTRY_HIGHLIGHT_EVENT, handleHighlight)
+  }, [])
+
+  const primaryItems = useMemo<SidebarItem[]>(() => {
+    return [
       {
         icon: <Container size={16} strokeWidth={1.5} />,
         label: 'Boxes',
         path: RoutePath.BOXES,
       },
       {
-        icon: <Box size={16} strokeWidth={1.5} />,
-        label: 'Snapshots',
-        path: RoutePath.SNAPSHOTS,
+        icon: <ReceiptText size={16} strokeWidth={1.5} />,
+        label: 'Billing',
+        path: RoutePath.BILLING,
       },
-      {
-        icon: <PackageOpen size={16} strokeWidth={1.5} />,
-        label: 'Registries',
-        path: RoutePath.REGISTRIES,
-      },
+      ...(canViewAdmin
+        ? [
+            {
+              icon: <ShieldCheck size={16} strokeWidth={1.5} />,
+              label: 'Admin',
+              path: RoutePath.ADMIN,
+            },
+          ]
+        : []),
     ]
+  }, [canViewAdmin])
 
-    if (authenticatedUserHasPermission(OrganizationRolePermissionsEnum.READ_VOLUMES)) {
-      arr.push({
-        icon: <HardDrive size={16} strokeWidth={1.5} />,
-        label: 'Volumes',
-        path: RoutePath.VOLUMES,
-      })
+  const secondaryGroups: SidebarGroup[] = useMemo(() => [], [])
+
+  const openOnboardingGuide = useCallback(() => {
+    const event = new Event(ONBOARDING_OPEN_EVENT, { cancelable: true })
+    window.dispatchEvent(event)
+
+    if (!event.defaultPrevented) {
+      navigate(`${RoutePath.BOXES}?onboarding=1`)
     }
+  }, [navigate])
 
-    if (authenticatedUserHasPermission(OrganizationRolePermissionsEnum.READ_AUDIT_LOGS)) {
-      arr.push({
-        icon: <TextSearch size={16} strokeWidth={1.5} />,
-        label: 'Audit Logs',
-        path: RoutePath.AUDIT_LOGS,
-      })
-    }
-
-    return arr
-  }, [authenticatedUserHasPermission])
-
-  const settingsItems = useMemo(() => {
-    const arr: SidebarItem[] = [
+  const commandItems = useMemo<SidebarItem[]>(
+    () => [
+      ...primaryItems,
+      ...secondaryGroups.flatMap((group) => group.items),
       {
-        icon: <Settings size={16} strokeWidth={1.5} />,
-        label: 'Settings',
-        path: RoutePath.SETTINGS,
-      },
-      { icon: <KeyRound size={16} strokeWidth={1.5} />, label: 'API Keys', path: RoutePath.KEYS },
-    ]
-
-    if (webhooksInitialized) {
-      if (webhooksEnabled) {
-        arr.push({
-          icon: <Mail size={16} strokeWidth={1.5} />,
-          label: 'Webhooks',
-          path: RoutePath.WEBHOOKS,
-        })
-      } else {
-        arr.push({
-          icon: <Mail size={16} strokeWidth={1.5} />,
-          label: 'Webhooks',
-          path: '#webhooks' as RoutePath,
-          onClick: () => {
-            window.open(webhooksAccess.data?.url, '_blank', 'noopener,noreferrer')
-          },
-        })
-      }
-    }
-
-    if (authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER) {
-      arr.push({
-        icon: <LockKeyhole size={16} strokeWidth={1.5} />,
-        label: 'Limits',
-        path: RoutePath.LIMITS,
-      })
-    }
-
-    if (!selectedOrganization?.personal) {
-      arr.push({
-        icon: <Users size={16} strokeWidth={1.5} />,
-        label: 'Members',
-        path: RoutePath.MEMBERS,
-      })
-    }
-
-    return arr
-  }, [
-    authenticatedUserOrganizationMember?.role,
-    selectedOrganization?.personal,
-    webhooksAccess.data?.url,
-    webhooksEnabled,
-    webhooksInitialized,
-  ])
-
-  const billingItems = useMemo(() => {
-    if (!billingEnabled || authenticatedUserOrganizationMember?.role !== OrganizationUserRoleEnum.OWNER) {
-      return []
-    }
-
-    return [
-      {
-        icon: <ChartColumn size={16} strokeWidth={1.5} />,
-        label: 'Spending',
-        path: RoutePath.BILLING_SPENDING,
+        path: RoutePath.KEYS,
+        label: 'API Keys',
+        icon: <KeyRound size={16} strokeWidth={1.5} />,
       },
       {
-        icon: <CreditCard size={16} strokeWidth={1.5} />,
-        label: 'Wallet',
-        path: RoutePath.BILLING_WALLET,
+        path: RoutePath.ONBOARDING,
+        label: 'Onboarding',
+        icon: <ListChecks size={16} strokeWidth={1.5} />,
+        onClick: openOnboardingGuide,
       },
-    ]
-  }, [authenticatedUserOrganizationMember?.role, billingEnabled])
-
-  const infrastructureItems = useMemo(() => {
-    if (!orgInfraEnabled) {
-      return []
-    }
-
-    const arr: SidebarItem[] = [
-      {
-        icon: <MapPinned size={16} strokeWidth={1.5} />,
-        label: 'Regions',
-        path: RoutePath.REGIONS,
-      },
-    ]
-
-    if (authenticatedUserHasPermission(OrganizationRolePermissionsEnum.READ_RUNNERS)) {
-      arr.push({
-        icon: <Server size={16} strokeWidth={1.5} />,
-        label: 'Runners',
-        path: RoutePath.RUNNERS,
-      })
-    }
-
-    return arr
-  }, [authenticatedUserHasPermission, orgInfraEnabled])
-
-  const experimentalItems = useMemo(() => {
-    if (
-      !organizationExperimentsEnabled ||
-      authenticatedUserOrganizationMember?.role !== OrganizationUserRoleEnum.OWNER
-    ) {
-      return []
-    }
-
-    return [
-      {
-        icon: <FlaskConical size={16} strokeWidth={1.5} />,
-        label: 'Experimental',
-        path: RoutePath.EXPERIMENTAL,
-      },
-    ]
-  }, [authenticatedUserOrganizationMember?.role, organizationExperimentsEnabled])
-
-  const miscItems = useMemo(() => {
-    if (!playgroundEnabled) {
-      return []
-    }
-
-    return [
-      {
-        icon: <Joystick size={16} strokeWidth={1.5} />,
-        label: 'Playground',
-        path: RoutePath.PLAYGROUND,
-      },
-    ]
-  }, [playgroundEnabled])
-
-  const secondaryGroups: SidebarGroup[] = useMemo(
-    () =>
-      [
-        { label: 'Misc', items: miscItems },
-        { label: 'Settings', items: settingsItems },
-        { label: 'Billing', items: billingItems },
-        { label: 'Infrastructure', items: infrastructureItems },
-        { label: 'Experimental', items: experimentalItems },
-      ].filter((group) => group.items.length > 0),
-    [billingItems, experimentalItems, infrastructureItems, miscItems, settingsItems],
-  )
-
-  const commandItems = useMemo(
-    () =>
-      primaryItems.concat(secondaryGroups.flatMap((group) => group.items)).concat(
-        {
-          path: RoutePath.ACCOUNT_SETTINGS,
-          label: 'Account Settings',
-          icon: <Settings size={16} strokeWidth={1.5} />,
-        },
-        {
-          path: RoutePath.USER_INVITATIONS,
-          label: 'Invitations',
-          icon: <Mail size={16} strokeWidth={1.5} />,
-        },
-        {
-          path: RoutePath.ONBOARDING,
-          label: 'Onboarding',
-          icon: <ListChecks size={16} strokeWidth={1.5} />,
-        },
-      ),
-    [primaryItems, secondaryGroups],
+    ],
+    [openOnboardingGuide, primaryItems, secondaryGroups],
   )
 
   const handleSignOut = () => {
     posthog?.reset()
     signoutRedirect()
   }
-
-  const { unreadCount: pylonUnreadCount, toggle: togglePylon, isEnabled: pylonEnabled } = usePylon()
-  usePylonCommands()
 
   const commandPaletteActions = useCommandPaletteActions()
   useNavCommands(commandItems)
@@ -364,69 +280,112 @@ export function Sidebar({ isBannerVisible, billingEnabled, version: _version }: 
       )}
     >
       <div className="mx-auto flex h-14 w-full max-w-[1440px] items-center gap-3 px-4 sm:px-5 2xl:px-0">
-        <div className="flex min-w-0 items-center gap-6">
+        <div className="flex min-w-0 items-center gap-3 sm:gap-6">
           <Link
             to={RoutePath.BOXES}
-            className="shrink-0 text-[1.15rem] font-semibold tracking-tight text-foreground"
+            className="inline-flex h-14 shrink-0 items-center text-foreground"
+            aria-label="BoxLite home"
           >
-            <LogoText />
+            <LogoText className="h-8 w-auto sm:h-9" />
           </Link>
 
-          {!isCompactScreen && (
-            <nav className="flex h-14 items-stretch gap-1">
-              {primaryItems.map((item) => {
-                const isActive = pathname.startsWith(item.path)
+          <nav className="hidden h-14 shrink-0 items-stretch gap-1 md:flex">
+            {primaryItems.map((item) => {
+              const isActive = pathname.startsWith(item.path)
 
-                return item.onClick ? (
-                  <button
-                    key={item.label}
-                    type="button"
-                    onClick={() => item.onClick?.()}
-                    className={cn(
-                      'inline-flex items-center border-b px-3 text-sm font-medium transition-colors',
-                      isActive
-                        ? 'border-foreground text-foreground'
-                        : 'border-transparent text-muted-foreground hover:text-foreground',
-                    )}
-                  >
-                    {item.label}
-                  </button>
-                ) : (
-                  <Link
-                    key={item.label}
-                    to={item.path}
-                    className={cn(
-                      'inline-flex items-center border-b px-3 text-sm font-medium transition-colors',
-                      isActive
-                        ? 'border-foreground text-foreground'
-                        : 'border-transparent text-muted-foreground hover:text-foreground',
-                    )}
-                  >
-                    {item.label}
-                  </Link>
-                )
-              })}
-            </nav>
-          )}
+              return item.onClick ? (
+                <button
+                  key={item.label}
+                  type="button"
+                  onClick={() => item.onClick?.()}
+                  className={cn(
+                    'inline-flex items-center border-b px-2 text-sm font-medium transition-colors sm:px-3',
+                    isActive
+                      ? 'border-foreground text-foreground'
+                      : 'border-transparent text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  {item.label}
+                </button>
+              ) : (
+                <Link
+                  key={item.label}
+                  to={item.path}
+                  className={cn(
+                    'inline-flex items-center border-b px-2 text-sm font-medium transition-colors sm:px-3',
+                    isActive
+                      ? 'border-foreground text-foreground'
+                      : 'border-transparent text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  {item.label}
+                </Link>
+              )
+            })}
+          </nav>
         </div>
 
         <div className="ml-auto flex items-center gap-2">
-          {!isCompactScreen && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="hidden md:inline-flex"
-              onClick={() => openCommandPalette('dashboard_header')}
-            >
+          <Button
+            variant="outline"
+            size={isCompactScreen ? 'icon-sm' : 'sm'}
+            className={cn('shrink-0', !isCompactScreen && 'hidden md:inline-flex')}
+            aria-label="Search"
+            onClick={() => openCommandPalette('dashboard_header')}
+          >
+            {isCompactScreen ? (
               <SearchIcon className="size-4" />
-              Search
-              <Kbd className="ml-1">{metaKey} K</Kbd>
-            </Button>
-          )}
+            ) : (
+              <>
+                <SearchIcon className="size-4" />
+                Search
+                <Kbd className="ml-1">{metaKey} K</Kbd>
+              </>
+            )}
+          </Button>
 
           <div className="hidden md:block">
             <OrganizationPicker variant="header" />
           </div>
+
+          <Button variant="ghost" size="sm" className="hidden xl:inline-flex" asChild>
+            <Link to={RoutePath.KEYS}>
+              <KeyRound className="size-4" />
+              API Keys
+            </Link>
+          </Button>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size={isCompactScreen ? 'icon-sm' : 'sm'}
+                className={cn(
+                  'relative',
+                  highlightOnboardingEntry &&
+                    'animate-[boxlite-guide-callout_1.1s_ease-in-out_3] ring-2 ring-primary ring-offset-2 ring-offset-background',
+                )}
+                aria-label="Open onboarding guide"
+                onClick={openOnboardingGuide}
+              >
+                <ListChecks className="size-4" />
+                {!isCompactScreen && <span>Guide</span>}
+                {!onboardingCoreProgress.isComplete && (
+                  <span
+                    className={cn(
+                      'inline-flex items-center justify-center rounded-full bg-muted-foreground/15 px-1.5 py-0.5 text-[10px] font-medium leading-none text-foreground',
+                      isCompactScreen && 'absolute -right-1 -top-1 size-4 bg-foreground p-0 text-background',
+                    )}
+                  >
+                    {isCompactScreen
+                      ? onboardingCoreProgress.completed
+                      : `${onboardingCoreProgress.completed}/${onboardingCoreProgress.total}`}
+                  </span>
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Open onboarding guide</TooltipContent>
+          </Tooltip>
 
           {!isCompactScreen && secondaryGroups.length > 0 && (
             <DropdownMenu>
@@ -455,56 +414,36 @@ export function Sidebar({ isBannerVisible, billingEnabled, version: _version }: 
               <Button
                 variant="ghost"
                 size="sm"
+                aria-label="Open profile menu"
                 className={cn(
-                  'inline-flex min-w-0 px-2',
+                  'inline-flex min-w-0 gap-2 rounded-md border border-border bg-background px-2 shadow-sm transition-colors hover:border-foreground/30 hover:bg-muted/70 data-[state=open]:border-foreground/40 data-[state=open]:bg-muted',
                   isCompactScreen ? 'justify-center' : 'sm:min-w-[8.5rem] sm:justify-between',
                 )}
               >
                 <span className="flex min-w-0 items-center gap-2">
-                  {user?.profile.picture ? (
-                    <img
-                      src={user.profile.picture}
-                      alt={user.profile.name || 'Profile picture'}
-                      className="h-4 w-4 rounded-sm"
-                    />
-                  ) : (
-                    <SquareUserRound className="size-4" />
-                  )}
+                  <span className="flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border bg-muted text-muted-foreground">
+                    {user?.profile.picture ? (
+                      <img
+                        src={user.profile.picture}
+                        alt={user.profile.name || 'Profile picture'}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <SquareUserRound className="size-4" />
+                    )}
+                  </span>
                   <span className={cn('truncate', isCompactScreen ? 'hidden' : 'hidden sm:block')}>
                     {user?.profile.name || 'Profile'}
                   </span>
                 </span>
+                {!isCompactScreen && <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />}
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="min-w-[15rem]">
-              <DropdownMenuItem asChild className="cursor-pointer">
-                <Link to={RoutePath.ACCOUNT_SETTINGS}>
-                  <Settings className="size-4" />
-                  Account Settings
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild className="cursor-pointer">
-                <Link to={RoutePath.USER_INVITATIONS}>
-                  <Mail className="size-4" />
-                  Invitations
-                  {organizationInvitationsCount > 0 && (
-                    <span className="ml-auto text-xs text-muted-foreground">{organizationInvitationsCount}</span>
-                  )}
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild className="cursor-pointer">
-                <Link to={RoutePath.ONBOARDING}>
-                  <ListChecks className="size-4" />
-                  Onboarding
-                </Link>
-              </DropdownMenuItem>
-              {pylonEnabled && (
-                <DropdownMenuItem className="cursor-pointer" onClick={() => togglePylon()}>
-                  <LifeBuoyIcon className="size-4" />
-                  Support
-                  {pylonUnreadCount > 0 && <span className="ml-auto text-xs text-muted-foreground">new</span>}
-                </DropdownMenuItem>
-              )}
+              <DropdownMenuLabel className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+                Appearance
+              </DropdownMenuLabel>
+              <ThemeMenuItems theme={theme} setTheme={setTheme} />
               <DropdownMenuSeparator />
               <DropdownMenuItem asChild className="cursor-pointer">
                 <a href={BOXLITE_DOCS_URL} target="_blank" rel="noopener noreferrer">
@@ -517,13 +456,6 @@ export function Sidebar({ isBannerVisible, billingEnabled, version: _version }: 
                   <MessageCircle className="size-4" />
                   Discord
                 </a>
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                className="cursor-pointer"
-                onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-              >
-                {theme === 'dark' ? <SunIcon className="size-4" /> : <MoonIcon className="size-4" />}
-                {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem className="cursor-pointer" onClick={handleSignOut}>
@@ -551,6 +483,12 @@ export function Sidebar({ isBannerVisible, billingEnabled, version: _version }: 
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 {primaryItems.map(renderMenuItem)}
+                <DropdownMenuItem asChild className="cursor-pointer">
+                  <Link to={RoutePath.KEYS}>
+                    <KeyRound className="size-4" />
+                    API Keys
+                  </Link>
+                </DropdownMenuItem>
                 {secondaryGroups.map((group) => (
                   <React.Fragment key={group.label}>
                     <DropdownMenuSeparator />

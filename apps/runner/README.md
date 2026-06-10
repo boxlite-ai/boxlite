@@ -22,7 +22,7 @@ the request path), see [`docs/architecture/README.md`](../../docs/architecture/R
 - Every major workflow the runner exposes:
   - **Box lifecycle** — create / start / stop / destroy / resize /
     recover / network-settings / info / backup
-  - **Snapshot management** — async pull, async build, log streaming,
+  - **Artifact management** — async pull, async build, log streaming,
     info-or-error, removal, tag, registry inspect
   - **Execution + attach** — the long-lived stdio bridge (in depth, with
     wire protocol and reaping policy)
@@ -51,7 +51,7 @@ If you want the formal API schema, see
 │   Python / Node / Rust SDKs            NestJS API (control plane)        │
 │   • interactive boxes                  • issues jobs to runner via       │
 │   • /attach WebSockets                   v2 long-poll                    │
-│   • file I/O, snapshots, metrics       • collects healthchecks          │
+│   • file I/O, artifact ops, metrics    • collects healthchecks          │
 └─────────────────────┬───────────────────────────────────┬────────────────┘
                       │                                   │
         HTTPS / WS    │                                   │ HTTP polling
@@ -70,7 +70,7 @@ If you want the formal API schema, see
 │                                                                          │
 │  pkg/api/controllers/ (HTTP layer)                                       │
 │    box.go    Create, Start, Stop, Destroy, Resize, Recover, ...      │
-│    snapshot.go   PullSnapshot, BuildSnapshot, RemoveSnapshot, ...        │
+│    artifact.go   PullArtifact, BuildArtifact, RemoveArtifact, ...        │
 │    boxlite_exec.go         POST /exec, GET /executions/:id, ...          │
 │    boxlite_exec_attach.go  GET /attach (WebSocket)                       │
 │    boxlite_files.go        PUT/GET /files                                │
@@ -80,7 +80,7 @@ If you want the formal API schema, see
 │                                                                          │
 │  pkg/services/           BoxService, BoxSyncService              │
 │  pkg/boxlite/            Client (FFI wrapper), ExecManager, registry     │
-│  pkg/cache/              BackupInfoCache, SnapshotErrorCache             │
+│  pkg/cache/              BackupInfoCache, ArtifactErrorCache             │
 │  pkg/runner/v2/          poller, executor, healthcheck                   │
 │  internal/metrics/       host + per-box metrics collection               │
 └───────────────────────────────────┬──────────────────────────────────────┘
@@ -101,7 +101,7 @@ If you want the formal API schema, see
 
 The HTTP server and every background service share **one** `boxlite.Client`
 instance (FFI wrapper around the Rust runtime). State that needs to survive
-request boundaries — backup progress, snapshot build/pull errors — lives in
+request boundaries — backup progress, artifact build/pull errors — lives in
 the in-process TTL caches under `pkg/cache/`.
 
 ---
@@ -115,7 +115,7 @@ the in-process TTL caches under `pkg/cache/`.
    handle to the VM hypervisor.
 2. **Service singletons** are constructed and stashed on the
    `runner.GetInstance(...)` global: `BoxService`, `BackupInfoCache`,
-   `SnapshotErrorCache`, `metrics.Collector`. Controllers later read them
+   `ArtifactErrorCache`, `metrics.Collector`. Controllers later read them
    via `runner.GetInstance(nil)`.
 3. **Background goroutines** are spawned (each one inherits the root
    context, so SIGTERM unwinds them cleanly):
@@ -148,7 +148,7 @@ crash handling live in the runtime, not the runner.
 
 | Method | Path | Controller | Purpose |
 | --- | --- | --- | --- |
-| `POST` | `/boxes` | `Create` | Allocate box, pull/use snapshot, return daemon version |
+| `POST` | `/boxes` | `Create` | Allocate box, pull/use artifact, return daemon version |
 | `POST` | `/boxes/:id/start` | `Start` | Boot a stopped box (optional auth token + metadata) |
 | `POST` | `/boxes/:id/stop` | `Stop` | Graceful or `force` shutdown |
 | `POST` | `/boxes/:id/destroy` | `Destroy` | Tear down completely |
@@ -171,29 +171,29 @@ synchronously (e.g. the runtime rejected the request outright) write
 calls surface the error reason. Per-stage progress comes from the
 runtime side and is also reflected in the cache.
 
-### 2. Snapshot management
+### 2. Artifact management
 
-Path prefix: `/snapshots`. Snapshots are OCI images cached at
+Path prefix: `/artifacts`. Runtime artifacts are OCI images cached at
 `~/.boxlite/images/`. Pull and build are **async with an error-cache
 sidecar**: the controller returns `202`, a goroutine runs the operation,
-and the result is recorded in `SnapshotErrorCache` keyed by image ref
+and the result is recorded in `ArtifactErrorCache` keyed by artifact ref
 (or destination ref if pull is mirroring).
 
 | Method | Path | Controller | Purpose |
 | --- | --- | --- | --- |
-| `POST` | `/snapshots/pull` | `PullSnapshot` | Mirror image; optional push to destination registry |
-| `POST` | `/snapshots/build` | `BuildSnapshot` | Build from Dockerfile + context hashes |
-| `GET` | `/snapshots/exists` | `SnapshotExists` | Yes/no local cache check |
-| `GET` | `/snapshots/info` | `GetSnapshotInfo` | Size, entrypoint, hash — `422` if error cached |
-| `POST` | `/snapshots/remove` | `RemoveSnapshot` | Delete local image + clear error cache |
-| `POST` | `/snapshots/tag` | `TagImage` | Re-tag existing local image (deprecated) |
-| `POST` | `/snapshots/inspect` | `InspectSnapshotInRegistry` | Remote digest + size lookup |
-| `GET` | `/snapshots/logs` | `GetBuildLogs` | Tail build log file; `follow=true` polls until image exists |
+| `POST` | `/artifacts/pull` | `PullArtifact` | Mirror image; optional push to destination registry |
+| `POST` | `/artifacts/build` | `BuildArtifact` | Build from Dockerfile + context hashes |
+| `GET` | `/artifacts/exists` | `ArtifactExists` | Yes/no local cache check |
+| `GET` | `/artifacts/info` | `GetArtifactInfo` | Size, entrypoint, hash — `422` if error cached |
+| `POST` | `/artifacts/remove` | `RemoveArtifact` | Delete local image + clear error cache |
+| `POST` | `/artifacts/tag` | `TagImage` | Re-tag existing local image (deprecated) |
+| `POST` | `/artifacts/inspect` | `InspectArtifactInRegistry` | Remote digest + size lookup |
+| `GET` | `/artifacts/logs` | `GetBuildLogs` | Tail build log file; `follow=true` polls until image exists |
 
 **Why a separate error cache.** Pull/build are decoupled from the
 request, so clients can't see failures via the HTTP response. They poll
-`/snapshots/info`, which returns `422 Unprocessable Entity` with the
-error text when `SnapshotErrorCache.GetError(ref)` is set. `200` means
+`/artifacts/info`, which returns `422 Unprocessable Entity` with the
+error text when `ArtifactErrorCache.GetError(ref)` is set. `200` means
 the image is ready; `404` means neither image nor cached error exists
 (the operation is still in flight or was never started).
 
@@ -432,7 +432,7 @@ durations, and network counters. All values come from
 
 - A snapshot from `metrics.Collector.Collect(ctx)` — host CPU load
   average, CPU/mem/disk %, summed allocated CPU/RAM/disk across running
-  boxes, snapshot count, started box count.
+  boxes, artifact count, started box count.
 - `runner.InspectRunnerServices(ctx)` — pings the BoxLite runtime with
   a 2 s timeout and reports `boxlite: healthy|<err>`.
 
@@ -475,7 +475,7 @@ gateway port directly to untrusted clients without auditing this path.
 
 ### Box state sync
 
-[`pkg/services/box_sync.go`](pkg/services/box_sync.go). Runs every
+[`pkg/services/sandbox_sync.go`](pkg/services/sandbox_sync.go). Runs every
 10 s (configurable in `main.go`). For each local box, fetches the
 authoritative state from BoxLite, then asks the control-plane API for
 all boxes currently `STARTED` and not under reconciliation, and
@@ -514,10 +514,10 @@ Each job is dispatched to a goroutine and handled in
 Supported job types:
 
 ```
-CREATE_BOX, START_BOX, STOP_BOX, DESTROY_BOX,
-RESIZE_BOX, RECOVER_BOX, UPDATE_BOX_NETWORK_SETTINGS,
+CREATE_SANDBOX, START_SANDBOX, STOP_SANDBOX, DESTROY_SANDBOX,
+RESIZE_SANDBOX, RECOVER_SANDBOX, UPDATE_SANDBOX_NETWORK_SETTINGS,
 CREATE_BACKUP,
-BUILD_SNAPSHOT, PULL_SNAPSHOT, REMOVE_SNAPSHOT, INSPECT_SNAPSHOT_IN_REGISTRY
+BUILD_ARTIFACT, PULL_ARTIFACT, REMOVE_ARTIFACT, INSPECT_ARTIFACT_IN_REGISTRY
 ```
 
 After the handler returns, `updateJobStatus` reports `COMPLETED` or
@@ -526,7 +526,7 @@ extracted from the job's `traceContext` map so the runner's spans chain
 under the API-side trace.
 
 This is the production path. The HTTP routes under `/boxes/` and
-`/snapshots/` exist for direct/SDK use; v2 turns those into pull-based
+`/artifacts/` exist for direct/SDK use; v2 turns those into pull-based
 job execution.
 
 ### v2 healthcheck
@@ -560,14 +560,14 @@ the Swagger UI (development only).
 | `POST` | `/boxes/:id/is-recoverable` | Check whether an error reason is recoverable |
 | `POST` | `/boxes/:id/network-settings` | Update block-all / allow-list |
 | `Any` | `/boxes/:id/toolbox/*path` | xterm.js page + WS terminal |
-| `POST` | `/snapshots/pull` | Async pull (mirror + optional push) |
-| `POST` | `/snapshots/build` | Async build |
-| `GET` | `/snapshots/exists` | Local existence check |
-| `GET` | `/snapshots/info` | Image info; `422` if cached error |
-| `POST` | `/snapshots/remove` | Delete image + clear error cache |
-| `POST` | `/snapshots/tag` | Re-tag (deprecated) |
-| `POST` | `/snapshots/inspect` | Remote digest + size |
-| `GET` | `/snapshots/logs` | Stream build log (`follow=true` polls until image exists) |
+| `POST` | `/artifacts/pull` | Async pull (mirror + optional push) |
+| `POST` | `/artifacts/build` | Async build |
+| `GET` | `/artifacts/exists` | Local existence check |
+| `GET` | `/artifacts/info` | Image info; `422` if cached error |
+| `POST` | `/artifacts/remove` | Delete image + clear error cache |
+| `POST` | `/artifacts/tag` | Re-tag (deprecated) |
+| `POST` | `/artifacts/inspect` | Remote digest + size |
+| `GET` | `/artifacts/logs` | Stream build log (`follow=true` polls until image exists) |
 | `POST` | `/v1/boxes/:boxId/exec` | Create execution |
 | `GET` | `/v1/boxes/:boxId/executions/:execId` | Execution status |
 | `DELETE` | `/v1/boxes/:boxId/executions/:execId` | Kill + evict |
@@ -643,16 +643,16 @@ scripts/build/fix-go-symbols.sh target/debug/libboxlite.a
 - **HTTP layer**:
   - [`pkg/api/server.go`](pkg/api/server.go) — route registration, middleware
   - [`pkg/api/controllers/box.go`](pkg/api/controllers/box.go) — lifecycle
-  - [`pkg/api/controllers/snapshot.go`](pkg/api/controllers/snapshot.go) — pull/build/inspect
+  - [`pkg/api/controllers/artifact.go`](pkg/api/controllers/artifact.go) — pull/build/inspect
   - [`pkg/api/controllers/boxlite_exec.go`](pkg/api/controllers/boxlite_exec.go) — exec create / signal / resize / status / legacy I/O
   - [`pkg/api/controllers/boxlite_exec_attach.go`](pkg/api/controllers/boxlite_exec_attach.go) — `/attach` WebSocket
   - [`pkg/api/controllers/boxlite_files.go`](pkg/api/controllers/boxlite_files.go), [`boxlite_metrics.go`](pkg/api/controllers/boxlite_metrics.go), [`proxy.go`](pkg/api/controllers/proxy.go), [`info.go`](pkg/api/controllers/info.go)
 
 - **Services / state**:
-  - [`pkg/services/box.go`](pkg/services/box.go), [`box_sync.go`](pkg/services/box_sync.go)
+  - [`pkg/services/box.go`](pkg/services/box.go), [`sandbox_sync.go`](pkg/services/sandbox_sync.go)
   - [`pkg/boxlite/client.go`](pkg/boxlite/client.go) — Go SDK wrapper
   - [`pkg/boxlite/exec_manager.go`](pkg/boxlite/exec_manager.go) — `ManagedExec`, reaping
-  - [`pkg/cache/`](pkg/cache/) — backup info and snapshot error caches
+  - [`pkg/cache/`](pkg/cache/) — backup info and artifact error caches
   - [`internal/metrics/collector.go`](internal/metrics/collector.go)
 
 - **Background loops**:

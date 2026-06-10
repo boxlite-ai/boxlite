@@ -7,10 +7,8 @@
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { BoxState } from '../enums/box-state.enum'
 import { IsEnum, IsOptional } from 'class-validator'
-import { BackupState } from '../enums/backup-state.enum'
 import { Box } from '../entities/box.entity'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
-import { BuildInfoDto } from './build-info.dto'
 import { BoxClass } from '../enums/box-class.enum'
 
 @ApiSchema({ name: 'BoxVolume' })
@@ -38,28 +36,36 @@ export class BoxVolume {
 @ApiSchema({ name: 'Box' })
 export class BoxDto {
   @ApiProperty({
-    description: 'The ID of the box',
-    example: 'box123',
+    description: 'The internal UUID of the sandbox',
+    example: 'fd955d93-e74a-48e7-9f2d-fcbe6dd9e920',
   })
   id: string
 
   @ApiProperty({
-    description: 'The organization ID of the box',
+    description: 'The public Box ID shown to users and SDK clients',
+    example: 'aB3cD4eF5gH6',
+  })
+  boxId: string
+
+  @ApiProperty({
+    description: 'The organization ID of the sandbox',
     example: 'organization123',
   })
   organizationId: string
 
   @ApiProperty({
-    description: 'The name of the box',
+    description: 'The name of the sandbox',
     example: 'MyBox',
   })
   name: string
 
+  // TODO(image-rewrite): the box image/template is no longer resolved server-side after the
+  // box_template subsystem was removed. Kept optional so REST mappers compile; always unset.
   @ApiPropertyOptional({
-    description: 'The snapshot used for the box',
-    example: 'boxlite-ai/box:latest',
+    description: 'The template used for the sandbox',
+    example: 'boxlite/base',
   })
-  snapshot: string
+  template?: string
 
   @ApiProperty({
     description: 'The user associated with the project',
@@ -68,7 +74,7 @@ export class BoxDto {
   user: string
 
   @ApiProperty({
-    description: 'Environment variables for the box',
+    description: 'Environment variables for the sandbox',
     type: 'object',
     additionalProperties: { type: 'string' },
     example: { NODE_ENV: 'production' },
@@ -76,7 +82,7 @@ export class BoxDto {
   env: Record<string, string>
 
   @ApiProperty({
-    description: 'Labels for the box',
+    description: 'Labels for the sandbox',
     type: 'object',
     additionalProperties: { type: 'string' },
     example: { 'boxlite.io/public': 'true' },
@@ -90,49 +96,49 @@ export class BoxDto {
   public: boolean
 
   @ApiProperty({
-    description: 'Whether to block all network access for the box',
+    description: 'Whether to block all network access for the sandbox',
     example: false,
   })
   networkBlockAll: boolean
 
   @ApiPropertyOptional({
-    description: 'Comma-separated list of allowed CIDR network addresses for the box',
+    description: 'Comma-separated list of allowed CIDR network addresses for the sandbox',
     example: '192.168.1.0/16,10.0.0.0/24',
   })
   networkAllowList?: string
 
   @ApiProperty({
-    description: 'The target environment for the box',
+    description: 'The target environment for the sandbox',
     example: 'local',
   })
   target: string
 
   @ApiProperty({
-    description: 'The CPU quota for the box',
+    description: 'The CPU quota for the sandbox',
     example: 2,
   })
   cpu: number
 
   @ApiProperty({
-    description: 'The GPU quota for the box',
+    description: 'The GPU quota for the sandbox',
     example: 0,
   })
   gpu: number
 
   @ApiProperty({
-    description: 'The memory quota for the box',
+    description: 'The memory quota for the sandbox',
     example: 4,
   })
   memory: number
 
   @ApiProperty({
-    description: 'The disk quota for the box',
+    description: 'The disk quota for the sandbox',
     example: 10,
   })
   disk: number
 
   @ApiPropertyOptional({
-    description: 'The state of the box',
+    description: 'The state of the sandbox',
     enum: BoxState,
     enumName: 'BoxState',
     example: Object.values(BoxState)[0],
@@ -143,7 +149,7 @@ export class BoxDto {
   state?: BoxState
 
   @ApiPropertyOptional({
-    description: 'The desired state of the box',
+    description: 'The desired state of the sandbox',
     enum: BoxDesiredState,
     enumName: 'BoxDesiredState',
     example: Object.values(BoxDesiredState)[0],
@@ -154,7 +160,7 @@ export class BoxDto {
   desiredState?: BoxDesiredState
 
   @ApiPropertyOptional({
-    description: 'The error reason of the box',
+    description: 'The error reason of the sandbox',
     example: 'The box is not running',
     required: false,
   })
@@ -170,38 +176,12 @@ export class BoxDto {
   recoverable?: boolean
 
   @ApiPropertyOptional({
-    description: 'The state of the backup',
-    enum: BackupState,
-    example: Object.values(BackupState)[0],
-    required: false,
-  })
-  @IsEnum(BackupState)
-  @IsOptional()
-  backupState?: BackupState
-
-  @ApiPropertyOptional({
-    description: 'The creation timestamp of the last backup',
-    example: '2024-10-01T12:00:00Z',
-    required: false,
-  })
-  @IsOptional()
-  backupCreatedAt?: string
-
-  @ApiPropertyOptional({
     description: 'Auto-stop interval in minutes (0 means disabled)',
     example: 30,
     required: false,
   })
   @IsOptional()
   autoStopInterval?: number
-
-  @ApiPropertyOptional({
-    description: 'Auto-archive interval in minutes',
-    example: 7 * 24 * 60,
-    required: false,
-  })
-  @IsOptional()
-  autoArchiveInterval?: number
 
   @ApiPropertyOptional({
     description:
@@ -213,7 +193,7 @@ export class BoxDto {
   autoDeleteInterval?: number
 
   @ApiPropertyOptional({
-    description: 'Array of volumes attached to the box',
+    description: 'Array of volumes attached to the sandbox',
     type: [BoxVolume],
     required: false,
   })
@@ -221,15 +201,7 @@ export class BoxDto {
   volumes?: BoxVolume[]
 
   @ApiPropertyOptional({
-    description: 'Build information for the box',
-    type: BuildInfoDto,
-    required: false,
-  })
-  @IsOptional()
-  buildInfo?: BuildInfoDto
-
-  @ApiPropertyOptional({
-    description: 'The creation timestamp of the box',
+    description: 'The creation timestamp of the sandbox',
     example: '2024-10-01T12:00:00Z',
     required: false,
   })
@@ -237,7 +209,7 @@ export class BoxDto {
   createdAt?: string
 
   @ApiPropertyOptional({
-    description: 'The last update timestamp of the box',
+    description: 'The last update timestamp of the sandbox',
     example: '2024-10-01T12:00:00Z',
     required: false,
   })
@@ -245,7 +217,7 @@ export class BoxDto {
   updatedAt?: string
 
   @ApiPropertyOptional({
-    description: 'The class of the box',
+    description: 'The class of the sandbox',
     enum: BoxClass,
     example: Object.values(BoxClass)[0],
     required: false,
@@ -256,7 +228,7 @@ export class BoxDto {
   class?: BoxClass
 
   @ApiPropertyOptional({
-    description: 'The version of the daemon running in the box',
+    description: 'The version of the daemon running in the sandbox',
     example: '1.0.0',
     required: false,
   })
@@ -264,7 +236,7 @@ export class BoxDto {
   daemonVersion?: string
 
   @ApiPropertyOptional({
-    description: 'The runner ID of the box',
+    description: 'The runner ID of the sandbox',
     example: 'runner123',
     required: false,
   })
@@ -272,7 +244,7 @@ export class BoxDto {
   runnerId?: string
 
   @ApiProperty({
-    description: 'The toolbox proxy URL for the box',
+    description: 'The toolbox proxy URL for the sandbox',
     example: 'https://proxy.app.boxlite.io/toolbox',
   })
   toolboxProxyUrl: string
@@ -280,10 +252,10 @@ export class BoxDto {
   static fromBox(box: Box, toolboxProxyUrl: string): BoxDto {
     return {
       id: box.id,
+      boxId: box.boxId,
       organizationId: box.organizationId,
       name: box.name,
       target: box.region,
-      snapshot: box.snapshot,
       user: box.osUser,
       env: box.env,
       cpu: box.cpu,
@@ -299,23 +271,11 @@ export class BoxDto {
       desiredState: box.desiredState,
       errorReason: box.errorReason,
       recoverable: box.recoverable,
-      backupState: box.backupState,
-      backupCreatedAt: box.lastBackupAt ? new Date(box.lastBackupAt).toISOString() : undefined,
       autoStopInterval: box.autoStopInterval,
-      autoArchiveInterval: box.autoArchiveInterval,
       autoDeleteInterval: box.autoDeleteInterval,
       class: box.class,
       createdAt: box.createdAt ? new Date(box.createdAt).toISOString() : undefined,
       updatedAt: box.updatedAt ? new Date(box.updatedAt).toISOString() : undefined,
-      buildInfo: box.buildInfo
-        ? {
-            dockerfileContent: box.buildInfo.dockerfileContent,
-            contextHashes: box.buildInfo.contextHashes,
-            createdAt: box.buildInfo.createdAt,
-            updatedAt: box.buildInfo.updatedAt,
-            snapshotRef: box.buildInfo.snapshotRef,
-          }
-        : undefined,
       daemonVersion: box.daemonVersion,
       runnerId: box.runnerId,
       toolboxProxyUrl,
@@ -338,9 +298,6 @@ export class BoxDto {
         }
         if (box.desiredState === BoxDesiredState.DESTROYED) {
           return BoxState.DESTROYING
-        }
-        if (box.desiredState === BoxDesiredState.ARCHIVED) {
-          return BoxState.ARCHIVING
         }
         break
       case BoxState.UNKNOWN:

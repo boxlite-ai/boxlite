@@ -4,7 +4,6 @@
 package boxlite
 
 import (
-	"runtime"
 	"testing"
 
 	"github.com/boxlite-ai/runner/pkg/api/dto"
@@ -70,15 +69,22 @@ func TestSanitizeImageReferenceStripsScheme(t *testing.T) {
 	}
 }
 
-func TestLinuxHostPlatformMatchesHostArch(t *testing.T) {
-	// Registry pulls must target the runner host's architecture: a layer
-	// pulled as linux/amd64 onto an arm64 host produces x86 ELF binaries that
-	// fail with ENOEXEC when libkrun execs them inside the microVM. Guard
-	// against re-hardcoding a fixed arch.
-	if linuxHostPlatform.OS != "linux" {
-		t.Errorf("OS = %q, want linux", linuxHostPlatform.OS)
+func TestLinuxArchitectureForGoarch(t *testing.T) {
+	tests := []struct {
+		name   string
+		goarch string
+		want   string
+	}{
+		{name: "apple silicon runner uses arm64 image manifests", goarch: "arm64", want: "arm64"},
+		{name: "x86 runner uses amd64 image manifests", goarch: "amd64", want: "amd64"},
+		{name: "unknown goarch passes through", goarch: "riscv64", want: "riscv64"},
 	}
-	if linuxHostPlatform.Architecture != runtime.GOARCH {
-		t.Errorf("Architecture = %q, want host arch %q", linuxHostPlatform.Architecture, runtime.GOARCH)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := linuxArchitectureForGoarch(tt.goarch); got != tt.want {
+				t.Fatalf("linuxArchitectureForGoarch(%q) = %q, want %q", tt.goarch, got, tt.want)
+			}
+		})
 	}
 }

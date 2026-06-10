@@ -13,8 +13,9 @@ export const PlaygroundBoxContext = createContext<UseBoxSessionResult | null>(nu
 
 export const PlaygroundBoxProvider: React.FC<{
   activeTab: PlaygroundCategories
+  vncEnabled: boolean
   children: React.ReactNode
-}> = ({ activeTab, children }) => {
+}> = ({ activeTab, vncEnabled, children }) => {
   const { getBoxParametersInfo } = usePlayground()
   const { createBoxParams } = getBoxParametersInfo()
   const stableCreateParams = useDeepCompareMemo(createBoxParams)
@@ -23,7 +24,7 @@ export const PlaygroundBoxProvider: React.FC<{
     scope: 'playground',
     createParams: stableCreateParams,
     terminal: true,
-    vnc: true,
+    vnc: vncEnabled,
     notify: { vnc: activeTab === PlaygroundCategories.VNC },
   })
 
@@ -31,20 +32,21 @@ export const PlaygroundBoxProvider: React.FC<{
   createRef.current = session.box.create
 
   useEffect(() => {
-    const needsBox = activeTab === PlaygroundCategories.TERMINAL || activeTab === PlaygroundCategories.VNC
+    const needsBox =
+      activeTab === PlaygroundCategories.TERMINAL || (vncEnabled && activeTab === PlaygroundCategories.VNC)
     if (needsBox && !session.box.instance && !session.box.loading && !session.box.error) {
       createRef.current()
     }
-  }, [activeTab, session.box.instance, session.box.loading, session.box.error])
+  }, [activeTab, session.box.instance, session.box.loading, session.box.error, vncEnabled])
 
   const vncBoxId = useRef<string | null>(null)
   useEffect(() => {
     const id = session.box.instance?.id
-    if (id && vncBoxId.current !== id) {
+    if (vncEnabled && id && vncBoxId.current !== id) {
       vncBoxId.current = id
       session.vnc.start()
     }
-  }, [session.box.instance?.id, session.vnc])
+  }, [session.box.instance?.id, session.vnc, vncEnabled])
 
   return <PlaygroundBoxContext.Provider value={session}>{children}</PlaygroundBoxContext.Provider>
 }

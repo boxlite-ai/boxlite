@@ -19,7 +19,7 @@ import { FailedAuthTrackerService } from './auth/failed-auth-tracker.service'
 import { DataSource, MigrationExecutor } from 'typeorm'
 import { getOpenApiConfig } from './openapi.config'
 import { AuditInterceptor } from './audit/interceptors/audit.interceptor'
-import { join } from 'node:path'
+import { extname, join } from 'node:path'
 import { ApiKeyService } from './api-key/api-key.service'
 import { BOXLITE_ADMIN_USER_ID } from './app.service'
 import { OrganizationService } from './organization/services/organization.service'
@@ -31,6 +31,7 @@ import type { IncomingMessage } from 'http'
 import type { Socket } from 'net'
 import { Logger as PinoLogger, LoggerErrorInterceptor } from 'nestjs-pino'
 import { BoxliteWsProxyService } from './boxlite-rest/boxlite-ws-proxy.service'
+import { ObservabilityContextInterceptor } from './interceptors/observability-context.interceptor'
 
 // https options
 const httpsEnabled = process.env.CERT_PATH && process.env.CERT_KEY_PATH
@@ -60,6 +61,7 @@ async function bootstrap() {
   app.set('trust proxy', true)
   app.useGlobalFilters(new AllExceptionsFilter(failedAuthTracker))
   app.useGlobalInterceptors(new LoggerErrorInterceptor())
+  app.useGlobalInterceptors(new ObservabilityContextInterceptor())
   app.useGlobalInterceptors(new MetricsInterceptor(configService))
   app.useGlobalInterceptors(app.get(AuditInterceptor))
   app.useGlobalPipes(
@@ -120,13 +122,15 @@ async function bootstrap() {
   // Replace dashboard api url before serving
   if (configService.get('production')) {
     const dashboardDir = join(__dirname, '..', 'dashboard')
+    const dashboardTextExtensions = new Set(['.html', '.js', '.css'])
     const replaceInDirectory = (dir: string) => {
       for (const file of readdirSync(dir)) {
         const filePath = join(dir, file)
         if (statSync(filePath).isDirectory()) {
-          if (file === 'assets') {
-            replaceInDirectory(filePath)
-          }
+          replaceInDirectory(filePath)
+          continue
+        }
+        if (!dashboardTextExtensions.has(extname(filePath))) {
           continue
         }
         Logger.log(`Replacing %BOXLITE_BASE_API_URL% in ${filePath}`)
@@ -228,8 +232,8 @@ async function createAdminApiKey(app: INestApplication, apiKeyName: string) {
   const apiKeyService = app.get(ApiKeyService)
   const organizationService = app.get(OrganizationService)
 
-  const personalOrg = await organizationService.findPersonal(BOXLITE_ADMIN_USER_ID)
-  const { value } = await apiKeyService.createApiKey(personalOrg.id, BOXLITE_ADMIN_USER_ID, apiKeyName, [])
+  const defaultOrg = await organizationService.findDefaultForUser(BOXLITE_ADMIN_USER_ID)
+  const { value } = await apiKeyService.createApiKey(defaultOrg.id, BOXLITE_ADMIN_USER_ID, apiKeyName, [])
   Logger.log(
     `
 =========================================

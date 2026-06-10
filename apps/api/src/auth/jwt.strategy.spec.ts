@@ -45,13 +45,13 @@ describe('JwtStrategy.validate — auto-created user', () => {
 
     await strategy.validate(request, { sub: 'user-1', email: 'new@boxlite.dev', email_verified: true })
 
-    // The bug: without personalOrganizationDefaultRegionId, the downstream
-    // UserCreatedEvent → handleUserCreatedEvent creates the Personal org with
+    // The bug: without defaultOrganizationDefaultRegionId, the downstream
+    // UserCreatedEvent → handleUserCreatedEvent creates the default org with
     // defaultRegionId=undefined. Assert the strategy forwards the configured
     // region id into the create DTO.
     expect(userService.create).toHaveBeenCalledTimes(1)
     expect(userService.create).toHaveBeenCalledWith(
-      expect.objectContaining({ personalOrganizationDefaultRegionId: DEFAULT_REGION_ID }),
+      expect.objectContaining({ defaultOrganizationDefaultRegionId: DEFAULT_REGION_ID }),
     )
   })
 })

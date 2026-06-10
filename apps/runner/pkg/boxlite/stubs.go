@@ -16,7 +16,7 @@ import (
 // Resize changes the CPU/memory/disk allocation of a box.
 // BoxLite VMs don't support hot-resize, so this stops, removes, and recreates.
 func (c *Client) Resize(ctx context.Context, boxId string, resizeDto dto.ResizeBoxDTO) error {
-	c.logger.Info("resize box (stop/recreate)", "box", boxId)
+	c.logger.Info("resize box (stop/recreate)", "sandbox", boxId)
 
 	bx, err := c.getOrFetchBox(ctx, boxId)
 	if err != nil {
@@ -55,12 +55,21 @@ func (c *Client) Resize(ctx context.Context, boxId string, resizeDto dto.ResizeB
 		boxlite.WithNetwork(boxlite.NetworkSpec{Mode: boxlite.NetworkModeEnabled}),
 	}
 
+	toolboxHostPort, err := c.reserveToolboxHostPort(ctx, boxId)
+	if err != nil {
+		return fmt.Errorf("failed to reserve toolbox port during resize: %w", err)
+	}
+	opts = append(opts, boxlite.WithPort(ToolboxGuestPort, toolboxHostPort))
+
 	if resizeDto.Disk > 0 {
 		opts = append(opts, boxlite.WithDiskSize(int(resizeDto.Disk)))
 	}
 
 	newBox, err := c.runtime.Create(ctx, info.Image, opts...)
 	if err != nil {
+		if cleanupErr := c.removeToolboxPortRecord(ctx, boxId); cleanupErr != nil {
+			c.logger.Warn("failed to remove toolbox port record after resize create failure", "sandbox", boxId, "error", cleanupErr)
+		}
 		return fmt.Errorf("failed to recreate box during resize: %w", err)
 	}
 
@@ -77,20 +86,20 @@ func (c *Client) Resize(ctx context.Context, boxId string, resizeDto dto.ResizeB
 
 // RecoverBox destroys and recreates a box from its snapshot.
 func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.RecoverBoxDTO) error {
-	c.logger.Info("recover box", "box", boxId)
+	c.logger.Info("recover sandbox", "sandbox", boxId)
 
 	if err := c.Destroy(ctx, boxId); err != nil {
 		c.logger.Warn("failed to destroy during recover", "error", err)
 	}
 
-	snapshot := "alpine:latest"
+	artifactRef := "alpine:latest"
 	if recoverDto.Snapshot != nil {
-		snapshot = *recoverDto.Snapshot
+		artifactRef = *recoverDto.Snapshot
 	}
 
 	createDto := dto.CreateBoxDTO{
 		Id:               boxId,
-		Snapshot:         snapshot,
+		ArtifactRef:      artifactRef,
 		OsUser:           recoverDto.OsUser,
 		CpuQuota:         recoverDto.CpuQuota,
 		MemoryQuota:      recoverDto.MemoryQuota,
@@ -105,20 +114,6 @@ func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.Re
 
 	_, _, err := c.Create(ctx, createDto)
 	return err
-}
-
-// CreateBackup creates a backup/snapshot of a running box.
-// TODO: Implement when BoxLite Go SDK exposes snapshot operations.
-func (c *Client) CreateBackup(ctx context.Context, boxId string, backupDto dto.CreateBackupDTO) error {
-	c.logger.Warn("create backup not yet implemented in BoxLite", "box", boxId)
-	return errdefs.ErrNotImplemented.WithMessage("backup is not supported by the BoxLite Go SDK")
-}
-
-// BuildSnapshot builds an image from a Dockerfile.
-// TODO: Implement OCI builder integration.
-func (c *Client) BuildSnapshot(ctx context.Context, req dto.BuildSnapshotRequestDTO) error {
-	c.logger.Warn("build snapshot not yet implemented in BoxLite", "snapshot", req.Snapshot)
-	return errdefs.ErrNotImplemented.WithMessage("snapshot build is not supported by the BoxLite Go SDK")
 }
 
 // GetImageInfo returns metadata about a cached image.
@@ -140,7 +135,7 @@ func (c *Client) GetImageInfo(ctx context.Context, imageName string) (*ImageInfo
 // UpdateNetworkSettings updates the network allowlist/blocklist for a box.
 // TODO: Implement when BoxLite Go SDK exposes network configuration.
 func (c *Client) UpdateNetworkSettings(ctx context.Context, boxId string, settings dto.UpdateNetworkSettingsDTO) error {
-	c.logger.Warn("update network settings not yet implemented in BoxLite", "box", boxId)
+	c.logger.Warn("update network settings not yet implemented in BoxLite", "sandbox", boxId)
 	return errdefs.ErrNotImplemented.WithMessage("live network settings update is not supported by the BoxLite Go SDK")
 }
 

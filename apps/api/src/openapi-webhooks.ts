@@ -9,9 +9,6 @@ import { WebhookEvent } from './webhook/constants/webhook-events.constants'
 import {
   BoxCreatedWebhookDto,
   BoxStateUpdatedWebhookDto,
-  SnapshotCreatedWebhookDto,
-  SnapshotStateUpdatedWebhookDto,
-  SnapshotRemovedWebhookDto,
   VolumeCreatedWebhookDto,
   VolumeStateUpdatedWebhookDto,
 } from './webhook/dto/webhook-event-payloads.dto'
@@ -42,7 +39,7 @@ export function addWebhookDocumentation(document: OpenAPIObject): OpenAPIObjectW
   return {
     ...document,
     webhooks: {
-      [WebhookEvent.BOX_CREATED]: {
+      [WebhookEvent.SANDBOX_CREATED]: {
         post: {
           requestBody: {
             description: 'Box created event',
@@ -59,7 +56,7 @@ export function addWebhookDocumentation(document: OpenAPIObject): OpenAPIObjectW
           },
         },
       },
-      [WebhookEvent.BOX_STATE_UPDATED]: {
+      [WebhookEvent.SANDBOX_STATE_UPDATED]: {
         post: {
           requestBody: {
             description: 'Box state updated event',
@@ -76,57 +73,7 @@ export function addWebhookDocumentation(document: OpenAPIObject): OpenAPIObjectW
           },
         },
       },
-      [WebhookEvent.SNAPSHOT_CREATED]: {
-        post: {
-          requestBody: {
-            description: 'Snapshot created event',
-            content: {
-              'application/json': {
-                schema: { $ref: getSchemaPath(SnapshotCreatedWebhookDto) },
-              },
-            },
-          },
-          responses: {
-            '200': {
-              description: 'Webhook received successfully',
-            },
-          },
-        },
-      },
-      [WebhookEvent.SNAPSHOT_STATE_UPDATED]: {
-        post: {
-          requestBody: {
-            description: 'Snapshot state updated event',
-            content: {
-              'application/json': {
-                schema: { $ref: getSchemaPath(SnapshotStateUpdatedWebhookDto) },
-              },
-            },
-          },
-          responses: {
-            '200': {
-              description: 'Webhook received successfully',
-            },
-          },
-        },
-      },
-      [WebhookEvent.SNAPSHOT_REMOVED]: {
-        post: {
-          requestBody: {
-            description: 'Snapshot removed event',
-            content: {
-              'application/json': {
-                schema: { $ref: getSchemaPath(SnapshotRemovedWebhookDto) },
-              },
-            },
-          },
-          responses: {
-            '200': {
-              description: 'Webhook received successfully',
-            },
-          },
-        },
-      },
+      // TODO(image-rewrite): TEMPLATE_* webhook docs removed with box_template.
       [WebhookEvent.VOLUME_CREATED]: {
         post: {
           requestBody: {

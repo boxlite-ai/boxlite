@@ -10,11 +10,6 @@ import { NotificationEmitter } from '../gateways/notification-emitter.abstract'
 import { BoxEvents } from '../../box/constants/box-events.constants'
 import { BoxCreatedEvent } from '../../box/events/box-create.event'
 import { BoxStateUpdatedEvent } from '../../box/events/box-state-updated.event'
-import { SnapshotCreatedEvent } from '../../box/events/snapshot-created.event'
-import { SnapshotEvents } from '../../box/constants/snapshot-events'
-import { SnapshotDto } from '../../box/dto/snapshot.dto'
-import { SnapshotStateUpdatedEvent } from '../../box/events/snapshot-state-updated.event'
-import { SnapshotRemovedEvent } from '../../box/events/snapshot-removed.event'
 import { VolumeEvents } from '../../box/constants/volume-events'
 import { VolumeCreatedEvent } from '../../box/events/volume-created.event'
 import { VolumeDto } from '../../box/dto/volume.dto'
@@ -30,7 +25,7 @@ import { RegionService } from '../../region/services/region.service'
 import { BoxService } from '../../box/services/box.service'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
-import { BOX_EVENT_CHANNEL } from '../../common/constants/constants'
+import { SANDBOX_EVENT_CHANNEL } from '../../common/constants/constants'
 
 @Injectable()
 export class NotificationService {
@@ -51,32 +46,14 @@ export class NotificationService {
   async handleBoxStateUpdated(event: BoxStateUpdatedEvent) {
     const dto = await this.boxService.toBoxDto(event.box)
     this.notificationEmitter.emitBoxStateUpdated(dto, event.oldState, event.newState)
-    this.redis.publish(BOX_EVENT_CHANNEL, JSON.stringify(event))
+    this.redis.publish(SANDBOX_EVENT_CHANNEL, JSON.stringify(event))
   }
 
   @OnEvent(BoxEvents.DESIRED_STATE_UPDATED)
   async handleBoxDesiredStateUpdated(event: BoxDesiredStateUpdatedEvent) {
     const dto = await this.boxService.toBoxDto(event.box)
     this.notificationEmitter.emitBoxDesiredStateUpdated(dto, event.oldDesiredState, event.newDesiredState)
-    this.redis.publish(BOX_EVENT_CHANNEL, JSON.stringify(event))
-  }
-
-  @OnEvent(SnapshotEvents.CREATED)
-  async handleSnapshotCreated(event: SnapshotCreatedEvent) {
-    const dto = SnapshotDto.fromSnapshot(event.snapshot)
-    this.notificationEmitter.emitSnapshotCreated(dto)
-  }
-
-  @OnEvent(SnapshotEvents.STATE_UPDATED)
-  async handleSnapshotStateUpdated(event: SnapshotStateUpdatedEvent) {
-    const dto = SnapshotDto.fromSnapshot(event.snapshot)
-    this.notificationEmitter.emitSnapshotStateUpdated(dto, event.oldState, event.newState)
-  }
-
-  @OnEvent(SnapshotEvents.REMOVED)
-  async handleSnapshotRemoved(event: SnapshotRemovedEvent) {
-    const dto = SnapshotDto.fromSnapshot(event.snapshot)
-    this.notificationEmitter.emitSnapshotRemoved(dto)
+    this.redis.publish(SANDBOX_EVENT_CHANNEL, JSON.stringify(event))
   }
 
   @OnEvent(VolumeEvents.CREATED)

@@ -20,10 +20,8 @@ import { OrganizationUserService } from './services/organization-user.service'
 import { OrganizationInvitationService } from './services/organization-invitation.service'
 import { UserModule } from '../user/user.module'
 import { Box } from '../box/entities/box.entity'
-import { Snapshot } from '../box/entities/snapshot.entity'
 import { Volume } from '../box/entities/volume.entity'
 import { RedisLockProvider } from '../box/common/redis-lock.provider'
-import { SnapshotRunner } from '../box/entities/snapshot-runner.entity'
 import { OrganizationUsageService } from './services/organization-usage.service'
 import { DataSource } from 'typeorm'
 import { EventEmitter2 } from '@nestjs/event-emitter'
@@ -45,9 +43,7 @@ import { EncryptionModule } from '../encryption/encryption.module'
       OrganizationUser,
       OrganizationInvitation,
       Box,
-      Snapshot,
       Volume,
-      SnapshotRunner,
       RegionQuota,
       Region,
     ]),

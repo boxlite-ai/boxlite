@@ -90,9 +90,6 @@ export class Region {
   @Column({ nullable: true })
   sshGatewayApiKeyHash: string | null
 
-  @Column({ nullable: true })
-  snapshotManagerUrl: string | null
-
   constructor(params: {
     name: string
     enforceQuotas: boolean
@@ -104,7 +101,6 @@ export class Region {
     sshGatewayUrl?: string | null
     proxyApiKeyHash?: string | null
     sshGatewayApiKeyHash?: string | null
-    snapshotManagerUrl?: string | null
   }) {
     this.name = params.name
     this.enforceQuotas = params.enforceQuotas
@@ -124,7 +120,6 @@ export class Region {
     this.sshGatewayUrl = params.sshGatewayUrl ?? null
     this.proxyApiKeyHash = params.proxyApiKeyHash ?? null
     this.sshGatewayApiKeyHash = params.sshGatewayApiKeyHash ?? null
-    this.snapshotManagerUrl = params.snapshotManagerUrl ?? null
   }
 
   @BeforeInsert()

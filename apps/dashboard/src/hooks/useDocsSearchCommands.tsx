@@ -15,7 +15,7 @@ import {
 import { cn } from '@/lib/utils'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { liteClient as algoliasearch } from 'algoliasearch/lite'
-import { BookOpen, Code2, Container, Layers, Terminal } from 'lucide-react'
+import { BookOpen, Code2, Container, Terminal } from 'lucide-react'
 import { ReactNode, useEffect, useMemo, useState } from 'react'
 
 const ALGOLIA_APP_ID = import.meta.env.VITE_ALGOLIA_APP_ID
@@ -196,13 +196,6 @@ export function useDocsSearchCommands() {
           label: 'Boxes',
           icon: <Container className="w-4 h-4" />,
           onSelect: () => openDocs('/en/boxes'),
-        },
-        {
-          id: 'suggestion-snapshots',
-          label: 'Snapshots',
-          icon: <Layers className="w-4 h-4" />,
-          onSelect: () => openDocs('/en/snapshots'),
-          chainable: true,
         },
         {
           id: 'suggestion-limits',

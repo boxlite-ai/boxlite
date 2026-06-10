@@ -4,14 +4,14 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-export type OrganizationUsageQuotaType = 'cpu' | 'memory' | 'disk' | 'snapshot_count' | 'volume_count'
-export type OrganizationUsageResourceType = 'box' | 'snapshot' | 'volume'
+export type OrganizationUsageQuotaType = 'cpu' | 'memory' | 'disk' | 'template_count' | 'volume_count'
+export type OrganizationUsageResourceType = 'sandbox' | 'template' | 'volume'
 
 const QUOTA_TO_RESOURCE_MAP: Record<OrganizationUsageQuotaType, OrganizationUsageResourceType> = {
-  cpu: 'box',
-  memory: 'box',
-  disk: 'box',
-  snapshot_count: 'snapshot',
+  cpu: 'sandbox',
+  memory: 'sandbox',
+  disk: 'sandbox',
+  template_count: 'template',
   volume_count: 'volume',
 } as const
 

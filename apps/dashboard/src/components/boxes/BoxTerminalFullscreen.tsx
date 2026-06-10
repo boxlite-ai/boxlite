@@ -13,7 +13,8 @@ import { useBoxQuery } from '@/hooks/queries/useBoxQuery'
 import { useTerminalSessionQuery } from '@/hooks/queries/useTerminalSessionQuery'
 import { useBoxSessionContext } from '@/hooks/useBoxSessionContext'
 import { useBoxWsSync } from '@/hooks/useBoxWsSync'
-import { isStoppable } from '@/lib/utils/box'
+import { getBoxDisplayName, getBoxPublicId } from '@/lib/box-identity'
+import { isStoppable } from '@/lib/utils/sandbox'
 import { Container, Play, RefreshCw, TerminalSquare } from 'lucide-react'
 import { BoxFullscreenShell } from './BoxFullscreenShell'
 import { BoxTerminalFrame } from './BoxTerminalFrame'
@@ -126,10 +127,11 @@ export default function BoxTerminalFullscreen() {
     body = <BoxTerminalFrame sessionUrl={session.url} className="flex-1" />
   }
 
-  const label = box?.name || box?.id || boxId
+  const label = box ? getBoxDisplayName(box) : boxId
+  const publicBoxId = box ? getBoxPublicId(box) : ''
 
   return (
-    <BoxFullscreenShell boxId={boxId} title={label} copyValue={box ? box.name || box.id : undefined}>
+    <BoxFullscreenShell boxId={boxId} title={label} copyValue={publicBoxId || undefined}>
       {body}
     </BoxFullscreenShell>
   )

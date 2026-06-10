@@ -41,15 +41,11 @@ type BoxBackend interface {
 	UpdateNetworkSettings(ctx context.Context, boxId string, settings dto.UpdateNetworkSettingsDTO) error
 	GetBoxState(ctx context.Context, boxId string) (enums.BoxState, error)
 
-	// Image/snapshot operations
-	PullSnapshot(ctx context.Context, req dto.PullSnapshotRequestDTO) error
-	BuildSnapshot(ctx context.Context, req dto.BuildSnapshotRequestDTO) error
+	// Runtime artifact operations
+	PullArtifact(ctx context.Context, req dto.PullArtifactRequestDTO) error
 	RemoveImage(ctx context.Context, imageName string, force bool) error
 	GetImageInfo(ctx context.Context, imageName string) (*ImageMeta, error)
 	InspectImageInRegistry(ctx context.Context, imageName string, registry *dto.RegistryDTO) (*RegistryDigest, error)
-
-	// Backup
-	CreateBackup(ctx context.Context, boxId string, backupDto dto.CreateBackupDTO) error
 
 	// Health
 	Ping(ctx context.Context) error

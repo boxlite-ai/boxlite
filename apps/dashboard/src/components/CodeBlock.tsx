@@ -7,6 +7,7 @@
 import { useTheme } from '@/contexts/ThemeContext'
 import { cn } from '@/lib/utils'
 import { Highlight, themes, type PrismTheme, type Token } from 'prism-react-renderer'
+import type { Key } from 'react'
 import { CopyButton } from './CopyButton'
 
 interface CodeBlockProps {
@@ -28,33 +29,47 @@ const oneDark = {
   ...themes.oneDark,
   plain: {
     ...themes.oneDark.plain,
-    background: 'hsl(var(--code-background))',
+    background: 'transparent',
+  },
+}
+
+const oneLight = {
+  ...themes.oneLight,
+  plain: {
+    ...themes.oneLight.plain,
+    background: 'transparent',
   },
 }
 
 const CodeBlock: React.FC<CodeBlockProps> = ({ code, language, showCopy = true, codeAreaClassName, className }) => {
-  const { theme } = useTheme()
+  const { resolvedTheme } = useTheme()
 
   return (
-    <div className={cn('relative rounded-lg', className)}>
+    <div
+      className={cn(
+        'relative min-w-0 max-w-full overflow-hidden rounded-lg border border-border/80 bg-[hsl(var(--code-background))] shadow-sm dark:border-white/10',
+        className,
+      )}
+    >
       <Highlight
-        theme={(theme === 'dark' ? oneDark : themes.oneLight) as PrismTheme}
+        theme={(resolvedTheme === 'dark' ? oneDark : oneLight) as PrismTheme}
         code={code.trim()}
         language={language}
       >
         {({ style, tokens, getLineProps, getTokenProps }: HighlightProps) => (
-          <pre className={cn('p-4 rounded-lg overflow-x-auto', codeAreaClassName)} style={style}>
+          <pre
+            className={cn('overflow-x-auto rounded-lg p-4 pr-12 text-[13px] leading-6', codeAreaClassName)}
+            style={style}
+          >
             {tokens.map((line, i) => {
               const props = getLineProps({ line, key: i })
-              // @ts-expect-error Workaround for the render error. Key should not be spread into JSX
-              const { key, ...rest } = props
+              const { key: lineKey, ...rest } = props as typeof props & { key?: Key }
               return (
-                <div key={i} {...rest}>
+                <div key={lineKey ?? i} {...rest}>
                   {line.map((token, key) => {
                     const tokenProps = getTokenProps({ token, key })
-                    // @ts-expect-error Workaround for the render error. Key should not be spread into JSX
-                    const { key: tokenKey, ...restTokenProps } = tokenProps
-                    return <span key={tokenKey} {...restTokenProps} />
+                    const { key: tokenKey, ...restTokenProps } = tokenProps as typeof tokenProps & { key?: Key }
+                    return <span key={tokenKey ?? key} {...restTokenProps} />
                   })}
                 </div>
               )
@@ -66,7 +81,7 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ code, language, showCopy = true, 
         <CopyButton
           value={code.trim()}
           variant="ghost"
-          className="absolute text-muted-foreground right-2 top-2.5 p-2"
+          className="absolute right-2 top-2.5 bg-background/80 p-2 text-muted-foreground shadow-sm ring-1 ring-border/70 backdrop-blur hover:bg-muted hover:text-foreground"
         />
       )}
     </div>

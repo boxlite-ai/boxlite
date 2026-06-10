@@ -25,7 +25,6 @@ func init() {
 	BoxCmd.AddCommand(DeleteCmd)
 	BoxCmd.AddCommand(StartCmd)
 	BoxCmd.AddCommand(StopCmd)
-	BoxCmd.AddCommand(ArchiveCmd)
 	BoxCmd.AddCommand(SSHCmd)
 	BoxCmd.AddCommand(ExecCmd)
 	BoxCmd.AddCommand(PreviewUrlCmd)

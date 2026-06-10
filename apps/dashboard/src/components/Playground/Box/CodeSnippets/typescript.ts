@@ -5,6 +5,7 @@
 
 import { CodeSnippetGenerator } from './types'
 import { joinGroupedSections } from './utils'
+import { getLanguageCodeToRun } from '@/lib/playground'
 
 export const TypeScriptSnippetGenerator: CodeSnippetGenerator = {
   getImports(p) {
@@ -58,7 +59,7 @@ export const TypeScriptSnippetGenerator: CodeSnippetGenerator = {
     const ind = '\t\t\t'
     return [
       `{`,
-      p.config.useCustomBoxSnapshotName ? `${ind}snapshot: '${p.state['snapshotName']}',` : '',
+      p.config.useCustomImageName ? `${ind}templateId: '${p.state['templateName']}',` : '',
       p.config.createBoxFromImage ? `${ind}image: Image.debianSlim("3.13"),` : '',
       this.getResources(p),
       p.config.useLanguageParam ? `${ind}language: '${p.state['language']}',` : '',
@@ -66,9 +67,6 @@ export const TypeScriptSnippetGenerator: CodeSnippetGenerator = {
         ? [
             p.config.useAutoStopInterval
               ? `${ind}autoStopInterval: ${p.state['createBoxBaseParams']['autoStopInterval']}, // ${p.state['createBoxBaseParams']['autoStopInterval'] == 0 ? 'Disables the auto-stop feature' : `Box will be stopped after ${p.state['createBoxBaseParams']['autoStopInterval']} minute${(p.state['createBoxBaseParams']['autoStopInterval'] as number) > 1 ? 's' : ''}`}`
-              : '',
-            p.config.useAutoArchiveInterval
-              ? `${ind}autoArchiveInterval: ${p.state['createBoxBaseParams']['autoArchiveInterval']}, // Auto-archive after a Box has been stopped for ${p.state['createBoxBaseParams']['autoArchiveInterval'] == 0 ? '30 days' : `${p.state['createBoxBaseParams']['autoArchiveInterval']} minutes`}`
               : '',
             p.config.useAutoDeleteInterval
               ? `${ind}autoDeleteInterval: ${p.state['createBoxBaseParams']['autoDeleteInterval']}, // ${p.state['createBoxBaseParams']['autoDeleteInterval'] == 0 ? 'Box will be deleted immediately after stopping' : p.state['createBoxBaseParams']['autoDeleteInterval'] == -1 ? 'Auto-delete functionality disabled' : `Auto-delete after a Box has been stopped for ${p.state['createBoxBaseParams']['autoDeleteInterval']} minutes`}`
@@ -94,7 +92,7 @@ export const TypeScriptSnippetGenerator: CodeSnippetGenerator = {
     return [
       `\n\n${ind}// Run code securely inside the Box`,
       `${ind}const codeRunResponse = await box.process.codeRun(\``,
-      `${(p.state['codeRunParams'].languageCode ?? '').replace(/`/g, '\\`').replace(/\$\{/g, '\\${')}`, // Escape backticks and ${ to prevent breaking the template literal
+      `${getLanguageCodeToRun(p.actions.codeSnippetLanguage).replace(/`/g, '\\`').replace(/\$\{/g, '\\${')}`,
       `${ind}\`)`,
       `${ind}if (codeRunResponse.exitCode !== 0) {`,
       `${ind + '\t'}console.error("Error running code:", codeRunResponse.exitCode, codeRunResponse.result)`,

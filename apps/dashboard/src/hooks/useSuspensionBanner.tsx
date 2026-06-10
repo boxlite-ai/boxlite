@@ -63,7 +63,7 @@ export function useSuspensionBanner(suspension?: Suspension | null) {
           id: SUSPENSION_BANNER_ID,
           variant: 'info',
           title: 'Setup Required',
-          description: 'Add a payment method to start creating boxes.',
+          description: 'Add a payment method to start creating Boxes.',
           icon: <CreditCardIcon className="h-4 w-4 flex-shrink-0 text-current" />,
           action:
             path !== RoutePath.BILLING_WALLET

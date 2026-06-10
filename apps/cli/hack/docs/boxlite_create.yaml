@@ -2,10 +2,6 @@ name: boxlite create
 synopsis: Create a new box
 usage: boxlite create [flags]
 options:
-  - name: auto-archive
-    default_value: '10080'
-    usage: |
-      Auto-archive interval in minutes (0 means the maximum interval will be used)
   - name: auto-delete
     default_value: '-1'
     usage: |

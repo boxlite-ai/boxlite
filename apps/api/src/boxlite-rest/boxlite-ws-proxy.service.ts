@@ -13,9 +13,15 @@ import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
 import type { Runner } from '../box/entities/runner.entity'
 
-// Matches /api/v1/<tenant>/boxes/<id>/executions/<id>/attach with optional query string.
+type RunnerUpgradeRequest = IncomingMessage & {
+  __boxliteRunner?: Runner
+  __boxliteRunnerBoxId?: string
+}
+
+// Matches /api/v1/boxes/<id>/executions/<id>/attach and the legacy
+// /api/v1/<tenant>/boxes/<id>/executions/<id>/attach shape with optional query string.
 // Capture group 1 is the box/box id.
-const ATTACH_PATH = /^\/api\/v1\/[^/]+\/boxes\/([^/]+)\/executions\/[^/]+\/attach(?:\?.*)?$/
+const ATTACH_PATH = /^\/api\/v1\/(?:[^/]+\/)?boxes\/([^/]+)\/executions\/[^/]+\/attach(?:\?.*)?$/
 
 /**
  * Singleton WebSocket proxy for `/attach` upgrades.
@@ -42,12 +48,18 @@ export class BoxliteWsProxyService {
     this.proxy = createProxyMiddleware({
       ws: true,
       changeOrigin: true,
-      // Drop the public `/api/v1/<tenant>/` prefix; runner mounts routes at `/v1/...`.
-      pathRewrite: (path: string) => path.replace(/^\/api\/v1\/[^/]+\/boxes\//, '/v1/boxes/'),
+      // Drop the public `/api/v1/` or `/api/v1/<tenant>/` prefix; runner mounts routes at `/v1/...`.
+      pathRewrite: (path: string, req: IncomingMessage) => {
+        const runnerBoxId = (req as RunnerUpgradeRequest).__boxliteRunnerBoxId
+        if (!runnerBoxId) {
+          throw new Error('ws proxy: runner box id not resolved before upgrade — bug in caller')
+        }
+        return path.replace(/^\/api\/v1\/(?:[^/]+\/)?boxes\/[^/]+/, `/v1/boxes/${runnerBoxId}`)
+      },
       // Target is resolved per-upgrade and stashed on the request before
       // delegating into the proxy.
       router: (req: IncomingMessage) => {
-        const runner = (req as IncomingMessage & { __boxliteRunner?: Runner }).__boxliteRunner
+        const runner = (req as RunnerUpgradeRequest).__boxliteRunner
         if (!runner) {
           throw new Error('ws proxy: runner not resolved before upgrade — bug in caller')
         }
@@ -55,7 +67,7 @@ export class BoxliteWsProxyService {
       },
       on: {
         proxyReqWs: (proxyReq: { setHeader: (name: string, value: string) => void }, req: IncomingMessage) => {
-          const runner = (req as IncomingMessage & { __boxliteRunner?: Runner }).__boxliteRunner
+          const runner = (req as RunnerUpgradeRequest).__boxliteRunner
           if (runner?.apiKey) {
             proxyReq.setHeader('Authorization', `Bearer ${runner.apiKey}`)
           }
@@ -106,7 +118,8 @@ export class BoxliteWsProxyService {
         this.respondAndClose(socket, 404, 'Not Found')
         return
       }
-      ;(req as IncomingMessage & { __boxliteRunner: Runner }).__boxliteRunner = runner
+      ;(req as RunnerUpgradeRequest).__boxliteRunner = runner
+      ;(req as RunnerUpgradeRequest).__boxliteRunnerBoxId = box.id
       ;(
         this.proxy as unknown as {
           upgrade: (req: IncomingMessage, socket: Socket, head: Buffer) => void

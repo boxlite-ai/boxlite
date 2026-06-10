@@ -23,12 +23,4 @@ export class UpdateRegionDto {
     required: false,
   })
   sshGatewayUrl?: string
-
-  @ApiProperty({
-    description: 'Snapshot Manager URL for the region',
-    example: 'https://snapshot-manager.example.com',
-    nullable: true,
-    required: false,
-  })
-  snapshotManagerUrl?: string
 }

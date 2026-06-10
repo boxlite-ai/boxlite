@@ -13,27 +13,21 @@ import {
   HttpStatus,
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { DataSource, In, IsNull, Like, Repository } from 'typeorm'
+import { DataSource, In, IsNull, Repository } from 'typeorm'
 import { REGION_NAME_REGEX } from '../constants/region-name-regex.constant'
 import { CreateRegionInternalDto } from '../dto/create-region-internal.dto'
 import { Region } from '../entities/region.entity'
 import { Runner } from '../../box/entities/runner.entity'
 import { RegionType } from '../enums/region-type.enum'
 import { CreateRegionResponseDto } from '../dto/create-region.dto'
-import { generateApiKeyHash, generateApiKeyValue, generateRandomString } from '../../common/utils/api-key'
+import { generateApiKeyHash, generateApiKeyValue } from '../../common/utils/api-key'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { RegionDto } from '../dto/region.dto'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { RegionEvents } from '../constants/region-events.constant'
 import { RegionCreatedEvent } from '../events/region-created.event'
 import { RegionDeletedEvent } from '../events/region-deleted.event'
-import { SnapshotManagerCredentialsDto } from '../dto/snapshot-manager-credentials.dto'
-import {
-  RegionSnapshotManagerCredsRegeneratedEvent,
-  RegionSnapshotManagerUpdatedEvent,
-} from '../events/region-snapshot-manager-creds.event'
 import { UpdateRegionDto } from '../dto/update-region.dto'
-import { Snapshot } from '../../box/entities/snapshot.entity'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
 import { toolboxProxyUrlCacheKey } from '../../box/utils/box-lookup-cache.util'
@@ -49,8 +43,6 @@ export class RegionService {
     private readonly runnerRepository: Repository<Runner>,
     private readonly dataSource: DataSource,
     private readonly eventEmitter: EventEmitter2,
-    @InjectRepository(Snapshot)
-    private readonly snapshotRepository: Repository<Snapshot>,
     @InjectRedis() private readonly redis: Redis,
     private readonly configService: TypedConfigService,
   ) {}
@@ -87,9 +79,6 @@ export class RegionService {
         ? generateApiKeyValue(this.configService.getOrThrow('apiKey.prefix'), 'svc')
         : undefined
 
-      const snapshotManagerUsername = createRegionDto.snapshotManagerUrl ? 'boxlite' : undefined
-      const snapshotManagerPassword = createRegionDto.snapshotManagerUrl ? generateRandomString(16) : undefined
-
       const region = new Region({
         name: createRegionDto.name,
         enforceQuotas: createRegionDto.enforceQuotas,
@@ -100,23 +89,17 @@ export class RegionService {
         sshGatewayUrl: createRegionDto.sshGatewayUrl,
         proxyApiKeyHash: proxyApiKey ? generateApiKeyHash(proxyApiKey) : null,
         sshGatewayApiKeyHash: sshGatewayApiKey ? generateApiKeyHash(sshGatewayApiKey) : null,
-        snapshotManagerUrl: createRegionDto.snapshotManagerUrl,
       })
 
       await this.dataSource.transaction(async (em) => {
         await em.save(region)
-        await this.eventEmitter.emitAsync(
-          RegionEvents.CREATED,
-          new RegionCreatedEvent(em, region, organizationId, snapshotManagerUsername, snapshotManagerPassword),
-        )
+        await this.eventEmitter.emitAsync(RegionEvents.CREATED, new RegionCreatedEvent(em, region, organizationId))
       })
 
       return new CreateRegionResponseDto({
         id: region.id,
         proxyApiKey,
         sshGatewayApiKey,
-        snapshotManagerUsername,
-        snapshotManagerPassword,
       })
     } catch (error) {
       if (error.code === '23505') {
@@ -296,47 +279,6 @@ export class RegionService {
         region.sshGatewayUrl = updateRegion.sshGatewayUrl ?? null
       }
 
-      if (updateRegion.snapshotManagerUrl !== undefined) {
-        if (region.snapshotManagerUrl) {
-          // If snapshots already exist, prevent changing the snapshot manager URL
-          const exists = await this.snapshotRepository.exists({
-            where: {
-              ref: Like(`${region.snapshotManagerUrl.replace(/^https?:\/\//, '')}%`),
-            },
-          })
-          if (exists) {
-            throw new BadRequestException(
-              'Cannot change snapshot manager URL for region with existing snapshots. Please delete existing snapshots first.',
-            )
-          }
-        }
-
-        const prevSnapshotManagerUrl = region.snapshotManagerUrl
-        region.snapshotManagerUrl = updateRegion.snapshotManagerUrl ?? null
-
-        let newUsername: string | undefined = undefined
-        let newPassword: string | undefined = undefined
-
-        // If the region did not have a snapshot manager, create new credentials
-        if (!prevSnapshotManagerUrl) {
-          newUsername = 'boxlite'
-          newPassword = generateRandomString(16)
-        }
-
-        await this.eventEmitter.emitAsync(
-          RegionEvents.SNAPSHOT_MANAGER_UPDATED,
-          new RegionSnapshotManagerUpdatedEvent(
-            region,
-            region.organizationId,
-            region.snapshotManagerUrl,
-            prevSnapshotManagerUrl,
-            newUsername,
-            newPassword,
-            em,
-          ),
-        )
-      }
-
       await em.save(region)
     })
 
@@ -395,36 +337,5 @@ export class RegionService {
     await this.regionRepository.save(region)
 
     return newApiKey
-  }
-
-  /**
-   * @param regionId - The ID of the region.
-   * @throws {NotFoundException} If the region is not found.
-   * @throws {BadRequestException} If the region does not have a snapshot manager URL configured.
-   * @returns The newly generated snapshot manager credentials.
-   */
-  async regenerateSnapshotManagerCredentials(regionId: string): Promise<SnapshotManagerCredentialsDto> {
-    const region = await this.findOne(regionId)
-
-    if (!region) {
-      throw new NotFoundException('Region not found')
-    }
-
-    if (!region.snapshotManagerUrl) {
-      throw new BadRequestException('Region does not have a snapshot manager URL configured')
-    }
-
-    const newUsername = 'boxlite'
-    const newPassword = generateRandomString(16)
-
-    await this.eventEmitter.emitAsync(
-      RegionEvents.SNAPSHOT_MANAGER_CREDENTIALS_REGENERATED,
-      new RegionSnapshotManagerCredsRegeneratedEvent(regionId, region.snapshotManagerUrl, newUsername, newPassword),
-    )
-
-    return new SnapshotManagerCredentialsDto({
-      username: newUsername,
-      password: newPassword,
-    })
   }
 }

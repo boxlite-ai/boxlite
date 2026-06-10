@@ -7,20 +7,17 @@
 import { Inject, Injectable, Logger } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Cron, CronExpression } from '@nestjs/schedule'
-import { FindOptionsWhere, In, MoreThan, Not, Repository } from 'typeorm'
+import { In, MoreThan, Not, Repository } from 'typeorm'
 import { RedisLockProvider } from '../common/redis-lock.provider'
 import { BoxRepository } from '../repositories/box.repository'
 import { Box } from '../entities/box.entity'
-import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
+import { SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 import { WarmPool } from '../entities/warm-pool.entity'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
 import { BoxEvents } from '../constants/box-events.constants'
 import { BoxOrganizationUpdatedEvent } from '../events/box-organization-updated.event'
 import { ConfigService } from '@nestjs/config'
-import { Snapshot } from '../entities/snapshot.entity'
-import { SnapshotState } from '../enums/snapshot-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
-import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { BoxState } from '../enums/box-state.enum'
 import { Runner } from '../entities/runner.entity'
 import { WarmPoolTopUpRequested } from '../events/warmpool-topup-requested.event'
@@ -28,12 +25,11 @@ import { WarmPoolEvents } from '../constants/warmpool-events.constants'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
-import { isValidUuid } from '../../common/utils/uuid'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
 export type FetchWarmPoolBoxParams = {
-  snapshot: string | Snapshot
+  template: string
   target: string
   class: BoxClass
   cpu: number
@@ -54,8 +50,6 @@ export class BoxWarmPoolService {
     @InjectRepository(WarmPool)
     private readonly warmPoolRepository: Repository<WarmPool>,
     private readonly boxRepository: BoxRepository,
-    @InjectRepository(Snapshot)
-    private readonly snapshotRepository: Repository<Snapshot>,
     @InjectRepository(Runner)
     private readonly runnerRepository: Repository<Runner>,
     private readonly redisLockProvider: RedisLockProvider,
@@ -71,37 +65,14 @@ export class BoxWarmPoolService {
   }
 
   async fetchWarmPoolBox(params: FetchWarmPoolBoxParams): Promise<Box | null> {
-    //  validate snapshot
-    let snapshot: Snapshot | null = null
-    if (typeof params.snapshot === 'string') {
-      const boxSnapshot = params.snapshot || this.configService.get<string>('DEFAULT_SNAPSHOT')
-
-      const snapshotFilter: FindOptionsWhere<Snapshot>[] = [
-        { organizationId: params.organizationId, name: boxSnapshot, state: SnapshotState.ACTIVE },
-        { general: true, name: boxSnapshot, state: SnapshotState.ACTIVE },
-      ]
-
-      if (isValidUuid(boxSnapshot)) {
-        snapshotFilter.push(
-          { organizationId: params.organizationId, id: boxSnapshot, state: SnapshotState.ACTIVE },
-          { general: true, id: boxSnapshot, state: SnapshotState.ACTIVE },
-        )
-      }
-
-      snapshot = await this.snapshotRepository.findOne({
-        where: snapshotFilter,
-      })
-      if (!snapshot) {
-        throw new BadRequestError(`Snapshot ${boxSnapshot} not found. Did you add it through the BoxLite Dashboard?`)
-      }
-    } else {
-      snapshot = params.snapshot
-    }
+    // TODO(image-rewrite): box_template validation removed; the warm pool now matches on the
+    // raw template name string carried by the warm_pool config. Rebuild template resolution here.
+    const templateName = params.template || this.configService.get<string>('defaultTemplate')
 
     //  check if box is warm pool
     const warmPoolItem = await this.warmPoolRepository.findOne({
       where: {
-        snapshot: snapshot.name,
+        template: templateName,
         target: params.target,
         class: params.class,
         cpu: params.cpu,
@@ -124,20 +95,19 @@ export class BoxWarmPoolService {
         .andWhere('(runner.unschedulable = true OR runner.availabilityScore < :scoreThreshold)')
 
       const queryBuilder = this.boxRepository
-        .createQueryBuilder('box')
-        .where('box.class = :class', { class: warmPoolItem.class })
-        .andWhere('box.cpu = :cpu', { cpu: warmPoolItem.cpu })
-        .andWhere('box.mem = :mem', { mem: warmPoolItem.mem })
-        .andWhere('box.disk = :disk', { disk: warmPoolItem.disk })
-        .andWhere('box.snapshot = :snapshot', { snapshot: snapshot.name })
-        .andWhere('box.osUser = :osUser', { osUser: warmPoolItem.osUser })
-        .andWhere('box.env = :env', { env: warmPoolItem.env })
-        .andWhere('box.organizationId = :organizationId', {
-          organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+        .createQueryBuilder('sandbox')
+        .where('sandbox.class = :class', { class: warmPoolItem.class })
+        .andWhere('sandbox.cpu = :cpu', { cpu: warmPoolItem.cpu })
+        .andWhere('sandbox.mem = :mem', { mem: warmPoolItem.mem })
+        .andWhere('sandbox.disk = :disk', { disk: warmPoolItem.disk })
+        .andWhere('sandbox.osUser = :osUser', { osUser: warmPoolItem.osUser })
+        .andWhere('sandbox.env = :env', { env: warmPoolItem.env })
+        .andWhere('sandbox.organizationId = :organizationId', {
+          organizationId: SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
         })
-        .andWhere('box.region = :region', { region: warmPoolItem.target })
-        .andWhere('box.state = :state', { state: BoxState.STARTED })
-        .andWhere(`box.runnerId NOT IN (${excludedRunnersSubquery.getQuery()})`)
+        .andWhere('sandbox.region = :region', { region: warmPoolItem.target })
+        .andWhere('sandbox.state = :state', { state: BoxState.STARTED })
+        .andWhere(`sandbox.runnerId NOT IN (${excludedRunnersSubquery.getQuery()})`)
         .setParameters({
           region: warmPoolItem.target,
           scoreThreshold: availabilityScoreThreshold,
@@ -149,7 +119,7 @@ export class BoxWarmPoolService {
       //  make sure we only release warm pool box once
       let warmPoolBox: Box | null = null
       for (const box of warmPoolBoxes) {
-        const lockKey = `box-warm-pool-${box.id}`
+        const lockKey = `sandbox-warm-pool-${box.id}`
         if (!(await this.redisLockProvider.lock(lockKey, 10))) {
           continue
         }
@@ -161,8 +131,8 @@ export class BoxWarmPoolService {
       return warmPoolBox
     }
 
-    //  no warm pool config exists for this snapshot — cache it so callers can skip
-    await this.redis.set(`warm-pool:skip:${snapshot.id}`, '1', 'EX', 60)
+    //  no warm pool config exists for this template — cache it so callers can skip
+    await this.redis.set(`warm-pool:skip:${templateName}`, '1', 'EX', 60)
 
     return null
   }
@@ -181,10 +151,11 @@ export class BoxWarmPoolService {
           return
         }
 
+        // TODO(image-rewrite): Box.template column removed with box_template; warm pool boxes
+        // can no longer be matched by template. Rebuild template-aware matching here.
         const boxCount = await this.boxRepository.count({
           where: {
-            snapshot: warmPoolItem.snapshot,
-            organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+            organizationId: SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
             class: warmPoolItem.class,
             osUser: warmPoolItem.osUser,
             env: warmPoolItem.env,
@@ -194,7 +165,7 @@ export class BoxWarmPoolService {
             mem: warmPoolItem.mem,
             disk: warmPoolItem.disk,
             desiredState: BoxDesiredState.STARTED,
-            state: Not(In([BoxState.ERROR, BoxState.BUILD_FAILED])),
+            state: Not(In([BoxState.ERROR])),
           },
         })
 
@@ -220,12 +191,13 @@ export class BoxWarmPoolService {
 
   @OnEvent(BoxEvents.ORGANIZATION_UPDATED)
   async handleBoxOrganizationUpdated(event: BoxOrganizationUpdatedEvent) {
-    if (event.newOrganizationId === BOX_WARM_POOL_UNASSIGNED_ORGANIZATION) {
+    if (event.newOrganizationId === SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION) {
       return
     }
+    // TODO(image-rewrite): Box.template column removed with box_template; warm pool matching no
+    // longer constrains on template. Rebuild template-aware matching here.
     const warmPoolItem = await this.warmPoolRepository.findOne({
       where: {
-        snapshot: event.box.snapshot,
         class: event.box.class,
         cpu: event.box.cpu,
         mem: event.box.mem,
@@ -243,8 +215,7 @@ export class BoxWarmPoolService {
 
     const boxCount = await this.boxRepository.count({
       where: {
-        snapshot: warmPoolItem.snapshot,
-        organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+        organizationId: SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
         class: warmPoolItem.class,
         osUser: warmPoolItem.osUser,
         env: warmPoolItem.env,
@@ -254,7 +225,7 @@ export class BoxWarmPoolService {
         mem: warmPoolItem.mem,
         disk: warmPoolItem.disk,
         desiredState: BoxDesiredState.STARTED,
-        state: Not(In([BoxState.ERROR, BoxState.BUILD_FAILED])),
+        state: Not(In([BoxState.ERROR])),
       },
     })
 

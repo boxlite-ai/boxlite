@@ -110,6 +110,8 @@ func run() int {
 		Logger:                       logger,
 		HomeDir:                      cfg.BoxliteHomeDir,
 		InsecureRegistries:           insecureRegs,
+		GhcrUsername:                 cfg.GhcrUsername,
+		GhcrToken:                    cfg.GhcrToken,
 		AWSRegion:                    cfg.AWSRegion,
 		AWSEndpointUrl:               cfg.AWSEndpointUrl,
 		AWSAccessKeyId:               cfg.AWSAccessKeyId,
@@ -117,6 +119,7 @@ func run() int {
 		VolumeCleanupInterval:        cfg.VolumeCleanupInterval,
 		VolumeCleanupDryRun:          cfg.VolumeCleanupDryRun,
 		VolumeCleanupExclusionPeriod: cfg.VolumeCleanupExclusionPeriod,
+		ToolboxReadyTimeout:          time.Duration(cfg.DaemonStartTimeoutSec) * time.Second,
 	})
 	if err != nil {
 		logger.Error("Error creating BoxLite client", "error", err)
@@ -162,7 +165,7 @@ func run() int {
 	_, err = runner.GetInstance(&runner.RunnerInstanceConfig{
 		Logger:             logger,
 		BackupInfoCache:    backupInfoCache,
-		SnapshotErrorCache: cache.NewSnapshotErrorCache(ctx, cfg.SnapshotErrorCacheRetention),
+		ArtifactErrorCache: cache.NewArtifactErrorCache(ctx, cfg.ArtifactErrorCacheRetention),
 		Boxlite:            boxliteClient,
 		BoxService:         boxService,
 		MetricsCollector:   metricsCollector,

@@ -45,10 +45,10 @@ export class RunnerStatusDto {
   currentAllocatedDiskGiB: number
 
   @ApiProperty({
-    description: 'Current snapshot count',
+    description: 'Current artifact count',
     example: 12,
   })
-  currentSnapshotCount: number
+  currentArtifactCount: number
 
   @ApiProperty({
     description: 'Runner status',

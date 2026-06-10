@@ -31,7 +31,7 @@ type BoxSyncService struct {
 
 func NewBoxSyncService(config BoxSyncServiceConfig) *BoxSyncService {
 	return &BoxSyncService{
-		log:      config.Logger.With(slog.String("component", "box_sync_service")),
+		log:      config.Logger.With(slog.String("component", "sandbox_sync_service")),
 		boxlite:  config.Boxlite,
 		interval: config.Interval,
 	}
@@ -52,7 +52,7 @@ func (s *BoxSyncService) GetLocalContainerStates(ctx context.Context) (map[strin
 
 		state, err := s.boxlite.GetBoxState(ctx, boxId)
 		if err != nil {
-			s.log.DebugContext(ctx, "Failed to get state for box", "boxId", boxId, "error", err)
+			s.log.DebugContext(ctx, "Failed to get state for sandbox", "sandboxId", boxId, "error", err)
 			continue
 		}
 
@@ -119,11 +119,11 @@ func (s *BoxSyncService) PerformSync(ctx context.Context) error {
 		convertedRemoteState := s.convertFromApiState(remoteState)
 
 		if localState != convertedRemoteState {
-			s.log.InfoContext(ctx, "State mismatch for box", "boxId", boxId, "localState", localState, "remoteState", convertedRemoteState)
+			s.log.InfoContext(ctx, "State mismatch for sandbox", "sandboxId", boxId, "localState", localState, "remoteState", convertedRemoteState)
 
 			err := s.SyncBoxState(ctx, boxId, localState)
 			if err != nil {
-				s.log.ErrorContext(ctx, "Failed to sync state for box", "boxId", boxId, "error", err)
+				s.log.ErrorContext(ctx, "Failed to sync state for sandbox", "sandboxId", boxId, "error", err)
 				continue
 			}
 			syncCount++
@@ -183,7 +183,7 @@ func (s *BoxSyncService) convertToApiState(localState enums.BoxState) apiclient.
 		return apiclient.BOXSTATE_STOPPING
 	case enums.BoxStateError:
 		return apiclient.BOXSTATE_ERROR
-	case enums.BoxStatePullingSnapshot:
+	case enums.BoxStatePullingArtifact:
 		return apiclient.BOXSTATE_PULLING_SNAPSHOT
 	default:
 		return apiclient.BOXSTATE_UNKNOWN
@@ -211,7 +211,7 @@ func (s *BoxSyncService) convertFromApiState(apiState apiclient.BoxState) enums.
 	case apiclient.BOXSTATE_ERROR:
 		return enums.BoxStateError
 	case apiclient.BOXSTATE_PULLING_SNAPSHOT:
-		return enums.BoxStatePullingSnapshot
+		return enums.BoxStatePullingArtifact
 	default:
 		return enums.BoxStateUnknown
 	}

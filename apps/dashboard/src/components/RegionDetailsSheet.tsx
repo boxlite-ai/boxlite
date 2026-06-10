@@ -23,7 +23,6 @@ interface RegionDetailsSheetProps {
   onUpdate: (region: Region) => void
   onRegenerateProxyApiKey: (region: Region) => void
   onRegenerateSshGatewayApiKey: (region: Region) => void
-  onRegenerateSnapshotManagerCredentials: (region: Region) => void
 }
 
 const RegionDetailsSheet: React.FC<RegionDetailsSheetProps> = ({
@@ -37,7 +36,6 @@ const RegionDetailsSheet: React.FC<RegionDetailsSheetProps> = ({
   onUpdate,
   onRegenerateProxyApiKey,
   onRegenerateSshGatewayApiKey,
-  onRegenerateSnapshotManagerCredentials,
 }) => {
   if (!region) return null
 
@@ -146,66 +144,38 @@ const RegionDetailsSheet: React.FC<RegionDetailsSheetProps> = ({
                   )}
                 </div>
               </div>
-              <div>
-                <h4 className="text-sm text-muted-foreground">Snapshot Manager URL</h4>
-                <div className="mt-1 flex items-center gap-2">
-                  <p className="text-sm font-medium truncate">{region.snapshotManagerUrl || '-'}</p>
-                  {region.snapshotManagerUrl && (
-                    <button
-                      onClick={() => copyToClipboard(region.snapshotManagerUrl || '')}
-                      className="text-muted-foreground hover:text-foreground transition-colors"
-                      aria-label="Copy Snapshot Manager URL"
-                    >
-                      <Copy className="w-3 h-3" />
-                    </button>
-                  )}
-                </div>
-              </div>
             </div>
           </div>
 
-          {isCustomRegion &&
-            writePermitted &&
-            (region.proxyUrl || region.sshGatewayUrl || region.snapshotManagerUrl) && (
-              <div>
-                <h3 className="text-lg font-medium">Credentials</h3>
-                <div className="mt-3 space-y-3">
-                  {region.proxyUrl && (
-                    <Button
-                      variant="outline"
-                      onClick={() => onRegenerateProxyApiKey(region)}
-                      disabled={isLoading}
-                      className="w-full justify-start"
-                    >
-                      <Info className="w-4 h-4 mr-2" />
-                      Regenerate Proxy API Key
-                    </Button>
-                  )}
-                  {region.sshGatewayUrl && (
-                    <Button
-                      variant="outline"
-                      onClick={() => onRegenerateSshGatewayApiKey(region)}
-                      disabled={isLoading}
-                      className="w-full justify-start"
-                    >
-                      <Info className="w-4 h-4 mr-2" />
-                      Regenerate SSH Gateway API Key
-                    </Button>
-                  )}
-                  {region.snapshotManagerUrl && (
-                    <Button
-                      variant="outline"
-                      onClick={() => onRegenerateSnapshotManagerCredentials(region)}
-                      disabled={isLoading}
-                      className="w-full justify-start"
-                    >
-                      <Info className="w-4 h-4 mr-2" />
-                      Regenerate Snapshot Manager Credentials
-                    </Button>
-                  )}
-                </div>
+          {isCustomRegion && writePermitted && (region.proxyUrl || region.sshGatewayUrl) && (
+            <div>
+              <h3 className="text-lg font-medium">Credentials</h3>
+              <div className="mt-3 space-y-3">
+                {region.proxyUrl && (
+                  <Button
+                    variant="outline"
+                    onClick={() => onRegenerateProxyApiKey(region)}
+                    disabled={isLoading}
+                    className="w-full justify-start"
+                  >
+                    <Info className="w-4 h-4 mr-2" />
+                    Regenerate Proxy API Key
+                  </Button>
+                )}
+                {region.sshGatewayUrl && (
+                  <Button
+                    variant="outline"
+                    onClick={() => onRegenerateSshGatewayApiKey(region)}
+                    disabled={isLoading}
+                    className="w-full justify-start"
+                  >
+                    <Info className="w-4 h-4 mr-2" />
+                    Regenerate SSH Gateway API Key
+                  </Button>
+                )}
               </div>
-            )}
+            </div>
+          )}
         </div>
       </SheetContent>
     </Sheet>

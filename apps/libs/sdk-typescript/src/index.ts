@@ -8,9 +8,10 @@ export { CodeLanguage, BoxLite } from './BoxLite'
 export type {
   CreateBoxBaseParams,
   CreateBoxFromImageParams,
-  CreateBoxFromSnapshotParams,
+  CreateBoxFromTemplateParams,
   BoxliteConfig,
   Resources,
+  TemplateResources,
   VolumeMount,
 } from './BoxLite'
 export { FileSystem } from './FileSystem'
@@ -23,7 +24,8 @@ export { BoxliteError, BoxLiteNotFoundError, BoxLiteRateLimitError, BoxLiteTimeo
 export { Image } from './Image'
 export { Box } from './Box'
 export type { BoxCodeToolbox } from './Box'
-export type { CreateSnapshotParams } from './Snapshot'
+export { TemplateService } from './Template'
+export type { CreateTemplateParams, PaginatedTemplates, Template } from './Template'
 export { ComputerUse, Mouse, Keyboard, Screenshot, Display } from './ComputerUse'
 export type { ExecutionError, ExecutionResult, OutputMessage, RunCodeOptions } from './types/CodeInterpreter'
 

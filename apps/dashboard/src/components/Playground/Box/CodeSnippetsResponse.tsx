@@ -20,7 +20,7 @@ import {
 } from '@/enums/Playground'
 import { usePlayground } from '@/hooks/usePlayground'
 import { usePlaygroundBox } from '@/hooks/usePlaygroundBox'
-import { createErrorMessageOutput } from '@/lib/playground'
+import { createErrorMessageOutput, getLanguageCodeToRun } from '@/lib/playground'
 import { cn } from '@/lib/utils'
 import { CodeLanguage, Box } from '@boxlite-ai/sdk'
 import { ChevronUpIcon, Loader2, PanelBottom, Play, XIcon } from 'lucide-react'
@@ -150,11 +150,12 @@ const BoxCodeSnippetsResponse = ({ className }: { className?: string }) => {
     })
   }, [pendingScrollSection, scrollToSection, clearPendingScrollSection])
 
-  const codeSnippetParams = useMemo<CodeSnippetParams>(
-    () => ({
+  const createCodeSnippetParams = useCallback(
+    (codeSnippetLanguage: CodeLanguage): CodeSnippetParams => ({
       state: boxParametersState,
       config: getBoxParametersInfo(),
       actions: {
+        codeSnippetLanguage,
         useConfigObject,
         fileSystemListFilesLocationSet,
         fileSystemCreateFolderParamsSet,
@@ -193,12 +194,16 @@ const BoxCodeSnippetsResponse = ({ className }: { className?: string }) => {
 
   const boxCodeSnippetsData = useMemo(
     () => ({
-      [CodeLanguage.PYTHON]: { code: codeSnippetGenerators[CodeLanguage.PYTHON].buildFullSnippet(codeSnippetParams) },
+      [CodeLanguage.PYTHON]: {
+        code: codeSnippetGenerators[CodeLanguage.PYTHON].buildFullSnippet(createCodeSnippetParams(CodeLanguage.PYTHON)),
+      },
       [CodeLanguage.TYPESCRIPT]: {
-        code: codeSnippetGenerators[CodeLanguage.TYPESCRIPT].buildFullSnippet(codeSnippetParams),
+        code: codeSnippetGenerators[CodeLanguage.TYPESCRIPT].buildFullSnippet(
+          createCodeSnippetParams(CodeLanguage.TYPESCRIPT),
+        ),
       },
     }),
-    [codeSnippetParams],
+    [createCodeSnippetParams],
   )
 
   const runCodeSnippet = async () => {
@@ -213,7 +218,7 @@ const BoxCodeSnippetsResponse = ({ className }: { className?: string }) => {
       setCodeSnippetOutput(codeSnippetOutput)
       if (codeToRunExists) {
         setCodeSnippetOutput(codeSnippetOutput + '\nRunning code...')
-        const codeRunResponse = await box.process.codeRun(boxParametersState['codeRunParams'].languageCode as string) // codeToRunExists guarantees that value isn't undefined so we put as string to silence TS compiler
+        const codeRunResponse = await box.process.codeRun(getLanguageCodeToRun(codeSnippetLanguage))
         codeSnippetOutput += `\nCode run result: ${codeRunResponse.result}`
         setCodeSnippetOutput(codeSnippetOutput)
       }

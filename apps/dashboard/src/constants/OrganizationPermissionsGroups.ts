@@ -10,11 +10,11 @@ export const ORGANIZATION_ROLE_PERMISSIONS_GROUPS: { name: string; permissions: 
   [
     {
       name: 'Boxes',
-      permissions: [OrganizationRolePermissionsEnum.WRITE_BOXES, OrganizationRolePermissionsEnum.DELETE_BOXES],
+      permissions: [OrganizationRolePermissionsEnum.WRITE_SANDBOXES, OrganizationRolePermissionsEnum.DELETE_SANDBOXES],
     },
     {
-      name: 'Snapshots',
-      permissions: [OrganizationRolePermissionsEnum.WRITE_SNAPSHOTS, OrganizationRolePermissionsEnum.DELETE_SNAPSHOTS],
+      name: 'Images',
+      permissions: [OrganizationRolePermissionsEnum.WRITE_TEMPLATES, OrganizationRolePermissionsEnum.DELETE_TEMPLATES],
     },
     {
       name: 'Registries',

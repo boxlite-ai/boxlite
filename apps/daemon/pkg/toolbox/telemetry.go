@@ -11,9 +11,25 @@ import (
 	"github.com/boxlite-ai/common-go/pkg/log"
 	"github.com/boxlite-ai/common-go/pkg/telemetry"
 	"github.com/boxlite-ai/daemon/internal"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 )
 
-func (s *server) initTelemetry(ctx context.Context, serviceName, entrypointLogFilePath string, organizationId, regionId *string) error {
+// seedBootSpanFromTraceParent starts+ends one "sandbox.boot" span parented on the propagated
+// W3C traceparent (BOXLITE_TRACEPARENT, injected by the runner at sandbox create) so the box's
+// telemetry joins the SAME traceId as the api->runner spans instead of rooting a fresh trace.
+// No-op when traceParent is nil/empty, so behavior is unchanged unless a trace was propagated.
+// Pure (takes the tracer) so it is unit-testable with an in-memory TracerProvider.
+func seedBootSpanFromTraceParent(ctx context.Context, tracer trace.Tracer, traceParent *string) {
+	if traceParent == nil || *traceParent == "" {
+		return
+	}
+	bootCtx := propagation.TraceContext{}.Extract(ctx, propagation.MapCarrier{"traceparent": *traceParent})
+	_, bootSpan := tracer.Start(bootCtx, "sandbox.boot")
+	bootSpan.End()
+}
+
+func (s *server) initTelemetry(ctx context.Context, serviceName, entrypointLogFilePath string, organizationId, regionId, traceParent *string) error {
 	if s.otelEndpoint == nil {
 		s.logger.InfoContext(ctx, "Otel endpoint not provided, skipping telemetry initialization")
 		return nil
@@ -133,6 +149,9 @@ func (s *server) initTelemetry(ctx context.Context, serviceName, entrypointLogFi
 	s.telemetry.TracerProvider = tp
 	s.telemetry.MeterProvider = mp
 	s.telemetry.LoggerProvider = lp
+
+	// Make the box's telemetry join the api->runner traceId (instead of rooting a fresh trace).
+	seedBootSpanFromTraceParent(ctx, tp.Tracer("boxlite.sandbox"), traceParent)
 
 	s.logger.InfoContext(ctx, "Telemetry initialized successfully")
 	return nil

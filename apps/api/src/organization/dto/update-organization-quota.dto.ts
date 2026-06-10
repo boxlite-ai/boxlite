@@ -18,10 +18,10 @@ export class UpdateOrganizationQuotaDto {
   maxDiskPerBox?: number
 
   @ApiProperty({ nullable: true })
-  snapshotQuota?: number
+  templateQuota?: number
 
   @ApiProperty({ nullable: true })
-  maxSnapshotSize?: number
+  maxTemplateSize?: number
 
   @ApiProperty({ nullable: true })
   volumeQuota?: number
@@ -44,6 +44,6 @@ export class UpdateOrganizationQuotaDto {
   @ApiProperty({ nullable: true })
   boxLifecycleRateLimitTtlSeconds?: number
 
-  @ApiProperty({ nullable: true, description: 'Time in minutes before an unused snapshot is deactivated' })
-  snapshotDeactivationTimeoutMinutes?: number
+  @ApiProperty({ nullable: true, description: 'Time in minutes before an unused template is deactivated' })
+  templateDeactivationTimeoutMinutes?: number
 }

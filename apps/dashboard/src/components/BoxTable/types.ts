@@ -4,29 +4,22 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { DEFAULT_BOX_SORTING, BoxFilters, BoxSorting } from '@/hooks/useBoxes'
+import { DEFAULT_SANDBOX_SORTING, BoxFilters, BoxSorting } from '@/hooks/useBoxes'
 import {
   ListBoxesPaginatedOrderEnum,
   ListBoxesPaginatedSortEnum,
   ListBoxesPaginatedStatesEnum,
-  Region,
   Box,
   BoxState,
-  SnapshotDto,
 } from '@boxlite-ai/api-client'
 import { ColumnFiltersState, SortingState, Table } from '@tanstack/react-table'
+import type { ReactNode } from 'react'
 
 export interface BoxTableProps {
   data: Box[]
   boxIsLoading: Record<string, boolean>
   boxStateIsTransitioning: Record<string, boolean>
   loading: boolean
-  snapshots: SnapshotDto[]
-  snapshotsDataIsLoading: boolean
-  snapshotsDataHasMore?: boolean
-  onChangeSnapshotSearchValue: (name?: string) => void
-  regionsData: Region[]
-  regionsDataIsLoading: boolean
   getRegionName: (regionId: string) => string | undefined
   handleStart: (id: string) => void
   handleStop: (id: string) => void
@@ -34,8 +27,6 @@ export interface BoxTableProps {
   handleBulkDelete: (ids: string[]) => void
   handleBulkStart: (ids: string[]) => void
   handleBulkStop: (ids: string[]) => void
-  handleBulkArchive: (ids: string[]) => void
-  handleArchive: (id: string) => void
   handleVnc: (id: string) => void
   getWebTerminalUrl: (id: string) => Promise<string | null>
   handleCreateSshAccess: (id: string) => void
@@ -56,6 +47,7 @@ export interface BoxTableProps {
   onFiltersChange: (filters: BoxFilters) => void
   handleRecover: (id: string) => void
   handleScreenRecordings: (id: string) => void
+  headerAction?: ReactNode
 }
 
 export interface BoxTableActionsProps {
@@ -67,7 +59,6 @@ export interface BoxTableActionsProps {
   onStart: (id: string) => void
   onStop: (id: string) => void
   onDelete: (id: string) => void
-  onArchive: (id: string) => void
   onVnc: (id: string) => void
   onOpenWebTerminal: (id: string) => void
   onCreateSshAccess: (id: string) => void
@@ -78,14 +69,9 @@ export interface BoxTableActionsProps {
 
 export interface BoxTableHeaderProps {
   table: Table<Box>
-  regionOptions: FacetedFilterOption[]
-  regionsDataIsLoading: boolean
-  snapshots: SnapshotDto[]
-  snapshotsDataIsLoading: boolean
-  snapshotsDataHasMore?: boolean
-  onChangeSnapshotSearchValue: (name?: string) => void
   onRefresh: () => void
   isRefreshing?: boolean
+  headerAction?: ReactNode
 }
 
 export interface FacetedFilterOption {
@@ -96,22 +82,26 @@ export interface FacetedFilterOption {
 
 export const convertTableSortingToApiSorting = (sorting: SortingState): BoxSorting => {
   if (!sorting.length) {
-    return DEFAULT_BOX_SORTING
+    return DEFAULT_SANDBOX_SORTING
   }
 
   const sort = sorting[0]
   let field: ListBoxesPaginatedSortEnum
 
   switch (sort.id) {
+    case 'boxId':
+      field = ListBoxesPaginatedSortEnum.BOX_ID
+      break
+    case 'id':
+      field = ListBoxesPaginatedSortEnum.ID
+      break
     case 'name':
       field = ListBoxesPaginatedSortEnum.NAME
       break
     case 'state':
       field = ListBoxesPaginatedSortEnum.STATE
       break
-    case 'snapshot':
-      field = ListBoxesPaginatedSortEnum.SNAPSHOT
-      break
+    // TODO(image-rewrite): template sort removed with the image/template subsystem.
     case 'region':
     case 'target':
       field = ListBoxesPaginatedSortEnum.REGION
@@ -147,11 +137,7 @@ export const convertTableFiltersToApiFilters = (columnFilters: ColumnFiltersStat
           filters.states = filter.value as ListBoxesPaginatedStatesEnum[]
         }
         break
-      case 'snapshot':
-        if (Array.isArray(filter.value) && filter.value.length > 0) {
-          filters.snapshots = filter.value as string[]
-        }
-        break
+      // TODO(image-rewrite): template filter removed with the image/template subsystem.
       case 'region':
       case 'target':
         if (Array.isArray(filter.value) && filter.value.length > 0) {
@@ -224,15 +210,19 @@ export const convertApiSortingToTableSorting = (sorting: BoxSorting): SortingSta
 
   let id: string
   switch (sorting.field) {
+    case ListBoxesPaginatedSortEnum.BOX_ID:
+      id = 'boxId'
+      break
+    case ListBoxesPaginatedSortEnum.ID:
+      id = 'id'
+      break
     case ListBoxesPaginatedSortEnum.NAME:
       id = 'name'
       break
     case ListBoxesPaginatedSortEnum.STATE:
       id = 'state'
       break
-    case ListBoxesPaginatedSortEnum.SNAPSHOT:
-      id = 'snapshot'
-      break
+    // TODO(image-rewrite): template sort removed with the image/template subsystem.
     case ListBoxesPaginatedSortEnum.REGION:
       id = 'region'
       break
@@ -259,9 +249,7 @@ export const convertApiFiltersToTableFilters = (filters: BoxFilters): ColumnFilt
     columnFilters.push({ id: 'state', value: filters.states })
   }
 
-  if (filters.snapshots && filters.snapshots.length > 0) {
-    columnFilters.push({ id: 'snapshot', value: filters.snapshots })
-  }
+  // TODO(image-rewrite): template filter removed with the image/template subsystem.
 
   if (filters.regions && filters.regions.length > 0) {
     columnFilters.push({ id: 'region', value: filters.regions })

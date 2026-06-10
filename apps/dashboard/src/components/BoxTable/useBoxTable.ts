@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Box, Region } from '@boxlite-ai/api-client'
+import { Box } from '@boxlite-ai/api-client'
 import {
   useReactTable,
   getCoreRowModel,
@@ -14,7 +14,6 @@ import {
   VisibilityState,
 } from '@tanstack/react-table'
 import { useMemo, useState, useEffect } from 'react'
-import { FacetedFilterOption } from './types'
 import { getColumns } from './columns'
 import {
   convertApiSortingToTableSorting,
@@ -25,7 +24,6 @@ import {
 import { BoxFilters, BoxSorting } from '@/hooks/useBoxes'
 import { LocalStorageKey } from '@/enums/LocalStorageKey'
 import { getLocalStorageItem, setLocalStorageItem } from '@/lib/local-storage'
-import { getRegionFullDisplayName } from '@/lib/utils'
 
 interface UseBoxTableProps {
   data: Box[]
@@ -35,7 +33,6 @@ interface UseBoxTableProps {
   handleStart: (id: string) => void
   handleStop: (id: string) => void
   handleDelete: (id: string) => void
-  handleArchive: (id: string) => void
   handleVnc: (id: string) => void
   getWebTerminalUrl: (id: string) => Promise<string | null>
   handleCreateSshAccess: (id: string) => void
@@ -51,7 +48,6 @@ interface UseBoxTableProps {
   onSortingChange: (sorting: BoxSorting) => void
   filters: BoxFilters
   onFiltersChange: (filters: BoxFilters) => void
-  regionsData: Region[]
   handleRecover: (id: string) => void
   getRegionName: (regionId: string) => string | undefined
 }
@@ -64,7 +60,6 @@ export function useBoxTable({
   handleStart,
   handleStop,
   handleDelete,
-  handleArchive,
   handleVnc,
   getWebTerminalUrl,
   handleCreateSshAccess,
@@ -77,7 +72,6 @@ export function useBoxTable({
   onSortingChange,
   filters,
   onFiltersChange,
-  regionsData,
   handleRecover,
   getRegionName,
 }: UseBoxTableProps) {
@@ -86,12 +80,12 @@ export function useBoxTable({
     const saved = getLocalStorageItem(LocalStorageKey.BoxTableColumnVisibility)
     if (saved) {
       try {
-        return JSON.parse(saved)
+        return { ...JSON.parse(saved), boxId: true, id: false, region: true, labels: false }
       } catch {
-        return { id: false, labels: false }
+        return { boxId: true, id: false, region: true, labels: false }
       }
     }
-    return { id: false, labels: false }
+    return { boxId: true, id: false, region: true, labels: false }
   })
 
   useEffect(() => {
@@ -102,20 +96,12 @@ export function useBoxTable({
   const tableSorting = useMemo(() => convertApiSortingToTableSorting(sorting), [sorting])
   const tableFilters = useMemo(() => convertApiFiltersToTableFilters(filters), [filters])
 
-  const regionOptions: FacetedFilterOption[] = useMemo(() => {
-    return regionsData.map((region) => ({
-      label: getRegionFullDisplayName(region),
-      value: region.id,
-    }))
-  }, [regionsData])
-
   const columns = useMemo(
     () =>
       getColumns({
         handleStart,
         handleStop,
         handleDelete,
-        handleArchive,
         handleVnc,
         getWebTerminalUrl,
         boxIsLoading,
@@ -131,7 +117,6 @@ export function useBoxTable({
       handleStart,
       handleStop,
       handleDelete,
-      handleArchive,
       handleVnc,
       getWebTerminalUrl,
       boxIsLoading,
@@ -189,6 +174,5 @@ export function useBoxTable({
 
   return {
     table,
-    regionOptions,
   }
 }

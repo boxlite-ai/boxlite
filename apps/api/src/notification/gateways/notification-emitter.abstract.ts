@@ -7,8 +7,6 @@
 import { BoxDto } from '../../box/dto/box.dto'
 import { BoxState } from '../../box/enums/box-state.enum'
 import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
-import { SnapshotDto } from '../../box/dto/snapshot.dto'
-import { SnapshotState } from '../../box/enums/snapshot-state.enum'
 import { VolumeDto } from '../../box/dto/volume.dto'
 import { VolumeState } from '../../box/enums/volume-state.enum'
 import { RunnerDto } from '../../box/dto/runner.dto'
@@ -22,9 +20,6 @@ export abstract class NotificationEmitter {
     oldDesiredState: BoxDesiredState,
     newDesiredState: BoxDesiredState,
   ): void
-  abstract emitSnapshotCreated(snapshot: SnapshotDto): void
-  abstract emitSnapshotStateUpdated(snapshot: SnapshotDto, oldState: SnapshotState, newState: SnapshotState): void
-  abstract emitSnapshotRemoved(snapshot: SnapshotDto): void
   abstract emitVolumeCreated(volume: VolumeDto): void
   abstract emitVolumeStateUpdated(volume: VolumeDto, oldState: VolumeState, newState: VolumeState): void
   abstract emitVolumeLastUsedAtUpdated(volume: VolumeDto): void

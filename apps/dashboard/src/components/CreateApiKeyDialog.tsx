@@ -18,26 +18,23 @@ import {
 } from '@/components/ui/dialog'
 import { Spinner } from '@/components/ui/spinner'
 import { AnimatePresence, motion } from 'framer-motion'
-import { CheckIcon, CopyIcon, EyeIcon, EyeOffIcon, InfoIcon } from 'lucide-react'
+import { CheckIcon, CopyIcon, InfoIcon } from 'lucide-react'
 
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { InputGroup, InputGroupButton, InputGroupInput } from '@/components/ui/input-group'
-import { Label } from '@/components/ui/label'
-import { CREATE_API_KEY_PERMISSIONS_GROUPS } from '@/constants/CreateApiKeyPermissionsGroups'
 import { useCreateApiKeyMutation } from '@/hooks/mutations/useCreateApiKeyMutation'
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard'
+import { getCreatedApiKeyCopyButtonLabel } from '@/lib/api-key-dialog'
 import { handleApiError } from '@/lib/error-handling'
-import { getMaskedToken } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 import { ApiKeyResponse, CreateApiKeyPermissionsEnum } from '@boxlite-ai/api-client'
 import { useForm } from '@tanstack/react-form'
 import { Plus } from 'lucide-react'
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { z } from 'zod'
 import { Alert, AlertDescription, AlertTitle } from './ui/alert'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs'
-import { ToggleGroup, ToggleGroupItem } from './ui/toggle-group'
 
 interface CreateApiKeyDialogProps {
   availablePermissions: CreateApiKeyPermissionsEnum[]
@@ -46,16 +43,10 @@ interface CreateApiKeyDialogProps {
   organizationId?: string
 }
 
-const isReadPermission = (permission: CreateApiKeyPermissionsEnum) => permission.startsWith('read:')
-const isWritePermission = (permission: CreateApiKeyPermissionsEnum) => permission.startsWith('write:')
-const isDeletePermission = (permission: CreateApiKeyPermissionsEnum) => permission.startsWith('delete:')
-
-const IMPLICIT_READ_RESOURCES = ['Boxes', 'Snapshots', 'Registries', 'Regions']
-
 const formSchema = z.object({
   name: z.string().min(1, 'Name is required'),
   expiresAt: z.date().optional(),
-  permissions: z.array(z.enum(CreateApiKeyPermissionsEnum)),
+  permissions: z.array(z.enum(CreateApiKeyPermissionsEnum)).min(1, 'At least one permission is required'),
 })
 
 type FormValues = z.infer<typeof formSchema>
@@ -69,13 +60,6 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
   const [open, setOpen] = useState(false)
 
   const { reset: resetCreateApiKeyMutation, ...createApiKeyMutation } = useCreateApiKeyMutation()
-
-  const availableGroups = useMemo(() => {
-    return CREATE_API_KEY_PERMISSIONS_GROUPS.map((group) => ({
-      ...group,
-      permissions: group.permissions.filter((p) => availablePermissions.includes(p)),
-    })).filter((group) => group.permissions.length > 0)
-  }, [availablePermissions])
 
   const form = useForm({
     defaultValues: {
@@ -138,13 +122,11 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
         </Button>
       </DialogTrigger>
 
-      <DialogContent className="max-w-lg">
+      <DialogContent className={cn(createdKey ? 'sm:max-w-5xl' : 'sm:max-w-2xl')}>
         <DialogHeader>
           <DialogTitle>{createdKey ? 'API Key Created' : 'Create New API Key'}</DialogTitle>
           <DialogDescription>
-            {createdKey
-              ? 'Your API key has been created successfully.'
-              : 'Choose which actions this API key will be authorized to perform.'}
+            {createdKey ? 'Your API key has been created successfully.' : 'Create a key for Boxes API access.'}
           </DialogDescription>
         </DialogHeader>
         {createdKey ? (
@@ -198,137 +180,24 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
                 )}
               </form.Field>
 
-              <Tabs
-                defaultValue="full-access"
-                className="items-start pb-4"
-                onValueChange={(value) => {
-                  if (value === 'full-access') {
-                    form.setFieldValue('permissions', availablePermissions)
-                  } else if (value === 'box-access') {
-                    form.setFieldValue('permissions', [
-                      CreateApiKeyPermissionsEnum.WRITE_BOXES,
-                      CreateApiKeyPermissionsEnum.DELETE_BOXES,
-                    ])
-                  } else {
-                    form.setFieldValue('permissions', [])
-                  }
-                }}
-              >
-                <Label className="mb-1">Permissions</Label>
-
-                <TabsList className="bg-muted w-full [&>*]:flex-1">
-                  <TabsTrigger value="full-access">Full Access</TabsTrigger>
-                  <TabsTrigger value="box-access">Boxes</TabsTrigger>
-                  <TabsTrigger value="restricted-access">Restricted </TabsTrigger>
-                </TabsList>
-                <TabsContent value="box-access" className="w-full">
-                  <Alert variant="info">
-                    <InfoIcon />
-                    <AlertTitle>Boxes Access</AlertTitle>
-                    <AlertDescription>This key grants read and write access to the Boxes resource.</AlertDescription>
-                  </Alert>
-                </TabsContent>
-                <TabsContent value="full-access" className="w-full">
-                  <Alert variant="info">
-                    <InfoIcon />
-                    <AlertTitle>Full Access</AlertTitle>
-                    <AlertDescription>
-                      This key grants full access to all resources. For better security, we recommend creating a
-                      restricted key.
-                    </AlertDescription>
-                  </Alert>
-                </TabsContent>
-                <TabsContent value="restricted-access" className="w-full">
-                  {availableGroups.length > 0 && (
-                    <form.Field name="permissions">
-                      {(field) => (
-                        <Field data-invalid={field.state.meta.isTouched && !field.state.meta.isValid}>
-                          <FieldGroup className="gap-4 xs:gap-2">
-                            {availableGroups.map((group) => {
-                              const readPermission = group.permissions.find(isReadPermission)
-                              const writePermission = group.permissions.find(isWritePermission)
-                              const deletePermission = group.permissions.find(isDeletePermission)
-                              const hasImplicitRead = IMPLICIT_READ_RESOURCES.includes(group.name)
-
-                              return (
-                                <div
-                                  key={group.name}
-                                  className="flex gap-2 justify-between xs:items-center flex-col xs:flex-row"
-                                >
-                                  <Label htmlFor={`group-${group.name}`} className="font-normal">
-                                    {group.name}
-                                  </Label>
-
-                                  <ToggleGroup
-                                    type="multiple"
-                                    variant="outline"
-                                    size="sm"
-                                    spacing={0}
-                                    value={group.permissions.filter((p) => field.state.value.includes(p))}
-                                    onValueChange={(newGroupSelection) => {
-                                      const permissionsWithoutThisGroup = field.state.value.filter(
-                                        (p) => !group.permissions.includes(p),
-                                      )
-
-                                      field.handleChange([
-                                        ...permissionsWithoutThisGroup,
-                                        ...newGroupSelection,
-                                      ] as CreateApiKeyPermissionsEnum[])
-                                    }}
-                                  >
-                                    {hasImplicitRead ? (
-                                      <ToggleGroupItem
-                                        value=""
-                                        aria-label="Implicit read access"
-                                        className="min-w-[64px]"
-                                        disabled
-                                        data-state="on"
-                                      >
-                                        Read*
-                                      </ToggleGroupItem>
-                                    ) : (
-                                      <ToggleGroupItem
-                                        value={readPermission ?? ''}
-                                        aria-label="Toggle read"
-                                        className="min-w-[64px]"
-                                        disabled={!readPermission}
-                                      >
-                                        {readPermission ? 'Read' : '-'}
-                                      </ToggleGroupItem>
-                                    )}
-                                    <ToggleGroupItem
-                                      value={writePermission ?? ''}
-                                      aria-label="Toggle write"
-                                      className="min-w-[64px]"
-                                      disabled={!writePermission}
-                                    >
-                                      {writePermission ? 'Write' : '-'}
-                                    </ToggleGroupItem>
-                                    <ToggleGroupItem
-                                      value={deletePermission ?? ''}
-                                      aria-label="Toggle delete"
-                                      className="min-w-[64px]"
-                                      disabled={!deletePermission}
-                                    >
-                                      {deletePermission ? 'Delete' : '-'}
-                                    </ToggleGroupItem>
-                                  </ToggleGroup>
-                                </div>
-                              )
-                            })}
-                          </FieldGroup>
-                          {field.state.meta.errors.length > 0 && field.state.meta.isTouched && (
-                            <FieldError errors={field.state.meta.errors} />
-                          )}
-                          <p className="text-sm text-muted-foreground mt-3">
-                            *Read access is always granted for these resources.
-                          </p>
-                        </Field>
-                      )}
-                    </form.Field>
-                  )}
-                </TabsContent>
-              </Tabs>
+              <form.Field name="permissions">
+                {(field) => (
+                  <Field data-invalid={field.state.meta.isTouched && !field.state.meta.isValid}>
+                    <FieldGroup>
+                      <Alert variant="info">
+                        <InfoIcon />
+                        <AlertTitle>Boxes API access</AlertTitle>
+                        <AlertDescription>
+                          This key can create and manage Boxes. Shared Linux base images are available automatically.
+                        </AlertDescription>
+                      </Alert>
+                    </FieldGroup>
+                    {field.state.meta.errors.length > 0 && field.state.meta.isTouched && (
+                      <FieldError errors={field.state.meta.errors} />
+                    )}
+                  </Field>
+                )}
+              </form.Field>
             </form>
           </div>
         )}
@@ -346,7 +215,7 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
                   type="submit"
                   form="create-api-key-form"
                   variant="default"
-                  disabled={!canSubmit || isSubmitting || !organizationId}
+                  disabled={!canSubmit || isSubmitting || !organizationId || availablePermissions.length === 0}
                 >
                   {isSubmitting && <Spinner />}
                   Create
@@ -373,8 +242,8 @@ const iconProps = {
 function CreatedKeyDisplay({ createdKey, apiUrl }: { createdKey: ApiKeyResponse; apiUrl: string }) {
   const [copiedApiKey, copyApiKey] = useCopyToClipboard()
   const [copiedApiUrl, copyApiUrl] = useCopyToClipboard()
-
-  const [apiKeyRevealed, setApiKeyRevealed] = useState(false)
+  const apiKeyCopyLabel = getCreatedApiKeyCopyButtonLabel({ copiedText: copiedApiKey, apiKey: createdKey.value })
+  const apiKeyCopied = copiedApiKey === createdKey.value
 
   return (
     <div className="space-y-6">
@@ -384,27 +253,43 @@ function CreatedKeyDisplay({ createdKey, apiUrl }: { createdKey: ApiKeyResponse;
       </Alert>
       <FieldGroup className="gap-4">
         <Field>
-          <FieldLabel htmlFor="api-key">API Key</FieldLabel>
+          <FieldLabel id="api-key-label">API Key</FieldLabel>
 
-          <InputGroup className="pr-1 flex-1">
-            <InputGroupInput
-              id="api-key"
-              value={apiKeyRevealed ? createdKey.value : getMaskedToken(createdKey.value)}
-              readOnly
-            />
-            <InputGroupButton variant="ghost" size="icon-xs" onClick={() => setApiKeyRevealed(!apiKeyRevealed)}>
-              {apiKeyRevealed ? <EyeOffIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}
-            </InputGroupButton>
-            <InputGroupButton variant="ghost" size="icon-xs" onClick={() => copyApiKey(createdKey.value)}>
+          <div
+            role="group"
+            aria-labelledby="api-key-label"
+            className="flex flex-col gap-3 rounded-md border border-primary/20 bg-primary/5 p-3 sm:flex-row sm:items-center"
+          >
+            <div className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-3 shadow-xs">
+              <code
+                id="api-key"
+                className="block overflow-x-auto whitespace-nowrap font-mono text-sm leading-6 text-foreground scrollbar-sm"
+              >
+                {createdKey.value}
+              </code>
+            </div>
+            <Button
+              type="button"
+              variant="default"
+              size="lg"
+              aria-label="Copy API key"
+              className={cn(
+                'h-12 w-full min-w-40 px-6 text-sm shadow-sm transition-[background-color,transform,box-shadow] active:scale-[0.98] sm:w-auto',
+                apiKeyCopied && 'bg-success text-white hover:bg-success/90',
+              )}
+              onClick={() => copyApiKey(createdKey.value)}
+            >
               <AnimatePresence initial={false} mode="wait">
-                {copiedApiKey ? (
-                  <MotionCheckIcon className="h-4 w-4" key="copied" {...iconProps} />
+                {apiKeyCopied ? (
+                  <MotionCheckIcon className="size-5" key="copied" {...iconProps} />
                 ) : (
-                  <MotionCopyIcon className="h-4 w-4" key="copy" {...iconProps} />
+                  <MotionCopyIcon className="size-5" key="copy" {...iconProps} />
                 )}
               </AnimatePresence>
-            </InputGroupButton>
-          </InputGroup>
+              {apiKeyCopyLabel}
+            </Button>
+          </div>
+          <FieldDescription>This is the only time the full key is shown. Copy it before closing.</FieldDescription>
         </Field>
 
         <Field>

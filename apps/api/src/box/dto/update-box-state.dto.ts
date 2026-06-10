@@ -21,7 +21,7 @@ export class UpdateBoxStateDto {
   @IsString()
   @ApiPropertyOptional({
     description: 'Optional error message when reporting an error state',
-    example: 'Failed to pull snapshot image',
+    example: 'Failed to pull artifact image',
   })
   errorReason?: string
 

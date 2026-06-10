@@ -31,9 +31,7 @@ export enum AuditAction {
   CREATE_BACKUP = 'create_backup',
   UPDATE_PUBLIC_STATUS = 'update_public_status',
   SET_AUTO_STOP_INTERVAL = 'set_auto_stop_interval',
-  SET_AUTO_ARCHIVE_INTERVAL = 'set_auto_archive_interval',
   SET_AUTO_DELETE_INTERVAL = 'set_auto_delete_interval',
-  ARCHIVE = 'archive',
   GET_PORT_PREVIEW_URL = 'get_port_preview_url',
   SET_GENERAL_STATUS = 'set_general_status',
   ACTIVATE = 'activate',
@@ -47,7 +45,6 @@ export enum AuditAction {
   RECOVER = 'recover',
   REGENERATE_PROXY_API_KEY = 'regenerate_proxy_api_key',
   REGENERATE_SSH_GATEWAY_API_KEY = 'regenerate_ssh_gateway_api_key',
-  REGENERATE_SNAPSHOT_MANAGER_CREDENTIALS = 'regenerate_snapshot_manager_credentials',
   // toolbox actions (must be prefixed with 'toolbox_')
   TOOLBOX_DELETE_FILE = 'toolbox_delete_file',
   TOOLBOX_DOWNLOAD_FILE = 'toolbox_download_file',

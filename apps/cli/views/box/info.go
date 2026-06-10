@@ -27,8 +27,8 @@ func RenderInfo(box *apiclient.Box, forceUnstyled bool) {
 		output += getInfoLine("State", getStateLabel(*box.State)) + "\n"
 	}
 
-	if box.Snapshot != nil {
-		output += getInfoLine("Snapshot", *box.Snapshot) + "\n"
+	if box.Template != nil {
+		output += getInfoLine("Template", *box.Template) + "\n"
 	}
 
 	output += getInfoLine("Region", box.Target) + "\n"
@@ -113,7 +113,7 @@ func getStateLabel(state apiclient.BoxState) string {
 	case apiclient.BOXSTATE_STOPPING:
 		return common.StoppingStyle.Render("STOPPING")
 	case apiclient.BOXSTATE_PULLING_SNAPSHOT:
-		return common.CreatingStyle.Render("PULLING SNAPSHOT")
+		return common.CreatingStyle.Render("PULLING ARTIFACT")
 	case apiclient.BOXSTATE_ARCHIVING:
 		return common.CreatingStyle.Render("ARCHIVING")
 	case apiclient.BOXSTATE_ARCHIVED:

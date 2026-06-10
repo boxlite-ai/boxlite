@@ -16,8 +16,8 @@ import (
 )
 
 var DeleteCmd = &cobra.Command{
-	Use:     "delete [SNAPSHOT_ID | SNAPSHOT_NAME]",
-	Short:   "Delete a snapshot",
+	Use:     "delete [TEMPLATE_ID | TEMPLATE_NAME]",
+	Short:   "Delete a template",
 	Args:    cobra.MaximumNArgs(1),
 	Aliases: common.GetAliases("delete"),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -28,62 +28,62 @@ var DeleteCmd = &cobra.Command{
 			return err
 		}
 
-		// Handle case when no snapshot ID is provided and allFlag is true
+		// Handle case when no template ID is provided and allFlag is true
 		if len(args) == 0 {
 			if allFlag {
 				page := float32(1.0)
 				limit := float32(200.0) // 200 is the maximum limit for the API
-				var allSnapshots []apiclient.SnapshotDto
+				var allTemplates []apiclient.BoxTemplateDto
 
 				for {
-					snapshotBatch, res, err := apiClient.SnapshotsAPI.GetAllSnapshots(ctx).Page(page).Limit(limit).Execute()
+					templateBatch, res, err := apiClient.TemplatesAPI.ListBoxTemplates(ctx).Page(page).Limit(limit).Execute()
 					if err != nil {
 						return apiclient_cli.HandleErrorResponse(res, err)
 					}
 
-					allSnapshots = append(allSnapshots, snapshotBatch.Items...)
+					allTemplates = append(allTemplates, templateBatch...)
 
-					if len(snapshotBatch.Items) < int(limit) || page >= snapshotBatch.TotalPages {
+					if len(templateBatch) < int(limit) {
 						break
 					}
 					page++
 				}
 
-				if len(allSnapshots) == 0 {
-					view_common.RenderInfoMessageBold("No snapshots to delete")
+				if len(allTemplates) == 0 {
+					view_common.RenderInfoMessageBold("No templates to delete")
 					return nil
 				}
 
 				var deletedCount int
 
-				for _, snapshot := range allSnapshots {
-					res, err := apiClient.SnapshotsAPI.RemoveSnapshot(ctx, snapshot.Id).Execute()
+				for _, template := range allTemplates {
+					res, err := apiClient.TemplatesAPI.RemoveBoxTemplate(ctx, template.Id).Execute()
 					if err != nil {
-						fmt.Printf("Failed to delete snapshot %s: %s\n", snapshot.Id, apiclient_cli.HandleErrorResponse(res, err))
+						fmt.Printf("Failed to delete template %s: %s\n", template.Id, apiclient_cli.HandleErrorResponse(res, err))
 					} else {
 						deletedCount++
 					}
 				}
 
-				view_common.RenderInfoMessageBold(fmt.Sprintf("Deleted %d snapshots", deletedCount))
+				view_common.RenderInfoMessageBold(fmt.Sprintf("Deleted %d templates", deletedCount))
 				return nil
 			}
 			return cmd.Help()
 		}
 
-		snapshotIdOrName := args[0]
+		templateIdOrName := args[0]
 
-		snapshot, res, err := apiClient.SnapshotsAPI.GetSnapshot(ctx, snapshotIdOrName).Execute()
+		template, res, err := apiClient.TemplatesAPI.GetBoxTemplate(ctx, templateIdOrName).Execute()
 		if err != nil {
 			return apiclient_cli.HandleErrorResponse(res, err)
 		}
 
-		res, err = apiClient.SnapshotsAPI.RemoveSnapshot(ctx, snapshot.Id).Execute()
+		res, err = apiClient.TemplatesAPI.RemoveBoxTemplate(ctx, template.Id).Execute()
 		if err != nil {
 			return apiclient_cli.HandleErrorResponse(res, err)
 		}
 
-		view_common.RenderInfoMessageBold(fmt.Sprintf("Snapshot %s deleted", snapshotIdOrName))
+		view_common.RenderInfoMessageBold(fmt.Sprintf("Template %s deleted", templateIdOrName))
 
 		return nil
 	},
@@ -92,5 +92,5 @@ var DeleteCmd = &cobra.Command{
 var allFlag bool
 
 func init() {
-	DeleteCmd.Flags().BoolVarP(&allFlag, "all", "a", false, "Delete all snapshots")
+	DeleteCmd.Flags().BoolVarP(&allFlag, "all", "a", false, "Delete all templates")
 }

@@ -4,11 +4,16 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { FeatureFlags } from '@/enums/FeatureFlags'
 import { RoutePath } from '@/enums/RoutePath'
+import { isDashboardVncEnabled } from '@/lib/dashboard-features'
+import { getBoxRouteId } from '@/lib/box-identity'
 import { BoxState } from '@boxlite-ai/api-client'
 import { Terminal, MoreVertical, Play, Square, Loader2, Wrench } from 'lucide-react'
+import { useFeatureFlagEnabled } from 'posthog-js/react'
 import { generatePath, useNavigate } from 'react-router-dom'
 import { useMemo } from 'react'
+import TooltipButton from '../TooltipButton'
 import { Button } from '../ui/button'
 import {
   DropdownMenu,
@@ -28,7 +33,6 @@ export function BoxTableActions({
   onStart,
   onStop,
   onDelete,
-  onArchive,
   onVnc,
   onOpenWebTerminal,
   onCreateSshAccess,
@@ -37,6 +41,7 @@ export function BoxTableActions({
   onScreenRecordings,
 }: BoxTableActionsProps) {
   const navigate = useNavigate()
+  const vncEnabled = isDashboardVncEnabled(useFeatureFlagEnabled(FeatureFlags.DASHBOARD_VNC))
   const isTransitioning = box.state === BoxState.STARTING || box.state === BoxState.STOPPING
 
   const primaryAction = useMemo(() => {
@@ -76,8 +81,8 @@ export function BoxTableActions({
 
     items.push({
       key: 'open',
-      label: 'Open',
-      onClick: () => navigate(generatePath(RoutePath.BOX_DETAILS, { boxId: box.id })),
+      label: 'View Details',
+      onClick: () => navigate(generatePath(RoutePath.BOX_DETAILS, { boxId: getBoxRouteId(box) })),
       disabled: isLoading,
     })
 
@@ -89,12 +94,14 @@ export function BoxTableActions({
           onClick: () => onOpenWebTerminal(box.id),
           disabled: isLoading,
         })
-        items.push({
-          key: 'vnc',
-          label: 'VNC',
-          onClick: () => onVnc(box.id),
-          disabled: isLoading,
-        })
+        if (vncEnabled) {
+          items.push({
+            key: 'vnc',
+            label: 'VNC',
+            onClick: () => onVnc(getBoxRouteId(box)),
+            disabled: isLoading,
+          })
+        }
         items.push({
           key: 'screen-recordings',
           label: 'Screen Recordings',
@@ -107,7 +114,7 @@ export function BoxTableActions({
           onClick: () => onStop(box.id),
           disabled: isLoading,
         })
-      } else if (box.state === BoxState.STOPPED || box.state === BoxState.ARCHIVED) {
+      } else if (box.state === BoxState.STOPPED) {
         items.push({
           key: 'start',
           label: 'Start',
@@ -119,15 +126,6 @@ export function BoxTableActions({
           key: 'recover',
           label: 'Recover',
           onClick: () => onRecover(box.id),
-          disabled: isLoading,
-        })
-      }
-
-      if (box.state === BoxState.STOPPED) {
-        items.push({
-          key: 'archive',
-          label: 'Archive',
-          onClick: () => onArchive(box.id),
           disabled: isLoading,
         })
       }
@@ -167,18 +165,19 @@ export function BoxTableActions({
     deletePermitted,
     box.state,
     box.id,
+    box.boxId,
     isLoading,
     box.recoverable,
     onStart,
     onStop,
     onDelete,
-    onArchive,
     onVnc,
     onOpenWebTerminal,
     onCreateSshAccess,
     onRevokeSshAccess,
     onRecover,
     onScreenRecordings,
+    vncEnabled,
     navigate,
   ])
 
@@ -245,10 +244,10 @@ export function BoxTableActions({
 
   return (
     <div className="flex items-center justify-end gap-2">
-      <Button
+      <TooltipButton
         variant="outline"
-        size="icon-sm"
         className="text-muted-foreground"
+        tooltipText={primaryAction.label}
         disabled={isLoading || isTransitioning}
         onClick={(e) => {
           e.stopPropagation()
@@ -256,13 +255,13 @@ export function BoxTableActions({
         }}
       >
         {primaryAction.icon}
-      </Button>
+      </TooltipButton>
 
       {box.state === BoxState.STARTED ? (
-        <Button
+        <TooltipButton
           variant="outline"
-          size="icon-sm"
           className="text-muted-foreground"
+          tooltipText="Open terminal"
           disabled={isLoading}
           onClick={(e) => {
             e.stopPropagation()
@@ -270,11 +269,16 @@ export function BoxTableActions({
           }}
         >
           <Terminal className="w-4 h-4" />
-        </Button>
+        </TooltipButton>
       ) : (
-        <Button variant="outline" size="icon-sm" className="text-muted-foreground" disabled>
+        <TooltipButton
+          variant="outline"
+          className="text-muted-foreground"
+          tooltipText="Terminal available when running"
+          disabled
+        >
           <Terminal className="w-4 h-4" />
-        </Button>
+        </TooltipButton>
       )}
 
       <DropdownMenu>

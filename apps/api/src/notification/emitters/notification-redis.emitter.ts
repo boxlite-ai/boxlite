@@ -12,9 +12,6 @@ import { BoxDto } from '../../box/dto/box.dto'
 import { BoxState } from '../../box/enums/box-state.enum'
 import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 import { BoxEvents } from '../../box/constants/box-events.constants'
-import { SnapshotDto } from '../../box/dto/snapshot.dto'
-import { SnapshotState } from '../../box/enums/snapshot-state.enum'
-import { SnapshotEvents } from '../../box/constants/snapshot-events'
 import { VolumeDto } from '../../box/dto/volume.dto'
 import { VolumeState } from '../../box/enums/volume-state.enum'
 import { VolumeEvents } from '../../box/constants/volume-events'
@@ -46,20 +43,6 @@ export class NotificationRedisEmitter extends NotificationEmitter implements OnM
 
   emitBoxDesiredStateUpdated(box: BoxDto, oldDesiredState: BoxDesiredState, newDesiredState: BoxDesiredState) {
     this.emitter.to(box.organizationId).emit(BoxEvents.DESIRED_STATE_UPDATED, { box, oldDesiredState, newDesiredState })
-  }
-
-  emitSnapshotCreated(snapshot: SnapshotDto) {
-    this.emitter.to(snapshot.organizationId).emit(SnapshotEvents.CREATED, snapshot)
-  }
-
-  emitSnapshotStateUpdated(snapshot: SnapshotDto, oldState: SnapshotState, newState: SnapshotState) {
-    this.emitter
-      .to(snapshot.organizationId)
-      .emit(SnapshotEvents.STATE_UPDATED, { snapshot: snapshot, oldState, newState })
-  }
-
-  emitSnapshotRemoved(snapshot: SnapshotDto) {
-    this.emitter.to(snapshot.organizationId).emit(SnapshotEvents.REMOVED, snapshot)
   }
 
   emitVolumeCreated(volume: VolumeDto) {

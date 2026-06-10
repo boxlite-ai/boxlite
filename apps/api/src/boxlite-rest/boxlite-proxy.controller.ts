@@ -31,7 +31,7 @@ import { RunnerService } from '../box/services/runner.service'
 // spec: @All() expands to the SEARCH verb, which OpenAPI 3.0 cannot express.
 @ApiExcludeController()
 @ApiTags('BoxLite REST')
-@Controller('v1/:prefix/boxes')
+@Controller(['v1/boxes', 'v1/:prefix/boxes'])
 @UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard)
 @ApiBearerAuth()
 export class BoxliteProxyController {
@@ -50,7 +50,7 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
-    return this.proxyToRunner(authContext, boxId, `/v1/boxes/${boxId}/exec`, req, res, next)
+    return this.proxyToRunner(authContext, boxId, (runnerBoxId) => `/v1/boxes/${runnerBoxId}/exec`, req, res, next)
   }
 
   @All(':boxId/executions/:execId/signal')
@@ -62,7 +62,14 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
-    return this.proxyToRunner(authContext, boxId, `/v1/boxes/${boxId}/executions/${execId}/signal`, req, res, next)
+    return this.proxyToRunner(
+      authContext,
+      boxId,
+      (runnerBoxId) => `/v1/boxes/${runnerBoxId}/executions/${execId}/signal`,
+      req,
+      res,
+      next,
+    )
   }
 
   @All(':boxId/executions/:execId/resize')
@@ -74,7 +81,14 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
-    return this.proxyToRunner(authContext, boxId, `/v1/boxes/${boxId}/executions/${execId}/resize`, req, res, next)
+    return this.proxyToRunner(
+      authContext,
+      boxId,
+      (runnerBoxId) => `/v1/boxes/${runnerBoxId}/executions/${execId}/resize`,
+      req,
+      res,
+      next,
+    )
   }
 
   @Get(':boxId/executions/:execId')
@@ -86,7 +100,14 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
-    return this.proxyToRunner(authContext, boxId, `/v1/boxes/${boxId}/executions/${execId}`, req, res, next)
+    return this.proxyToRunner(
+      authContext,
+      boxId,
+      (runnerBoxId) => `/v1/boxes/${runnerBoxId}/executions/${execId}`,
+      req,
+      res,
+      next,
+    )
   }
 
   @Delete(':boxId/executions/:execId')
@@ -98,7 +119,14 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
-    return this.proxyToRunner(authContext, boxId, `/v1/boxes/${boxId}/executions/${execId}`, req, res, next)
+    return this.proxyToRunner(
+      authContext,
+      boxId,
+      (runnerBoxId) => `/v1/boxes/${runnerBoxId}/executions/${execId}`,
+      req,
+      res,
+      next,
+    )
   }
 
   // /executions/:execId/attach is a WebSocket-only route. Real WS upgrades
@@ -116,7 +144,14 @@ export class BoxliteProxyController {
     @Next() next: NextFunction,
   ) {
     const query = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : ''
-    return this.proxyToRunner(authContext, boxId, `/v1/boxes/${boxId}/files${query}`, req, res, next)
+    return this.proxyToRunner(
+      authContext,
+      boxId,
+      (runnerBoxId) => `/v1/boxes/${runnerBoxId}/files${query}`,
+      req,
+      res,
+      next,
+    )
   }
 
   @All(':boxId/metrics')
@@ -127,13 +162,13 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
-    return this.proxyToRunner(authContext, boxId, `/v1/boxes/${boxId}/metrics`, req, res, next)
+    return this.proxyToRunner(authContext, boxId, (runnerBoxId) => `/v1/boxes/${runnerBoxId}/metrics`, req, res, next)
   }
 
   private async proxyToRunner(
     authContext: OrganizationAuthContext,
     boxId: string,
-    targetPath: string,
+    targetPathForRunnerBox: (runnerBoxId: string) => string,
     req: Request,
     res: Response,
     next: NextFunction,
@@ -167,7 +202,7 @@ export class BoxliteProxyController {
       changeOrigin: true,
       autoRewrite: true,
       ws: opts?.ws ?? false,
-      pathRewrite: () => targetPath,
+      pathRewrite: () => targetPathForRunnerBox(sandbox.id),
       on: {
         proxyReq: (proxyReq: any, originalReq: any) => {
           proxyReq.setHeader('Authorization', `Bearer ${runner.apiKey}`)

@@ -34,14 +34,14 @@ Configure the SDK using [environment variables](https://www.boxlite.io/docs/en/c
 import { BoxLite } from '@boxlite-ai/sdk'
 
 // Initialize with environment variables
-const boxlite = new BoxLite();
+const boxlite = new BoxLite()
 
 // Initialize with configuration object
 const boxlite = new BoxLite({
   apiKey: 'YOUR_API_KEY',
   apiUrl: 'YOUR_API_URL',
   target: 'us',
-});
+})
 ```
 
 ## Create a box
@@ -51,12 +51,12 @@ Create a box to run your code securely in an isolated environment.
 ```typescript
 import { BoxLite } from '@boxlite-ai/sdk'
 
-const boxlite = new BoxLite({apiKey: "YOUR_API_KEY"});
+const boxlite = new BoxLite({ apiKey: 'YOUR_API_KEY' })
 const box = await boxlite.create({
-  language: 'typescript'
-});
-const response = await box.process.codeRun('console.log("Hello World!")');
-console.log(response.result);
+  language: 'typescript',
+})
+const response = await box.process.codeRun('console.log("Hello World!")')
+console.log(response.result)
 ```
 
 ## Examples and guides
@@ -68,13 +68,13 @@ BoxLite provides [examples](https://www.boxlite.io/docs/en/getting-started/#exam
 Create a box with [custom resources](https://www.boxlite.io/docs/en/boxes/#resources) (CPU, memory, disk).
 
 ```typescript
-import { BoxLite, Image } from '@boxlite-ai/sdk';
+import { BoxLite, Image } from '@boxlite-ai/sdk'
 
-const boxlite = new BoxLite();
+const boxlite = new BoxLite()
 const box = await boxlite.create({
-    image: Image.debianSlim('3.12'),
-    resources: { cpu: 2, memory: 4, disk: 8 }
-});
+  image: Image.debianSlim('3.12'),
+  resources: { cpu: 2, memory: 4, disk: 8 },
+})
 ```
 
 ### Create an ephemeral box
@@ -82,27 +82,27 @@ const box = await boxlite.create({
 Create an [ephemeral box](https://www.boxlite.io/docs/en/boxes/#ephemeral-boxes) that is automatically deleted when stopped.
 
 ```typescript
-import { BoxLite } from '@boxlite-ai/sdk';
+import { BoxLite } from '@boxlite-ai/sdk'
 
-const boxlite = new BoxLite();
+const boxlite = new BoxLite()
 const box = await boxlite.create({
-    ephemeral: true,
-    autoStopInterval: 5
-});
+  ephemeral: true,
+  autoStopInterval: 5,
+})
 ```
 
-### Create a box from a snapshot
+### Create a box from a template
 
-Create a box from a [snapshot](https://www.boxlite.io/docs/en/snapshots/).
+Create a box from a prepared template.
 
 ```typescript
-import { BoxLite } from '@boxlite-ai/sdk';
+import { BoxLite } from '@boxlite-ai/sdk'
 
-const boxlite = new BoxLite();
+const boxlite = new BoxLite()
 const box = await boxlite.create({
-    snapshot: 'my-snapshot-name',
-    language: 'typescript'
-});
+  templateId: 'boxlite/base',
+  language: 'typescript',
+})
 ```
 
 ### Execute commands

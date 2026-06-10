@@ -6,23 +6,23 @@ package dto
 
 import "strings"
 
-type SnapshotInfoResponse struct {
+type ArtifactInfoResponse struct {
 	Name       string   `json:"name" example:"nginx:latest"`
 	SizeGB     float64  `json:"sizeGB" example:"0.13"`
 	Entrypoint []string `json:"entrypoint,omitempty" example:"[\"nginx\",\"-g\",\"daemon off;\"]"`
 	Cmd        []string `json:"cmd,omitempty" example:"[\"nginx\",\"-g\",\"daemon off;\"]"`
 	Hash       string   `json:"hash,omitempty" example:"a7be6198544f09a75b26e6376459b47c5b9972e7351d440e092c4faa9ea064ff"`
-} //	@name	SnapshotInfoResponse
+} //	@name	ArtifactInfoResponse
 
-type SnapshotDigestResponse struct {
+type ArtifactDigestResponse struct {
 	Hash   string  `json:"hash" example:"a7be6198544f09a75b26e6376459b47c5b9972e7351d440e092c4faa9ea064ff"`
 	SizeGB float64 `json:"sizeGB" example:"0.13"`
-} //	@name	SnapshotDigestResponse
+} //	@name	ArtifactDigestResponse
 
-type InspectSnapshotInRegistryRequestDTO struct {
-	Snapshot string       `json:"snapshot" validate:"required" example:"nginx:latest"`
-	Registry *RegistryDTO `json:"registry,omitempty"`
-} //	@name	InspectSnapshotInRegistryRequest
+type InspectArtifactInRegistryRequestDTO struct {
+	ArtifactRef string       `json:"artifactRef" validate:"required" example:"nginx:latest"`
+	Registry    *RegistryDTO `json:"registry,omitempty"`
+} //	@name	InspectArtifactInRegistryRequest
 
 func HashWithoutPrefix(hash string) string {
 	return strings.TrimPrefix(hash, "sha256:")

@@ -15,6 +15,7 @@ export default [
       '**/dist',
       '**/node_modules/**',
       '**/.nx/**',
+      '**/.sst/**',
       '**/vite.config.*.timestamp*',
       '**/vitest.config.*.timestamp*',
       'docs/**',

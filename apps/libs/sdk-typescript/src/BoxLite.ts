@@ -6,13 +6,13 @@
 
 import {
   Configuration,
-  SnapshotsApi,
   ObjectStorageApi,
   BoxApi,
   BoxState,
   VolumesApi,
   BoxVolume,
   ConfigApi,
+  TemplatesApi,
 } from '@boxlite-ai/api-client'
 import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios'
 import { BoxPythonCodeToolbox } from './code-toolbox/BoxPythonCodeToolbox'
@@ -21,7 +21,7 @@ import { BoxJsCodeToolbox } from './code-toolbox/BoxJsCodeToolbox'
 import { BoxliteError, BoxLiteNotFoundError, BoxLiteRateLimitError } from './errors/BoxliteError'
 import { Image } from './Image'
 import { Box, PaginatedBoxes } from './Box'
-import { SnapshotService } from './Snapshot'
+import { TemplateService } from './Template'
 import { VolumeService } from './Volume'
 import * as packageJson from '../package.json'
 import { processStreamingResponse } from './utils/Stream'
@@ -132,6 +132,11 @@ export interface Resources {
 }
 
 /**
+ * Resource overrides supported when creating a Box from a template.
+ */
+export type TemplateResources = Pick<Resources, 'cpu' | 'memory' | 'disk'>
+
+/**
  * Base parameters for creating a new Box.
  *
  * @interface
@@ -141,7 +146,6 @@ export interface Resources {
  * @property {Record<string, string>} [labels] - Box labels
  * @property {boolean} [public] - Is the Box port preview public
  * @property {number} [autoStopInterval] - Auto-stop interval in minutes (0 means disabled). Default is 15 minutes.
- * @property {number} [autoArchiveInterval] - Auto-archive interval in minutes (0 means the maximum interval will be used). Default is 7 days.
  * @property {number} [autoDeleteInterval] - Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping). By default, auto-delete is disabled.
  * @property {VolumeMount[]} [volumes] - Optional array of volumes to mount to the Box
  * @property {boolean} [networkBlockAll] - Whether to block all network access for the Box
@@ -156,7 +160,6 @@ export type CreateBoxBaseParams = {
   labels?: Record<string, string>
   public?: boolean
   autoStopInterval?: number
-  autoArchiveInterval?: number
   autoDeleteInterval?: number
   volumes?: VolumeMount[]
   networkBlockAll?: boolean
@@ -179,13 +182,15 @@ export type CreateBoxFromImageParams = CreateBoxBaseParams & {
 }
 
 /**
- * Parameters for creating a new Box from a snapshot.
+ * Parameters for creating a new Box from a template.
  *
  * @interface
- * @property {string} [snapshot] - Name of the snapshot to use for the Box.
+ * @property {string} [templateId] - ID or name of the template to use for the Box.
+ * @property {TemplateResources} [resources] - Optional CPU, memory, and disk overrides for the Box.
  */
-export type CreateBoxFromSnapshotParams = CreateBoxBaseParams & {
-  snapshot?: string
+export type CreateBoxFromTemplateParams = CreateBoxBaseParams & {
+  templateId?: string
+  resources?: TemplateResources
 }
 
 /**
@@ -194,7 +199,7 @@ export type CreateBoxFromSnapshotParams = CreateBoxBaseParams & {
  * Can be initialized either with explicit configuration or using environment variables.
  *
  * @property {VolumeService} volume - Service for managing BoxLite Volumes
- * @property {SnapshotService} snapshot - Service for managing BoxLite Snapshots
+ * @property {TemplateService} template - Service for managing BoxLite Templates
  *
  * @example
  * // Using environment variables
@@ -230,7 +235,7 @@ export class BoxLite implements AsyncDisposable {
   private readonly apiUrl: string
   private otelSdk?: NodeSDK
   public readonly volume: VolumeService
-  public readonly snapshot: SnapshotService
+  public readonly template: TemplateService
 
   /**
    * Creates a new BoxLite client instance.
@@ -305,9 +310,9 @@ export class BoxLite implements AsyncDisposable {
     this.objectStorageApi = new ObjectStorageApi(configuration, '', axiosInstance)
     this.configApi = new ConfigApi(configuration, '', axiosInstance)
     this.volume = new VolumeService(new VolumesApi(configuration, '', axiosInstance))
-    this.snapshot = new SnapshotService(
+    this.template = new TemplateService(
       configuration,
-      new SnapshotsApi(configuration, '', axiosInstance),
+      new TemplatesApi(configuration, '', axiosInstance),
       this.objectStorageApi,
       this.target,
     )
@@ -355,10 +360,10 @@ export class BoxLite implements AsyncDisposable {
   }
 
   /**
-   * Creates Boxes from specified or default snapshot. You can specify various parameters,
+   * Creates Boxes from specified or default template. You can specify various parameters,
    * including language, image, environment variables, and volumes.
    *
-   * @param {CreateBoxFromSnapshotParams} [params] - Parameters for Box creation from snapshot
+   * @param {CreateBoxFromTemplateParams} [params] - Parameters for Box creation from template
    * @param {object} [options] - Options for the create operation
    * @param {number} [options.timeout] - Timeout in seconds (0 means no timeout, default is 60)
    * @returns {Promise<Box>} The created Box instance
@@ -368,33 +373,32 @@ export class BoxLite implements AsyncDisposable {
    *
    * @example
    * // Create a custom box
-   * const params: CreateBoxFromSnapshotParams = {
+   * const params: CreateBoxFromTemplateParams = {
    *     language: 'typescript',
-   *     snapshot: 'my-snapshot-id',
+   *     templateId: 'my-template-id',
    *     envVars: {
    *         NODE_ENV: 'development',
    *         DEBUG: 'true'
    *     },
    *     autoStopInterval: 60,
-   *     autoArchiveInterval: 60,
    *     autoDeleteInterval: 120
    * };
    * const box = await boxlite.create(params, { timeout: 100 });
    */
-  public async create(params?: CreateBoxFromSnapshotParams, options?: { timeout?: number }): Promise<Box>
+  public async create(params?: CreateBoxFromTemplateParams, options?: { timeout?: number }): Promise<Box>
   /**
    * Creates Boxes from specified image available on some registry or declarative BoxLite Image. You can specify various parameters,
-   * including resources, language, image, environment variables, and volumes. BoxLite creates snapshot from
+   * including resources, language, image, environment variables, and volumes. BoxLite creates runtime build material from
    * provided image and uses it to create Box.
    *
    * @param {CreateBoxFromImageParams} [params] - Parameters for Box creation from image
    * @param {object} [options] - Options for the create operation
    * @param {number} [options.timeout] - Timeout in seconds (0 means no timeout, default is 60)
-   * @param {function} [options.onSnapshotCreateLogs] - Callback function to handle snapshot creation logs.
+   * @param {function} [options.onTemplateCreateLogs] - Callback function to handle template creation logs.
    * @returns {Promise<Box>} The created Box instance
    *
    * @example
-   * const box = await boxlite.create({ image: 'debian:12.9' }, { timeout: 90, onSnapshotCreateLogs: console.log });
+   * const box = await boxlite.create({ image: 'debian:12.9' }, { timeout: 90, onTemplateCreateLogs: console.log });
    *
    * @example
    * // Create a custom box
@@ -411,19 +415,18 @@ export class BoxLite implements AsyncDisposable {
    *         memory: 4 // 4GB RAM
    *     },
    *     autoStopInterval: 60,
-   *     autoArchiveInterval: 60,
    *     autoDeleteInterval: 120
    * };
-   * const box = await boxlite.create(params, { timeout: 100, onSnapshotCreateLogs: console.log });
+   * const box = await boxlite.create(params, { timeout: 100, onTemplateCreateLogs: console.log });
    */
   public async create(
     params?: CreateBoxFromImageParams,
-    options?: { onSnapshotCreateLogs?: (chunk: string) => void; timeout?: number },
+    options?: { onTemplateCreateLogs?: (chunk: string) => void; timeout?: number },
   ): Promise<Box>
   @WithInstrumentation()
   public async create(
-    params?: CreateBoxFromSnapshotParams | CreateBoxFromImageParams,
-    options: { onSnapshotCreateLogs?: (chunk: string) => void; timeout?: number } = { timeout: 60 },
+    params?: CreateBoxFromTemplateParams | CreateBoxFromImageParams,
+    options: { onTemplateCreateLogs?: (chunk: string) => void; timeout?: number } = { timeout: 60 },
   ): Promise<Box> {
     const startTime = Date.now()
 
@@ -461,22 +464,16 @@ export class BoxLite implements AsyncDisposable {
       params.autoDeleteInterval = 0
     }
 
-    if (
-      params.autoArchiveInterval !== undefined &&
-      (!Number.isInteger(params.autoArchiveInterval) || params.autoArchiveInterval < 0)
-    ) {
-      throw new BoxliteError('autoArchiveInterval must be a non-negative integer')
-    }
-
     const codeToolbox = this.getCodeToolbox(params.language as CodeLanguage)
 
     try {
       let buildInfo: any | undefined
-      let snapshot: string | undefined
+      let templateId: string | undefined
       let resources: Resources | undefined
+      let gpu: number | undefined
 
-      if ('snapshot' in params) {
-        snapshot = params.snapshot
+      if ('templateId' in params) {
+        templateId = params.templateId
       }
 
       if ('image' in params) {
@@ -485,7 +482,7 @@ export class BoxLite implements AsyncDisposable {
             dockerfileContent: Image.base(params.image).dockerfile,
           }
         } else if (params.image instanceof Image) {
-          const contextHashes = await SnapshotService.processImageContext(this.objectStorageApi, params.image)
+          const contextHashes = await TemplateService.processImageContext(this.objectStorageApi, params.image)
           buildInfo = {
             contextHashes,
             dockerfileContent: params.image.dockerfile,
@@ -494,13 +491,14 @@ export class BoxLite implements AsyncDisposable {
       }
 
       if ('resources' in params) {
-        resources = params.resources
+        resources = params.resources as Resources | undefined
+        gpu = 'image' in params ? resources?.gpu : undefined
       }
 
       const response = await this.boxApi.createBox(
         {
           name: params.name,
-          snapshot: snapshot,
+          templateId,
           buildInfo,
           user: params.user,
           env: params.envVars || {},
@@ -508,11 +506,10 @@ export class BoxLite implements AsyncDisposable {
           public: params.public,
           target: this.target,
           cpu: resources?.cpu,
-          gpu: resources?.gpu,
+          gpu,
           memory: resources?.memory,
           disk: resources?.disk,
           autoStopInterval: params.autoStopInterval,
-          autoArchiveInterval: params.autoArchiveInterval,
           autoDeleteInterval: params.autoDeleteInterval,
           volumes: params.volumes,
           networkBlockAll: params.networkBlockAll,
@@ -526,7 +523,7 @@ export class BoxLite implements AsyncDisposable {
 
       let boxInstance = response.data
 
-      if (boxInstance.state === BoxState.PENDING_BUILD && options.onSnapshotCreateLogs) {
+      if (boxInstance.state === BoxState.PENDING_BUILD && options.onTemplateCreateLogs) {
         const terminalStates: BoxState[] = [
           BoxState.STARTED,
           BoxState.STARTING,
@@ -555,7 +552,7 @@ export class BoxLite implements AsyncDisposable {
               method: 'GET',
               headers: this.clientConfig.baseOptions.headers,
             }),
-          (chunk) => options.onSnapshotCreateLogs?.(chunk.trimEnd()),
+          (chunk) => options.onTemplateCreateLogs?.(chunk.trimEnd()),
           async () => {
             boxInstance = (await this.boxApi.getBox(boxInstance.id)).data
             return boxInstance.state !== undefined && terminalStates.includes(boxInstance.state)

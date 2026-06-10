@@ -16,7 +16,6 @@ import { ServeStaticModule } from '@nestjs/serve-static'
 import { join } from 'path'
 import { ApiKeyModule } from './api-key/api-key.module'
 import { seconds, ThrottlerModule } from '@nestjs/throttler'
-import { DockerRegistryModule } from './docker-registry/docker-registry.module'
 import { RedisModule, getRedisConnectionToken } from '@nestjs-modules/ioredis'
 import { ScheduleModule } from '@nestjs/schedule'
 import { EventEmitterModule } from '@nestjs/event-emitter'
@@ -145,8 +144,8 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
           { name: 'anonymous', config: rateLimit.anonymous },
           { name: 'failed-auth', config: rateLimit.failedAuth },
           { name: 'authenticated', config: rateLimit.authenticated },
-          { name: 'box-create', config: rateLimit.boxCreate },
-          { name: 'box-lifecycle', config: rateLimit.boxLifecycle },
+          { name: 'sandbox-create', config: rateLimit.boxCreate },
+          { name: 'sandbox-lifecycle', config: rateLimit.boxLifecycle },
         ]
           .filter(({ config }) => config.ttl !== undefined && config.limit !== undefined)
           .map(({ name, config }) => ({
@@ -169,7 +168,6 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
     AuthModule,
     UserModule,
     BoxModule,
-    DockerRegistryModule,
     ScheduleModule.forRoot(),
     UsageModule,
     AnalyticsModule,

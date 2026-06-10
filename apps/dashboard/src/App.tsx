@@ -4,21 +4,15 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import Onboarding from '@/pages/Onboarding'
-import OrganizationMembers from '@/pages/OrganizationMembers'
 import OrganizationSettings from '@/pages/OrganizationSettings'
-import UserOrganizationInvitations from '@/pages/UserOrganizationInvitations'
 import { NotificationSocketProvider } from '@/providers/NotificationSocketProvider'
 import { OrganizationsProvider } from '@/providers/OrganizationsProvider'
 import { SelectedOrganizationProvider } from '@/providers/SelectedOrganizationProvider'
-import { UserOrganizationInvitationsProvider } from '@/providers/UserOrganizationInvitationsProvider'
 import { initPylon } from '@/vendor/pylon'
-import { OrganizationRolePermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { useFeatureFlagEnabled, usePostHog } from 'posthog-js/react'
 import React, { Suspense, useEffect } from 'react'
 import { useAuth } from 'react-oidc-context'
-import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
+import { generatePath, Navigate, Outlet, Route, Routes, useLocation, useParams } from 'react-router-dom'
 import { BannerProvider } from './components/Banner'
 import { CommandPaletteProvider } from './components/CommandPalette'
 import LoadingFallback from './components/LoadingFallback'
@@ -35,32 +29,38 @@ import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from './constants/ExternalLinks'
 import { FeatureFlags } from './enums/FeatureFlags'
 import { RoutePath, getRouteSubPath } from './enums/RoutePath'
 import { useConfig } from './hooks/useConfig'
-import AccountSettings from './pages/AccountSettings'
-import AuditLogs from './pages/AuditLogs'
+import { isDashboardVncEnabled } from './lib/dashboard-features'
 import Dashboard from './pages/Dashboard'
 import EmailVerify from './pages/EmailVerify'
-import Experimental from './pages/Experimental'
 import Keys from './pages/Keys'
 import LandingPage from './pages/LandingPage'
-import Limits from './pages/Limits'
 import Logout from './pages/Logout'
 import NotFound from './pages/NotFound'
-import Playground from './pages/Playground'
-import Regions from './pages/Regions'
-import Registries from './pages/Registries'
-import Runners from './pages/Runners'
+import Admin from './pages/Admin'
+import Billing from './pages/Billing'
 import Boxes from './pages/Boxes'
-import Snapshots from './pages/Snapshots'
-import Spending from './pages/Spending'
-import Volumes from './pages/Volumes'
-import Wallet from './pages/Wallet'
-import WebhookEndpointDetails from './pages/WebhookEndpointDetails'
-import Webhooks from './pages/Webhooks'
 import { BoxDetails, BoxTerminalFullscreen, BoxVncFullscreen } from './components/boxes'
 import { ApiProvider } from './providers/ApiProvider'
 import { RegionsProvider } from './providers/RegionsProvider'
 import { BoxSessionProvider } from './providers/BoxSessionProvider'
-import { SvixProvider } from './providers/SvixProvider'
+
+const HIDDEN_DASHBOARD_ROUTES = [
+  RoutePath.IMAGES,
+  RoutePath.REGISTRIES,
+  RoutePath.VOLUMES,
+  RoutePath.LIMITS,
+  RoutePath.BILLING_SPENDING,
+  RoutePath.BILLING_WALLET,
+  RoutePath.MEMBERS,
+  RoutePath.ROLES,
+  RoutePath.AUDIT_LOGS,
+  RoutePath.REGIONS,
+  RoutePath.RUNNERS,
+  RoutePath.EXPERIMENTAL,
+  RoutePath.PLAYGROUND,
+  RoutePath.WEBHOOKS,
+  RoutePath.WEBHOOK_ENDPOINT_DETAILS,
+]
 
 // Simple redirection components for external URLs
 const DocsRedirect = () => {
@@ -79,6 +79,31 @@ const SlackRedirect = () => {
   return null
 }
 
+const LegacyBoxRedirect = ({
+  route,
+}: {
+  route: RoutePath.BOX_DETAILS | RoutePath.BOX_TERMINAL | RoutePath.BOX_VNC
+}) => {
+  const location = useLocation()
+  const { boxId } = useParams()
+
+  if (!boxId) {
+    return <Navigate to={`${RoutePath.BOXES}${location.search}`} replace />
+  }
+
+  return <Navigate to={`${generatePath(route, { boxId })}${location.search}`} replace />
+}
+
+const BoxVncFeatureRoute = ({ enabled }: { enabled: boolean }) => {
+  const { boxId } = useParams()
+
+  if (!enabled) {
+    return <Navigate to={boxId ? generatePath(RoutePath.BOX_DETAILS, { boxId }) : RoutePath.BOXES} replace />
+  }
+
+  return <BoxVncFullscreen />
+}
+
 // Same-origin OIDC silent-renew iframes are legitimate, so frame refusal
 // belongs in deployment headers. The terminal Paste action also refuses to
 // read clipboard when the dashboard itself is framed.
@@ -87,7 +112,9 @@ function App() {
   const config = useConfig()
   const location = useLocation()
   const posthog = usePostHog()
+  const vncEnabled = isDashboardVncEnabled(useFeatureFlagEnabled(FeatureFlags.DASHBOARD_VNC))
   const { error: authError, isAuthenticated, user, removeUser } = useAuth()
+  const boxesRedirect = `${RoutePath.BOXES}${location.search}`
 
   useEffect(() => {
     if (isAuthenticated && user && posthog?.get_distinct_id() !== user.profile.sub) {
@@ -144,9 +171,18 @@ function App() {
   return (
     <Routes>
       <Route path={RoutePath.LANDING} element={<LandingPage />} />
+      <Route path="/lander" element={<Navigate to={RoutePath.LANDING} replace />} />
       <Route path={RoutePath.LOGOUT} element={<Logout />} />
       <Route path={RoutePath.DOCS} element={<DocsRedirect />} />
       <Route path={RoutePath.SLACK} element={<SlackRedirect />} />
+      <Route
+        path={RoutePath.ACCOUNT_SETTINGS}
+        element={<Navigate to={`${RoutePath.BOXES}${location.search}`} replace />}
+      />
+      <Route
+        path={RoutePath.USER_INVITATIONS}
+        element={<Navigate to={`${RoutePath.BOXES}${location.search}`} replace />}
+      />
       <Route
         path={RoutePath.DASHBOARD}
         element={
@@ -155,15 +191,13 @@ function App() {
               <OrganizationsProvider>
                 <SelectedOrganizationProvider>
                   <RegionsProvider>
-                    <UserOrganizationInvitationsProvider>
-                      <NotificationSocketProvider>
-                        <CommandPaletteProvider>
-                          <BannerProvider>
-                            <Dashboard />
-                          </BannerProvider>
-                        </CommandPaletteProvider>
-                      </NotificationSocketProvider>
-                    </UserOrganizationInvitationsProvider>
+                    <NotificationSocketProvider>
+                      <CommandPaletteProvider>
+                        <BannerProvider>
+                          <Dashboard />
+                        </BannerProvider>
+                      </CommandPaletteProvider>
+                    </NotificationSocketProvider>
                   </RegionsProvider>
                 </SelectedOrganizationProvider>
               </OrganizationsProvider>
@@ -171,9 +205,14 @@ function App() {
           </Suspense>
         }
       >
-        <Route index element={<Navigate to={`${getRouteSubPath(RoutePath.BOXES)}${location.search}`} replace />} />
+        <Route index element={<Navigate to={boxesRedirect} replace />} />
         <Route path={getRouteSubPath(RoutePath.KEYS)} element={<Keys />} />
         <Route path={getRouteSubPath(RoutePath.BOXES)} element={<Boxes />} />
+        <Route path={getRouteSubPath(RoutePath.BILLING)} element={<Billing />} />
+        <Route path={getRouteSubPath(RoutePath.PRICING)} element={<Navigate to={RoutePath.BILLING} replace />} />
+        <Route path={getRouteSubPath(RoutePath.ADMIN)} element={<Admin />} />
+        <Route path={getRouteSubPath(RoutePath.LEGACY_SANDBOXES)} element={<Navigate to={boxesRedirect} replace />} />
+        {/* TODO(image-rewrite): legacy /dashboard/templates route removed with the templates page. */}
         {/* Pathless layout route: a single BoxSessionProvider fiber
             persists across the three box routes, so activation state
             (e.g. "terminal connected") survives navigation between the
@@ -187,183 +226,34 @@ function App() {
           }
         >
           <Route path={getRouteSubPath(RoutePath.BOX_TERMINAL)} element={<BoxTerminalFullscreen />} />
-          <Route path={getRouteSubPath(RoutePath.BOX_VNC)} element={<BoxVncFullscreen />} />
+          <Route path={getRouteSubPath(RoutePath.BOX_VNC)} element={<BoxVncFeatureRoute enabled={vncEnabled} />} />
           <Route path={getRouteSubPath(RoutePath.BOX_DETAILS)} element={<BoxDetails />} />
+          <Route
+            path={getRouteSubPath(RoutePath.LEGACY_SANDBOX_TERMINAL)}
+            element={<LegacyBoxRedirect route={RoutePath.BOX_TERMINAL} />}
+          />
+          <Route
+            path={getRouteSubPath(RoutePath.LEGACY_SANDBOX_VNC)}
+            element={<LegacyBoxRedirect route={vncEnabled ? RoutePath.BOX_VNC : RoutePath.BOX_DETAILS} />}
+          />
+          <Route
+            path={getRouteSubPath(RoutePath.LEGACY_SANDBOX_DETAILS)}
+            element={<LegacyBoxRedirect route={RoutePath.BOX_DETAILS} />}
+          />
         </Route>
-        <Route path={getRouteSubPath(RoutePath.SNAPSHOTS)} element={<Snapshots />} />
-        <Route path={getRouteSubPath(RoutePath.REGISTRIES)} element={<Registries />} />
-        <Route
-          path={getRouteSubPath(RoutePath.VOLUMES)}
-          element={
-            <RequiredPermissionsOrganizationPageWrapper
-              requiredPermissions={[OrganizationRolePermissionsEnum.READ_VOLUMES]}
-            >
-              <Volumes />
-            </RequiredPermissionsOrganizationPageWrapper>
-          }
-        />
-        <Route
-          path={getRouteSubPath(RoutePath.LIMITS)}
-          element={
-            <OwnerAccessOrganizationPageWrapper>
-              <Limits />
-            </OwnerAccessOrganizationPageWrapper>
-          }
-        />
-        {config.billingApiUrl && (
-          <>
-            <Route
-              path={getRouteSubPath(RoutePath.BILLING_SPENDING)}
-              element={
-                <OwnerAccessOrganizationPageWrapper>
-                  <Spending />
-                </OwnerAccessOrganizationPageWrapper>
-              }
-            />
-            <Route
-              path={getRouteSubPath(RoutePath.BILLING_WALLET)}
-              element={
-                <OwnerAccessOrganizationPageWrapper>
-                  <Wallet />
-                </OwnerAccessOrganizationPageWrapper>
-              }
-            />
-            <Route path={getRouteSubPath(RoutePath.EMAIL_VERIFY)} element={<EmailVerify />} />
-          </>
-        )}
-        <Route
-          path={getRouteSubPath(RoutePath.MEMBERS)}
-          element={
-            <NonPersonalOrganizationPageWrapper>
-              <OrganizationMembers />
-            </NonPersonalOrganizationPageWrapper>
-          }
-        />
-        {
-          // TODO: uncomment when we allow creating custom roles
-          /* <Route
-          path={getRouteSubPath(RoutePath.ROLES)}
-          element={
-            <NonPersonalOrganizationPageWrapper>
-              <OwnerAccessOrganizationPageWrapper>
-                <OrganizationRoles />
-              </OwnerAccessOrganizationPageWrapper>
-            </NonPersonalOrganizationPageWrapper>
-          }
-        /> */
-        }
-        <Route
-          path={getRouteSubPath(RoutePath.AUDIT_LOGS)}
-          element={
-            <RequiredPermissionsOrganizationPageWrapper
-              requiredPermissions={[OrganizationRolePermissionsEnum.READ_AUDIT_LOGS]}
-            >
-              <AuditLogs />
-            </RequiredPermissionsOrganizationPageWrapper>
-          }
-        />
+        {HIDDEN_DASHBOARD_ROUTES.map((path) => (
+          <Route key={path} path={getRouteSubPath(path)} element={<Navigate to={boxesRedirect} replace />} />
+        ))}
+        <Route path={getRouteSubPath(RoutePath.EMAIL_VERIFY)} element={<EmailVerify />} />
         <Route path={getRouteSubPath(RoutePath.SETTINGS)} element={<OrganizationSettings />} />
         <Route
-          path={getRouteSubPath(RoutePath.REGIONS)}
-          element={
-            <RequiredFeatureFlagWrapper flagKey={FeatureFlags.ORGANIZATION_INFRASTRUCTURE}>
-              <Regions />
-            </RequiredFeatureFlagWrapper>
-          }
-        />
-        <Route
-          path={getRouteSubPath(RoutePath.RUNNERS)}
-          element={
-            <RequiredFeatureFlagWrapper flagKey={FeatureFlags.ORGANIZATION_INFRASTRUCTURE}>
-              <RequiredPermissionsOrganizationPageWrapper
-                requiredPermissions={[OrganizationRolePermissionsEnum.READ_RUNNERS]}
-              >
-                <Runners />
-              </RequiredPermissionsOrganizationPageWrapper>
-            </RequiredFeatureFlagWrapper>
-          }
-        />
-        <Route
-          path={getRouteSubPath(RoutePath.ACCOUNT_SETTINGS)}
-          element={<AccountSettings linkedAccountsEnabled={config.linkedAccountsEnabled} />}
-        />
-        <Route path={getRouteSubPath(RoutePath.USER_INVITATIONS)} element={<UserOrganizationInvitations />} />
-        <Route path={getRouteSubPath(RoutePath.ONBOARDING)} element={<Onboarding />} />
-        <Route
-          path={getRouteSubPath(RoutePath.EXPERIMENTAL)}
-          element={
-            <OwnerAccessOrganizationPageWrapper>
-              <Experimental />
-            </OwnerAccessOrganizationPageWrapper>
-          }
-        />
-        <Route path={getRouteSubPath(RoutePath.PLAYGROUND)} element={<Playground />} />
-        <Route
-          path={getRouteSubPath(RoutePath.WEBHOOKS)}
-          element={
-            <SvixProvider>
-              <Webhooks />
-            </SvixProvider>
-          }
-        />
-        <Route
-          path={getRouteSubPath(RoutePath.WEBHOOK_ENDPOINT_DETAILS)}
-          element={
-            <SvixProvider>
-              <WebhookEndpointDetails />
-            </SvixProvider>
-          }
+          path={getRouteSubPath(RoutePath.ONBOARDING)}
+          element={<Navigate to={`${RoutePath.BOXES}?onboarding=1`} replace />}
         />
       </Route>
       <Route path="*" element={<NotFound />} />
     </Routes>
   )
-}
-
-function NonPersonalOrganizationPageWrapper({ children }: { children: React.ReactNode }) {
-  const { selectedOrganization } = useSelectedOrganization()
-
-  if (selectedOrganization?.personal) {
-    return <Navigate to={RoutePath.DASHBOARD} replace />
-  }
-
-  return children
-}
-
-function OwnerAccessOrganizationPageWrapper({ children }: { children: React.ReactNode }) {
-  const { authenticatedUserOrganizationMember } = useSelectedOrganization()
-
-  if (authenticatedUserOrganizationMember?.role !== OrganizationUserRoleEnum.OWNER) {
-    return <Navigate to={RoutePath.DASHBOARD} replace />
-  }
-
-  return children
-}
-
-function RequiredPermissionsOrganizationPageWrapper({
-  children,
-  requiredPermissions,
-}: {
-  children: React.ReactNode
-  requiredPermissions: OrganizationRolePermissionsEnum[]
-}) {
-  const { authenticatedUserHasPermission } = useSelectedOrganization()
-
-  if (!requiredPermissions.every((permission) => authenticatedUserHasPermission(permission))) {
-    return <Navigate to={RoutePath.DASHBOARD} replace />
-  }
-
-  return children
-}
-
-function RequiredFeatureFlagWrapper({ children, flagKey }: { children: React.ReactNode; flagKey: FeatureFlags }) {
-  const flagEnabled = useFeatureFlagEnabled(flagKey)
-
-  if (!flagEnabled) {
-    return <Navigate to={RoutePath.DASHBOARD} replace />
-  }
-
-  return children
 }
 
 export default App

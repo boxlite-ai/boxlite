@@ -7,12 +7,12 @@ import { CopyButton } from '@/components/CopyButton'
 import { ResourceChip } from '@/components/ResourceChip'
 import { TimestampTooltip } from '@/components/TimestampTooltip'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '@/components/ui/empty'
 import { Skeleton } from '@/components/ui/skeleton'
+import { getBoxPublicId, getBoxPublicIdLabel } from '@/lib/box-identity'
 import { cn, formatDuration, getRelativeTimeString } from '@/lib/utils'
 import { Box } from '@boxlite-ai/api-client'
-import { AlertCircle, Tag } from 'lucide-react'
-import React, { useMemo } from 'react'
+import { AlertCircle } from 'lucide-react'
+import React from 'react'
 
 export function InfoSection({
   title,
@@ -53,10 +53,9 @@ interface BoxInfoPanelProps {
   getRegionName: (id: string) => string | undefined
 }
 
-export function BoxInfoPanel({ box, getRegionName }: BoxInfoPanelProps) {
-  const labelEntries = useMemo(() => {
-    return box.labels ? Object.entries(box.labels) : []
-  }, [box.labels])
+export function BoxInfoPanel({ box }: BoxInfoPanelProps) {
+  // TODO(image-rewrite): image display formatting removed with the image/template subsystem; show raw value.
+  const publicBoxId = getBoxPublicId(box)
 
   return (
     <div className="flex flex-col">
@@ -70,17 +69,19 @@ export function BoxInfoPanel({ box, getRegionName }: BoxInfoPanelProps) {
       )}
 
       <InfoSection title="General">
-        <InfoRow label="Region" className="-mr-2">
-          <div className="flex items-center gap-1">
-            <span className="truncate">{getRegionName(box.target) ?? box.target}</span>
-            <CopyButton value={box.target} tooltipText="Copy" size="icon-xs" />
+        <InfoRow label="Box ID" className="-mr-2">
+          <div className="flex min-w-0 items-center gap-1">
+            <span className="truncate font-mono text-xs">{getBoxPublicIdLabel(box)}</span>
+            {publicBoxId && <CopyButton value={publicBoxId} tooltipText="Copy Box ID" size="icon-xs" />}
           </div>
         </InfoRow>
-        <InfoRow label="Snapshot" className="-mr-2">
-          {box.snapshot ? (
-            <div className="flex items-center gap-1 min-w-0">
-              <span className="truncate font-mono text-sm">{box.snapshot}</span>
-              <CopyButton value={box.snapshot} tooltipText="Copy" size="icon-xs" />
+        <InfoRow label="Image" className="-mr-2">
+          {box.template ? (
+            <div className="flex min-w-0 items-center gap-1">
+              <div className="min-w-0 text-right">
+                <div className="truncate text-sm">{box.template}</div>
+              </div>
+              <CopyButton value={box.template} tooltipText="Copy" size="icon-xs" />
             </div>
           ) : (
             <span className="text-muted-foreground font-normal">—</span>
@@ -104,13 +105,6 @@ export function BoxInfoPanel({ box, getRegionName }: BoxInfoPanelProps) {
             <span className="text-muted-foreground font-normal">Disabled</span>
           )}
         </InfoRow>
-        <InfoRow label="Auto-archive">
-          {box.autoArchiveInterval ? (
-            formatDuration(box.autoArchiveInterval)
-          ) : (
-            <span className="text-muted-foreground font-normal">Disabled</span>
-          )}
-        </InfoRow>
         <InfoRow label="Auto-delete">
           {box.autoDeleteInterval !== undefined && box.autoDeleteInterval >= 0 ? (
             box.autoDeleteInterval === 0 ? (
@@ -122,33 +116,6 @@ export function BoxInfoPanel({ box, getRegionName }: BoxInfoPanelProps) {
             <span className="text-muted-foreground font-normal">Disabled</span>
           )}
         </InfoRow>
-      </InfoSection>
-
-      <InfoSection title="Labels">
-        {labelEntries.length > 0 ? (
-          <div className="max-h-[250px] overflow-y-auto scrollbar-sm">
-            <div className="flex flex-wrap gap-2 py-1">
-              {labelEntries.map(([key, value]) => (
-                <code
-                  key={key}
-                  className="flex items-center gap-1 bg-muted border border-border rounded px-2 py-1 text-xs font-mono"
-                >
-                  <span className="text-muted-foreground">{key}:</span>
-                  <span>{value}</span>
-                </code>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <Empty>
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <Tag className="size-4" />
-              </EmptyMedia>
-              <EmptyDescription>No labels</EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        )}
       </InfoSection>
 
       <InfoSection title="Timestamps">
@@ -173,10 +140,6 @@ export function InfoPanelSkeleton() {
       <div className="px-5 py-4 border-b border-border">
         <Skeleton className="h-2.5 w-16 mb-3" />
         <div className="space-y-3">
-          <div className="flex justify-between">
-            <Skeleton className="h-4 w-12" />
-            <Skeleton className="h-4 w-20" />
-          </div>
           <div className="flex justify-between">
             <Skeleton className="h-4 w-16" />
             <Skeleton className="h-4 w-32" />
@@ -207,10 +170,6 @@ export function InfoPanelSkeleton() {
             <Skeleton className="h-4 w-16" />
           </div>
         </div>
-      </div>
-      <div className="px-5 py-4 border-b border-border">
-        <Skeleton className="h-2.5 w-14 mb-3" />
-        <Skeleton className="h-4 w-full" />
       </div>
       <div className="px-5 py-4">
         <Skeleton className="h-2.5 w-24 mb-3" />

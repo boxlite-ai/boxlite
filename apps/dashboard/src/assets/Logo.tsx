@@ -4,18 +4,38 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import bboxLogoDark from './bbox-logo-dark.png'
-import bboxLogoLight from './bbox-logo-light.png'
+import boxliteIconBlack from './boxlite-icon-black.png'
+import boxliteIconLight from './boxlite-icon-light.png'
+import boxliteWebsiteLogoDark from './boxlite-website-logo-dark.png'
+import boxliteWebsiteLogoLight from './boxlite-website-logo-light.png'
 
-export function Logo() {
+type LogoProps = {
+  className?: string
+  decorative?: boolean
+}
+
+type LogoTextProps = {
+  className?: string
+}
+
+export function Logo({ className = 'h-7 w-7', decorative = false }: LogoProps) {
+  const imageProps = decorative ? { alt: '', 'aria-hidden': true } : { alt: 'BoxLite' }
+
   return (
     <span className="inline-flex items-center justify-center">
-      <img src={bboxLogoDark} alt="BoxLite" className="block h-7 w-7 dark:hidden" />
-      <img src={bboxLogoLight} alt="BoxLite" className="hidden h-7 w-7 dark:block" />
+      <img {...imageProps} src={boxliteIconBlack} className={`block ${className} object-contain dark:hidden`} />
+      <img {...imageProps} src={boxliteIconLight} className={`hidden ${className} object-contain dark:block`} />
     </span>
   )
 }
 
-export function LogoText() {
-  return <span className="text-lg font-semibold tracking-tight text-foreground">BoxLite</span>
+export function LogoText({ className = 'h-9 w-auto' }: LogoTextProps = {}) {
+  const imageClassName = `${className} object-contain`
+
+  return (
+    <span className="inline-flex items-center text-foreground">
+      <img src={boxliteWebsiteLogoLight} alt="BoxLite" className={`block dark:hidden ${imageClassName}`} />
+      <img src={boxliteWebsiteLogoDark} alt="BoxLite" className={`hidden dark:block ${imageClassName}`} />
+    </span>
+  )
 }

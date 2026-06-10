@@ -8,7 +8,6 @@ import { IsEnum, IsObject, IsOptional, IsString, IsNumber, IsBoolean } from 'cla
 import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxVolume } from './box.dto'
-import { CreateBuildInfoDto } from './create-build-info.dto'
 
 enum RunnerRegion {
   EU = 'eu',
@@ -125,27 +124,10 @@ export class CreateWorkspaceDto {
   autoStopInterval?: number
 
   @ApiPropertyOptional({
-    description: 'Auto-archive interval in minutes (0 means the maximum interval will be used)',
-    example: 7 * 24 * 60,
-    type: 'integer',
-  })
-  @IsOptional()
-  @IsNumber()
-  autoArchiveInterval?: number
-
-  @ApiPropertyOptional({
     description: 'Array of volumes to attach to the workspace',
     type: [BoxVolume],
     required: false,
   })
   @IsOptional()
   volumes?: BoxVolume[]
-
-  @ApiPropertyOptional({
-    description: 'Build information for the workspace',
-    type: CreateBuildInfoDto,
-  })
-  @IsOptional()
-  @IsObject()
-  buildInfo?: CreateBuildInfoDto
 }

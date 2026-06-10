@@ -9,22 +9,16 @@ import { Runner } from '../entities/runner.entity'
 import { ModuleRef } from '@nestjs/core'
 import { RunnerAdapterV0 } from './runnerAdapter.v0'
 import { RunnerAdapterV2 } from './runnerAdapter.v2'
-import { BuildInfo } from '../entities/build-info.entity'
-import { DockerRegistry } from '../../docker-registry/entities/docker-registry.entity'
 import { Box } from '../entities/box.entity'
 import { BoxState } from '../enums/box-state.enum'
-import { BackupState } from '../enums/backup-state.enum'
 import { RunnerServiceInfo } from '../common/runner-service-info'
 
 export interface RunnerBoxInfo {
   state: BoxState
   daemonVersion?: string
-  backupState?: BackupState
-  backupSnapshot?: string
-  backupErrorReason?: string
 }
 
-export interface RunnerSnapshotInfo {
+export interface RunnerArtifactInfo {
   name: string
   sizeGB: number
   entrypoint: string[]
@@ -32,7 +26,7 @@ export interface RunnerSnapshotInfo {
   hash: string
 }
 
-export interface SnapshotDigestResponse {
+export interface ArtifactDigestResponse {
   hash: string
   sizeGB: number
 }
@@ -44,6 +38,7 @@ export interface RunnerMetrics {
   currentCpuUsagePercentage?: number
   currentDiskUsagePercentage?: number
   currentMemoryUsagePercentage?: number
+  currentArtifactCount?: number
   currentSnapshotCount?: number
   currentStartedBoxes?: number
 }
@@ -68,8 +63,7 @@ export interface RunnerAdapter {
   boxInfo(boxId: string): Promise<RunnerBoxInfo>
   createBox(
     box: Box,
-    snapshotRef: string,
-    registry?: DockerRegistry,
+    artifactRef: string,
     entrypoint?: string[],
     metadata?: { [key: string]: string },
     otelEndpoint?: string,
@@ -83,26 +77,12 @@ export interface RunnerAdapter {
   ): Promise<StartBoxResponse | undefined>
   stopBox(boxId: string, force?: boolean): Promise<void>
   destroyBox(boxId: string): Promise<void>
-  createBackup(box: Box, backupSnapshotName: string, registry?: DockerRegistry): Promise<void>
 
-  removeSnapshot(snapshotName: string): Promise<void>
-  buildSnapshot(
-    buildInfo: BuildInfo,
-    organizationId?: string,
-    sourceRegistries?: DockerRegistry[],
-    registry?: DockerRegistry,
-    pushToInternalRegistry?: boolean,
-  ): Promise<void>
-  pullSnapshot(
-    snapshotName: string,
-    registry?: DockerRegistry,
-    destinationRegistry?: DockerRegistry,
-    destinationRef?: string,
-    newTag?: string,
-  ): Promise<void>
-  snapshotExists(snapshotRef: string): Promise<boolean>
-  getSnapshotInfo(snapshotName: string): Promise<RunnerSnapshotInfo>
-  inspectSnapshotInRegistry(snapshotName: string, registry?: DockerRegistry): Promise<SnapshotDigestResponse>
+  // TODO(image-rewrite): pullArtifact / getArtifactInfo removed with runner_artifact_cache +
+  // box_template; the runner binary keeps the capability but the API-side adapter no longer uses it.
+  removeArtifact(artifactRef: string): Promise<void>
+  artifactExists(artifactRef: string): Promise<boolean>
+  inspectArtifactInRegistry(artifactRef: string): Promise<ArtifactDigestResponse>
 
   updateNetworkSettings(
     boxId: string,

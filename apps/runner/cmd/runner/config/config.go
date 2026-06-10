@@ -54,16 +54,18 @@ type Config struct {
 	HealthcheckInterval                time.Duration `envconfig:"HEALTHCHECK_INTERVAL" default:"30s" validate:"min=10s"`
 	HealthcheckTimeout                 time.Duration `envconfig:"HEALTHCHECK_TIMEOUT" default:"10s"`
 	BackupTimeoutMin                   int           `envconfig:"BACKUP_TIMEOUT_MIN" default:"60" validate:"min=1"`
-	SnapshotPullTimeout                time.Duration `envconfig:"SNAPSHOT_PULL_TIMEOUT" default:"60m" validate:"min=1m"`
+	ArtifactPullTimeout                time.Duration `envconfig:"ARTIFACT_PULL_TIMEOUT" default:"60m" validate:"min=1m"`
 	BuildTimeoutMin                    int           `envconfig:"BUILD_TIMEOUT_MIN" default:"120" validate:"min=1"`
 	BuildCPUCores                      int64         `envconfig:"BUILD_CPU_CORES" default:"4" validate:"min=1"`
 	BuildMemoryGB                      int64         `envconfig:"BUILD_MEMORY_GB" default:"8" validate:"min=1"`
 	ApiVersion                         int           `envconfig:"API_VERSION" default:"2"`
 	InitializeDaemonTelemetry          bool          `envconfig:"INITIALIZE_DAEMON_TELEMETRY" default:"true"`
-	SnapshotErrorCacheRetention        time.Duration `envconfig:"SNAPSHOT_ERROR_CACHE_RETENTION" default:"10m" validate:"min=5m"`
+	ArtifactErrorCacheRetention        time.Duration `envconfig:"ARTIFACT_ERROR_CACHE_RETENTION" default:"10m" validate:"min=5m"`
 	BuildEngine                        string        `envconfig:"BUILD_ENGINE" default:"buildkit" validate:"oneof=buildkit legacy"`
 	BoxliteHomeDir                     string        `envconfig:"BOXLITE_HOME_DIR"`
 	InsecureRegistries                 string        `envconfig:"INSECURE_REGISTRIES"`
+	GhcrUsername                       string        `envconfig:"GHCR_USERNAME"`
+	GhcrToken                          string        `envconfig:"GHCR_TOKEN"`
 }
 
 var DEFAULT_API_PORT int = 8080
@@ -156,14 +158,14 @@ func GetBuildEngine() string {
 	return config.BuildEngine
 }
 
-func GetBuildLogFilePath(snapshotRef string) (string, error) {
-	// Extract image name from various snapshot ref formats:
+func GetBuildLogFilePath(artifactRef string) (string, error) {
+	// Extract image name from various artifact ref formats:
 	// - registry:5000/boxlite/boxlite-<hash>
 	// - boxlite-<hash>
 	// - boxlite-<hash>:tag
 	// - cr.preprod.boxlite.ai/sbox/boxlite/boxlite-<hash>:boxlite
 
-	buildId := snapshotRef
+	buildId := artifactRef
 
 	// Remove tag if present (everything after last colon that's not part of a port)
 	// A tag colon will come after the last slash

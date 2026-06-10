@@ -8,7 +8,6 @@ import { IsEnum, IsObject, IsOptional, IsString, IsNumber, IsBoolean, IsArray } 
 import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxVolume } from './box.dto'
-import { CreateBuildInfoDto } from './create-build-info.dto'
 
 @ApiSchema({ name: 'CreateBox' })
 export class CreateBoxDto {
@@ -21,12 +20,12 @@ export class CreateBoxDto {
   name?: string
 
   @ApiPropertyOptional({
-    description: 'The ID or name of the snapshot used for the box',
-    example: 'ubuntu-4vcpu-8ram-100gb',
+    description: 'The ID or name of the template used for the box',
+    example: 'ubuntu-template-id',
   })
   @IsOptional()
   @IsString()
-  snapshot?: string
+  templateId?: string
 
   @ApiPropertyOptional({
     description: 'The user associated with the project',
@@ -37,7 +36,7 @@ export class CreateBoxDto {
   user?: string
 
   @ApiPropertyOptional({
-    description: 'Environment variables for the box',
+    description: 'Environment variables for the sandbox',
     type: 'object',
     additionalProperties: { type: 'string' },
     example: { NODE_ENV: 'production' },
@@ -47,7 +46,7 @@ export class CreateBoxDto {
   env?: { [key: string]: string }
 
   @ApiPropertyOptional({
-    description: 'Labels for the box',
+    description: 'Labels for the sandbox',
     type: 'object',
     additionalProperties: { type: 'string' },
     example: { 'boxlite.io/public': 'true' },
@@ -65,7 +64,7 @@ export class CreateBoxDto {
   public?: boolean
 
   @ApiPropertyOptional({
-    description: 'Whether to block all network access for the box',
+    description: 'Whether to block all network access for the sandbox',
     example: false,
   })
   @IsOptional()
@@ -73,7 +72,7 @@ export class CreateBoxDto {
   networkBlockAll?: boolean
 
   @ApiPropertyOptional({
-    description: 'Comma-separated list of allowed CIDR network addresses for the box',
+    description: 'Comma-separated list of allowed CIDR network addresses for the sandbox',
     example: '192.168.1.0/16,10.0.0.0/24',
   })
   @IsOptional()
@@ -98,7 +97,7 @@ export class CreateBoxDto {
   target?: string
 
   @ApiPropertyOptional({
-    description: 'CPU cores allocated to the box',
+    description: 'CPU cores allocated to the sandbox',
     example: 2,
     type: 'integer',
   })
@@ -107,7 +106,7 @@ export class CreateBoxDto {
   cpu?: number
 
   @ApiPropertyOptional({
-    description: 'GPU units allocated to the box',
+    description: 'GPU units allocated to the sandbox',
     example: 1,
     type: 'integer',
   })
@@ -143,15 +142,6 @@ export class CreateBoxDto {
   autoStopInterval?: number
 
   @ApiPropertyOptional({
-    description: 'Auto-archive interval in minutes (0 means the maximum interval will be used)',
-    example: 7 * 24 * 60,
-    type: 'integer',
-  })
-  @IsOptional()
-  @IsNumber()
-  autoArchiveInterval?: number
-
-  @ApiPropertyOptional({
     description:
       'Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping)',
     example: 30,
@@ -162,19 +152,11 @@ export class CreateBoxDto {
   autoDeleteInterval?: number
 
   @ApiPropertyOptional({
-    description: 'Array of volumes to attach to the box',
+    description: 'Array of volumes to attach to the sandbox',
     type: [BoxVolume],
     required: false,
   })
   @IsOptional()
   @IsArray()
   volumes?: BoxVolume[]
-
-  @ApiPropertyOptional({
-    description: 'Build information for the box',
-    type: CreateBuildInfoDto,
-  })
-  @IsOptional()
-  @IsObject()
-  buildInfo?: CreateBuildInfoDto
 }

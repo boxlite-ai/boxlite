@@ -5,6 +5,7 @@
 
 import { CodeSnippetGenerator } from './types'
 import { joinGroupedSections } from './utils'
+import { getLanguageCodeToRun } from '@/lib/playground'
 
 export const PythonSnippetGenerator: CodeSnippetGenerator = {
   getImports(p) {
@@ -13,9 +14,9 @@ export const PythonSnippetGenerator: CodeSnippetGenerator = {
         'from boxlite import BoxLite as BoxLite',
         p.actions.useConfigObject ? 'BoxliteConfig as BoxLiteConfig' : '',
         p.config.useBoxCreateParams
-          ? p.config.createBoxFromSnapshot
-            ? 'CreateBoxFromSnapshotParams'
-            : 'CreateBoxFromImageParams'
+          ? p.config.createBoxFromTemplate
+            ? 'CreateBoxFromTemplateParams as CreateBoxFromImageParams'
+            : 'CreateBoxFromImageParams as CreateBoxFromImageParams'
           : '',
         p.config.useResources ? 'Resources' : '',
         p.config.createBoxFromImage ? 'Image' : '',
@@ -60,8 +61,8 @@ export const PythonSnippetGenerator: CodeSnippetGenerator = {
     if (!p.config.useBoxCreateParams) return ''
     const ind = '\t'
     return [
-      `\n\nparams = ${p.config.createBoxFromSnapshot ? 'CreateBoxFromSnapshotParams' : 'CreateBoxFromImageParams'}(`,
-      p.config.useCustomBoxSnapshotName ? `${ind}snapshot="${p.state['snapshotName']}",` : '',
+      `\n\nparams = CreateBoxFromImageParams(`,
+      p.config.useCustomImageName ? `${ind}template_id="${p.state['templateName']}",` : '',
       p.config.createBoxFromImage ? `${ind}image=Image.debian_slim("3.13"),` : '',
       p.config.useResources ? `${ind}resources=resources,` : '',
       p.config.useLanguageParam ? `${ind}language="${p.state['language']}",` : '',
@@ -69,9 +70,6 @@ export const PythonSnippetGenerator: CodeSnippetGenerator = {
         ? [
             p.config.useAutoStopInterval
               ? `${ind}auto_stop_interval=${p.state['createBoxBaseParams']['autoStopInterval']}, # ${p.state['createBoxBaseParams']['autoStopInterval'] == 0 ? 'Disables the auto-stop feature' : `Box will be stopped after ${p.state['createBoxBaseParams']['autoStopInterval']} minute${(p.state['createBoxBaseParams']['autoStopInterval'] as number) > 1 ? 's' : ''}`}`
-              : '',
-            p.config.useAutoArchiveInterval
-              ? `${ind}auto_archive_interval=${p.state['createBoxBaseParams']['autoArchiveInterval']}, # Auto-archive after a Box has been stopped for ${p.state['createBoxBaseParams']['autoArchiveInterval'] == 0 ? '30 days' : `${p.state['createBoxBaseParams']['autoArchiveInterval']} minutes`}`
               : '',
             p.config.useAutoDeleteInterval
               ? `${ind}auto_delete_interval=${p.state['createBoxBaseParams']['autoDeleteInterval']}, # ${p.state['createBoxBaseParams']['autoDeleteInterval'] == 0 ? 'Box will be deleted immediately after stopping' : p.state['createBoxBaseParams']['autoDeleteInterval'] == -1 ? 'Auto-delete functionality disabled' : `Auto-delete after a Box has been stopped for ${p.state['createBoxBaseParams']['autoDeleteInterval']} minutes`}`
@@ -98,7 +96,7 @@ export const PythonSnippetGenerator: CodeSnippetGenerator = {
     return [
       '\n\n# Run code securely inside the Box',
       'codeRunResponse = box.process.code_run(',
-      `'''${p.state['codeRunParams'].languageCode}'''`,
+      `'''${getLanguageCodeToRun(p.actions.codeSnippetLanguage)}'''`,
       ')',
       'if codeRunResponse.exit_code != 0:',
       `${ind}print(f"Error: {codeRunResponse.exit_code} {codeRunResponse.result}")`,

@@ -178,6 +178,7 @@ func run() int {
 		RecordingService:      recordingService,
 		OrganizationId:        c.OrganizationId,
 		RegionId:              c.RegionId,
+		TraceParent:           c.TraceParent,
 		EntrypointLogFilePath: entrypointLogFilePath,
 	})
 

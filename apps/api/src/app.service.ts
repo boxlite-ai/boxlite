@@ -5,13 +5,10 @@
  */
 
 import { Injectable, Logger, OnApplicationBootstrap, OnApplicationShutdown } from '@nestjs/common'
-import { DockerRegistryService } from './docker-registry/services/docker-registry.service'
-import { RegistryType } from './docker-registry/enums/registry-type.enum'
 import { OrganizationService } from './organization/services/organization.service'
 import { UserService } from './user/user.service'
 import { ApiKeyService } from './api-key/api-key.service'
 import { EventEmitterReadinessWatcher } from '@nestjs/event-emitter'
-import { SnapshotService } from './box/services/snapshot.service'
 import { SystemRole } from './user/enums/system-role.enum'
 import { TypedConfigService } from './config/typed-config.service'
 import { SchedulerRegistry } from '@nestjs/schedule'
@@ -28,13 +25,11 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
   private readonly logger = new Logger(AppService.name)
 
   constructor(
-    private readonly dockerRegistryService: DockerRegistryService,
     private readonly configService: TypedConfigService,
     private readonly userService: UserService,
     private readonly organizationService: OrganizationService,
     private readonly apiKeyService: ApiKeyService,
     private readonly eventEmitterReadinessWatcher: EventEmitterReadinessWatcher,
-    private readonly snapshotService: SnapshotService,
     private readonly schedulerRegistry: SchedulerRegistry,
     private readonly regionService: RegionService,
     private readonly runnerService: RunnerService,
@@ -55,17 +50,12 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
 
     await this.initializeDefaultRegion()
     await this.initializeAdminUser()
-    await this.initializeTransientRegistry()
-    await this.initializeBackupRegistry()
-    await this.initializeInternalRegistry()
-    await this.initializeBackupRegistry()
 
     // Default runner init is not awaited because v2 runners depend on the API to be ready
-    this.initializeDefaultRunner()
-      .then(() => this.initializeDefaultSnapshot())
-      .catch((error) => {
-        this.logger.error('Error initializing default runner', error)
-      })
+    // TODO(image-rewrite): system template seeding removed with box_template; rebuild here.
+    this.initializeDefaultRunner().catch((error) => {
+      this.logger.error('Error initializing default runner', error)
+    })
   }
 
   private async stopAllCronJobs(): Promise<void> {
@@ -167,175 +157,62 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
   }
 
   private async initializeAdminUser(): Promise<void> {
-    if (await this.userService.findOne(BOXLITE_ADMIN_USER_ID)) {
-      return
+    let user = await this.userService.findOne(BOXLITE_ADMIN_USER_ID)
+    if (!user) {
+      user = await this.userService.create({
+        id: BOXLITE_ADMIN_USER_ID,
+        name: 'BoxLite Admin',
+        defaultOrganizationQuota: {
+          totalCpuQuota: this.configService.getOrThrow('admin.totalCpuQuota'),
+          totalMemoryQuota: this.configService.getOrThrow('admin.totalMemoryQuota'),
+          totalDiskQuota: this.configService.getOrThrow('admin.totalDiskQuota'),
+          maxCpuPerBox: this.configService.getOrThrow('admin.maxCpuPerBox'),
+          maxMemoryPerBox: this.configService.getOrThrow('admin.maxMemoryPerBox'),
+          maxDiskPerBox: this.configService.getOrThrow('admin.maxDiskPerBox'),
+          templateQuota: this.configService.getOrThrow('admin.templateQuota'),
+          maxTemplateSize: this.configService.getOrThrow('admin.maxTemplateSize'),
+          volumeQuota: this.configService.getOrThrow('admin.volumeQuota'),
+        },
+        defaultOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
+        role: SystemRole.ADMIN,
+      })
     }
 
-    const user = await this.userService.create({
-      id: BOXLITE_ADMIN_USER_ID,
-      name: 'BoxLite Admin',
-      personalOrganizationQuota: {
-        totalCpuQuota: this.configService.getOrThrow('admin.totalCpuQuota'),
-        totalMemoryQuota: this.configService.getOrThrow('admin.totalMemoryQuota'),
-        totalDiskQuota: this.configService.getOrThrow('admin.totalDiskQuota'),
-        maxCpuPerBox: this.configService.getOrThrow('admin.maxCpuPerBox'),
-        maxMemoryPerBox: this.configService.getOrThrow('admin.maxMemoryPerBox'),
-        maxDiskPerBox: this.configService.getOrThrow('admin.maxDiskPerBox'),
-        snapshotQuota: this.configService.getOrThrow('admin.snapshotQuota'),
-        maxSnapshotSize: this.configService.getOrThrow('admin.maxSnapshotSize'),
-        volumeQuota: this.configService.getOrThrow('admin.volumeQuota'),
-      },
-      personalOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
-      role: SystemRole.ADMIN,
-    })
-    const personalOrg = await this.organizationService.findPersonal(user.id)
-    const { value } = await this.apiKeyService.createApiKey(
-      personalOrg.id,
+    const defaultOrg = await this.organizationService.findDefaultForUser(user.id)
+    await this.ensureAdminOrganizationQuota(defaultOrg.id)
+    const { value } = await this.apiKeyService.ensureApiKeyValue(
+      defaultOrg.id,
       user.id,
       BOXLITE_ADMIN_USER_ID,
       [],
-      undefined,
       this.configService.getOrThrow('admin.apiKey'),
     )
     this.logger.log(
       `
 =========================================
 =========================================
-Admin user created with API key: ${value}
+Admin API key ensured: ${this.maskApiKeyForLog(value)}
 =========================================
 =========================================`,
     )
   }
 
-  private async initializeTransientRegistry(): Promise<void> {
-    const existingRegistry = await this.dockerRegistryService.getAvailableTransientRegistry(
-      this.configService.getOrThrow('defaultRegion.id'),
-    )
-    if (existingRegistry) {
-      return
-    }
-
-    const registryUrl = this.configService.getOrThrow('transientRegistry.url')
-    const registryAdmin = this.configService.getOrThrow('transientRegistry.admin')
-    const registryPassword = this.configService.getOrThrow('transientRegistry.password')
-    const registryProjectId = this.configService.getOrThrow('transientRegistry.projectId')
-
-    if (!registryUrl || !registryAdmin || !registryPassword || !registryProjectId) {
-      this.logger.warn('Registry configuration not found, skipping transient registry setup')
-      return
-    }
-
-    this.logger.log('Initializing default transient registry...')
-
-    await this.dockerRegistryService.create({
-      name: 'Transient Registry',
-      url: registryUrl,
-      username: registryAdmin,
-      password: registryPassword,
-      project: registryProjectId,
-      registryType: RegistryType.TRANSIENT,
-      isDefault: true,
+  private async ensureAdminOrganizationQuota(organizationId: string): Promise<void> {
+    await this.organizationService.updateQuota(organizationId, {
+      maxCpuPerBox: this.configService.getOrThrow('admin.maxCpuPerBox'),
+      maxMemoryPerBox: this.configService.getOrThrow('admin.maxMemoryPerBox'),
+      maxDiskPerBox: this.configService.getOrThrow('admin.maxDiskPerBox'),
+      templateQuota: this.configService.getOrThrow('admin.templateQuota'),
+      maxTemplateSize: this.configService.getOrThrow('admin.maxTemplateSize'),
+      volumeQuota: this.configService.getOrThrow('admin.volumeQuota'),
     })
-
-    this.logger.log('Default transient registry initialized successfully')
   }
 
-  private async initializeInternalRegistry(): Promise<void> {
-    const existingRegistry = await this.dockerRegistryService.getAvailableInternalRegistry(
-      this.configService.getOrThrow('defaultRegion.id'),
-    )
-    if (existingRegistry) {
-      return
+  private maskApiKeyForLog(value: string): string {
+    if (value.length <= 8) {
+      return '********'
     }
-
-    const registryUrl = this.configService.getOrThrow('internalRegistry.url')
-    const registryAdmin = this.configService.getOrThrow('internalRegistry.admin')
-    const registryPassword = this.configService.getOrThrow('internalRegistry.password')
-    const registryProjectId = this.configService.getOrThrow('internalRegistry.projectId')
-
-    if (!registryUrl || !registryAdmin || !registryPassword || !registryProjectId) {
-      this.logger.warn('Registry configuration not found, skipping internal registry setup')
-      return
-    }
-
-    this.logger.log('Initializing default internal registry...')
-
-    await this.dockerRegistryService.create({
-      name: 'Internal Registry',
-      url: registryUrl,
-      username: registryAdmin,
-      password: registryPassword,
-      project: registryProjectId,
-      registryType: RegistryType.INTERNAL,
-      isDefault: true,
-    })
-
-    this.logger.log('Default internal registry initialized successfully')
+    return `${value.slice(0, 4)}...${value.slice(-4)}`
   }
 
-  private async initializeBackupRegistry(): Promise<void> {
-    const existingRegistry = await this.dockerRegistryService.getAvailableBackupRegistry(
-      this.configService.getOrThrow('defaultRegion.id'),
-    )
-    if (existingRegistry) {
-      return
-    }
-
-    const registryUrl = this.configService.getOrThrow('internalRegistry.url')
-    const registryAdmin = this.configService.getOrThrow('internalRegistry.admin')
-    const registryPassword = this.configService.getOrThrow('internalRegistry.password')
-    const registryProjectId = this.configService.getOrThrow('internalRegistry.projectId')
-
-    if (!registryUrl || !registryAdmin || !registryPassword || !registryProjectId) {
-      this.logger.warn('Registry configuration not found, skipping backup registry setup')
-      return
-    }
-
-    this.logger.log('Initializing default backup registry...')
-
-    await this.dockerRegistryService.create(
-      {
-        name: 'Backup Registry',
-        url: registryUrl,
-        username: registryAdmin,
-        password: registryPassword,
-        project: registryProjectId,
-        registryType: RegistryType.BACKUP,
-        isDefault: true,
-      },
-      undefined,
-      true,
-    )
-
-    this.logger.log('Default backup registry initialized successfully')
-  }
-
-  private async initializeDefaultSnapshot(): Promise<void> {
-    const adminPersonalOrg = await this.organizationService.findPersonal(BOXLITE_ADMIN_USER_ID)
-
-    try {
-      const existingSnapshot = await this.snapshotService.getSnapshotByName(
-        this.configService.getOrThrow('defaultSnapshot'),
-        adminPersonalOrg.id,
-      )
-      if (existingSnapshot) {
-        return
-      }
-    } catch {
-      this.logger.log('Default snapshot not found, creating...')
-    }
-
-    const defaultSnapshot = this.configService.getOrThrow('defaultSnapshot')
-
-    await this.snapshotService.createFromPull(
-      adminPersonalOrg,
-      {
-        name: defaultSnapshot,
-        imageName: defaultSnapshot,
-      },
-      true,
-    )
-
-    this.logger.log('Default snapshot created successfully')
-  }
 }

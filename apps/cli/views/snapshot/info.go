@@ -15,22 +15,23 @@ import (
 	"golang.org/x/term"
 )
 
-func RenderInfo(snapshot *apiclient.SnapshotDto, forceUnstyled bool) {
+func RenderInfo(template *apiclient.BoxTemplateDto, forceUnstyled bool) {
 	var output string
-	nameLabel := "Snapshot"
+	nameLabel := "Template"
 
 	output += "\n"
-	output += getInfoLine(nameLabel, snapshot.Name) + "\n"
-	output += getInfoLine("State", getStateLabel(snapshot.State)) + "\n"
+	output += getInfoLine(nameLabel, template.Name) + "\n"
+	output += getInfoLine("State", getStateLabel(template.State)) + "\n"
 
-	if size := snapshot.Size.Get(); size != nil {
-		output += getInfoLine("Size", fmt.Sprintf("%.2f GB", *size)) + "\n"
-	} else {
-		output += getInfoLine("Size", "-") + "\n"
+	if template.ArtifactRef != nil {
+		output += getInfoLine("Artifact", *template.ArtifactRef) + "\n"
 	}
-	output += getInfoLine("Created", util.GetTimeSinceLabel(snapshot.CreatedAt)) + "\n"
+	output += getInfoLine("CPU", fmt.Sprintf("%.0f cores", template.DefaultResources.Cpu)) + "\n"
+	output += getInfoLine("Memory", fmt.Sprintf("%.0f GB", template.DefaultResources.Memory)) + "\n"
+	output += getInfoLine("Disk", fmt.Sprintf("%.0f GB", template.DefaultResources.Disk)) + "\n"
+	output += getInfoLine("Created", util.GetTimeSinceLabel(template.CreatedAt)) + "\n"
 
-	output += getInfoLine("ID", snapshot.Id) + "\n"
+	output += getInfoLine("ID", template.Id) + "\n"
 
 	terminalWidth, _, err := term.GetSize(int(os.Stdout.Fd()))
 	if err != nil {
@@ -42,7 +43,7 @@ func RenderInfo(snapshot *apiclient.SnapshotDto, forceUnstyled bool) {
 		return
 	}
 
-	output = common.GetStyledMainTitle("Snapshot Info") + "\n" + output
+	output = common.GetStyledMainTitle("Template Info") + "\n" + output
 
 	renderTUIView(output, common.GetContainerBreakpointWidth(terminalWidth))
 }
@@ -65,19 +66,19 @@ func getInfoLine(key, value string) string {
 	return util.PropertyNameStyle.Render(fmt.Sprintf("%-*s", util.PropertyNameWidth, key)) + util.PropertyValueStyle.Render(value) + "\n"
 }
 
-func getStateLabel(state apiclient.SnapshotState) string {
+func getStateLabel(state apiclient.BoxTemplateState) string {
 	switch state {
-	case apiclient.SNAPSHOTSTATE_PENDING:
+	case apiclient.BOXTEMPLATESTATE_PENDING:
 		return common.CreatingStyle.Render("PENDING")
-	case apiclient.SNAPSHOTSTATE_PULLING:
-		return common.CreatingStyle.Render("PULLING SNAPSHOT")
-	case apiclient.SNAPSHOTSTATE_ACTIVE:
+	case apiclient.BOXTEMPLATESTATE_PULLING:
+		return common.CreatingStyle.Render("PULLING ARTIFACT")
+	case apiclient.BOXTEMPLATESTATE_ACTIVE:
 		return common.StartedStyle.Render("ACTIVE")
-	case apiclient.SNAPSHOTSTATE_ERROR:
+	case apiclient.BOXTEMPLATESTATE_ERROR:
 		return common.ErrorStyle.Render("ERROR")
-	case apiclient.SNAPSHOTSTATE_BUILD_FAILED:
+	case apiclient.BOXTEMPLATESTATE_BUILD_FAILED:
 		return common.ErrorStyle.Render("BUILD FAILED")
-	case apiclient.SNAPSHOTSTATE_REMOVING:
+	case apiclient.BOXTEMPLATESTATE_REMOVING:
 		return common.DeletedStyle.Render("REMOVING")
 	default:
 		return common.UndefinedStyle.Render("/")

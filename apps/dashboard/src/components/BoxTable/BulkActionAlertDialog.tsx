@@ -19,7 +19,6 @@ export enum BulkAction {
   Delete = 'delete',
   Start = 'start',
   Stop = 'stop',
-  Archive = 'archive',
 }
 
 interface BulkActionData {
@@ -51,12 +50,6 @@ function getBulkActionData(action: BulkAction, count: number): BulkActionData {
         title: 'Stop Boxes',
         description: `Are you sure you want to stop ${countText}?`,
         buttonLabel: 'Stop',
-      }
-    case BulkAction.Archive:
-      return {
-        title: 'Archive Boxes',
-        description: `Are you sure you want to archive ${countText}? Archived boxes can be restored later.`,
-        buttonLabel: 'Archive',
       }
   }
 }

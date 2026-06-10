@@ -9,17 +9,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var SnapshotsCmd = &cobra.Command{
-	Use:     "snapshot",
-	Short:   "Manage BoxLite snapshots",
-	Long:    "Commands for managing BoxLite snapshots",
-	Aliases: []string{"snapshots"},
-	GroupID: internal.BOX_GROUP,
+var TemplatesCmd = &cobra.Command{
+	Use:     "template",
+	Short:   "Manage BoxLite templates",
+	Long:    "Commands for managing BoxLite templates",
+	Aliases: []string{"templates", "snapshot", "snapshots"},
+	GroupID: internal.SANDBOX_GROUP,
 }
 
 func init() {
-	SnapshotsCmd.AddCommand(ListCmd)
-	SnapshotsCmd.AddCommand(CreateCmd)
-	SnapshotsCmd.AddCommand(PushCmd)
-	SnapshotsCmd.AddCommand(DeleteCmd)
+	TemplatesCmd.AddCommand(ListCmd)
+	TemplatesCmd.AddCommand(CreateCmd)
+	TemplatesCmd.AddCommand(PushCmd)
+	TemplatesCmd.AddCommand(DeleteCmd)
 }

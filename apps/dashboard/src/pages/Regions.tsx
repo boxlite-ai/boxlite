@@ -11,7 +11,6 @@ import {
   OrganizationRolePermissionsEnum,
   CreateRegion,
   CreateRegionResponse,
-  SnapshotManagerCredentials,
   UpdateRegion,
 } from '@boxlite-ai/api-client'
 import { RegionTable } from '@/components/RegionTable'
@@ -63,13 +62,9 @@ const Regions: React.FC = () => {
   // Regenerate API Key state
   const [showRegenerateProxyApiKeyDialog, setShowRegenerateProxyApiKeyDialog] = useState(false)
   const [showRegenerateSshGatewayApiKeyDialog, setShowRegenerateSshGatewayApiKeyDialog] = useState(false)
-  const [showRegenerateSnapshotManagerCredsDialog, setShowRegenerateSnapshotManagerCredsDialog] = useState(false)
   const [regeneratedApiKey, setRegeneratedApiKey] = useState<string | null>(null)
-  const [regeneratedSnapshotManagerCreds, setRegeneratedSnapshotManagerCreds] =
-    useState<SnapshotManagerCredentials | null>(null)
   const [regionForRegenerate, setRegionForRegenerate] = useState<Region | null>(null)
   const [isApiKeyRevealed, setIsApiKeyRevealed] = useState(false)
-  const [isSnapshotManagerPasswordRevealed, setIsSnapshotManagerPasswordRevealed] = useState(false)
 
   // Region Details Sheet state
   const [selectedRegion, setSelectedRegion] = useState<Region | null>(null)
@@ -135,12 +130,6 @@ const Regions: React.FC = () => {
     setRegionForRegenerate(region)
     setRegeneratedApiKey(null)
     setShowRegenerateSshGatewayApiKeyDialog(true)
-  }
-
-  const handleRegenerateSnapshotManagerCredentials = async (region: Region) => {
-    setRegionForRegenerate(region)
-    setRegeneratedSnapshotManagerCreds(null)
-    setShowRegenerateSnapshotManagerCredsDialog(true)
   }
 
   const handleOpenRegionDetails = (region: Region) => {
@@ -216,30 +205,6 @@ const Regions: React.FC = () => {
     }
   }
 
-  const confirmRegenerateSnapshotManagerCredentials = async () => {
-    if (!regionForRegenerate || !selectedOrganization) {
-      return
-    }
-
-    setRegionIsLoading((prev) => ({ ...prev, [regionForRegenerate.id]: true }))
-
-    try {
-      const response = await organizationsApi.regenerateSnapshotManagerCredentials(
-        regionForRegenerate.id,
-        selectedOrganization.id,
-      )
-      setRegeneratedSnapshotManagerCreds(response.data)
-      setShowRegenerateSnapshotManagerCredsDialog(true)
-      toast.success('Snapshot Manager credentials regenerated successfully')
-    } catch (error) {
-      handleApiError(error, 'Failed to regenerate Snapshot Manager credentials')
-      setShowRegenerateSnapshotManagerCredsDialog(false)
-      setRegionForRegenerate(null)
-    } finally {
-      setRegionIsLoading((prev) => ({ ...prev, [regionForRegenerate.id]: false }))
-    }
-  }
-
   const copyToClipboard = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text)
@@ -296,7 +261,6 @@ const Regions: React.FC = () => {
         onUpdate={handleOpenUpdateDialog}
         onRegenerateProxyApiKey={handleRegenerateProxyApiKey}
         onRegenerateSshGatewayApiKey={handleRegenerateSshGatewayApiKey}
-        onRegenerateSnapshotManagerCredentials={handleRegenerateSnapshotManagerCredentials}
       />
 
       {regionToUpdate && (
@@ -481,96 +445,6 @@ const Regions: React.FC = () => {
                   setRegionForRegenerate(null)
                   setRegeneratedApiKey(null)
                   setIsApiKeyRevealed(false)
-                }}
-                className="bg-secondary text-secondary-foreground hover:bg-secondary/80"
-              >
-                Close
-              </AlertDialogAction>
-            )}
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Regenerate Snapshot Manager Credentials Dialog */}
-      <AlertDialog
-        open={showRegenerateSnapshotManagerCredsDialog}
-        onOpenChange={(isOpen) => {
-          setShowRegenerateSnapshotManagerCredsDialog(isOpen)
-          if (!isOpen) {
-            setRegionForRegenerate(null)
-            setRegeneratedSnapshotManagerCreds(null)
-            setIsSnapshotManagerPasswordRevealed(false)
-          }
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {regeneratedSnapshotManagerCreds
-                ? 'Snapshot Manager Credentials Regenerated'
-                : 'Regenerate Snapshot Manager Credentials'}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {regeneratedSnapshotManagerCreds ? (
-                'The new credentials have been generated. Copy them now as they will not be shown again.'
-              ) : (
-                <>
-                  <strong>Warning:</strong> This will immediately invalidate the current Snapshot Manager credentials.
-                  The Snapshot Manager will need to be reconfigured with the new credentials.
-                </>
-              )}
-              {regeneratedSnapshotManagerCreds && (
-                <div className="space-y-4 mt-4">
-                  <div>
-                    <span className="text-xs text-muted-foreground">Username</span>
-                    <CopyableValue
-                      displayValue={regeneratedSnapshotManagerCreds.username}
-                      copyValue={regeneratedSnapshotManagerCreds.username}
-                      copyLabel="snapshot manager username"
-                      onCopy={copyToClipboard}
-                    />
-                  </div>
-                  <div>
-                    <span className="text-xs text-muted-foreground">Password</span>
-                    <CopyableValue
-                      displayValue={
-                        isSnapshotManagerPasswordRevealed
-                          ? regeneratedSnapshotManagerCreds.password
-                          : getMaskedToken(regeneratedSnapshotManagerCreds.password)
-                      }
-                      copyValue={regeneratedSnapshotManagerCreds.password}
-                      copyLabel="snapshot manager password"
-                      onCopy={copyToClipboard}
-                      valueProps={{
-                        onMouseEnter: () => setIsSnapshotManagerPasswordRevealed(true),
-                        onMouseLeave: () => setIsSnapshotManagerPasswordRevealed(false),
-                      }}
-                    />
-                  </div>
-                </div>
-              )}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-
-          <AlertDialogFooter>
-            {!regeneratedSnapshotManagerCreds ? (
-              <>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction
-                  onClick={confirmRegenerateSnapshotManagerCredentials}
-                  disabled={!regionForRegenerate || regionIsLoading[regionForRegenerate?.id || '']}
-                  className="bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                >
-                  {regionForRegenerate && regionIsLoading[regionForRegenerate.id] ? 'Regenerating...' : 'Regenerate'}
-                </AlertDialogAction>
-              </>
-            ) : (
-              <AlertDialogAction
-                onClick={() => {
-                  setShowRegenerateSnapshotManagerCredsDialog(false)
-                  setRegionForRegenerate(null)
-                  setRegeneratedSnapshotManagerCreds(null)
-                  setIsSnapshotManagerPasswordRevealed(false)
                 }}
                 className="bg-secondary text-secondary-foreground hover:bg-secondary/80"
               >

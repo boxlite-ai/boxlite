@@ -5,17 +5,10 @@
  */
 
 import { Injectable, Logger } from '@nestjs/common'
-import { InjectRepository } from '@nestjs/typeorm'
-import { Repository } from 'typeorm'
-import { Snapshot } from '../entities/snapshot.entity'
-import { SnapshotRunner } from '../entities/snapshot-runner.entity'
 import { BoxState } from '../enums/box-state.enum'
-import { SnapshotState } from '../enums/snapshot-state.enum'
-import { SnapshotRunnerState } from '../enums/snapshot-runner-state.enum'
 import { JobStatus } from '../enums/job-status.enum'
 import { JobType } from '../enums/job-type.enum'
 import { Job } from '../entities/job.entity'
-import { BackupState } from '../enums/backup-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { sanitizeBoxError } from '../utils/sanitize-error.util'
 import { OrganizationUsageService } from '../../organization/services/organization-usage.service'
@@ -35,10 +28,6 @@ export class JobStateHandlerService {
 
   constructor(
     private readonly boxRepository: BoxRepository,
-    @InjectRepository(Snapshot)
-    private readonly snapshotRepository: Repository<Snapshot>,
-    @InjectRepository(SnapshotRunner)
-    private readonly snapshotRunnerRepository: Repository<SnapshotRunner>,
     private readonly organizationUsageService: OrganizationUsageService,
     private readonly redisLockProvider: RedisLockProvider,
   ) {}
@@ -57,34 +46,24 @@ export class JobStateHandlerService {
     }
 
     switch (job.type) {
-      case JobType.CREATE_BOX:
+      case JobType.CREATE_SANDBOX:
         await this.handleCreateBoxJobCompletion(job)
         break
-      case JobType.START_BOX:
+      case JobType.START_SANDBOX:
         await this.handleStartBoxJobCompletion(job)
         break
-      case JobType.STOP_BOX:
+      case JobType.STOP_SANDBOX:
         await this.handleStopBoxJobCompletion(job)
         break
-      case JobType.DESTROY_BOX:
+      case JobType.DESTROY_SANDBOX:
         await this.handleDestroyBoxJobCompletion(job)
         break
-      case JobType.RESIZE_BOX:
+      case JobType.RESIZE_SANDBOX:
         await this.handleResizeBoxJobCompletion(job)
         break
-      case JobType.PULL_SNAPSHOT:
-        await this.handlePullSnapshotJobCompletion(job)
-        break
-      case JobType.BUILD_SNAPSHOT:
-        await this.handleBuildSnapshotJobCompletion(job)
-        break
-      case JobType.REMOVE_SNAPSHOT:
-        await this.handleRemoveSnapshotJobCompletion(job)
-        break
-      case JobType.CREATE_BACKUP:
-        await this.handleCreateBackupJobCompletion(job)
-        break
-      case JobType.RECOVER_BOX:
+      // TODO(image-rewrite): PULL_ARTIFACT / REMOVE_ARTIFACT job handling removed with
+      // runner_artifact_cache + box_template; rebuild artifact lifecycle handling here.
+      case JobType.RECOVER_SANDBOX:
         await this.handleRecoverBoxJobCompletion(job)
         break
       default:
@@ -92,7 +71,7 @@ export class JobStateHandlerService {
     }
 
     switch (job.resourceType) {
-      case ResourceType.BOX: {
+      case ResourceType.SANDBOX: {
         const lockKey = getStateChangeLockKey(job.resourceId)
         this.redisLockProvider
           .unlock(lockKey)
@@ -111,13 +90,13 @@ export class JobStateHandlerService {
     try {
       const box = await this.boxRepository.findOne({ where: { id: boxId } })
       if (!box) {
-        this.logger.warn(`Box ${boxId} not found for CREATE_BOX job ${job.id}`)
+        this.logger.warn(`Box ${boxId} not found for CREATE_SANDBOX job ${job.id}`)
         return
       }
 
       if (box.desiredState !== BoxDesiredState.STARTED) {
         this.logger.error(
-          `Box ${boxId} is not in desired state STARTED for CREATE_BOX job ${job.id}. Desired state: ${box.desiredState}`,
+          `Box ${boxId} is not in desired state STARTED for CREATE_SANDBOX job ${job.id}. Desired state: ${box.desiredState}`,
         )
         return
       }
@@ -125,7 +104,7 @@ export class JobStateHandlerService {
       const updateData: Partial<Box> = {}
 
       if (job.status === JobStatus.COMPLETED) {
-        this.logger.debug(`CREATE_BOX job ${job.id} completed successfully, marking box ${boxId} as STARTED`)
+        this.logger.debug(`CREATE_SANDBOX job ${job.id} completed successfully, marking box ${boxId} as STARTED`)
         updateData.state = BoxState.STARTED
         updateData.errorReason = null
         const metadata = job.getResultMetadata()
@@ -133,16 +112,16 @@ export class JobStateHandlerService {
           updateData.daemonVersion = metadata.daemonVersion
         }
       } else if (job.status === JobStatus.FAILED) {
-        this.logger.error(`CREATE_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
+        this.logger.error(`CREATE_SANDBOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
         updateData.state = BoxState.ERROR
         const { recoverable, errorReason } = sanitizeBoxError(job.errorMessage)
-        updateData.errorReason = errorReason || 'Failed to create box'
+        updateData.errorReason = errorReason || 'Failed to create sandbox'
         updateData.recoverable = recoverable
       }
 
       await this.boxRepository.update(boxId, { updateData, entity: box })
     } catch (error) {
-      this.logger.error(`Error handling CREATE_BOX job completion for box ${boxId}:`, error)
+      this.logger.error(`Error handling CREATE_SANDBOX job completion for box ${boxId}:`, error)
     }
   }
 
@@ -153,13 +132,13 @@ export class JobStateHandlerService {
     try {
       const box = await this.boxRepository.findOne({ where: { id: boxId } })
       if (!box) {
-        this.logger.warn(`Box ${boxId} not found for START_BOX job ${job.id}`)
+        this.logger.warn(`Box ${boxId} not found for START_SANDBOX job ${job.id}`)
         return
       }
 
       if (box.desiredState !== BoxDesiredState.STARTED) {
         this.logger.error(
-          `Box ${boxId} is not in desired state STARTED for START_BOX job ${job.id}. Desired state: ${box.desiredState}`,
+          `Box ${boxId} is not in desired state STARTED for START_SANDBOX job ${job.id}. Desired state: ${box.desiredState}`,
         )
         return
       }
@@ -167,7 +146,7 @@ export class JobStateHandlerService {
       const updateData: Partial<Box> = {}
 
       if (job.status === JobStatus.COMPLETED) {
-        this.logger.debug(`START_BOX job ${job.id} completed successfully, marking box ${boxId} as STARTED`)
+        this.logger.debug(`START_SANDBOX job ${job.id} completed successfully, marking box ${boxId} as STARTED`)
         updateData.state = BoxState.STARTED
         updateData.errorReason = null
         const metadata = job.getResultMetadata()
@@ -175,16 +154,16 @@ export class JobStateHandlerService {
           updateData.daemonVersion = metadata.daemonVersion
         }
       } else if (job.status === JobStatus.FAILED) {
-        this.logger.error(`START_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
+        this.logger.error(`START_SANDBOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
         updateData.state = BoxState.ERROR
         const { recoverable, errorReason } = sanitizeBoxError(job.errorMessage)
-        updateData.errorReason = errorReason || 'Failed to start box'
+        updateData.errorReason = errorReason || 'Failed to start sandbox'
         updateData.recoverable = recoverable
       }
 
       await this.boxRepository.update(boxId, { updateData, entity: box })
     } catch (error) {
-      this.logger.error(`Error handling START_BOX job completion for box ${boxId}:`, error)
+      this.logger.error(`Error handling START_SANDBOX job completion for box ${boxId}:`, error)
     }
   }
 
@@ -195,13 +174,13 @@ export class JobStateHandlerService {
     try {
       const box = await this.boxRepository.findOne({ where: { id: boxId } })
       if (!box) {
-        this.logger.warn(`Box ${boxId} not found for STOP_BOX job ${job.id}`)
+        this.logger.warn(`Box ${boxId} not found for STOP_SANDBOX job ${job.id}`)
         return
       }
 
       if (box.desiredState !== BoxDesiredState.STOPPED) {
         this.logger.error(
-          `Box ${boxId} is not in desired state STOPPED for STOP_BOX job ${job.id}. Desired state: ${box.desiredState}`,
+          `Box ${boxId} is not in desired state STOPPED for STOP_SANDBOX job ${job.id}. Desired state: ${box.desiredState}`,
         )
         return
       }
@@ -209,21 +188,20 @@ export class JobStateHandlerService {
       const updateData: Partial<Box> = {}
 
       if (job.status === JobStatus.COMPLETED) {
-        this.logger.debug(`STOP_BOX job ${job.id} completed successfully, marking box ${boxId} as STOPPED`)
+        this.logger.debug(`STOP_SANDBOX job ${job.id} completed successfully, marking box ${boxId} as STOPPED`)
         updateData.state = BoxState.STOPPED
         updateData.errorReason = null
-        Object.assign(updateData, Box.getBackupStateUpdate(box, BackupState.NONE))
       } else if (job.status === JobStatus.FAILED) {
-        this.logger.error(`STOP_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
+        this.logger.error(`STOP_SANDBOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
         updateData.state = BoxState.ERROR
         const { recoverable, errorReason } = sanitizeBoxError(job.errorMessage)
-        updateData.errorReason = errorReason || 'Failed to stop box'
+        updateData.errorReason = errorReason || 'Failed to stop sandbox'
         updateData.recoverable = recoverable
       }
 
       await this.boxRepository.update(boxId, { updateData, entity: box })
     } catch (error) {
-      this.logger.error(`Error handling STOP_BOX job completion for box ${boxId}:`, error)
+      this.logger.error(`Error handling STOP_SANDBOX job completion for box ${boxId}:`, error)
     }
   }
 
@@ -234,223 +212,30 @@ export class JobStateHandlerService {
     try {
       const box = await this.boxRepository.findOne({ where: { id: boxId } })
       if (!box) {
-        this.logger.warn(`Box ${boxId} not found for DESTROY_BOX job ${job.id}`)
+        this.logger.warn(`Box ${boxId} not found for DESTROY_SANDBOX job ${job.id}`)
         return
       }
       const updateData: Partial<Box> = {}
 
       if (box.desiredState === BoxDesiredState.DESTROYED) {
         if (job.status === JobStatus.COMPLETED) {
-          this.logger.debug(`DESTROY_BOX job ${job.id} completed successfully, marking box ${boxId} as DESTROYED`)
+          this.logger.debug(`DESTROY_SANDBOX job ${job.id} completed successfully, marking box ${boxId} as DESTROYED`)
           updateData.state = BoxState.DESTROYED
           updateData.errorReason = null
         } else if (job.status === JobStatus.FAILED) {
-          this.logger.error(`DESTROY_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
+          this.logger.error(`DESTROY_SANDBOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
           updateData.state = BoxState.ERROR
           const { recoverable, errorReason } = sanitizeBoxError(job.errorMessage)
-          updateData.errorReason = errorReason || 'Failed to destroy box'
+          updateData.errorReason = errorReason || 'Failed to destroy sandbox'
           updateData.recoverable = recoverable
         }
-      } else if (box.desiredState === BoxDesiredState.ARCHIVED && box.backupState === BackupState.COMPLETED) {
-        if (job.status === JobStatus.COMPLETED) {
-          this.logger.debug(`DESTROY_BOX job ${job.id} completed during archiving, marking box ${boxId} as ARCHIVED`)
-        } else if (job.status === JobStatus.FAILED) {
-          this.logger.warn(
-            `DESTROY_BOX job ${job.id} failed during archiving for box ${boxId}: ${job.errorMessage}. Marking as ARCHIVED since backup is complete.`,
-          )
-        }
-        updateData.state = BoxState.ARCHIVED
-        updateData.errorReason = null
       } else {
         return
       }
 
       await this.boxRepository.update(boxId, { updateData, entity: box })
     } catch (error) {
-      this.logger.error(`Error handling DESTROY_BOX job completion for box ${boxId}:`, error)
-    }
-  }
-
-  private async handlePullSnapshotJobCompletion(job: Job): Promise<void> {
-    const snapshotRef = job.resourceId
-    const runnerId = job.runnerId
-    if (!snapshotRef || !runnerId) return
-
-    try {
-      const snapshotRunner = await this.snapshotRunnerRepository.findOne({
-        where: { snapshotRef, runnerId },
-      })
-
-      if (!snapshotRunner) {
-        this.logger.warn(`SnapshotRunner not found for snapshot ${snapshotRef} on runner ${runnerId}`)
-        return
-      }
-
-      if (job.status === JobStatus.COMPLETED) {
-        this.logger.debug(
-          `PULL_SNAPSHOT job ${job.id} completed successfully, marking SnapshotRunner ${snapshotRunner.id} as READY`,
-        )
-        snapshotRunner.state = SnapshotRunnerState.READY
-        snapshotRunner.errorReason = null
-
-        // Check if this is the initial runner for a snapshot and update the snapshot state
-        const snapshot = await this.snapshotRepository.findOne({
-          where: { initialRunnerId: runnerId, ref: snapshotRef },
-        })
-        if (snapshot && (snapshot.state === SnapshotState.PULLING || snapshot.state === SnapshotState.BUILDING)) {
-          this.logger.debug(`Marking snapshot ${snapshot.id} as ACTIVE after initial pull completed`)
-          snapshot.state = SnapshotState.ACTIVE
-          snapshot.errorReason = null
-          snapshot.lastUsedAt = new Date()
-          await this.snapshotRepository.save(snapshot)
-        }
-      } else if (job.status === JobStatus.FAILED) {
-        this.logger.error(`PULL_SNAPSHOT job ${job.id} failed for snapshot ${snapshotRef}: ${job.errorMessage}`)
-        snapshotRunner.state = SnapshotRunnerState.ERROR
-        snapshotRunner.errorReason = job.errorMessage || 'Failed to pull snapshot'
-
-        // Check if this is the initial runner for a snapshot and update the snapshot state
-        const snapshot = await this.snapshotRepository.findOne({
-          where: { initialRunnerId: runnerId, ref: snapshotRef },
-        })
-        if (snapshot && snapshot.state === SnapshotState.PULLING) {
-          this.logger.error(`Marking snapshot ${snapshot.id} as ERROR after initial pull failed`)
-          snapshot.state = SnapshotState.ERROR
-          snapshot.errorReason = job.errorMessage || 'Failed to pull snapshot on initial runner'
-          await this.snapshotRepository.save(snapshot)
-        }
-      }
-
-      await this.snapshotRunnerRepository.save(snapshotRunner)
-    } catch (error) {
-      this.logger.error(`Error handling PULL_SNAPSHOT job completion for snapshot ${snapshotRef}:`, error)
-    }
-  }
-
-  private async handleBuildSnapshotJobCompletion(job: Job): Promise<void> {
-    const snapshotRef = job.resourceId
-    const runnerId = job.runnerId
-    if (!snapshotRef || !runnerId) return
-
-    try {
-      // For BUILD_SNAPSHOT, find snapshot by buildInfo.snapshotRef
-      const snapshot = await this.snapshotRepository
-        .createQueryBuilder('snapshot')
-        .leftJoinAndSelect('snapshot.buildInfo', 'buildInfo')
-        .where('snapshot.initialRunnerId = :runnerId', { runnerId })
-        .andWhere('buildInfo.snapshotRef = :snapshotRef', { snapshotRef })
-        .getOne()
-
-      // Update SnapshotRunner state
-      const snapshotRunner = await this.snapshotRunnerRepository.findOne({
-        where: { snapshotRef, runnerId },
-      })
-
-      if (job.status === JobStatus.COMPLETED) {
-        this.logger.debug(`BUILD_SNAPSHOT job ${job.id} completed successfully for snapshot ref ${snapshotRef}`)
-
-        if (snapshot?.state === SnapshotState.BUILDING) {
-          snapshot.state = SnapshotState.ACTIVE
-          snapshot.errorReason = null
-          snapshot.lastUsedAt = new Date()
-          await this.snapshotRepository.save(snapshot)
-          this.logger.debug(`Marked snapshot ${snapshot.id} as ACTIVE after build completed`)
-        }
-
-        if (snapshotRunner) {
-          snapshotRunner.state = SnapshotRunnerState.READY
-          snapshotRunner.errorReason = null
-          await this.snapshotRunnerRepository.save(snapshotRunner)
-        }
-      } else if (job.status === JobStatus.FAILED) {
-        this.logger.error(`BUILD_SNAPSHOT job ${job.id} failed for snapshot ref ${snapshotRef}: ${job.errorMessage}`)
-
-        if (snapshot?.state === SnapshotState.BUILDING) {
-          snapshot.state = SnapshotState.ERROR
-          snapshot.errorReason = job.errorMessage || 'Failed to build snapshot'
-          await this.snapshotRepository.save(snapshot)
-        }
-
-        if (snapshotRunner) {
-          snapshotRunner.state = SnapshotRunnerState.ERROR
-          snapshotRunner.errorReason = job.errorMessage || 'Failed to build snapshot'
-          await this.snapshotRunnerRepository.save(snapshotRunner)
-        }
-      }
-    } catch (error) {
-      this.logger.error(`Error handling BUILD_SNAPSHOT job completion for snapshot ref ${snapshotRef}:`, error)
-    }
-  }
-
-  private async handleRemoveSnapshotJobCompletion(job: Job): Promise<void> {
-    const snapshotRef = job.resourceId
-    const runnerId = job.runnerId
-    if (!snapshotRef || !runnerId) return
-
-    try {
-      if (job.status === JobStatus.COMPLETED) {
-        this.logger.debug(
-          `REMOVE_SNAPSHOT job ${job.id} completed successfully for snapshot ${snapshotRef} on runner ${runnerId}`,
-        )
-        const affected = await this.snapshotRunnerRepository.delete({ snapshotRef, runnerId })
-        if (affected.affected && affected.affected > 0) {
-          this.logger.debug(
-            `Removed ${affected.affected} snapshot runners for snapshot ${snapshotRef} on runner ${runnerId}`,
-          )
-        }
-      } else if (job.status === JobStatus.FAILED) {
-        this.logger.error(
-          `REMOVE_SNAPSHOT job ${job.id} failed for snapshot ${snapshotRef} on runner ${runnerId}: ${job.errorMessage}`,
-        )
-      }
-    } catch (error) {
-      this.logger.error(`Error handling REMOVE_SNAPSHOT job completion for snapshot ${snapshotRef}:`, error)
-    }
-  }
-
-  private async handleCreateBackupJobCompletion(job: Job): Promise<void> {
-    const boxId = job.resourceId
-    if (!boxId) return
-
-    try {
-      const box = await this.boxRepository.findOne({ where: { id: boxId } })
-      if (!box) {
-        this.logger.warn(`Box ${boxId} not found for CREATE_BACKUP job ${job.id}`)
-        return
-      }
-
-      // Parse the job payload to get the snapshot this job was for.
-      // Old v2 runners may not include snapshot in the payload, so we only
-      // perform stale-snapshot checks when the field is present.
-      const jobSnapshot = job.getPayload<{ snapshot?: string }>()?.snapshot
-
-      // Ignore stale backup results if the job's snapshot doesn't match the current DB snapshot.
-      // Old v2 runners may not include snapshot in the payload — skip this check for them.
-      if (jobSnapshot && jobSnapshot !== box.backupSnapshot) {
-        this.logger.warn(
-          `Ignoring stale backup ${job.status} for box ${boxId}: job snapshot ${jobSnapshot} does not match DB snapshot ${box.backupSnapshot}`,
-        )
-        return
-      }
-
-      const updateData: Partial<Box> = {}
-
-      if (job.status === JobStatus.COMPLETED) {
-        this.logger.debug(
-          `CREATE_BACKUP job ${job.id} completed successfully, marking box ${boxId} as BACKUP_COMPLETED`,
-        )
-        Object.assign(updateData, Box.getBackupStateUpdate(box, BackupState.COMPLETED))
-      } else if (job.status === JobStatus.FAILED) {
-        this.logger.error(`CREATE_BACKUP job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
-        Object.assign(
-          updateData,
-          Box.getBackupStateUpdate(box, BackupState.ERROR, undefined, undefined, job.errorMessage),
-        )
-      }
-
-      await this.boxRepository.update(boxId, { updateData, entity: box })
-    } catch (error) {
-      this.logger.error(`Error handling CREATE_BACKUP job completion for box ${boxId}:`, error)
+      this.logger.error(`Error handling DESTROY_SANDBOX job completion for box ${boxId}:`, error)
     }
   }
 
@@ -461,13 +246,13 @@ export class JobStateHandlerService {
     try {
       const box = await this.boxRepository.findOne({ where: { id: boxId } })
       if (!box) {
-        this.logger.warn(`Box ${boxId} not found for RECOVER_BOX job ${job.id}`)
+        this.logger.warn(`Box ${boxId} not found for RECOVER_SANDBOX job ${job.id}`)
         return
       }
 
       if (box.desiredState !== BoxDesiredState.STARTED) {
         this.logger.error(
-          `Box ${boxId} is not in desired state STARTED for RECOVER_BOX job ${job.id}. Desired state: ${box.desiredState}`,
+          `Box ${boxId} is not in desired state STARTED for RECOVER_SANDBOX job ${job.id}. Desired state: ${box.desiredState}`,
         )
         return
       }
@@ -475,18 +260,18 @@ export class JobStateHandlerService {
       const updateData: Partial<Box> = {}
 
       if (job.status === JobStatus.COMPLETED) {
-        this.logger.debug(`RECOVER_BOX job ${job.id} completed successfully, marking box ${boxId} as STARTED`)
+        this.logger.debug(`RECOVER_SANDBOX job ${job.id} completed successfully, marking box ${boxId} as STARTED`)
         updateData.state = BoxState.STARTED
         updateData.errorReason = null
       } else if (job.status === JobStatus.FAILED) {
-        this.logger.error(`RECOVER_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
+        this.logger.error(`RECOVER_SANDBOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
         updateData.state = BoxState.ERROR
-        updateData.errorReason = job.errorMessage || 'Failed to recover box'
+        updateData.errorReason = job.errorMessage || 'Failed to recover sandbox'
       }
 
       await this.boxRepository.update(boxId, { updateData, entity: box })
     } catch (error) {
-      this.logger.error(`Error handling RECOVER_BOX job completion for box ${boxId}:`, error)
+      this.logger.error(`Error handling RECOVER_SANDBOX job completion for box ${boxId}:`, error)
     }
   }
 
@@ -497,12 +282,12 @@ export class JobStateHandlerService {
     try {
       const box = await this.boxRepository.findOne({ where: { id: boxId } })
       if (!box) {
-        this.logger.warn(`Box ${boxId} not found for RESIZE_BOX job ${job.id}`)
+        this.logger.warn(`Box ${boxId} not found for RESIZE_SANDBOX job ${job.id}`)
         return
       }
 
       if (box.state !== BoxState.RESIZING) {
-        this.logger.warn(`Box ${boxId} is not in RESIZING state for RESIZE_BOX job ${job.id}. State: ${box.state}`)
+        this.logger.warn(`Box ${boxId} is not in RESIZING state for RESIZE_SANDBOX job ${job.id}. State: ${box.state}`)
         return
       }
 
@@ -515,7 +300,9 @@ export class JobStateHandlerService {
             : null
 
       if (!previousState) {
-        this.logger.error(`Box ${boxId} has unexpected desiredState ${box.desiredState} for RESIZE_BOX job ${job.id}`)
+        this.logger.error(
+          `Box ${boxId} has unexpected desiredState ${box.desiredState} for RESIZE_SANDBOX job ${job.id}`,
+        )
         return
       }
 
@@ -531,7 +318,7 @@ export class JobStateHandlerService {
       const updateData: Partial<Box> = {}
 
       if (job.status === JobStatus.COMPLETED) {
-        this.logger.debug(`RESIZE_BOX job ${job.id} completed successfully for box ${boxId}`)
+        this.logger.debug(`RESIZE_SANDBOX job ${job.id} completed successfully for box ${boxId}`)
 
         // Update box resources
         updateData.cpu = payload.cpu ?? box.cpu
@@ -549,7 +336,7 @@ export class JobStateHandlerService {
         )
         return
       } else if (job.status === JobStatus.FAILED) {
-        this.logger.error(`RESIZE_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
+        this.logger.error(`RESIZE_SANDBOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
 
         // Rollback pending usage (all deltas were tracked, including negative)
         await this.organizationUsageService.decrementPendingBoxUsage(
@@ -565,7 +352,7 @@ export class JobStateHandlerService {
 
       await this.boxRepository.update(boxId, { updateData, entity: box })
     } catch (error) {
-      this.logger.error(`Error handling RESIZE_BOX job completion for box ${boxId}:`, error)
+      this.logger.error(`Error handling RESIZE_SANDBOX job completion for box ${boxId}:`, error)
     }
   }
 }

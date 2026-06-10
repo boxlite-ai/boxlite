@@ -29,6 +29,7 @@ export function useBoxWsSync({ boxId, refetchOnCreate = false }: UseBoxWsSyncOpt
     const updateStateInListCache = (targetId: string, state: BoxState) => {
       queryClient.setQueriesData<PaginatedBoxes>({ queryKey: getBoxesQueryKey(orgId) }, (oldData) => {
         if (!oldData) return oldData
+        if (!Array.isArray(oldData.items)) return oldData
         return {
           ...oldData,
           items: oldData.items.map((s) => (s.id === targetId ? { ...s, state } : s)),
@@ -43,10 +44,16 @@ export function useBoxWsSync({ boxId, refetchOnCreate = false }: UseBoxWsSyncOpt
       })
     }
 
-    const optimisticUpdate = (targetId: string, state: BoxState) => {
-      updateStateInListCache(targetId, state)
+    const matchesActiveBox = (box: Box) => !boxId || box.id === boxId || box.boxId === boxId
+
+    const optimisticUpdate = (box: Box, state: BoxState) => {
+      updateStateInListCache(box.id, state)
       if (boxId) {
-        updateStateInDetailCache(targetId, state)
+        updateStateInDetailCache(boxId, state)
+        updateStateInDetailCache(box.id, state)
+        if (box.boxId) {
+          updateStateInDetailCache(box.boxId, state)
+        }
       }
     }
 
@@ -73,7 +80,7 @@ export function useBoxWsSync({ boxId, refetchOnCreate = false }: UseBoxWsSyncOpt
     }
 
     const handleStateUpdated = (data: { box: Box; oldState: BoxState; newState: BoxState }) => {
-      if (boxId && data.box.id !== boxId) return
+      if (!matchesActiveBox(data.box)) return
 
       // warm pool boxes — treat as created
       if (data.oldState === data.newState && data.newState === BoxState.STARTED) {
@@ -91,7 +98,7 @@ export function useBoxWsSync({ boxId, refetchOnCreate = false }: UseBoxWsSyncOpt
         updatedState = BoxState.DESTROYED
       }
 
-      optimisticUpdate(data.box.id, updatedState)
+      optimisticUpdate(data.box, updatedState)
       invalidate()
     }
 
@@ -100,12 +107,12 @@ export function useBoxWsSync({ boxId, refetchOnCreate = false }: UseBoxWsSyncOpt
       oldDesiredState: BoxDesiredState
       newDesiredState: BoxDesiredState
     }) => {
-      if (boxId && data.box.id !== boxId) return
+      if (!matchesActiveBox(data.box)) return
 
       if (data.newDesiredState !== BoxDesiredState.DESTROYED) return
       if (data.box.state !== BoxState.ERROR && data.box.state !== BoxState.BUILD_FAILED) return
 
-      optimisticUpdate(data.box.id, BoxState.DESTROYED)
+      optimisticUpdate(data.box, BoxState.DESTROYED)
       invalidate()
     }
 

@@ -13,31 +13,23 @@ import {
   RunnerAdapter,
   RunnerInfo,
   RunnerBoxInfo,
-  RunnerSnapshotInfo,
   StartBoxResponse,
-  SnapshotDigestResponse,
+  ArtifactDigestResponse,
 } from './runnerAdapter'
-import { SnapshotStateError } from '../errors/snapshot-state-error'
 import { Runner } from '../entities/runner.entity'
 import {
   Configuration,
   BoxApi,
   EnumsBoxState,
-  SnapshotsApi,
-  EnumsBackupState,
+  ArtifactsApi,
   DefaultApi,
   CreateBoxDTO,
-  BuildSnapshotRequestDTO,
-  CreateBackupDTO,
-  PullSnapshotRequestDTO,
   UpdateNetworkSettingsDTO,
+  InspectArtifactInRegistryRequest,
   RecoverBoxDTO,
 } from '@boxlite-ai/runner-api-client'
 import { Box } from '../entities/box.entity'
-import { BuildInfo } from '../entities/build-info.entity'
-import { DockerRegistry } from '../../docker-registry/entities/docker-registry.entity'
 import { BoxState } from '../enums/box-state.enum'
-import { BackupState } from '../enums/backup-state.enum'
 import { RunnerApiError } from '../errors/runner-api-error'
 
 const isDebugEnabled = process.env.DEBUG === 'true'
@@ -49,7 +41,7 @@ const RETRYABLE_NETWORK_ERROR_CODES = ['ECONNRESET', 'ETIMEDOUT']
 export class RunnerAdapterV0 implements RunnerAdapter {
   private readonly logger = new Logger(RunnerAdapterV0.name)
   private boxApiClient: BoxApi
-  private snapshotApiClient: SnapshotsApi
+  private artifactApiClient: ArtifactsApi
   private runnerApiClient: DefaultApi
 
   private convertBoxState(state: EnumsBoxState): BoxState {
@@ -72,25 +64,10 @@ export class RunnerAdapterV0 implements RunnerAdapter {
         return BoxState.STOPPING
       case EnumsBoxState.BoxStateError:
         return BoxState.ERROR
-      case EnumsBoxState.BoxStatePullingSnapshot:
-        return BoxState.PULLING_SNAPSHOT
+      case EnumsBoxState.BoxStatePullingArtifact:
+        return BoxState.PULLING_ARTIFACT
       default:
         return BoxState.UNKNOWN
-    }
-  }
-
-  private convertBackupState(state: EnumsBackupState): BackupState {
-    switch (state) {
-      case EnumsBackupState.BackupStatePending:
-        return BackupState.PENDING
-      case EnumsBackupState.BackupStateInProgress:
-        return BackupState.IN_PROGRESS
-      case EnumsBackupState.BackupStateCompleted:
-        return BackupState.COMPLETED
-      case EnumsBackupState.BackupStateFailed:
-        return BackupState.ERROR
-      default:
-        return BackupState.NONE
     }
   }
 
@@ -152,7 +129,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     }
 
     this.boxApiClient = new BoxApi(new Configuration(), '', axiosInstance)
-    this.snapshotApiClient = new SnapshotsApi(new Configuration(), '', axiosInstance)
+    this.artifactApiClient = new ArtifactsApi(new Configuration(), '', axiosInstance)
     this.runnerApiClient = new DefaultApi(new Configuration(), '', axiosInstance)
   }
 
@@ -176,17 +153,13 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     const boxInfo = await this.boxApiClient.info(boxId)
     return {
       state: this.convertBoxState(boxInfo.data.state),
-      backupState: this.convertBackupState(boxInfo.data.backupState),
-      backupSnapshot: boxInfo.data.backupSnapshot,
-      backupErrorReason: boxInfo.data.backupError,
       daemonVersion: boxInfo.data.daemonVersion,
     }
   }
 
   async createBox(
     box: Box,
-    snapshotRef: string,
-    registry?: DockerRegistry,
+    artifactRef: string,
     entrypoint?: string[],
     metadata?: { [key: string]: string },
     otelEndpoint?: string,
@@ -194,22 +167,15 @@ export class RunnerAdapterV0 implements RunnerAdapter {
   ): Promise<StartBoxResponse | undefined> {
     const createBoxDto: CreateBoxDTO = {
       id: box.id,
+      boxId: box.boxId,
       userId: box.organizationId,
-      snapshot: snapshotRef,
+      artifactRef,
       osUser: box.osUser,
       cpuQuota: box.cpu,
       gpuQuota: box.gpu,
       memoryQuota: box.mem,
       storageQuota: box.disk,
       env: box.env,
-      registry: registry
-        ? {
-            project: registry.project,
-            url: registry.url.replace(/^(https?:\/\/)/, ''),
-            username: registry.username,
-            password: registry.password,
-          }
-        : undefined,
       entrypoint: entrypoint,
       volumes: box.volumes?.map((volume) => ({
         volumeId: volume.volumeId,
@@ -218,7 +184,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       })),
       networkBlockAll: box.networkBlockAll,
       networkAllowList: box.networkAllowList,
-      metadata: metadata,
+      metadata: { ...(metadata ?? {}), boxId: box.boxId },
       authToken: box.authToken,
       otelEndpoint,
       skipStart: skipStart,
@@ -261,137 +227,25 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     await this.boxApiClient.destroy(boxId)
   }
 
-  async createBackup(box: Box, backupSnapshotName: string, registry?: DockerRegistry): Promise<void> {
-    const request: CreateBackupDTO = {
-      snapshot: backupSnapshotName,
-      registry: undefined,
-    }
-
-    if (registry) {
-      request.registry = {
-        project: registry.project,
-        url: registry.url.replace(/^(https?:\/\/)/, ''),
-        username: registry.username,
-        password: registry.password,
-      }
-    }
-
-    await this.boxApiClient.createBackup(box.id, request)
+  async removeArtifact(artifactRef: string): Promise<void> {
+    await this.artifactApiClient.removeArtifact(artifactRef)
   }
 
-  async buildSnapshot(
-    buildInfo: BuildInfo,
-    organizationId?: string,
-    sourceRegistries?: DockerRegistry[],
-    registry?: DockerRegistry,
-    pushToInternalRegistry?: boolean,
-  ): Promise<void> {
-    const request: BuildSnapshotRequestDTO = {
-      snapshot: buildInfo.snapshotRef,
-      dockerfile: buildInfo.dockerfileContent,
-      organizationId: organizationId,
-      context: buildInfo.contextHashes,
-      pushToInternalRegistry: pushToInternalRegistry,
-    }
+  // TODO(image-rewrite): pullArtifact removed with runner_artifact_cache + box_template.
 
-    if (sourceRegistries) {
-      request.sourceRegistries = sourceRegistries.map((sourceRegistry) => ({
-        project: sourceRegistry.project,
-        url: sourceRegistry.url.replace(/^(https?:\/\/)/, ''),
-        username: sourceRegistry.username,
-        password: sourceRegistry.password,
-      }))
-    }
-
-    if (registry) {
-      request.registry = {
-        project: registry.project,
-        url: registry.url.replace(/^(https?:\/\/)/, ''),
-        username: registry.username,
-        password: registry.password,
-      }
-    }
-
-    await this.snapshotApiClient.buildSnapshot(request)
-  }
-
-  async removeSnapshot(snapshotName: string): Promise<void> {
-    await this.snapshotApiClient.removeSnapshot(snapshotName)
-  }
-
-  async pullSnapshot(
-    snapshotName: string,
-    registry?: DockerRegistry,
-    destinationRegistry?: DockerRegistry,
-    destinationRef?: string,
-    newTag?: string,
-  ): Promise<void> {
-    const request: PullSnapshotRequestDTO = {
-      snapshot: snapshotName,
-      newTag,
-    }
-
-    if (registry) {
-      request.registry = {
-        project: registry.project,
-        url: registry.url.replace(/^(https?:\/\/)/, ''),
-        username: registry.username,
-        password: registry.password,
-      }
-    }
-
-    if (destinationRegistry) {
-      request.destinationRegistry = {
-        project: destinationRegistry.project,
-        url: destinationRegistry.url.replace(/^(https?:\/\/)/, ''),
-        username: destinationRegistry.username,
-        password: destinationRegistry.password,
-      }
-    }
-
-    if (destinationRef) {
-      request.destinationRef = destinationRef
-    }
-
-    await this.snapshotApiClient.pullSnapshot(request)
-  }
-
-  async snapshotExists(snapshotName: string): Promise<boolean> {
-    const response = await this.snapshotApiClient.snapshotExists(snapshotName)
+  async artifactExists(artifactRef: string): Promise<boolean> {
+    const response = await this.artifactApiClient.artifactExists(artifactRef)
     return response.data.exists
   }
 
-  async getSnapshotInfo(snapshotName: string): Promise<RunnerSnapshotInfo> {
-    try {
-      const response = await this.snapshotApiClient.getSnapshotInfo(snapshotName)
+  // TODO(image-rewrite): getArtifactInfo removed with runner_artifact_cache + box_template.
 
-      return {
-        name: response.data.name || '',
-        sizeGB: response.data.sizeGB,
-        entrypoint: response.data.entrypoint,
-        cmd: response.data.cmd,
-        hash: response.data.hash,
-      }
-    } catch (err) {
-      if (err instanceof RunnerApiError && err.statusCode === 422) {
-        throw new SnapshotStateError(err.message)
-      }
-      throw err
+  async inspectArtifactInRegistry(artifactRef: string): Promise<ArtifactDigestResponse> {
+    const request: InspectArtifactInRegistryRequest = {
+      artifactRef,
     }
-  }
 
-  async inspectSnapshotInRegistry(snapshotName: string, registry?: DockerRegistry): Promise<SnapshotDigestResponse> {
-    const response = await this.snapshotApiClient.inspectSnapshotInRegistry({
-      snapshot: snapshotName,
-      registry: registry
-        ? {
-            project: registry.project,
-            url: registry.url.replace(/^(https?:\/\/)/, ''),
-            username: registry.username,
-            password: registry.password,
-          }
-        : undefined,
-    })
+    const response = await this.artifactApiClient.inspectArtifactInRegistry(request)
 
     return {
       hash: response.data.hash,
@@ -417,7 +271,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
   async recoverBox(box: Box): Promise<void> {
     const recoverBoxDTO: RecoverBoxDTO = {
       userId: box.organizationId,
-      snapshot: box.snapshot,
+      snapshot: box.template,
       osUser: box.osUser,
       cpuQuota: box.cpu,
       gpuQuota: box.gpu,
@@ -432,7 +286,6 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       networkBlockAll: box.networkBlockAll,
       networkAllowList: box.networkAllowList,
       errorReason: box.errorReason,
-      backupErrorReason: box.backupErrorReason,
     }
     await this.boxApiClient.recover(box.id, recoverBoxDTO)
   }

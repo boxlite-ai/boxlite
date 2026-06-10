@@ -35,7 +35,10 @@ export class OrganizationAccessGuard implements CanActivate {
     }
 
     // note: semantic parameter names must be used (avoid :id)
-    const organizationIdParam = request.params.organizationId || request.params.orgId || request.params.prefix
+    const organizationIdParam = this.resolveOrganizationIdParam(
+      request.params.organizationId || request.params.orgId || request.params.prefix,
+      authContext,
+    )
 
     if (
       authContext.role !== 'ssh-gateway' &&
@@ -64,6 +67,10 @@ export class OrganizationAccessGuard implements CanActivate {
     }
 
     const organizationId = organizationIdParam || authContext.organizationId
+    if (!organizationId) {
+      this.logger.warn('Organization ID missing from the request context.')
+      return false
+    }
 
     const organization = await this.getCachedOrganization(organizationId)
 
@@ -96,6 +103,17 @@ export class OrganizationAccessGuard implements CanActivate {
     request.user = organizationAuthContext
 
     return true
+  }
+
+  private resolveOrganizationIdParam(organizationIdParam: string | undefined, authContext: AuthContext) {
+    // REST SDKs released before path_prefix support hardcoded `/v1/default/...`.
+    // API keys are already org-scoped, so preserve that legacy route shape by
+    // resolving `default` to the authenticated org instead of rejecting it.
+    if (organizationIdParam === 'default') {
+      return authContext.organizationId
+    }
+
+    return organizationIdParam
   }
 
   private async getCachedOrganization(organizationId: string): Promise<Organization | null> {

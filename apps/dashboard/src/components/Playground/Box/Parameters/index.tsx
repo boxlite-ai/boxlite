@@ -16,14 +16,14 @@ import BoxManagementParameters from './Management'
 import BoxProcessCodeExecution from './ProcessCodeExecution'
 
 const boxParametersSectionsData = [
-  { value: BoxParametersSections.BOX_MANAGEMENT, label: 'Management' },
+  { value: BoxParametersSections.SANDBOX_MANAGEMENT, label: 'Management' },
   { value: BoxParametersSections.FILE_SYSTEM, label: 'File System' },
   { value: BoxParametersSections.GIT_OPERATIONS, label: 'Git Operations' },
   { value: BoxParametersSections.PROCESS_CODE_EXECUTION, label: 'Process & Code Execution' },
 ]
 
 const sectionIcons = {
-  [BoxParametersSections.BOX_MANAGEMENT]: <BoltIcon strokeWidth={1.5} />,
+  [BoxParametersSections.SANDBOX_MANAGEMENT]: <BoltIcon strokeWidth={1.5} />,
   [BoxParametersSections.GIT_OPERATIONS]: <GitBranchIcon strokeWidth={1.5} />,
   [BoxParametersSections.FILE_SYSTEM]: <FolderIcon strokeWidth={1.5} />,
   [BoxParametersSections.PROCESS_CODE_EXECUTION]: <SquareTerminalIcon strokeWidth={1.5} />,
@@ -33,19 +33,8 @@ const BoxParameters = ({ className }: { className?: string }) => {
   const { openedParametersSections, setOpenedParametersSections, enabledSections, enableSection, disableSection } =
     usePlayground()
 
-  // TODO - Currently, snapshot selection is not supported in the Playground, so we are using empty array and false for loading. We keep to code commented to enable it in future if requested by users.
-  // const { snapshotApi } = useApi()
-  // const { selectedOrganization } = useSelectedOrganization()
-
-  // const { data: snapshotsData = [], isLoading: snapshotsLoading } = useQuery({
-  //   queryKey: ['snapshots', selectedOrganization?.id, 'all'],
-  //   queryFn: async () => {
-  //     if (!selectedOrganization) return []
-  //     const response = await snapshotApi.getAllSnapshots(selectedOrganization.id)
-  //     return response.data.items
-  //   },
-  //   enabled: !!selectedOrganization,
-  // })
+  // TODO(image-rewrite): template selection in the Playground was removed with the image/template
+  // subsystem. Management is rendered with an empty template list; rebuild template fetching here.
 
   return (
     <div className={cn('flex flex-col gap-6', className)}>
@@ -59,7 +48,7 @@ const BoxParameters = ({ className }: { className?: string }) => {
         onValueChange={(sections) => setOpenedParametersSections(sections as BoxParametersSections[])}
       >
         {boxParametersSectionsData.map((section) => {
-          const isManagement = section.value === BoxParametersSections.BOX_MANAGEMENT
+          const isManagement = section.value === BoxParametersSections.SANDBOX_MANAGEMENT
           const isEnabled = enabledSections.includes(section.value as BoxParametersSections)
           const isExpanded = openedParametersSections.includes(section.value as BoxParametersSections)
           return (
@@ -102,8 +91,8 @@ const BoxParameters = ({ className }: { className?: string }) => {
                   <div className="space-y-4">
                     {section.value === BoxParametersSections.FILE_SYSTEM && <BoxFileSystem />}
                     {section.value === BoxParametersSections.GIT_OPERATIONS && <BoxGitOperations />}
-                    {section.value === BoxParametersSections.BOX_MANAGEMENT && (
-                      <BoxManagementParameters snapshotsData={[]} snapshotsLoading={false} />
+                    {section.value === BoxParametersSections.SANDBOX_MANAGEMENT && (
+                      <BoxManagementParameters templatesData={[]} templatesLoading={false} />
                     )}
                     {section.value === BoxParametersSections.PROCESS_CODE_EXECUTION && <BoxProcessCodeExecution />}
                   </div>

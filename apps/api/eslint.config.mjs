@@ -8,8 +8,7 @@ export default [
       'no-restricted-syntax': [
         'error',
         {
-          selector:
-            'Decorator[expression.callee.name="InjectRepository"] > CallExpression > Identifier[name="Box"]',
+          selector: 'Decorator[expression.callee.name="InjectRepository"] > CallExpression > Identifier[name="Box"]',
           message: 'Do not use @InjectRepository(Box). Use the custom BoxRepository instead.',
         },
       ],

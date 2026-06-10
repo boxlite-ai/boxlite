@@ -58,12 +58,8 @@ func (a *BoxliteAdapter) GetBoxState(ctx context.Context, boxId string) (enums.B
 	return a.client.GetBoxState(ctx, boxId)
 }
 
-func (a *BoxliteAdapter) PullSnapshot(ctx context.Context, req dto.PullSnapshotRequestDTO) error {
-	return a.client.PullSnapshot(ctx, req)
-}
-
-func (a *BoxliteAdapter) BuildSnapshot(ctx context.Context, req dto.BuildSnapshotRequestDTO) error {
-	return a.client.BuildSnapshot(ctx, req)
+func (a *BoxliteAdapter) PullArtifact(ctx context.Context, req dto.PullArtifactRequestDTO) error {
+	return a.client.PullArtifact(ctx, req)
 }
 
 func (a *BoxliteAdapter) RemoveImage(ctx context.Context, imageName string, force bool) error {
@@ -92,10 +88,6 @@ func (a *BoxliteAdapter) InspectImageInRegistry(ctx context.Context, imageName s
 		Digest: digest.Digest,
 		Size:   digest.Size,
 	}, nil
-}
-
-func (a *BoxliteAdapter) CreateBackup(ctx context.Context, boxId string, backupDto dto.CreateBackupDTO) error {
-	return a.client.CreateBackup(ctx, boxId, backupDto)
 }
 
 func (a *BoxliteAdapter) Ping(ctx context.Context) error {

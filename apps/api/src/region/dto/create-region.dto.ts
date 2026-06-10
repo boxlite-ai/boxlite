@@ -32,14 +32,6 @@ export class CreateRegionDto {
     required: false,
   })
   sshGatewayUrl?: string
-
-  @ApiProperty({
-    description: 'Snapshot Manager URL for the region',
-    example: 'https://snapshot-manager.example.com',
-    nullable: true,
-    required: false,
-  })
-  snapshotManagerUrl?: string
 }
 
 @ApiSchema({ name: 'CreateRegionResponse' })
@@ -68,32 +60,9 @@ export class CreateRegionResponseDto {
   })
   sshGatewayApiKey?: string
 
-  @ApiProperty({
-    description: 'Snapshot Manager username for the region',
-    example: 'boxlite',
-    nullable: true,
-    required: false,
-  })
-  snapshotManagerUsername?: string
-
-  @ApiProperty({
-    description: 'Snapshot Manager password for the region',
-    nullable: true,
-    required: false,
-  })
-  snapshotManagerPassword?: string
-
-  constructor(params: {
-    id: string
-    proxyApiKey?: string
-    sshGatewayApiKey?: string
-    snapshotManagerUsername?: string
-    snapshotManagerPassword?: string
-  }) {
+  constructor(params: { id: string; proxyApiKey?: string; sshGatewayApiKey?: string }) {
     this.id = params.id
     this.proxyApiKey = params.proxyApiKey
     this.sshGatewayApiKey = params.sshGatewayApiKey
-    this.snapshotManagerUsername = params.snapshotManagerUsername
-    this.snapshotManagerPassword = params.snapshotManagerPassword
   }
 }

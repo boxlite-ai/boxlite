@@ -39,11 +39,13 @@ exporters:
       password: '${env:REDIS_PASSWORD:-}'
 
   clickhouse:
-    endpoint: ${env:CLICKHOUSE_ENDPOINT}
-    database: otel
+    endpoint: ${env:CLICKHOUSE_ENDPOINT:-https://clickhouse-disabled.invalid:443}
+    database: ${env:CLICKHOUSE_DATABASE:-otel}
     ttl: ${env:CLICKHOUSE_TTL:-72h}
-    username: default
-    password: ${env:CLICKHOUSE_PASSWORD}
+    username: ${env:CLICKHOUSE_USERNAME:-default}
+    password: ${env:CLICKHOUSE_PASSWORD:-unused}
+    create_schema: ${env:CLICKHOUSE_CREATE_SCHEMA:-false}
+    compress: ${env:CLICKHOUSE_COMPRESS:-none}
 
     sending_queue:
       queue_size: ${env:CLICKHOUSE_EXPORTER_SENDING_QUEUE_SIZE:-1000}
@@ -78,10 +80,10 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      exporters: [boxlite_exporter, clickhouse]
+      exporters: [boxlite_exporter]
     metrics:
       receivers: [otlp]
-      exporters: [boxlite_exporter, clickhouse]
+      exporters: [boxlite_exporter]
     logs:
       receivers: [otlp]
-      exporters: [boxlite_exporter, clickhouse]
+      exporters: [boxlite_exporter]

@@ -111,7 +111,7 @@ export class BoxStateWaiterService implements OnModuleDestroy {
   }
 
   private assertNotFailed(state: BoxState, errorReason?: string | null) {
-    if (state === BoxState.ERROR || state === BoxState.BUILD_FAILED) {
+    if (state === BoxState.ERROR) {
       throw new BadRequestError(`Box failed to start: ${errorReason || 'Unknown error'}`)
     }
   }

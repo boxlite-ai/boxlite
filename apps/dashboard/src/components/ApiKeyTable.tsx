@@ -190,7 +190,7 @@ const getColumns = ({
         return <div className="max-w-md px-3">Permissions</div>
       },
       cell: ({ row }) => {
-        return <PermissionsTooltip permissions={row.original.permissions} availablePermissions={allPermissions} />
+        return <PermissionsTooltip permissions={row.original.permissions} availablePermissions={visiblePermissions} />
       },
     },
     {
@@ -306,9 +306,9 @@ const getColumns = ({
   return columns
 }
 
-const allPermissions = Object.values(CreateApiKeyPermissionsEnum)
+const visiblePermissions = CREATE_API_KEY_PERMISSIONS_GROUPS.flatMap((group) => group.permissions)
 
-const IMPLICIT_READ_RESOURCES = ['Boxes', 'Snapshots', 'Registries', 'Regions']
+const IMPLICIT_READ_RESOURCES = ['Boxes']
 
 function PermissionsTooltip({
   permissions,
@@ -317,7 +317,7 @@ function PermissionsTooltip({
   permissions: ApiKeyListPermissionsEnum[]
   availablePermissions: CreateApiKeyPermissionsEnum[]
 }) {
-  const isFullAccess = allPermissions.length === permissions.length
+  const isFullAccess = visiblePermissions.every((permission) => permissions.includes(permission))
   const isSingleResourceAccess = CREATE_API_KEY_PERMISSIONS_GROUPS.find(
     (group) =>
       group.permissions.length === permissions.length && group.permissions.every((p) => permissions.includes(p)),
@@ -330,8 +330,8 @@ function PermissionsTooltip({
     })).filter((group) => group.permissions.length > 0)
   }, [availablePermissions])
 
-  const badgeVariant = isFullAccess ? 'warning' : 'outline'
-  const badgeText = isFullAccess ? 'Full' : isSingleResourceAccess ? isSingleResourceAccess.name : 'Restricted'
+  const badgeVariant = isFullAccess && !isSingleResourceAccess ? 'warning' : 'outline'
+  const badgeText = isSingleResourceAccess ? isSingleResourceAccess.name : isFullAccess ? 'Full' : 'Restricted'
 
   return (
     <Popover>

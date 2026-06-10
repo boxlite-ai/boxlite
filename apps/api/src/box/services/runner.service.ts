@@ -24,9 +24,6 @@ import { RunnerState } from '../enums/runner-state.enum'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { BoxState } from '../enums/box-state.enum'
-import { SnapshotRunner } from '../entities/snapshot-runner.entity'
-import { SnapshotRunnerState } from '../enums/snapshot-runner-state.enum'
-import { RunnerSnapshotDto } from '../dto/runner-snapshot.dto'
 import { RunnerAdapterFactory, RunnerInfo } from '../runner-adapter/runnerAdapter'
 import { RedisLockProvider } from '../common/redis-lock.provider'
 import { TypedConfigService } from '../../config/typed-config.service'
@@ -41,7 +38,6 @@ import { RunnerStateUpdatedEvent } from '../events/runner-state-updated.event'
 import { RunnerDeletedEvent } from '../events/runner-deleted.event'
 import { generateApiKeyValue } from '../../common/utils/api-key'
 import { RunnerFullDto } from '../dto/runner-full.dto'
-import { Snapshot } from '../entities/snapshot.entity'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import Redis from 'ioredis'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
@@ -60,13 +56,9 @@ export class RunnerService {
     private readonly runnerRepository: Repository<Runner>,
     private readonly runnerAdapterFactory: RunnerAdapterFactory,
     private readonly boxRepository: BoxRepository,
-    @InjectRepository(SnapshotRunner)
-    private readonly snapshotRunnerRepository: Repository<SnapshotRunner>,
     private readonly redisLockProvider: RedisLockProvider,
     private readonly configService: TypedConfigService,
     private readonly regionService: RegionService,
-    @InjectRepository(Snapshot)
-    private readonly snapshotRepository: Repository<Snapshot>,
     @Inject(EventEmitter2)
     private eventEmitter: EventEmitter2,
     private readonly dataSource: DataSource,
@@ -302,26 +294,9 @@ export class RunnerService {
       ? params.excludedRunnerIds.filter((id) => !!id)
       : undefined
 
-    if (params.snapshotRef !== undefined) {
-      const snapshotRunners = await this.snapshotRunnerRepository.find({
-        where: {
-          state: SnapshotRunnerState.READY,
-          snapshotRef: params.snapshotRef,
-        },
-      })
-
-      let runnerIds = snapshotRunners.map((snapshotRunner) => snapshotRunner.runnerId)
-
-      if (excludedRunnerIds?.length) {
-        runnerIds = runnerIds.filter((id) => !excludedRunnerIds.includes(id))
-      }
-
-      if (!runnerIds.length) {
-        return []
-      }
-
-      runnerFilter.id = In(runnerIds)
-    } else if (excludedRunnerIds?.length) {
+    // TODO(image-rewrite): artifact-cache aware runner selection removed with
+    // runner_artifact_cache; runners are no longer filtered by which artifact they have cached.
+    if (excludedRunnerIds?.length) {
       runnerFilter.id = Not(In(excludedRunnerIds))
     }
 
@@ -389,6 +364,7 @@ export class RunnerService {
       currentAllocatedCpu?: number
       currentAllocatedMemoryGiB?: number
       currentAllocatedDiskGiB?: number
+      currentArtifactCount?: number
       currentSnapshotCount?: number
       currentStartedBoxes?: number
       cpu?: number
@@ -453,7 +429,7 @@ export class RunnerService {
       updateData.currentAllocatedCpu = metrics.currentAllocatedCpu || 0
       updateData.currentAllocatedMemoryGiB = metrics.currentAllocatedMemoryGiB || 0
       updateData.currentAllocatedDiskGiB = metrics.currentAllocatedDiskGiB || 0
-      updateData.currentSnapshotCount = metrics.currentSnapshotCount || 0
+      updateData.currentArtifactCount = metrics.currentArtifactCount ?? metrics.currentSnapshotCount ?? 0
       updateData.currentStartedBoxes = metrics.currentStartedBoxes || 0
       updateData.cpu = metrics.cpu
       updateData.memoryGiB = metrics.memoryGiB
@@ -759,121 +735,8 @@ export class RunnerService {
     return availableRunners[randomIntFromInterval(0, availableRunners.length - 1)]
   }
 
-  async getSnapshotRunner(runnerId: string, snapshotRef: string): Promise<SnapshotRunner> {
-    return this.snapshotRunnerRepository.findOne({
-      where: {
-        runnerId: runnerId,
-        snapshotRef: snapshotRef,
-      },
-    })
-  }
-
-  async getSnapshotRunners(snapshotRef: string): Promise<SnapshotRunner[]> {
-    return this.snapshotRunnerRepository.find({
-      where: {
-        snapshotRef,
-      },
-      order: {
-        state: 'ASC', // Sorts state BUILDING_SNAPSHOT before ERROR
-        createdAt: 'ASC', // Sorts first runner to start building snapshot on top
-      },
-    })
-  }
-
-  async createSnapshotRunnerEntry(
-    runnerId: string,
-    snapshotRef: string,
-    state?: SnapshotRunnerState,
-    errorReason?: string,
-  ): Promise<void> {
-    try {
-      const snapshotRunner = new SnapshotRunner()
-      snapshotRunner.runnerId = runnerId
-      snapshotRunner.snapshotRef = snapshotRef
-      if (state) {
-        snapshotRunner.state = state
-      }
-      if (errorReason) {
-        snapshotRunner.errorReason = errorReason
-      }
-      await this.snapshotRunnerRepository.save(snapshotRunner)
-    } catch (error) {
-      if (error.code === '23505') {
-        // PostgreSQL unique violation error code - entry already exists, allow it
-        this.logger.debug(
-          `SnapshotRunner entry already exists for runnerId: ${runnerId}, snapshotRef: ${snapshotRef}. Continuing...`,
-        )
-        return
-      }
-      throw error // Re-throw any other errors
-    }
-  }
-
-  // TODO: combine getRunnersWithMultipleSnapshotsBuilding and getRunnersWithMultipleSnapshotsPulling?
-
-  async getRunnersWithMultipleSnapshotsBuilding(maxSnapshotCount = 6): Promise<string[]> {
-    const runners = await this.boxRepository
-      .createQueryBuilder('box')
-      .select('box.runnerId', 'runnerId')
-      .where('box.state = :state', { state: BoxState.BUILDING_SNAPSHOT })
-      .andWhere('box.buildInfoSnapshotRef IS NOT NULL')
-      .groupBy('box.runnerId')
-      .having('COUNT(DISTINCT box.buildInfoSnapshotRef) > :maxSnapshotCount', { maxSnapshotCount })
-      .getRawMany()
-
-    return runners.map((item) => item.runnerId)
-  }
-
-  async getRunnersWithMultipleSnapshotsPulling(maxSnapshotCount = 6): Promise<string[]> {
-    const runners = await this.snapshotRunnerRepository
-      .createQueryBuilder('snapshot_runner')
-      .select('snapshot_runner.runnerId')
-      .where('snapshot_runner.state = :state', { state: SnapshotRunnerState.PULLING_SNAPSHOT })
-      .groupBy('snapshot_runner.runnerId')
-      .having('COUNT(*) > :maxSnapshotCount', { maxSnapshotCount })
-      .getRawMany()
-
-    return runners.map((item) => item.runnerId)
-  }
-
-  async getRunnersBySnapshotRef(ref: string): Promise<RunnerSnapshotDto[]> {
-    const snapshotRunners = await this.snapshotRunnerRepository.find({
-      where: {
-        snapshotRef: ref,
-        state: Not(SnapshotRunnerState.ERROR),
-      },
-      select: ['runnerId', 'id'],
-    })
-
-    // Extract distinct runnerIds from snapshot runners
-    const runnerIds = [...new Set(snapshotRunners.map((sr) => sr.runnerId))]
-
-    // Find all runners with these IDs
-    const runners = await this.runnerRepository.find({
-      where: { id: In(runnerIds) },
-      select: ['id', 'domain'],
-    })
-
-    this.logger.debug(`Found ${runners.length} runners with IDs: ${runners.map((r) => r.id).join(', ')}`)
-
-    // Map to DTO format, including the snapshot runner ID
-    return runners.map((runner) => {
-      const snapshotRunner = snapshotRunners.find((sr) => sr.runnerId === runner.id)
-      return new RunnerSnapshotDto(snapshotRunner.id, runner.id, runner.domain)
-    })
-  }
-
-  async getInitialRunnerBySnapshotId(snapshotId: string): Promise<Runner> {
-    const snapshot = await this.snapshotRepository.findOne({ where: { id: snapshotId } })
-    if (!snapshot) {
-      throw new NotFoundException('Snapshot runner not found')
-    }
-    if (!snapshot.initialRunnerId) {
-      throw new BadRequestException('Initial runner not found')
-    }
-
-    return await this.findOneOrFail(snapshot.initialRunnerId)
-  }
+  // TODO(image-rewrite): the artifact-cache + template based runner/artifact lookup helpers were
+  // removed with the image/template subsystem. Rebuild artifact-cache aware scheduling here.
 
   async getRunnerApiVersion(runnerId: string): Promise<string> {
     const result = await this.runnerRepository.findOneOrFail({
@@ -1052,7 +915,6 @@ export class RunnerService {
 export class GetRunnerParams {
   regions?: string[]
   boxClass?: BoxClass
-  snapshotRef?: string
   excludedRunnerIds?: string[]
   availabilityScoreThreshold?: number
 }

@@ -61,6 +61,7 @@ type ServerConfig struct {
 	RecordingService      *recording.RecordingService
 	OrganizationId        *string
 	RegionId              *string
+	TraceParent           *string
 	EntrypointLogFilePath string
 }
 
@@ -76,6 +77,7 @@ func NewServer(config ServerConfig) *server {
 		recordingService:      config.RecordingService,
 		organizationId:        config.OrganizationId,
 		regionId:              config.RegionId,
+		traceParent:           config.TraceParent,
 		entrypointLogFilePath: config.EntrypointLogFilePath,
 	}
 }
@@ -96,6 +98,7 @@ type server struct {
 	httpServer            *http.Server
 	organizationId        *string
 	regionId              *string
+	traceParent           *string
 	ctx                   context.Context
 	cancel                context.CancelFunc
 }
@@ -152,7 +155,7 @@ func (s *server) Start() error {
 		r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerfiles.Handler))
 	}
 
-	r.POST("/init", s.Initialize(otelServiceName, s.entrypointLogFilePath, s.organizationId, s.regionId))
+	r.POST("/init", s.Initialize(otelServiceName, s.entrypointLogFilePath, s.organizationId, s.regionId, s.traceParent))
 
 	r.GET("/version", s.GetVersion)
 

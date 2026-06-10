@@ -6,11 +6,10 @@
 
 import { Tooltip } from '@/components/Tooltip'
 import { Label } from '@/components/ui/label'
-import { BOX_SNAPSHOT_DEFAULT_VALUE } from '@/constants/Playground'
+import { SANDBOX_TEMPLATE_DEFAULT_VALUE } from '@/constants/Playground'
 import { NumberParameterFormItem, ParameterFormItem } from '@/contexts/PlaygroundContext'
 import { usePlayground } from '@/hooks/usePlayground'
 import { getLanguageCodeToRun } from '@/lib/playground'
-import { SnapshotDto } from '@boxlite-ai/api-client'
 import { CodeLanguage, Resources } from '@boxlite-ai/sdk'
 import { HelpCircleIcon } from 'lucide-react'
 import InlineInputFormControl from '../../Inputs/InlineInputFormControl'
@@ -19,16 +18,18 @@ import FormSelectInput from '../../Inputs/SelectInput'
 import StackedInputFormControl from '../../Inputs/StackedInputFormControl'
 import { useEffect } from 'react'
 
-// TODO - Currently, snapshot selection is not supported in the Playground, so props are hardcoded to an empty array and false for loading. We keep snapshot parts commented to enable it in future if requested by users. Also, box creation and code snippet generation suppoort snapshot selection, so they will work when snapshot selection is enabled in the UI without requiring any additional changes. Currently, the snapshot value is fixed to 'Default'
+// TODO(image-rewrite): template selection UI was removed with the image/template subsystem.
+// Props are kept (hardcoded to an empty list) so the playground compiles; rebuild template
+// selection here once the new image/template model lands.
 type BoxManagementParametersProps = {
-  snapshotsData: Array<SnapshotDto>
-  snapshotsLoading: boolean
+  templatesData: Array<{ name: string }>
+  templatesLoading: boolean
 }
 
-const BoxManagementParameters: React.FC<BoxManagementParametersProps> = ({ snapshotsData, snapshotsLoading }) => {
+const BoxManagementParameters: React.FC<BoxManagementParametersProps> = ({ templatesData, templatesLoading }) => {
   const { boxParametersState, setBoxParameterValue } = usePlayground()
   const boxLanguage = boxParametersState['language']
-  const boxSnapshotName = boxParametersState['snapshotName']
+  const boxTemplateName = boxParametersState['templateName']
   const resources = boxParametersState['resources']
   const boxFromImageParams = boxParametersState['createBoxBaseParams']
 
@@ -38,10 +39,10 @@ const BoxManagementParameters: React.FC<BoxManagementParametersProps> = ({ snaps
     placeholder: 'Select box language',
   }
 
-  // const boxSnapshotFormData: ParameterFormItem = {
-  //   label: 'Snapshot',
-  //   key: 'snapshotName',
-  //   placeholder: 'Select box snapshot',
+  // const boxTemplateFormData: ParameterFormItem = {
+  //   label: 'Image',
+  //   key: 'templateName',
+  //   placeholder: 'Select box image',
   // }
 
   // Available languages
@@ -66,10 +67,9 @@ const BoxManagementParameters: React.FC<BoxManagementParametersProps> = ({ snaps
   ]
 
   const lifecycleParamsFormData: (NumberParameterFormItem & {
-    key: 'autoStopInterval' | 'autoArchiveInterval' | 'autoDeleteInterval'
+    key: 'autoStopInterval' | 'autoDeleteInterval'
   })[] = [
     { label: 'Stop (min)', key: 'autoStopInterval', min: 0, max: Infinity, placeholder: '15' },
-    { label: 'Archive (min)', key: 'autoArchiveInterval', min: 0, max: Infinity, placeholder: '7' },
     { label: 'Delete (min)', key: 'autoDeleteInterval', min: -1, max: Infinity, placeholder: '' },
   ]
 
@@ -80,7 +80,7 @@ const BoxManagementParameters: React.FC<BoxManagementParametersProps> = ({ snaps
     })
   }, [boxParametersState.language, setBoxParameterValue])
 
-  const nonDefaultSnapshotSelected = boxSnapshotName && boxSnapshotName !== BOX_SNAPSHOT_DEFAULT_VALUE
+  const nonDefaultTemplateSelected = boxTemplateName && boxTemplateName !== SANDBOX_TEMPLATE_DEFAULT_VALUE
 
   return (
     <>
@@ -94,20 +94,20 @@ const BoxManagementParameters: React.FC<BoxManagementParametersProps> = ({ snaps
           }}
         />
       </StackedInputFormControl>
-      {/* <StackedInputFormControl formItem={boxSnapshotFormData}>
+      {/* <StackedInputFormControl formItem={boxTemplateFormData}>
         <FormSelectInput
           selectOptions={[
-            { value: BOX_SNAPSHOT_DEFAULT_VALUE, label: 'Default' },
-            ...snapshotsData.map((snapshot) => ({
-              value: snapshot.name,
-              label: snapshot.name,
+            { value: SANDBOX_TEMPLATE_DEFAULT_VALUE, label: 'Default' },
+            ...templatesData.map((template) => ({
+              value: template.name,
+              label: template.name,
             })),
           ]}
-          loading={snapshotsLoading}
-          selectValue={boxSnapshotName}
-          formItem={boxSnapshotFormData}
-          onChangeHandler={(snapshotName) => {
-            setBoxParameterValue(boxSnapshotFormData.key as 'snapshotName', snapshotName)
+          loading={templatesLoading}
+          selectValue={boxTemplateName}
+          formItem={boxTemplateFormData}
+          onChangeHandler={(templateName) => {
+            setBoxParameterValue(boxTemplateFormData.key as 'templateName', templateName)
           }}
         />
       </StackedInputFormControl> */}
@@ -116,11 +116,11 @@ const BoxManagementParameters: React.FC<BoxManagementParametersProps> = ({ snaps
           <Label htmlFor="resources" className="text-sm text-muted-foreground">
             Resources
           </Label>
-          {nonDefaultSnapshotSelected && (
+          {nonDefaultTemplateSelected && (
             <Tooltip
               content={
                 <div className="text-balance text-center max-w-[300px]">
-                  Resources cannot be modified when a non-default snapshot is selected.
+                  Resources cannot be modified when a non-default image is selected.
                 </div>
               }
               label={
@@ -135,7 +135,7 @@ const BoxManagementParameters: React.FC<BoxManagementParametersProps> = ({ snaps
           {resourcesFormData.map((resourceParamFormItem) => (
             <InlineInputFormControl key={resourceParamFormItem.key} formItem={resourceParamFormItem}>
               <FormNumberInput
-                disabled={Boolean(nonDefaultSnapshotSelected)}
+                disabled={Boolean(nonDefaultTemplateSelected)}
                 numberValue={resources[resourceParamFormItem.key]}
                 numberFormItem={resourceParamFormItem}
                 onChangeHandler={(value) => {

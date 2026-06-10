@@ -11,7 +11,7 @@ import (
 	"github.com/boxlite-ai/boxlite/cli/apiclient"
 	"github.com/boxlite-ai/boxlite/cli/cmd/common"
 	"github.com/boxlite-ai/boxlite/cli/config"
-	"github.com/boxlite-ai/boxlite/cli/views/snapshot"
+	templateView "github.com/boxlite-ai/boxlite/cli/views/snapshot"
 	"github.com/spf13/cobra"
 )
 
@@ -22,8 +22,8 @@ var (
 
 var ListCmd = &cobra.Command{
 	Use:     "list",
-	Short:   "List all snapshots",
-	Long:    "List all available BoxLite snapshots",
+	Short:   "List all templates",
+	Long:    "List all available BoxLite templates",
 	Aliases: common.GetAliases("list"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
@@ -44,14 +44,22 @@ var ListCmd = &cobra.Command{
 			limit = float32(limitFlag)
 		}
 
-		snapshots, res, err := apiClient.SnapshotsAPI.GetAllSnapshots(ctx).Page(page).Limit(limit).Execute()
+		listTemplatesRequest := apiClient.TemplatesAPI.ListBoxTemplates(ctx)
+		if cmd.Flags().Changed("page") {
+			listTemplatesRequest = listTemplatesRequest.Page(page)
+		}
+		if cmd.Flags().Changed("limit") {
+			listTemplatesRequest = listTemplatesRequest.Limit(limit)
+		}
+
+		templates, res, err := listTemplatesRequest.Execute()
 		if err != nil {
 			fmt.Printf("Error: %v\n", err)
 			return apiclient.HandleErrorResponse(res, err)
 		}
 
 		if common.FormatFlag != "" {
-			formattedData := common.NewFormatter(snapshots.Items)
+			formattedData := common.NewFormatter(templates)
 			formattedData.Print()
 			return nil
 		}
@@ -66,7 +74,7 @@ var ListCmd = &cobra.Command{
 			activeOrganizationName = &name
 		}
 
-		snapshot.ListSnapshots(snapshots.Items, activeOrganizationName)
+		templateView.ListTemplates(templates, activeOrganizationName)
 		return nil
 	},
 }

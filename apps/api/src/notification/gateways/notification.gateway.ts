@@ -11,9 +11,6 @@ import { createAdapter } from '@socket.io/redis-adapter'
 import { BoxEvents } from '../../box/constants/box-events.constants'
 import { BoxState } from '../../box/enums/box-state.enum'
 import { BoxDto } from '../../box/dto/box.dto'
-import { SnapshotDto } from '../../box/dto/snapshot.dto'
-import { SnapshotEvents } from '../../box/constants/snapshot-events'
-import { SnapshotState } from '../../box/enums/snapshot-state.enum'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import Redis from 'ioredis'
 import { JwtStrategy } from '../../auth/jwt.strategy'
@@ -113,20 +110,6 @@ export class NotificationGateway extends NotificationEmitter implements OnGatewa
 
   emitBoxDesiredStateUpdated(box: BoxDto, oldDesiredState: BoxDesiredState, newDesiredState: BoxDesiredState) {
     this.server.to(box.organizationId).emit(BoxEvents.DESIRED_STATE_UPDATED, { box, oldDesiredState, newDesiredState })
-  }
-
-  emitSnapshotCreated(snapshot: SnapshotDto) {
-    this.server.to(snapshot.organizationId).emit(SnapshotEvents.CREATED, snapshot)
-  }
-
-  emitSnapshotStateUpdated(snapshot: SnapshotDto, oldState: SnapshotState, newState: SnapshotState) {
-    this.server
-      .to(snapshot.organizationId)
-      .emit(SnapshotEvents.STATE_UPDATED, { snapshot: snapshot, oldState, newState })
-  }
-
-  emitSnapshotRemoved(snapshot: SnapshotDto) {
-    this.server.to(snapshot.organizationId).emit(SnapshotEvents.REMOVED, snapshot)
   }
 
   emitVolumeCreated(volume: VolumeDto) {

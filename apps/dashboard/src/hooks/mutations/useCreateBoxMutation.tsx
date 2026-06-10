@@ -3,18 +3,20 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { CreateBoxFromImageParams, CreateBoxFromSnapshotParams, BoxLite, Box } from '@boxlite-ai/sdk'
+import { CreateBoxFromImageParams, CreateBoxFromTemplateParams, BoxLite, Box } from '@boxlite-ai/sdk'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from 'react-oidc-context'
+import { useConfig } from '../useConfig'
 import { useSelectedOrganization } from '../useSelectedOrganization'
 import { getBoxesQueryKey } from '../useBoxes'
 
-export type CreateBoxParams = (CreateBoxFromSnapshotParams | CreateBoxFromImageParams) & {
+export type CreateBoxParams = (CreateBoxFromTemplateParams | CreateBoxFromImageParams) & {
   target?: string
 }
 
 export const useCreateBoxMutation = () => {
   const { user } = useAuth()
+  const { apiUrl } = useConfig()
   const { selectedOrganization } = useSelectedOrganization()
   const queryClient = useQueryClient()
 
@@ -27,7 +29,7 @@ export const useCreateBoxMutation = () => {
       const { target, ...createParams } = params
       const client = new BoxLite({
         jwtToken: user.access_token,
-        apiUrl: import.meta.env.VITE_API_URL,
+        apiUrl,
         organizationId: selectedOrganization.id,
         target,
       })
@@ -35,7 +37,7 @@ export const useCreateBoxMutation = () => {
       if ('image' in createParams) {
         return await client.create(createParams as CreateBoxFromImageParams)
       }
-      return await client.create(createParams as CreateBoxFromSnapshotParams)
+      return await client.create(createParams as CreateBoxFromTemplateParams)
     },
     onSuccess: async () => {
       if (selectedOrganization?.id) {

@@ -10,6 +10,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { RoutePath } from '@/enums/RoutePath'
 import { useBoxQuery } from '@/hooks/queries/useBoxQuery'
 import { useBoxWsSync } from '@/hooks/useBoxWsSync'
+import { getBoxDisplayName, getBoxPublicId } from '@/lib/box-identity'
 import { Container } from 'lucide-react'
 import { BoxFullscreenShell } from './BoxFullscreenShell'
 import { BoxVncTab } from './BoxVncTab'
@@ -19,11 +20,12 @@ export default function BoxVncFullscreen() {
   const { data: box, isLoading, isError } = useBoxQuery(boxId ?? '')
   useBoxWsSync({ boxId })
 
-  const label = box?.name || box?.id || boxId
+  const label = box ? getBoxDisplayName(box) : boxId
   const backPath = boxId ? RoutePath.BOX_DETAILS.replace(':boxId', boxId) : RoutePath.BOXES
+  const publicBoxId = box ? getBoxPublicId(box) : ''
 
   return (
-    <BoxFullscreenShell boxId={boxId} title={label} copyValue={box ? box.name || box.id : undefined}>
+    <BoxFullscreenShell boxId={boxId} title={label} copyValue={publicBoxId || undefined}>
       {isLoading ? (
         <div className="flex flex-1 items-center justify-center gap-2 text-muted-foreground">
           <Spinner className="size-4" />

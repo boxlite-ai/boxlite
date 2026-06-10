@@ -14,9 +14,9 @@ import { PageLimit } from '../../common/decorators/page-limit.decorator'
 
 export enum BoxSortField {
   ID = 'id',
+  BOX_ID = 'boxId',
   NAME = 'name',
   STATE = 'state',
-  SNAPSHOT = 'snapshot',
   REGION = 'region',
   UPDATED_AT = 'updatedAt',
   CREATED_AT = 'createdAt',
@@ -42,7 +42,7 @@ export class ListBoxesQueryDto {
 
   @ApiProperty({
     name: 'id',
-    description: 'Filter by partial ID match',
+    description: 'Filter by partial Box ID, internal UUID, or name match',
     required: false,
     type: String,
     example: 'abc123',
@@ -100,18 +100,6 @@ export class ListBoxesQueryDto {
     message: `each value must be one of the following values: ${VALID_QUERY_STATES.join(', ')}`,
   })
   states?: BoxState[]
-
-  @ApiProperty({
-    name: 'snapshots',
-    description: 'List of snapshot names to filter by',
-    required: false,
-    type: [String],
-  })
-  @IsOptional()
-  @ToArray()
-  @IsArray()
-  @IsString({ each: true })
-  snapshots?: string[]
 
   @ApiProperty({
     name: 'regions',

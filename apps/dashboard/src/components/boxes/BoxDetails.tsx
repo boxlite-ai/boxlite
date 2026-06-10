@@ -4,7 +4,8 @@
  */
 
 import { OrganizationSuspendedError } from '@/api/errors'
-import { PageHeader, PageLayout, PageTitle } from '@/components/PageLayout'
+import { OnboardingGuideDialog } from '@/components/OnboardingGuideDialog'
+import { PageLayout } from '@/components/PageLayout'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,8 +20,8 @@ import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { FeatureFlags } from '@/enums/FeatureFlags'
+import { LocalStorageKey } from '@/enums/LocalStorageKey'
 import { RoutePath } from '@/enums/RoutePath'
-import { useArchiveBoxMutation } from '@/hooks/mutations/useArchiveBoxMutation'
 import { useDeleteBoxMutation } from '@/hooks/mutations/useDeleteBoxMutation'
 import { useRecoverBoxMutation } from '@/hooks/mutations/useRecoverBoxMutation'
 import { useStartBoxMutation } from '@/hooks/mutations/useStartBoxMutation'
@@ -32,16 +33,28 @@ import { useMatchMedia } from '@/hooks/useMatchMedia'
 import { useRegions } from '@/hooks/useRegions'
 import { useBoxWsSync } from '@/hooks/useBoxWsSync'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
+import { isDashboardVncEnabled, isBoxContentTabAvailable } from '@/lib/dashboard-features'
 import { handleApiError } from '@/lib/error-handling'
-import { isStoppable, isTransitioning } from '@/lib/utils/box'
+import { setLocalStorageItem } from '@/lib/local-storage'
+import {
+  ONBOARDING_ENTRY_HIGHLIGHT_EVENT,
+  ONBOARDING_OPEN_EVENT,
+  getOnboardingCoreProgress,
+  mergeOnboardingProgress,
+  ONBOARDING_PROGRESS_EVENT,
+  readOnboardingProgress,
+  type OnboardingProgress,
+} from '@/lib/onboarding-progress'
+import { isStoppable, isTransitioning } from '@/lib/utils/sandbox'
 import { OrganizationRolePermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { isAxiosError } from 'axios'
-import { Container, GripVertical, RefreshCw } from 'lucide-react'
+import { Code2, Container, GripVertical, ListChecks, RefreshCw } from 'lucide-react'
 import { useQueryState } from 'nuqs'
 import { useFeatureFlagEnabled } from 'posthog-js/react'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { useAuth } from 'react-oidc-context'
 import { Group, Panel, Separator } from 'react-resizable-panels'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { CreateSshAccessDialog } from './CreateSshAccessDialog'
 import { RevokeSshAccessDialog } from './RevokeSshAccessDialog'
@@ -53,19 +66,87 @@ import { tabParser } from './SearchParams'
 export default function BoxDetails() {
   const { boxId } = useParams<{ boxId: string }>()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const config = useConfig()
+  const { user } = useAuth()
+  const userId = user?.profile.sub
   const { boxApi } = useApi()
   const { authenticatedUserOrganizationMember, selectedOrganization, authenticatedUserHasPermission } =
     useSelectedOrganization()
   const { getRegionName } = useRegions()
 
   const experimentsEnabled = useFeatureFlagEnabled(FeatureFlags.ORGANIZATION_EXPERIMENTS)
+  const vncEnabled = isDashboardVncEnabled(useFeatureFlagEnabled(FeatureFlags.DASHBOARD_VNC))
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [createSshDialogOpen, setCreateSshDialogOpen] = useState(false)
   const [revokeSshDialogOpen, setRevokeSshDialogOpen] = useState(false)
+  const [showOnboardingDialog, setShowOnboardingDialog] = useState(false)
+  const [onboardingProgress, setOnboardingProgress] = useState<OnboardingProgress>(() => readOnboardingProgress(userId))
   const [tab, setTab] = useQueryState('tab', tabParser)
   const isDesktop = useMatchMedia('(min-width: 1024px)')
+
+  const updateOnboardingProgress = useCallback(
+    (progress: OnboardingProgress) => {
+      setOnboardingProgress(mergeOnboardingProgress(userId, progress))
+    },
+    [userId],
+  )
+
+  useEffect(() => {
+    setOnboardingProgress(readOnboardingProgress(userId))
+  }, [userId])
+
+  useEffect(() => {
+    const handleOnboardingProgress = (event: Event) => {
+      const progress = (event as CustomEvent<OnboardingProgress>).detail
+      setOnboardingProgress(progress ?? readOnboardingProgress(userId))
+    }
+
+    window.addEventListener(ONBOARDING_PROGRESS_EVENT, handleOnboardingProgress)
+    return () => window.removeEventListener(ONBOARDING_PROGRESS_EVENT, handleOnboardingProgress)
+  }, [userId])
+
+  useEffect(() => {
+    if (!selectedOrganization || !user?.profile.sub) {
+      return
+    }
+
+    if (searchParams.get('onboarding') === '1') {
+      setShowOnboardingDialog(true)
+    }
+  }, [searchParams, selectedOrganization, user?.profile.sub])
+
+  useEffect(() => {
+    const handleOpenOnboarding = (event: Event) => {
+      event.preventDefault()
+      setShowOnboardingDialog(true)
+    }
+
+    window.addEventListener(ONBOARDING_OPEN_EVENT, handleOpenOnboarding)
+    return () => window.removeEventListener(ONBOARDING_OPEN_EVENT, handleOpenOnboarding)
+  }, [])
+
+  const clearOnboardingUrlParam = useCallback(() => {
+    if (searchParams.get('onboarding') !== '1') {
+      return
+    }
+
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.delete('onboarding')
+    setSearchParams(nextParams, { replace: true })
+  }, [searchParams, setSearchParams])
+
+  const closeOnboardingDialog = useCallback(() => {
+    if (userId) {
+      setLocalStorageItem(`${LocalStorageKey.SkipOnboardingPrefix}${userId}`, 'true')
+    }
+    setShowOnboardingDialog(false)
+    window.setTimeout(() => {
+      window.dispatchEvent(new Event(ONBOARDING_ENTRY_HIGHLIGHT_EVENT))
+      clearOnboardingUrlParam()
+    }, 220)
+  }, [clearOnboardingUrlParam, userId])
 
   // On desktop (lg+), the overview tab is hidden in the sidebar, so switch to a content tab
   useEffect(() => {
@@ -74,39 +155,48 @@ export default function BoxDetails() {
     }
   }, [isDesktop, tab, setTab, experimentsEnabled])
 
-  // When experiments are disabled, coerce experimental tabs back to a supported default
+  // Coerce hidden tabs back to a supported default.
   useEffect(() => {
-    if (!experimentsEnabled && (tab === 'logs' || tab === 'traces' || tab === 'metrics' || tab === 'spending')) {
+    if (!isBoxContentTabAvailable(tab, { experimentsEnabled, vncEnabled })) {
       setTab('terminal')
     }
-  }, [experimentsEnabled, tab, setTab])
+  }, [experimentsEnabled, tab, setTab, vncEnabled])
 
   const { data: box, isLoading, isError, error, refetch, isFetching } = useBoxQuery(boxId ?? '')
   const isNotFound = isError && isAxiosError(error.cause) && error.cause?.status === 404
+  const onboardingCoreProgress = getOnboardingCoreProgress(onboardingProgress)
+  const showOnboardingNudge = Boolean(box && !onboardingCoreProgress.isComplete)
 
   useBoxWsSync({ boxId })
 
+  useEffect(() => {
+    if (box && !onboardingProgress.boxCreated) {
+      updateOnboardingProgress({ boxCreated: true })
+    }
+  }, [onboardingProgress.boxCreated, box, updateOnboardingProgress])
+
+  useEffect(() => {
+    if (box && tab === 'terminal' && !onboardingProgress.terminalOpened) {
+      updateOnboardingProgress({ boxCreated: true, terminalOpened: true })
+    }
+  }, [onboardingProgress.terminalOpened, box, tab, updateOnboardingProgress])
+
   const startMutation = useStartBoxMutation()
   const stopMutation = useStopBoxMutation()
-  const archiveMutation = useArchiveBoxMutation()
   const recoverMutation = useRecoverBoxMutation()
   const deleteMutation = useDeleteBoxMutation()
 
-  const writePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
-  const deletePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.DELETE_BOXES)
+  const writePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_SANDBOXES)
+  const deletePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.DELETE_SANDBOXES)
   const transitioning = box ? isTransitioning(box) : false
   const anyMutating =
-    startMutation.isPending ||
-    stopMutation.isPending ||
-    archiveMutation.isPending ||
-    recoverMutation.isPending ||
-    deleteMutation.isPending
+    startMutation.isPending || stopMutation.isPending || recoverMutation.isPending || deleteMutation.isPending
   const actionsDisabled = anyMutating || transitioning
 
   const handleStart = async () => {
     if (!box) return
     try {
-      await startMutation.mutateAsync({ boxId: box.id })
+      await startMutation.mutateAsync({ boxId: box.id, detailRef: boxId })
       toast.success('Box started')
     } catch (error) {
       handleApiError(error, 'Failed to start box', {
@@ -125,27 +215,17 @@ export default function BoxDetails() {
   const handleStop = async () => {
     if (!box) return
     try {
-      await stopMutation.mutateAsync({ boxId: box.id })
+      await stopMutation.mutateAsync({ boxId: box.id, detailRef: boxId })
       toast.success('Box stopped')
     } catch (error) {
       handleApiError(error, 'Failed to stop box')
     }
   }
 
-  const handleArchive = async () => {
-    if (!box) return
-    try {
-      await archiveMutation.mutateAsync({ boxId: box.id })
-      toast.success('Box archived')
-    } catch (error) {
-      handleApiError(error, 'Failed to archive box')
-    }
-  }
-
   const handleRecover = async () => {
     if (!box) return
     try {
-      await recoverMutation.mutateAsync({ boxId: box.id })
+      await recoverMutation.mutateAsync({ boxId: box.id, detailRef: boxId })
       toast.success('Box recovery started')
     } catch (error) {
       handleApiError(error, 'Failed to recover box')
@@ -155,7 +235,7 @@ export default function BoxDetails() {
   const handleDelete = async () => {
     if (!box) return
     try {
-      await deleteMutation.mutateAsync({ boxId: box.id })
+      await deleteMutation.mutateAsync({ boxId: box.id, detailRef: boxId })
       toast.success('Box deleted')
       setDeleteDialogOpen(false)
       navigate(RoutePath.BOXES)
@@ -180,10 +260,18 @@ export default function BoxDetails() {
 
   return (
     <PageLayout className="h-[var(--app-content-height,calc(100svh_-_3.5rem))] overflow-hidden">
-      <PageHeader className="hidden sm:flex">
-        <PageTitle>Boxes</PageTitle>
-      </PageHeader>
-
+      <OnboardingGuideDialog
+        open={showOnboardingDialog}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) {
+            closeOnboardingDialog()
+          } else {
+            setShowOnboardingDialog(true)
+          }
+        }}
+        onProgressChange={updateOnboardingProgress}
+        progress={onboardingProgress}
+      />
       <BoxHeader
         box={box}
         isLoading={isLoading}
@@ -193,7 +281,6 @@ export default function BoxDetails() {
         isFetching={isFetching}
         onStart={handleStart}
         onStop={handleStop}
-        onArchive={handleArchive}
         onRecover={handleRecover}
         onDelete={() => setDeleteDialogOpen(true)}
         onRefresh={() => refetch()}
@@ -204,10 +291,35 @@ export default function BoxDetails() {
         mutations={{
           start: startMutation.isPending,
           stop: stopMutation.isPending,
-          archive: archiveMutation.isPending,
           recover: recoverMutation.isPending,
         }}
       />
+
+      {showOnboardingNudge && (
+        <div className="shrink-0 border-b border-border bg-card px-4 py-3 sm:px-5">
+          <div className="mx-auto flex max-w-[1440px] flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="flex min-w-0 flex-1 items-start gap-3">
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+                <ListChecks className="size-4" />
+              </span>
+              <div className="min-w-0">
+                <div className="text-sm font-semibold">Connect with the SDK</div>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <span className="inline-flex items-center gap-1">
+                    <Code2 className="size-3.5" />
+                    Generate an API key and run the SDK example.
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2 sm:justify-end">
+              <Button type="button" size="sm" onClick={() => setShowOnboardingDialog(true)}>
+                Open SDK guide
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {isNotFound ? (
         <div className="flex flex-1 min-h-0 items-center justify-center">
@@ -233,7 +345,7 @@ export default function BoxDetails() {
                 minSize={250}
                 maxSize={550}
                 defaultSize={320}
-                className="flex flex-col overflow-hidden"
+                className="flex flex-col overflow-hidden bg-card"
               >
                 <div className="flex items-center px-5 border-b border-border shrink-0 h-[41px]">
                   <span className="text-sm font-medium">Overview</span>
@@ -262,6 +374,7 @@ export default function BoxDetails() {
               box={box}
               isLoading={isLoading}
               experimentsEnabled={experimentsEnabled}
+              vncEnabled={vncEnabled}
               tab={tab}
               onTabChange={setTab}
             />

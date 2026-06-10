@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { SnapshotQueryParams } from './useSnapshotsQuery'
 import type { AuditLogsQueryParams } from './useAuditLogsQuery'
 
 export const queryKeys = {
@@ -56,22 +55,7 @@ export const queryKeys = {
         ...(page !== undefined && perPage !== undefined ? [{ page, perPage }] : []),
       ] as const,
   },
-  snapshots: {
-    all: ['snapshots'] as const,
-    list: (organizationId: string, params?: SnapshotQueryParams) => {
-      const base = [...queryKeys.snapshots.all, organizationId, 'list'] as const
-      if (!params) return base
-      return [
-        ...base,
-        {
-          page: params.page,
-          pageSize: params.pageSize,
-          ...(params.filters && { filters: params.filters }),
-          ...(params.sorting && { sorting: params.sorting }),
-        },
-      ] as const
-    },
-  },
+  // TODO(image-rewrite): template query keys removed with the image/template subsystem.
   registries: {
     all: ['registries'] as const,
     list: (organizationId: string) => [...queryKeys.registries.all, organizationId, 'list'] as const,

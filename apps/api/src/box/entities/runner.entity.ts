@@ -114,7 +114,7 @@ export class Runner {
   @Column({
     default: 0,
   })
-  currentSnapshotCount: number
+  currentArtifactCount: number
 
   @Column({
     default: 0,

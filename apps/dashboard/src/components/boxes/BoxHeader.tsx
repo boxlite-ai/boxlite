@@ -17,9 +17,10 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
-import { isArchivable, isRecoverable, isStartable, isStoppable } from '@/lib/utils/box'
+import { getBoxDisplayName, getBoxPublicId, getBoxPublicIdLabel } from '@/lib/box-identity'
+import { isRecoverable, isSshAccessible, isStartable, isStoppable } from '@/lib/utils/sandbox'
 import { Box } from '@boxlite-ai/api-client'
-import { ArrowLeft, MoreHorizontal, Play, RefreshCw, Square, Wrench } from 'lucide-react'
+import { ArrowLeft, MoreHorizontal, Play, RefreshCw, Square, Terminal, Wrench } from 'lucide-react'
 
 interface BoxHeaderProps {
   box: Box | undefined
@@ -30,7 +31,6 @@ interface BoxHeaderProps {
   isFetching: boolean
   onStart: () => void
   onStop: () => void
-  onArchive: () => void
   onRecover: () => void
   onDelete: () => void
   onRefresh: () => void
@@ -41,7 +41,6 @@ interface BoxHeaderProps {
   mutations: {
     start: boolean
     stop: boolean
-    archive: boolean
     recover: boolean
   }
 }
@@ -55,7 +54,6 @@ export function BoxHeader({
   isFetching,
   onStart,
   onStop,
-  onArchive,
   onRecover,
   onDelete,
   onRefresh,
@@ -65,6 +63,8 @@ export function BoxHeader({
   onScreenRecordings,
   mutations,
 }: BoxHeaderProps) {
+  const publicBoxId = box ? getBoxPublicId(box) : ''
+
   return (
     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 min-w-0 px-4 sm:px-5 py-1.5 sm:py-2 border-b border-border shrink-0">
       <div className="flex items-center gap-2 min-w-0">
@@ -76,13 +76,13 @@ export function BoxHeader({
         ) : box ? (
           <div className="min-w-0">
             <div className="flex items-center gap-1 min-w-0">
-              <h2 className="text-base font-medium truncate">{box.name || box.id}</h2>
-              <CopyButton value={box.name || box.id} tooltipText="Copy name" size="icon-xs" />
+              <h2 className="text-base font-medium truncate">{getBoxDisplayName(box)}</h2>
+              <CopyButton value={getBoxDisplayName(box)} tooltipText="Copy name" size="icon-xs" />
             </div>
             <div className="hidden sm:flex items-center gap-1 min-w-0">
-              <span className="text-xs text-muted-foreground shrink-0">UUID</span>
-              <span className="text-sm text-muted-foreground font-mono truncate">{box.id}</span>
-              <CopyButton value={box.id} tooltipText="Copy ID" size="icon-xs" />
+              <span className="text-xs text-muted-foreground shrink-0">Box ID</span>
+              <span className="text-sm text-muted-foreground font-mono truncate">{getBoxPublicIdLabel(box)}</span>
+              {publicBoxId && <CopyButton value={publicBoxId} tooltipText="Copy Box ID" size="icon-xs" />}
             </div>
           </div>
         ) : null}
@@ -120,6 +120,12 @@ export function BoxHeader({
                       Recover
                     </Button>
                   )}
+                  {isSshAccessible(box) && (
+                    <Button variant="outline" size="sm" onClick={onCreateSshAccess} disabled={actionsDisabled}>
+                      <Terminal className="size-4" />
+                      SSH
+                    </Button>
+                  )}
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button variant="outline" size="icon-sm" aria-label="More actions">
@@ -134,9 +140,6 @@ export function BoxHeader({
                         <DropdownMenuSeparator />
                       </DropdownMenuGroup>
                       <DropdownMenuGroup>
-                        <DropdownMenuItem onClick={onCreateSshAccess} disabled={actionsDisabled}>
-                          Create SSH Access
-                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={onRevokeSshAccess} disabled={actionsDisabled}>
                           Revoke SSH Access
                         </DropdownMenuItem>
@@ -145,16 +148,6 @@ export function BoxHeader({
                           Screen Recordings
                         </DropdownMenuItem>
                       </DropdownMenuGroup>
-                      {isArchivable(box) && (
-                        <>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuGroup>
-                            <DropdownMenuItem onClick={onArchive} disabled={actionsDisabled}>
-                              Archive
-                            </DropdownMenuItem>
-                          </DropdownMenuGroup>
-                        </>
-                      )}
                       {deletePermitted && (
                         <>
                           <DropdownMenuSeparator />

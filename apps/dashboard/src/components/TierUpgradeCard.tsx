@@ -223,7 +223,6 @@ function getTierRequirementItems(
     items.push({
       label: 'Email verification',
       isChecked: requirementsState.emailVerified,
-      link: RoutePath.ACCOUNT_SETTINGS,
     })
   }
   if (tier.tier === 2) {

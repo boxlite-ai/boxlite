@@ -14,7 +14,7 @@
       "dependsOn": [
         {
           "target": "build",
-          "projects": "sdk-typescript"
+          "projects": ["sdk-typescript", "analytics-api-client"]
         }
       ]
     },

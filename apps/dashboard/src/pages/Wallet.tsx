@@ -299,12 +299,16 @@ const Wallet = () => {
                     </AlertDescription>
                   </Alert>
                 )}
-                {!wallet.creditCardConnected && user.profile.email_verified && selectedOrganization?.personal && (
-                  <Alert variant="neutral">
-                    <SparklesIcon />
-                    <AlertDescription>Connect a credit card to receive an additional $100 of credits.</AlertDescription>
-                  </Alert>
-                )}
+                {!wallet.creditCardConnected &&
+                  user.profile.email_verified &&
+                  selectedOrganization?.isDefaultForAuthenticatedUser && (
+                    <Alert variant="neutral">
+                      <SparklesIcon />
+                      <AlertDescription>
+                        Connect a credit card to receive an additional $100 of credits.
+                      </AlertDescription>
+                    </Alert>
+                  )}
               </>
             )}
             {wallet.hasFailedOrPendingInvoice && (

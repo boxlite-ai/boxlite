@@ -10,10 +10,9 @@ import { Region } from './entities/region.entity'
 import { RegionService } from './services/region.service'
 import { Runner } from '../box/entities/runner.entity'
 import { RegionController } from './controllers/region.controller'
-import { Snapshot } from '../box/entities/snapshot.entity'
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Region, Runner, Snapshot])],
+  imports: [TypeOrmModule.forFeature([Region, Runner])],
   controllers: [RegionController],
   providers: [RegionService],
   exports: [RegionService],

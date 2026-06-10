@@ -7,6 +7,8 @@
 import { Injectable, ExecutionContext, Logger, CanActivate, Type, mixin } from '@nestjs/common'
 import { ModuleRef } from '@nestjs/core'
 
+export const OR_GUARD_INNER_GUARDS = Symbol('OR_GUARD_INNER_GUARDS')
+
 /**
  * Creates an OrGuard that allows access if at least one of the provided guards allows access.
  * It tries each guard in sequence and returns true on the first successful guard.
@@ -44,5 +46,10 @@ export function OrGuard(guards: Type<CanActivate>[]): Type<CanActivate> {
     }
   }
 
-  return mixin(OrGuardMixin)
+  const guardClass = OrGuardMixin as Type<CanActivate> & {
+    [OR_GUARD_INNER_GUARDS]?: Type<CanActivate>[]
+  }
+  guardClass[OR_GUARD_INNER_GUARDS] = guards
+
+  return mixin(guardClass)
 }

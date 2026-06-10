@@ -5,11 +5,12 @@
 
 import { queryKeys } from '@/hooks/queries/queryKeys'
 import { useApi } from '@/hooks/useApi'
+import { useConfig } from '@/hooks/useConfig'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import {
   CreateBoxBaseParams,
   CreateBoxFromImageParams,
-  CreateBoxFromSnapshotParams,
+  CreateBoxFromTemplateParams,
   BoxLite,
   Box,
 } from '@boxlite-ai/sdk'
@@ -18,7 +19,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { toast } from 'sonner'
 
-type CreateBoxParams = CreateBoxBaseParams | CreateBoxFromImageParams | CreateBoxFromSnapshotParams
+type CreateBoxParams = CreateBoxBaseParams | CreateBoxFromImageParams | CreateBoxFromTemplateParams
 
 const TERMINAL_PORT = 22222
 const VNC_PORT = 6080
@@ -60,7 +61,7 @@ export type UseBoxSessionResult = {
 export function removeBoxSessionQueries(queryClient: QueryClient, scope: string): void {
   queryClient
     .getMutationCache()
-    .findAll({ mutationKey: ['create-box', scope] })
+    .findAll({ mutationKey: ['create-sandbox', scope] })
     .forEach((m) => queryClient.getMutationCache().remove(m))
   queryClient.removeQueries({ queryKey: queryKeys.box.session(scope) })
 }
@@ -89,19 +90,20 @@ export function useBoxSession(options?: UseBoxSessionOptions): UseBoxSessionResu
   const { user } = useAuth()
   const { selectedOrganization } = useSelectedOrganization()
   const { boxApi, toolboxApi } = useApi()
+  const { apiUrl } = useConfig()
   const queryClient = useQueryClient()
 
   const client = useMemo(() => {
     if (!user?.access_token || !selectedOrganization?.id) return null
     return new BoxLite({
       jwtToken: user.access_token,
-      apiUrl: import.meta.env.VITE_API_URL,
+      apiUrl,
       organizationId: selectedOrganization.id,
     })
-  }, [user?.access_token, selectedOrganization?.id])
+  }, [apiUrl, user?.access_token, selectedOrganization?.id])
 
   const createMutation = useMutation<Box, Error, CreateBoxParams | undefined>({
-    mutationKey: ['create-box', scope ?? 'default'],
+    mutationKey: ['create-sandbox', scope ?? 'default'],
     mutationFn: async (params) => {
       if (!client) throw new Error('Unable to create BoxLite client: missing access token or organization ID.')
       return await client.create(params ?? createParams)
@@ -111,7 +113,7 @@ export function useBoxSession(options?: UseBoxSessionOptions): UseBoxSessionResu
     },
     onError: (error) => {
       if (notifyRef.current.box) {
-        toast.error('Failed to create box', {
+        toast.error('Failed to create sandbox', {
           description: error.message,
           action: { label: 'Try again', onClick: () => createMutation.mutate(createParams) },
         })
@@ -125,10 +127,7 @@ export function useBoxSession(options?: UseBoxSessionOptions): UseBoxSessionResu
 
   const boxQuery = useQuery<Box>({
     queryKey: queryKeys.box.instance(resolvedScope, boxId),
-    queryFn: async () => {
-      if (!client) throw new Error('Client not initialized')
-      return await client.get(boxId)
-    },
+    queryFn: () => client?.get(boxId) ?? Promise.reject(new Error('Client not initialized')),
     enabled: !!resolvedScope && !!boxId && !!client,
   })
 
