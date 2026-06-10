@@ -202,7 +202,7 @@ export class BoxliteProxyController {
       changeOrigin: true,
       autoRewrite: true,
       ws: opts?.ws ?? false,
-      pathRewrite: () => targetPathForRunnerBox(sandbox.id),
+      pathRewrite: () => targetPathForRunnerBox(box.id),
       on: {
         proxyReq: (proxyReq: any, originalReq: any) => {
           proxyReq.setHeader('Authorization', `Bearer ${runner.apiKey}`)

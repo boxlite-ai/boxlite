@@ -18,7 +18,7 @@ import {
 
 type InvalidateBoxLookupCacheArgs =
   | {
-      boxId: string
+      id: string
       boxId: string
       organizationId: string
       name: string
@@ -75,7 +75,7 @@ export class BoxLookupCacheInvalidationService {
           boxLookupCacheKeyById({
             organizationId,
             returnDestroyed,
-            boxId: args.boxId,
+            boxId: args.id,
           }),
         )
         for (const boxId of boxIds) {
@@ -114,7 +114,7 @@ export class BoxLookupCacheInvalidationService {
   }
 
   invalidateOrgId(args: {
-    boxId: string
+    id: string
     boxId: string
     organizationId: string
     name: string
@@ -146,7 +146,7 @@ export class BoxLookupCacheInvalidationService {
       cacheIds.push(
         boxOrgIdCacheKeyById({
           organizationId,
-          boxId: args.boxId,
+          boxId: args.id,
         }),
       )
       for (const boxId of boxIds) {
@@ -168,7 +168,7 @@ export class BoxLookupCacheInvalidationService {
     }
 
     // Also invalidate the "no org" variants (when organizationId was not provided to getOrganizationId)
-    cacheIds.push(boxOrgIdCacheKeyById({ boxId: args.boxId }))
+    cacheIds.push(boxOrgIdCacheKeyById({ boxId: args.id }))
     for (const boxId of boxIds) {
       cacheIds.push(boxOrgIdCacheKeyByBoxId({ boxId }))
     }

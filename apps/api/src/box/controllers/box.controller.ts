@@ -68,7 +68,7 @@ import { SshGatewayGuard } from '../guards/ssh-gateway.guard'
 import { ToolboxProxyUrlDto } from '../dto/toolbox-proxy-url.dto'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
-import { SANDBOX_EVENT_CHANNEL } from '../../common/constants/constants'
+import { BOX_EVENT_CHANNEL } from '../../common/constants/constants'
 import { RequireFlagsEnabled } from '@openfeature/nestjs-sdk'
 import { FeatureFlags } from '../../common/constants/feature-flags'
 import { RegionBoxAccessGuard } from '../guards/region-box-access.guard'
@@ -89,9 +89,9 @@ export class BoxController {
     @InjectRedis() private readonly redis: Redis,
   ) {
     this.redisSubscriber = this.redis.duplicate()
-    this.redisSubscriber.subscribe(SANDBOX_EVENT_CHANNEL)
+    this.redisSubscriber.subscribe(BOX_EVENT_CHANNEL)
     this.redisSubscriber.on('message', (channel, message) => {
-      if (channel !== SANDBOX_EVENT_CHANNEL) {
+      if (channel !== BOX_EVENT_CHANNEL) {
         return
       }
 
@@ -229,10 +229,10 @@ export class BoxController {
     description: 'The box has been successfully created.',
     type: BoxDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @Audit({
     action: AuditAction.CREATE,
-    targetType: AuditTarget.SANDBOX,
+    targetType: AuditTarget.BOX,
     targetIdFromResult: (result: BoxDto) => result?.id,
     requestMetadata: {
       body: (req: TypedRequest<CreateBoxDto>) => ({
@@ -367,11 +367,11 @@ export class BoxController {
     description: 'Box has been deleted',
     type: BoxDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.DELETE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.DELETE_BOXES])
   @UseGuards(BoxAccessGuard)
   @Audit({
     action: AuditAction.DELETE,
-    targetType: AuditTarget.SANDBOX,
+    targetType: AuditTarget.BOX,
     targetIdFromRequest: (req) => req.params.boxIdOrName,
     targetIdFromResult: (result: BoxDto) => result?.id,
   })
@@ -401,11 +401,11 @@ export class BoxController {
     description: 'Recovery initiated',
     type: BoxDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
   @Audit({
     action: AuditAction.RECOVER,
-    targetType: AuditTarget.SANDBOX,
+    targetType: AuditTarget.BOX,
     targetIdFromRequest: (req) => req.params.boxIdOrName,
     targetIdFromResult: (result: BoxDto) => result?.id,
   })
@@ -441,11 +441,11 @@ export class BoxController {
     description: 'Box has been started',
     type: BoxDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
   @Audit({
     action: AuditAction.START,
-    targetType: AuditTarget.SANDBOX,
+    targetType: AuditTarget.BOX,
     targetIdFromRequest: (req) => req.params.boxIdOrName,
     targetIdFromResult: (result: BoxDto) => result?.id,
   })
@@ -487,11 +487,11 @@ export class BoxController {
     description: 'Box has been stopped',
     type: BoxDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
   @Audit({
     action: AuditAction.STOP,
-    targetType: AuditTarget.SANDBOX,
+    targetType: AuditTarget.BOX,
     targetIdFromRequest: (req) => req.params.boxIdOrName,
     targetIdFromResult: (result: BoxDto) => result?.id,
     requestMetadata: {
@@ -528,12 +528,12 @@ export class BoxController {
     description: 'Box has been resized',
     type: BoxDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
-  @RequireFlagsEnabled({ flags: [{ flagKey: FeatureFlags.SANDBOX_RESIZE, defaultValue: false }] })
+  @RequireFlagsEnabled({ flags: [{ flagKey: FeatureFlags.BOX_RESIZE, defaultValue: false }] })
   @Audit({
     action: AuditAction.RESIZE,
-    targetType: AuditTarget.SANDBOX,
+    targetType: AuditTarget.BOX,
     targetIdFromRequest: (req) => req.params.boxIdOrName,
     targetIdFromResult: (result: BoxDto) => result?.id,
     requestMetadata: {
@@ -569,11 +569,11 @@ export class BoxController {
     description: 'Labels have been successfully replaced',
     type: BoxLabelsDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
   @Audit({
     action: AuditAction.REPLACE_LABELS,
-    targetType: AuditTarget.SANDBOX,
+    targetType: AuditTarget.BOX,
     targetIdFromRequest: (req) => req.params.boxIdOrName,
     targetIdFromResult: (result: BoxDto) => result?.id,
     requestMetadata: {
@@ -637,11 +637,11 @@ export class BoxController {
     description: 'Public status has been successfully updated',
     type: BoxDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
   @Audit({
     action: AuditAction.UPDATE_PUBLIC_STATUS,
-    targetType: AuditTarget.SANDBOX,
+    targetType: AuditTarget.BOX,
     targetIdFromRequest: (req) => req.params.boxIdOrName,
     targetIdFromResult: (result: BoxDto) => result?.id,
     requestMetadata: {
@@ -698,11 +698,11 @@ export class BoxController {
     description: 'Auto-stop interval has been set',
     type: BoxDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
   @Audit({
     action: AuditAction.SET_AUTO_STOP_INTERVAL,
-    targetType: AuditTarget.SANDBOX,
+    targetType: AuditTarget.BOX,
     targetIdFromRequest: (req) => req.params.boxIdOrName,
     targetIdFromResult: (result: BoxDto) => result?.id,
     requestMetadata: {
@@ -741,11 +741,11 @@ export class BoxController {
     description: 'Auto-delete interval has been set',
     type: BoxDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
   @Audit({
     action: AuditAction.SET_AUTO_DELETE_INTERVAL,
-    targetType: AuditTarget.SANDBOX,
+    targetType: AuditTarget.BOX,
     targetIdFromRequest: (req) => req.params.boxIdOrName,
     targetIdFromResult: (result: BoxDto) => result?.id,
     requestMetadata: {
@@ -779,11 +779,11 @@ export class BoxController {
   //   description: 'Network settings have been updated',
   //   type: BoxDto,
   // })
-  // @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  // @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   // @UseGuards(BoxAccessGuard)
   // @Audit({
   //   action: AuditAction.UPDATE_NETWORK_SETTINGS,
-  //   targetType: AuditTarget.SANDBOX,
+  //   targetType: AuditTarget.BOX,
   //   targetIdFromRequest: (req) => req.params.boxIdOrName,
   //   targetIdFromResult: (result: BoxDto) => result?.id,
   //   requestMetadata: {
@@ -928,11 +928,11 @@ export class BoxController {
     description: 'SSH access has been created',
     type: SshAccessDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
   @Audit({
     action: AuditAction.CREATE_SSH_ACCESS,
-    targetType: AuditTarget.SANDBOX,
+    targetType: AuditTarget.BOX,
     targetIdFromRequest: (req) => req.params.boxIdOrName,
     targetIdFromResult: (result: SshAccessDto) => result?.boxId,
     requestMetadata: {
@@ -971,11 +971,11 @@ export class BoxController {
     description: 'SSH access has been revoked',
     type: BoxDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
   @Audit({
     action: AuditAction.REVOKE_SSH_ACCESS,
-    targetType: AuditTarget.SANDBOX,
+    targetType: AuditTarget.BOX,
     targetIdFromRequest: (req) => req.params.boxIdOrName,
     targetIdFromResult: (result: BoxDto) => result?.id,
     requestMetadata: {

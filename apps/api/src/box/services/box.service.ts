@@ -17,7 +17,7 @@ import { RunnerService } from './runner.service'
 import { BoxError } from '../../exceptions/box-error.exception'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Cron, CronExpression } from '@nestjs/schedule'
-import { SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
+import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 import { BoxWarmPoolService } from './box-warm-pool.service'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
 import { WarmPoolEvents } from '../constants/warmpool-events.constants'
@@ -45,8 +45,8 @@ import { PaginatedList } from '../../common/interfaces/paginated-list.interface'
 import {
   BoxSortField,
   BoxSortDirection,
-  DEFAULT_SANDBOX_SORT_FIELD,
-  DEFAULT_SANDBOX_SORT_DIRECTION,
+  DEFAULT_BOX_SORT_FIELD,
+  DEFAULT_BOX_SORT_DIRECTION,
 } from '../dto/list-boxes-query.dto'
 import { createRangeFilter } from '../../common/utils/range-filter'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
@@ -259,7 +259,7 @@ export class BoxService {
   async createForWarmPool(warmPoolItem: WarmPool): Promise<Box> {
     const box = new Box(warmPoolItem.target)
 
-    box.organizationId = SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION
+    box.organizationId = BOX_WARM_POOL_UNASSIGNED_ORGANIZATION
 
     box.class = warmPoolItem.class
     //  TODO: default user should be configurable
@@ -456,11 +456,11 @@ export class BoxService {
 
     // Defensive invalidation of orgId cache since the box moved from unassigned to a real organization
     this.boxLookupCacheInvalidationService.invalidateOrgId({
-      boxId: warmPoolBox.id,
+      id: warmPoolBox.id,
       boxId: warmPoolBox.boxId,
       organizationId: organization.id,
       name: warmPoolBox.name,
-      previousOrganizationId: SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+      previousOrganizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
     })
 
     // Treat this as a newly started box
@@ -541,7 +541,7 @@ export class BoxService {
       lastEventBefore,
     } = filters || {}
 
-    const { field: sortField = DEFAULT_SANDBOX_SORT_FIELD, direction: sortDirection = DEFAULT_SANDBOX_SORT_DIRECTION } =
+    const { field: sortField = DEFAULT_BOX_SORT_FIELD, direction: sortDirection = DEFAULT_BOX_SORT_DIRECTION } =
       sort || {}
 
     const baseFindOptions: FindOptionsWhere<Box> = {

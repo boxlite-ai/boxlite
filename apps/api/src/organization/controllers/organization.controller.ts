@@ -649,7 +649,7 @@ export class OrganizationController {
   @RequiredSystemRole(SystemRole.ADMIN)
   @UseGuards(CombinedAuthGuard, SystemActionGuard)
   @Audit({
-    action: AuditAction.UPDATE_SANDBOX_DEFAULT_LIMITED_NETWORK_EGRESS,
+    action: AuditAction.UPDATE_BOX_DEFAULT_LIMITED_NETWORK_EGRESS,
     targetType: AuditTarget.ORGANIZATION,
     targetIdFromRequest: (req) => req.params.organizationId,
     requestMetadata: {

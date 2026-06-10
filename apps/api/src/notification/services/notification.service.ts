@@ -25,7 +25,7 @@ import { RegionService } from '../../region/services/region.service'
 import { BoxService } from '../../box/services/box.service'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
-import { SANDBOX_EVENT_CHANNEL } from '../../common/constants/constants'
+import { BOX_EVENT_CHANNEL } from '../../common/constants/constants'
 
 @Injectable()
 export class NotificationService {
@@ -46,14 +46,14 @@ export class NotificationService {
   async handleBoxStateUpdated(event: BoxStateUpdatedEvent) {
     const dto = await this.boxService.toBoxDto(event.box)
     this.notificationEmitter.emitBoxStateUpdated(dto, event.oldState, event.newState)
-    this.redis.publish(SANDBOX_EVENT_CHANNEL, JSON.stringify(event))
+    this.redis.publish(BOX_EVENT_CHANNEL, JSON.stringify(event))
   }
 
   @OnEvent(BoxEvents.DESIRED_STATE_UPDATED)
   async handleBoxDesiredStateUpdated(event: BoxDesiredStateUpdatedEvent) {
     const dto = await this.boxService.toBoxDto(event.box)
     this.notificationEmitter.emitBoxDesiredStateUpdated(dto, event.oldDesiredState, event.newDesiredState)
-    this.redis.publish(SANDBOX_EVENT_CHANNEL, JSON.stringify(event))
+    this.redis.publish(BOX_EVENT_CHANNEL, JSON.stringify(event))
   }
 
   @OnEvent(VolumeEvents.CREATED)

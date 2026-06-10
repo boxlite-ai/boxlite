@@ -14,7 +14,7 @@ import { BoxState } from '../../box/enums/box-state.enum'
 import { BoxEvents } from './../../box/constants/box-events.constants'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { RedisLockProvider } from '../../box/common/redis-lock.provider'
-import { SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../../box/constants/box.constants'
+import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../../box/constants/box.constants'
 import { BoxUsagePeriodArchive } from '../entities/box-usage-period-archive.entity'
 import { TrackableJobExecutions } from '../../common/interfaces/trackable-job-executions'
 import { TrackJobExecution } from '../../common/decorators/track-job-execution.decorator'
@@ -122,7 +122,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
         endAt: IsNull(),
         // 1 day ago
         startAt: LessThan(new Date(Date.now() - 1000 * 60 * 60 * 24)),
-        organizationId: Not(SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION),
+        organizationId: Not(BOX_WARM_POOL_UNASSIGNED_ORGANIZATION),
       },
       order: {
         startAt: 'ASC',

@@ -10,8 +10,8 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
 import { In, Repository } from 'typeorm'
-import { SANDBOX_STATES_CONSUMING_COMPUTE } from '../constants/box-states-consuming-compute.constant'
-import { SANDBOX_STATES_CONSUMING_DISK } from '../constants/box-states-consuming-disk.constant'
+import { BOX_STATES_CONSUMING_COMPUTE } from '../constants/box-states-consuming-compute.constant'
+import { BOX_STATES_CONSUMING_DISK } from '../constants/box-states-consuming-disk.constant'
 import { VOLUME_STATES_CONSUMING_RESOURCES } from '../constants/volume-states-consuming-resources.constant'
 import { OrganizationUsageOverviewDto, RegionUsageOverviewDto } from '../dto/organization-usage-overview.dto'
 import {
@@ -285,12 +285,12 @@ export class OrganizationUsageService {
     let memToSubtract = 0
     let diskToSubtract = 0
 
-    if (SANDBOX_STATES_CONSUMING_COMPUTE.includes(excludedBox.state)) {
+    if (BOX_STATES_CONSUMING_COMPUTE.includes(excludedBox.state)) {
       cpuToSubtract = excludedBox.cpu
       memToSubtract = excludedBox.mem
     }
 
-    if (SANDBOX_STATES_CONSUMING_DISK.includes(excludedBox.state)) {
+    if (BOX_STATES_CONSUMING_DISK.includes(excludedBox.state)) {
       diskToSubtract = excludedBox.disk
     }
 
@@ -614,8 +614,8 @@ export class OrganizationUsageService {
       ])
       .where('sandbox.organizationId = :organizationId', { organizationId })
       .andWhere('sandbox.region = :regionId', { regionId })
-      .setParameter('statesConsumingCompute', SANDBOX_STATES_CONSUMING_COMPUTE)
-      .setParameter('statesConsumingDisk', SANDBOX_STATES_CONSUMING_DISK)
+      .setParameter('statesConsumingCompute', BOX_STATES_CONSUMING_COMPUTE)
+      .setParameter('statesConsumingDisk', BOX_STATES_CONSUMING_DISK)
       .setParameter('resizingState', BoxState.RESIZING)
       .setParameter('startedDesiredState', BoxDesiredState.STARTED)
       .getRawOne()
@@ -833,12 +833,12 @@ export class OrganizationUsageService {
       })
 
       if (excludedBox) {
-        if (SANDBOX_STATES_CONSUMING_COMPUTE.includes(excludedBox.state)) {
+        if (BOX_STATES_CONSUMING_COMPUTE.includes(excludedBox.state)) {
           shouldIncrementCpu = false
           shouldIncrementMemory = false
         }
 
-        if (SANDBOX_STATES_CONSUMING_DISK.includes(excludedBox.state)) {
+        if (BOX_STATES_CONSUMING_DISK.includes(excludedBox.state)) {
           shouldIncrementDisk = false
         }
       }
@@ -1228,21 +1228,21 @@ export class OrganizationUsageService {
         event.box.cpu,
         event.oldState,
         event.newState,
-        SANDBOX_STATES_CONSUMING_COMPUTE,
+        BOX_STATES_CONSUMING_COMPUTE,
       )
 
       const memDelta = this.calculateQuotaUsageDelta(
         event.box.mem,
         event.oldState,
         event.newState,
-        SANDBOX_STATES_CONSUMING_COMPUTE,
+        BOX_STATES_CONSUMING_COMPUTE,
       )
 
       const diskDelta = this.calculateQuotaUsageDelta(
         event.box.disk,
         event.oldState,
         event.newState,
-        SANDBOX_STATES_CONSUMING_DISK,
+        BOX_STATES_CONSUMING_DISK,
       )
 
       if (cpuDelta !== 0) {

@@ -11,7 +11,7 @@ import { In, MoreThan, Not, Repository } from 'typeorm'
 import { RedisLockProvider } from '../common/redis-lock.provider'
 import { BoxRepository } from '../repositories/box.repository'
 import { Box } from '../entities/box.entity'
-import { SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
+import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 import { WarmPool } from '../entities/warm-pool.entity'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
 import { BoxEvents } from '../constants/box-events.constants'
@@ -103,7 +103,7 @@ export class BoxWarmPoolService {
         .andWhere('sandbox.osUser = :osUser', { osUser: warmPoolItem.osUser })
         .andWhere('sandbox.env = :env', { env: warmPoolItem.env })
         .andWhere('sandbox.organizationId = :organizationId', {
-          organizationId: SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+          organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
         })
         .andWhere('sandbox.region = :region', { region: warmPoolItem.target })
         .andWhere('sandbox.state = :state', { state: BoxState.STARTED })
@@ -155,7 +155,7 @@ export class BoxWarmPoolService {
         // can no longer be matched by template. Rebuild template-aware matching here.
         const boxCount = await this.boxRepository.count({
           where: {
-            organizationId: SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+            organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
             class: warmPoolItem.class,
             osUser: warmPoolItem.osUser,
             env: warmPoolItem.env,
@@ -191,7 +191,7 @@ export class BoxWarmPoolService {
 
   @OnEvent(BoxEvents.ORGANIZATION_UPDATED)
   async handleBoxOrganizationUpdated(event: BoxOrganizationUpdatedEvent) {
-    if (event.newOrganizationId === SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION) {
+    if (event.newOrganizationId === BOX_WARM_POOL_UNASSIGNED_ORGANIZATION) {
       return
     }
     // TODO(image-rewrite): Box.template column removed with box_template; warm pool matching no
@@ -215,7 +215,7 @@ export class BoxWarmPoolService {
 
     const boxCount = await this.boxRepository.count({
       where: {
-        organizationId: SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+        organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
         class: warmPoolItem.class,
         osUser: warmPoolItem.osUser,
         env: warmPoolItem.env,

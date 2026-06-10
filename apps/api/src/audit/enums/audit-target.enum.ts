@@ -11,7 +11,7 @@ export enum AuditTarget {
   ORGANIZATION_ROLE = 'organization_role',
   ORGANIZATION_USER = 'organization_user',
   RUNNER = 'runner',
-  SANDBOX = 'sandbox',
+  BOX = 'box',
   TEMPLATE = 'template',
   USER = 'user',
   VOLUME = 'volume',

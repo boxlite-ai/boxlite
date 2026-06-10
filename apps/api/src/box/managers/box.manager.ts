@@ -16,7 +16,7 @@ import { RunnerService } from '../services/runner.service'
 
 import { RedisLockProvider, LockCode } from '../common/redis-lock.provider'
 
-import { SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
+import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 
 import { BoxEvents } from '../constants/box-events.constants'
 import { BoxStoppedEvent } from '../events/box-stopped.event'
@@ -87,7 +87,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
             .innerJoin('sandbox_last_activity', 'activity', 'activity."sandboxId" = box.id')
             .where('sandbox."runnerId" = :runnerId', { runnerId: runner.id })
             .andWhere('sandbox."organizationId" != :warmPoolOrg', {
-              warmPoolOrg: SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+              warmPoolOrg: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
             })
             .andWhere('sandbox.state = :state', { state: BoxState.STARTED })
             .andWhere('sandbox."desiredState" = :desiredState', {
@@ -164,7 +164,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
             .innerJoin('sandbox_last_activity', 'activity', 'activity."sandboxId" = box.id')
             .where('sandbox."runnerId" = :runnerId', { runnerId: runner.id })
             .andWhere('sandbox."organizationId" != :warmPoolOrg', {
-              warmPoolOrg: SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+              warmPoolOrg: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
             })
             .andWhere('sandbox.state = :state', { state: BoxState.STOPPED })
             .andWhere('sandbox."desiredState" = :desiredState', {

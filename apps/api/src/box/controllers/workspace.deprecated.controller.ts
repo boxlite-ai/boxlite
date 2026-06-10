@@ -121,10 +121,10 @@ export class WorkspaceController {
     description: 'The workspace has been successfully created.',
     type: WorkspaceDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @Audit({
     action: AuditAction.CREATE,
-    targetType: AuditTarget.SANDBOX,
+    targetType: AuditTarget.BOX,
     targetIdFromResult: (result: WorkspaceDto) => result?.id,
     requestMetadata: {
       body: (req: TypedRequest<CreateWorkspaceDto>) => ({
@@ -220,11 +220,11 @@ export class WorkspaceController {
     status: 200,
     description: 'Workspace has been deleted',
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.DELETE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.DELETE_BOXES])
   @UseGuards(WorkspaceAccessGuard)
   @Audit({
     action: AuditAction.DELETE,
-    targetType: AuditTarget.SANDBOX,
+    targetType: AuditTarget.BOX,
     targetIdFromRequest: (req) => req.params.workspaceId,
   })
   async removeWorkspace(
@@ -251,11 +251,11 @@ export class WorkspaceController {
     status: 200,
     description: 'Workspace has been started',
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(WorkspaceAccessGuard)
   @Audit({
     action: AuditAction.START,
-    targetType: AuditTarget.SANDBOX,
+    targetType: AuditTarget.BOX,
     targetIdFromRequest: (req) => req.params.workspaceId,
   })
   async startWorkspace(
@@ -281,11 +281,11 @@ export class WorkspaceController {
     status: 200,
     description: 'Workspace has been stopped',
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(WorkspaceAccessGuard)
   @Audit({
     action: AuditAction.STOP,
-    targetType: AuditTarget.SANDBOX,
+    targetType: AuditTarget.BOX,
     targetIdFromRequest: (req) => req.params.workspaceId,
   })
   async stopWorkspace(@Param('workspaceId') workspaceId: string): Promise<void> {
@@ -309,11 +309,11 @@ export class WorkspaceController {
     description: 'Labels have been successfully replaced',
     type: WorkspaceLabelsDto,
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(WorkspaceAccessGuard)
   @Audit({
     action: AuditAction.REPLACE_LABELS,
-    targetType: AuditTarget.SANDBOX,
+    targetType: AuditTarget.BOX,
     targetIdFromRequest: (req) => req.params.workspaceId,
     requestMetadata: {
       body: (req: TypedRequest<WorkspaceLabelsDto>) => ({
@@ -345,11 +345,11 @@ export class WorkspaceController {
     description: 'Public status to set',
     type: 'boolean',
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(WorkspaceAccessGuard)
   @Audit({
     action: AuditAction.UPDATE_PUBLIC_STATUS,
-    targetType: AuditTarget.SANDBOX,
+    targetType: AuditTarget.BOX,
     targetIdFromRequest: (req) => req.params.workspaceId,
     requestMetadata: {
       params: (req) => ({
@@ -384,11 +384,11 @@ export class WorkspaceController {
     status: 200,
     description: 'Auto-stop interval has been set',
   })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(WorkspaceAccessGuard)
   @Audit({
     action: AuditAction.SET_AUTO_STOP_INTERVAL,
-    targetType: AuditTarget.SANDBOX,
+    targetType: AuditTarget.BOX,
     targetIdFromRequest: (req) => req.params.workspaceId,
     requestMetadata: {
       params: (req) => ({
