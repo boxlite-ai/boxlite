@@ -32,7 +32,10 @@
 FROM node:24-slim AS boxlite-source
 ENV CI=true
 
-RUN apt-get update && apt-get install -y --no-install-recommends bash curl && \
+# postgresql-client is required by the e2e-cloud workflow's
+# "Init admin-org sandbox quota" step, which `aws ecs execute-command`s
+# into this container and runs `psql` against RDS to seed quota rows.
+RUN apt-get update && apt-get install -y --no-install-recommends bash curl postgresql-client && \
   rm -rf /var/lib/apt/lists/*
 RUN npm install -g corepack && corepack enable
 
