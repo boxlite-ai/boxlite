@@ -320,7 +320,7 @@ jobs:
       # ──────────────────────────────────────────────────────────────────
       # One-time init: admin-org sandbox quota. Naturally idempotent
       # because the SET clause always writes the same target values; we
-      # drop the `AND max_cpu_per_sandbox=0` guard the first draft had —
+      # drop the `AND max_cpu_per_box=0` guard the first draft had —
       # it prevented convergence from partial-update states. The SELECT
       # afterwards prints the post-state for the workflow log.
       #
@@ -356,7 +356,7 @@ jobs:
           # to stdin and our `sh -c '…'` exits immediately after psql.
           OUT=/tmp/ecs_exec.log
           aws ecs execute-command --cluster "$CLUSTER" --task "$TASK" --container Api --interactive \
-            --command 'sh -c "PGPASSWORD=\"\$DB_PASSWORD\" psql -h \"\$DB_HOST\" -U \"\$DB_USERNAME\" -d \"\$DB_DATABASE\" -v ON_ERROR_STOP=1 -c \"UPDATE \\\"organization\\\" SET max_cpu_per_sandbox=4, max_memory_per_sandbox=8192, max_disk_per_sandbox=20 WHERE id='\''4a1eef70-8734-4814-b7a5-0ca3522a8760'\''; SELECT id, max_cpu_per_sandbox, max_memory_per_sandbox, max_disk_per_sandbox FROM \\\"organization\\\" WHERE id='\''4a1eef70-8734-4814-b7a5-0ca3522a8760'\'';\""' \
+            --command 'sh -c "PGPASSWORD=\"\$DB_PASSWORD\" psql -h \"\$DB_HOST\" -U \"\$DB_USERNAME\" -d \"\$DB_DATABASE\" -v ON_ERROR_STOP=1 -c \"UPDATE \\\"organization\\\" SET max_cpu_per_box=4, max_memory_per_box=8192, max_disk_per_box=20 WHERE id='\''4a1eef70-8734-4814-b7a5-0ca3522a8760'\''; SELECT id, max_cpu_per_box, max_memory_per_box, max_disk_per_box FROM \\\"organization\\\" WHERE id='\''4a1eef70-8734-4814-b7a5-0ca3522a8760'\'';\""' \
             2>&1 | tee "$OUT"
 
           # Verify the SELECT result actually shows the target values.
