@@ -355,15 +355,24 @@ jobs:
           # ECS Exec, but a non-TTY shell works because we feed nothing
           # to stdin and our `sh -c '…'` exits immediately after psql.
           OUT=/tmp/ecs_exec.log
+          # psql flags:
+          #   -A          unaligned output (no column padding, no wrapping)
+          #   -t          tuples only (omit header + footer rows)
+          #   -P pager=off  defensive — psql defaults to less/more when
+          #                 attached to a TTY-like session even with --interactive,
+          #                 which wraps long lines and adds "--More--" prompts
+          #                 that broke the previous grep
+          # PAGER=cat       belt-and-braces in case psql calls $PAGER directly
           aws ecs execute-command --cluster "$CLUSTER" --task "$TASK" --container Api --interactive \
-            --command 'sh -c "PGPASSWORD=\"\$DB_PASSWORD\" psql -h \"\$DB_HOST\" -U \"\$DB_USERNAME\" -d \"\$DB_DATABASE\" -v ON_ERROR_STOP=1 -c \"UPDATE \\\"organization\\\" SET max_cpu_per_box=4, max_memory_per_box=8192, max_disk_per_box=20 WHERE id='\''4a1eef70-8734-4814-b7a5-0ca3522a8760'\''; SELECT id, max_cpu_per_box, max_memory_per_box, max_disk_per_box FROM \\\"organization\\\" WHERE id='\''4a1eef70-8734-4814-b7a5-0ca3522a8760'\'';\""' \
+            --command 'sh -c "PAGER=cat PGPASSWORD=\"\$DB_PASSWORD\" psql -h \"\$DB_HOST\" -U \"\$DB_USERNAME\" -d \"\$DB_DATABASE\" -A -t -P pager=off -v ON_ERROR_STOP=1 -c \"UPDATE \\\"organization\\\" SET max_cpu_per_box=4, max_memory_per_box=8192, max_disk_per_box=20 WHERE id='\''4a1eef70-8734-4814-b7a5-0ca3522a8760'\''; SELECT id, max_cpu_per_box, max_memory_per_box, max_disk_per_box FROM \\\"organization\\\" WHERE id='\''4a1eef70-8734-4814-b7a5-0ca3522a8760'\'';\""' \
             2>&1 | tee "$OUT"
 
           # Verify the SELECT result actually shows the target values.
+          # With -A -t output, the SELECT row is one line: "<uuid>|4|8192|20".
           # ECS Exec exit-code propagation through Session Manager is
           # historically unreliable; grep the output as ground truth.
-          grep -E '4 *\| *8192 *\| *20' "$OUT" \
-            || { echo "::error::admin-org quota SELECT did not show target values (4|8192|20)"; exit 1; }
+          grep -E '\|4\|8192\|20$' "$OUT" \
+            || { echo "::error::admin-org quota SELECT did not show target values (|4|8192|20)"; exit 1; }
 
       # ──────────────────────────────────────────────────────────────────
       # Build SDK from THIS checkout (path_prefix and other source-tree
