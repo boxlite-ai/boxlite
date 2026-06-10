@@ -8,19 +8,19 @@ import { Emitter } from '@socket.io/redis-emitter'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import Redis from 'ioredis'
 import { NotificationEmitter } from '../gateways/notification-emitter.abstract'
-import { SandboxDto } from '../../sandbox/dto/sandbox.dto'
-import { SandboxState } from '../../sandbox/enums/sandbox-state.enum'
-import { SandboxDesiredState } from '../../sandbox/enums/sandbox-desired-state.enum'
-import { SandboxEvents } from '../../sandbox/constants/sandbox-events.constants'
-import { SnapshotDto } from '../../sandbox/dto/snapshot.dto'
-import { SnapshotState } from '../../sandbox/enums/snapshot-state.enum'
-import { SnapshotEvents } from '../../sandbox/constants/snapshot-events'
-import { VolumeDto } from '../../sandbox/dto/volume.dto'
-import { VolumeState } from '../../sandbox/enums/volume-state.enum'
-import { VolumeEvents } from '../../sandbox/constants/volume-events'
-import { RunnerDto } from '../../sandbox/dto/runner.dto'
-import { RunnerState } from '../../sandbox/enums/runner-state.enum'
-import { RunnerEvents } from '../../sandbox/constants/runner-events'
+import { BoxDto } from '../../box/dto/box.dto'
+import { BoxState } from '../../box/enums/box-state.enum'
+import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
+import { BoxEvents } from '../../box/constants/box-events.constants'
+import { SnapshotDto } from '../../box/dto/snapshot.dto'
+import { SnapshotState } from '../../box/enums/snapshot-state.enum'
+import { SnapshotEvents } from '../../box/constants/snapshot-events'
+import { VolumeDto } from '../../box/dto/volume.dto'
+import { VolumeState } from '../../box/enums/volume-state.enum'
+import { VolumeEvents } from '../../box/constants/volume-events'
+import { RunnerDto } from '../../box/dto/runner.dto'
+import { RunnerState } from '../../box/enums/runner-state.enum'
+import { RunnerEvents } from '../../box/constants/runner-events'
 
 @Injectable()
 export class NotificationRedisEmitter extends NotificationEmitter implements OnModuleInit {
@@ -36,22 +36,16 @@ export class NotificationRedisEmitter extends NotificationEmitter implements OnM
     this.logger.debug('Socket.io Redis emitter initialized (publish-only)')
   }
 
-  emitSandboxCreated(sandbox: SandboxDto) {
-    this.emitter.to(sandbox.organizationId).emit(SandboxEvents.CREATED, sandbox)
+  emitBoxCreated(box: BoxDto) {
+    this.emitter.to(box.organizationId).emit(BoxEvents.CREATED, box)
   }
 
-  emitSandboxStateUpdated(sandbox: SandboxDto, oldState: SandboxState, newState: SandboxState) {
-    this.emitter.to(sandbox.organizationId).emit(SandboxEvents.STATE_UPDATED, { sandbox, oldState, newState })
+  emitBoxStateUpdated(box: BoxDto, oldState: BoxState, newState: BoxState) {
+    this.emitter.to(box.organizationId).emit(BoxEvents.STATE_UPDATED, { box, oldState, newState })
   }
 
-  emitSandboxDesiredStateUpdated(
-    sandbox: SandboxDto,
-    oldDesiredState: SandboxDesiredState,
-    newDesiredState: SandboxDesiredState,
-  ) {
-    this.emitter
-      .to(sandbox.organizationId)
-      .emit(SandboxEvents.DESIRED_STATE_UPDATED, { sandbox, oldDesiredState, newDesiredState })
+  emitBoxDesiredStateUpdated(box: BoxDto, oldDesiredState: BoxDesiredState, newDesiredState: BoxDesiredState) {
+    this.emitter.to(box.organizationId).emit(BoxEvents.DESIRED_STATE_UPDATED, { box, oldDesiredState, newDesiredState })
   }
 
   emitSnapshotCreated(snapshot: SnapshotDto) {

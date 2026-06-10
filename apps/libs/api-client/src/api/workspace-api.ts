@@ -18,27 +18,26 @@ import type { AxiosPromise, AxiosInstance, RawAxiosRequestConfig } from 'axios';
 import globalAxios from 'axios';
 // Some imports not used depending on template conditions
 // @ts-ignore
-import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObject, setBearerAuthToObject, setOAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction } from '../common';
+import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObject, setBearerAuthToObject, setOAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction, replaceWithSerializableTypeIfNeeded } from '../common';
 // @ts-ignore
 import { BASE_PATH, COLLECTION_FORMATS, type RequestArgs, BaseAPI, RequiredError, operationServerMap } from '../base';
 // @ts-ignore
-import type { CreateWorkspace } from '../models';
+import type { BoxLabels } from '../models';
 // @ts-ignore
-import type { SandboxLabels } from '../models';
+import type { CreateWorkspace } from '../models';
 // @ts-ignore
 import type { Workspace } from '../models';
 // @ts-ignore
 import type { WorkspacePortPreviewUrl } from '../models';
 /**
  * WorkspaceApi - axios parameter creator
- * @export
  */
 export const WorkspaceApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         *
+         * 
          * @summary [DEPRECATED] Archive workspace
-         * @param {string} workspaceId
+         * @param {string} workspaceId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
@@ -48,7 +47,7 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             // verify required parameter 'workspaceId' is not null or undefined
             assertParamExists('archiveWorkspaceDeprecated', 'workspaceId', workspaceId)
             const localVarPath = `/workspace/{workspaceId}/archive`
-                .replace(`{${"workspaceId"}}`, encodeURIComponent(String(workspaceId)));
+                .replace('{workspaceId}', encodeURIComponent(String(workspaceId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -67,7 +66,6 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             // authentication oauth2 required
 
 
-
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
             }
@@ -81,7 +79,7 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Create workspace backup
          * @param {string} workspaceId ID of the workspace
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -93,7 +91,7 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             // verify required parameter 'workspaceId' is not null or undefined
             assertParamExists('createBackupWorkspaceDeprecated', 'workspaceId', workspaceId)
             const localVarPath = `/workspace/{workspaceId}/backup`
-                .replace(`{${"workspaceId"}}`, encodeURIComponent(String(workspaceId)));
+                .replace('{workspaceId}', encodeURIComponent(String(workspaceId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -111,7 +109,7 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -126,9 +124,9 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Create a new workspace
-         * @param {CreateWorkspace} createWorkspace
+         * @param {CreateWorkspace} createWorkspace 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
@@ -155,9 +153,8 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -173,10 +170,10 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Delete workspace
          * @param {string} workspaceId ID of the workspace
-         * @param {boolean} force
+         * @param {boolean} force 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
@@ -188,7 +185,7 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             // verify required parameter 'force' is not null or undefined
             assertParamExists('deleteWorkspaceDeprecated', 'force', force)
             const localVarPath = `/workspace/{workspaceId}`
-                .replace(`{${"workspaceId"}}`, encodeURIComponent(String(workspaceId)));
+                .replace('{workspaceId}', encodeURIComponent(String(workspaceId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -211,7 +208,6 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             }
 
 
-
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
             }
@@ -225,7 +221,7 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Get build logs
          * @param {string} workspaceId ID of the workspace
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -238,7 +234,7 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             // verify required parameter 'workspaceId' is not null or undefined
             assertParamExists('getBuildLogsWorkspaceDeprecated', 'workspaceId', workspaceId)
             const localVarPath = `/workspace/{workspaceId}/build-logs`
-                .replace(`{${"workspaceId"}}`, encodeURIComponent(String(workspaceId)));
+                .replace('{workspaceId}', encodeURIComponent(String(workspaceId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -261,7 +257,6 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             }
 
 
-
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
             }
@@ -275,7 +270,7 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Get preview URL for a workspace port
          * @param {string} workspaceId ID of the workspace
          * @param {number} port Port number to get preview URL for
@@ -290,8 +285,8 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             // verify required parameter 'port' is not null or undefined
             assertParamExists('getPortPreviewUrlWorkspaceDeprecated', 'port', port)
             const localVarPath = `/workspace/{workspaceId}/ports/{port}/preview-url`
-                .replace(`{${"workspaceId"}}`, encodeURIComponent(String(workspaceId)))
-                .replace(`{${"port"}}`, encodeURIComponent(String(port)));
+                .replace('{workspaceId}', encodeURIComponent(String(workspaceId)))
+                .replace('{port}', encodeURIComponent(String(port)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -309,7 +304,7 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -324,7 +319,7 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Get workspace details
          * @param {string} workspaceId ID of the workspace
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -337,7 +332,7 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             // verify required parameter 'workspaceId' is not null or undefined
             assertParamExists('getWorkspaceDeprecated', 'workspaceId', workspaceId)
             const localVarPath = `/workspace/{workspaceId}`
-                .replace(`{${"workspaceId"}}`, encodeURIComponent(String(workspaceId)));
+                .replace('{workspaceId}', encodeURIComponent(String(workspaceId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -359,7 +354,7 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
                 localVarQueryParameter['verbose'] = verbose;
             }
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -374,7 +369,7 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] List all workspaces
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {boolean} [verbose] Include verbose output
@@ -410,7 +405,7 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
                 localVarQueryParameter['labels'] = labels;
             }
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -425,22 +420,22 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Replace workspace labels
          * @param {string} workspaceId ID of the workspace
-         * @param {SandboxLabels} sandboxLabels
+         * @param {BoxLabels} boxLabels 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        replaceLabelsWorkspaceDeprecated: async (workspaceId: string, sandboxLabels: SandboxLabels, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        replaceLabelsWorkspaceDeprecated: async (workspaceId: string, boxLabels: BoxLabels, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             // verify required parameter 'workspaceId' is not null or undefined
             assertParamExists('replaceLabelsWorkspaceDeprecated', 'workspaceId', workspaceId)
-            // verify required parameter 'sandboxLabels' is not null or undefined
-            assertParamExists('replaceLabelsWorkspaceDeprecated', 'sandboxLabels', sandboxLabels)
+            // verify required parameter 'boxLabels' is not null or undefined
+            assertParamExists('replaceLabelsWorkspaceDeprecated', 'boxLabels', boxLabels)
             const localVarPath = `/workspace/{workspaceId}/labels`
-                .replace(`{${"workspaceId"}}`, encodeURIComponent(String(workspaceId)));
+                .replace('{workspaceId}', encodeURIComponent(String(workspaceId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -458,9 +453,8 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -468,7 +462,7 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-            localVarRequestOptions.data = serializeDataIfNeeded(sandboxLabels, localVarRequestOptions, configuration)
+            localVarRequestOptions.data = serializeDataIfNeeded(boxLabels, localVarRequestOptions, configuration)
 
             return {
                 url: toPathString(localVarUrlObj),
@@ -476,7 +470,7 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Set workspace auto-archive interval
          * @param {string} workspaceId ID of the workspace
          * @param {number} interval Auto-archive interval in minutes (0 means the maximum interval will be used)
@@ -491,8 +485,8 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             // verify required parameter 'interval' is not null or undefined
             assertParamExists('setAutoArchiveIntervalWorkspaceDeprecated', 'interval', interval)
             const localVarPath = `/workspace/{workspaceId}/autoarchive/{interval}`
-                .replace(`{${"workspaceId"}}`, encodeURIComponent(String(workspaceId)))
-                .replace(`{${"interval"}}`, encodeURIComponent(String(interval)));
+                .replace('{workspaceId}', encodeURIComponent(String(workspaceId)))
+                .replace('{interval}', encodeURIComponent(String(interval)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -511,7 +505,6 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             // authentication oauth2 required
 
 
-
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
             }
@@ -525,7 +518,7 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Set workspace auto-stop interval
          * @param {string} workspaceId ID of the workspace
          * @param {number} interval Auto-stop interval in minutes (0 to disable)
@@ -540,8 +533,8 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             // verify required parameter 'interval' is not null or undefined
             assertParamExists('setAutostopIntervalWorkspaceDeprecated', 'interval', interval)
             const localVarPath = `/workspace/{workspaceId}/autostop/{interval}`
-                .replace(`{${"workspaceId"}}`, encodeURIComponent(String(workspaceId)))
-                .replace(`{${"interval"}}`, encodeURIComponent(String(interval)));
+                .replace('{workspaceId}', encodeURIComponent(String(workspaceId)))
+                .replace('{interval}', encodeURIComponent(String(interval)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -560,7 +553,6 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             // authentication oauth2 required
 
 
-
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
             }
@@ -574,7 +566,7 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Start workspace
          * @param {string} workspaceId ID of the workspace
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -586,7 +578,7 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             // verify required parameter 'workspaceId' is not null or undefined
             assertParamExists('startWorkspaceDeprecated', 'workspaceId', workspaceId)
             const localVarPath = `/workspace/{workspaceId}/start`
-                .replace(`{${"workspaceId"}}`, encodeURIComponent(String(workspaceId)));
+                .replace('{workspaceId}', encodeURIComponent(String(workspaceId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -605,7 +597,6 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             // authentication oauth2 required
 
 
-
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
             }
@@ -619,7 +610,7 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Stop workspace
          * @param {string} workspaceId ID of the workspace
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -631,7 +622,7 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             // verify required parameter 'workspaceId' is not null or undefined
             assertParamExists('stopWorkspaceDeprecated', 'workspaceId', workspaceId)
             const localVarPath = `/workspace/{workspaceId}/stop`
-                .replace(`{${"workspaceId"}}`, encodeURIComponent(String(workspaceId)));
+                .replace('{workspaceId}', encodeURIComponent(String(workspaceId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -650,7 +641,6 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             // authentication oauth2 required
 
 
-
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
             }
@@ -664,7 +654,7 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Update public status
          * @param {string} workspaceId ID of the workspace
          * @param {boolean} isPublic Public status to set
@@ -679,8 +669,8 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             // verify required parameter 'isPublic' is not null or undefined
             assertParamExists('updatePublicStatusWorkspaceDeprecated', 'isPublic', isPublic)
             const localVarPath = `/workspace/{workspaceId}/public/{isPublic}`
-                .replace(`{${"workspaceId"}}`, encodeURIComponent(String(workspaceId)))
-                .replace(`{${"isPublic"}}`, encodeURIComponent(String(isPublic)));
+                .replace('{workspaceId}', encodeURIComponent(String(workspaceId)))
+                .replace('{isPublic}', encodeURIComponent(String(isPublic)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -697,7 +687,6 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
-
 
 
             if (xBoxLiteOrganizationID != null) {
@@ -717,15 +706,14 @@ export const WorkspaceApiAxiosParamCreator = function (configuration?: Configura
 
 /**
  * WorkspaceApi - functional programming interface
- * @export
  */
 export const WorkspaceApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = WorkspaceApiAxiosParamCreator(configuration)
     return {
         /**
-         *
+         * 
          * @summary [DEPRECATED] Archive workspace
-         * @param {string} workspaceId
+         * @param {string} workspaceId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
@@ -738,7 +726,7 @@ export const WorkspaceApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Create workspace backup
          * @param {string} workspaceId ID of the workspace
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -753,9 +741,9 @@ export const WorkspaceApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Create a new workspace
-         * @param {CreateWorkspace} createWorkspace
+         * @param {CreateWorkspace} createWorkspace 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
@@ -768,10 +756,10 @@ export const WorkspaceApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Delete workspace
          * @param {string} workspaceId ID of the workspace
-         * @param {boolean} force
+         * @param {boolean} force 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
@@ -784,7 +772,7 @@ export const WorkspaceApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Get build logs
          * @param {string} workspaceId ID of the workspace
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -800,7 +788,7 @@ export const WorkspaceApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Get preview URL for a workspace port
          * @param {string} workspaceId ID of the workspace
          * @param {number} port Port number to get preview URL for
@@ -816,7 +804,7 @@ export const WorkspaceApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Get workspace details
          * @param {string} workspaceId ID of the workspace
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -832,7 +820,7 @@ export const WorkspaceApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] List all workspaces
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {boolean} [verbose] Include verbose output
@@ -848,23 +836,23 @@ export const WorkspaceApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Replace workspace labels
          * @param {string} workspaceId ID of the workspace
-         * @param {SandboxLabels} sandboxLabels
+         * @param {BoxLabels} boxLabels 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        async replaceLabelsWorkspaceDeprecated(workspaceId: string, sandboxLabels: SandboxLabels, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<SandboxLabels>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.replaceLabelsWorkspaceDeprecated(workspaceId, sandboxLabels, xBoxLiteOrganizationID, options);
+        async replaceLabelsWorkspaceDeprecated(workspaceId: string, boxLabels: BoxLabels, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<BoxLabels>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.replaceLabelsWorkspaceDeprecated(workspaceId, boxLabels, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['WorkspaceApi.replaceLabelsWorkspaceDeprecated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Set workspace auto-archive interval
          * @param {string} workspaceId ID of the workspace
          * @param {number} interval Auto-archive interval in minutes (0 means the maximum interval will be used)
@@ -880,7 +868,7 @@ export const WorkspaceApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Set workspace auto-stop interval
          * @param {string} workspaceId ID of the workspace
          * @param {number} interval Auto-stop interval in minutes (0 to disable)
@@ -896,7 +884,7 @@ export const WorkspaceApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Start workspace
          * @param {string} workspaceId ID of the workspace
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -911,7 +899,7 @@ export const WorkspaceApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Stop workspace
          * @param {string} workspaceId ID of the workspace
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -926,7 +914,7 @@ export const WorkspaceApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Update public status
          * @param {string} workspaceId ID of the workspace
          * @param {boolean} isPublic Public status to set
@@ -946,15 +934,14 @@ export const WorkspaceApiFp = function(configuration?: Configuration) {
 
 /**
  * WorkspaceApi - factory interface
- * @export
  */
 export const WorkspaceApiFactory = function (configuration?: Configuration, basePath?: string, axios?: AxiosInstance) {
     const localVarFp = WorkspaceApiFp(configuration)
     return {
         /**
-         *
+         * 
          * @summary [DEPRECATED] Archive workspace
-         * @param {string} workspaceId
+         * @param {string} workspaceId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
@@ -964,7 +951,7 @@ export const WorkspaceApiFactory = function (configuration?: Configuration, base
             return localVarFp.archiveWorkspaceDeprecated(workspaceId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Create workspace backup
          * @param {string} workspaceId ID of the workspace
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -976,9 +963,9 @@ export const WorkspaceApiFactory = function (configuration?: Configuration, base
             return localVarFp.createBackupWorkspaceDeprecated(workspaceId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Create a new workspace
-         * @param {CreateWorkspace} createWorkspace
+         * @param {CreateWorkspace} createWorkspace 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
@@ -988,10 +975,10 @@ export const WorkspaceApiFactory = function (configuration?: Configuration, base
             return localVarFp.createWorkspaceDeprecated(createWorkspace, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Delete workspace
          * @param {string} workspaceId ID of the workspace
-         * @param {boolean} force
+         * @param {boolean} force 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
@@ -1001,7 +988,7 @@ export const WorkspaceApiFactory = function (configuration?: Configuration, base
             return localVarFp.deleteWorkspaceDeprecated(workspaceId, force, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Get build logs
          * @param {string} workspaceId ID of the workspace
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -1014,7 +1001,7 @@ export const WorkspaceApiFactory = function (configuration?: Configuration, base
             return localVarFp.getBuildLogsWorkspaceDeprecated(workspaceId, xBoxLiteOrganizationID, follow, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Get preview URL for a workspace port
          * @param {string} workspaceId ID of the workspace
          * @param {number} port Port number to get preview URL for
@@ -1027,7 +1014,7 @@ export const WorkspaceApiFactory = function (configuration?: Configuration, base
             return localVarFp.getPortPreviewUrlWorkspaceDeprecated(workspaceId, port, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Get workspace details
          * @param {string} workspaceId ID of the workspace
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -1040,7 +1027,7 @@ export const WorkspaceApiFactory = function (configuration?: Configuration, base
             return localVarFp.getWorkspaceDeprecated(workspaceId, xBoxLiteOrganizationID, verbose, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] List all workspaces
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {boolean} [verbose] Include verbose output
@@ -1053,20 +1040,20 @@ export const WorkspaceApiFactory = function (configuration?: Configuration, base
             return localVarFp.listWorkspacesDeprecated(xBoxLiteOrganizationID, verbose, labels, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Replace workspace labels
          * @param {string} workspaceId ID of the workspace
-         * @param {SandboxLabels} sandboxLabels
+         * @param {BoxLabels} boxLabels 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @deprecated
          * @throws {RequiredError}
          */
-        replaceLabelsWorkspaceDeprecated(workspaceId: string, sandboxLabels: SandboxLabels, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<SandboxLabels> {
-            return localVarFp.replaceLabelsWorkspaceDeprecated(workspaceId, sandboxLabels, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        replaceLabelsWorkspaceDeprecated(workspaceId: string, boxLabels: BoxLabels, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<BoxLabels> {
+            return localVarFp.replaceLabelsWorkspaceDeprecated(workspaceId, boxLabels, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Set workspace auto-archive interval
          * @param {string} workspaceId ID of the workspace
          * @param {number} interval Auto-archive interval in minutes (0 means the maximum interval will be used)
@@ -1079,7 +1066,7 @@ export const WorkspaceApiFactory = function (configuration?: Configuration, base
             return localVarFp.setAutoArchiveIntervalWorkspaceDeprecated(workspaceId, interval, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Set workspace auto-stop interval
          * @param {string} workspaceId ID of the workspace
          * @param {number} interval Auto-stop interval in minutes (0 to disable)
@@ -1092,7 +1079,7 @@ export const WorkspaceApiFactory = function (configuration?: Configuration, base
             return localVarFp.setAutostopIntervalWorkspaceDeprecated(workspaceId, interval, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Start workspace
          * @param {string} workspaceId ID of the workspace
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -1104,7 +1091,7 @@ export const WorkspaceApiFactory = function (configuration?: Configuration, base
             return localVarFp.startWorkspaceDeprecated(workspaceId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Stop workspace
          * @param {string} workspaceId ID of the workspace
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -1116,7 +1103,7 @@ export const WorkspaceApiFactory = function (configuration?: Configuration, base
             return localVarFp.stopWorkspaceDeprecated(workspaceId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] Update public status
          * @param {string} workspaceId ID of the workspace
          * @param {boolean} isPublic Public status to set
@@ -1133,70 +1120,63 @@ export const WorkspaceApiFactory = function (configuration?: Configuration, base
 
 /**
  * WorkspaceApi - object-oriented interface
- * @export
- * @class WorkspaceApi
- * @extends {BaseAPI}
  */
 export class WorkspaceApi extends BaseAPI {
     /**
-     *
+     * 
      * @summary [DEPRECATED] Archive workspace
-     * @param {string} workspaceId
+     * @param {string} workspaceId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof WorkspaceApi
      */
     public archiveWorkspaceDeprecated(workspaceId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return WorkspaceApiFp(this.configuration).archiveWorkspaceDeprecated(workspaceId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary [DEPRECATED] Create workspace backup
      * @param {string} workspaceId ID of the workspace
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof WorkspaceApi
      */
     public createBackupWorkspaceDeprecated(workspaceId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return WorkspaceApiFp(this.configuration).createBackupWorkspaceDeprecated(workspaceId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary [DEPRECATED] Create a new workspace
-     * @param {CreateWorkspace} createWorkspace
+     * @param {CreateWorkspace} createWorkspace 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof WorkspaceApi
      */
     public createWorkspaceDeprecated(createWorkspace: CreateWorkspace, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return WorkspaceApiFp(this.configuration).createWorkspaceDeprecated(createWorkspace, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary [DEPRECATED] Delete workspace
      * @param {string} workspaceId ID of the workspace
-     * @param {boolean} force
+     * @param {boolean} force 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof WorkspaceApi
      */
     public deleteWorkspaceDeprecated(workspaceId: string, force: boolean, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return WorkspaceApiFp(this.configuration).deleteWorkspaceDeprecated(workspaceId, force, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary [DEPRECATED] Get build logs
      * @param {string} workspaceId ID of the workspace
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -1204,14 +1184,13 @@ export class WorkspaceApi extends BaseAPI {
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof WorkspaceApi
      */
     public getBuildLogsWorkspaceDeprecated(workspaceId: string, xBoxLiteOrganizationID?: string, follow?: boolean, options?: RawAxiosRequestConfig) {
         return WorkspaceApiFp(this.configuration).getBuildLogsWorkspaceDeprecated(workspaceId, xBoxLiteOrganizationID, follow, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary [DEPRECATED] Get preview URL for a workspace port
      * @param {string} workspaceId ID of the workspace
      * @param {number} port Port number to get preview URL for
@@ -1219,14 +1198,13 @@ export class WorkspaceApi extends BaseAPI {
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof WorkspaceApi
      */
     public getPortPreviewUrlWorkspaceDeprecated(workspaceId: string, port: number, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return WorkspaceApiFp(this.configuration).getPortPreviewUrlWorkspaceDeprecated(workspaceId, port, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary [DEPRECATED] Get workspace details
      * @param {string} workspaceId ID of the workspace
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -1234,14 +1212,13 @@ export class WorkspaceApi extends BaseAPI {
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof WorkspaceApi
      */
     public getWorkspaceDeprecated(workspaceId: string, xBoxLiteOrganizationID?: string, verbose?: boolean, options?: RawAxiosRequestConfig) {
         return WorkspaceApiFp(this.configuration).getWorkspaceDeprecated(workspaceId, xBoxLiteOrganizationID, verbose, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary [DEPRECATED] List all workspaces
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {boolean} [verbose] Include verbose output
@@ -1249,29 +1226,27 @@ export class WorkspaceApi extends BaseAPI {
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof WorkspaceApi
      */
     public listWorkspacesDeprecated(xBoxLiteOrganizationID?: string, verbose?: boolean, labels?: string, options?: RawAxiosRequestConfig) {
         return WorkspaceApiFp(this.configuration).listWorkspacesDeprecated(xBoxLiteOrganizationID, verbose, labels, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary [DEPRECATED] Replace workspace labels
      * @param {string} workspaceId ID of the workspace
-     * @param {SandboxLabels} sandboxLabels
+     * @param {BoxLabels} boxLabels 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof WorkspaceApi
      */
-    public replaceLabelsWorkspaceDeprecated(workspaceId: string, sandboxLabels: SandboxLabels, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return WorkspaceApiFp(this.configuration).replaceLabelsWorkspaceDeprecated(workspaceId, sandboxLabels, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public replaceLabelsWorkspaceDeprecated(workspaceId: string, boxLabels: BoxLabels, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return WorkspaceApiFp(this.configuration).replaceLabelsWorkspaceDeprecated(workspaceId, boxLabels, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary [DEPRECATED] Set workspace auto-archive interval
      * @param {string} workspaceId ID of the workspace
      * @param {number} interval Auto-archive interval in minutes (0 means the maximum interval will be used)
@@ -1279,14 +1254,13 @@ export class WorkspaceApi extends BaseAPI {
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof WorkspaceApi
      */
     public setAutoArchiveIntervalWorkspaceDeprecated(workspaceId: string, interval: number, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return WorkspaceApiFp(this.configuration).setAutoArchiveIntervalWorkspaceDeprecated(workspaceId, interval, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary [DEPRECATED] Set workspace auto-stop interval
      * @param {string} workspaceId ID of the workspace
      * @param {number} interval Auto-stop interval in minutes (0 to disable)
@@ -1294,42 +1268,39 @@ export class WorkspaceApi extends BaseAPI {
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof WorkspaceApi
      */
     public setAutostopIntervalWorkspaceDeprecated(workspaceId: string, interval: number, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return WorkspaceApiFp(this.configuration).setAutostopIntervalWorkspaceDeprecated(workspaceId, interval, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary [DEPRECATED] Start workspace
      * @param {string} workspaceId ID of the workspace
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof WorkspaceApi
      */
     public startWorkspaceDeprecated(workspaceId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return WorkspaceApiFp(this.configuration).startWorkspaceDeprecated(workspaceId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary [DEPRECATED] Stop workspace
      * @param {string} workspaceId ID of the workspace
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof WorkspaceApi
      */
     public stopWorkspaceDeprecated(workspaceId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return WorkspaceApiFp(this.configuration).stopWorkspaceDeprecated(workspaceId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary [DEPRECATED] Update public status
      * @param {string} workspaceId ID of the workspace
      * @param {boolean} isPublic Public status to set
@@ -1337,9 +1308,9 @@ export class WorkspaceApi extends BaseAPI {
      * @param {*} [options] Override http request option.
      * @deprecated
      * @throws {RequiredError}
-     * @memberof WorkspaceApi
      */
     public updatePublicStatusWorkspaceDeprecated(workspaceId: string, isPublic: boolean, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return WorkspaceApiFp(this.configuration).updatePublicStatusWorkspaceDeprecated(workspaceId, isPublic, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 }
+

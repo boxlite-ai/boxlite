@@ -1,12 +1,23 @@
-# BoxLite [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://go.boxlite.ai/discord)
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/boxlite-banner-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset=".github/assets/boxlite-banner-light.png">
+    <img alt="BoxLite" src=".github/assets/boxlite-banner-light.png" width="560">
+  </picture>
+</h1>
 
-[![GitHub stars](https://img.shields.io/github/stars/boxlite-ai/boxlite?style=social)](https://github.com/boxlite-ai/boxlite)
-[![Build](https://github.com/boxlite-ai/boxlite/actions/workflows/build-wheels.yml/badge.svg)](https://github.com/boxlite-ai/boxlite/actions/workflows/build-wheels.yml)
-[![Lint](https://github.com/boxlite-ai/boxlite/actions/workflows/lint.yml/badge.svg)](https://github.com/boxlite-ai/boxlite/actions/workflows/lint.yml)
-[![codecov](https://codecov.io/gh/boxlite-ai/boxlite/branch/main/graph/badge.svg)](https://codecov.io/gh/boxlite-ai/boxlite)
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+<p align="center">
+  <a href="https://go.boxlite.ai/discord"><img alt="Discord" src="https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&amp;logoColor=white"></a>
+  <a href="https://github.com/boxlite-ai/boxlite"><img alt="GitHub stars" src="https://img.shields.io/github/stars/boxlite-ai/boxlite?style=social"></a>
+  <a href="https://github.com/boxlite-ai/boxlite/actions/workflows/build-wheels.yml"><img alt="Build" src="https://github.com/boxlite-ai/boxlite/actions/workflows/build-wheels.yml/badge.svg"></a>
+  <a href="https://github.com/boxlite-ai/boxlite/actions/workflows/lint.yml"><img alt="Lint" src="https://github.com/boxlite-ai/boxlite/actions/workflows/lint.yml/badge.svg"></a>
+  <a href="https://codecov.io/gh/boxlite-ai/boxlite"><img alt="codecov" src="https://codecov.io/gh/boxlite-ai/boxlite/branch/main/graph/badge.svg"></a>
+  <a href="https://opensource.org/licenses/Apache-2.0"><img alt="License" src="https://img.shields.io/badge/License-Apache_2.0-blue.svg"></a>
+</p>
 
-Compute substrate for AI agents: lightweight enough to live on your laptop, elastic enough to scale into the cloud and unleash unlimited resources.
+<p align="center">
+  Compute substrate for AI agents: lightweight enough to live on your laptop, elastic enough to scale into the cloud and unleash unlimited resources.
+</p>
 
 
 ## What is BoxLite?

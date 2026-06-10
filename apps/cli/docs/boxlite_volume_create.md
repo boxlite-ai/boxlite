@@ -20,4 +20,5 @@ boxlite volume create [NAME] [flags]
 
 ### SEE ALSO
 
-* [boxlite volume](boxlite_volume.md)  - Manage BoxLite volumes
+* [boxlite volume](boxlite_volume.md)	 - Manage BoxLite volumes
+

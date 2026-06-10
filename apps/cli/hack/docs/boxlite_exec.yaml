@@ -1,7 +1,7 @@
 name: boxlite exec
-synopsis: Execute a command in a sandbox
-description: Execute a command in a running sandbox
-usage: boxlite exec [SANDBOX_ID | SANDBOX_NAME] -- [COMMAND] [ARGS...] [flags]
+synopsis: Execute a command in a box
+description: Execute a command in a running box
+usage: boxlite exec [BOX_ID | BOX_NAME] -- [COMMAND] [ARGS...] [flags]
 options:
   - name: cwd
     usage: Working directory for command execution

@@ -27,12 +27,12 @@ type FileUploadArgs struct {
 
 func GetFileUploadTool() mcp.Tool {
 	return mcp.NewTool("file_upload",
-		mcp.WithDescription("Upload files to the BoxLite sandbox from text or base64-encoded binary content. Creates necessary parent directories automatically and verifies successful writes. Files persist during the session and have appropriate permissions for further tool operations. Supports overwrite controls and maintains original file formats."),
+		mcp.WithDescription("Upload files to the BoxLite box from text or base64-encoded binary content. Creates necessary parent directories automatically and verifies successful writes. Files persist during the session and have appropriate permissions for further tool operations. Supports overwrite controls and maintains original file formats."),
 		mcp.WithString("filePath", mcp.Required(), mcp.Description("Path to the file to upload. Files should always be uploaded to the /tmp directory if user doesn't specify otherwise.")),
 		mcp.WithString("content", mcp.Required(), mcp.Description("Content of the file to upload.")),
 		mcp.WithString("encoding", mcp.Required(), mcp.Description("Encoding of the file to upload.")),
 		mcp.WithBoolean("overwrite", mcp.Required(), mcp.Description("Overwrite the file if it already exists.")),
-		mcp.WithString("id", mcp.Required(), mcp.Description("ID of the sandbox to upload the file to.")),
+		mcp.WithString("id", mcp.Required(), mcp.Description("ID of the box to upload the file to.")),
 	)
 }
 
@@ -43,7 +43,7 @@ func FileUpload(ctx context.Context, request mcp.CallToolRequest, args FileUploa
 	}
 
 	if args.Id == nil || *args.Id == "" {
-		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("sandbox ID is required")
+		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("box ID is required")
 	}
 
 	if args.FilePath == nil || *args.FilePath == "" {
@@ -63,14 +63,14 @@ func FileUpload(ctx context.Context, request mcp.CallToolRequest, args FileUploa
 		overwrite = *args.Overwrite
 	}
 
-	// Get the sandbox using sandbox ID
-	sandbox, _, err := apiClient.SandboxAPI.GetSandbox(ctx, *args.Id).Execute()
+	// Get the box using box ID
+	box, _, err := apiClient.BoxAPI.GetBox(ctx, *args.Id).Execute()
 	if err != nil {
-		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("failed to get sandbox: %v", err)
+		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("failed to get box: %v", err)
 	}
 
-	if sandbox == nil {
-		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("no sandbox available")
+	if box == nil {
+		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("no box available")
 	}
 
 	// Check if file exists and handle overwrite

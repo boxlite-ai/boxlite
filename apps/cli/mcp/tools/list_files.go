@@ -22,9 +22,9 @@ type ListFilesArgs struct {
 
 func GetListFilesTool() mcp.Tool {
 	return mcp.NewTool("list_files",
-		mcp.WithDescription("List files in a directory in the BoxLite sandbox."),
+		mcp.WithDescription("List files in a directory in the BoxLite box."),
 		mcp.WithString("path", mcp.Description("Path to the directory to list files from (defaults to current directory).")),
-		mcp.WithString("id", mcp.Required(), mcp.Description("ID of the sandbox to list the files from.")),
+		mcp.WithString("id", mcp.Required(), mcp.Description("ID of the box to list the files from.")),
 	)
 }
 
@@ -35,7 +35,7 @@ func ListFiles(ctx context.Context, request mcp.CallToolRequest, args ListFilesA
 	}
 
 	if args.Id == nil || *args.Id == "" {
-		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("sandbox ID is required")
+		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("box ID is required")
 	}
 
 	// Get directory path from request arguments (optional)

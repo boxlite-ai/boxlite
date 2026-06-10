@@ -22,19 +22,19 @@ var proxyTransport = &http.Transport{
 	}).DialContext,
 }
 
-// ProxyRequest handles proxying requests to a sandbox's container
+// ProxyRequest handles proxying requests to a box's container
 //
 //	@Tags			toolbox
-//	@Summary		Proxy requests to the sandbox toolbox
-//	@Description	Forwards the request to the specified sandbox's container
-//	@Param			workspaceId	path		string	true	"Sandbox ID"
+//	@Summary		Proxy requests to the box toolbox
+//	@Description	Forwards the request to the specified box's container
+//	@Param			workspaceId	path		string	true	"Box ID"
 //	@Param			projectId	path		string	true	"Project ID"
 //	@Param			path		path		string	true	"Path to forward"
 //	@Success		200			{object}	string	"Proxied response"
 //	@Failure		400			{object}	string	"Bad request"
 //	@Failure		401			{object}	string	"Unauthorized"
-//	@Failure		404			{object}	string	"Sandbox container not found"
-//	@Failure		409			{object}	string	"Sandbox container conflict"
+//	@Failure		404			{object}	string	"Box container not found"
+//	@Failure		409			{object}	string	"Box container conflict"
 //	@Failure		500			{object}	string	"Internal server error"
 //	@Router			/workspaces/{workspaceId}/{projectId}/toolbox/{path} [get]
 func NewProxyRequestHandler(getProxyTarget func(*gin.Context) (targetUrl *url.URL, extraHeaders map[string]string, err error), modifyResponse func(*http.Response) error) gin.HandlerFunc {

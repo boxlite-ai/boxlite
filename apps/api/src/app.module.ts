@@ -10,7 +10,7 @@ import { FailedAuthRateLimitMiddleware } from './common/middleware/failed-auth-r
 import { AppService } from './app.service'
 import { UserModule } from './user/user.module'
 import { TypeOrmModule } from '@nestjs/typeorm'
-import { SandboxModule } from './sandbox/sandbox.module'
+import { BoxModule } from './box/box.module'
 import { AuthModule } from './auth/auth.module'
 import { ServeStaticModule } from '@nestjs/serve-static'
 import { join } from 'path'
@@ -43,7 +43,7 @@ import { RegionModule } from './region/region.module'
 import { BodyParserErrorModule } from './common/modules/body-parser-error.module'
 import { AdminModule } from './admin/admin.module'
 import { ClickHouseModule } from './clickhouse/clickhouse.module'
-import { SandboxTelemetryModule } from './sandbox-telemetry/sandbox-telemetry.module'
+import { BoxTelemetryModule } from './box-telemetry/box-telemetry.module'
 import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
 
 @Module({
@@ -145,8 +145,8 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
           { name: 'anonymous', config: rateLimit.anonymous },
           { name: 'failed-auth', config: rateLimit.failedAuth },
           { name: 'authenticated', config: rateLimit.authenticated },
-          { name: 'sandbox-create', config: rateLimit.sandboxCreate },
-          { name: 'sandbox-lifecycle', config: rateLimit.sandboxLifecycle },
+          { name: 'box-create', config: rateLimit.boxCreate },
+          { name: 'box-lifecycle', config: rateLimit.boxLifecycle },
         ]
           .filter(({ config }) => config.ttl !== undefined && config.limit !== undefined)
           .map(({ name, config }) => ({
@@ -168,7 +168,7 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
     ApiKeyModule,
     AuthModule,
     UserModule,
-    SandboxModule,
+    BoxModule,
     DockerRegistryModule,
     ScheduleModule.forRoot(),
     UsageModule,
@@ -196,7 +196,7 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
     AuditModule,
     HealthModule,
     ClickHouseModule,
-    SandboxTelemetryModule,
+    BoxTelemetryModule,
     BoxliteRestModule,
     OpenFeatureModule.forRoot({
       contextFactory: (request: ExecutionContext) => {

@@ -39,7 +39,7 @@ from the failed step.
 ## After first deploy
 
 Nothing needs to be fed back into `.env`. The runner EC2 self-registers with the
-API on boot — v2 runners report their address via healthcheck — so sandboxes
+API on boot — v2 runners report their address via healthcheck — so boxes
 work as soon as the runner reaches `READY` (~30–60s), visible in the dashboard
 Runner table or `GET /admin/runners`.
 
@@ -75,9 +75,9 @@ Five public DNS names, four different fronting layers:
 |--------------------------------|------------------------|-------------------------------------------------------------------|
 | `<STACK_DOMAIN>`               | CloudFront Router      | Dashboard SPA + static assets (cache-friendly, edge-served)       |
 | `api.<STACK_DOMAIN>`           | Api ALB (direct)       | REST API, WebSocket `/attach`, build-log streaming, file transfer |
-| `proxy.<STACK_DOMAIN>`         | Proxy ALB (direct)     | Port-preview wildcard `<port>-<sandboxId>.proxy.<domain>`         |
-| `*.proxy.<STACK_DOMAIN>`       | Proxy ALB (direct)     | Wildcard alias of the above (per-sandbox preview hosts)           |
-| `ssh.<STACK_DOMAIN>`           | SshGateway NLB (TCP)   | `ssh -p 2222 <token>@ssh.<STACK_DOMAIN>` to a sandbox             |
+| `proxy.<STACK_DOMAIN>`         | Proxy ALB (direct)     | Port-preview wildcard `<port>-<boxId>.proxy.<domain>`         |
+| `*.proxy.<STACK_DOMAIN>`       | Proxy ALB (direct)     | Wildcard alias of the above (per-box preview hosts)           |
+| `ssh.<STACK_DOMAIN>`           | SshGateway NLB (TCP)   | `ssh -p 2222 <token>@ssh.<STACK_DOMAIN>` to a box             |
 
 **Why `/api/*` bypasses CloudFront.** CloudFront imposes a non-configurable
 10-minute idle cap on WebSocket connections — even with WS Ping frames and
@@ -210,7 +210,7 @@ npx sst remove --stage dev       # destroy everything
 
 The Runner EC2 instance (`tag:Name=boxlite-runner`) holds load-bearing state:
 `/var/lib/boxlite` on its root disk, plus the in-memory libkrun VMs that back
-running sandboxes. **It must not be replaced by routine deploys.** Two Pulumi
+running boxes. **It must not be replaced by routine deploys.** Two Pulumi
 resource options on `sst.config.ts`'s Runner enforce that:
 
 - `ignoreChanges: ["ami", "userDataBase64"]` — Ubuntu publishes new AMIs
@@ -233,7 +233,7 @@ scripts/deploy/runner-update-binary.sh 0.9.5     # explicit
 
 The script uses AWS SSM Run Command to stop the systemd unit, download the
 release tarball from GitHub Releases, swap `/usr/local/bin/boxlite-runner`,
-and restart. Sandbox state under `/var/lib/boxlite` is untouched.
+and restart. Box state under `/var/lib/boxlite` is untouched.
 
 ### Deliberate decommission (three-step ceremony)
 
@@ -241,8 +241,8 @@ When you actually need to replace the Runner (failed disk, security incident,
 major version upgrade with on-disk format change), it is a multi-edit
 operation by design:
 
-1. Verify no `running` sandboxes are pinned to this Runner (DB query against
-   `sandbox.runnerId`).
+1. Verify no `running` boxes are pinned to this Runner (DB query against
+   `box.runnerId`).
 2. Edit `sst.config.ts`: change `protect: true` to `protect: false` on the
    Runner resource. Run `npx sst deploy --stage <stage>`. This only updates
    the resource metadata; the EC2 is not yet touched.
@@ -279,7 +279,7 @@ follows that. Not yet implemented.
                                      api.<STACK_DOMAIN>
                                      idle_timeout=1h  (for long WS sessions)
 
-  Browser ───▶ Proxy ALB ───▶ sandbox port (toolbox + user-app previews)
+  Browser ───▶ Proxy ALB ───▶ box port (toolbox + user-app previews)
                 proxy.<STACK_DOMAIN> + *.proxy.<STACK_DOMAIN>
                 idle_timeout=1h
 
@@ -354,7 +354,7 @@ missing `email_verified` claim. Deploy the Post-Login Action described above.
 systemd logs (`aws ssm start-session` → `journalctl -u boxlite-runner`) for auth
 or connectivity errors to the API.
 
-**Sandbox preview URL returns 503** — Proxy service may need a force-redeploy after
+**Box preview URL returns 503** — Proxy service may need a force-redeploy after
 initial setup: `aws ecs update-service --force-new-deployment --service Proxy`.
 
 **Docker build fails with "broken pipe"** — transient ECR push failure. Retry deploy.

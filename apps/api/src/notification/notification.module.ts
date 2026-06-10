@@ -10,7 +10,7 @@ import { NotificationGateway } from './gateways/notification.gateway'
 import { NotificationRedisEmitter } from './emitters/notification-redis.emitter'
 import { NotificationEmitter } from './gateways/notification-emitter.abstract'
 import { OrganizationModule } from '../organization/organization.module'
-import { SandboxModule } from '../sandbox/sandbox.module'
+import { BoxModule } from '../box/box.module'
 import { RedisModule } from '@nestjs-modules/ioredis'
 import { AuthModule } from '../auth/auth.module'
 import { RegionModule } from '../region/region.module'
@@ -19,7 +19,7 @@ import { isApiEnabled } from '../common/utils/app-mode'
 const gatewayEnabled = isApiEnabled() && process.env.NOTIFICATION_GATEWAY_DISABLED !== 'true'
 
 @Module({
-  imports: [OrganizationModule, SandboxModule, RedisModule, AuthModule, RegionModule],
+  imports: [OrganizationModule, BoxModule, RedisModule, AuthModule, RegionModule],
   providers: [
     NotificationService,
     ...(gatewayEnabled

@@ -1,0 +1,80 @@
+name: API client drift
+
+# Regenerates the OpenAPI spec and the generated product clients
+# (apps/libs/api-client, apps/api-client-go, apps/libs/analytics-api-client)
+# and fails if the committed clients differ — the committed clients must
+# always match their specs (apps/api source for the product clients,
+# apps/libs/analytics-api-client/swagger.json for the analytics client).
+# Ported from daytonaio/daytona's `format-lint-api-clients` PR check.
+
+on:
+  pull_request:
+    paths:
+      - 'apps/**'
+      - '.github/workflows/api-client-drift.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  check-generated-clients:
+    name: Regenerate API clients and diff
+    runs-on: ubuntu-latest
+    services:
+      # generate-openapi.ts boots the full NestJS app; SKIP_CONNECTIONS=true
+      # defers DB/queue connections but bootstrap still issues Redis commands
+      # (notification pub/sub), so a real Redis avoids a retry-exhaustion race.
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+    env:
+      REDIS_HOST: localhost
+    defaults:
+      run:
+        working-directory: apps
+    steps:
+      - uses: actions/checkout@v5
+
+      # corepack must be enabled before setup-node's yarn cache probe runs
+      - name: Enable corepack (yarn 4)
+        run: corepack enable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: apps/yarn.lock
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: temurin
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Prepare offline app env
+        run: |
+          printf 'DEFAULT_PACKAGE_VERSION=0.0.0-dev\n' > .env
+          cp api/.env.example api/.env
+
+      - name: Pin openapi-generator version
+        run: |
+          openapi_version="$(node -e "console.log(require('./openapitools.json')['generator-cli'].version)")"
+          yarn openapi-generator-cli version-manager set "$openapi_version"
+
+      - name: Regenerate API clients
+        run: |
+          yarn nx run api-client:generate:api-client
+          yarn nx run api-client-go:generate:api-client
+          yarn nx run analytics-api-client:generate:api-client
+
+      - name: Fail on drift
+        run: |
+          if [ -n "$(git status --porcelain -- libs/api-client api-client-go libs/analytics-api-client)" ]; then
+            git status --porcelain -- libs/api-client api-client-go libs/analytics-api-client
+            git diff -- libs/api-client api-client-go libs/analytics-api-client | head -200
+            echo "::error::Generated API clients are stale. Run 'yarn nx run api-client:generate:api-client && yarn nx run api-client-go:generate:api-client && yarn nx run analytics-api-client:generate:api-client' in apps/ and commit the result."
+            exit 1
+          fi

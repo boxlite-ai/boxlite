@@ -26,4 +26,5 @@ boxlite snapshot list [flags]
 
 ### SEE ALSO
 
-* [boxlite snapshot](boxlite_snapshot.md)  - Manage BoxLite snapshots
+* [boxlite snapshot](boxlite_snapshot.md)	 - Manage BoxLite snapshots
+

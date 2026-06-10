@@ -8,34 +8,34 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useQuery } from '@tanstack/react-query'
 import { queryKeys } from './queryKeys'
 
-export const useVncInitialStatusQuery = (sandboxId: string, enabled: boolean) => {
+export const useVncInitialStatusQuery = (boxId: string, enabled: boolean) => {
   const { toolboxApi } = useApi()
   const { selectedOrganization } = useSelectedOrganization()
 
   return useQuery({
-    queryKey: queryKeys.sandboxes.vncInitialStatus(sandboxId),
+    queryKey: queryKeys.boxes.vncInitialStatus(boxId),
     queryFn: async () => {
-      const { data } = await toolboxApi.getComputerUseStatusDeprecated(sandboxId, selectedOrganization?.id)
+      const { data } = await toolboxApi.getComputerUseStatusDeprecated(boxId, selectedOrganization?.id)
       return data.status as string
     },
-    enabled: enabled && !!sandboxId && !!selectedOrganization?.id,
+    enabled: enabled && !!boxId && !!selectedOrganization?.id,
     retry: false,
     staleTime: 0,
   })
 }
 
-export const useVncPollStatusQuery = (sandboxId: string, enabled: boolean) => {
+export const useVncPollStatusQuery = (boxId: string, enabled: boolean) => {
   const { toolboxApi } = useApi()
   const { selectedOrganization } = useSelectedOrganization()
 
   return useQuery({
-    queryKey: queryKeys.sandboxes.vncPollStatus(sandboxId),
+    queryKey: queryKeys.boxes.vncPollStatus(boxId),
     queryFn: async () => {
-      const { data } = await toolboxApi.getComputerUseStatusDeprecated(sandboxId, selectedOrganization?.id)
+      const { data } = await toolboxApi.getComputerUseStatusDeprecated(boxId, selectedOrganization?.id)
       if (data.status !== 'active') throw new Error(`VNC not ready: ${data.status}`)
       return data.status as string
     },
-    enabled: enabled && !!sandboxId && !!selectedOrganization?.id,
+    enabled: enabled && !!boxId && !!selectedOrganization?.id,
     retry: 10,
     retryDelay: 2000,
   })

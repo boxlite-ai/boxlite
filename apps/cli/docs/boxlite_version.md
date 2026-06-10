@@ -14,4 +14,5 @@ boxlite version [flags]
 
 ### SEE ALSO
 
-* [boxlite](boxlite.md)  - BoxLite CLI
+* [boxlite](boxlite.md)	 - BoxLite CLI
+

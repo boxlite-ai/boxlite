@@ -29,7 +29,7 @@ export const VerifyEmailDialog: React.FC<VerifyEmailDialogProps> = ({ open, onOp
           <DialogTitle>Verify Your Account</DialogTitle>
           <DialogDescription>
             A verification email was sent to your registered email address. Please note that you must verify your email
-            before you can create sandboxes or new organizations.
+            before you can create boxes or new organizations.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>

@@ -14,16 +14,10 @@
 
 
 
-/**
- *
- * @export
- * @interface SetSnapshotGeneralStatusDto
- */
 export interface SetSnapshotGeneralStatusDto {
     /**
      * Whether the snapshot is general
-     * @type {boolean}
-     * @memberof SetSnapshotGeneralStatusDto
      */
     'general': boolean;
 }
+

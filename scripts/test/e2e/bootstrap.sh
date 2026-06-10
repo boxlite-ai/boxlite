@@ -73,6 +73,10 @@ echo "=== 4. yarn install (stderr preserved — silent install hides real failur
 # assume workspace root is one level above apps/. The real fix is to
 # rewrite those paths; that's a separate refactor PR.
 cd "$APPS"
+# yarn treats `apps/` as its own project root only when a lockfile anchors it;
+# the repo doesn't commit one (see make/dev.mk), so seed an empty lockfile first
+# or `yarn install` aborts with "apps isn't part of the project" on fresh checkouts.
+[ -f yarn.lock ] || : > yarn.lock
 yarn install >/dev/null
 [[ -L "$APPS/apps" ]] || ln -sfn . apps
 

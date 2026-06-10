@@ -16,26 +16,21 @@ export type TerminalSession = {
   expiresAt: number
 }
 
-export const useTerminalSessionQuery = (sandboxId: string, enabled: boolean) => {
-  const { sandboxApi } = useApi()
+export const useTerminalSessionQuery = (boxId: string, enabled: boolean) => {
+  const { boxApi } = useApi()
   const { selectedOrganization } = useSelectedOrganization()
   const queryClient = useQueryClient()
-  const queryKey = queryKeys.sandboxes.terminalSession(sandboxId)
+  const queryKey = queryKeys.boxes.terminalSession(boxId)
 
   const query = useQuery({
     queryKey,
     queryFn: async (): Promise<TerminalSession> => {
       const url = (
-        await sandboxApi.getSignedPortPreviewUrl(
-          sandboxId,
-          TERMINAL_PORT,
-          selectedOrganization?.id,
-          SESSION_DURATION_SECONDS,
-        )
+        await boxApi.getSignedPortPreviewUrl(boxId, TERMINAL_PORT, selectedOrganization?.id, SESSION_DURATION_SECONDS)
       ).data.url
       return { url, expiresAt: Date.now() + SESSION_DURATION_SECONDS * 1000 }
     },
-    enabled: enabled && !!sandboxId && !!selectedOrganization?.id,
+    enabled: enabled && !!boxId && !!selectedOrganization?.id,
     staleTime: Infinity,
   })
 

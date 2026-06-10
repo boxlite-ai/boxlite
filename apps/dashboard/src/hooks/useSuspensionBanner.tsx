@@ -63,7 +63,7 @@ export function useSuspensionBanner(suspension?: Suspension | null) {
           id: SUSPENSION_BANNER_ID,
           variant: 'info',
           title: 'Setup Required',
-          description: 'Add a payment method to start creating sandboxes.',
+          description: 'Add a payment method to start creating boxes.',
           icon: <CreditCardIcon className="h-4 w-4 flex-shrink-0 text-current" />,
           action:
             path !== RoutePath.BILLING_WALLET
@@ -97,9 +97,9 @@ export function useSuspensionBanner(suspension?: Suspension | null) {
 
       const cleanupText = cleanupDate
         ? cleanupDatePassed
-          ? 'Sandboxes will be stopped'
-          : `Sandboxes will be stopped ${formatDistanceToNow(cleanupDate, { addSuffix: true })}`
-        : 'Sandboxes will be stopped soon'
+          ? 'Boxes will be stopped'
+          : `Boxes will be stopped ${formatDistanceToNow(cleanupDate, { addSuffix: true })}`
+        : 'Boxes will be stopped soon'
 
       addBanner({
         id: SUSPENSION_BANNER_ID,
@@ -126,9 +126,9 @@ export function useSuspensionBanner(suspension?: Suspension | null) {
     const cleanupDatePassed = cleanupDate !== null && cleanupDate <= new Date()
     const cleanupText = cleanupDate
       ? cleanupDatePassed
-        ? 'Sandboxes will be stopped'
-        : `Sandboxes will be stopped ${formatDistanceToNow(cleanupDate, { addSuffix: true })}`
-      : 'Sandboxes will be stopped soon'
+        ? 'Boxes will be stopped'
+        : `Boxes will be stopped ${formatDistanceToNow(cleanupDate, { addSuffix: true })}`
+      : 'Boxes will be stopped soon'
 
     addBanner({
       id: SUSPENSION_BANNER_ID,

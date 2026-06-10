@@ -17,7 +17,7 @@ import { DataSource, In, IsNull, Like, Repository } from 'typeorm'
 import { REGION_NAME_REGEX } from '../constants/region-name-regex.constant'
 import { CreateRegionInternalDto } from '../dto/create-region-internal.dto'
 import { Region } from '../entities/region.entity'
-import { Runner } from '../../sandbox/entities/runner.entity'
+import { Runner } from '../../box/entities/runner.entity'
 import { RegionType } from '../enums/region-type.enum'
 import { CreateRegionResponseDto } from '../dto/create-region.dto'
 import { generateApiKeyHash, generateApiKeyValue, generateRandomString } from '../../common/utils/api-key'
@@ -33,10 +33,10 @@ import {
   RegionSnapshotManagerUpdatedEvent,
 } from '../events/region-snapshot-manager-creds.event'
 import { UpdateRegionDto } from '../dto/update-region.dto'
-import { Snapshot } from '../../sandbox/entities/snapshot.entity'
+import { Snapshot } from '../../box/entities/snapshot.entity'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
-import { toolboxProxyUrlCacheKey } from '../../sandbox/utils/sandbox-lookup-cache.util'
+import { toolboxProxyUrlCacheKey } from '../../box/utils/box-lookup-cache.util'
 
 @Injectable()
 export class RegionService {

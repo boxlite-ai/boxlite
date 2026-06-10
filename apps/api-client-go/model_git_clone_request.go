@@ -342,3 +342,5 @@ func (v *NullableGitCloneRequest) UnmarshalJSON(src []byte) error {
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }
+
+

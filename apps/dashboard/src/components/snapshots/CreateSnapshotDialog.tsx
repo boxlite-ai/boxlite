@@ -145,7 +145,7 @@ export const CreateSnapshotDialog = ({ className, ref }: { className?: string; r
         <DialogHeader>
           <DialogTitle>Create New Snapshot</DialogTitle>
           <DialogDescription>
-            Register a new snapshot to be used for spinning up sandboxes in your organization.
+            Register a new snapshot to be used for spinning up boxes in your organization.
           </DialogDescription>
         </DialogHeader>
         <ScrollArea fade="mask" className="h-[500px] overflow-auto -mx-5">

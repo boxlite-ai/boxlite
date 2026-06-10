@@ -47,10 +47,10 @@ func ProxyRequest(logger *slog.Logger) gin.HandlerFunc {
 			return
 		}
 
-		sandboxId := ctx.Param("sandboxId")
+		boxId := ctx.Param("boxId")
 
 		if ctx.Request.Header.Get("Upgrade") == "websocket" {
-			handleWebSocketTerminal(ctx, r, sandboxId, logger)
+			handleWebSocketTerminal(ctx, r, boxId, logger)
 			return
 		}
 
@@ -92,7 +92,7 @@ window.addEventListener('resize',function(){fitAddon.fit();});
 </body>
 </html>`
 
-func handleWebSocketTerminal(ctx *gin.Context, r *runner.Runner, sandboxId string, logger *slog.Logger) {
+func handleWebSocketTerminal(ctx *gin.Context, r *runner.Runner, boxId string, logger *slog.Logger) {
 	ws, err := upgrader.Upgrade(ctx.Writer, ctx.Request, nil)
 	if err != nil {
 		logger.Warn("websocket upgrade failed", "error", err)
@@ -113,9 +113,9 @@ func handleWebSocketTerminal(ctx *gin.Context, r *runner.Runner, sandboxId strin
 	go runTerminalKeepalive(keepaliveCtx, ws, &writeMu, logger)
 
 	shellCmd, shellArgs := shellutil.DefaultInteractiveShell()
-	execution, err := r.Boxlite.StartExecution(ctx.Request.Context(), sandboxId, shellCmd, shellArgs, wsWriter, wsWriter, true)
+	execution, err := r.Boxlite.StartExecution(ctx.Request.Context(), boxId, shellCmd, shellArgs, wsWriter, wsWriter, true)
 	if err != nil {
-		logger.Warn("failed to start terminal execution", "sandbox", sandboxId, "error", err)
+		logger.Warn("failed to start terminal execution", "box", boxId, "error", err)
 		writeMu.Lock()
 		_ = ws.WriteControl(
 			websocket.CloseMessage,

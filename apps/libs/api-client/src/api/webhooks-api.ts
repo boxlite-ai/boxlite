@@ -18,7 +18,7 @@ import type { AxiosPromise, AxiosInstance, RawAxiosRequestConfig } from 'axios';
 import globalAxios from 'axios';
 // Some imports not used depending on template conditions
 // @ts-ignore
-import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObject, setBearerAuthToObject, setOAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction } from '../common';
+import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObject, setBearerAuthToObject, setOAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction, replaceWithSerializableTypeIfNeeded } from '../common';
 // @ts-ignore
 import { BASE_PATH, COLLECTION_FORMATS, type RequestArgs, BaseAPI, RequiredError, operationServerMap } from '../base';
 // @ts-ignore
@@ -31,14 +31,13 @@ import type { WebhookControllerGetStatus200Response } from '../models';
 import type { WebhookInitializationStatus } from '../models';
 /**
  * WebhooksApi - axios parameter creator
- * @export
  */
 export const WebhooksApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         *
+         * 
          * @summary Get Svix Consumer App Portal access for an organization
-         * @param {string} organizationId
+         * @param {string} organizationId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -47,7 +46,7 @@ export const WebhooksApiAxiosParamCreator = function (configuration?: Configurat
             // verify required parameter 'organizationId' is not null or undefined
             assertParamExists('webhookControllerGetAppPortalAccess', 'organizationId', organizationId)
             const localVarPath = `/webhooks/organizations/{organizationId}/app-portal-access`
-                .replace(`{${"organizationId"}}`, encodeURIComponent(String(organizationId)));
+                .replace('{organizationId}', encodeURIComponent(String(organizationId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -63,7 +62,7 @@ export const WebhooksApiAxiosParamCreator = function (configuration?: Configurat
             // http bearer authentication required
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -78,9 +77,9 @@ export const WebhooksApiAxiosParamCreator = function (configuration?: Configurat
             };
         },
         /**
-         *
+         * 
          * @summary Get webhook initialization status for an organization
-         * @param {string} organizationId
+         * @param {string} organizationId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -89,7 +88,7 @@ export const WebhooksApiAxiosParamCreator = function (configuration?: Configurat
             // verify required parameter 'organizationId' is not null or undefined
             assertParamExists('webhookControllerGetInitializationStatus', 'organizationId', organizationId)
             const localVarPath = `/webhooks/organizations/{organizationId}/initialization-status`
-                .replace(`{${"organizationId"}}`, encodeURIComponent(String(organizationId)));
+                .replace('{organizationId}', encodeURIComponent(String(organizationId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -105,7 +104,7 @@ export const WebhooksApiAxiosParamCreator = function (configuration?: Configurat
             // http bearer authentication required
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -120,10 +119,10 @@ export const WebhooksApiAxiosParamCreator = function (configuration?: Configurat
             };
         },
         /**
-         *
+         * 
          * @summary Get delivery attempts for a webhook message
-         * @param {string} organizationId
-         * @param {string} messageId
+         * @param {string} organizationId 
+         * @param {string} messageId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -134,8 +133,8 @@ export const WebhooksApiAxiosParamCreator = function (configuration?: Configurat
             // verify required parameter 'messageId' is not null or undefined
             assertParamExists('webhookControllerGetMessageAttempts', 'messageId', messageId)
             const localVarPath = `/webhooks/organizations/{organizationId}/messages/{messageId}/attempts`
-                .replace(`{${"organizationId"}}`, encodeURIComponent(String(organizationId)))
-                .replace(`{${"messageId"}}`, encodeURIComponent(String(messageId)));
+                .replace('{organizationId}', encodeURIComponent(String(organizationId)))
+                .replace('{messageId}', encodeURIComponent(String(messageId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -151,7 +150,7 @@ export const WebhooksApiAxiosParamCreator = function (configuration?: Configurat
             // http bearer authentication required
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -166,7 +165,7 @@ export const WebhooksApiAxiosParamCreator = function (configuration?: Configurat
             };
         },
         /**
-         *
+         * 
          * @summary Get webhook service status
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -189,7 +188,7 @@ export const WebhooksApiAxiosParamCreator = function (configuration?: Configurat
             // http bearer authentication required
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -204,9 +203,9 @@ export const WebhooksApiAxiosParamCreator = function (configuration?: Configurat
             };
         },
         /**
-         *
+         * 
          * @summary Initialize webhooks for an organization
-         * @param {string} organizationId
+         * @param {string} organizationId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -215,7 +214,7 @@ export const WebhooksApiAxiosParamCreator = function (configuration?: Configurat
             // verify required parameter 'organizationId' is not null or undefined
             assertParamExists('webhookControllerInitializeWebhooks', 'organizationId', organizationId)
             const localVarPath = `/webhooks/organizations/{organizationId}/initialize`
-                .replace(`{${"organizationId"}}`, encodeURIComponent(String(organizationId)));
+                .replace('{organizationId}', encodeURIComponent(String(organizationId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -232,7 +231,6 @@ export const WebhooksApiAxiosParamCreator = function (configuration?: Configurat
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
 
-
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
             }
@@ -246,10 +244,10 @@ export const WebhooksApiAxiosParamCreator = function (configuration?: Configurat
             };
         },
         /**
-         *
+         * 
          * @summary Send a webhook message to an organization
-         * @param {string} organizationId
-         * @param {SendWebhookDto} sendWebhookDto
+         * @param {string} organizationId 
+         * @param {SendWebhookDto} sendWebhookDto 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -260,7 +258,7 @@ export const WebhooksApiAxiosParamCreator = function (configuration?: Configurat
             // verify required parameter 'sendWebhookDto' is not null or undefined
             assertParamExists('webhookControllerSendWebhook', 'sendWebhookDto', sendWebhookDto)
             const localVarPath = `/webhooks/organizations/{organizationId}/send`
-                .replace(`{${"organizationId"}}`, encodeURIComponent(String(organizationId)));
+                .replace('{organizationId}', encodeURIComponent(String(organizationId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -275,8 +273,6 @@ export const WebhooksApiAxiosParamCreator = function (configuration?: Configurat
             // authentication bearer required
             // http bearer authentication required
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-
 
             localVarHeaderParameter['Content-Type'] = 'application/json';
 
@@ -298,15 +294,14 @@ export const WebhooksApiAxiosParamCreator = function (configuration?: Configurat
 
 /**
  * WebhooksApi - functional programming interface
- * @export
  */
 export const WebhooksApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = WebhooksApiAxiosParamCreator(configuration)
     return {
         /**
-         *
+         * 
          * @summary Get Svix Consumer App Portal access for an organization
-         * @param {string} organizationId
+         * @param {string} organizationId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -318,9 +313,9 @@ export const WebhooksApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get webhook initialization status for an organization
-         * @param {string} organizationId
+         * @param {string} organizationId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -332,10 +327,10 @@ export const WebhooksApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get delivery attempts for a webhook message
-         * @param {string} organizationId
-         * @param {string} messageId
+         * @param {string} organizationId 
+         * @param {string} messageId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -347,7 +342,7 @@ export const WebhooksApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get webhook service status
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -360,9 +355,9 @@ export const WebhooksApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Initialize webhooks for an organization
-         * @param {string} organizationId
+         * @param {string} organizationId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -374,10 +369,10 @@ export const WebhooksApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Send a webhook message to an organization
-         * @param {string} organizationId
-         * @param {SendWebhookDto} sendWebhookDto
+         * @param {string} organizationId 
+         * @param {SendWebhookDto} sendWebhookDto 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -393,15 +388,14 @@ export const WebhooksApiFp = function(configuration?: Configuration) {
 
 /**
  * WebhooksApi - factory interface
- * @export
  */
 export const WebhooksApiFactory = function (configuration?: Configuration, basePath?: string, axios?: AxiosInstance) {
     const localVarFp = WebhooksApiFp(configuration)
     return {
         /**
-         *
+         * 
          * @summary Get Svix Consumer App Portal access for an organization
-         * @param {string} organizationId
+         * @param {string} organizationId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -410,9 +404,9 @@ export const WebhooksApiFactory = function (configuration?: Configuration, baseP
             return localVarFp.webhookControllerGetAppPortalAccess(organizationId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get webhook initialization status for an organization
-         * @param {string} organizationId
+         * @param {string} organizationId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -421,10 +415,10 @@ export const WebhooksApiFactory = function (configuration?: Configuration, baseP
             return localVarFp.webhookControllerGetInitializationStatus(organizationId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get delivery attempts for a webhook message
-         * @param {string} organizationId
-         * @param {string} messageId
+         * @param {string} organizationId 
+         * @param {string} messageId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -433,7 +427,7 @@ export const WebhooksApiFactory = function (configuration?: Configuration, baseP
             return localVarFp.webhookControllerGetMessageAttempts(organizationId, messageId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get webhook service status
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -443,9 +437,9 @@ export const WebhooksApiFactory = function (configuration?: Configuration, baseP
             return localVarFp.webhookControllerGetStatus(xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Initialize webhooks for an organization
-         * @param {string} organizationId
+         * @param {string} organizationId 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -454,10 +448,10 @@ export const WebhooksApiFactory = function (configuration?: Configuration, baseP
             return localVarFp.webhookControllerInitializeWebhooks(organizationId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Send a webhook message to an organization
-         * @param {string} organizationId
-         * @param {SendWebhookDto} sendWebhookDto
+         * @param {string} organizationId 
+         * @param {SendWebhookDto} sendWebhookDto 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -470,87 +464,79 @@ export const WebhooksApiFactory = function (configuration?: Configuration, baseP
 
 /**
  * WebhooksApi - object-oriented interface
- * @export
- * @class WebhooksApi
- * @extends {BaseAPI}
  */
 export class WebhooksApi extends BaseAPI {
     /**
-     *
+     * 
      * @summary Get Svix Consumer App Portal access for an organization
-     * @param {string} organizationId
+     * @param {string} organizationId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof WebhooksApi
      */
     public webhookControllerGetAppPortalAccess(organizationId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return WebhooksApiFp(this.configuration).webhookControllerGetAppPortalAccess(organizationId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Get webhook initialization status for an organization
-     * @param {string} organizationId
+     * @param {string} organizationId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof WebhooksApi
      */
     public webhookControllerGetInitializationStatus(organizationId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return WebhooksApiFp(this.configuration).webhookControllerGetInitializationStatus(organizationId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Get delivery attempts for a webhook message
-     * @param {string} organizationId
-     * @param {string} messageId
+     * @param {string} organizationId 
+     * @param {string} messageId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof WebhooksApi
      */
     public webhookControllerGetMessageAttempts(organizationId: string, messageId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return WebhooksApiFp(this.configuration).webhookControllerGetMessageAttempts(organizationId, messageId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Get webhook service status
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof WebhooksApi
      */
     public webhookControllerGetStatus(xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return WebhooksApiFp(this.configuration).webhookControllerGetStatus(xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Initialize webhooks for an organization
-     * @param {string} organizationId
+     * @param {string} organizationId 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof WebhooksApi
      */
     public webhookControllerInitializeWebhooks(organizationId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return WebhooksApiFp(this.configuration).webhookControllerInitializeWebhooks(organizationId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Send a webhook message to an organization
-     * @param {string} organizationId
-     * @param {SendWebhookDto} sendWebhookDto
+     * @param {string} organizationId 
+     * @param {SendWebhookDto} sendWebhookDto 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof WebhooksApi
      */
     public webhookControllerSendWebhook(organizationId: string, sendWebhookDto: SendWebhookDto, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return WebhooksApiFp(this.configuration).webhookControllerSendWebhook(organizationId, sendWebhookDto, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 }
+

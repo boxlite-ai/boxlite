@@ -31,7 +31,7 @@ type Config struct {
 	Environment                        string        `envconfig:"ENVIRONMENT"`
 	ContainerRuntime                   string        `envconfig:"CONTAINER_RUNTIME"`
 	ContainerNetwork                   string        `envconfig:"CONTAINER_NETWORK"`
-	InterSandboxNetworkEnabled         bool          `envconfig:"INTER_SANDBOX_NETWORK_ENABLED" default:"true"`
+	InterBoxNetworkEnabled             bool          `envconfig:"INTER_BOX_NETWORK_ENABLED" default:"true"`
 	LogFilePath                        string        `envconfig:"LOG_FILE_PATH"`
 	AWSRegion                          string        `envconfig:"AWS_REGION"`
 	AWSEndpointUrl                     string        `envconfig:"AWS_ENDPOINT_URL"`
@@ -40,7 +40,7 @@ type Config struct {
 	AWSDefaultBucket                   string        `envconfig:"AWS_DEFAULT_BUCKET"`
 	ResourceLimitsDisabled             bool          `envconfig:"RESOURCE_LIMITS_DISABLED"`
 	DaemonStartTimeoutSec              int           `envconfig:"DAEMON_START_TIMEOUT_SEC"`
-	SandboxStartTimeoutSec             int           `envconfig:"SANDBOX_START_TIMEOUT_SEC"`
+	BoxStartTimeoutSec                 int           `envconfig:"BOX_START_TIMEOUT_SEC"`
 	UseSnapshotEntrypoint              bool          `envconfig:"USE_SNAPSHOT_ENTRYPOINT"`
 	Domain                             string        `envconfig:"RUNNER_DOMAIN" validate:"omitempty,hostname|ip"`
 	VolumeCleanupInterval              time.Duration `envconfig:"VOLUME_CLEANUP_INTERVAL" default:"30s" validate:"min=10s"`

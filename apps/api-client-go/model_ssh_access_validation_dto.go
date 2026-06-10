@@ -23,8 +23,8 @@ var _ MappedNullable = &SshAccessValidationDto{}
 type SshAccessValidationDto struct {
 	// Whether the SSH access token is valid
 	Valid bool `json:"valid"`
-	// ID of the sandbox this SSH access is for
-	SandboxId string `json:"sandboxId"`
+	// ID of the box this SSH access is for
+	BoxId string `json:"boxId"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -34,10 +34,10 @@ type _SshAccessValidationDto SshAccessValidationDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewSshAccessValidationDto(valid bool, sandboxId string) *SshAccessValidationDto {
+func NewSshAccessValidationDto(valid bool, boxId string) *SshAccessValidationDto {
 	this := SshAccessValidationDto{}
 	this.Valid = valid
-	this.SandboxId = sandboxId
+	this.BoxId = boxId
 	return &this
 }
 
@@ -73,28 +73,28 @@ func (o *SshAccessValidationDto) SetValid(v bool) {
 	o.Valid = v
 }
 
-// GetSandboxId returns the SandboxId field value
-func (o *SshAccessValidationDto) GetSandboxId() string {
+// GetBoxId returns the BoxId field value
+func (o *SshAccessValidationDto) GetBoxId() string {
 	if o == nil {
 		var ret string
 		return ret
 	}
 
-	return o.SandboxId
+	return o.BoxId
 }
 
-// GetSandboxIdOk returns a tuple with the SandboxId field value
+// GetBoxIdOk returns a tuple with the BoxId field value
 // and a boolean to check if the value has been set.
-func (o *SshAccessValidationDto) GetSandboxIdOk() (*string, bool) {
+func (o *SshAccessValidationDto) GetBoxIdOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return &o.SandboxId, true
+	return &o.BoxId, true
 }
 
-// SetSandboxId sets field value
-func (o *SshAccessValidationDto) SetSandboxId(v string) {
-	o.SandboxId = v
+// SetBoxId sets field value
+func (o *SshAccessValidationDto) SetBoxId(v string) {
+	o.BoxId = v
 }
 
 func (o SshAccessValidationDto) MarshalJSON() ([]byte, error) {
@@ -108,7 +108,7 @@ func (o SshAccessValidationDto) MarshalJSON() ([]byte, error) {
 func (o SshAccessValidationDto) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["valid"] = o.Valid
-	toSerialize["sandboxId"] = o.SandboxId
+	toSerialize["boxId"] = o.BoxId
 
 	for key, value := range o.AdditionalProperties {
 		toSerialize[key] = value
@@ -123,7 +123,7 @@ func (o *SshAccessValidationDto) UnmarshalJSON(data []byte) (err error) {
 	// that every required field exists as a key in the generic map.
 	requiredProperties := []string{
 		"valid",
-		"sandboxId",
+		"boxId",
 	}
 
 	allProperties := make(map[string]interface{})
@@ -154,7 +154,7 @@ func (o *SshAccessValidationDto) UnmarshalJSON(data []byte) (err error) {
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "valid")
-		delete(additionalProperties, "sandboxId")
+		delete(additionalProperties, "boxId")
 		o.AdditionalProperties = additionalProperties
 	}
 
@@ -196,3 +196,5 @@ func (v *NullableSshAccessValidationDto) UnmarshalJSON(src []byte) error {
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }
+
+

@@ -18,31 +18,30 @@ import type { AxiosPromise, AxiosInstance, RawAxiosRequestConfig } from 'axios';
 import globalAxios from 'axios';
 // Some imports not used depending on template conditions
 // @ts-ignore
-import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObject, setBearerAuthToObject, setOAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction } from '../common';
+import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObject, setBearerAuthToObject, setOAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction, replaceWithSerializableTypeIfNeeded } from '../common';
 // @ts-ignore
 import { BASE_PATH, COLLECTION_FORMATS, type RequestArgs, BaseAPI, RequiredError, operationServerMap } from '../base';
 /**
  * PreviewApi - axios parameter creator
- * @export
  */
 export const PreviewApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         *
-         * @summary Get sandbox ID from signed preview URL token
+         * 
+         * @summary Get box ID from signed preview URL token
          * @param {string} signedPreviewToken Signed preview URL token
-         * @param {number} port Port number to get sandbox ID from signed preview URL token
+         * @param {number} port Port number to get box ID from signed preview URL token
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        getSandboxIdFromSignedPreviewUrlToken: async (signedPreviewToken: string, port: number, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        getBoxIdFromSignedPreviewUrlToken: async (signedPreviewToken: string, port: number, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             // verify required parameter 'signedPreviewToken' is not null or undefined
-            assertParamExists('getSandboxIdFromSignedPreviewUrlToken', 'signedPreviewToken', signedPreviewToken)
+            assertParamExists('getBoxIdFromSignedPreviewUrlToken', 'signedPreviewToken', signedPreviewToken)
             // verify required parameter 'port' is not null or undefined
-            assertParamExists('getSandboxIdFromSignedPreviewUrlToken', 'port', port)
-            const localVarPath = `/preview/{signedPreviewToken}/{port}/sandbox-id`
-                .replace(`{${"signedPreviewToken"}}`, encodeURIComponent(String(signedPreviewToken)))
-                .replace(`{${"port"}}`, encodeURIComponent(String(port)));
+            assertParamExists('getBoxIdFromSignedPreviewUrlToken', 'port', port)
+            const localVarPath = `/preview/{signedPreviewToken}/{port}/box-id`
+                .replace('{signedPreviewToken}', encodeURIComponent(String(signedPreviewToken)))
+                .replace('{port}', encodeURIComponent(String(port)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -54,7 +53,7 @@ export const PreviewApiAxiosParamCreator = function (configuration?: Configurati
             const localVarHeaderParameter = {} as any;
             const localVarQueryParameter = {} as any;
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
@@ -66,17 +65,17 @@ export const PreviewApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
-         * @summary Check if user has access to the sandbox
-         * @param {string} sandboxId
+         * 
+         * @summary Check if user has access to the box
+         * @param {string} boxId 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        hasSandboxAccess: async (sandboxId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('hasSandboxAccess', 'sandboxId', sandboxId)
-            const localVarPath = `/preview/{sandboxId}/access`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+        hasBoxAccess: async (boxId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('hasBoxAccess', 'boxId', boxId)
+            const localVarPath = `/preview/{boxId}/access`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -94,7 +93,7 @@ export const PreviewApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
@@ -106,17 +105,17 @@ export const PreviewApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
-         * @summary Check if sandbox is public
-         * @param {string} sandboxId ID of the sandbox
+         * 
+         * @summary Check if box is public
+         * @param {string} boxId ID of the box
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        isSandboxPublic: async (sandboxId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('isSandboxPublic', 'sandboxId', sandboxId)
-            const localVarPath = `/preview/{sandboxId}/public`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+        isBoxPublic: async (boxId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('isBoxPublic', 'boxId', boxId)
+            const localVarPath = `/preview/{boxId}/public`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -128,7 +127,7 @@ export const PreviewApiAxiosParamCreator = function (configuration?: Configurati
             const localVarHeaderParameter = {} as any;
             const localVarQueryParameter = {} as any;
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
@@ -140,21 +139,21 @@ export const PreviewApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
-         * @summary Check if sandbox auth token is valid
-         * @param {string} sandboxId ID of the sandbox
-         * @param {string} authToken Auth token of the sandbox
+         * 
+         * @summary Check if box auth token is valid
+         * @param {string} boxId ID of the box
+         * @param {string} authToken Auth token of the box
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        isValidAuthToken: async (sandboxId: string, authToken: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('isValidAuthToken', 'sandboxId', sandboxId)
+        isValidAuthToken: async (boxId: string, authToken: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('isValidAuthToken', 'boxId', boxId)
             // verify required parameter 'authToken' is not null or undefined
             assertParamExists('isValidAuthToken', 'authToken', authToken)
-            const localVarPath = `/preview/{sandboxId}/validate/{authToken}`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)))
-                .replace(`{${"authToken"}}`, encodeURIComponent(String(authToken)));
+            const localVarPath = `/preview/{boxId}/validate/{authToken}`
+                .replace('{boxId}', encodeURIComponent(String(boxId)))
+                .replace('{authToken}', encodeURIComponent(String(authToken)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -166,7 +165,7 @@ export const PreviewApiAxiosParamCreator = function (configuration?: Configurati
             const localVarHeaderParameter = {} as any;
             const localVarQueryParameter = {} as any;
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
@@ -182,61 +181,60 @@ export const PreviewApiAxiosParamCreator = function (configuration?: Configurati
 
 /**
  * PreviewApi - functional programming interface
- * @export
  */
 export const PreviewApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = PreviewApiAxiosParamCreator(configuration)
     return {
         /**
-         *
-         * @summary Get sandbox ID from signed preview URL token
+         * 
+         * @summary Get box ID from signed preview URL token
          * @param {string} signedPreviewToken Signed preview URL token
-         * @param {number} port Port number to get sandbox ID from signed preview URL token
+         * @param {number} port Port number to get box ID from signed preview URL token
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async getSandboxIdFromSignedPreviewUrlToken(signedPreviewToken: string, port: number, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<string>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getSandboxIdFromSignedPreviewUrlToken(signedPreviewToken, port, options);
+        async getBoxIdFromSignedPreviewUrlToken(signedPreviewToken: string, port: number, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<string>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getBoxIdFromSignedPreviewUrlToken(signedPreviewToken, port, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['PreviewApi.getSandboxIdFromSignedPreviewUrlToken']?.[localVarOperationServerIndex]?.url;
+            const localVarOperationServerBasePath = operationServerMap['PreviewApi.getBoxIdFromSignedPreviewUrlToken']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
-         * @summary Check if user has access to the sandbox
-         * @param {string} sandboxId
+         * 
+         * @summary Check if user has access to the box
+         * @param {string} boxId 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async hasSandboxAccess(sandboxId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<boolean>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.hasSandboxAccess(sandboxId, options);
+        async hasBoxAccess(boxId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<boolean>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.hasBoxAccess(boxId, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['PreviewApi.hasSandboxAccess']?.[localVarOperationServerIndex]?.url;
+            const localVarOperationServerBasePath = operationServerMap['PreviewApi.hasBoxAccess']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
-         * @summary Check if sandbox is public
-         * @param {string} sandboxId ID of the sandbox
+         * 
+         * @summary Check if box is public
+         * @param {string} boxId ID of the box
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async isSandboxPublic(sandboxId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<boolean>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.isSandboxPublic(sandboxId, options);
+        async isBoxPublic(boxId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<boolean>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.isBoxPublic(boxId, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['PreviewApi.isSandboxPublic']?.[localVarOperationServerIndex]?.url;
+            const localVarOperationServerBasePath = operationServerMap['PreviewApi.isBoxPublic']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
-         * @summary Check if sandbox auth token is valid
-         * @param {string} sandboxId ID of the sandbox
-         * @param {string} authToken Auth token of the sandbox
+         * 
+         * @summary Check if box auth token is valid
+         * @param {string} boxId ID of the box
+         * @param {string} authToken Auth token of the box
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async isValidAuthToken(sandboxId: string, authToken: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<boolean>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.isValidAuthToken(sandboxId, authToken, options);
+        async isValidAuthToken(boxId: string, authToken: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<boolean>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.isValidAuthToken(boxId, authToken, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['PreviewApi.isValidAuthToken']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -246,110 +244,103 @@ export const PreviewApiFp = function(configuration?: Configuration) {
 
 /**
  * PreviewApi - factory interface
- * @export
  */
 export const PreviewApiFactory = function (configuration?: Configuration, basePath?: string, axios?: AxiosInstance) {
     const localVarFp = PreviewApiFp(configuration)
     return {
         /**
-         *
-         * @summary Get sandbox ID from signed preview URL token
+         * 
+         * @summary Get box ID from signed preview URL token
          * @param {string} signedPreviewToken Signed preview URL token
-         * @param {number} port Port number to get sandbox ID from signed preview URL token
+         * @param {number} port Port number to get box ID from signed preview URL token
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        getSandboxIdFromSignedPreviewUrlToken(signedPreviewToken: string, port: number, options?: RawAxiosRequestConfig): AxiosPromise<string> {
-            return localVarFp.getSandboxIdFromSignedPreviewUrlToken(signedPreviewToken, port, options).then((request) => request(axios, basePath));
+        getBoxIdFromSignedPreviewUrlToken(signedPreviewToken: string, port: number, options?: RawAxiosRequestConfig): AxiosPromise<string> {
+            return localVarFp.getBoxIdFromSignedPreviewUrlToken(signedPreviewToken, port, options).then((request) => request(axios, basePath));
         },
         /**
-         *
-         * @summary Check if user has access to the sandbox
-         * @param {string} sandboxId
+         * 
+         * @summary Check if user has access to the box
+         * @param {string} boxId 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        hasSandboxAccess(sandboxId: string, options?: RawAxiosRequestConfig): AxiosPromise<boolean> {
-            return localVarFp.hasSandboxAccess(sandboxId, options).then((request) => request(axios, basePath));
+        hasBoxAccess(boxId: string, options?: RawAxiosRequestConfig): AxiosPromise<boolean> {
+            return localVarFp.hasBoxAccess(boxId, options).then((request) => request(axios, basePath));
         },
         /**
-         *
-         * @summary Check if sandbox is public
-         * @param {string} sandboxId ID of the sandbox
+         * 
+         * @summary Check if box is public
+         * @param {string} boxId ID of the box
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        isSandboxPublic(sandboxId: string, options?: RawAxiosRequestConfig): AxiosPromise<boolean> {
-            return localVarFp.isSandboxPublic(sandboxId, options).then((request) => request(axios, basePath));
+        isBoxPublic(boxId: string, options?: RawAxiosRequestConfig): AxiosPromise<boolean> {
+            return localVarFp.isBoxPublic(boxId, options).then((request) => request(axios, basePath));
         },
         /**
-         *
-         * @summary Check if sandbox auth token is valid
-         * @param {string} sandboxId ID of the sandbox
-         * @param {string} authToken Auth token of the sandbox
+         * 
+         * @summary Check if box auth token is valid
+         * @param {string} boxId ID of the box
+         * @param {string} authToken Auth token of the box
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        isValidAuthToken(sandboxId: string, authToken: string, options?: RawAxiosRequestConfig): AxiosPromise<boolean> {
-            return localVarFp.isValidAuthToken(sandboxId, authToken, options).then((request) => request(axios, basePath));
+        isValidAuthToken(boxId: string, authToken: string, options?: RawAxiosRequestConfig): AxiosPromise<boolean> {
+            return localVarFp.isValidAuthToken(boxId, authToken, options).then((request) => request(axios, basePath));
         },
     };
 };
 
 /**
  * PreviewApi - object-oriented interface
- * @export
- * @class PreviewApi
- * @extends {BaseAPI}
  */
 export class PreviewApi extends BaseAPI {
     /**
-     *
-     * @summary Get sandbox ID from signed preview URL token
+     * 
+     * @summary Get box ID from signed preview URL token
      * @param {string} signedPreviewToken Signed preview URL token
-     * @param {number} port Port number to get sandbox ID from signed preview URL token
+     * @param {number} port Port number to get box ID from signed preview URL token
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof PreviewApi
      */
-    public getSandboxIdFromSignedPreviewUrlToken(signedPreviewToken: string, port: number, options?: RawAxiosRequestConfig) {
-        return PreviewApiFp(this.configuration).getSandboxIdFromSignedPreviewUrlToken(signedPreviewToken, port, options).then((request) => request(this.axios, this.basePath));
+    public getBoxIdFromSignedPreviewUrlToken(signedPreviewToken: string, port: number, options?: RawAxiosRequestConfig) {
+        return PreviewApiFp(this.configuration).getBoxIdFromSignedPreviewUrlToken(signedPreviewToken, port, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
-     * @summary Check if user has access to the sandbox
-     * @param {string} sandboxId
+     * 
+     * @summary Check if user has access to the box
+     * @param {string} boxId 
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof PreviewApi
      */
-    public hasSandboxAccess(sandboxId: string, options?: RawAxiosRequestConfig) {
-        return PreviewApiFp(this.configuration).hasSandboxAccess(sandboxId, options).then((request) => request(this.axios, this.basePath));
+    public hasBoxAccess(boxId: string, options?: RawAxiosRequestConfig) {
+        return PreviewApiFp(this.configuration).hasBoxAccess(boxId, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
-     * @summary Check if sandbox is public
-     * @param {string} sandboxId ID of the sandbox
+     * 
+     * @summary Check if box is public
+     * @param {string} boxId ID of the box
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof PreviewApi
      */
-    public isSandboxPublic(sandboxId: string, options?: RawAxiosRequestConfig) {
-        return PreviewApiFp(this.configuration).isSandboxPublic(sandboxId, options).then((request) => request(this.axios, this.basePath));
+    public isBoxPublic(boxId: string, options?: RawAxiosRequestConfig) {
+        return PreviewApiFp(this.configuration).isBoxPublic(boxId, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
-     * @summary Check if sandbox auth token is valid
-     * @param {string} sandboxId ID of the sandbox
-     * @param {string} authToken Auth token of the sandbox
+     * 
+     * @summary Check if box auth token is valid
+     * @param {string} boxId ID of the box
+     * @param {string} authToken Auth token of the box
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof PreviewApi
      */
-    public isValidAuthToken(sandboxId: string, authToken: string, options?: RawAxiosRequestConfig) {
-        return PreviewApiFp(this.configuration).isValidAuthToken(sandboxId, authToken, options).then((request) => request(this.axios, this.basePath));
+    public isValidAuthToken(boxId: string, authToken: string, options?: RawAxiosRequestConfig) {
+        return PreviewApiFp(this.configuration).isValidAuthToken(boxId, authToken, options).then((request) => request(this.axios, this.basePath));
     }
 }
+

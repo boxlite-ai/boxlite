@@ -66,7 +66,7 @@ export class Mouse {
    *
    * @example
    * ```typescript
-   * const position = await sandbox.computerUse.mouse.getPosition();
+   * const position = await box.computerUse.mouse.getPosition();
    * console.log(`Mouse is at: ${position.x}, ${position.y}`);
    * ```
    */
@@ -85,7 +85,7 @@ export class Mouse {
    *
    * @example
    * ```typescript
-   * const result = await sandbox.computerUse.mouse.move(100, 200);
+   * const result = await box.computerUse.mouse.move(100, 200);
    * console.log(`Mouse moved to: ${result.x}, ${result.y}`);
    * ```
    */
@@ -108,13 +108,13 @@ export class Mouse {
    * @example
    * ```typescript
    * // Single left click
-   * const result = await sandbox.computerUse.mouse.click(100, 200);
+   * const result = await box.computerUse.mouse.click(100, 200);
    *
    * // Double click
-   * const doubleClick = await sandbox.computerUse.mouse.click(100, 200, 'left', true);
+   * const doubleClick = await box.computerUse.mouse.click(100, 200, 'left', true);
    *
    * // Right click
-   * const rightClick = await sandbox.computerUse.mouse.click(100, 200, 'right');
+   * const rightClick = await box.computerUse.mouse.click(100, 200, 'right');
    * ```
    */
   @WithInstrumentation()
@@ -136,7 +136,7 @@ export class Mouse {
    *
    * @example
    * ```typescript
-   * const result = await sandbox.computerUse.mouse.drag(50, 50, 150, 150);
+   * const result = await box.computerUse.mouse.drag(50, 50, 150, 150);
    * console.log(`Dragged from ${result.from.x},${result.from.y} to ${result.to.x},${result.to.y}`);
    * ```
    */
@@ -165,10 +165,10 @@ export class Mouse {
    * @example
    * ```typescript
    * // Scroll up
-   * const scrollUp = await sandbox.computerUse.mouse.scroll(100, 200, 'up', 3);
+   * const scrollUp = await box.computerUse.mouse.scroll(100, 200, 'up', 3);
    *
    * // Scroll down
-   * const scrollDown = await sandbox.computerUse.mouse.scroll(100, 200, 'down', 5);
+   * const scrollDown = await box.computerUse.mouse.scroll(100, 200, 'down', 5);
    * ```
    */
   @WithInstrumentation()
@@ -195,7 +195,7 @@ export class Keyboard {
    * @example
    * ```typescript
    * try {
-   *   await sandbox.computerUse.keyboard.type('Hello, World!');
+   *   await box.computerUse.keyboard.type('Hello, World!');
    *   console.log('Operation success');
    * } catch (e) {
    *   console.log('Operation failed:', e);
@@ -203,7 +203,7 @@ export class Keyboard {
    *
    * // With delay between characters
    * try {
-   *   await sandbox.computerUse.keyboard.type('Slow typing', 100);
+   *   await box.computerUse.keyboard.type('Slow typing', 100);
    *   console.log('Operation success');
    * } catch (e) {
    *   console.log('Operation failed:', e);
@@ -227,7 +227,7 @@ export class Keyboard {
    * ```typescript
    * // Press Enter
    * try {
-   *   await sandbox.computerUse.keyboard.press('Return');
+   *   await box.computerUse.keyboard.press('Return');
    *   console.log('Operation success');
    * } catch (e) {
    *   console.log('Operation failed:', e);
@@ -235,7 +235,7 @@ export class Keyboard {
    *
    * // Press Ctrl+C
    * try {
-   *   await sandbox.computerUse.keyboard.press('c', ['ctrl']);
+   *   await box.computerUse.keyboard.press('c', ['ctrl']);
    *   console.log('Operation success');
    * } catch (e) {
    *   console.log('Operation failed:', e);
@@ -243,7 +243,7 @@ export class Keyboard {
    *
    * // Press Ctrl+Shift+T
    * try {
-   *   await sandbox.computerUse.keyboard.press('t', ['ctrl', 'shift']);
+   *   await box.computerUse.keyboard.press('t', ['ctrl', 'shift']);
    *   console.log('Operation success');
    * } catch (e) {
    *   console.log('Operation failed:', e);
@@ -266,7 +266,7 @@ export class Keyboard {
    * ```typescript
    * // Copy
    * try {
-   *   await sandbox.computerUse.keyboard.hotkey('ctrl+c');
+   *   await box.computerUse.keyboard.hotkey('ctrl+c');
    *   console.log('Operation success');
    * } catch (e) {
    *   console.log('Operation failed:', e);
@@ -274,7 +274,7 @@ export class Keyboard {
    *
    * // Paste
    * try {
-   *   await sandbox.computerUse.keyboard.hotkey('ctrl+v');
+   *   await box.computerUse.keyboard.hotkey('ctrl+v');
    *   console.log('Operation success');
    * } catch (e) {
    *   console.log('Operation failed:', e);
@@ -282,7 +282,7 @@ export class Keyboard {
    *
    * // Alt+Tab
    * try {
-   *   await sandbox.computerUse.keyboard.hotkey('alt+tab');
+   *   await box.computerUse.keyboard.hotkey('alt+tab');
    *   console.log('Operation success');
    * } catch (e) {
    *   console.log('Operation failed:', e);
@@ -310,11 +310,11 @@ export class Screenshot {
    *
    * @example
    * ```typescript
-   * const screenshot = await sandbox.computerUse.screenshot.takeFullScreen();
+   * const screenshot = await box.computerUse.screenshot.takeFullScreen();
    * console.log(`Screenshot size: ${screenshot.width}x${screenshot.height}`);
    *
    * // With cursor visible
-   * const withCursor = await sandbox.computerUse.screenshot.takeFullScreen(true);
+   * const withCursor = await box.computerUse.screenshot.takeFullScreen(true);
    * ```
    */
   @WithInstrumentation()
@@ -333,7 +333,7 @@ export class Screenshot {
    * @example
    * ```typescript
    * const region = { x: 100, y: 100, width: 300, height: 200 };
-   * const screenshot = await sandbox.computerUse.screenshot.takeRegion(region);
+   * const screenshot = await box.computerUse.screenshot.takeRegion(region);
    * console.log(`Captured region: ${screenshot.region.width}x${screenshot.region.height}`);
    * ```
    */
@@ -358,17 +358,17 @@ export class Screenshot {
    * @example
    * ```typescript
    * // Default compression
-   * const screenshot = await sandbox.computerUse.screenshot.takeCompressed();
+   * const screenshot = await box.computerUse.screenshot.takeCompressed();
    *
    * // High quality JPEG
-   * const jpeg = await sandbox.computerUse.screenshot.takeCompressed({
+   * const jpeg = await box.computerUse.screenshot.takeCompressed({
    *   format: 'jpeg',
    *   quality: 95,
    *   showCursor: true
    * });
    *
    * // Scaled down PNG
-   * const scaled = await sandbox.computerUse.screenshot.takeCompressed({
+   * const scaled = await box.computerUse.screenshot.takeCompressed({
    *   format: 'png',
    *   scale: 0.5
    * });
@@ -395,7 +395,7 @@ export class Screenshot {
    * @example
    * ```typescript
    * const region = { x: 0, y: 0, width: 800, height: 600 };
-   * const screenshot = await sandbox.computerUse.screenshot.takeCompressedRegion(region, {
+   * const screenshot = await box.computerUse.screenshot.takeCompressedRegion(region, {
    *   format: 'webp',
    *   quality: 80,
    *   showCursor: true
@@ -435,7 +435,7 @@ export class Display {
    *
    * @example
    * ```typescript
-   * const info = await sandbox.computerUse.display.getInfo();
+   * const info = await box.computerUse.display.getInfo();
    * console.log(`Primary display: ${info.primary_display.width}x${info.primary_display.height}`);
    * console.log(`Total displays: ${info.total_displays}`);
    * info.displays.forEach((display, index) => {
@@ -456,7 +456,7 @@ export class Display {
    *
    * @example
    * ```typescript
-   * const windows = await sandbox.computerUse.display.getWindows();
+   * const windows = await box.computerUse.display.getWindows();
    * console.log(`Found ${windows.count} open windows:`);
    * windows.windows.forEach(window => {
    *   console.log(`- ${window.title} (ID: ${window.id})`);
@@ -485,7 +485,7 @@ export class RecordingService {
    * @example
    * ```typescript
    * // Start a recording with a label
-   * const recording = await sandbox.computerUse.recording.start('my-test-recording');
+   * const recording = await box.computerUse.recording.start('my-test-recording');
    * console.log(`Recording started: ${recording.id}`);
    * console.log(`File: ${recording.filePath}`);
    * ```
@@ -503,7 +503,7 @@ export class RecordingService {
    *
    * @example
    * ```typescript
-   * const result = await sandbox.computerUse.recording.stop(recording.id);
+   * const result = await box.computerUse.recording.stop(recording.id);
    * console.log(`Recording stopped: ${result.durationSeconds} seconds`);
    * console.log(`Saved to: ${result.filePath}`);
    * ```
@@ -520,7 +520,7 @@ export class RecordingService {
    *
    * @example
    * ```typescript
-   * const recordings = await sandbox.computerUse.recording.list();
+   * const recordings = await box.computerUse.recording.list();
    * console.log(`Found ${recordings.recordings.length} recordings`);
    * recordings.recordings.forEach(rec => {
    *   console.log(`- ${rec.fileName}: ${rec.status}`);
@@ -540,7 +540,7 @@ export class RecordingService {
    *
    * @example
    * ```typescript
-   * const recording = await sandbox.computerUse.recording.get(recordingId);
+   * const recording = await box.computerUse.recording.get(recordingId);
    * console.log(`Recording: ${recording.fileName}`);
    * console.log(`Status: ${recording.status}`);
    * console.log(`Duration: ${recording.durationSeconds} seconds`);
@@ -558,7 +558,7 @@ export class RecordingService {
    *
    * @example
    * ```typescript
-   * await sandbox.computerUse.recording.delete(recordingId);
+   * await box.computerUse.recording.delete(recordingId);
    * console.log('Recording deleted');
    * ```
    */
@@ -578,7 +578,7 @@ export class RecordingService {
    * @example
    * ```typescript
    * // Download recording to file
-   * await sandbox.computerUse.recording.download(recordingId, 'local_recording.mp4');
+   * await box.computerUse.recording.download(recordingId, 'local_recording.mp4');
    * console.log('Recording downloaded');
    * ```
    */
@@ -607,7 +607,7 @@ export class RecordingService {
  * Computer Use functionality for interacting with the desktop environment.
  *
  * Provides access to mouse, keyboard, screenshot, display, and recording operations
- * for automating desktop interactions within a sandbox.
+ * for automating desktop interactions within a box.
  *
  * @property {Mouse} mouse - Mouse operations interface
  * @property {Keyboard} keyboard - Keyboard operations interface
@@ -639,7 +639,7 @@ export class ComputerUse {
    *
    * @example
    * ```typescript
-   * const result = await sandbox.computerUse.start();
+   * const result = await box.computerUse.start();
    * console.log('Computer use processes started:', result.message);
    * ```
    */
@@ -656,7 +656,7 @@ export class ComputerUse {
    *
    * @example
    * ```typescript
-   * const result = await sandbox.computerUse.stop();
+   * const result = await box.computerUse.stop();
    * console.log('Computer use processes stopped:', result.message);
    * ```
    */
@@ -673,7 +673,7 @@ export class ComputerUse {
    *
    * @example
    * ```typescript
-   * const status = await sandbox.computerUse.getStatus();
+   * const status = await box.computerUse.getStatus();
    * console.log('Computer use status:', status.status);
    * ```
    */
@@ -691,8 +691,8 @@ export class ComputerUse {
    *
    * @example
    * ```typescript
-   * const xvfbStatus = await sandbox.computerUse.getProcessStatus('xvfb');
-   * const noVncStatus = await sandbox.computerUse.getProcessStatus('novnc');
+   * const xvfbStatus = await box.computerUse.getProcessStatus('xvfb');
+   * const noVncStatus = await box.computerUse.getProcessStatus('novnc');
    * ```
    */
   @WithInstrumentation()
@@ -709,7 +709,7 @@ export class ComputerUse {
    *
    * @example
    * ```typescript
-   * const result = await sandbox.computerUse.restartProcess('xfce4');
+   * const result = await box.computerUse.restartProcess('xfce4');
    * console.log('XFCE4 process restarted:', result.message);
    * ```
    */
@@ -727,7 +727,7 @@ export class ComputerUse {
    *
    * @example
    * ```typescript
-   * const logsResp = await sandbox.computerUse.getProcessLogs('novnc');
+   * const logsResp = await box.computerUse.getProcessLogs('novnc');
    * console.log('NoVNC logs:', logsResp.logs);
    * ```
    */
@@ -745,7 +745,7 @@ export class ComputerUse {
    *
    * @example
    * ```typescript
-   * const errorsResp = await sandbox.computerUse.getProcessErrors('x11vnc');
+   * const errorsResp = await box.computerUse.getProcessErrors('x11vnc');
    * console.log('X11VNC errors:', errorsResp.errors);
    * ```
    */

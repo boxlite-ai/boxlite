@@ -2,7 +2,7 @@
 // Copyright (c) 2024 BoxLite AI (originally Daytona Platforms Inc.
 // Modified and rebranded for BoxLite
 
-// Package boxlite provides a BoxLite-backed implementation of the sandbox runtime,
+// Package boxlite provides a BoxLite-backed implementation of the box runtime,
 // replacing Docker with VM-based isolation via the BoxLite Go SDK.
 package boxlite
 
@@ -148,38 +148,38 @@ func (c *Client) Close() error {
 	return c.runtime.Close()
 }
 
-// Create creates a new sandbox (VM) from the given image and configuration.
+// Create creates a new box (VM) from the given image and configuration.
 // Returns the box ID and daemon version.
-func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (string, string, error) {
-	// API sends cores / GB / GB as small integers (see apps/api Sandbox entity).
-	cpus := int(sandboxDto.CpuQuota)
+func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error) {
+	// API sends cores / GB / GB as small integers (see apps/api Box entity).
+	cpus := int(boxDto.CpuQuota)
 	if cpus < 1 {
 		cpus = 1
 	}
-	memoryMiB := int(sandboxDto.MemoryQuota * 1024)
+	memoryMiB := int(boxDto.MemoryQuota * 1024)
 	if memoryMiB < 128 {
 		memoryMiB = 128
 	}
 	opts := []boxlite.BoxOption{
-		boxlite.WithName(sandboxDto.Id),
+		boxlite.WithName(boxDto.Id),
 		boxlite.WithCPUs(cpus),
 		boxlite.WithMemory(memoryMiB),
 		boxlite.WithAutoRemove(false),
 		boxlite.WithDetach(true),
 	}
-	if sandboxDto.StorageQuota > 0 {
-		opts = append(opts, boxlite.WithDiskSize(int(sandboxDto.StorageQuota)))
+	if boxDto.StorageQuota > 0 {
+		opts = append(opts, boxlite.WithDiskSize(int(boxDto.StorageQuota)))
 	}
 
-	for k, v := range sandboxDto.Env {
+	for k, v := range boxDto.Env {
 		opts = append(opts, boxlite.WithEnv(k, v))
 	}
 
-	if len(sandboxDto.Entrypoint) > 0 {
-		opts = append(opts, boxlite.WithEntrypoint(sandboxDto.Entrypoint...))
+	if len(boxDto.Entrypoint) > 0 {
+		opts = append(opts, boxlite.WithEntrypoint(boxDto.Entrypoint...))
 	}
 
-	volumeMounts, err := c.getVolumeMounts(ctx, sandboxDto.Volumes)
+	volumeMounts, err := c.getVolumeMounts(ctx, boxDto.Volumes)
 	if err != nil {
 		return "", "", err
 	}
@@ -188,30 +188,30 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 	}
 
 	if len(volumeMounts) > 0 {
-		if err := c.recordSandboxVolumeMounts(ctx, sandboxDto.Id, volumeMounts); err != nil {
+		if err := c.recordBoxVolumeMounts(ctx, boxDto.Id, volumeMounts); err != nil {
 			return "", "", err
 		}
 	}
 
-	opts = append(opts, boxlite.WithNetwork(networkSpec(sandboxDto.NetworkBlockAll, sandboxDto.NetworkAllowList)))
+	opts = append(opts, boxlite.WithNetwork(networkSpec(boxDto.NetworkBlockAll, boxDto.NetworkAllowList)))
 
-	bx, err := c.runtime.Create(ctx, sandboxDto.Snapshot, opts...)
+	bx, err := c.runtime.Create(ctx, boxDto.Snapshot, opts...)
 	if err != nil {
 		if len(volumeMounts) > 0 {
-			if cleanupErr := c.removeSandboxVolumeMountRecord(ctx, sandboxDto.Id); cleanupErr != nil {
-				c.logger.WarnContext(ctx, "failed to remove sandbox volume mount record after create failure", "sandbox", sandboxDto.Id, "error", cleanupErr)
+			if cleanupErr := c.removeBoxVolumeMountRecord(ctx, boxDto.Id); cleanupErr != nil {
+				c.logger.WarnContext(ctx, "failed to remove box volume mount record after create failure", "box", boxDto.Id, "error", cleanupErr)
 			}
 		}
 		return "", "", fmt.Errorf("failed to create box: %w", err)
 	}
 
 	c.mu.Lock()
-	c.boxes[sandboxDto.Id] = bx
+	c.boxes[boxDto.Id] = bx
 	c.mu.Unlock()
 
-	c.logger.Info("created box", "id", bx.ID(), "name", bx.Name(), "image", sandboxDto.Snapshot)
+	c.logger.Info("created box", "id", bx.ID(), "name", bx.Name(), "image", boxDto.Snapshot)
 
-	skipStart := sandboxDto.SkipStart != nil && *sandboxDto.SkipStart
+	skipStart := boxDto.SkipStart != nil && *boxDto.SkipStart
 	if !skipStart {
 		if err := bx.Start(ctx); err != nil {
 			return bx.ID(), "", fmt.Errorf("failed to start box: %w", err)
@@ -221,13 +221,13 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 	return bx.ID(), "boxlite", nil
 }
 
-// Start starts a stopped sandbox and returns the daemon version.
-func (c *Client) Start(ctx context.Context, sandboxId string, authToken *string, metadata map[string]string) (string, error) {
-	if err := c.ensureVolumeMountsFromMetadata(ctx, sandboxId, metadata); err != nil {
+// Start starts a stopped box and returns the daemon version.
+func (c *Client) Start(ctx context.Context, boxId string, authToken *string, metadata map[string]string) (string, error) {
+	if err := c.ensureVolumeMountsFromMetadata(ctx, boxId, metadata); err != nil {
 		c.logger.ErrorContext(ctx, "failed to ensure volume FUSE mounts", "error", err)
 	}
 
-	bx, err := c.getOrFetchBox(ctx, sandboxId)
+	bx, err := c.getOrFetchBox(ctx, boxId)
 	if err != nil {
 		return "", err
 	}
@@ -237,72 +237,72 @@ func (c *Client) Start(ctx context.Context, sandboxId string, authToken *string,
 	return "boxlite", nil
 }
 
-// Stop stops a running sandbox.
-func (c *Client) Stop(ctx context.Context, sandboxId string, force bool) error {
-	bx, err := c.getOrFetchBox(ctx, sandboxId)
+// Stop stops a running box.
+func (c *Client) Stop(ctx context.Context, boxId string, force bool) error {
+	bx, err := c.getOrFetchBox(ctx, boxId)
 	if err != nil {
 		return err
 	}
 	err = bx.Stop(ctx)
 
 	c.mu.Lock()
-	delete(c.boxes, sandboxId)
+	delete(c.boxes, boxId)
 	c.mu.Unlock()
 
 	return err
 }
 
-// Destroy removes a sandbox entirely.
-func (c *Client) Destroy(ctx context.Context, sandboxId string) error {
+// Destroy removes a box entirely.
+func (c *Client) Destroy(ctx context.Context, boxId string) error {
 	c.mu.Lock()
-	if bx, ok := c.boxes[sandboxId]; ok {
+	if bx, ok := c.boxes[boxId]; ok {
 		bx.Close()
-		delete(c.boxes, sandboxId)
+		delete(c.boxes, boxId)
 	}
 	c.mu.Unlock()
 
-	if err := c.runtime.ForceRemove(ctx, sandboxId); err != nil {
+	if err := c.runtime.ForceRemove(ctx, boxId); err != nil {
 		return err
 	}
 
-	if err := c.removeSandboxVolumeMountRecord(ctx, sandboxId); err != nil {
-		c.logger.WarnContext(ctx, "failed to remove sandbox volume mount record", "sandbox", sandboxId, "error", err)
+	if err := c.removeBoxVolumeMountRecord(ctx, boxId); err != nil {
+		c.logger.WarnContext(ctx, "failed to remove box volume mount record", "box", boxId, "error", err)
 	}
 	c.CleanupOrphanedVolumeMounts(ctx)
 
 	return nil
 }
 
-// GetSandboxState returns the current state of a sandbox.
-func (c *Client) GetSandboxState(ctx context.Context, sandboxId string) (enums.SandboxState, error) {
-	bx, err := c.getOrFetchBox(ctx, sandboxId)
+// GetBoxState returns the current state of a box.
+func (c *Client) GetBoxState(ctx context.Context, boxId string) (enums.BoxState, error) {
+	bx, err := c.getOrFetchBox(ctx, boxId)
 	if err != nil {
 		if boxlite.IsNotFound(err) {
-			return enums.SandboxStateUnknown, nil
+			return enums.BoxStateUnknown, nil
 		}
-		return enums.SandboxStateUnknown, err
+		return enums.BoxStateUnknown, err
 	}
 
 	info, err := bx.Info(ctx)
 	if err != nil {
-		return enums.SandboxStateUnknown, err
+		return enums.BoxStateUnknown, err
 	}
 
 	switch info.State {
 	case boxlite.StateRunning:
-		return enums.SandboxStateStarted, nil
+		return enums.BoxStateStarted, nil
 	case boxlite.StateStopped:
-		return enums.SandboxStateStopped, nil
+		return enums.BoxStateStopped, nil
 	case boxlite.StateConfigured:
-		return enums.SandboxStateCreating, nil
+		return enums.BoxStateCreating, nil
 	default:
-		return enums.SandboxStateUnknown, nil
+		return enums.BoxStateUnknown, nil
 	}
 }
 
-// StartExecution starts an interactive execution in a sandbox.
-func (c *Client) StartExecution(ctx context.Context, sandboxId string, command string, args []string, stdout, stderr io.Writer, tty bool) (*boxlite.Execution, error) {
-	bx, err := c.getOrFetchBox(ctx, sandboxId)
+// StartExecution starts an interactive execution in a box.
+func (c *Client) StartExecution(ctx context.Context, boxId string, command string, args []string, stdout, stderr io.Writer, tty bool) (*boxlite.Execution, error) {
+	bx, err := c.getOrFetchBox(ctx, boxId)
 	if err != nil {
 		return nil, err
 	}
@@ -313,9 +313,9 @@ func (c *Client) StartExecution(ctx context.Context, sandboxId string, command s
 	})
 }
 
-// Exec executes a command in a running sandbox and returns the result.
-func (c *Client) Exec(ctx context.Context, sandboxId string, command string, args ...string) (*ExecResult, error) {
-	bx, err := c.getOrFetchBox(ctx, sandboxId)
+// Exec executes a command in a running box and returns the result.
+func (c *Client) Exec(ctx context.Context, boxId string, command string, args ...string) (*ExecResult, error) {
+	bx, err := c.getOrFetchBox(ctx, boxId)
 	if err != nil {
 		return nil, err
 	}
@@ -332,18 +332,18 @@ func (c *Client) Exec(ctx context.Context, sandboxId string, command string, arg
 	}, nil
 }
 
-// CopyInto copies a file from host into a sandbox.
-func (c *Client) CopyInto(ctx context.Context, sandboxId string, hostSrc, guestDst string) error {
-	bx, err := c.getOrFetchBox(ctx, sandboxId)
+// CopyInto copies a file from host into a box.
+func (c *Client) CopyInto(ctx context.Context, boxId string, hostSrc, guestDst string) error {
+	bx, err := c.getOrFetchBox(ctx, boxId)
 	if err != nil {
 		return err
 	}
 	return bx.CopyInto(ctx, hostSrc, guestDst)
 }
 
-// CopyOut copies a file from a sandbox to the host.
-func (c *Client) CopyOut(ctx context.Context, sandboxId string, guestSrc, hostDst string) error {
-	bx, err := c.getOrFetchBox(ctx, sandboxId)
+// CopyOut copies a file from a box to the host.
+func (c *Client) CopyOut(ctx context.Context, boxId string, guestSrc, hostDst string) error {
+	bx, err := c.getOrFetchBox(ctx, boxId)
 	if err != nil {
 		return err
 	}
@@ -417,9 +417,9 @@ func (c *Client) Metrics(ctx context.Context) (*boxlite.RuntimeMetrics, error) {
 	return c.runtime.Metrics(ctx)
 }
 
-// BoxMetrics returns metrics for a specific sandbox.
-func (c *Client) BoxMetrics(ctx context.Context, sandboxId string) (*boxlite.BoxMetrics, error) {
-	bx, err := c.getOrFetchBox(ctx, sandboxId)
+// BoxMetrics returns metrics for a specific box.
+func (c *Client) BoxMetrics(ctx context.Context, boxId string) (*boxlite.BoxMetrics, error) {
+	bx, err := c.getOrFetchBox(ctx, boxId)
 	if err != nil {
 		return nil, err
 	}
@@ -432,27 +432,27 @@ func (c *Client) ListInfo(ctx context.Context) ([]boxlite.BoxInfo, error) {
 }
 
 // GetBox retrieves a box handle from cache or fetches it from the runtime.
-func (c *Client) GetBox(ctx context.Context, sandboxId string) (*boxlite.Box, error) {
-	return c.getOrFetchBox(ctx, sandboxId)
+func (c *Client) GetBox(ctx context.Context, boxId string) (*boxlite.Box, error) {
+	return c.getOrFetchBox(ctx, boxId)
 }
 
 // getOrFetchBox retrieves a box handle from cache or fetches it from the runtime.
-func (c *Client) getOrFetchBox(ctx context.Context, sandboxId string) (*boxlite.Box, error) {
+func (c *Client) getOrFetchBox(ctx context.Context, boxId string) (*boxlite.Box, error) {
 	c.mu.RLock()
-	bx, ok := c.boxes[sandboxId]
+	bx, ok := c.boxes[boxId]
 	c.mu.RUnlock()
 
 	if ok {
 		return bx, nil
 	}
 
-	bx, err := c.runtime.Get(ctx, sandboxId)
+	bx, err := c.runtime.Get(ctx, boxId)
 	if err != nil {
-		return nil, fmt.Errorf("box %s not found: %w", sandboxId, err)
+		return nil, fmt.Errorf("box %s not found: %w", boxId, err)
 	}
 
 	c.mu.Lock()
-	c.boxes[sandboxId] = bx
+	c.boxes[boxId] = bx
 	c.mu.Unlock()
 
 	return bx, nil

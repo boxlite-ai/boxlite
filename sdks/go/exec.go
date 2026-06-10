@@ -92,6 +92,17 @@ type executionStreamState struct {
 	onStderr func([]byte)
 
 	released atomic.Bool
+
+	// drained is the os/exec `goroutineErr` analog: closed by
+	// deliverExit when the C-side on_exit callback fires. C's exit_pump
+	// gates Exit on every stream pump's done_tx, so by the time on_exit
+	// runs, the drain goroutine has already dispatched every
+	// Stdout/Stderr callback for this execution. Execution.Wait blocks
+	// on this after the process's exit code has been collected, so a
+	// caller using buffered Stdout/Stderr sinks never sees a truncated
+	// buffer. The fold happens at the SDK boundary; the C-side Wait
+	// task stays decoupled from streams.
+	drained chan struct{}
 }
 
 func newExecutionStreamState(opts ExecutionOptions) *executionStreamState {
@@ -100,6 +111,7 @@ func newExecutionStreamState(opts ExecutionOptions) *executionStreamState {
 		stderr:   opts.Stderr,
 		onStdout: opts.OnStdout,
 		onStderr: opts.OnStderr,
+		drained:  make(chan struct{}),
 	}
 }
 
@@ -137,6 +149,7 @@ func (s *executionStreamState) deliverStderr(data []byte) {
 
 func (s *executionStreamState) deliverExit(_ int) {
 	s.released.Store(true)
+	close(s.drained)
 }
 
 func (s *executionStreamState) markReleased() {
@@ -286,11 +299,18 @@ func (e *Execution) Write(p []byte) (int, error) {
 	return e.Stdin.Write(p)
 }
 
-// Wait waits for the command to finish and returns its exit code.
+// Wait blocks until the process has exited AND every stdout/stderr
+// callback for this execution has been dispatched, then returns the
+// exit code. Mirrors os/exec.Cmd's Wait for the io.Writer case —
+// every BoxLite execution IS the io.Writer case (streams are pushed
+// to a user-supplied Writer / callback; there is no StdoutPipe-style
+// user-read pipe), so Wait is the single terminal and must guarantee
+// output completeness on return.
 //
-// boxlite_execution_wait runs as its own async task on the C side and
-// pushes a wait completion event into the runtime queue, dispatched here
-// by the drain goroutine.
+// The post-exit-code drain is non-cancelable by ctx (parity with
+// os/exec's awaitGoroutines); only runtime shutdown breaks it, in
+// which case the process's exit code is preserved and err is
+// overwritten only if the wait had none.
 func (e *Execution) Wait(ctx context.Context) (int, error) {
 	if e.handle == nil {
 		return 0, &Error{Code: ErrInvalidState, Message: "execution is closed"}
@@ -300,22 +320,40 @@ func (e *Execution) Wait(ctx context.Context) (int, error) {
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
-	code := C.boxlite_execution_wait(e.handle, C.cbExecutionWait(), handleToPtr(h), &cerr)
-	if code != C.Ok {
+	if rc := C.boxlite_execution_wait(e.handle, C.cbExecutionWait(), handleToPtr(h), &cerr); rc != C.Ok {
 		deleteHandleForDispatch(h)
 		return 0, freeError(&cerr)
 	}
 
+	var code int
+	var err error
 	select {
 	case res := <-ch:
-		return res.exitCode, res.err
+		code, err = res.exitCode, res.err
 	case <-ctx.Done():
+		// ctx cancel before the process reports exit: skip the
+		// drain barrier (consistent with os/exec's behavior on
+		// Process.Wait cancellation).
 		drainAndDelete(ch, h, e.closing)
 		return 0, ctx.Err()
 	case <-e.closing:
 		drainAndDelete(ch, h, e.closing)
 		return 0, ErrRuntimeClosed
 	}
+
+	// Drain barrier: wait for stream pumps to flush before returning,
+	// so the caller's stdout/stderr Writers see every chunk the exec
+	// produced. Non-cancelable by ctx — only runtime shutdown breaks
+	// it. Preserves the exit code from the wait result; overwrites
+	// err only if the wait itself had none.
+	select {
+	case <-e.streamState.drained:
+	case <-e.closing:
+		if err == nil {
+			err = ErrRuntimeClosed
+		}
+	}
+	return code, err
 }
 
 // Kill terminates the running command.

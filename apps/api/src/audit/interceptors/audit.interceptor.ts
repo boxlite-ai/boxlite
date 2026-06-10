@@ -120,7 +120,7 @@ export class AuditInterceptor implements NestInterceptor {
   /**
    * Resolves the identifier of the target resource from the initial request or the response object.
    *
-   * Prioritizes resolving the ID from the response object as the request may not include a unique resource identifier (e.g. delete sandbox by name).
+   * Prioritizes resolving the ID from the response object as the request may not include a unique resource identifier (e.g. delete box by name).
    */
   private resolveTargetId(auditContext: AuditContext, request: RequestWithUser, result?: any): string | null {
     if (auditContext.targetIdFromResult && result) {

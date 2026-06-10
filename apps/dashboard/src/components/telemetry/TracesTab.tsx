@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useCallback } from 'react'
-import { useSandboxTraces, TracesQueryParams } from '@/hooks/useSandboxTraces'
+import { useBoxTraces, TracesQueryParams } from '@/hooks/useBoxTraces'
 import { TimeRangeSelector } from './TimeRangeSelector'
 import { TraceDetailsSheet } from './TraceDetailsSheet'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -19,10 +19,10 @@ import { subHours } from 'date-fns'
 import { TraceSummary } from '@boxlite-ai/api-client'
 
 interface TracesTabProps {
-  sandboxId: string
+  boxId: string
 }
 
-export const TracesTab: React.FC<TracesTabProps> = ({ sandboxId }) => {
+export const TracesTab: React.FC<TracesTabProps> = ({ boxId }) => {
   const [timeRange, setTimeRange] = useState(() => {
     const now = new Date()
     return { from: subHours(now, 1), to: now }
@@ -38,7 +38,7 @@ export const TracesTab: React.FC<TracesTabProps> = ({ sandboxId }) => {
     limit,
   }
 
-  const { data, isLoading, refetch } = useSandboxTraces(sandboxId, queryParams)
+  const { data, isLoading, refetch } = useBoxTraces(boxId, queryParams)
 
   const handleTimeRangeChange = useCallback((from: Date, to: Date) => {
     setTimeRange({ from, to })
@@ -161,7 +161,7 @@ export const TracesTab: React.FC<TracesTabProps> = ({ sandboxId }) => {
       )}
 
       <TraceDetailsSheet
-        sandboxId={sandboxId}
+        boxId={boxId}
         traceId={selectedTraceId}
         open={!!selectedTraceId}
         onOpenChange={(open) => !open && setSelectedTraceId(null)}

@@ -165,3 +165,5 @@ func (v *NullableHealthControllerCheck200ResponseInfoValue) UnmarshalJSON(src []
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }
+
+

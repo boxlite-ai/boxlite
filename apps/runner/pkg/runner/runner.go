@@ -23,7 +23,7 @@ type RunnerInstanceConfig struct {
 	SnapshotErrorCache *cache.SnapshotErrorCache
 	Boxlite            *blclient.Client
 	MetricsCollector   *metrics.Collector
-	SandboxService     *services.SandboxService
+	BoxService         *services.BoxService
 }
 
 type Runner struct {
@@ -32,7 +32,7 @@ type Runner struct {
 	SnapshotErrorCache *cache.SnapshotErrorCache
 	Boxlite            *blclient.Client
 	MetricsCollector   *metrics.Collector
-	SandboxService     *services.SandboxService
+	BoxService         *services.BoxService
 }
 
 var runner *Runner
@@ -57,7 +57,7 @@ func GetInstance(config *RunnerInstanceConfig) (*Runner, error) {
 			BackupInfoCache:    config.BackupInfoCache,
 			SnapshotErrorCache: config.SnapshotErrorCache,
 			Boxlite:            config.Boxlite,
-			SandboxService:     config.SandboxService,
+			BoxService:         config.BoxService,
 			MetricsCollector:   config.MetricsCollector,
 		}
 	}

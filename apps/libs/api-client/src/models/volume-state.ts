@@ -16,8 +16,6 @@
 
 /**
  * Volume state
- * @export
- * @enum {string}
  */
 
 export const VolumeState = {
@@ -27,7 +25,11 @@ export const VolumeState = {
     PENDING_DELETE: 'pending_delete',
     DELETING: 'deleting',
     DELETED: 'deleted',
-    ERROR: 'error'
+    ERROR: 'error',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 
 export type VolumeState = typeof VolumeState[keyof typeof VolumeState];
+
+
+

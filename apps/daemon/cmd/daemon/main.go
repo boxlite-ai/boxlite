@@ -71,7 +71,7 @@ func run() int {
 		err := util.ReadEntrypointLogs(entrypointLogFilePath)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				logger.Warn("Logs not found, please check if correct entrypoint was provided for sandbox.")
+				logger.Warn("Logs not found, please check if correct entrypoint was provided for box.")
 			} else {
 				logger.Error("Failed to read entrypoint log file", "error", err)
 			}
@@ -173,7 +173,7 @@ func run() int {
 		WorkDir:               workDir,
 		ConfigDir:             configDir,
 		OtelEndpoint:          c.OtelEndpoint,
-		SandboxId:             c.SandboxId,
+		BoxId:                 c.BoxId,
 		SessionService:        sessionService,
 		RecordingService:      recordingService,
 		OrganizationId:        c.OrganizationId,

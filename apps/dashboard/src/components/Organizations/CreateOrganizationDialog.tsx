@@ -176,7 +176,7 @@ export const CreateOrganizationDialog: React.FC<CreateOrganizationDialogProps> =
                 </SelectContent>
               </Select>
               <p className="text-sm text-muted-foreground mt-1 pl-1">
-                The region that will be used as the default target for creating sandboxes in this organization.
+                The region that will be used as the default target for creating boxes in this organization.
               </p>
             </div>
           </form>

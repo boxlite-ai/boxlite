@@ -8,24 +8,24 @@ import { Logger, OnModuleInit, UnauthorizedException } from '@nestjs/common'
 import { WebSocketGateway, WebSocketServer, OnGatewayInit } from '@nestjs/websockets'
 import { Server, Socket } from 'socket.io'
 import { createAdapter } from '@socket.io/redis-adapter'
-import { SandboxEvents } from '../../sandbox/constants/sandbox-events.constants'
-import { SandboxState } from '../../sandbox/enums/sandbox-state.enum'
-import { SandboxDto } from '../../sandbox/dto/sandbox.dto'
-import { SnapshotDto } from '../../sandbox/dto/snapshot.dto'
-import { SnapshotEvents } from '../../sandbox/constants/snapshot-events'
-import { SnapshotState } from '../../sandbox/enums/snapshot-state.enum'
+import { BoxEvents } from '../../box/constants/box-events.constants'
+import { BoxState } from '../../box/enums/box-state.enum'
+import { BoxDto } from '../../box/dto/box.dto'
+import { SnapshotDto } from '../../box/dto/snapshot.dto'
+import { SnapshotEvents } from '../../box/constants/snapshot-events'
+import { SnapshotState } from '../../box/enums/snapshot-state.enum'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import Redis from 'ioredis'
 import { JwtStrategy } from '../../auth/jwt.strategy'
 import { ApiKeyStrategy } from '../../auth/api-key.strategy'
 import { isAuthContext } from '../../common/interfaces/auth-context.interface'
-import { VolumeEvents } from '../../sandbox/constants/volume-events'
-import { VolumeDto } from '../../sandbox/dto/volume.dto'
-import { VolumeState } from '../../sandbox/enums/volume-state.enum'
-import { SandboxDesiredState } from '../../sandbox/enums/sandbox-desired-state.enum'
-import { RunnerDto } from '../../sandbox/dto/runner.dto'
-import { RunnerState } from '../../sandbox/enums/runner-state.enum'
-import { RunnerEvents } from '../../sandbox/constants/runner-events'
+import { VolumeEvents } from '../../box/constants/volume-events'
+import { VolumeDto } from '../../box/dto/volume.dto'
+import { VolumeState } from '../../box/enums/volume-state.enum'
+import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
+import { RunnerDto } from '../../box/dto/runner.dto'
+import { RunnerState } from '../../box/enums/runner-state.enum'
+import { RunnerEvents } from '../../box/constants/runner-events'
 import { NotificationEmitter } from './notification-emitter.abstract'
 
 @WebSocketGateway({
@@ -103,22 +103,16 @@ export class NotificationGateway extends NotificationEmitter implements OnGatewa
     })
   }
 
-  emitSandboxCreated(sandbox: SandboxDto) {
-    this.server.to(sandbox.organizationId).emit(SandboxEvents.CREATED, sandbox)
+  emitBoxCreated(box: BoxDto) {
+    this.server.to(box.organizationId).emit(BoxEvents.CREATED, box)
   }
 
-  emitSandboxStateUpdated(sandbox: SandboxDto, oldState: SandboxState, newState: SandboxState) {
-    this.server.to(sandbox.organizationId).emit(SandboxEvents.STATE_UPDATED, { sandbox, oldState, newState })
+  emitBoxStateUpdated(box: BoxDto, oldState: BoxState, newState: BoxState) {
+    this.server.to(box.organizationId).emit(BoxEvents.STATE_UPDATED, { box, oldState, newState })
   }
 
-  emitSandboxDesiredStateUpdated(
-    sandbox: SandboxDto,
-    oldDesiredState: SandboxDesiredState,
-    newDesiredState: SandboxDesiredState,
-  ) {
-    this.server
-      .to(sandbox.organizationId)
-      .emit(SandboxEvents.DESIRED_STATE_UPDATED, { sandbox, oldDesiredState, newDesiredState })
+  emitBoxDesiredStateUpdated(box: BoxDto, oldDesiredState: BoxDesiredState, newDesiredState: BoxDesiredState) {
+    this.server.to(box.organizationId).emit(BoxEvents.DESIRED_STATE_UPDATED, { box, oldDesiredState, newDesiredState })
   }
 
   emitSnapshotCreated(snapshot: SnapshotDto) {

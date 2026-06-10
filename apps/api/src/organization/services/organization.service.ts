@@ -24,18 +24,18 @@ import { OnAsyncEvent } from '../../common/decorators/on-async-event.decorator'
 import { UserEvents } from '../../user/constants/user-events.constant'
 import { UserCreatedEvent } from '../../user/events/user-created.event'
 import { UserDeletedEvent } from '../../user/events/user-deleted.event'
-import { Snapshot } from '../../sandbox/entities/snapshot.entity'
-import { SandboxState } from '../../sandbox/enums/sandbox-state.enum'
+import { Snapshot } from '../../box/entities/snapshot.entity'
+import { BoxState } from '../../box/enums/box-state.enum'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { OrganizationEvents } from '../constants/organization-events.constant'
 import { CreateOrganizationQuotaDto } from '../dto/create-organization-quota.dto'
 import { UserEmailVerifiedEvent } from '../../user/events/user-email-verified.event'
 import { Cron, CronExpression } from '@nestjs/schedule'
-import { RedisLockProvider } from '../../sandbox/common/redis-lock.provider'
-import { OrganizationSuspendedSandboxStoppedEvent } from '../events/organization-suspended-sandbox-stopped.event'
-import { SandboxDesiredState } from '../../sandbox/enums/sandbox-desired-state.enum'
+import { RedisLockProvider } from '../../box/common/redis-lock.provider'
+import { OrganizationSuspendedBoxStoppedEvent } from '../events/organization-suspended-box-stopped.event'
+import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 import { SystemRole } from '../../user/enums/system-role.enum'
-import { SnapshotState } from '../../sandbox/enums/snapshot-state.enum'
+import { SnapshotState } from '../../box/enums/snapshot-state.enum'
 import { OrganizationSuspendedSnapshotDeactivatedEvent } from '../events/organization-suspended-snapshot-deactivated.event'
 import { TrackJobExecution } from '../../common/decorators/track-job-execution.decorator'
 import { TrackableJobExecutions } from '../../common/interfaces/trackable-job-executions'
@@ -52,20 +52,20 @@ import { RegionType } from '../../region/enums/region-type.enum'
 import { RegionDto } from '../../region/dto/region.dto'
 import { EncryptionService } from '../../encryption/encryption.service'
 import { OtelConfigDto } from '../dto/otel-config.dto'
-import { sandboxLookupCacheKeyByAuthToken } from '../../sandbox/utils/sandbox-lookup-cache.util'
-import { SandboxRepository } from '../../sandbox/repositories/sandbox.repository'
+import { boxLookupCacheKeyByAuthToken } from '../../box/utils/box-lookup-cache.util'
+import { BoxRepository } from '../../box/repositories/box.repository'
 
 @Injectable()
 export class OrganizationService implements OnModuleInit, TrackableJobExecutions, OnApplicationShutdown {
   activeJobs = new Set<string>()
   private readonly logger = new Logger(OrganizationService.name)
   private defaultOrganizationQuota: CreateOrganizationQuotaDto
-  private defaultSandboxLimitedNetworkEgress: boolean
+  private defaultBoxLimitedNetworkEgress: boolean
 
   constructor(
     @InjectRepository(Organization)
     private readonly organizationRepository: Repository<Organization>,
-    private readonly sandboxRepository: SandboxRepository,
+    private readonly boxRepository: BoxRepository,
     @InjectRepository(Snapshot)
     private readonly snapshotRepository: Repository<Snapshot>,
     private readonly eventEmitter: EventEmitter2,
@@ -79,9 +79,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     private readonly encryptionService: EncryptionService,
   ) {
     this.defaultOrganizationQuota = this.configService.getOrThrow('defaultOrganizationQuota')
-    this.defaultSandboxLimitedNetworkEgress = this.configService.getOrThrow(
-      'organizationSandboxDefaultLimitedNetworkEgress',
-    )
+    this.defaultBoxLimitedNetworkEgress = this.configService.getOrThrow('organizationBoxDefaultLimitedNetworkEgress')
   }
 
   async onApplicationShutdown() {
@@ -93,7 +91,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
   }
 
   async onModuleInit(): Promise<void> {
-    await this.stopSuspendedOrganizationSandboxes()
+    await this.stopSuspendedOrganizationBoxes()
   }
 
   async create(
@@ -127,32 +125,32 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     })
   }
 
-  async findBySandboxId(sandboxId: string): Promise<Organization | null> {
-    const sandbox = await this.sandboxRepository.findOne({
-      where: { id: sandboxId },
+  async findByBoxId(boxId: string): Promise<Organization | null> {
+    const box = await this.boxRepository.findOne({
+      where: { id: boxId },
     })
 
-    if (!sandbox) {
+    if (!box) {
       return null
     }
 
-    return this.organizationRepository.findOne({ where: { id: sandbox.organizationId } })
+    return this.organizationRepository.findOne({ where: { id: box.organizationId } })
   }
 
-  async findBySandboxAuthToken(authToken: string): Promise<Organization | null> {
-    const sandbox = await this.sandboxRepository.findOne({
+  async findByBoxAuthToken(authToken: string): Promise<Organization | null> {
+    const box = await this.boxRepository.findOne({
       where: { authToken },
       cache: {
-        id: sandboxLookupCacheKeyByAuthToken({ authToken }),
+        id: boxLookupCacheKeyByAuthToken({ authToken }),
         milliseconds: 10_000,
       },
     })
 
-    if (!sandbox) {
+    if (!box) {
       return null
     }
 
-    return this.organizationRepository.findOne({ where: { id: sandbox.organizationId } })
+    return this.organizationRepository.findOne({ where: { id: box.organizationId } })
   }
 
   async findPersonal(userId: string): Promise<Organization> {
@@ -175,22 +173,21 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       throw new NotFoundException(`Organization with ID ${organizationId} not found`)
     }
 
-    organization.maxCpuPerSandbox = updateDto.maxCpuPerSandbox ?? organization.maxCpuPerSandbox
-    organization.maxMemoryPerSandbox = updateDto.maxMemoryPerSandbox ?? organization.maxMemoryPerSandbox
-    organization.maxDiskPerSandbox = updateDto.maxDiskPerSandbox ?? organization.maxDiskPerSandbox
+    organization.maxCpuPerBox = updateDto.maxCpuPerBox ?? organization.maxCpuPerBox
+    organization.maxMemoryPerBox = updateDto.maxMemoryPerBox ?? organization.maxMemoryPerBox
+    organization.maxDiskPerBox = updateDto.maxDiskPerBox ?? organization.maxDiskPerBox
     organization.maxSnapshotSize = updateDto.maxSnapshotSize ?? organization.maxSnapshotSize
     organization.volumeQuota = updateDto.volumeQuota ?? organization.volumeQuota
     organization.snapshotQuota = updateDto.snapshotQuota ?? organization.snapshotQuota
     organization.authenticatedRateLimit = updateDto.authenticatedRateLimit ?? organization.authenticatedRateLimit
-    organization.sandboxCreateRateLimit = updateDto.sandboxCreateRateLimit ?? organization.sandboxCreateRateLimit
-    organization.sandboxLifecycleRateLimit =
-      updateDto.sandboxLifecycleRateLimit ?? organization.sandboxLifecycleRateLimit
+    organization.boxCreateRateLimit = updateDto.boxCreateRateLimit ?? organization.boxCreateRateLimit
+    organization.boxLifecycleRateLimit = updateDto.boxLifecycleRateLimit ?? organization.boxLifecycleRateLimit
     organization.authenticatedRateLimitTtlSeconds =
       updateDto.authenticatedRateLimitTtlSeconds ?? organization.authenticatedRateLimitTtlSeconds
-    organization.sandboxCreateRateLimitTtlSeconds =
-      updateDto.sandboxCreateRateLimitTtlSeconds ?? organization.sandboxCreateRateLimitTtlSeconds
-    organization.sandboxLifecycleRateLimitTtlSeconds =
-      updateDto.sandboxLifecycleRateLimitTtlSeconds ?? organization.sandboxLifecycleRateLimitTtlSeconds
+    organization.boxCreateRateLimitTtlSeconds =
+      updateDto.boxCreateRateLimitTtlSeconds ?? organization.boxCreateRateLimitTtlSeconds
+    organization.boxLifecycleRateLimitTtlSeconds =
+      updateDto.boxLifecycleRateLimitTtlSeconds ?? organization.boxLifecycleRateLimitTtlSeconds
     organization.snapshotDeactivationTimeoutMinutes =
       updateDto.snapshotDeactivationTimeoutMinutes ?? organization.snapshotDeactivationTimeoutMinutes
 
@@ -227,14 +224,14 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     return new RegionQuotaDto(regionQuota)
   }
 
-  async getRegionQuotaBySandboxId(sandboxId: string): Promise<RegionQuotaDto | null> {
-    const sandbox = await this.sandboxRepository.findOne({
-      where: { id: sandboxId },
+  async getRegionQuotaByBoxId(boxId: string): Promise<RegionQuotaDto | null> {
+    const box = await this.boxRepository.findOne({
+      where: { id: boxId },
     })
-    if (!sandbox) {
+    if (!box) {
       return null
     }
-    return this.getRegionQuota(sandbox.organizationId, sandbox.region)
+    return this.getRegionQuota(box.organizationId, box.region)
   }
 
   /**
@@ -313,15 +310,15 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     await this.organizationRepository.save(organization)
   }
 
-  async updateSandboxDefaultLimitedNetworkEgress(
+  async updateBoxDefaultLimitedNetworkEgress(
     organizationId: string,
-    sandboxDefaultLimitedNetworkEgress: boolean,
+    boxDefaultLimitedNetworkEgress: boolean,
   ): Promise<void> {
     const organization = await this.organizationRepository.findOne({ where: { id: organizationId } })
     if (!organization) {
       throw new NotFoundException(`Organization with ID ${organizationId} not found`)
     }
-    organization.sandboxLimitedNetworkEgress = sandboxDefaultLimitedNetworkEgress
+    organization.boxLimitedNetworkEgress = boxDefaultLimitedNetworkEgress
 
     await this.organizationRepository.save(organization)
   }
@@ -394,8 +391,8 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     await this.organizationRepository.save(organization)
   }
 
-  async getOtelConfigBySandboxAuthToken(sandboxAuthToken: string): Promise<OtelConfigDto | null> {
-    const organization = await this.findBySandboxAuthToken(sandboxAuthToken)
+  async getOtelConfigByBoxAuthToken(boxAuthToken: string): Promise<OtelConfigDto | null> {
+    const organization = await this.findByBoxAuthToken(boxAuthToken)
     if (!organization) {
       return null
     }
@@ -461,7 +458,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     creatorEmailVerified: boolean,
     personal = false,
     quota: CreateOrganizationQuotaDto = this.defaultOrganizationQuota,
-    sandboxLimitedNetworkEgress: boolean = this.defaultSandboxLimitedNetworkEgress,
+    boxLimitedNetworkEgress: boolean = this.defaultBoxLimitedNetworkEgress,
   ): Promise<Organization> {
     if (personal) {
       const count = await entityManager.count(Organization, {
@@ -486,9 +483,9 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     organization.createdBy = createdBy
     organization.personal = personal
 
-    organization.maxCpuPerSandbox = quota.maxCpuPerSandbox
-    organization.maxMemoryPerSandbox = quota.maxMemoryPerSandbox
-    organization.maxDiskPerSandbox = quota.maxDiskPerSandbox
+    organization.maxCpuPerBox = quota.maxCpuPerBox
+    organization.maxMemoryPerBox = quota.maxMemoryPerBox
+    organization.maxDiskPerBox = quota.maxDiskPerBox
     organization.snapshotQuota = quota.snapshotQuota
     organization.maxSnapshotSize = quota.maxSnapshotSize
     organization.volumeQuota = quota.volumeQuota
@@ -503,7 +500,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       organization.suspensionReason = 'Payment method required'
     }
 
-    organization.sandboxLimitedNetworkEgress = sandboxLimitedNetworkEgress
+    organization.boxLimitedNetworkEgress = boxLimitedNetworkEgress
 
     const owner = new OrganizationUser()
     owner.userId = createdBy
@@ -581,13 +578,13 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     return region
   }
 
-  @Cron(CronExpression.EVERY_MINUTE, { name: 'stop-suspended-organization-sandboxes' })
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'stop-suspended-organization-boxes' })
   @TrackJobExecution()
-  @LogExecution('stop-suspended-organization-sandboxes')
+  @LogExecution('stop-suspended-organization-boxes')
   @WithInstrumentation()
-  async stopSuspendedOrganizationSandboxes(): Promise<void> {
+  async stopSuspendedOrganizationBoxes(): Promise<void> {
     //  lock the sync to only run one instance at a time
-    const lockKey = 'stop-suspended-organization-sandboxes'
+    const lockKey = 'stop-suspended-organization-boxes'
     if (!(await this.redisLockProvider.lock(lockKey, 60))) {
       return
     }
@@ -599,11 +596,11 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       .andWhere(`"suspendedAt" < NOW() - INTERVAL '1 hour' * "suspensionCleanupGracePeriodHours"`)
       .andWhere(`"suspendedAt" > NOW() - INTERVAL '7 day'`)
       .andWhereExists(
-        this.sandboxRepository
-          .createQueryBuilder('sandbox')
+        this.boxRepository
+          .createQueryBuilder('box')
           .select('1')
           .where(
-            `"sandbox"."organizationId" = "organization"."id" AND "sandbox"."desiredState" = '${SandboxDesiredState.STARTED}' and "sandbox"."state" NOT IN ('${SandboxState.ERROR}', '${SandboxState.BUILD_FAILED}')`,
+            `"box"."organizationId" = "organization"."id" AND "box"."desiredState" = '${BoxDesiredState.STARTED}' and "box"."state" NOT IN ('${BoxState.ERROR}', '${BoxState.BUILD_FAILED}')`,
           ),
       )
       .take(100)
@@ -617,18 +614,18 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       return
     }
 
-    const sandboxes = await this.sandboxRepository.find({
+    const boxes = await this.boxRepository.find({
       where: {
         organizationId: In(suspendedOrganizationIds),
-        desiredState: SandboxDesiredState.STARTED,
-        state: Not(In([SandboxState.ERROR, SandboxState.BUILD_FAILED])),
+        desiredState: BoxDesiredState.STARTED,
+        state: Not(In([BoxState.ERROR, BoxState.BUILD_FAILED])),
       },
     })
 
-    sandboxes.map((sandbox) =>
+    boxes.map((box) =>
       this.eventEmitter.emitAsync(
-        OrganizationEvents.SUSPENDED_SANDBOX_STOPPED,
-        new OrganizationSuspendedSandboxStoppedEvent(sandbox.id),
+        OrganizationEvents.SUSPENDED_BOX_STOPPED,
+        new OrganizationSuspendedBoxStoppedEvent(box.id),
       ),
     )
 

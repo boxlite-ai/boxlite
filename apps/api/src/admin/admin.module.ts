@@ -6,13 +6,13 @@
 
 import { Module } from '@nestjs/common'
 import { AdminRunnerController } from './controllers/runner.controller'
-import { AdminSandboxController } from './controllers/sandbox.controller'
-import { SandboxModule } from '../sandbox/sandbox.module'
+import { AdminBoxController } from './controllers/box.controller'
+import { BoxModule } from '../box/box.module'
 import { RegionModule } from '../region/region.module'
 import { OrganizationModule } from '../organization/organization.module'
 
 @Module({
-  imports: [SandboxModule, RegionModule, OrganizationModule],
-  controllers: [AdminRunnerController, AdminSandboxController],
+  imports: [BoxModule, RegionModule, OrganizationModule],
+  controllers: [AdminRunnerController, AdminBoxController],
 })
 export class AdminModule {}

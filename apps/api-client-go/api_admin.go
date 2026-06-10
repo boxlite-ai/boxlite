@@ -73,17 +73,17 @@ type AdminAPI interface {
 	AdminListRunnersExecute(r AdminAPIAdminListRunnersRequest) ([]RunnerFull, *http.Response, error)
 
 	/*
-	AdminRecoverSandbox Recover sandbox from error state as an admin
+	AdminRecoverBox Recover box from error state as an admin
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId ID of the sandbox
-	@return AdminAPIAdminRecoverSandboxRequest
+	@param boxId ID of the box
+	@return AdminAPIAdminRecoverBoxRequest
 	*/
-	AdminRecoverSandbox(ctx context.Context, sandboxId string) AdminAPIAdminRecoverSandboxRequest
+	AdminRecoverBox(ctx context.Context, boxId string) AdminAPIAdminRecoverBoxRequest
 
-	// AdminRecoverSandboxExecute executes the request
-	//  @return Sandbox
-	AdminRecoverSandboxExecute(r AdminAPIAdminRecoverSandboxRequest) (*Sandbox, *http.Response, error)
+	// AdminRecoverBoxExecute executes the request
+	//  @return Box
+	AdminRecoverBoxExecute(r AdminAPIAdminRecoverBoxRequest) (*Box, *http.Response, error)
 
 	/*
 	AdminUpdateRunnerScheduling Update runner scheduling status
@@ -507,48 +507,48 @@ func (a *AdminAPIService) AdminListRunnersExecute(r AdminAPIAdminListRunnersRequ
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
-type AdminAPIAdminRecoverSandboxRequest struct {
+type AdminAPIAdminRecoverBoxRequest struct {
 	ctx context.Context
 	ApiService AdminAPI
-	sandboxId string
+	boxId string
 }
 
-func (r AdminAPIAdminRecoverSandboxRequest) Execute() (*Sandbox, *http.Response, error) {
-	return r.ApiService.AdminRecoverSandboxExecute(r)
+func (r AdminAPIAdminRecoverBoxRequest) Execute() (*Box, *http.Response, error) {
+	return r.ApiService.AdminRecoverBoxExecute(r)
 }
 
 /*
-AdminRecoverSandbox Recover sandbox from error state as an admin
+AdminRecoverBox Recover box from error state as an admin
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId ID of the sandbox
- @return AdminAPIAdminRecoverSandboxRequest
+ @param boxId ID of the box
+ @return AdminAPIAdminRecoverBoxRequest
 */
-func (a *AdminAPIService) AdminRecoverSandbox(ctx context.Context, sandboxId string) AdminAPIAdminRecoverSandboxRequest {
-	return AdminAPIAdminRecoverSandboxRequest{
+func (a *AdminAPIService) AdminRecoverBox(ctx context.Context, boxId string) AdminAPIAdminRecoverBoxRequest {
+	return AdminAPIAdminRecoverBoxRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
 // Execute executes the request
-//  @return Sandbox
-func (a *AdminAPIService) AdminRecoverSandboxExecute(r AdminAPIAdminRecoverSandboxRequest) (*Sandbox, *http.Response, error) {
+//  @return Box
+func (a *AdminAPIService) AdminRecoverBoxExecute(r AdminAPIAdminRecoverBoxRequest) (*Box, *http.Response, error) {
 	var (
 		localVarHTTPMethod   = http.MethodPost
 		localVarPostBody     interface{}
 		formFiles            []formFile
-		localVarReturnValue  *Sandbox
+		localVarReturnValue  *Box
 	)
 
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "AdminAPIService.AdminRecoverSandbox")
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "AdminAPIService.AdminRecoverBox")
 	if err != nil {
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/admin/sandbox/{sandboxId}/recover"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/admin/box/{boxId}/recover"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}

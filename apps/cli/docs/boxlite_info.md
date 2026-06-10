@@ -1,9 +1,9 @@
 ## boxlite info
 
-Get sandbox info
+Get box info
 
 ```
-boxlite info [SANDBOX_ID] | [SANDBOX_NAME] [flags]
+boxlite info [BOX_ID] | [BOX_NAME] [flags]
 ```
 
 ### Options
@@ -20,4 +20,5 @@ boxlite info [SANDBOX_ID] | [SANDBOX_NAME] [flags]
 
 ### SEE ALSO
 
-* [boxlite](boxlite.md)  - BoxLite CLI
+* [boxlite](boxlite.md)	 - BoxLite CLI
+

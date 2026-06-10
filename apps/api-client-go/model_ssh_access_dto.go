@@ -24,8 +24,8 @@ var _ MappedNullable = &SshAccessDto{}
 type SshAccessDto struct {
 	// Unique identifier for the SSH access
 	Id string `json:"id"`
-	// ID of the sandbox this SSH access is for
-	SandboxId string `json:"sandboxId"`
+	// ID of the box this SSH access is for
+	BoxId string `json:"boxId"`
 	// SSH access token
 	Token string `json:"token"`
 	// When the SSH access expires
@@ -34,7 +34,7 @@ type SshAccessDto struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When the SSH access was last updated
 	UpdatedAt time.Time `json:"updatedAt"`
-	// SSH command to connect to the sandbox
+	// SSH command to connect to the box
 	SshCommand string `json:"sshCommand"`
 	AdditionalProperties map[string]interface{}
 }
@@ -45,10 +45,10 @@ type _SshAccessDto SshAccessDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewSshAccessDto(id string, sandboxId string, token string, expiresAt time.Time, createdAt time.Time, updatedAt time.Time, sshCommand string) *SshAccessDto {
+func NewSshAccessDto(id string, boxId string, token string, expiresAt time.Time, createdAt time.Time, updatedAt time.Time, sshCommand string) *SshAccessDto {
 	this := SshAccessDto{}
 	this.Id = id
-	this.SandboxId = sandboxId
+	this.BoxId = boxId
 	this.Token = token
 	this.ExpiresAt = expiresAt
 	this.CreatedAt = createdAt
@@ -89,28 +89,28 @@ func (o *SshAccessDto) SetId(v string) {
 	o.Id = v
 }
 
-// GetSandboxId returns the SandboxId field value
-func (o *SshAccessDto) GetSandboxId() string {
+// GetBoxId returns the BoxId field value
+func (o *SshAccessDto) GetBoxId() string {
 	if o == nil {
 		var ret string
 		return ret
 	}
 
-	return o.SandboxId
+	return o.BoxId
 }
 
-// GetSandboxIdOk returns a tuple with the SandboxId field value
+// GetBoxIdOk returns a tuple with the BoxId field value
 // and a boolean to check if the value has been set.
-func (o *SshAccessDto) GetSandboxIdOk() (*string, bool) {
+func (o *SshAccessDto) GetBoxIdOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return &o.SandboxId, true
+	return &o.BoxId, true
 }
 
-// SetSandboxId sets field value
-func (o *SshAccessDto) SetSandboxId(v string) {
-	o.SandboxId = v
+// SetBoxId sets field value
+func (o *SshAccessDto) SetBoxId(v string) {
+	o.BoxId = v
 }
 
 // GetToken returns the Token field value
@@ -244,7 +244,7 @@ func (o SshAccessDto) MarshalJSON() ([]byte, error) {
 func (o SshAccessDto) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["id"] = o.Id
-	toSerialize["sandboxId"] = o.SandboxId
+	toSerialize["boxId"] = o.BoxId
 	toSerialize["token"] = o.Token
 	toSerialize["expiresAt"] = o.ExpiresAt
 	toSerialize["createdAt"] = o.CreatedAt
@@ -264,7 +264,7 @@ func (o *SshAccessDto) UnmarshalJSON(data []byte) (err error) {
 	// that every required field exists as a key in the generic map.
 	requiredProperties := []string{
 		"id",
-		"sandboxId",
+		"boxId",
 		"token",
 		"expiresAt",
 		"createdAt",
@@ -300,7 +300,7 @@ func (o *SshAccessDto) UnmarshalJSON(data []byte) (err error) {
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "id")
-		delete(additionalProperties, "sandboxId")
+		delete(additionalProperties, "boxId")
 		delete(additionalProperties, "token")
 		delete(additionalProperties, "expiresAt")
 		delete(additionalProperties, "createdAt")
@@ -347,3 +347,5 @@ func (v *NullableSshAccessDto) UnmarshalJSON(src []byte) error {
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }
+
+

@@ -50,8 +50,8 @@ func (s *Server) Start() error {
 			} else {
 				s.logger.Debug("Received empty password")
 			}
-			// Only allow authentication with the hardcoded password 'sandbox-ssh'
-			authenticated := password == "sandbox-ssh"
+			// Only allow authentication with the hardcoded password 'box-ssh'
+			authenticated := password == "box-ssh"
 			if authenticated {
 				s.logger.Debug("Password authentication succeeded", "user", ctx.User())
 			} else {

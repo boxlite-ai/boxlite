@@ -8,7 +8,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/
 import { VNCInteractionOptionsSectionComponentProps, WrapVNCInvokeApiType } from '@/contexts/PlaygroundContext'
 import { VNCInteractionOptionsSections } from '@/enums/Playground'
 import { usePlayground } from '@/hooks/usePlayground'
-import { usePlaygroundSandbox } from '@/hooks/usePlaygroundSandbox'
+import { usePlaygroundBox } from '@/hooks/usePlaygroundBox'
 import { createErrorMessageOutput } from '@/lib/playground'
 
 import { CameraIcon, KeyboardIcon, MonitorIcon, MousePointer2Icon } from 'lucide-react'
@@ -38,9 +38,9 @@ const VNCInteractionOptions: React.FC = () => {
   >([VNCInteractionOptionsSections.DISPLAY])
   const { setVNCInteractionOptionsParamValue } = usePlayground()
 
-  const { sandbox, vnc } = usePlaygroundSandbox()
+  const { box, vnc } = usePlaygroundBox()
 
-  const ComputerUseClient = vnc.url && sandbox.instance ? sandbox.instance.computerUse : null
+  const ComputerUseClient = vnc.url && box.instance ? box.instance.computerUse : null
 
   // Standardize VNC invokeAPI call flow with this method
   const wrapVNCInvokeApi = useCallback<WrapVNCInvokeApiType>(
@@ -60,8 +60,8 @@ const VNCInteractionOptions: React.FC = () => {
     [setVNCInteractionOptionsParamValue],
   )
 
-  // Disable actions run if there was an error during sandbox creation or during VNC ComputerUse initialization
-  const VNCActionsDisabled = !!sandbox.error || !!vnc.error || !ComputerUseClient
+  // Disable actions run if there was an error during box creation or during VNC ComputerUse initialization
+  const VNCActionsDisabled = !!box.error || !!vnc.error || !ComputerUseClient
 
   const interactionOptionsSectionComponentProps: VNCInteractionOptionsSectionComponentProps = {
     disableActions: VNCActionsDisabled,

@@ -22,10 +22,10 @@ type CreateFolderArgs struct {
 
 func GetCreateFolderTool() mcp.Tool {
 	return mcp.NewTool("create_folder",
-		mcp.WithDescription("Create a new folder in the BoxLite sandbox."),
+		mcp.WithDescription("Create a new folder in the BoxLite box."),
 		mcp.WithString("folderPath", mcp.Required(), mcp.Description("Path to the folder to create.")),
 		mcp.WithString("mode", mcp.Description("Mode of the folder to create (defaults to 0755).")),
-		mcp.WithString("id", mcp.Required(), mcp.Description("ID of the sandbox to create the folder in.")),
+		mcp.WithString("id", mcp.Required(), mcp.Description("ID of the box to create the folder in.")),
 	)
 }
 
@@ -36,7 +36,7 @@ func CreateFolder(ctx context.Context, request mcp.CallToolRequest, args CreateF
 	}
 
 	if args.Id == nil || *args.Id == "" {
-		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("sandbox ID is required")
+		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("box ID is required")
 	}
 
 	if args.FolderPath == nil || *args.FolderPath == "" {

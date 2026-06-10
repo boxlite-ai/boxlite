@@ -14,154 +14,102 @@
 
 
 
-/**
- *
- * @export
- * @interface Organization
- */
 export interface Organization {
     /**
      * Organization ID
-     * @type {string}
-     * @memberof Organization
      */
     'id': string;
     /**
      * Organization name
-     * @type {string}
-     * @memberof Organization
      */
     'name': string;
     /**
      * User ID of the organization creator
-     * @type {string}
-     * @memberof Organization
      */
     'createdBy': string;
     /**
      * Personal organization flag
-     * @type {boolean}
-     * @memberof Organization
      */
     'personal': boolean;
     /**
      * Creation timestamp
-     * @type {Date}
-     * @memberof Organization
      */
     'createdAt': Date;
     /**
      * Last update timestamp
-     * @type {Date}
-     * @memberof Organization
      */
     'updatedAt': Date;
     /**
      * Suspended flag
-     * @type {boolean}
-     * @memberof Organization
      */
     'suspended': boolean;
     /**
      * Suspended at
-     * @type {Date}
-     * @memberof Organization
      */
     'suspendedAt': Date;
     /**
      * Suspended reason
-     * @type {string}
-     * @memberof Organization
      */
     'suspensionReason': string;
     /**
      * Suspended until
-     * @type {Date}
-     * @memberof Organization
      */
     'suspendedUntil': Date;
     /**
      * Suspension cleanup grace period hours
-     * @type {number}
-     * @memberof Organization
      */
     'suspensionCleanupGracePeriodHours': number;
     /**
-     * Max CPU per sandbox
-     * @type {number}
-     * @memberof Organization
+     * Max CPU per box
      */
-    'maxCpuPerSandbox': number;
+    'maxCpuPerBox': number;
     /**
-     * Max memory per sandbox
-     * @type {number}
-     * @memberof Organization
+     * Max memory per box
      */
-    'maxMemoryPerSandbox': number;
+    'maxMemoryPerBox': number;
     /**
-     * Max disk per sandbox
-     * @type {number}
-     * @memberof Organization
+     * Max disk per box
      */
-    'maxDiskPerSandbox': number;
+    'maxDiskPerBox': number;
     /**
      * Time in minutes before an unused snapshot is deactivated
-     * @type {number}
-     * @memberof Organization
      */
     'snapshotDeactivationTimeoutMinutes': number;
     /**
-     * Sandbox default network block all
-     * @type {boolean}
-     * @memberof Organization
+     * Box default network block all
      */
-    'sandboxLimitedNetworkEgress': boolean;
+    'boxLimitedNetworkEgress': boolean;
     /**
      * Default region ID
-     * @type {string}
-     * @memberof Organization
      */
     'defaultRegionId'?: string;
     /**
      * Authenticated rate limit per minute
-     * @type {number}
-     * @memberof Organization
      */
     'authenticatedRateLimit': number | null;
     /**
-     * Sandbox create rate limit per minute
-     * @type {number}
-     * @memberof Organization
+     * Box create rate limit per minute
      */
-    'sandboxCreateRateLimit': number | null;
+    'boxCreateRateLimit': number | null;
     /**
-     * Sandbox lifecycle rate limit per minute
-     * @type {number}
-     * @memberof Organization
+     * Box lifecycle rate limit per minute
      */
-    'sandboxLifecycleRateLimit': number | null;
+    'boxLifecycleRateLimit': number | null;
     /**
      * Experimental configuration
-     * @type {object}
-     * @memberof Organization
      */
     'experimentalConfig': object;
     /**
      * Authenticated rate limit TTL in seconds
-     * @type {number}
-     * @memberof Organization
      */
     'authenticatedRateLimitTtlSeconds': number | null;
     /**
-     * Sandbox create rate limit TTL in seconds
-     * @type {number}
-     * @memberof Organization
+     * Box create rate limit TTL in seconds
      */
-    'sandboxCreateRateLimitTtlSeconds': number | null;
+    'boxCreateRateLimitTtlSeconds': number | null;
     /**
-     * Sandbox lifecycle rate limit TTL in seconds
-     * @type {number}
-     * @memberof Organization
+     * Box lifecycle rate limit TTL in seconds
      */
-    'sandboxLifecycleRateLimitTtlSeconds': number | null;
+    'boxLifecycleRateLimitTtlSeconds': number | null;
 }
+

@@ -14,28 +14,18 @@
 
 
 
-/**
- *
- * @export
- * @interface PortPreviewUrl
- */
 export interface PortPreviewUrl {
     /**
-     * ID of the sandbox
-     * @type {string}
-     * @memberof PortPreviewUrl
+     * ID of the box
      */
-    'sandboxId': string;
+    'boxId': string;
     /**
      * Preview url
-     * @type {string}
-     * @memberof PortPreviewUrl
      */
     'url': string;
     /**
      * Access token
-     * @type {string}
-     * @memberof PortPreviewUrl
      */
     'token': string;
 }
+

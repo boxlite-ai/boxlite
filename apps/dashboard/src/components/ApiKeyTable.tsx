@@ -308,7 +308,7 @@ const getColumns = ({
 
 const allPermissions = Object.values(CreateApiKeyPermissionsEnum)
 
-const IMPLICIT_READ_RESOURCES = ['Sandboxes', 'Snapshots', 'Registries', 'Regions']
+const IMPLICIT_READ_RESOURCES = ['Boxes', 'Snapshots', 'Registries', 'Regions']
 
 function PermissionsTooltip({
   permissions,

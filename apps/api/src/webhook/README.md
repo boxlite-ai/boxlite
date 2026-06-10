@@ -94,10 +94,10 @@ Returns the current status of the webhook service, indicating whether it's prope
 
 The service automatically sends webhooks for the following events:
 
-### Sandbox Events
+### Box Events
 
-- `sandbox.created` - When a sandbox is created
-- `sandbox.state.updated` - When sandbox state changes
+- `box.created` - When a box is created
+- `box.state.updated` - When box state changes
 
 ### Snapshot Events
 
@@ -114,11 +114,11 @@ The service automatically sends webhooks for the following events:
 
 All webhooks include event-specific data relevant to the resource being updated.
 
-### Example Sandbox Created Payload
+### Example Box Created Payload
 
 ```json
 {
-  "id": "sandbox-uuid",
+  "id": "box-uuid",
   "organizationId": "org-uuid",
   "state": "STARTED",
   "class": "SMALL",
@@ -126,11 +126,11 @@ All webhooks include event-specific data relevant to the resource being updated.
 }
 ```
 
-### Example Sandbox State Updated Payload
+### Example Box State Updated Payload
 
 ```json
 {
-  "id": "sandbox-uuid",
+  "id": "box-uuid",
   "organizationId": "org-uuid",
   "oldState": "STOPPED",
   "newState": "STARTED",
@@ -201,7 +201,7 @@ For local development without Svix:
 
 ### Event Flow
 
-1. System event occurs (e.g., sandbox created)
+1. System event occurs (e.g., box created)
 2. Event emitter publishes the event
 3. Webhook event handler catches the event
 4. Handler calls webhook service to send webhook

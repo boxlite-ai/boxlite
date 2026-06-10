@@ -45,6 +45,7 @@ node_modules/
 .pnpm-store/
 package-lock.json
 yarn.lock
+!/apps/yarn.lock
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -81,6 +82,7 @@ yarn-error.log*
 .env
 .env.*
 !/openapi/reference-server/.env.example
+!/apps/api/.env.example
 
 # ============================================================================
 # Go SDK

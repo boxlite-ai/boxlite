@@ -11,15 +11,15 @@ import { OrganizationService } from './organization/services/organization.servic
 import { UserService } from './user/user.service'
 import { ApiKeyService } from './api-key/api-key.service'
 import { EventEmitterReadinessWatcher } from '@nestjs/event-emitter'
-import { SnapshotService } from './sandbox/services/snapshot.service'
+import { SnapshotService } from './box/services/snapshot.service'
 import { SystemRole } from './user/enums/system-role.enum'
 import { TypedConfigService } from './config/typed-config.service'
 import { SchedulerRegistry } from '@nestjs/schedule'
 import { RegionService } from './region/services/region.service'
-import { RunnerService } from './sandbox/services/runner.service'
-import { RunnerAdapterFactory } from './sandbox/runner-adapter/runnerAdapter'
+import { RunnerService } from './box/services/runner.service'
+import { RunnerAdapterFactory } from './box/runner-adapter/runnerAdapter'
 import { RegionType } from './region/enums/region-type.enum'
-import { RunnerState } from './sandbox/enums/runner-state.enum'
+import { RunnerState } from './box/enums/runner-state.enum'
 
 export const BOXLITE_ADMIN_USER_ID = 'boxlite-admin'
 
@@ -178,9 +178,9 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
         totalCpuQuota: this.configService.getOrThrow('admin.totalCpuQuota'),
         totalMemoryQuota: this.configService.getOrThrow('admin.totalMemoryQuota'),
         totalDiskQuota: this.configService.getOrThrow('admin.totalDiskQuota'),
-        maxCpuPerSandbox: this.configService.getOrThrow('admin.maxCpuPerSandbox'),
-        maxMemoryPerSandbox: this.configService.getOrThrow('admin.maxMemoryPerSandbox'),
-        maxDiskPerSandbox: this.configService.getOrThrow('admin.maxDiskPerSandbox'),
+        maxCpuPerBox: this.configService.getOrThrow('admin.maxCpuPerBox'),
+        maxMemoryPerBox: this.configService.getOrThrow('admin.maxMemoryPerBox'),
+        maxDiskPerBox: this.configService.getOrThrow('admin.maxDiskPerBox'),
         snapshotQuota: this.configService.getOrThrow('admin.snapshotQuota'),
         maxSnapshotSize: this.configService.getOrThrow('admin.maxSnapshotSize'),
         volumeQuota: this.configService.getOrThrow('admin.volumeQuota'),

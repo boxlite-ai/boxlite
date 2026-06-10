@@ -44,7 +44,7 @@ import { AuditAction } from '../../audit/enums/audit-action.enum'
 import { AuditTarget } from '../../audit/enums/audit-target.enum'
 import { EmailUtils } from '../../common/utils/email.util'
 import { OrganizationUsageService } from '../services/organization-usage.service'
-import { OrganizationSandboxDefaultLimitedNetworkEgressDto } from '../dto/organization-sandbox-default-limited-network-egress.dto'
+import { OrganizationBoxDefaultLimitedNetworkEgressDto } from '../dto/organization-box-default-limited-network-egress.dto'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { AuthenticatedRateLimitGuard } from '../../common/guards/authenticated-rate-limit.guard'
 import { UpdateOrganizationRegionQuotaDto } from '../dto/update-organization-region-quota.dto'
@@ -358,9 +358,9 @@ export class OrganizationController {
     targetIdFromRequest: (req) => req.params.organizationId,
     requestMetadata: {
       body: (req: TypedRequest<UpdateOrganizationQuotaDto>) => ({
-        maxCpuPerSandbox: req.body?.maxCpuPerSandbox,
-        maxMemoryPerSandbox: req.body?.maxMemoryPerSandbox,
-        maxDiskPerSandbox: req.body?.maxDiskPerSandbox,
+        maxCpuPerBox: req.body?.maxCpuPerBox,
+        maxMemoryPerBox: req.body?.maxMemoryPerBox,
+        maxDiskPerBox: req.body?.maxDiskPerBox,
         snapshotQuota: req.body?.snapshotQuota,
         maxSnapshotSize: req.body?.maxSnapshotSize,
         volumeQuota: req.body?.volumeQuota,
@@ -512,10 +512,10 @@ export class OrganizationController {
     return this.organizationService.unsuspend(organizationId)
   }
 
-  @Get('/by-sandbox-id/:sandboxId')
+  @Get('/by-box-id/:boxId')
   @ApiOperation({
-    summary: 'Get organization by sandbox ID',
-    operationId: 'getOrganizationBySandboxId',
+    summary: 'Get organization by box ID',
+    operationId: 'getOrganizationByBoxId',
   })
   @ApiResponse({
     status: 200,
@@ -523,25 +523,25 @@ export class OrganizationController {
     type: OrganizationDto,
   })
   @ApiParam({
-    name: 'sandboxId',
-    description: 'Sandbox ID',
+    name: 'boxId',
+    description: 'Box ID',
     type: 'string',
   })
   @RequiredApiRole([SystemRole.ADMIN, 'proxy'])
   @UseGuards(CombinedAuthGuard, AuthenticatedRateLimitGuard, SystemActionGuard)
-  async getBySandboxId(@Param('sandboxId') sandboxId: string): Promise<OrganizationDto> {
-    const organization = await this.organizationService.findBySandboxId(sandboxId)
+  async getByBoxId(@Param('boxId') boxId: string): Promise<OrganizationDto> {
+    const organization = await this.organizationService.findByBoxId(boxId)
     if (!organization) {
-      throw new NotFoundException(`Organization with sandbox ID ${sandboxId} not found`)
+      throw new NotFoundException(`Organization with box ID ${boxId} not found`)
     }
 
     return OrganizationDto.fromOrganization(organization)
   }
 
-  @Get('/region-quota/by-sandbox-id/:sandboxId')
+  @Get('/region-quota/by-box-id/:boxId')
   @ApiOperation({
-    summary: 'Get region quota by sandbox ID',
-    operationId: 'getRegionQuotaBySandboxId',
+    summary: 'Get region quota by box ID',
+    operationId: 'getRegionQuotaByBoxId',
   })
   @ApiResponse({
     status: 200,
@@ -549,25 +549,25 @@ export class OrganizationController {
     type: RegionQuotaDto,
   })
   @ApiParam({
-    name: 'sandboxId',
-    description: 'Sandbox ID',
+    name: 'boxId',
+    description: 'Box ID',
     type: 'string',
   })
   @RequiredApiRole([SystemRole.ADMIN, 'proxy'])
   @UseGuards(CombinedAuthGuard, AuthenticatedRateLimitGuard, SystemActionGuard)
-  async getRegionQuotaBySandboxId(@Param('sandboxId') sandboxId: string): Promise<RegionQuotaDto> {
-    const regionQuota = await this.organizationService.getRegionQuotaBySandboxId(sandboxId)
+  async getRegionQuotaByBoxId(@Param('boxId') boxId: string): Promise<RegionQuotaDto> {
+    const regionQuota = await this.organizationService.getRegionQuotaByBoxId(boxId)
     if (!regionQuota) {
-      throw new NotFoundException(`Region quota for sandbox with ID ${sandboxId} not found`)
+      throw new NotFoundException(`Region quota for box with ID ${boxId} not found`)
     }
 
     return regionQuota
   }
 
-  @Get('/otel-config/by-sandbox-auth-token/:authToken')
+  @Get('/otel-config/by-box-auth-token/:authToken')
   @ApiOperation({
-    summary: 'Get organization OTEL config by sandbox auth token',
-    operationId: 'getOrganizationOtelConfigBySandboxAuthToken',
+    summary: 'Get organization OTEL config by box auth token',
+    operationId: 'getOrganizationOtelConfigByBoxAuthToken',
   })
   @ApiResponse({
     status: 200,
@@ -576,28 +576,28 @@ export class OrganizationController {
   })
   @ApiParam({
     name: 'authToken',
-    description: 'Sandbox Auth Token',
+    description: 'Box Auth Token',
     type: 'string',
   })
   @RequiredApiRole([SystemRole.ADMIN, 'otel-collector'])
   @UseGuards(CombinedAuthGuard, OrGuard([SystemActionGuard, OtelCollectorGuard]))
-  async getOtelConfigBySandboxAuthToken(@Param('authToken') authToken: string): Promise<OtelConfigDto> {
-    const otelConfigDto = await this.organizationService.getOtelConfigBySandboxAuthToken(authToken)
+  async getOtelConfigByBoxAuthToken(@Param('authToken') authToken: string): Promise<OtelConfigDto> {
+    const otelConfigDto = await this.organizationService.getOtelConfigByBoxAuthToken(authToken)
     if (!otelConfigDto) {
-      throw new NotFoundException(`Organization OTEL config with sandbox auth token ${authToken} not found`)
+      throw new NotFoundException(`Organization OTEL config with box auth token ${authToken} not found`)
     }
 
     return otelConfigDto
   }
 
-  @Post('/:organizationId/sandbox-default-limited-network-egress')
+  @Post('/:organizationId/box-default-limited-network-egress')
   @ApiOperation({
-    summary: 'Update sandbox default limited network egress',
-    operationId: 'updateSandboxDefaultLimitedNetworkEgress',
+    summary: 'Update box default limited network egress',
+    operationId: 'updateBoxDefaultLimitedNetworkEgress',
   })
   @ApiResponse({
     status: 204,
-    description: 'Sandbox default limited network egress updated successfully',
+    description: 'Box default limited network egress updated successfully',
   })
   @ApiParam({
     name: 'organizationId',
@@ -607,22 +607,22 @@ export class OrganizationController {
   @RequiredSystemRole(SystemRole.ADMIN)
   @UseGuards(CombinedAuthGuard, SystemActionGuard)
   @Audit({
-    action: AuditAction.UPDATE_SANDBOX_DEFAULT_LIMITED_NETWORK_EGRESS,
+    action: AuditAction.UPDATE_BOX_DEFAULT_LIMITED_NETWORK_EGRESS,
     targetType: AuditTarget.ORGANIZATION,
     targetIdFromRequest: (req) => req.params.organizationId,
     requestMetadata: {
-      body: (req: TypedRequest<OrganizationSandboxDefaultLimitedNetworkEgressDto>) => ({
-        sandboxDefaultLimitedNetworkEgress: req.body?.sandboxDefaultLimitedNetworkEgress,
+      body: (req: TypedRequest<OrganizationBoxDefaultLimitedNetworkEgressDto>) => ({
+        boxDefaultLimitedNetworkEgress: req.body?.boxDefaultLimitedNetworkEgress,
       }),
     },
   })
-  async updateSandboxDefaultLimitedNetworkEgress(
+  async updateBoxDefaultLimitedNetworkEgress(
     @Param('organizationId') organizationId: string,
-    @Body() body: OrganizationSandboxDefaultLimitedNetworkEgressDto,
+    @Body() body: OrganizationBoxDefaultLimitedNetworkEgressDto,
   ): Promise<void> {
-    return this.organizationService.updateSandboxDefaultLimitedNetworkEgress(
+    return this.organizationService.updateBoxDefaultLimitedNetworkEgress(
       organizationId,
-      body.sandboxDefaultLimitedNetworkEgress,
+      body.boxDefaultLimitedNetworkEgress,
     )
   }
 

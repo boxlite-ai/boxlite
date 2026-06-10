@@ -128,23 +128,23 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		infoController.GET("", controllers.RunnerInfo)
 	}
 
-	sandboxControllerLogger := a.logger.With(slog.String("component", "sandbox_controller"))
-	sandboxController := protected.Group("/sandboxes")
+	boxControllerLogger := a.logger.With(slog.String("component", "box_controller"))
+	boxController := protected.Group("/boxes")
 	{
-		sandboxController.POST("", controllers.Create)
-		sandboxController.GET("/:sandboxId", controllers.Info)
-		sandboxController.POST("/:sandboxId/destroy", controllers.Destroy)
-		sandboxController.POST("/:sandboxId/start", controllers.Start)
-		sandboxController.POST("/:sandboxId/stop", controllers.Stop)
-		sandboxController.POST("/:sandboxId/backup", controllers.CreateBackup(sandboxControllerLogger))
-		sandboxController.POST("/:sandboxId/resize", controllers.Resize)
-		sandboxController.POST("/:sandboxId/recover", controllers.Recover)
-		sandboxController.POST("/:sandboxId/is-recoverable", controllers.IsRecoverable)
-		sandboxController.POST("/:sandboxId/network-settings", controllers.UpdateNetworkSettings)
+		boxController.POST("", controllers.Create)
+		boxController.GET("/:boxId", controllers.Info)
+		boxController.POST("/:boxId/destroy", controllers.Destroy)
+		boxController.POST("/:boxId/start", controllers.Start)
+		boxController.POST("/:boxId/stop", controllers.Stop)
+		boxController.POST("/:boxId/backup", controllers.CreateBackup(boxControllerLogger))
+		boxController.POST("/:boxId/resize", controllers.Resize)
+		boxController.POST("/:boxId/recover", controllers.Recover)
+		boxController.POST("/:boxId/is-recoverable", controllers.IsRecoverable)
+		boxController.POST("/:boxId/network-settings", controllers.UpdateNetworkSettings)
 
-		// Add proxy endpoint within the sandbox controller for toolbox
+		// Add proxy endpoint within the box controller for toolbox
 		// Using Any() to handle all HTTP methods for the toolbox proxy
-		sandboxController.Any("/:sandboxId/toolbox/*path", controllers.ProxyRequest(sandboxControllerLogger))
+		boxController.Any("/:boxId/toolbox/*path", controllers.ProxyRequest(boxControllerLogger))
 	}
 
 	snapshotControllerLogger := a.logger.With(slog.String("component", "snapshot_controller"))

@@ -17,16 +17,19 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common'
-import { ApiTags, ApiBearerAuth } from '@nestjs/swagger'
+import { ApiTags, ApiBearerAuth, ApiExcludeController } from '@nestjs/swagger'
 import { createProxyMiddleware, fixRequestBody, Options } from 'http-proxy-middleware'
 import { Request, Response, NextFunction } from 'express'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
-import { SandboxService } from '../sandbox/services/sandbox.service'
-import { RunnerService } from '../sandbox/services/runner.service'
+import { BoxService } from '../box/services/box.service'
+import { RunnerService } from '../box/services/runner.service'
 
+// Spec-first surface (openapi/box.openapi.yaml). Must stay out of the product
+// spec: @All() expands to the SEARCH verb, which OpenAPI 3.0 cannot express.
+@ApiExcludeController()
 @ApiTags('BoxLite REST')
 @Controller('v1/:prefix/boxes')
 @UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard)
@@ -35,7 +38,7 @@ export class BoxliteProxyController {
   private readonly logger = new Logger(BoxliteProxyController.name)
 
   constructor(
-    private readonly sandboxService: SandboxService,
+    private readonly boxService: BoxService,
     private readonly runnerService: RunnerService,
   ) {}
 
@@ -136,19 +139,19 @@ export class BoxliteProxyController {
     next: NextFunction,
     opts?: { ws?: boolean },
   ) {
-    const sandbox = await this.sandboxService.findOneByIdOrName(boxId, authContext.organizationId)
-    if (!sandbox) {
+    const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
+    if (!box) {
       throw new NotFoundException(`Box ${boxId} not found`)
     }
 
     // Mirror legacy toolbox.deprecated.service.ts:111 — any SDK-initiated proxy
     // call counts as user activity, so the autostop cron does not reap an
-    // actively used sandbox. Best-effort: never block the proxy on this.
-    this.sandboxService
-      .updateLastActivityAt(sandbox.id, new Date())
-      .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${sandbox.id}: ${err}`))
+    // actively used box. Best-effort: never block the proxy on this.
+    this.boxService
+      .updateLastActivityAt(box.id, new Date())
+      .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${box.id}: ${err}`))
 
-    const runner = await this.runnerService.findOne(sandbox.runnerId)
+    const runner = await this.runnerService.findOne(box.runnerId)
     if (!runner) {
       throw new NotFoundException(`Runner for box ${boxId} not found`)
     }

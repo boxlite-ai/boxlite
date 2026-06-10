@@ -10,7 +10,7 @@ import { ApiKeyService } from './api-key.service'
 import { ApiKey } from './api-key.entity'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { OrganizationModule } from '../organization/organization.module'
-import { RedisLockProvider } from '../sandbox/common/redis-lock.provider'
+import { RedisLockProvider } from '../box/common/redis-lock.provider'
 
 @Module({
   imports: [OrganizationModule, TypeOrmModule.forFeature([ApiKey])],

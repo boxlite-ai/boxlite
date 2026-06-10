@@ -25,7 +25,7 @@ import {
 import { WithInstrumentation } from './utils/otel.decorator'
 
 /**
- * Parameters for setting file permissions in the Sandbox.
+ * Parameters for setting file permissions in the Box.
  *
  * @interface
  * @property {string} [mode] - File mode/permissions in octal format (e.g. "644")
@@ -49,12 +49,12 @@ export type FilePermissionsParams = {
 }
 
 /**
- * Represents a file to be uploaded to the Sandbox.
+ * Represents a file to be uploaded to the Box.
  *
  * @interface
  * @property {string | Buffer} source - File to upload. If a Buffer, it is interpreted as the file content which is loaded into memory.
- * Make sure it fits into memory, otherwise use the local file path which content will be streamed to the Sandbox.
- * @property {string} destination - Absolute destination path in the Sandbox. Relative paths are resolved based on the sandbox working directory.
+ * Make sure it fits into memory, otherwise use the local file path which content will be streamed to the Box.
+ * @property {string} destination - Absolute destination path in the Box. Relative paths are resolved based on the box working directory.
  */
 export interface FileUpload {
   source: string | Buffer
@@ -62,10 +62,10 @@ export interface FileUpload {
 }
 
 /**
- * Represents a request to download a single file from the Sandbox.
+ * Represents a request to download a single file from the Box.
  *
  * @interface
- * @property {string} source - Source path in the Sandbox. Relative paths are resolved based on the user's
+ * @property {string} source - Source path in the Box. Relative paths are resolved based on the user's
  * root directory.
  * @property {string} [destination] - Destination path in the local filesystem where the file content will be
  * streamed to. If not provided, the file will be downloaded in the bytes buffer (might cause memory issues if the file is large).
@@ -106,7 +106,7 @@ export interface DownloadMetadata {
 }
 
 /**
- * Provides file system operations within a Sandbox.
+ * Provides file system operations within a Box.
  *
  * @class
  */
@@ -117,9 +117,9 @@ export class FileSystem {
   ) {}
 
   /**
-   * Create a new directory in the Sandbox with specified permissions.
+   * Create a new directory in the Box with specified permissions.
    *
-   * @param {string} path - Path where the directory should be created. Relative paths are resolved based on the sandbox working directory.
+   * @param {string} path - Path where the directory should be created. Relative paths are resolved based on the box working directory.
    * @param {string} mode - Directory permissions in octal format (e.g. "755")
    * @returns {Promise<void>}
    *
@@ -134,9 +134,9 @@ export class FileSystem {
   }
 
   /**
-   * Deletes a file or directory from the Sandbox.
+   * Deletes a file or directory from the Box.
    *
-   * @param {string} path - Path to the file or directory to delete. Relative paths are resolved based on the sandbox working directory.
+   * @param {string} path - Path to the file or directory to delete. Relative paths are resolved based on the box working directory.
    * @param {boolean} [recursive] - If the file is a directory, this must be true to delete it.
    * @returns {Promise<void>}
    *
@@ -151,10 +151,10 @@ export class FileSystem {
   }
 
   /**
-   * Downloads a file from the Sandbox. This method loads the entire file into memory, so it is not recommended
+   * Downloads a file from the Box. This method loads the entire file into memory, so it is not recommended
    * for downloading large files.
    *
-   * @param {string} remotePath - Path to the file to download. Relative paths are resolved based on the sandbox working directory.
+   * @param {string} remotePath - Path to the file to download. Relative paths are resolved based on the box working directory.
    * @param {number} [timeout] - Timeout for the download operation in seconds. 0 means no timeout.
    * Default is 30 minutes.
    * @returns {Promise<Buffer>} The file contents as a Buffer.
@@ -166,10 +166,10 @@ export class FileSystem {
    */
   public async downloadFile(remotePath: string, timeout?: number): Promise<Buffer>
   /**
-   * Downloads a file from the Sandbox and saves it to a local file. This method uses streaming to download the file,
+   * Downloads a file from the Box and saves it to a local file. This method uses streaming to download the file,
    * so it is recommended for downloading larger files.
    *
-   * @param {string} remotePath - Path to the file to download in the Sandbox. Relative paths are resolved based on the sandbox working directory.
+   * @param {string} remotePath - Path to the file to download in the Box. Relative paths are resolved based on the box working directory.
    * @param {string} localPath - Path to save the downloaded file.
    * @param {number} [timeout] - Timeout for the download operation in seconds. 0 means no timeout.
    * Default is 30 minutes.
@@ -206,7 +206,7 @@ export class FileSystem {
   }
 
   /**
-   * Downloads multiple files from the Sandbox. If the files already exist locally, they will be overwritten.
+   * Downloads multiple files from the Box. If the files already exist locally, they will be overwritten.
    *
    * @param {FileDownloadRequest[]} files - Array of file download requests.
    * @param {number} [timeoutSec] - Timeout for the download operation in seconds. 0 means no timeout.
@@ -280,9 +280,9 @@ export class FileSystem {
   }
 
   /**
-   * Searches for text patterns within files in the Sandbox.
+   * Searches for text patterns within files in the Box.
    *
-   * @param {string} path - Directory to search in. Relative paths are resolved based on the sandbox working directory.
+   * @param {string} path - Directory to search in. Relative paths are resolved based on the box working directory.
    * @param {string} pattern - Search pattern
    * @returns {Promise<Array<Match>>} Array of matches with file and line information
    *
@@ -302,7 +302,7 @@ export class FileSystem {
   /**
    * Retrieves detailed information about a file or directory.
    *
-   * @param {string} path - Path to the file or directory. Relative paths are resolved based on the sandbox working directory.
+   * @param {string} path - Path to the file or directory. Relative paths are resolved based on the box working directory.
    * @returns {Promise<FileInfo>} Detailed file information including size, permissions, modification time
    *
    * @example
@@ -317,9 +317,9 @@ export class FileSystem {
   }
 
   /**
-   * Lists contents of a directory in the Sandbox.
+   * Lists contents of a directory in the Box.
    *
-   * @param {string} path - Directory path to list. Relative paths are resolved based on the sandbox working directory.
+   * @param {string} path - Directory path to list. Relative paths are resolved based on the box working directory.
    * @returns {Promise<FileInfo[]>} Array of file and directory information
    *
    * @example
@@ -338,8 +338,8 @@ export class FileSystem {
   /**
    * Moves or renames a file or directory.
    *
-   * @param {string} source - Source path. Relative paths are resolved based on the sandbox working directory.
-   * @param {string} destination - Destination path. Relative paths are resolved based on the sandbox working directory.
+   * @param {string} source - Source path. Relative paths are resolved based on the box working directory.
+   * @param {string} destination - Destination path. Relative paths are resolved based on the box working directory.
    * @returns {Promise<void>}
    *
    * @example
@@ -355,7 +355,7 @@ export class FileSystem {
   /**
    * Replaces text content in multiple files.
    *
-   * @param {string[]} files - Array of file paths to process. Relative paths are resolved based on the sandbox working directory.
+   * @param {string[]} files - Array of file paths to process. Relative paths are resolved based on the box working directory.
    * @param {string} pattern - Pattern to replace
    * @param {string} newValue - Replacement text
    * @returns {Promise<Array<ReplaceResult>>} Results of the replace operation for each file
@@ -381,9 +381,9 @@ export class FileSystem {
   }
 
   /**
-   * Searches for files and directories by name pattern in the Sandbox.
+   * Searches for files and directories by name pattern in the Box.
    *
-   * @param {string} path - Directory to search in. Relative paths are resolved based on the sandbox working directory.
+   * @param {string} path - Directory to search in. Relative paths are resolved based on the box working directory.
    * @param {string} pattern - File name pattern (supports globs)
    * @returns {Promise<SearchFilesResponse>} Search results with matching files
    *
@@ -401,7 +401,7 @@ export class FileSystem {
   /**
    * Sets permissions and ownership for a file or directory.
    *
-   * @param {string} path - Path to the file or directory. Relative paths are resolved based on the sandbox working directory.
+   * @param {string} path - Path to the file or directory. Relative paths are resolved based on the box working directory.
    * @param {FilePermissionsParams} permissions - Permission settings
    * @returns {Promise<void>}
    *
@@ -425,11 +425,11 @@ export class FileSystem {
   }
 
   /**
-   * Uploads a file to the Sandbox. This method loads the entire file into memory, so it is not recommended
+   * Uploads a file to the Box. This method loads the entire file into memory, so it is not recommended
    * for uploading large files.
    *
    * @param {Buffer} file - Buffer of the file to upload.
-   * @param {string} remotePath - Destination path in the Sandbox. Relative paths are resolved based on the sandbox working directory.
+   * @param {string} remotePath - Destination path in the Box. Relative paths are resolved based on the box working directory.
    * @param {number} [timeout] - Timeout for the upload operation in seconds. 0 means no timeout.
    * Default is 30 minutes.
    * @returns {Promise<void>}
@@ -440,11 +440,11 @@ export class FileSystem {
    */
   public async uploadFile(file: Buffer, remotePath: string, timeout?: number): Promise<void>
   /**
-   * Uploads a file from the local file system to the Sandbox. This method uses streaming to upload the file,
+   * Uploads a file from the local file system to the Box. This method uses streaming to upload the file,
    * so it is recommended for uploading larger files.
    *
    * @param {string} localPath - Path to the local file to upload.
-   * @param {string} remotePath - Destination path in the Sandbox. Relative paths are resolved based on the sandbox working directory.
+   * @param {string} remotePath - Destination path in the Box. Relative paths are resolved based on the box working directory.
    * @param {number} [timeout] - Timeout for the upload operation in seconds. 0 means no timeout.
    * Default is 30 minutes.
    * @returns {Promise<void>}
@@ -460,7 +460,7 @@ export class FileSystem {
   }
 
   /**
-   * Uploads multiple files to the Sandbox. If files already exist at the destination paths,
+   * Uploads multiple files to the Box. If files already exist at the destination paths,
    * they will be overwritten.
    *
    * @param {FileUpload[]} files - Array of files to upload.

@@ -42,7 +42,7 @@ const SEGMENTS = [
 
 export const UsageSummary: React.FC<AggregatedUsageChartProps> = ({ data, isLoading }) => {
   const totalPrice = data?.totalPrice ?? 0
-  const sandboxCount = data?.sandboxCount ?? 0
+  const boxCount = data?.boxCount ?? 0
 
   return (
     <div className="flex gap-4 sm:gap-12 sm:flex-row flex-col p-4">
@@ -60,10 +60,10 @@ export const UsageSummary: React.FC<AggregatedUsageChartProps> = ({ data, isLoad
         </div>
       </div>
       <div className="flex flex-col gap-1">
-        <div>Sandboxes</div>
+        <div>Boxes</div>
         <div className="relative">
           <div className={cn('text-2xl font-semibold', isLoading && 'invisible')}>
-            <NumberFlow value={sandboxCount} />
+            <NumberFlow value={boxCount} />
           </div>
           {isLoading && <Skeleton className="absolute inset-y-1 left-0 w-14" />}
         </div>

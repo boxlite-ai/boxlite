@@ -185,7 +185,7 @@ export function RunnerTable({
                 icon={<Server className="w-8 h-8" />}
                 description={
                   <div className="space-y-2">
-                    <p>Runners are the machines that run your sandboxes.</p>
+                    <p>Runners are the machines that run your boxes.</p>
                     {regions.length === 0 && (
                       <p>There must be at least one region in your organization before runners can be created.</p>
                     )}

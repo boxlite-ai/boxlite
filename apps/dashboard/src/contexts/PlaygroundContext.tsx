@@ -13,16 +13,16 @@ import {
   MouseScrollDirection,
   PlaygroundActions,
   ProcessCodeExecutionActions,
-  SandboxParametersSections,
+  BoxParametersSections,
   ScreenshotActions,
   ScreenshotFormatOption,
 } from '@/enums/Playground'
 import {
   CodeLanguage,
   ComputerUse,
-  CreateSandboxBaseParams,
-  CreateSandboxFromImageParams,
-  CreateSandboxFromSnapshotParams,
+  CreateBoxBaseParams,
+  CreateBoxFromImageParams,
+  CreateBoxFromSnapshotParams,
   Resources,
   ScreenshotOptions,
   ScreenshotRegion,
@@ -134,7 +134,7 @@ export type MouseActionFormData<T extends MouseClick | MouseDrag | MouseMove | M
 export type ScreenshotActionFormData<T extends ScreenshotRegion | CustomizedScreenshotOptions> =
   PlaygroundActionWithParamsFormData<ScreenshotActions, T>
 
-// --- Sandbox param types ---
+// --- Box param types ---
 
 export type ListFilesParams = {
   directoryPath: string
@@ -184,11 +184,11 @@ export type GitOperationsActionFormData<T extends GitCloneParams | GitStatusPara
 export type ProcessCodeExecutionOperationsActionFormData<T extends CodeRunParams | ShellCommandRunParams> =
   PlaygroundActionWithParamsFormData<ProcessCodeExecutionActions, T>
 
-export interface SandboxParams {
+export interface BoxParams {
   language?: CodeLanguage
   snapshotName?: string
   resources: Resources
-  createSandboxBaseParams: CreateSandboxBaseParams
+  createBoxBaseParams: CreateBoxBaseParams
   // File system operations params
   listFilesParams: ListFilesParams
   createFolderParams: CreateFolderParams
@@ -202,7 +202,7 @@ export interface SandboxParams {
   shellCommandRunParams: ShellCommandRunParams
 }
 
-export type SetSandboxParamsValue = <K extends keyof SandboxParams>(key: K, value: SandboxParams[K]) => void
+export type SetBoxParamsValue = <K extends keyof BoxParams>(key: K, value: BoxParams[K]) => void
 
 export interface VNCInteractionOptionsParams {
   keyboardHotKeyParams: KeyboardHotKey
@@ -222,7 +222,7 @@ export type SetVNCInteractionOptionsParamValue = <K extends keyof VNCInteraction
   value: VNCInteractionOptionsParams[K],
 ) => void
 
-export type PlaygroundActionParams = SandboxParams & VNCInteractionOptionsParams
+export type PlaygroundActionParams = BoxParams & VNCInteractionOptionsParams
 
 export type SetPlaygroundActionParamValue = <K extends keyof PlaygroundActionParams>(
   key: K,
@@ -269,26 +269,26 @@ export type PlaygroundActionParamValueSetter = <A extends PlaygroundActions, T>(
   value: any,
 ) => void
 
-export type SandboxParametersInfo = {
+export type BoxParametersInfo = {
   useLanguageParam: boolean
   useResources: boolean
   useResourcesCPU: boolean
   useResourcesMemory: boolean
   useResourcesDisk: boolean
-  createSandboxParamsExist: boolean
+  createBoxParamsExist: boolean
   useAutoStopInterval: boolean
   useAutoArchiveInterval: boolean
   useAutoDeleteInterval: boolean
-  useSandboxCreateParams: boolean
-  useCustomSandboxSnapshotName: boolean
-  createSandboxFromImage: boolean
-  createSandboxFromSnapshot: boolean
-  createSandboxParams: CreateSandboxBaseParams | CreateSandboxFromImageParams | CreateSandboxFromSnapshotParams
+  useBoxCreateParams: boolean
+  useCustomBoxSnapshotName: boolean
+  createBoxFromImage: boolean
+  createBoxFromSnapshot: boolean
+  createBoxParams: CreateBoxBaseParams | CreateBoxFromImageParams | CreateBoxFromSnapshotParams
 }
 
 export interface IPlaygroundContext {
-  sandboxParametersState: SandboxParams
-  setSandboxParameterValue: SetSandboxParamsValue
+  boxParametersState: BoxParams
+  setBoxParameterValue: SetBoxParamsValue
   VNCInteractionOptionsParamsState: VNCInteractionOptionsParams
   setVNCInteractionOptionsParamValue: SetVNCInteractionOptionsParamValue
   runPlaygroundActionWithParams: RunPlaygroundActionWithParams
@@ -297,13 +297,13 @@ export interface IPlaygroundContext {
   playgroundActionParamValueSetter: PlaygroundActionParamValueSetter
   runningActionMethod: RunningActionMethodName
   actionRuntimeError: ActionRuntimeError
-  getSandboxParametersInfo: () => SandboxParametersInfo
-  openedParametersSections: SandboxParametersSections[]
-  setOpenedParametersSections: React.Dispatch<React.SetStateAction<SandboxParametersSections[]>>
-  enabledSections: SandboxParametersSections[]
-  enableSection: (section: SandboxParametersSections) => void
-  disableSection: (section: SandboxParametersSections) => void
-  pendingScrollSection: SandboxParametersSections | null
+  getBoxParametersInfo: () => BoxParametersInfo
+  openedParametersSections: BoxParametersSections[]
+  setOpenedParametersSections: React.Dispatch<React.SetStateAction<BoxParametersSections[]>>
+  enabledSections: BoxParametersSections[]
+  enableSection: (section: BoxParametersSections) => void
+  disableSection: (section: BoxParametersSections) => void
+  pendingScrollSection: BoxParametersSections | null
   clearPendingScrollSection: () => void
 }
 

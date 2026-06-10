@@ -42,9 +42,9 @@ export type Position = {
  * IDE-like features such as code completion, symbol search, and more.
  *
  * @property {LspLanguageId} languageId - The language server type (e.g., "typescript")
- * @property {string} pathToProject - Path to the project root directory. Relative paths are resolved based on the sandbox working directory.
- * @property {LspApi} apiClient - API client for Sandbox lsp operations
- * @property {SandboxInstance} instance - The Sandbox instance this server belongs to
+ * @property {string} pathToProject - Path to the project root directory. Relative paths are resolved based on the box working directory.
+ * @property {LspApi} apiClient - API client for Box lsp operations
+ * @property {BoxInstance} instance - The Box instance this server belongs to
  *
  * @class
  */
@@ -68,7 +68,7 @@ export class LspServer {
    * @returns {Promise<void>}
    *
    * @example
-   * const lsp = await sandbox.createLspServer('typescript', 'workspace/project');
+   * const lsp = await box.createLspServer('typescript', 'workspace/project');
    * await lsp.start();  // Initialize the server
    * // Now ready for LSP operations
    */
@@ -103,7 +103,7 @@ export class LspServer {
    * language features like diagnostics and completions for that file. The server
    * will begin tracking the file's contents and providing language features.
    *
-   * @param {string} path - Path to the opened file. Relative paths are resolved based on the sandbox working directory.
+   * @param {string} path - Path to the opened file. Relative paths are resolved based on the box working directory.
    * @returns {Promise<void>}
    *
    * @example
@@ -165,7 +165,7 @@ export class LspServer {
   }
 
   /**
-   * Searches for symbols matching the query string across the entire Sandbox.
+   * Searches for symbols matching the query string across the entire Box.
    *
    * @param {string} query - Search query to match against symbol names
    * @returns {Promise<LspSymbol[]>} List of matching symbols from all files. Each symbol includes:
@@ -173,15 +173,15 @@ export class LspServer {
    *                                 - kind: The symbol's kind (function, class, variable, etc.)
    *                                 - location: The location of the symbol in the file
    *
-   * @deprecated Use `sandboxSymbols` instead. This method will be removed in a future version.
+   * @deprecated Use `boxSymbols` instead. This method will be removed in a future version.
    */
   @WithInstrumentation()
   public async workspaceSymbols(query: string): Promise<LspSymbol[]> {
-    return await this.sandboxSymbols(query)
+    return await this.boxSymbols(query)
   }
 
   /**
-   * Searches for symbols matching the query string across the entire Sandbox.
+   * Searches for symbols matching the query string across the entire Box.
    *
    * @param {string} query - Search query to match against symbol names
    * @returns {Promise<LspSymbol[]>} List of matching symbols from all files. Each symbol includes:
@@ -191,13 +191,13 @@ export class LspServer {
    *
    * @example
    * // Search for all symbols containing "User"
-   * const symbols = await lsp.sandboxSymbols('User');
+   * const symbols = await lsp.boxSymbols('User');
    * symbols.forEach(symbol => {
    *   console.log(`${symbol.name} (${symbol.kind}) in ${symbol.location}`);
    * });
    */
   @WithInstrumentation()
-  public async sandboxSymbols(query: string): Promise<LspSymbol[]> {
+  public async boxSymbols(query: string): Promise<LspSymbol[]> {
     const response = await this.apiClient.workspaceSymbols(query, this.languageId, this.pathToProject)
     return response.data
   }

@@ -1,0 +1,15 @@
+/*
+ * Copyright BoxLite AI (originally Daytona Platforms Inc.
+ * SPDX-License-Identifier: AGPL-3.0
+ */
+
+package models
+
+import "github.com/boxlite-ai/runner/pkg/models/enums"
+
+type BoxInfo struct {
+	BoxState          enums.BoxState
+	BackupState       enums.BackupState
+	BackupSnapshot    string
+	BackupErrorReason *string
+}

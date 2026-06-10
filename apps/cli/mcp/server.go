@@ -37,8 +37,8 @@ func (s *BoxliteMCPServer) Start() error {
 }
 
 func (s *BoxliteMCPServer) addTools() {
-	s.AddTool(tools.GetCreateSandboxTool(), mcp.NewTypedToolHandler(tools.CreateSandbox))
-	s.AddTool(tools.GetDestroySandboxTool(), mcp.NewTypedToolHandler(tools.DestroySandbox))
+	s.AddTool(tools.GetCreateBoxTool(), mcp.NewTypedToolHandler(tools.CreateBox))
+	s.AddTool(tools.GetDestroyBoxTool(), mcp.NewTypedToolHandler(tools.DestroyBox))
 
 	s.AddTool(tools.GetFileUploadTool(), mcp.NewTypedToolHandler(tools.FileUpload))
 	s.AddTool(tools.GetFileDownloadTool(), mcp.NewTypedToolHandler(tools.FileDownload))

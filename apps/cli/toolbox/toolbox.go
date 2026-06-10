@@ -37,8 +37,8 @@ func NewClient(apiClient *apiclient.APIClient) *Client {
 	}
 }
 
-// Gets the toolbox proxy URL for a sandbox, caching by region in config
-func (c *Client) getProxyURL(ctx context.Context, sandboxId, region string) (string, error) {
+// Gets the toolbox proxy URL for a box, caching by region in config
+func (c *Client) getProxyURL(ctx context.Context, boxId, region string) (string, error) {
 	// Check config cache first
 	cachedURL, err := config.GetToolboxProxyUrl(region)
 	if err == nil && cachedURL != "" {
@@ -46,7 +46,7 @@ func (c *Client) getProxyURL(ctx context.Context, sandboxId, region string) (str
 	}
 
 	// Fetch from API
-	toolboxProxyUrl, _, err := c.apiClient.SandboxAPI.GetToolboxProxyUrl(ctx, sandboxId).Execute()
+	toolboxProxyUrl, _, err := c.apiClient.BoxAPI.GetToolboxProxyUrl(ctx, boxId).Execute()
 	if err != nil {
 		return "", fmt.Errorf("failed to get toolbox proxy URL: %w", err)
 	}
@@ -57,19 +57,19 @@ func (c *Client) getProxyURL(ctx context.Context, sandboxId, region string) (str
 	return toolboxProxyUrl.Url, nil
 }
 
-func (c *Client) ExecuteCommand(ctx context.Context, sandbox *apiclient.Sandbox, request ExecuteRequest) (*ExecuteResponse, error) {
-	proxyURL, err := c.getProxyURL(ctx, sandbox.Id, sandbox.Target)
+func (c *Client) ExecuteCommand(ctx context.Context, box *apiclient.Box, request ExecuteRequest) (*ExecuteResponse, error) {
+	proxyURL, err := c.getProxyURL(ctx, box.Id, box.Target)
 	if err != nil {
 		return nil, err
 	}
 
-	return c.executeCommandViaProxy(ctx, proxyURL, sandbox.Id, request)
+	return c.executeCommandViaProxy(ctx, proxyURL, box.Id, request)
 }
 
 // TODO: replace this with the toolbox api client at some point
-func (c *Client) executeCommandViaProxy(ctx context.Context, proxyURL, sandboxId string, request ExecuteRequest) (*ExecuteResponse, error) {
-	// Build the URL: {proxyUrl}/{sandboxId}/process/execute
-	url := fmt.Sprintf("%s/%s/process/execute", strings.TrimSuffix(proxyURL, "/"), sandboxId)
+func (c *Client) executeCommandViaProxy(ctx context.Context, proxyURL, boxId string, request ExecuteRequest) (*ExecuteResponse, error) {
+	// Build the URL: {proxyUrl}/{boxId}/process/execute
+	url := fmt.Sprintf("%s/%s/process/execute", strings.TrimSuffix(proxyURL, "/"), boxId)
 
 	body, err := json.Marshal(request)
 	if err != nil {

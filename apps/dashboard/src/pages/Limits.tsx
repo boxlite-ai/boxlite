@@ -147,7 +147,7 @@ export default function Limits() {
                 </div>
                 <CardDescription>
                   Limits help us mitigate misuse and manage infrastructure resources. <br /> Ensuring fair and stable
-                  access to sandboxes and compute capacity across all users.
+                  access to boxes and compute capacity across all users.
                 </CardDescription>
               </CardHeader>
               <CardContent className="p-0 flex flex-col">
@@ -170,13 +170,13 @@ export default function Limits() {
                   )
                 )}
                 <RateLimits
-                  title="Sandbox Limits"
-                  description="Resources limit per sandbox."
+                  title="Box Limits"
+                  description="Resources limit per box."
                   className="border-t border-border"
                   rateLimits={[
-                    { label: 'Compute', value: selectedOrganization?.maxCpuPerSandbox, unit: 'vCPU' },
-                    { label: 'Memory', value: selectedOrganization?.maxMemoryPerSandbox, unit: 'GiB' },
-                    { label: 'Storage', value: selectedOrganization?.maxDiskPerSandbox, unit: 'GiB' },
+                    { label: 'Compute', value: selectedOrganization?.maxCpuPerBox, unit: 'vCPU' },
+                    { label: 'Memory', value: selectedOrganization?.maxMemoryPerBox, unit: 'GiB' },
+                    { label: 'Storage', value: selectedOrganization?.maxDiskPerBox, unit: 'GiB' },
                   ]}
                 />
 
@@ -192,18 +192,16 @@ export default function Limits() {
                         selectedOrganization?.authenticatedRateLimitTtlSeconds ?? config?.rateLimit?.authenticated?.ttl,
                     },
                     {
-                      value: selectedOrganization?.sandboxCreateRateLimit || config?.rateLimit?.sandboxCreate?.limit,
-                      label: 'Sandbox Creation',
+                      value: selectedOrganization?.boxCreateRateLimit || config?.rateLimit?.boxCreate?.limit,
+                      label: 'Box Creation',
                       ttlSeconds:
-                        selectedOrganization?.sandboxCreateRateLimitTtlSeconds ?? config?.rateLimit?.sandboxCreate?.ttl,
+                        selectedOrganization?.boxCreateRateLimitTtlSeconds ?? config?.rateLimit?.boxCreate?.ttl,
                     },
                     {
-                      value:
-                        selectedOrganization?.sandboxLifecycleRateLimit || config?.rateLimit?.sandboxLifecycle?.limit,
-                      label: 'Sandbox Lifecycle',
+                      value: selectedOrganization?.boxLifecycleRateLimit || config?.rateLimit?.boxLifecycle?.limit,
+                      label: 'Box Lifecycle',
                       ttlSeconds:
-                        selectedOrganization?.sandboxLifecycleRateLimitTtlSeconds ??
-                        config?.rateLimit?.sandboxLifecycle?.ttl,
+                        selectedOrganization?.boxLifecycleRateLimitTtlSeconds ?? config?.rateLimit?.boxLifecycle?.ttl,
                     },
                   ]}
                 />

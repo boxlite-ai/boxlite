@@ -14,16 +14,10 @@
 
 
 
-/**
- *
- * @export
- * @interface RegenerateApiKeyResponse
- */
 export interface RegenerateApiKeyResponse {
     /**
      * The newly generated API key
-     * @type {string}
-     * @memberof RegenerateApiKeyResponse
      */
     'apiKey': string;
 }
+

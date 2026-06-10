@@ -1,0 +1,536 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "BoxLite Analytics API",
+    "description": "BoxLite Analytics API - Read-only telemetry and usage data. Authenticated via BoxLite API keys or JWT tokens.",
+    "version": "v0.0.0-dev"
+  },
+  "host": "localhost:8080",
+  "securityDefinitions": {
+    "Bearer": {
+      "type": "apiKey",
+      "name": "Authorization",
+      "in": "header"
+    }
+  },
+  "paths": {
+    "/organization/{organizationId}/box/{boxId}/usage": {
+      "get": {
+        "summary": "Get box usage periods",
+        "description": "Retrieve usage periods for a specific box within a time range",
+        "tags": ["Usage"],
+        "produces": ["application/json"],
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          {
+            "name": "organizationId",
+            "in": "path",
+            "description": "Organization ID",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "boxId",
+            "in": "path",
+            "description": "Box ID",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Start time (RFC3339)",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "End time (RFC3339)",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/models.UsagePeriod" }
+            }
+          }
+        }
+      }
+    },
+    "/organization/{organizationId}/usage/aggregated": {
+      "get": {
+        "summary": "Get aggregated usage",
+        "description": "Retrieve aggregated usage for an organization within a time range",
+        "tags": ["Usage"],
+        "produces": ["application/json"],
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          {
+            "name": "organizationId",
+            "in": "path",
+            "description": "Organization ID",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Start time (RFC3339)",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "End time (RFC3339)",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": { "$ref": "#/definitions/models.AggregatedUsage" }
+          }
+        }
+      }
+    },
+    "/organization/{organizationId}/usage/chart": {
+      "get": {
+        "summary": "Get usage chart data",
+        "description": "Retrieve usage chart data points for an organization within a time range",
+        "tags": ["Usage"],
+        "produces": ["application/json"],
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          {
+            "name": "organizationId",
+            "in": "path",
+            "description": "Organization ID",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Start time (RFC3339)",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "End time (RFC3339)",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "region",
+            "in": "query",
+            "description": "Region filter",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/models.UsageChartPoint" }
+            }
+          }
+        }
+      }
+    },
+    "/organization/{organizationId}/usage/box": {
+      "get": {
+        "summary": "Get per-box usage",
+        "description": "Retrieve per-box usage for an organization within a time range",
+        "tags": ["Usage"],
+        "produces": ["application/json"],
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          {
+            "name": "organizationId",
+            "in": "path",
+            "description": "Organization ID",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Start time (RFC3339)",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "End time (RFC3339)",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/models.BoxUsage" }
+            }
+          }
+        }
+      }
+    },
+    "/organization/{organizationId}/box/{boxId}/telemetry/logs": {
+      "get": {
+        "summary": "Get box logs",
+        "description": "Retrieve OTEL logs for a box within a time range",
+        "tags": ["Telemetry"],
+        "produces": ["application/json"],
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          {
+            "name": "organizationId",
+            "in": "path",
+            "description": "Organization ID",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "boxId",
+            "in": "path",
+            "description": "Box ID",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Start time (RFC3339)",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "End time (RFC3339)",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "severity",
+            "in": "query",
+            "description": "Severity filter (comma-separated)",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Search filter",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size",
+            "required": false,
+            "type": "integer"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Page offset",
+            "required": false,
+            "type": "integer"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/models.LogEntry" }
+            }
+          }
+        }
+      }
+    },
+    "/organization/{organizationId}/box/{boxId}/telemetry/metrics": {
+      "get": {
+        "summary": "Get box metrics",
+        "description": "Retrieve OTEL metrics for a box within a time range",
+        "tags": ["Telemetry"],
+        "produces": ["application/json"],
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          {
+            "name": "organizationId",
+            "in": "path",
+            "description": "Organization ID",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "boxId",
+            "in": "path",
+            "description": "Box ID",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Start time (RFC3339)",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "End time (RFC3339)",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "metricNames",
+            "in": "query",
+            "description": "Metric names filter (comma-separated)",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/models.MetricPoint" }
+            }
+          }
+        }
+      }
+    },
+    "/organization/{organizationId}/box/{boxId}/telemetry/traces": {
+      "get": {
+        "summary": "Get box traces",
+        "description": "Retrieve OTEL trace summaries for a box within a time range",
+        "tags": ["Telemetry"],
+        "produces": ["application/json"],
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          {
+            "name": "organizationId",
+            "in": "path",
+            "description": "Organization ID",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "boxId",
+            "in": "path",
+            "description": "Box ID",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Start time (RFC3339)",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "End time (RFC3339)",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size",
+            "required": false,
+            "type": "integer"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Page offset",
+            "required": false,
+            "type": "integer"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/models.TraceSummary" }
+            }
+          }
+        }
+      }
+    },
+    "/organization/{organizationId}/box/{boxId}/telemetry/traces/{traceId}": {
+      "get": {
+        "summary": "Get trace spans",
+        "description": "Retrieve all spans for a trace",
+        "tags": ["Telemetry"],
+        "produces": ["application/json"],
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          {
+            "name": "organizationId",
+            "in": "path",
+            "description": "Organization ID",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "boxId",
+            "in": "path",
+            "description": "Box ID",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "traceId",
+            "in": "path",
+            "description": "Trace ID",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/models.Span" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "models.AggregatedUsage": {
+      "type": "object",
+      "properties": {
+        "boxCount": { "type": "integer" },
+        "firstStart": { "type": "string" },
+        "lastEnd": { "type": "string" },
+        "totalCPUSeconds": { "type": "number" },
+        "totalDiskGBSeconds": { "type": "number" },
+        "totalGPUSeconds": { "type": "number" },
+        "totalPrice": { "type": "number" },
+        "totalRAMGBSeconds": { "type": "number" }
+      }
+    },
+    "models.BoxUsage": {
+      "type": "object",
+      "properties": {
+        "boxId": { "type": "string" },
+        "firstStart": { "type": "string" },
+        "lastEnd": { "type": "string" },
+        "totalCPUSeconds": { "type": "number" },
+        "totalDiskGBSeconds": { "type": "number" },
+        "totalGPUSeconds": { "type": "number" },
+        "totalPrice": { "type": "number" },
+        "totalRAMGBSeconds": { "type": "number" }
+      }
+    },
+    "models.UsageChartPoint": {
+      "type": "object",
+      "properties": {
+        "cpu": { "type": "number" },
+        "cpuPrice": { "type": "number" },
+        "diskGB": { "type": "number" },
+        "diskPrice": { "type": "number" },
+        "ramGB": { "type": "number" },
+        "ramPrice": { "type": "number" },
+        "time": { "type": "string" }
+      }
+    },
+    "models.UsagePeriod": {
+      "type": "object",
+      "properties": {
+        "cpu": { "type": "number" },
+        "diskGB": { "type": "number" },
+        "endAt": { "type": "string" },
+        "gpu": { "type": "number" },
+        "price": { "type": "number" },
+        "ramGB": { "type": "number" },
+        "startAt": { "type": "string" }
+      }
+    },
+    "models.LogEntry": {
+      "type": "object",
+      "properties": {
+        "body": { "type": "string" },
+        "logAttributes": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "resourceAttributes": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "serviceName": { "type": "string" },
+        "severityNumber": { "type": "integer" },
+        "severityText": { "type": "string" },
+        "spanId": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "traceId": { "type": "string" }
+      }
+    },
+    "models.MetricPoint": {
+      "type": "object",
+      "properties": {
+        "metricName": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "value": { "type": "number" }
+      }
+    },
+    "models.Span": {
+      "type": "object",
+      "properties": {
+        "durationMs": { "type": "number" },
+        "parentSpanId": { "type": "string" },
+        "spanAttributes": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "spanId": { "type": "string" },
+        "spanName": { "type": "string" },
+        "statusCode": { "type": "string" },
+        "statusMessage": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "traceId": { "type": "string" }
+      }
+    },
+    "models.TraceSummary": {
+      "type": "object",
+      "properties": {
+        "endTime": { "type": "string" },
+        "rootSpanName": { "type": "string" },
+        "spanCount": { "type": "integer" },
+        "startTime": { "type": "string" },
+        "statusCode": { "type": "string" },
+        "totalDurationMs": { "type": "number" },
+        "traceId": { "type": "string" }
+      }
+    }
+  }
+}

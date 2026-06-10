@@ -128,14 +128,14 @@ func run() int {
 
 	backupInfoCache := cache.NewBackupInfoCache(ctx, cfg.BackupInfoCacheRetention)
 
-	sandboxService := services.NewSandboxService(logger, backupInfoCache, boxliteClient)
+	boxService := services.NewBoxService(logger, backupInfoCache, boxliteClient)
 
-	sandboxSyncService := services.NewSandboxSyncService(services.SandboxSyncServiceConfig{
+	boxSyncService := services.NewBoxSyncService(services.BoxSyncServiceConfig{
 		Logger:   logger,
 		Boxlite:  boxliteClient,
 		Interval: 10 * time.Second,
 	})
-	sandboxSyncService.StartSyncProcess(ctx)
+	boxSyncService.StartSyncProcess(ctx)
 
 	// Initialize SSH Gateway if enabled
 	if sshgateway.IsSSHGatewayEnabled() {
@@ -164,7 +164,7 @@ func run() int {
 		BackupInfoCache:    backupInfoCache,
 		SnapshotErrorCache: cache.NewSnapshotErrorCache(ctx, cfg.SnapshotErrorCacheRetention),
 		Boxlite:            boxliteClient,
-		SandboxService:     sandboxService,
+		BoxService:         boxService,
 		MetricsCollector:   metricsCollector,
 	})
 	if err != nil {
@@ -172,7 +172,7 @@ func run() int {
 		return 2
 	}
 
-	sandboxBackend := backend.NewBoxliteAdapter(boxliteClient)
+	boxBackend := backend.NewBoxliteAdapter(boxliteClient)
 
 	if cfg.ApiVersion == 2 {
 		healthcheckService, err := healthcheck.NewService(&healthcheck.HealthcheckServiceConfig{
@@ -198,7 +198,7 @@ func run() int {
 
 		executorService, err := executor.NewExecutor(&executor.ExecutorConfig{
 			Logger:    logger,
-			Backend:   sandboxBackend,
+			Backend:   boxBackend,
 			Collector: metricsCollector,
 		})
 		if err != nil {

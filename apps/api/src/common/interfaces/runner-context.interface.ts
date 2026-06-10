@@ -5,7 +5,7 @@
  */
 
 import { BaseAuthContext } from './auth-context.interface'
-import { Runner } from '../../sandbox/entities/runner.entity'
+import { Runner } from '../../box/entities/runner.entity'
 
 export interface RunnerContext extends BaseAuthContext {
   role: 'runner'

@@ -17,6 +17,8 @@
 export * from './api/admin-api';
 export * from './api/api-keys-api';
 export * from './api/audit-api';
+export * from './api/auth-api';
+export * from './api/box-api';
 export * from './api/config-api';
 export * from './api/docker-registry-api';
 export * from './api/health-api';
@@ -26,10 +28,10 @@ export * from './api/organizations-api';
 export * from './api/preview-api';
 export * from './api/regions-api';
 export * from './api/runners-api';
-export * from './api/sandbox-api';
 export * from './api/snapshots-api';
 export * from './api/toolbox-api';
 export * from './api/users-api';
 export * from './api/volumes-api';
 export * from './api/webhooks-api';
 export * from './api/workspace-api';
+

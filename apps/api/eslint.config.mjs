@@ -1,4 +1,4 @@
-import baseConfig from '../../eslint.config.mjs'
+import baseConfig from '../eslint.config.mjs'
 
 export default [
   ...baseConfig,
@@ -9,8 +9,8 @@ export default [
         'error',
         {
           selector:
-            'Decorator[expression.callee.name="InjectRepository"] > CallExpression > Identifier[name="Sandbox"]',
-          message: 'Do not use @InjectRepository(Sandbox). Use the custom SandboxRepository instead.',
+            'Decorator[expression.callee.name="InjectRepository"] > CallExpression > Identifier[name="Box"]',
+          message: 'Do not use @InjectRepository(Box). Use the custom BoxRepository instead.',
         },
       ],
     },

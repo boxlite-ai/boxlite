@@ -1,6 +1,6 @@
 name: boxlite snapshot delete
 synopsis: Delete a snapshot
-usage: boxlite snapshot delete [SNAPSHOT_ID] [flags]
+usage: boxlite snapshot delete [SNAPSHOT_ID | SNAPSHOT_NAME] [flags]
 options:
   - name: all
     shorthand: a

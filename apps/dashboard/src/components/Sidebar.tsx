@@ -122,8 +122,8 @@ export function Sidebar({ isBannerVisible, billingEnabled, version: _version }: 
     const arr: SidebarItem[] = [
       {
         icon: <Container size={16} strokeWidth={1.5} />,
-        label: 'Sandboxes',
-        path: RoutePath.SANDBOXES,
+        label: 'Boxes',
+        path: RoutePath.BOXES,
       },
       {
         icon: <Box size={16} strokeWidth={1.5} />,
@@ -366,7 +366,7 @@ export function Sidebar({ isBannerVisible, billingEnabled, version: _version }: 
       <div className="mx-auto flex h-14 w-full max-w-[1440px] items-center gap-3 px-4 sm:px-5 2xl:px-0">
         <div className="flex min-w-0 items-center gap-6">
           <Link
-            to={RoutePath.SANDBOXES}
+            to={RoutePath.BOXES}
             className="shrink-0 text-[1.15rem] font-semibold tracking-tight text-foreground"
           >
             <LogoText />

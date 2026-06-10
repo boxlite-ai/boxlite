@@ -14,28 +14,17 @@
 
 
 
-/**
- *
- * @export
- * @interface CreateOrganizationRole
- */
 export interface CreateOrganizationRole {
     /**
      * The name of the role
-     * @type {string}
-     * @memberof CreateOrganizationRole
      */
     'name': string;
     /**
      * The description of the role
-     * @type {string}
-     * @memberof CreateOrganizationRole
      */
     'description': string;
     /**
      * The list of permissions assigned to the role
-     * @type {Array<string>}
-     * @memberof CreateOrganizationRole
      */
     'permissions': Array<CreateOrganizationRolePermissionsEnum>;
 }
@@ -45,8 +34,8 @@ export const CreateOrganizationRolePermissionsEnum = {
     DELETE_REGISTRIES: 'delete:registries',
     WRITE_SNAPSHOTS: 'write:snapshots',
     DELETE_SNAPSHOTS: 'delete:snapshots',
-    WRITE_SANDBOXES: 'write:sandboxes',
-    DELETE_SANDBOXES: 'delete:sandboxes',
+    WRITE_BOXES: 'write:boxes',
+    DELETE_BOXES: 'delete:boxes',
     READ_VOLUMES: 'read:volumes',
     WRITE_VOLUMES: 'write:volumes',
     DELETE_VOLUMES: 'delete:volumes',
@@ -55,7 +44,10 @@ export const CreateOrganizationRolePermissionsEnum = {
     READ_RUNNERS: 'read:runners',
     WRITE_RUNNERS: 'write:runners',
     DELETE_RUNNERS: 'delete:runners',
-    READ_AUDIT_LOGS: 'read:audit_logs'
+    READ_AUDIT_LOGS: 'read:audit_logs',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 
 export type CreateOrganizationRolePermissionsEnum = typeof CreateOrganizationRolePermissionsEnum[keyof typeof CreateOrganizationRolePermissionsEnum];
+
+

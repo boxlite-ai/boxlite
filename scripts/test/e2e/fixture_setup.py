@@ -133,9 +133,9 @@ def patch_admin_quota():
     import subprocess
     sql = """
 UPDATE organization SET
-    max_cpu_per_sandbox = 4,
-    max_memory_per_sandbox = 8,
-    max_disk_per_sandbox = 20
+    max_cpu_per_box = 4,
+    max_memory_per_box = 8,
+    max_disk_per_box = 20
 WHERE personal = true;
 """
     r = subprocess.run(

@@ -14,16 +14,7 @@
 
 
 
-/**
- *
- * @export
- * @interface WebhookControllerGetStatus200Response
- */
 export interface WebhookControllerGetStatus200Response {
-    /**
-     *
-     * @type {boolean}
-     * @memberof WebhookControllerGetStatus200Response
-     */
     'enabled'?: boolean;
 }
+

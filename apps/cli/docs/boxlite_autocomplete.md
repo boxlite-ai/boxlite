@@ -14,4 +14,5 @@ boxlite autocomplete [bash|zsh|fish|powershell] [flags]
 
 ### SEE ALSO
 
-* [boxlite](boxlite.md)  - BoxLite CLI
+* [boxlite](boxlite.md)	 - BoxLite CLI
+

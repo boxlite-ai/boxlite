@@ -47,7 +47,7 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
 
   protected generateKey(context: ExecutionContext, suffix: string, name: string): string {
     // Override to make rate limiting per-rate-limit-type, not per-route
-    // This ensures all routes share the same counter per rate limit type (authenticated, sandbox-create, sandbox-lifecycle)
+    // This ensures all routes share the same counter per rate limit type (authenticated, box-create, box-lifecycle)
     return `${name}-${suffix}`
   }
 
@@ -72,15 +72,15 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
     }
 
     // Check authenticated throttlers
-    const authenticatedThrottlers = ['authenticated', 'sandbox-create', 'sandbox-lifecycle']
+    const authenticatedThrottlers = ['authenticated', 'box-create', 'box-lifecycle']
     if (authenticatedThrottlers.includes(throttler.name)) {
       if (isAuthenticated) {
         // Only 'authenticated' applies to all routes by default
-        // 'sandbox-create' and 'sandbox-lifecycle' only apply if explicitly configured via @SkipThrottle or @Throttle
+        // 'box-create' and 'box-lifecycle' only apply if explicitly configured via @SkipThrottle or @Throttle
         const isDefaultThrottler = throttler.name === 'authenticated'
 
         if (!isDefaultThrottler) {
-          // Sandbox throttlers (sandbox-create, sandbox-lifecycle) are opt-in only
+          // Box throttlers (box-create, box-lifecycle) are opt-in only
           // Check if this route declares this throttler scope via @ThrottlerScope() decorator
           const scopes = this.reflector.getAllAndOverride<string[]>(THROTTLER_SCOPE_KEY, [
             context.getHandler(),
@@ -101,19 +101,19 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
             const customLimit =
               throttler.name === 'authenticated'
                 ? orgLimits.authenticated
-                : throttler.name === 'sandbox-create'
-                  ? orgLimits.sandboxCreate
-                  : throttler.name === 'sandbox-lifecycle'
-                    ? orgLimits.sandboxLifecycle
+                : throttler.name === 'box-create'
+                  ? orgLimits.boxCreate
+                  : throttler.name === 'box-lifecycle'
+                    ? orgLimits.boxLifecycle
                     : undefined
 
             const customTtlSeconds =
               throttler.name === 'authenticated'
                 ? orgLimits.authenticatedTtlSeconds
-                : throttler.name === 'sandbox-create'
-                  ? orgLimits.sandboxCreateTtlSeconds
-                  : throttler.name === 'sandbox-lifecycle'
-                    ? orgLimits.sandboxLifecycleTtlSeconds
+                : throttler.name === 'box-create'
+                  ? orgLimits.boxCreateTtlSeconds
+                  : throttler.name === 'box-lifecycle'
+                    ? orgLimits.boxLifecycleTtlSeconds
                     : undefined
 
             if (customLimit != null || customTtlSeconds != null) {
@@ -152,11 +152,11 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
 
   private async getCachedOrganizationRateLimits(organizationId: string): Promise<{
     authenticated: number | null
-    sandboxCreate: number | null
-    sandboxLifecycle: number | null
+    boxCreate: number | null
+    boxLifecycle: number | null
     authenticatedTtlSeconds: number | null
-    sandboxCreateTtlSeconds: number | null
-    sandboxLifecycleTtlSeconds: number | null
+    boxCreateTtlSeconds: number | null
+    boxLifecycleTtlSeconds: number | null
   } | null> {
     // If OrganizationService is not available (e.g., in UserModule), use default rate limits
     if (!this.organizationService) {
@@ -175,11 +175,11 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
       if (organization) {
         const limits = {
           authenticated: organization.authenticatedRateLimit,
-          sandboxCreate: organization.sandboxCreateRateLimit,
-          sandboxLifecycle: organization.sandboxLifecycleRateLimit,
+          boxCreate: organization.boxCreateRateLimit,
+          boxLifecycle: organization.boxLifecycleRateLimit,
           authenticatedTtlSeconds: organization.authenticatedRateLimitTtlSeconds,
-          sandboxCreateTtlSeconds: organization.sandboxCreateRateLimitTtlSeconds,
-          sandboxLifecycleTtlSeconds: organization.sandboxLifecycleRateLimitTtlSeconds,
+          boxCreateTtlSeconds: organization.boxCreateRateLimitTtlSeconds,
+          boxLifecycleTtlSeconds: organization.boxLifecycleRateLimitTtlSeconds,
         }
         await this.redis.set(cacheKey, JSON.stringify(limits), 'EX', 60)
         return limits

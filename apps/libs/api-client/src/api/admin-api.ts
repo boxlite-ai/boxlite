@@ -18,27 +18,26 @@ import type { AxiosPromise, AxiosInstance, RawAxiosRequestConfig } from 'axios';
 import globalAxios from 'axios';
 // Some imports not used depending on template conditions
 // @ts-ignore
-import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObject, setBearerAuthToObject, setOAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction } from '../common';
+import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObject, setBearerAuthToObject, setOAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction, replaceWithSerializableTypeIfNeeded } from '../common';
 // @ts-ignore
 import { BASE_PATH, COLLECTION_FORMATS, type RequestArgs, BaseAPI, RequiredError, operationServerMap } from '../base';
 // @ts-ignore
 import type { AdminCreateRunner } from '../models';
 // @ts-ignore
+import type { Box } from '../models';
+// @ts-ignore
 import type { CreateRunnerResponse } from '../models';
 // @ts-ignore
 import type { RunnerFull } from '../models';
-// @ts-ignore
-import type { Sandbox } from '../models';
 /**
  * AdminApi - axios parameter creator
- * @export
  */
 export const AdminApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         *
+         * 
          * @summary Create runner
-         * @param {AdminCreateRunner} adminCreateRunner
+         * @param {AdminCreateRunner} adminCreateRunner 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -63,9 +62,8 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
@@ -78,7 +76,7 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         *
+         * 
          * @summary Delete runner
          * @param {string} id Runner ID
          * @param {*} [options] Override http request option.
@@ -88,7 +86,7 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             // verify required parameter 'id' is not null or undefined
             assertParamExists('adminDeleteRunner', 'id', id)
             const localVarPath = `/admin/runners/{id}`
-                .replace(`{${"id"}}`, encodeURIComponent(String(id)));
+                .replace('{id}', encodeURIComponent(String(id)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -107,7 +105,6 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             // authentication oauth2 required
 
 
-
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
@@ -118,7 +115,7 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         *
+         * 
          * @summary Get runner by ID
          * @param {string} id Runner ID
          * @param {*} [options] Override http request option.
@@ -128,7 +125,7 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             // verify required parameter 'id' is not null or undefined
             assertParamExists('adminGetRunnerById', 'id', id)
             const localVarPath = `/admin/runners/{id}`
-                .replace(`{${"id"}}`, encodeURIComponent(String(id)));
+                .replace('{id}', encodeURIComponent(String(id)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -146,7 +143,7 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
@@ -158,7 +155,7 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         *
+         * 
          * @summary List all runners
          * @param {string} [regionId] Filter runners by region ID
          * @param {*} [options] Override http request option.
@@ -187,7 +184,7 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
                 localVarQueryParameter['regionId'] = regionId;
             }
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
@@ -199,17 +196,17 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         *
-         * @summary Recover sandbox from error state as an admin
-         * @param {string} sandboxId ID of the sandbox
+         * 
+         * @summary Recover box from error state as an admin
+         * @param {string} boxId ID of the box
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        adminRecoverSandbox: async (sandboxId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('adminRecoverSandbox', 'sandboxId', sandboxId)
-            const localVarPath = `/admin/sandbox/{sandboxId}/recover`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+        adminRecoverBox: async (boxId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('adminRecoverBox', 'boxId', boxId)
+            const localVarPath = `/admin/box/{boxId}/recover`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -227,7 +224,7 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
@@ -239,9 +236,9 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         *
+         * 
          * @summary Update runner scheduling status
-         * @param {string} id
+         * @param {string} id 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -249,7 +246,7 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             // verify required parameter 'id' is not null or undefined
             assertParamExists('adminUpdateRunnerScheduling', 'id', id)
             const localVarPath = `/admin/runners/{id}/scheduling`
-                .replace(`{${"id"}}`, encodeURIComponent(String(id)));
+                .replace('{id}', encodeURIComponent(String(id)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -268,7 +265,6 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             // authentication oauth2 required
 
 
-
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
@@ -283,15 +279,14 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
 
 /**
  * AdminApi - functional programming interface
- * @export
  */
 export const AdminApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = AdminApiAxiosParamCreator(configuration)
     return {
         /**
-         *
+         * 
          * @summary Create runner
-         * @param {AdminCreateRunner} adminCreateRunner
+         * @param {AdminCreateRunner} adminCreateRunner 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -302,7 +297,7 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Delete runner
          * @param {string} id Runner ID
          * @param {*} [options] Override http request option.
@@ -315,7 +310,7 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get runner by ID
          * @param {string} id Runner ID
          * @param {*} [options] Override http request option.
@@ -328,7 +323,7 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary List all runners
          * @param {string} [regionId] Filter runners by region ID
          * @param {*} [options] Override http request option.
@@ -341,22 +336,22 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
-         * @summary Recover sandbox from error state as an admin
-         * @param {string} sandboxId ID of the sandbox
+         * 
+         * @summary Recover box from error state as an admin
+         * @param {string} boxId ID of the box
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async adminRecoverSandbox(sandboxId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Sandbox>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.adminRecoverSandbox(sandboxId, options);
+        async adminRecoverBox(boxId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Box>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminRecoverBox(boxId, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminRecoverSandbox']?.[localVarOperationServerIndex]?.url;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminRecoverBox']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Update runner scheduling status
-         * @param {string} id
+         * @param {string} id 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -371,15 +366,14 @@ export const AdminApiFp = function(configuration?: Configuration) {
 
 /**
  * AdminApi - factory interface
- * @export
  */
 export const AdminApiFactory = function (configuration?: Configuration, basePath?: string, axios?: AxiosInstance) {
     const localVarFp = AdminApiFp(configuration)
     return {
         /**
-         *
+         * 
          * @summary Create runner
-         * @param {AdminCreateRunner} adminCreateRunner
+         * @param {AdminCreateRunner} adminCreateRunner 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -387,7 +381,7 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminCreateRunner(adminCreateRunner, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Delete runner
          * @param {string} id Runner ID
          * @param {*} [options] Override http request option.
@@ -397,7 +391,7 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminDeleteRunner(id, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get runner by ID
          * @param {string} id Runner ID
          * @param {*} [options] Override http request option.
@@ -407,7 +401,7 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminGetRunnerById(id, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary List all runners
          * @param {string} [regionId] Filter runners by region ID
          * @param {*} [options] Override http request option.
@@ -417,19 +411,19 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminListRunners(regionId, options).then((request) => request(axios, basePath));
         },
         /**
-         *
-         * @summary Recover sandbox from error state as an admin
-         * @param {string} sandboxId ID of the sandbox
+         * 
+         * @summary Recover box from error state as an admin
+         * @param {string} boxId ID of the box
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        adminRecoverSandbox(sandboxId: string, options?: RawAxiosRequestConfig): AxiosPromise<Sandbox> {
-            return localVarFp.adminRecoverSandbox(sandboxId, options).then((request) => request(axios, basePath));
+        adminRecoverBox(boxId: string, options?: RawAxiosRequestConfig): AxiosPromise<Box> {
+            return localVarFp.adminRecoverBox(boxId, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Update runner scheduling status
-         * @param {string} id
+         * @param {string} id 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -441,80 +435,72 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
 
 /**
  * AdminApi - object-oriented interface
- * @export
- * @class AdminApi
- * @extends {BaseAPI}
  */
 export class AdminApi extends BaseAPI {
     /**
-     *
+     * 
      * @summary Create runner
-     * @param {AdminCreateRunner} adminCreateRunner
+     * @param {AdminCreateRunner} adminCreateRunner 
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof AdminApi
      */
     public adminCreateRunner(adminCreateRunner: AdminCreateRunner, options?: RawAxiosRequestConfig) {
         return AdminApiFp(this.configuration).adminCreateRunner(adminCreateRunner, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Delete runner
      * @param {string} id Runner ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof AdminApi
      */
     public adminDeleteRunner(id: string, options?: RawAxiosRequestConfig) {
         return AdminApiFp(this.configuration).adminDeleteRunner(id, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Get runner by ID
      * @param {string} id Runner ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof AdminApi
      */
     public adminGetRunnerById(id: string, options?: RawAxiosRequestConfig) {
         return AdminApiFp(this.configuration).adminGetRunnerById(id, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary List all runners
      * @param {string} [regionId] Filter runners by region ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof AdminApi
      */
     public adminListRunners(regionId?: string, options?: RawAxiosRequestConfig) {
         return AdminApiFp(this.configuration).adminListRunners(regionId, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
-     * @summary Recover sandbox from error state as an admin
-     * @param {string} sandboxId ID of the sandbox
+     * 
+     * @summary Recover box from error state as an admin
+     * @param {string} boxId ID of the box
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof AdminApi
      */
-    public adminRecoverSandbox(sandboxId: string, options?: RawAxiosRequestConfig) {
-        return AdminApiFp(this.configuration).adminRecoverSandbox(sandboxId, options).then((request) => request(this.axios, this.basePath));
+    public adminRecoverBox(boxId: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminRecoverBox(boxId, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Update runner scheduling status
-     * @param {string} id
+     * @param {string} id 
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof AdminApi
      */
     public adminUpdateRunnerScheduling(id: string, options?: RawAxiosRequestConfig) {
         return AdminApiFp(this.configuration).adminUpdateRunnerScheduling(id, options).then((request) => request(this.axios, this.basePath));
     }
 }
+

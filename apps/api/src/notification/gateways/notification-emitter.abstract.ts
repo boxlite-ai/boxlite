@@ -4,23 +4,23 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { SandboxDto } from '../../sandbox/dto/sandbox.dto'
-import { SandboxState } from '../../sandbox/enums/sandbox-state.enum'
-import { SandboxDesiredState } from '../../sandbox/enums/sandbox-desired-state.enum'
-import { SnapshotDto } from '../../sandbox/dto/snapshot.dto'
-import { SnapshotState } from '../../sandbox/enums/snapshot-state.enum'
-import { VolumeDto } from '../../sandbox/dto/volume.dto'
-import { VolumeState } from '../../sandbox/enums/volume-state.enum'
-import { RunnerDto } from '../../sandbox/dto/runner.dto'
-import { RunnerState } from '../../sandbox/enums/runner-state.enum'
+import { BoxDto } from '../../box/dto/box.dto'
+import { BoxState } from '../../box/enums/box-state.enum'
+import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
+import { SnapshotDto } from '../../box/dto/snapshot.dto'
+import { SnapshotState } from '../../box/enums/snapshot-state.enum'
+import { VolumeDto } from '../../box/dto/volume.dto'
+import { VolumeState } from '../../box/enums/volume-state.enum'
+import { RunnerDto } from '../../box/dto/runner.dto'
+import { RunnerState } from '../../box/enums/runner-state.enum'
 
 export abstract class NotificationEmitter {
-  abstract emitSandboxCreated(sandbox: SandboxDto): void
-  abstract emitSandboxStateUpdated(sandbox: SandboxDto, oldState: SandboxState, newState: SandboxState): void
-  abstract emitSandboxDesiredStateUpdated(
-    sandbox: SandboxDto,
-    oldDesiredState: SandboxDesiredState,
-    newDesiredState: SandboxDesiredState,
+  abstract emitBoxCreated(box: BoxDto): void
+  abstract emitBoxStateUpdated(box: BoxDto, oldState: BoxState, newState: BoxState): void
+  abstract emitBoxDesiredStateUpdated(
+    box: BoxDto,
+    oldDesiredState: BoxDesiredState,
+    newDesiredState: BoxDesiredState,
   ): void
   abstract emitSnapshotCreated(snapshot: SnapshotDto): void
   abstract emitSnapshotStateUpdated(snapshot: SnapshotDto, oldState: SnapshotState, newState: SnapshotState): void

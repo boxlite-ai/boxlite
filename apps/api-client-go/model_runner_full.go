@@ -40,7 +40,7 @@ type RunnerFull struct {
 	// The type of GPU
 	GpuType *string `json:"gpuType,omitempty"`
 	// The class of the runner
-	Class SandboxClass `json:"class"`
+	Class BoxClass `json:"class"`
 	// Current CPU usage percentage
 	CurrentCpuUsagePercentage *float32 `json:"currentCpuUsagePercentage,omitempty"`
 	// Current RAM usage percentage
@@ -55,8 +55,8 @@ type RunnerFull struct {
 	CurrentAllocatedDiskGiB *float32 `json:"currentAllocatedDiskGiB,omitempty"`
 	// Current snapshot count
 	CurrentSnapshotCount *float32 `json:"currentSnapshotCount,omitempty"`
-	// Current number of started sandboxes
-	CurrentStartedSandboxes *float32 `json:"currentStartedSandboxes,omitempty"`
+	// Current number of started boxes
+	CurrentStartedBoxes *float32 `json:"currentStartedBoxes,omitempty"`
 	// Runner availability score
 	AvailabilityScore *float32 `json:"availabilityScore,omitempty"`
 	// The region of the runner
@@ -95,7 +95,7 @@ type _RunnerFull RunnerFull
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewRunnerFull(id string, cpu float32, memory float32, disk float32, class SandboxClass, region string, name string, state RunnerState, unschedulable bool, createdAt string, updatedAt string, version string, apiVersion string, apiKey string) *RunnerFull {
+func NewRunnerFull(id string, cpu float32, memory float32, disk float32, class BoxClass, region string, name string, state RunnerState, unschedulable bool, createdAt string, updatedAt string, version string, apiVersion string, apiKey string) *RunnerFull {
 	this := RunnerFull{}
 	this.Id = id
 	this.Cpu = cpu
@@ -379,9 +379,9 @@ func (o *RunnerFull) SetGpuType(v string) {
 }
 
 // GetClass returns the Class field value
-func (o *RunnerFull) GetClass() SandboxClass {
+func (o *RunnerFull) GetClass() BoxClass {
 	if o == nil {
-		var ret SandboxClass
+		var ret BoxClass
 		return ret
 	}
 
@@ -390,7 +390,7 @@ func (o *RunnerFull) GetClass() SandboxClass {
 
 // GetClassOk returns a tuple with the Class field value
 // and a boolean to check if the value has been set.
-func (o *RunnerFull) GetClassOk() (*SandboxClass, bool) {
+func (o *RunnerFull) GetClassOk() (*BoxClass, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -398,7 +398,7 @@ func (o *RunnerFull) GetClassOk() (*SandboxClass, bool) {
 }
 
 // SetClass sets field value
-func (o *RunnerFull) SetClass(v SandboxClass) {
+func (o *RunnerFull) SetClass(v BoxClass) {
 	o.Class = v
 }
 
@@ -626,36 +626,36 @@ func (o *RunnerFull) SetCurrentSnapshotCount(v float32) {
 	o.CurrentSnapshotCount = &v
 }
 
-// GetCurrentStartedSandboxes returns the CurrentStartedSandboxes field value if set, zero value otherwise.
-func (o *RunnerFull) GetCurrentStartedSandboxes() float32 {
-	if o == nil || IsNil(o.CurrentStartedSandboxes) {
+// GetCurrentStartedBoxes returns the CurrentStartedBoxes field value if set, zero value otherwise.
+func (o *RunnerFull) GetCurrentStartedBoxes() float32 {
+	if o == nil || IsNil(o.CurrentStartedBoxes) {
 		var ret float32
 		return ret
 	}
-	return *o.CurrentStartedSandboxes
+	return *o.CurrentStartedBoxes
 }
 
-// GetCurrentStartedSandboxesOk returns a tuple with the CurrentStartedSandboxes field value if set, nil otherwise
+// GetCurrentStartedBoxesOk returns a tuple with the CurrentStartedBoxes field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *RunnerFull) GetCurrentStartedSandboxesOk() (*float32, bool) {
-	if o == nil || IsNil(o.CurrentStartedSandboxes) {
+func (o *RunnerFull) GetCurrentStartedBoxesOk() (*float32, bool) {
+	if o == nil || IsNil(o.CurrentStartedBoxes) {
 		return nil, false
 	}
-	return o.CurrentStartedSandboxes, true
+	return o.CurrentStartedBoxes, true
 }
 
-// HasCurrentStartedSandboxes returns a boolean if a field has been set.
-func (o *RunnerFull) HasCurrentStartedSandboxes() bool {
-	if o != nil && !IsNil(o.CurrentStartedSandboxes) {
+// HasCurrentStartedBoxes returns a boolean if a field has been set.
+func (o *RunnerFull) HasCurrentStartedBoxes() bool {
+	if o != nil && !IsNil(o.CurrentStartedBoxes) {
 		return true
 	}
 
 	return false
 }
 
-// SetCurrentStartedSandboxes gets a reference to the given float32 and assigns it to the CurrentStartedSandboxes field.
-func (o *RunnerFull) SetCurrentStartedSandboxes(v float32) {
-	o.CurrentStartedSandboxes = &v
+// SetCurrentStartedBoxes gets a reference to the given float32 and assigns it to the CurrentStartedBoxes field.
+func (o *RunnerFull) SetCurrentStartedBoxes(v float32) {
+	o.CurrentStartedBoxes = &v
 }
 
 // GetAvailabilityScore returns the AvailabilityScore field value if set, zero value otherwise.
@@ -1062,8 +1062,8 @@ func (o RunnerFull) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.CurrentSnapshotCount) {
 		toSerialize["currentSnapshotCount"] = o.CurrentSnapshotCount
 	}
-	if !IsNil(o.CurrentStartedSandboxes) {
-		toSerialize["currentStartedSandboxes"] = o.CurrentStartedSandboxes
+	if !IsNil(o.CurrentStartedBoxes) {
+		toSerialize["currentStartedBoxes"] = o.CurrentStartedBoxes
 	}
 	if !IsNil(o.AvailabilityScore) {
 		toSerialize["availabilityScore"] = o.AvailabilityScore
@@ -1159,7 +1159,7 @@ func (o *RunnerFull) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "currentAllocatedMemoryGiB")
 		delete(additionalProperties, "currentAllocatedDiskGiB")
 		delete(additionalProperties, "currentSnapshotCount")
-		delete(additionalProperties, "currentStartedSandboxes")
+		delete(additionalProperties, "currentStartedBoxes")
 		delete(additionalProperties, "availabilityScore")
 		delete(additionalProperties, "region")
 		delete(additionalProperties, "name")
@@ -1214,3 +1214,5 @@ func (v *NullableRunnerFull) UnmarshalJSON(src []byte) error {
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }
+
+

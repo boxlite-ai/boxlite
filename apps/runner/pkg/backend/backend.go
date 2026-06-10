@@ -2,7 +2,7 @@
 // Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
-// Package backend defines the SandboxBackend interface abstracting
+// Package backend defines the BoxBackend interface abstracting
 // Docker and BoxLite runtime operations for the executor.
 package backend
 
@@ -27,19 +27,19 @@ type RegistryDigest struct {
 	Size   int64
 }
 
-// SandboxBackend abstracts sandbox lifecycle operations.
+// BoxBackend abstracts box lifecycle operations.
 // Implemented by DockerAdapter and BoxliteAdapter.
-type SandboxBackend interface {
-	// Sandbox lifecycle — returns (containerId, daemonVersion, error)
-	Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (string, string, error)
+type BoxBackend interface {
+	// Box lifecycle — returns (containerId, daemonVersion, error)
+	Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error)
 	// Start returns daemonVersion
-	Start(ctx context.Context, sandboxId string, authToken *string, metadata map[string]string) (string, error)
-	Stop(ctx context.Context, sandboxId string, force bool) error
-	Destroy(ctx context.Context, sandboxId string) error
-	Resize(ctx context.Context, sandboxId string, resizeDto dto.ResizeSandboxDTO) error
-	RecoverSandbox(ctx context.Context, sandboxId string, recoverDto dto.RecoverSandboxDTO) error
-	UpdateNetworkSettings(ctx context.Context, sandboxId string, settings dto.UpdateNetworkSettingsDTO) error
-	GetSandboxState(ctx context.Context, sandboxId string) (enums.SandboxState, error)
+	Start(ctx context.Context, boxId string, authToken *string, metadata map[string]string) (string, error)
+	Stop(ctx context.Context, boxId string, force bool) error
+	Destroy(ctx context.Context, boxId string) error
+	Resize(ctx context.Context, boxId string, resizeDto dto.ResizeBoxDTO) error
+	RecoverBox(ctx context.Context, boxId string, recoverDto dto.RecoverBoxDTO) error
+	UpdateNetworkSettings(ctx context.Context, boxId string, settings dto.UpdateNetworkSettingsDTO) error
+	GetBoxState(ctx context.Context, boxId string) (enums.BoxState, error)
 
 	// Image/snapshot operations
 	PullSnapshot(ctx context.Context, req dto.PullSnapshotRequestDTO) error
@@ -49,7 +49,7 @@ type SandboxBackend interface {
 	InspectImageInRegistry(ctx context.Context, imageName string, registry *dto.RegistryDTO) (*RegistryDigest, error)
 
 	// Backup
-	CreateBackup(ctx context.Context, sandboxId string, backupDto dto.CreateBackupDTO) error
+	CreateBackup(ctx context.Context, boxId string, backupDto dto.CreateBackupDTO) error
 
 	// Health
 	Ping(ctx context.Context) error

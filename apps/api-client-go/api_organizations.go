@@ -175,17 +175,17 @@ type OrganizationsAPI interface {
 	GetOrganizationExecute(r OrganizationsAPIGetOrganizationRequest) (*Organization, *http.Response, error)
 
 	/*
-	GetOrganizationBySandboxId Get organization by sandbox ID
+	GetOrganizationByBoxId Get organization by box ID
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId Sandbox ID
-	@return OrganizationsAPIGetOrganizationBySandboxIdRequest
+	@param boxId Box ID
+	@return OrganizationsAPIGetOrganizationByBoxIdRequest
 	*/
-	GetOrganizationBySandboxId(ctx context.Context, sandboxId string) OrganizationsAPIGetOrganizationBySandboxIdRequest
+	GetOrganizationByBoxId(ctx context.Context, boxId string) OrganizationsAPIGetOrganizationByBoxIdRequest
 
-	// GetOrganizationBySandboxIdExecute executes the request
+	// GetOrganizationByBoxIdExecute executes the request
 	//  @return Organization
-	GetOrganizationBySandboxIdExecute(r OrganizationsAPIGetOrganizationBySandboxIdRequest) (*Organization, *http.Response, error)
+	GetOrganizationByBoxIdExecute(r OrganizationsAPIGetOrganizationByBoxIdRequest) (*Organization, *http.Response, error)
 
 	/*
 	GetOrganizationInvitationsCountForAuthenticatedUser Get count of organization invitations for authenticated user
@@ -200,17 +200,17 @@ type OrganizationsAPI interface {
 	GetOrganizationInvitationsCountForAuthenticatedUserExecute(r OrganizationsAPIGetOrganizationInvitationsCountForAuthenticatedUserRequest) (float32, *http.Response, error)
 
 	/*
-	GetOrganizationOtelConfigBySandboxAuthToken Get organization OTEL config by sandbox auth token
+	GetOrganizationOtelConfigByBoxAuthToken Get organization OTEL config by box auth token
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param authToken Sandbox Auth Token
-	@return OrganizationsAPIGetOrganizationOtelConfigBySandboxAuthTokenRequest
+	@param authToken Box Auth Token
+	@return OrganizationsAPIGetOrganizationOtelConfigByBoxAuthTokenRequest
 	*/
-	GetOrganizationOtelConfigBySandboxAuthToken(ctx context.Context, authToken string) OrganizationsAPIGetOrganizationOtelConfigBySandboxAuthTokenRequest
+	GetOrganizationOtelConfigByBoxAuthToken(ctx context.Context, authToken string) OrganizationsAPIGetOrganizationOtelConfigByBoxAuthTokenRequest
 
-	// GetOrganizationOtelConfigBySandboxAuthTokenExecute executes the request
+	// GetOrganizationOtelConfigByBoxAuthTokenExecute executes the request
 	//  @return OtelConfig
-	GetOrganizationOtelConfigBySandboxAuthTokenExecute(r OrganizationsAPIGetOrganizationOtelConfigBySandboxAuthTokenRequest) (*OtelConfig, *http.Response, error)
+	GetOrganizationOtelConfigByBoxAuthTokenExecute(r OrganizationsAPIGetOrganizationOtelConfigByBoxAuthTokenRequest) (*OtelConfig, *http.Response, error)
 
 	/*
 	GetOrganizationUsageOverview Get organization current usage overview
@@ -239,17 +239,17 @@ type OrganizationsAPI interface {
 	GetRegionByIdExecute(r OrganizationsAPIGetRegionByIdRequest) (*Region, *http.Response, error)
 
 	/*
-	GetRegionQuotaBySandboxId Get region quota by sandbox ID
+	GetRegionQuotaByBoxId Get region quota by box ID
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param sandboxId Sandbox ID
-	@return OrganizationsAPIGetRegionQuotaBySandboxIdRequest
+	@param boxId Box ID
+	@return OrganizationsAPIGetRegionQuotaByBoxIdRequest
 	*/
-	GetRegionQuotaBySandboxId(ctx context.Context, sandboxId string) OrganizationsAPIGetRegionQuotaBySandboxIdRequest
+	GetRegionQuotaByBoxId(ctx context.Context, boxId string) OrganizationsAPIGetRegionQuotaByBoxIdRequest
 
-	// GetRegionQuotaBySandboxIdExecute executes the request
+	// GetRegionQuotaByBoxIdExecute executes the request
 	//  @return RegionQuota
-	GetRegionQuotaBySandboxIdExecute(r OrganizationsAPIGetRegionQuotaBySandboxIdRequest) (*RegionQuota, *http.Response, error)
+	GetRegionQuotaByBoxIdExecute(r OrganizationsAPIGetRegionQuotaByBoxIdRequest) (*RegionQuota, *http.Response, error)
 
 	/*
 	LeaveOrganization Leave organization
@@ -428,6 +428,18 @@ type OrganizationsAPI interface {
 	UpdateAccessForOrganizationMemberExecute(r OrganizationsAPIUpdateAccessForOrganizationMemberRequest) (*OrganizationUser, *http.Response, error)
 
 	/*
+	UpdateBoxDefaultLimitedNetworkEgress Update box default limited network egress
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param organizationId Organization ID
+	@return OrganizationsAPIUpdateBoxDefaultLimitedNetworkEgressRequest
+	*/
+	UpdateBoxDefaultLimitedNetworkEgress(ctx context.Context, organizationId string) OrganizationsAPIUpdateBoxDefaultLimitedNetworkEgressRequest
+
+	// UpdateBoxDefaultLimitedNetworkEgressExecute executes the request
+	UpdateBoxDefaultLimitedNetworkEgressExecute(r OrganizationsAPIUpdateBoxDefaultLimitedNetworkEgressRequest) (*http.Response, error)
+
+	/*
 	UpdateExperimentalConfig Update experimental configuration
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
@@ -503,18 +515,6 @@ type OrganizationsAPI interface {
 
 	// UpdateRegionExecute executes the request
 	UpdateRegionExecute(r OrganizationsAPIUpdateRegionRequest) (*http.Response, error)
-
-	/*
-	UpdateSandboxDefaultLimitedNetworkEgress Update sandbox default limited network egress
-
-	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param organizationId Organization ID
-	@return OrganizationsAPIUpdateSandboxDefaultLimitedNetworkEgressRequest
-	*/
-	UpdateSandboxDefaultLimitedNetworkEgress(ctx context.Context, organizationId string) OrganizationsAPIUpdateSandboxDefaultLimitedNetworkEgressRequest
-
-	// UpdateSandboxDefaultLimitedNetworkEgressExecute executes the request
-	UpdateSandboxDefaultLimitedNetworkEgressExecute(r OrganizationsAPIUpdateSandboxDefaultLimitedNetworkEgressRequest) (*http.Response, error)
 }
 
 // OrganizationsAPIService OrganizationsAPI service
@@ -1734,34 +1734,34 @@ func (a *OrganizationsAPIService) GetOrganizationExecute(r OrganizationsAPIGetOr
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
-type OrganizationsAPIGetOrganizationBySandboxIdRequest struct {
+type OrganizationsAPIGetOrganizationByBoxIdRequest struct {
 	ctx context.Context
 	ApiService OrganizationsAPI
-	sandboxId string
+	boxId string
 }
 
-func (r OrganizationsAPIGetOrganizationBySandboxIdRequest) Execute() (*Organization, *http.Response, error) {
-	return r.ApiService.GetOrganizationBySandboxIdExecute(r)
+func (r OrganizationsAPIGetOrganizationByBoxIdRequest) Execute() (*Organization, *http.Response, error) {
+	return r.ApiService.GetOrganizationByBoxIdExecute(r)
 }
 
 /*
-GetOrganizationBySandboxId Get organization by sandbox ID
+GetOrganizationByBoxId Get organization by box ID
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId Sandbox ID
- @return OrganizationsAPIGetOrganizationBySandboxIdRequest
+ @param boxId Box ID
+ @return OrganizationsAPIGetOrganizationByBoxIdRequest
 */
-func (a *OrganizationsAPIService) GetOrganizationBySandboxId(ctx context.Context, sandboxId string) OrganizationsAPIGetOrganizationBySandboxIdRequest {
-	return OrganizationsAPIGetOrganizationBySandboxIdRequest{
+func (a *OrganizationsAPIService) GetOrganizationByBoxId(ctx context.Context, boxId string) OrganizationsAPIGetOrganizationByBoxIdRequest {
+	return OrganizationsAPIGetOrganizationByBoxIdRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
 // Execute executes the request
 //  @return Organization
-func (a *OrganizationsAPIService) GetOrganizationBySandboxIdExecute(r OrganizationsAPIGetOrganizationBySandboxIdRequest) (*Organization, *http.Response, error) {
+func (a *OrganizationsAPIService) GetOrganizationByBoxIdExecute(r OrganizationsAPIGetOrganizationByBoxIdRequest) (*Organization, *http.Response, error) {
 	var (
 		localVarHTTPMethod   = http.MethodGet
 		localVarPostBody     interface{}
@@ -1769,13 +1769,13 @@ func (a *OrganizationsAPIService) GetOrganizationBySandboxIdExecute(r Organizati
 		localVarReturnValue  *Organization
 	)
 
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "OrganizationsAPIService.GetOrganizationBySandboxId")
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "OrganizationsAPIService.GetOrganizationByBoxId")
 	if err != nil {
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/organizations/by-sandbox-id/{sandboxId}"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/organizations/by-box-id/{boxId}"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -1932,25 +1932,25 @@ func (a *OrganizationsAPIService) GetOrganizationInvitationsCountForAuthenticate
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
-type OrganizationsAPIGetOrganizationOtelConfigBySandboxAuthTokenRequest struct {
+type OrganizationsAPIGetOrganizationOtelConfigByBoxAuthTokenRequest struct {
 	ctx context.Context
 	ApiService OrganizationsAPI
 	authToken string
 }
 
-func (r OrganizationsAPIGetOrganizationOtelConfigBySandboxAuthTokenRequest) Execute() (*OtelConfig, *http.Response, error) {
-	return r.ApiService.GetOrganizationOtelConfigBySandboxAuthTokenExecute(r)
+func (r OrganizationsAPIGetOrganizationOtelConfigByBoxAuthTokenRequest) Execute() (*OtelConfig, *http.Response, error) {
+	return r.ApiService.GetOrganizationOtelConfigByBoxAuthTokenExecute(r)
 }
 
 /*
-GetOrganizationOtelConfigBySandboxAuthToken Get organization OTEL config by sandbox auth token
+GetOrganizationOtelConfigByBoxAuthToken Get organization OTEL config by box auth token
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param authToken Sandbox Auth Token
- @return OrganizationsAPIGetOrganizationOtelConfigBySandboxAuthTokenRequest
+ @param authToken Box Auth Token
+ @return OrganizationsAPIGetOrganizationOtelConfigByBoxAuthTokenRequest
 */
-func (a *OrganizationsAPIService) GetOrganizationOtelConfigBySandboxAuthToken(ctx context.Context, authToken string) OrganizationsAPIGetOrganizationOtelConfigBySandboxAuthTokenRequest {
-	return OrganizationsAPIGetOrganizationOtelConfigBySandboxAuthTokenRequest{
+func (a *OrganizationsAPIService) GetOrganizationOtelConfigByBoxAuthToken(ctx context.Context, authToken string) OrganizationsAPIGetOrganizationOtelConfigByBoxAuthTokenRequest {
+	return OrganizationsAPIGetOrganizationOtelConfigByBoxAuthTokenRequest{
 		ApiService: a,
 		ctx: ctx,
 		authToken: authToken,
@@ -1959,7 +1959,7 @@ func (a *OrganizationsAPIService) GetOrganizationOtelConfigBySandboxAuthToken(ct
 
 // Execute executes the request
 //  @return OtelConfig
-func (a *OrganizationsAPIService) GetOrganizationOtelConfigBySandboxAuthTokenExecute(r OrganizationsAPIGetOrganizationOtelConfigBySandboxAuthTokenRequest) (*OtelConfig, *http.Response, error) {
+func (a *OrganizationsAPIService) GetOrganizationOtelConfigByBoxAuthTokenExecute(r OrganizationsAPIGetOrganizationOtelConfigByBoxAuthTokenRequest) (*OtelConfig, *http.Response, error) {
 	var (
 		localVarHTTPMethod   = http.MethodGet
 		localVarPostBody     interface{}
@@ -1967,12 +1967,12 @@ func (a *OrganizationsAPIService) GetOrganizationOtelConfigBySandboxAuthTokenExe
 		localVarReturnValue  *OtelConfig
 	)
 
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "OrganizationsAPIService.GetOrganizationOtelConfigBySandboxAuthToken")
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "OrganizationsAPIService.GetOrganizationOtelConfigByBoxAuthToken")
 	if err != nil {
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/organizations/otel-config/by-sandbox-auth-token/{authToken}"
+	localVarPath := localBasePath + "/organizations/otel-config/by-box-auth-token/{authToken}"
 	localVarPath = strings.Replace(localVarPath, "{"+"authToken"+"}", url.PathEscape(parameterValueToString(r.authToken, "authToken")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -2245,34 +2245,34 @@ func (a *OrganizationsAPIService) GetRegionByIdExecute(r OrganizationsAPIGetRegi
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
-type OrganizationsAPIGetRegionQuotaBySandboxIdRequest struct {
+type OrganizationsAPIGetRegionQuotaByBoxIdRequest struct {
 	ctx context.Context
 	ApiService OrganizationsAPI
-	sandboxId string
+	boxId string
 }
 
-func (r OrganizationsAPIGetRegionQuotaBySandboxIdRequest) Execute() (*RegionQuota, *http.Response, error) {
-	return r.ApiService.GetRegionQuotaBySandboxIdExecute(r)
+func (r OrganizationsAPIGetRegionQuotaByBoxIdRequest) Execute() (*RegionQuota, *http.Response, error) {
+	return r.ApiService.GetRegionQuotaByBoxIdExecute(r)
 }
 
 /*
-GetRegionQuotaBySandboxId Get region quota by sandbox ID
+GetRegionQuotaByBoxId Get region quota by box ID
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param sandboxId Sandbox ID
- @return OrganizationsAPIGetRegionQuotaBySandboxIdRequest
+ @param boxId Box ID
+ @return OrganizationsAPIGetRegionQuotaByBoxIdRequest
 */
-func (a *OrganizationsAPIService) GetRegionQuotaBySandboxId(ctx context.Context, sandboxId string) OrganizationsAPIGetRegionQuotaBySandboxIdRequest {
-	return OrganizationsAPIGetRegionQuotaBySandboxIdRequest{
+func (a *OrganizationsAPIService) GetRegionQuotaByBoxId(ctx context.Context, boxId string) OrganizationsAPIGetRegionQuotaByBoxIdRequest {
+	return OrganizationsAPIGetRegionQuotaByBoxIdRequest{
 		ApiService: a,
 		ctx: ctx,
-		sandboxId: sandboxId,
+		boxId: boxId,
 	}
 }
 
 // Execute executes the request
 //  @return RegionQuota
-func (a *OrganizationsAPIService) GetRegionQuotaBySandboxIdExecute(r OrganizationsAPIGetRegionQuotaBySandboxIdRequest) (*RegionQuota, *http.Response, error) {
+func (a *OrganizationsAPIService) GetRegionQuotaByBoxIdExecute(r OrganizationsAPIGetRegionQuotaByBoxIdRequest) (*RegionQuota, *http.Response, error) {
 	var (
 		localVarHTTPMethod   = http.MethodGet
 		localVarPostBody     interface{}
@@ -2280,13 +2280,13 @@ func (a *OrganizationsAPIService) GetRegionQuotaBySandboxIdExecute(r Organizatio
 		localVarReturnValue  *RegionQuota
 	)
 
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "OrganizationsAPIService.GetRegionQuotaBySandboxId")
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "OrganizationsAPIService.GetRegionQuotaByBoxId")
 	if err != nil {
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/organizations/region-quota/by-sandbox-id/{sandboxId}"
-	localVarPath = strings.Replace(localVarPath, "{"+"sandboxId"+"}", url.PathEscape(parameterValueToString(r.sandboxId, "sandboxId")), -1)
+	localVarPath := localBasePath + "/organizations/region-quota/by-box-id/{boxId}"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -3778,6 +3778,107 @@ func (a *OrganizationsAPIService) UpdateAccessForOrganizationMemberExecute(r Org
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
+type OrganizationsAPIUpdateBoxDefaultLimitedNetworkEgressRequest struct {
+	ctx context.Context
+	ApiService OrganizationsAPI
+	organizationId string
+	organizationBoxDefaultLimitedNetworkEgress *OrganizationBoxDefaultLimitedNetworkEgress
+}
+
+func (r OrganizationsAPIUpdateBoxDefaultLimitedNetworkEgressRequest) OrganizationBoxDefaultLimitedNetworkEgress(organizationBoxDefaultLimitedNetworkEgress OrganizationBoxDefaultLimitedNetworkEgress) OrganizationsAPIUpdateBoxDefaultLimitedNetworkEgressRequest {
+	r.organizationBoxDefaultLimitedNetworkEgress = &organizationBoxDefaultLimitedNetworkEgress
+	return r
+}
+
+func (r OrganizationsAPIUpdateBoxDefaultLimitedNetworkEgressRequest) Execute() (*http.Response, error) {
+	return r.ApiService.UpdateBoxDefaultLimitedNetworkEgressExecute(r)
+}
+
+/*
+UpdateBoxDefaultLimitedNetworkEgress Update box default limited network egress
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param organizationId Organization ID
+ @return OrganizationsAPIUpdateBoxDefaultLimitedNetworkEgressRequest
+*/
+func (a *OrganizationsAPIService) UpdateBoxDefaultLimitedNetworkEgress(ctx context.Context, organizationId string) OrganizationsAPIUpdateBoxDefaultLimitedNetworkEgressRequest {
+	return OrganizationsAPIUpdateBoxDefaultLimitedNetworkEgressRequest{
+		ApiService: a,
+		ctx: ctx,
+		organizationId: organizationId,
+	}
+}
+
+// Execute executes the request
+func (a *OrganizationsAPIService) UpdateBoxDefaultLimitedNetworkEgressExecute(r OrganizationsAPIUpdateBoxDefaultLimitedNetworkEgressRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodPost
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "OrganizationsAPIService.UpdateBoxDefaultLimitedNetworkEgress")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/organizations/{organizationId}/box-default-limited-network-egress"
+	localVarPath = strings.Replace(localVarPath, "{"+"organizationId"+"}", url.PathEscape(parameterValueToString(r.organizationId, "organizationId")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+	if r.organizationBoxDefaultLimitedNetworkEgress == nil {
+		return nil, reportError("organizationBoxDefaultLimitedNetworkEgress is required and must be specified")
+	}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{"application/json"}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	// body params
+	localVarPostBody = r.organizationBoxDefaultLimitedNetworkEgress
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
 type OrganizationsAPIUpdateExperimentalConfigRequest struct {
 	ctx context.Context
 	ApiService OrganizationsAPI
@@ -4398,107 +4499,6 @@ func (a *OrganizationsAPIService) UpdateRegionExecute(r OrganizationsAPIUpdateRe
 	}
 	// body params
 	localVarPostBody = r.updateRegion
-	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
-	if err != nil {
-		return nil, err
-	}
-
-	localVarHTTPResponse, err := a.client.callAPI(req)
-	if err != nil || localVarHTTPResponse == nil {
-		return localVarHTTPResponse, err
-	}
-
-	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
-	localVarHTTPResponse.Body.Close()
-	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
-	if err != nil {
-		return localVarHTTPResponse, err
-	}
-
-	if localVarHTTPResponse.StatusCode >= 300 {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: localVarHTTPResponse.Status,
-		}
-		return localVarHTTPResponse, newErr
-	}
-
-	return localVarHTTPResponse, nil
-}
-
-type OrganizationsAPIUpdateSandboxDefaultLimitedNetworkEgressRequest struct {
-	ctx context.Context
-	ApiService OrganizationsAPI
-	organizationId string
-	organizationSandboxDefaultLimitedNetworkEgress *OrganizationSandboxDefaultLimitedNetworkEgress
-}
-
-func (r OrganizationsAPIUpdateSandboxDefaultLimitedNetworkEgressRequest) OrganizationSandboxDefaultLimitedNetworkEgress(organizationSandboxDefaultLimitedNetworkEgress OrganizationSandboxDefaultLimitedNetworkEgress) OrganizationsAPIUpdateSandboxDefaultLimitedNetworkEgressRequest {
-	r.organizationSandboxDefaultLimitedNetworkEgress = &organizationSandboxDefaultLimitedNetworkEgress
-	return r
-}
-
-func (r OrganizationsAPIUpdateSandboxDefaultLimitedNetworkEgressRequest) Execute() (*http.Response, error) {
-	return r.ApiService.UpdateSandboxDefaultLimitedNetworkEgressExecute(r)
-}
-
-/*
-UpdateSandboxDefaultLimitedNetworkEgress Update sandbox default limited network egress
-
- @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param organizationId Organization ID
- @return OrganizationsAPIUpdateSandboxDefaultLimitedNetworkEgressRequest
-*/
-func (a *OrganizationsAPIService) UpdateSandboxDefaultLimitedNetworkEgress(ctx context.Context, organizationId string) OrganizationsAPIUpdateSandboxDefaultLimitedNetworkEgressRequest {
-	return OrganizationsAPIUpdateSandboxDefaultLimitedNetworkEgressRequest{
-		ApiService: a,
-		ctx: ctx,
-		organizationId: organizationId,
-	}
-}
-
-// Execute executes the request
-func (a *OrganizationsAPIService) UpdateSandboxDefaultLimitedNetworkEgressExecute(r OrganizationsAPIUpdateSandboxDefaultLimitedNetworkEgressRequest) (*http.Response, error) {
-	var (
-		localVarHTTPMethod   = http.MethodPost
-		localVarPostBody     interface{}
-		formFiles            []formFile
-	)
-
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "OrganizationsAPIService.UpdateSandboxDefaultLimitedNetworkEgress")
-	if err != nil {
-		return nil, &GenericOpenAPIError{error: err.Error()}
-	}
-
-	localVarPath := localBasePath + "/organizations/{organizationId}/sandbox-default-limited-network-egress"
-	localVarPath = strings.Replace(localVarPath, "{"+"organizationId"+"}", url.PathEscape(parameterValueToString(r.organizationId, "organizationId")), -1)
-
-	localVarHeaderParams := make(map[string]string)
-	localVarQueryParams := url.Values{}
-	localVarFormParams := url.Values{}
-	if r.organizationSandboxDefaultLimitedNetworkEgress == nil {
-		return nil, reportError("organizationSandboxDefaultLimitedNetworkEgress is required and must be specified")
-	}
-
-	// to determine the Content-Type header
-	localVarHTTPContentTypes := []string{"application/json"}
-
-	// set Content-Type header
-	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
-	if localVarHTTPContentType != "" {
-		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
-	}
-
-	// to determine the Accept header
-	localVarHTTPHeaderAccepts := []string{}
-
-	// set Accept header
-	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
-	if localVarHTTPHeaderAccept != "" {
-		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
-	}
-	// body params
-	localVarPostBody = r.organizationSandboxDefaultLimitedNetworkEgress
 	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
 	if err != nil {
 		return nil, err

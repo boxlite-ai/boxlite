@@ -6,14 +6,14 @@
 
 import { Injectable, Logger } from '@nestjs/common'
 import { OnEvent } from '@nestjs/event-emitter'
-import { SandboxEvents } from '../../sandbox/constants/sandbox-events.constants'
-import { SandboxCreatedEvent } from '../../sandbox/events/sandbox-create.event'
-import { SandboxDesiredStateUpdatedEvent } from '../../sandbox/events/sandbox-desired-state-updated.event'
-import { SandboxDestroyedEvent } from '../../sandbox/events/sandbox-destroyed.event'
-import { SandboxPublicStatusUpdatedEvent } from '../../sandbox/events/sandbox-public-status-updated.event'
-import { SandboxStartedEvent } from '../../sandbox/events/sandbox-started.event'
-import { SandboxStateUpdatedEvent } from '../../sandbox/events/sandbox-state-updated.event'
-import { SandboxStoppedEvent } from '../../sandbox/events/sandbox-stopped.event'
+import { BoxEvents } from '../../box/constants/box-events.constants'
+import { BoxCreatedEvent } from '../../box/events/box-create.event'
+import { BoxDesiredStateUpdatedEvent } from '../../box/events/box-desired-state-updated.event'
+import { BoxDestroyedEvent } from '../../box/events/box-destroyed.event'
+import { BoxPublicStatusUpdatedEvent } from '../../box/events/box-public-status-updated.event'
+import { BoxStartedEvent } from '../../box/events/box-started.event'
+import { BoxStateUpdatedEvent } from '../../box/events/box-state-updated.event'
+import { BoxStoppedEvent } from '../../box/events/box-stopped.event'
 import { PostHog } from 'posthog-node'
 import { OnAsyncEvent } from '../../common/decorators/on-async-event.decorator'
 import { Organization } from '../../organization/entities/organization.entity'
@@ -40,39 +40,39 @@ export class AnalyticsService {
     })
   }
 
-  @OnEvent(SandboxEvents.CREATED)
-  async handleSandboxCreatedEvent(event: SandboxCreatedEvent) {
-    this.logger.debug(`Sandbox created: ${JSON.stringify(event)}`)
+  @OnEvent(BoxEvents.CREATED)
+  async handleBoxCreatedEvent(event: BoxCreatedEvent) {
+    this.logger.debug(`Box created: ${JSON.stringify(event)}`)
   }
 
-  @OnEvent(SandboxEvents.STARTED)
-  async handleSandboxStartedEvent(event: SandboxStartedEvent) {
-    this.logger.debug(`Sandbox started: ${JSON.stringify(event)}`)
+  @OnEvent(BoxEvents.STARTED)
+  async handleBoxStartedEvent(event: BoxStartedEvent) {
+    this.logger.debug(`Box started: ${JSON.stringify(event)}`)
   }
 
-  @OnEvent(SandboxEvents.STOPPED)
-  async handleSandboxStoppedEvent(event: SandboxStoppedEvent) {
-    this.logger.debug(`Sandbox stopped: ${JSON.stringify(event)}`)
+  @OnEvent(BoxEvents.STOPPED)
+  async handleBoxStoppedEvent(event: BoxStoppedEvent) {
+    this.logger.debug(`Box stopped: ${JSON.stringify(event)}`)
   }
 
-  @OnEvent(SandboxEvents.DESTROYED)
-  async handleSandboxDestroyedEvent(event: SandboxDestroyedEvent) {
-    this.logger.debug(`Sandbox destroyed: ${JSON.stringify(event)}`)
+  @OnEvent(BoxEvents.DESTROYED)
+  async handleBoxDestroyedEvent(event: BoxDestroyedEvent) {
+    this.logger.debug(`Box destroyed: ${JSON.stringify(event)}`)
   }
 
-  @OnEvent(SandboxEvents.PUBLIC_STATUS_UPDATED)
-  async handleSandboxPublicStatusUpdatedEvent(event: SandboxPublicStatusUpdatedEvent) {
-    this.logger.debug(`Sandbox public status updated: ${JSON.stringify(event)}`)
+  @OnEvent(BoxEvents.PUBLIC_STATUS_UPDATED)
+  async handleBoxPublicStatusUpdatedEvent(event: BoxPublicStatusUpdatedEvent) {
+    this.logger.debug(`Box public status updated: ${JSON.stringify(event)}`)
   }
 
-  @OnEvent(SandboxEvents.DESIRED_STATE_UPDATED)
-  async handleSandboxDesiredStateUpdatedEvent(event: SandboxDesiredStateUpdatedEvent) {
-    this.logger.debug(`Sandbox desired state updated: ${JSON.stringify(event)}`)
+  @OnEvent(BoxEvents.DESIRED_STATE_UPDATED)
+  async handleBoxDesiredStateUpdatedEvent(event: BoxDesiredStateUpdatedEvent) {
+    this.logger.debug(`Box desired state updated: ${JSON.stringify(event)}`)
   }
 
-  @OnEvent(SandboxEvents.STATE_UPDATED)
-  async handleSandboxStateUpdatedEvent(event: SandboxStateUpdatedEvent) {
-    this.logger.debug(`Sandbox state updated: ${JSON.stringify(event)}`)
+  @OnEvent(BoxEvents.STATE_UPDATED)
+  async handleBoxStateUpdatedEvent(event: BoxStateUpdatedEvent) {
+    this.logger.debug(`Box state updated: ${JSON.stringify(event)}`)
   }
 
   @OnAsyncEvent({

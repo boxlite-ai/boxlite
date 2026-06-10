@@ -28,9 +28,9 @@ type Content struct {
 
 func GetFileDownloadTool() mcp.Tool {
 	return mcp.NewTool("file_download",
-		mcp.WithDescription("Download a file from the BoxLite sandbox. Returns the file content either as text or as a base64 encoded image. Handles special cases like matplotlib plots stored as JSON with embedded base64 images."),
+		mcp.WithDescription("Download a file from the BoxLite box. Returns the file content either as text or as a base64 encoded image. Handles special cases like matplotlib plots stored as JSON with embedded base64 images."),
 		mcp.WithString("filePath", mcp.Required(), mcp.Description("Path to the file to download.")),
-		mcp.WithString("id", mcp.Required(), mcp.Description("ID of the sandbox to download the file from.")),
+		mcp.WithString("id", mcp.Required(), mcp.Description("ID of the box to download the file from.")),
 	)
 }
 
@@ -41,7 +41,7 @@ func FileDownload(ctx context.Context, request mcp.CallToolRequest, args FileDow
 	}
 
 	if args.Id == nil || *args.Id == "" {
-		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("sandbox ID is required")
+		return &mcp.CallToolResult{IsError: true}, fmt.Errorf("box ID is required")
 	}
 
 	if args.FilePath == nil || *args.FilePath == "" {

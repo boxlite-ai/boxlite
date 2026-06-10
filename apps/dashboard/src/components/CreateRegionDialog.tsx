@@ -122,7 +122,7 @@ export const CreateRegionDialog: React.FC<CreateRegionDialogProps> = ({
           <DialogTitle>{createdRegion ? 'New Region Created' : 'Create New Region'}</DialogTitle>
           <DialogDescription>
             {!createdRegion
-              ? 'Add a new region for grouping runners and sandboxes.'
+              ? 'Add a new region for grouping runners and boxes.'
               : createdRegion.proxyApiKey ||
                   createdRegion.sshGatewayApiKey ||
                   createdRegion.snapshotManagerUsername ||

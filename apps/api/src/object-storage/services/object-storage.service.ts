@@ -6,7 +6,7 @@
 
 import { BadRequestException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common'
 import { TypedConfigService } from '../../config/typed-config.service'
-import { StorageAccessDto } from '../../sandbox/dto/storage-access-dto'
+import { StorageAccessDto } from '../../box/dto/storage-access-dto'
 import axios from 'axios'
 import * as aws4 from 'aws4'
 import * as xml2js from 'xml2js'

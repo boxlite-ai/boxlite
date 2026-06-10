@@ -21,7 +21,7 @@ import { dynamicImport } from './utils/Import'
 import { WithInstrumentation } from './utils/otel.decorator'
 
 /**
- * Represents a BoxLite Snapshot which is a pre-configured sandbox.
+ * Represents a BoxLite Snapshot which is a pre-configured box.
  *
  * @property {string} id - Unique identifier for the Snapshot.
  * @property {string} organizationId - Organization ID that owns the Snapshot.

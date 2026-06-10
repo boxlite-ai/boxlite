@@ -1,5 +1,5 @@
 name: boxlite list
-synopsis: List sandboxes
+synopsis: List boxes
 usage: boxlite list [flags]
 options:
   - name: format

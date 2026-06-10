@@ -26,12 +26,12 @@ func NewBackupInfoCache(ctx context.Context, retention time.Duration) *BackupInf
 	}
 }
 
-func (c *BackupInfoCache) SetBackupState(ctx context.Context, sandboxId string, state enums.BackupState, snapshot string, err error) error {
+func (c *BackupInfoCache) SetBackupState(ctx context.Context, boxId string, state enums.BackupState, snapshot string, err error) error {
 	entry := models.BackupInfo{
 		State:    state,
 		Snapshot: snapshot,
 		Error:    err,
 	}
 
-	return c.Set(ctx, sandboxId, entry, c.retention)
+	return c.Set(ctx, boxId, entry, c.retention)
 }

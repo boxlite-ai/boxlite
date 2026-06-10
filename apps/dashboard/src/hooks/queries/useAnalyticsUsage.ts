@@ -9,7 +9,7 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { queryKeys } from '@/hooks/queries/queryKeys'
 import {
   ModelsAggregatedUsage,
-  ModelsSandboxUsage,
+  ModelsBoxUsage,
   ModelsUsageChartPoint,
   ModelsUsagePeriod,
 } from '@boxlite-ai/analytics-api-client'
@@ -42,17 +42,17 @@ export function useAggregatedUsage(params: AnalyticsUsageParams) {
   })
 }
 
-export function useSandboxesUsage(params: AnalyticsUsageParams) {
+export function useBoxesUsage(params: AnalyticsUsageParams) {
   const api = useApi()
   const { selectedOrganization } = useSelectedOrganization()
 
-  return useQuery<ModelsSandboxUsage[]>({
-    queryKey: queryKeys.analytics.sandboxesUsage(selectedOrganization?.id ?? '', params),
+  return useQuery<ModelsBoxUsage[]>({
+    queryKey: queryKeys.analytics.boxesUsage(selectedOrganization?.id ?? '', params),
     queryFn: async () => {
       if (!selectedOrganization || !api.analyticsUsageApi) {
         throw new Error('Missing required parameters')
       }
-      const response = await api.analyticsUsageApi.organizationOrganizationIdUsageSandboxGet(
+      const response = await api.analyticsUsageApi.organizationOrganizationIdUsageBoxGet(
         selectedOrganization.id,
         params.from.toISOString(),
         params.to.toISOString(),
@@ -91,25 +91,25 @@ export function useUsageChart(params: UsageChartParams) {
   })
 }
 
-export function useSandboxUsagePeriods(sandboxId: string | undefined, params: AnalyticsUsageParams) {
+export function useBoxUsagePeriods(boxId: string | undefined, params: AnalyticsUsageParams) {
   const api = useApi()
   const { selectedOrganization } = useSelectedOrganization()
 
   return useQuery<ModelsUsagePeriod[]>({
-    queryKey: queryKeys.analytics.sandboxUsagePeriods(selectedOrganization?.id ?? '', sandboxId ?? '', params),
+    queryKey: queryKeys.analytics.boxUsagePeriods(selectedOrganization?.id ?? '', boxId ?? '', params),
     queryFn: async () => {
-      if (!selectedOrganization || !sandboxId || !api.analyticsUsageApi) {
+      if (!selectedOrganization || !boxId || !api.analyticsUsageApi) {
         throw new Error('Missing required parameters')
       }
-      const response = await api.analyticsUsageApi.organizationOrganizationIdSandboxSandboxIdUsageGet(
+      const response = await api.analyticsUsageApi.organizationOrganizationIdBoxBoxIdUsageGet(
         selectedOrganization.id,
-        sandboxId,
+        boxId,
         params.from.toISOString(),
         params.to.toISOString(),
       )
       return response.data
     },
-    enabled: !!sandboxId && !!selectedOrganization && !!api.analyticsUsageApi && params.enabled !== false,
+    enabled: !!boxId && !!selectedOrganization && !!api.analyticsUsageApi && params.enabled !== false,
     staleTime: 10_000,
   })
 }

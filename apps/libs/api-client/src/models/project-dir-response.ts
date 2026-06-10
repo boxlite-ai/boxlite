@@ -14,16 +14,7 @@
 
 
 
-/**
- *
- * @export
- * @interface ProjectDirResponse
- */
 export interface ProjectDirResponse {
-    /**
-     *
-     * @type {string}
-     * @memberof ProjectDirResponse
-     */
     'dir'?: string;
 }
+

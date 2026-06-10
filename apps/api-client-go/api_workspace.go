@@ -159,9 +159,9 @@ type WorkspaceAPI interface {
 	ReplaceLabelsWorkspaceDeprecated(ctx context.Context, workspaceId string) WorkspaceAPIReplaceLabelsWorkspaceDeprecatedRequest
 
 	// ReplaceLabelsWorkspaceDeprecatedExecute executes the request
-	//  @return SandboxLabels
+	//  @return BoxLabels
 	// Deprecated
-	ReplaceLabelsWorkspaceDeprecatedExecute(r WorkspaceAPIReplaceLabelsWorkspaceDeprecatedRequest) (*SandboxLabels, *http.Response, error)
+	ReplaceLabelsWorkspaceDeprecatedExecute(r WorkspaceAPIReplaceLabelsWorkspaceDeprecatedRequest) (*BoxLabels, *http.Response, error)
 
 	/*
 	SetAutoArchiveIntervalWorkspaceDeprecated [DEPRECATED] Set workspace auto-archive interval
@@ -1185,12 +1185,12 @@ type WorkspaceAPIReplaceLabelsWorkspaceDeprecatedRequest struct {
 	ctx context.Context
 	ApiService WorkspaceAPI
 	workspaceId string
-	sandboxLabels *SandboxLabels
+	boxLabels *BoxLabels
 	xBoxLiteOrganizationID *string
 }
 
-func (r WorkspaceAPIReplaceLabelsWorkspaceDeprecatedRequest) SandboxLabels(sandboxLabels SandboxLabels) WorkspaceAPIReplaceLabelsWorkspaceDeprecatedRequest {
-	r.sandboxLabels = &sandboxLabels
+func (r WorkspaceAPIReplaceLabelsWorkspaceDeprecatedRequest) BoxLabels(boxLabels BoxLabels) WorkspaceAPIReplaceLabelsWorkspaceDeprecatedRequest {
+	r.boxLabels = &boxLabels
 	return r
 }
 
@@ -1200,7 +1200,7 @@ func (r WorkspaceAPIReplaceLabelsWorkspaceDeprecatedRequest) XBoxLiteOrganizatio
 	return r
 }
 
-func (r WorkspaceAPIReplaceLabelsWorkspaceDeprecatedRequest) Execute() (*SandboxLabels, *http.Response, error) {
+func (r WorkspaceAPIReplaceLabelsWorkspaceDeprecatedRequest) Execute() (*BoxLabels, *http.Response, error) {
 	return r.ApiService.ReplaceLabelsWorkspaceDeprecatedExecute(r)
 }
 
@@ -1222,14 +1222,14 @@ func (a *WorkspaceAPIService) ReplaceLabelsWorkspaceDeprecated(ctx context.Conte
 }
 
 // Execute executes the request
-//  @return SandboxLabels
+//  @return BoxLabels
 // Deprecated
-func (a *WorkspaceAPIService) ReplaceLabelsWorkspaceDeprecatedExecute(r WorkspaceAPIReplaceLabelsWorkspaceDeprecatedRequest) (*SandboxLabels, *http.Response, error) {
+func (a *WorkspaceAPIService) ReplaceLabelsWorkspaceDeprecatedExecute(r WorkspaceAPIReplaceLabelsWorkspaceDeprecatedRequest) (*BoxLabels, *http.Response, error) {
 	var (
 		localVarHTTPMethod   = http.MethodPut
 		localVarPostBody     interface{}
 		formFiles            []formFile
-		localVarReturnValue  *SandboxLabels
+		localVarReturnValue  *BoxLabels
 	)
 
 	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "WorkspaceAPIService.ReplaceLabelsWorkspaceDeprecated")
@@ -1243,8 +1243,8 @@ func (a *WorkspaceAPIService) ReplaceLabelsWorkspaceDeprecatedExecute(r Workspac
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
 	localVarFormParams := url.Values{}
-	if r.sandboxLabels == nil {
-		return localVarReturnValue, nil, reportError("sandboxLabels is required and must be specified")
+	if r.boxLabels == nil {
+		return localVarReturnValue, nil, reportError("boxLabels is required and must be specified")
 	}
 
 	// to determine the Content-Type header
@@ -1268,7 +1268,7 @@ func (a *WorkspaceAPIService) ReplaceLabelsWorkspaceDeprecatedExecute(r Workspac
 		parameterAddToHeaderOrQuery(localVarHeaderParams, "X-BoxLite-Organization-ID", r.xBoxLiteOrganizationID, "simple", "")
 	}
 	// body params
-	localVarPostBody = r.sandboxLabels
+	localVarPostBody = r.boxLabels
 	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
 	if err != nil {
 		return localVarReturnValue, nil, err

@@ -1,6 +1,6 @@
 name: boxlite preview-url
-synopsis: Get signed preview URL for a sandbox port
-usage: boxlite preview-url [SANDBOX_ID | SANDBOX_NAME] [flags]
+synopsis: Get signed preview URL for a box port
+usage: boxlite preview-url [BOX_ID | BOX_NAME] [flags]
 options:
   - name: expires
     default_value: '3600'

@@ -14,28 +14,17 @@
 
 
 
-/**
- *
- * @export
- * @interface CreateApiKey
- */
 export interface CreateApiKey {
     /**
      * The name of the API key
-     * @type {string}
-     * @memberof CreateApiKey
      */
     'name': string;
     /**
      * The list of organization resource permissions explicitly assigned to the API key
-     * @type {Array<string>}
-     * @memberof CreateApiKey
      */
     'permissions': Array<CreateApiKeyPermissionsEnum>;
     /**
      * When the API key expires
-     * @type {Date}
-     * @memberof CreateApiKey
      */
     'expiresAt'?: Date | null;
 }
@@ -45,8 +34,8 @@ export const CreateApiKeyPermissionsEnum = {
     DELETE_REGISTRIES: 'delete:registries',
     WRITE_SNAPSHOTS: 'write:snapshots',
     DELETE_SNAPSHOTS: 'delete:snapshots',
-    WRITE_SANDBOXES: 'write:sandboxes',
-    DELETE_SANDBOXES: 'delete:sandboxes',
+    WRITE_BOXES: 'write:boxes',
+    DELETE_BOXES: 'delete:boxes',
     READ_VOLUMES: 'read:volumes',
     WRITE_VOLUMES: 'write:volumes',
     DELETE_VOLUMES: 'delete:volumes',
@@ -55,7 +44,10 @@ export const CreateApiKeyPermissionsEnum = {
     READ_RUNNERS: 'read:runners',
     WRITE_RUNNERS: 'write:runners',
     DELETE_RUNNERS: 'delete:runners',
-    READ_AUDIT_LOGS: 'read:audit_logs'
+    READ_AUDIT_LOGS: 'read:audit_logs',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 
 export type CreateApiKeyPermissionsEnum = typeof CreateApiKeyPermissionsEnum[keyof typeof CreateApiKeyPermissionsEnum];
+
+

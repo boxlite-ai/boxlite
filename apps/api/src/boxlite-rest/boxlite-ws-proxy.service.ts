@@ -9,12 +9,12 @@ import type { Socket } from 'net'
 import { createProxyMiddleware, type RequestHandler } from 'http-proxy-middleware'
 import { ApiKeyService } from '../api-key/api-key.service'
 import { OrganizationUserService } from '../organization/services/organization-user.service'
-import { SandboxService } from '../sandbox/services/sandbox.service'
-import { RunnerService } from '../sandbox/services/runner.service'
-import type { Runner } from '../sandbox/entities/runner.entity'
+import { BoxService } from '../box/services/box.service'
+import { RunnerService } from '../box/services/runner.service'
+import type { Runner } from '../box/entities/runner.entity'
 
 // Matches /api/v1/<tenant>/boxes/<id>/executions/<id>/attach with optional query string.
-// Capture group 1 is the sandbox/box id.
+// Capture group 1 is the box/box id.
 const ATTACH_PATH = /^\/api\/v1\/[^/]+\/boxes\/([^/]+)\/executions\/[^/]+\/attach(?:\?.*)?$/
 
 /**
@@ -36,7 +36,7 @@ export class BoxliteWsProxyService {
   constructor(
     private readonly apiKeyService: ApiKeyService,
     private readonly organizationUserService: OrganizationUserService,
-    private readonly sandboxService: SandboxService,
+    private readonly boxService: BoxService,
     private readonly runnerService: RunnerService,
   ) {
     this.proxy = createProxyMiddleware({
@@ -73,7 +73,7 @@ export class BoxliteWsProxyService {
   }
 
   /**
-   * Resolve auth + sandbox + runner, then hand the upgrade to the shared
+   * Resolve auth + box + runner, then hand the upgrade to the shared
    * proxy middleware. Closes the socket cleanly on any failure.
    */
   async upgrade(req: IncomingMessage, socket: Socket, head: Buffer): Promise<void> {
@@ -90,18 +90,18 @@ export class BoxliteWsProxyService {
     }
 
     try {
-      const sandbox = await this.sandboxService.findOneByIdOrName(match.boxId, auth.organizationId)
-      if (!sandbox?.runnerId) {
+      const box = await this.boxService.findOneByIdOrName(match.boxId, auth.organizationId)
+      if (!box?.runnerId) {
         this.respondAndClose(socket, 404, 'Not Found')
         return
       }
       // Mirror legacy toolbox path — opening a WS attach is user activity,
       // so the autostop cron does not reap a session that's still connected.
       // Best-effort: do not fail the upgrade if this errors.
-      this.sandboxService
-        .updateLastActivityAt(sandbox.id, new Date())
-        .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${sandbox.id}: ${err}`))
-      const runner = await this.runnerService.findOne(sandbox.runnerId)
+      this.boxService
+        .updateLastActivityAt(box.id, new Date())
+        .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${box.id}: ${err}`))
+      const runner = await this.runnerService.findOne(box.runnerId)
       if (!runner) {
         this.respondAndClose(socket, 404, 'Not Found')
         return
@@ -125,7 +125,7 @@ export class BoxliteWsProxyService {
    * organization. The membership check is critical — removing a user from an
    * org deletes the OrganizationUser row but does not cascade to ApiKey rows,
    * so without it a removed member's surviving key can still attach to
-   * sandboxes in that org.
+   * boxes in that org.
    *
    * JWT (the second strategy in CombinedAuthGuard) is unused here because
    * clients send an opaque, long-lived API key directly as the Bearer

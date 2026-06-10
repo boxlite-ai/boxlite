@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
 import { usePlayground } from '@/hooks/usePlayground'
-import { usePlaygroundSandbox } from '@/hooks/usePlaygroundSandbox'
+import { usePlaygroundBox } from '@/hooks/usePlaygroundBox'
 import { AnimatePresence, motion } from 'framer-motion'
 import { ChevronUpIcon, RefreshCcw, XIcon } from 'lucide-react'
 import { useEffect } from 'react'
@@ -54,9 +54,9 @@ const VNCErrorContent: React.FC<{ message: string }> = ({ message }) => {
 
 const VNCDesktopWindowResponse: React.FC<{ className?: string }> = ({ className }) => {
   const { VNCInteractionOptionsParamsState } = usePlayground()
-  const { sandbox, vnc } = usePlaygroundSandbox()
+  const { box, vnc } = usePlaygroundBox()
 
-  const loadingVNCUrl = vnc.loading || (!sandbox.instance && !sandbox.error)
+  const loadingVNCUrl = vnc.loading || (!box.instance && !box.error)
 
   const resultPanelRef = usePanelRef()
 
@@ -88,13 +88,13 @@ const VNCDesktopWindowResponse: React.FC<{ className?: string }> = ({ className 
                       >
                         {vnc.error && <VNCErrorContent message={vnc.error || 'There was an error loading VNC.'} />}
 
-                        {sandbox.instance ? (
+                        {box.instance ? (
                           <Button variant="outline" className="mt-2" onClick={() => vnc.refetch()}>
                             <RefreshCcw className="size-4" />
                             Retry
                           </Button>
                         ) : (
-                          sandbox.error && <span className="text-sm text-muted-foreground">{sandbox.error}</span>
+                          box.error && <span className="text-sm text-muted-foreground">{box.error}</span>
                         )}
                       </motion.div>
                     )}

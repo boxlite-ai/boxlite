@@ -37,7 +37,7 @@ type BoxliteConfiguration struct {
 	ProxyTemplateUrl string `json:"proxyTemplateUrl"`
 	// Toolbox template URL
 	ProxyToolboxUrl string `json:"proxyToolboxUrl"`
-	// Default snapshot for sandboxes
+	// Default snapshot for boxes
 	DefaultSnapshot string `json:"defaultSnapshot"`
 	// Dashboard URL
 	DashboardUrl string `json:"dashboardUrl"`
@@ -732,3 +732,5 @@ func (v *NullableBoxliteConfiguration) UnmarshalJSON(src []byte) error {
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }
+
+

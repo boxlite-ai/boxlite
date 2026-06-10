@@ -17,34 +17,22 @@
 // @ts-ignore
 import type { RateLimitEntry } from './rate-limit-entry';
 
-/**
- *
- * @export
- * @interface RateLimitConfig
- */
 export interface RateLimitConfig {
     /**
      * Failed authentication rate limit
-     * @type {RateLimitEntry}
-     * @memberof RateLimitConfig
      */
     'failedAuth'?: RateLimitEntry;
     /**
      * Authenticated rate limit
-     * @type {RateLimitEntry}
-     * @memberof RateLimitConfig
      */
     'authenticated'?: RateLimitEntry;
     /**
-     * Sandbox create rate limit
-     * @type {RateLimitEntry}
-     * @memberof RateLimitConfig
+     * Box create rate limit
      */
-    'sandboxCreate'?: RateLimitEntry;
+    'boxCreate'?: RateLimitEntry;
     /**
-     * Sandbox lifecycle rate limit
-     * @type {RateLimitEntry}
-     * @memberof RateLimitConfig
+     * Box lifecycle rate limit
      */
-    'sandboxLifecycle'?: RateLimitEntry;
+    'boxLifecycle'?: RateLimitEntry;
 }
+

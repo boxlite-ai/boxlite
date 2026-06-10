@@ -34,20 +34,20 @@ func AwaitSnapshotState(ctx context.Context, apiClient *apiclient.APIClient, nam
 	}
 }
 
-func AwaitSandboxState(ctx context.Context, apiClient *apiclient.APIClient, targetSandbox string, state apiclient.SandboxState) error {
+func AwaitBoxState(ctx context.Context, apiClient *apiclient.APIClient, targetBox string, state apiclient.BoxState) error {
 	for {
-		sandbox, res, err := apiClient.SandboxAPI.GetSandbox(ctx, targetSandbox).Execute()
+		box, res, err := apiClient.BoxAPI.GetBox(ctx, targetBox).Execute()
 		if err != nil {
 			return apiclient_cli.HandleErrorResponse(res, err)
 		}
 
-		if sandbox.State != nil && *sandbox.State == state {
+		if box.State != nil && *box.State == state {
 			return nil
-		} else if sandbox.State != nil && (*sandbox.State == apiclient.SANDBOXSTATE_ERROR || *sandbox.State == apiclient.SANDBOXSTATE_BUILD_FAILED) {
-			if sandbox.ErrorReason == nil {
-				return fmt.Errorf("sandbox processing failed")
+		} else if box.State != nil && (*box.State == apiclient.BOXSTATE_ERROR || *box.State == apiclient.BOXSTATE_BUILD_FAILED) {
+			if box.ErrorReason == nil {
+				return fmt.Errorf("box processing failed")
 			}
-			return fmt.Errorf("sandbox processing failed: %s", *sandbox.ErrorReason)
+			return fmt.Errorf("box processing failed: %s", *box.ErrorReason)
 		}
 
 		time.Sleep(time.Second)

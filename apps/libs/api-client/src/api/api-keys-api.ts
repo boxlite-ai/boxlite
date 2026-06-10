@@ -18,7 +18,7 @@ import type { AxiosPromise, AxiosInstance, RawAxiosRequestConfig } from 'axios';
 import globalAxios from 'axios';
 // Some imports not used depending on template conditions
 // @ts-ignore
-import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObject, setBearerAuthToObject, setOAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction } from '../common';
+import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObject, setBearerAuthToObject, setOAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction, replaceWithSerializableTypeIfNeeded } from '../common';
 // @ts-ignore
 import { BASE_PATH, COLLECTION_FORMATS, type RequestArgs, BaseAPI, RequiredError, operationServerMap } from '../base';
 // @ts-ignore
@@ -29,14 +29,13 @@ import type { ApiKeyResponse } from '../models';
 import type { CreateApiKey } from '../models';
 /**
  * ApiKeysApi - axios parameter creator
- * @export
  */
 export const ApiKeysApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         *
+         * 
          * @summary Create API key
-         * @param {CreateApiKey} createApiKey
+         * @param {CreateApiKey} createApiKey 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -62,9 +61,8 @@ export const ApiKeysApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
-
             localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -80,9 +78,9 @@ export const ApiKeysApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Delete API key
-         * @param {string} name
+         * @param {string} name 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -91,7 +89,7 @@ export const ApiKeysApiAxiosParamCreator = function (configuration?: Configurati
             // verify required parameter 'name' is not null or undefined
             assertParamExists('deleteApiKey', 'name', name)
             const localVarPath = `/api-keys/{name}`
-                .replace(`{${"name"}}`, encodeURIComponent(String(name)));
+                .replace('{name}', encodeURIComponent(String(name)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -110,7 +108,6 @@ export const ApiKeysApiAxiosParamCreator = function (configuration?: Configurati
             // authentication oauth2 required
 
 
-
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
             }
@@ -124,10 +121,10 @@ export const ApiKeysApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Delete API key for user
-         * @param {string} userId
-         * @param {string} name
+         * @param {string} userId 
+         * @param {string} name 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -138,8 +135,8 @@ export const ApiKeysApiAxiosParamCreator = function (configuration?: Configurati
             // verify required parameter 'name' is not null or undefined
             assertParamExists('deleteApiKeyForUser', 'name', name)
             const localVarPath = `/api-keys/{userId}/{name}`
-                .replace(`{${"userId"}}`, encodeURIComponent(String(userId)))
-                .replace(`{${"name"}}`, encodeURIComponent(String(name)));
+                .replace('{userId}', encodeURIComponent(String(userId)))
+                .replace('{name}', encodeURIComponent(String(name)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -158,7 +155,6 @@ export const ApiKeysApiAxiosParamCreator = function (configuration?: Configurati
             // authentication oauth2 required
 
 
-
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
             }
@@ -172,9 +168,9 @@ export const ApiKeysApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Get API key
-         * @param {string} name
+         * @param {string} name 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -183,7 +179,7 @@ export const ApiKeysApiAxiosParamCreator = function (configuration?: Configurati
             // verify required parameter 'name' is not null or undefined
             assertParamExists('getApiKey', 'name', name)
             const localVarPath = `/api-keys/{name}`
-                .replace(`{${"name"}}`, encodeURIComponent(String(name)));
+                .replace('{name}', encodeURIComponent(String(name)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -201,7 +197,7 @@ export const ApiKeysApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -216,7 +212,7 @@ export const ApiKeysApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Get current API key\'s details
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -241,7 +237,7 @@ export const ApiKeysApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -256,7 +252,7 @@ export const ApiKeysApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary List API keys
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -281,7 +277,7 @@ export const ApiKeysApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-
+            localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -300,15 +296,14 @@ export const ApiKeysApiAxiosParamCreator = function (configuration?: Configurati
 
 /**
  * ApiKeysApi - functional programming interface
- * @export
  */
 export const ApiKeysApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = ApiKeysApiAxiosParamCreator(configuration)
     return {
         /**
-         *
+         * 
          * @summary Create API key
-         * @param {CreateApiKey} createApiKey
+         * @param {CreateApiKey} createApiKey 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -320,9 +315,9 @@ export const ApiKeysApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Delete API key
-         * @param {string} name
+         * @param {string} name 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -334,10 +329,10 @@ export const ApiKeysApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Delete API key for user
-         * @param {string} userId
-         * @param {string} name
+         * @param {string} userId 
+         * @param {string} name 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -349,9 +344,9 @@ export const ApiKeysApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get API key
-         * @param {string} name
+         * @param {string} name 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -363,7 +358,7 @@ export const ApiKeysApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get current API key\'s details
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -376,7 +371,7 @@ export const ApiKeysApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary List API keys
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -393,15 +388,14 @@ export const ApiKeysApiFp = function(configuration?: Configuration) {
 
 /**
  * ApiKeysApi - factory interface
- * @export
  */
 export const ApiKeysApiFactory = function (configuration?: Configuration, basePath?: string, axios?: AxiosInstance) {
     const localVarFp = ApiKeysApiFp(configuration)
     return {
         /**
-         *
+         * 
          * @summary Create API key
-         * @param {CreateApiKey} createApiKey
+         * @param {CreateApiKey} createApiKey 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -410,9 +404,9 @@ export const ApiKeysApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.createApiKey(createApiKey, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Delete API key
-         * @param {string} name
+         * @param {string} name 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -421,10 +415,10 @@ export const ApiKeysApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.deleteApiKey(name, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Delete API key for user
-         * @param {string} userId
-         * @param {string} name
+         * @param {string} userId 
+         * @param {string} name 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -433,9 +427,9 @@ export const ApiKeysApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.deleteApiKeyForUser(userId, name, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get API key
-         * @param {string} name
+         * @param {string} name 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -444,7 +438,7 @@ export const ApiKeysApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getApiKey(name, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get current API key\'s details
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -454,7 +448,7 @@ export const ApiKeysApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getCurrentApiKey(xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary List API keys
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -468,85 +462,77 @@ export const ApiKeysApiFactory = function (configuration?: Configuration, basePa
 
 /**
  * ApiKeysApi - object-oriented interface
- * @export
- * @class ApiKeysApi
- * @extends {BaseAPI}
  */
 export class ApiKeysApi extends BaseAPI {
     /**
-     *
+     * 
      * @summary Create API key
-     * @param {CreateApiKey} createApiKey
+     * @param {CreateApiKey} createApiKey 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof ApiKeysApi
      */
     public createApiKey(createApiKey: CreateApiKey, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return ApiKeysApiFp(this.configuration).createApiKey(createApiKey, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Delete API key
-     * @param {string} name
+     * @param {string} name 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof ApiKeysApi
      */
     public deleteApiKey(name: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return ApiKeysApiFp(this.configuration).deleteApiKey(name, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Delete API key for user
-     * @param {string} userId
-     * @param {string} name
+     * @param {string} userId 
+     * @param {string} name 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof ApiKeysApi
      */
     public deleteApiKeyForUser(userId: string, name: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return ApiKeysApiFp(this.configuration).deleteApiKeyForUser(userId, name, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Get API key
-     * @param {string} name
+     * @param {string} name 
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof ApiKeysApi
      */
     public getApiKey(name: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return ApiKeysApiFp(this.configuration).getApiKey(name, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary Get current API key\'s details
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof ApiKeysApi
      */
     public getCurrentApiKey(xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return ApiKeysApiFp(this.configuration).getCurrentApiKey(xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
-     *
+     * 
      * @summary List API keys
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
-     * @memberof ApiKeysApi
      */
     public listApiKeys(xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return ApiKeysApiFp(this.configuration).listApiKeys(xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 }
+

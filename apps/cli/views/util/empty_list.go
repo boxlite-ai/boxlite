@@ -8,8 +8,8 @@ import (
 	"github.com/boxlite-ai/boxlite/cli/views/common"
 )
 
-func NotifyEmptySandboxList(tip bool) {
-	common.RenderInfoMessageBold("No sandboxes found")
+func NotifyEmptyBoxList(tip bool) {
+	common.RenderInfoMessageBold("No boxes found")
 	if tip {
 		common.RenderTip("Use the BoxLite SDK to get started.")
 	}

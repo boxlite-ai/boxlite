@@ -36,9 +36,9 @@ type volumeMount struct {
 	rootPath  string
 }
 
-type sandboxVolumeMountRecord struct {
-	SandboxID string   `json:"sandboxId"`
-	Paths     []string `json:"paths"`
+type boxVolumeMountRecord struct {
+	BoxID string   `json:"boxId"`
+	Paths []string `json:"paths"`
 }
 
 func getVolumeMountBasePath() string {
@@ -93,7 +93,7 @@ func (c *Client) getVolumeMounts(ctx context.Context, volumes []dto.VolumeDTO) (
 	return volumeMounts, nil
 }
 
-func (c *Client) ensureVolumeMountsFromMetadata(ctx context.Context, sandboxID string, metadata map[string]string) error {
+func (c *Client) ensureVolumeMountsFromMetadata(ctx context.Context, boxID string, metadata map[string]string) error {
 	if metadata == nil {
 		return nil
 	}
@@ -116,7 +116,7 @@ func (c *Client) ensureVolumeMountsFromMetadata(ctx context.Context, sandboxID s
 		return err
 	}
 
-	return c.recordSandboxVolumeMounts(ctx, sandboxID, volumeMounts)
+	return c.recordBoxVolumeMounts(ctx, boxID, volumeMounts)
 }
 
 func (c *Client) ensureVolumeFuseMounted(ctx context.Context, volumeId string, mountPath string) error {
@@ -250,8 +250,8 @@ func (c *Client) getMountCmd(ctx context.Context, volume string, path string) *e
 	return cmd
 }
 
-func (c *Client) recordSandboxVolumeMounts(ctx context.Context, sandboxID string, mounts []volumeMount) error {
-	if sandboxID == "" || len(mounts) == 0 {
+func (c *Client) recordBoxVolumeMounts(ctx context.Context, boxID string, mounts []volumeMount) error {
+	if boxID == "" || len(mounts) == 0 {
 		return nil
 	}
 
@@ -265,14 +265,14 @@ func (c *Client) recordSandboxVolumeMounts(ctx context.Context, sandboxID string
 		paths = append(paths, path)
 	}
 
-	record := sandboxVolumeMountRecord{
-		SandboxID: sandboxID,
-		Paths:     paths,
+	record := boxVolumeMountRecord{
+		BoxID: boxID,
+		Paths: paths,
 	}
 
 	data, err := json.Marshal(record)
 	if err != nil {
-		return fmt.Errorf("failed to marshal volume mount record for sandbox %s: %w", sandboxID, err)
+		return fmt.Errorf("failed to marshal volume mount record for box %s: %w", boxID, err)
 	}
 
 	dir := getVolumeMountRecordDir()
@@ -280,27 +280,27 @@ func (c *Client) recordSandboxVolumeMounts(ctx context.Context, sandboxID string
 		return fmt.Errorf("failed to create volume mount record directory %s: %w", dir, err)
 	}
 
-	path := filepath.Join(dir, sandboxID+".json")
+	path := filepath.Join(dir, boxID+".json")
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		return fmt.Errorf("failed to write volume mount record %s: %w", path, err)
 	}
 
-	c.logger.DebugContext(ctx, "recorded sandbox volume mounts", "sandbox", sandboxID, "paths", paths)
+	c.logger.DebugContext(ctx, "recorded box volume mounts", "box", boxID, "paths", paths)
 	return nil
 }
 
-func (c *Client) removeSandboxVolumeMountRecord(ctx context.Context, sandboxID string) error {
-	if sandboxID == "" {
+func (c *Client) removeBoxVolumeMountRecord(ctx context.Context, boxID string) error {
+	if boxID == "" {
 		return nil
 	}
 
-	path := filepath.Join(getVolumeMountRecordDir(), sandboxID+".json")
+	path := filepath.Join(getVolumeMountRecordDir(), boxID+".json")
 	err := os.Remove(path)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
 
-	c.logger.DebugContext(ctx, "removed sandbox volume mount record", "sandbox", sandboxID)
+	c.logger.DebugContext(ctx, "removed box volume mount record", "box", boxID)
 	return nil
 }
 
@@ -312,7 +312,7 @@ func normalizeVolumePath(path string) string {
 	return strings.TrimRight(filepath.Clean(path), "/")
 }
 
-// CleanupOrphanedVolumeMounts removes S3/FUSE volume mounts no longer referenced by known sandboxes.
+// CleanupOrphanedVolumeMounts removes S3/FUSE volume mounts no longer referenced by known boxes.
 func (c *Client) CleanupOrphanedVolumeMounts(ctx context.Context) {
 	c.volumeCleanupMutex.Lock()
 	defer c.volumeCleanupMutex.Unlock()
@@ -373,7 +373,7 @@ func (c *Client) getRecordedVolumeMounts() (map[string]bool, error) {
 			return nil, err
 		}
 
-		var record sandboxVolumeMountRecord
+		var record boxVolumeMountRecord
 		if err := json.Unmarshal(data, &record); err != nil {
 			return nil, err
 		}
