@@ -7,7 +7,9 @@ const { composePlugins, withNx } = require('@nx/webpack')
 const path = require('path')
 const glob = require('glob')
 
-const migrationFiles = glob.sync('apps/api/src/migrations/**/*-migration.{ts,js}')
+const migrationFiles = glob
+  .sync('apps/api/src/migrations/**/*-migration.{ts,js}')
+  .map((f) => path.resolve(process.cwd(), f))
 const migrationEntries = migrationFiles.reduce((acc, migrationFile) => {
   const entryName = migrationFile.substring(migrationFile.lastIndexOf('/') + 1, migrationFile.lastIndexOf('.'))
   acc[entryName] = migrationFile

@@ -36,6 +36,11 @@ diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.WARN)
 const appMode = getAppMode()
 const serviceNameSuffix = appMode === 'api' ? 'api' : appMode === 'worker' ? 'worker' : 'api'
 
+// sdk-node@^0.218 brings otlp-exporter-base@0.218 to the hoisted root,
+// but exporter-{trace,metrics,logs}-otlp-http are still pinned at ^0.207
+// and carry their own nested 0.207 copy. The two carry incompatible
+// `headers` typings. Cast at the call sites below until the http exporters
+// catch up to 0.218 in a follow-up dep-bump PR.
 const otlpExporterConfig: OTLPExporterNodeConfigBase = {
   compression: CompressionAlgorithm.GZIP,
   keepAlive: true,
@@ -59,11 +64,11 @@ const otelSdk = new NodeSDK({
     new KafkaJsInstrumentation(),
     new RuntimeNodeInstrumentation(),
   ],
-  logRecordProcessors: [new BatchLogRecordProcessor(new OTLPLogExporter(otlpExporterConfig))],
-  spanProcessors: [new BatchSpanProcessor(new OTLPTraceExporter(otlpExporterConfig))],
+  logRecordProcessors: [new BatchLogRecordProcessor(new OTLPLogExporter(otlpExporterConfig as any))],
+  spanProcessors: [new BatchSpanProcessor(new OTLPTraceExporter(otlpExporterConfig as any))],
   metricReaders: [
     new PeriodicExportingMetricReader({
-      exporter: new OTLPMetricExporter(otlpExporterConfig),
+      exporter: new OTLPMetricExporter(otlpExporterConfig as any),
       exportIntervalMillis: 30 * 1000,
     }),
   ],

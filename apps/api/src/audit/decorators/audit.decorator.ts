@@ -9,16 +9,23 @@ import { Request } from 'express'
 import { AuditAction } from '../enums/audit-action.enum'
 import { AuditTarget } from '../enums/audit-target.enum'
 
-export type TypedRequest<T> = Omit<Request, 'body'> & { body: T }
+// Express 5's @types/express-serve-static-core widened ParamsDictionary[key]
+// from `string` to `string | string[]`, but Express still only ever returns
+// `string` at runtime. Narrow it back so consumers can treat `req.params.foo`
+// as a plain string without per-call-site coercion.
+type NarrowParams = Record<string, string>
+type AuditRequest = Request<NarrowParams>
+
+export type TypedRequest<T> = Omit<AuditRequest, 'body'> & { body: T }
 
 export const MASKED_AUDIT_VALUE = '********'
 
 export interface AuditContext {
   action: AuditAction
   targetType?: AuditTarget
-  targetIdFromRequest?: (req: Request) => string | null | undefined
+  targetIdFromRequest?: (req: AuditRequest) => string | null | undefined
   targetIdFromResult?: (result: any) => string | null | undefined
-  requestMetadata?: Record<string, (req: Request) => any>
+  requestMetadata?: Record<string, (req: AuditRequest) => any>
 }
 
 export const AUDIT_CONTEXT_KEY = 'audit_context'

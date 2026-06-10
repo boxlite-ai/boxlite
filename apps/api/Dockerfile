@@ -11,7 +11,8 @@ WORKDIR /boxlite
 COPY apps/package.json apps/yarn.lock apps/.yarnrc.yml ./
 RUN yarn install --immutable
 
-COPY apps/nx.json apps/tsconfig.base.json apps/NOTICE ./
+COPY apps/nx.json apps/NOTICE ./
+COPY apps/tsconfig.base.json apps/tsconfig.base.json
 
 ARG CACHE_BUST=1
 ENV NX_DAEMON=false
@@ -25,6 +26,13 @@ COPY apps/libs/api-client/ libs/api-client/
 COPY apps/libs/analytics-api-client/ libs/analytics-api-client/
 COPY apps/libs/toolbox-api-client/ libs/toolbox-api-client/
 COPY apps/libs/sdk-typescript/ libs/sdk-typescript/
+
+# tsconfig.base.json (now at apps/) declares paths as "libs/<lib>/src/index.ts"
+# relative to its own dir, i.e. /boxlite/apps/libs/<lib>/…, but the COPYs above
+# place them at /boxlite/libs/<lib>/…  (the stripped layout the nx project graph
+# expects via each lib's sourceRoot). Bridge with a symlink instead of moving
+# files, so both consumers see the libs where they expect.
+RUN ln -s ../libs apps/libs
 
 RUN echo 1777389170 && yarn nx build api --configuration=production --nxBail=true
 

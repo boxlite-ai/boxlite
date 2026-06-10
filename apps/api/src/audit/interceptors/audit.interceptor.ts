@@ -26,7 +26,8 @@ import { AuthContext } from '../../common/interfaces/auth-context.interface'
 import { CustomHeaders } from '../../common/constants/header.constants'
 import { TypedConfigService } from '../../config/typed-config.service'
 
-type RequestWithUser = Request & {
+// See note in audit.decorator.ts about Express 5's ParamsDictionary widening.
+type RequestWithUser = Request<Record<string, string>> & {
   user?: AuthContext
 }
 

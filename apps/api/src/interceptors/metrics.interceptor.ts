@@ -38,7 +38,8 @@ import { TypedConfigService } from '../config/typed-config.service'
 import { UpdateOrganizationRegionQuotaDto } from '../organization/dto/update-organization-region-quota.dto'
 import { UpdateOrganizationDefaultRegionDto } from '../organization/dto/update-organization-default-region.dto'
 
-type RequestWithUser = Request & { user?: { userId: string; organizationId: string } }
+// See note in audit.decorator.ts about Express 5's ParamsDictionary widening.
+type RequestWithUser = Request<Record<string, string>> & { user?: { userId: string; organizationId: string } }
 type CommonCaptureProps = {
   organizationId?: string
   distinctId: string
