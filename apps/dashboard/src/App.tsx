@@ -79,21 +79,6 @@ const SlackRedirect = () => {
   return null
 }
 
-const LegacyBoxRedirect = ({
-  route,
-}: {
-  route: RoutePath.BOX_DETAILS | RoutePath.BOX_TERMINAL | RoutePath.BOX_VNC
-}) => {
-  const location = useLocation()
-  const { boxId } = useParams()
-
-  if (!boxId) {
-    return <Navigate to={`${RoutePath.BOXES}${location.search}`} replace />
-  }
-
-  return <Navigate to={`${generatePath(route, { boxId })}${location.search}`} replace />
-}
-
 const BoxVncFeatureRoute = ({ enabled }: { enabled: boolean }) => {
   const { boxId } = useParams()
 
@@ -211,7 +196,6 @@ function App() {
         <Route path={getRouteSubPath(RoutePath.BILLING)} element={<Billing />} />
         <Route path={getRouteSubPath(RoutePath.PRICING)} element={<Navigate to={RoutePath.BILLING} replace />} />
         <Route path={getRouteSubPath(RoutePath.ADMIN)} element={<Admin />} />
-        <Route path={getRouteSubPath(RoutePath.LEGACY_BOXES)} element={<Navigate to={boxesRedirect} replace />} />
         {/* TODO(image-rewrite): legacy /dashboard/templates route removed with the templates page. */}
         {/* Pathless layout route: a single BoxSessionProvider fiber
             persists across the three box routes, so activation state
@@ -228,18 +212,6 @@ function App() {
           <Route path={getRouteSubPath(RoutePath.BOX_TERMINAL)} element={<BoxTerminalFullscreen />} />
           <Route path={getRouteSubPath(RoutePath.BOX_VNC)} element={<BoxVncFeatureRoute enabled={vncEnabled} />} />
           <Route path={getRouteSubPath(RoutePath.BOX_DETAILS)} element={<BoxDetails />} />
-          <Route
-            path={getRouteSubPath(RoutePath.LEGACY_BOX_TERMINAL)}
-            element={<LegacyBoxRedirect route={RoutePath.BOX_TERMINAL} />}
-          />
-          <Route
-            path={getRouteSubPath(RoutePath.LEGACY_BOX_VNC)}
-            element={<LegacyBoxRedirect route={vncEnabled ? RoutePath.BOX_VNC : RoutePath.BOX_DETAILS} />}
-          />
-          <Route
-            path={getRouteSubPath(RoutePath.LEGACY_BOX_DETAILS)}
-            element={<LegacyBoxRedirect route={RoutePath.BOX_DETAILS} />}
-          />
         </Route>
         {HIDDEN_DASHBOARD_ROUTES.map((path) => (
           <Route key={path} path={getRouteSubPath(path)} element={<Navigate to={boxesRedirect} replace />} />

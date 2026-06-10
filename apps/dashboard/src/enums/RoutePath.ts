@@ -50,12 +50,6 @@ export enum RoutePath {
   BOX_TERMINAL = '/dashboard/boxes/:boxId/terminal',
   BOX_VNC = '/dashboard/boxes/:boxId/vnc',
 
-  // Legacy box routes
-  LEGACY_BOXES = '/dashboard/boxes',
-  LEGACY_BOX_DETAILS = '/dashboard/boxes/:boxId',
-  LEGACY_BOX_TERMINAL = '/dashboard/boxes/:boxId/terminal',
-  LEGACY_BOX_VNC = '/dashboard/boxes/:boxId/vnc',
-
   // Email verification
   EMAIL_VERIFY = '/dashboard/organization/:organizationId/verify-email/:email/:token',
 }
