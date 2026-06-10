@@ -212,7 +212,12 @@ jobs:
           set -euo pipefail
           REGISTRY="${{ steps.ecr_login.outputs.registry }}"
           IMAGE="${REGISTRY}/${ECR_REPO}:api-${{ github.sha }}"
-          docker buildx build --platform linux/amd64 --load -t "$IMAGE" apps/api
+          # Build context = repo root because apps/api/Dockerfile references
+          # paths like `apps/libs/sdk-typescript`, `apps/dashboard`, etc. —
+          # NOT just contents of apps/api/. Using `apps/api` as context would
+          # fail "not found" on those COPY commands.
+          docker buildx build --platform linux/amd64 --load \
+            -f apps/api/Dockerfile -t "$IMAGE" .
           docker push "$IMAGE"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
