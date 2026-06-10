@@ -426,12 +426,26 @@ jobs:
           # appear in subsequent logging.
           echo "::add-mask::$ADMIN_KEY"
 
+          # The Python SDK's REST client builds URLs as
+          # `{url}/v1/{path_prefix}/{endpoint}` (api-routes proxied by
+          # apps/api/src/boxlite-rest/boxlite-{box,proxy}.controller.ts,
+          # `@Controller('v1/:prefix/boxes')`). The `:prefix` is the
+          # caller's organization-scoped path prefix, returned by
+          # `GET /api/v1/me` for the admin API key. Without it the
+          # SDK hits `/api/v1/boxes` which the NestJS router does NOT
+          # match (404 "Cannot POST /api/v1/boxes").
+          PATH_PREFIX=$(curl -fsS -H "Authorization: Bearer $ADMIN_KEY" \
+            "http://${API_DNS}/api/v1/me" | python3 -c 'import json,sys; print(json.load(sys.stdin)["path_prefix"])')
+          [ -n "$PATH_PREFIX" ] || { echo "::error::Empty path_prefix from /api/v1/me"; exit 1; }
+          echo "Resolved path_prefix=${PATH_PREFIX}"
+
           mkdir -p ~/.boxlite
           chmod 700 ~/.boxlite
           {
               printf '[profiles.p1]\n'
-              printf 'url = "http://%s/api"\n' "$API_DNS"
-              printf 'api_key = "%s"\n'        "$ADMIN_KEY"
+              printf 'url = "http://%s/api"\n'  "$API_DNS"
+              printf 'api_key = "%s"\n'         "$ADMIN_KEY"
+              printf 'path_prefix = "%s"\n'     "$PATH_PREFIX"
           } > ~/.boxlite/credentials.toml
           chmod 600 ~/.boxlite/credentials.toml
           unset ADMIN_KEY
