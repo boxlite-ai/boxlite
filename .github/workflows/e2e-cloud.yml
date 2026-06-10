@@ -7,12 +7,13 @@
 # breaking CI. This workflow runs the full path against the always-on
 # Tokyo stack (`boxlite-e2e-ci-*`), not a per-run local bootstrap.
 #
-# Required-check shape: the `e2e-gate` job ALWAYS runs and reports
-# success/failure. Branch protection on `main` should require the
-# `E2E gate (required)` check — the cheap `changes` job on a
-# GitHub-hosted runner decides if the expensive `e2e` job needs to
-# fire at all (token / deploy cost), and the gate collapses the
-# result into one always-reported check.
+# NOT-YET-REQUIRED: this workflow is currently NOT a branch-protection
+# required check. The Tokyo stack's IAM OIDC role (provisioned by
+# `scripts/ci/setup-e2e-cloud-oidc.sh`) and SSM Parameter Store entry
+# `/boxlite/e2e-ci/admin-api-key` must exist before any run can pass.
+# After the first green run, an admin should add the `E2E suite (Tokyo)`
+# (or a re-introduced gate job's name) to branch protection on `main`.
+# Trial runs available now via `workflow_dispatch`.
 #
 # Authentication: GitHub OIDC → AWS STS (no stored AWS credentials).
 # Required AWS resources (provisioned by `scripts/ci/setup-e2e-cloud-oidc.sh`):
@@ -487,35 +488,10 @@ jobs:
           aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$RUNNER" \
             --query StandardOutputContent --output text | tail -500
 
-  # Single always-runs job that branch protection can require.
-  # Collapses the conditional `e2e` outcome into one stable check
-  # name. Pass = e2e ran and passed, OR no relevant paths changed.
-  # Fail = e2e ran and failed / was cancelled.
-  e2e-gate:
-    name: E2E gate (required)
-    needs: [changes, e2e]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Decide gate result
-        run: |
-          set -e
-          IS_DISPATCH="${{ github.event_name == 'workflow_dispatch' }}"
-          RELEVANT="${{ needs.changes.outputs.relevant }}"
-          E2E_RESULT="${{ needs.e2e.result }}"
-
-          if [[ "$RELEVANT" != "true" && "$IS_DISPATCH" != "true" ]]; then
-            echo "✅ E2E gate: skipped — no relevant paths changed in this PR"
-            exit 0
-          fi
-
-          case "$E2E_RESULT" in
-            success)
-              echo "✅ E2E gate: e2e suite passed"
-              exit 0
-              ;;
-            *)
-              echo "❌ E2E gate: e2e suite reported '$E2E_RESULT'"
-              exit 1
-              ;;
-          esac
+  # NOTE: an `e2e-gate` consolidation job has been INTENTIONALLY OMITTED
+  # for now. The gate's purpose is to give branch protection a stable
+  # always-reported status check — but adding it back as a required check
+  # before the Tokyo stack's AWS prerequisites are provisioned would block
+  # every PR (the e2e job has no path to succeed until then). Re-introduce
+  # the gate (and add it to branch protection) once a first green run
+  # against Tokyo is observed.
