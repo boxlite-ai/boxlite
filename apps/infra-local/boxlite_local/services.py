@@ -32,8 +32,10 @@ SPEC_PG = ServiceSpec(
     # wedging a connection mid-query. Without this, a wedged backend stays
     # `active` forever holding a connection, and the API's per-10s lifecycle
     # crons accumulate stuck backends until the pool is exhausted and the
-    # dashboard hangs. (Client-side query_timeout in apps/api frees the API
-    # pool; these reap the orphaned server backend so it doesn't leak.)
+    # dashboard hangs. These reap the orphaned server backend so it doesn't
+    # leak. The client side is deliberately left unprotected to keep apps/
+    # unmodified: a wedged API pool connection may hold its slot until
+    # `make stack-restart COMPONENTS=api`. Root fix belongs in the transport.
     #   - statement_timeout: cap any single query at 30s.
     #   - tcp_keepalives_*: detect a dead peer (~60s) and close the backend.
     # "postgres" as first arg keeps docker-entrypoint.sh's init (initdb/seed).

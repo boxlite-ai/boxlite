@@ -27,12 +27,6 @@ const configuration = {
       idleTimeoutMillis: process.env.DB_POOL_IDLE_TIMEOUT_MS && parseInt(process.env.DB_POOL_IDLE_TIMEOUT_MS, 10),
       connectionTimeoutMillis:
         process.env.DB_POOL_CONNECTION_TIMEOUT_MS && parseInt(process.env.DB_POOL_CONNECTION_TIMEOUT_MS, 10),
-      // Per-query timeouts (default: unset → pg default of no timeout, prod
-      // unchanged). query_timeout aborts a query client-side and recycles the
-      // pool connection; statement_timeout is the matching server-side cap.
-      statementTimeoutMillis:
-        process.env.DB_STATEMENT_TIMEOUT_MS && parseInt(process.env.DB_STATEMENT_TIMEOUT_MS, 10),
-      queryTimeoutMillis: process.env.DB_QUERY_TIMEOUT_MS && parseInt(process.env.DB_QUERY_TIMEOUT_MS, 10),
     },
   },
   redis: {

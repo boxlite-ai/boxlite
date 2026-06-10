@@ -110,22 +110,12 @@ start_api() {
   #   - RUNNER_AVAILABILITY_SCORE_THRESHOLD=5   (prod default 10)
   #   - RUNNER_MEMORY_PENALTY_THRESHOLD=95      (prod default 75)
   #   - RUNNER_DISK_PENALTY_THRESHOLD=95        (prod default 75)
-  # Per-query DB timeouts (prod leaves these unset). Connections to the
-  # postgres L1 box go over the microVM transport, which can silently wedge a
-  # query mid-stream; without a timeout the wedged query holds its pool
-  # connection forever. The lifecycle crons (every 10s) then accumulate stuck
-  # connections until the pool is exhausted and the API/dashboard hang. A
-  # 30s client-side query_timeout abandons such a query and recycles the slot.
-  #   - DB_QUERY_TIMEOUT_MS=30000      (client-side abort + pool recycle)
-  #   - DB_STATEMENT_TIMEOUT_MS=30000  (matching server-side cap)
   # Set BEFORE sourcing apps/.env so anything explicitly set there still
   # wins (set -a + . ./.env exports .env values).
   ( cd "${APPS_DIR}" && \
     export RUNNER_AVAILABILITY_SCORE_THRESHOLD=5 \
            RUNNER_MEMORY_PENALTY_THRESHOLD=95 \
-           RUNNER_DISK_PENALTY_THRESHOLD=95 \
-           DB_QUERY_TIMEOUT_MS=30000 \
-           DB_STATEMENT_TIMEOUT_MS=30000 && \
+           RUNNER_DISK_PENALTY_THRESHOLD=95 && \
     set -a && . ./.env && set +a && \
     nohup corepack yarn nx serve api > "$(log_file api)" 2>&1 & \
     echo $! > "$(pid_file api)" )
