@@ -18,7 +18,7 @@ use std::time::Duration;
 /// Similar to Docker's HEALTHCHECK directive.
 ///
 /// This is an advanced option - most users should rely on the defaults.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HealthCheckOptions {
     /// Time between health checks.
     ///
@@ -569,7 +569,7 @@ impl SecurityOptionsBuilder {
 ///
 /// Entry-level users can ignore this — defaults are compatibility-focused.
 /// Only modify these if you understand the security implications.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AdvancedBoxOptions {
     /// Security isolation options (jailer, seccomp, namespaces, resource limits).
     ///
@@ -594,11 +594,31 @@ pub struct AdvancedBoxOptions {
 
     /// Health check options.
     ///
-    /// When set, a background task will periodically ping the guest agent
-    /// to verify the box is healthy. Unhealthy boxes are marked and can
-    /// trigger automatic recovery.
+    /// When set, a background task periodically pings the guest agent to
+    /// verify the box is healthy, AND — critically for zombie-shim
+    /// prevention (Issue #523) — `waitpid`s the shim if it has died
+    /// asynchronously (OOM, external SIGKILL, internal panic). Detection
+    /// alone isn't enough: a dead shim whose parent never `waitpid`s
+    /// stays in `State: Z` in `/proc` and keeps holding the PID slot.
     ///
-    /// Most users should rely on the defaults.
-    #[serde(default)]
+    /// Default: `Some(HealthCheckOptions::default())` so every box gets
+    /// a watcher without the operator opting in. Disable with explicit
+    /// `health_check: None` if you want neither pings nor zombie reaping
+    /// (you'll then need to handle shim death yourself).
+    #[serde(default = "default_health_check")]
     pub health_check: Option<HealthCheckOptions>,
+}
+
+fn default_health_check() -> Option<HealthCheckOptions> {
+    Some(HealthCheckOptions::default())
+}
+
+impl Default for AdvancedBoxOptions {
+    fn default() -> Self {
+        Self {
+            security: SecurityOptions::default(),
+            isolate_mounts: false,
+            health_check: default_health_check(),
+        }
+    }
 }

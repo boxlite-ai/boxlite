@@ -96,6 +96,13 @@ pub(crate) trait BoxBackend: Send + Sync {
 
     async fn stop(&self) -> BoxliteResult<()>;
 
+    /// Force-stop: skip the SIGTERM grace + guest-shutdown wait that
+    /// `stop()` does, kill the shim with SIGKILL via the canonical
+    /// 持-Child path. Used by `rm --force` (Issue #523 / #613) so that
+    /// rm-force's kill+reap shares the same lifecycle teardown as
+    /// `stop()` instead of bypassing the `Child` handle.
+    async fn stop_force(&self) -> BoxliteResult<()>;
+
     async fn copy_into(
         &self,
         host_src: &Path,

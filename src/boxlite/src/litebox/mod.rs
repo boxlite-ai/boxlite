@@ -116,6 +116,17 @@ impl LiteBox {
         self.box_backend.stop().await
     }
 
+    /// Force-stop variant for `rm --force`. Skips the SIGTERM-then-
+    /// SIGKILL graceful phase + the 10 s guest-agent shutdown wait
+    /// that `stop()` does, and sends SIGKILL immediately via the
+    /// canonical 持-Child path (`ShimHandler::stop_force`). Used by
+    /// `LocalRuntime::remove(force=true)` so the kill+reap shares
+    /// the same lifecycle teardown as `stop()` instead of the older
+    /// PID-only `kill_process + libc::waitpid` shortcut.
+    pub async fn stop_force(&self) -> BoxliteResult<()> {
+        self.box_backend.stop_force().await
+    }
+
     /// Copy files/directories from host into the container rootfs.
     pub async fn copy_into(
         &self,

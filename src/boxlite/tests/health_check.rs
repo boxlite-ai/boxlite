@@ -149,4 +149,98 @@ async fn health_check_becomes_unhealthy_when_shim_killed() {
         health_status.state,
         health_status.failures
     );
+
+    // Belt-and-braces: the leak check in PerTestBoxHome::drop is the
+    // load-bearing assertion (any live PID at home-drop fails the
+    // test), but pin the kernel-level state of the killed shim here
+    // too so a fix regression shows the cause inline rather than only
+    // at the home-drop panic site.
+    let proc_status = std::fs::read_to_string(format!("/proc/{shim_pid}/status"));
+    match proc_status {
+        Ok(s) => {
+            let state_line = s
+                .lines()
+                .find(|l| l.starts_with("State:"))
+                .unwrap_or("State: <missing>")
+                .to_string();
+            assert!(
+                !state_line.contains('Z'),
+                "shim PID {shim_pid} still a zombie after health check fired: \
+                 {state_line}. Health check's shim_died branch must reap \
+                 (libc::waitpid)."
+            );
+        }
+        Err(_) => { /* /proc entry gone — already reaped, ideal */ }
+    }
+}
+
+/// Same shape as `health_check_becomes_unhealthy_when_shim_killed` but
+/// drives the death via `SIGTERM` instead of `SIGKILL`. Covers the
+/// canonical real-world variants — k8s liveness probe's initial signal,
+/// the cgroup OOM-killer's first attempt, `systemctl stop`, plain
+/// `kill <pid>` — anywhere the shim gets a polite "please exit" rather
+/// than an immediate kernel hard-kill.
+///
+/// The reap path inside health check is the same `WNOHANG` retry loop;
+/// nothing special-cases SIGTERM. This test is here so a regression
+/// that *only* handles the SIGKILL path doesn't slip through green.
+#[tokio::test]
+async fn health_check_becomes_unhealthy_when_shim_sigtermed() {
+    let t = BoxTestBase::with_options(health_check_opts(
+        Duration::from_secs(2),
+        Duration::from_secs(1),
+        2,
+        Duration::from_secs(1),
+    ))
+    .await;
+
+    let box_id = t.bx.id().clone();
+    t.bx.start().await.expect("Failed to start box");
+    sleep(Duration::from_secs(4)).await;
+
+    let info = t.runtime.get_info(box_id.as_str()).await.unwrap().unwrap();
+    assert_eq!(info.health_status.state, HealthState::Healthy);
+
+    let shim_pid = info.pid.expect("No shim PID found");
+    println!("SIGTERM-ing shim process with PID: {shim_pid}");
+
+    Command::new("kill")
+        .arg("-TERM")
+        .arg(shim_pid.to_string())
+        .output()
+        .expect("Failed to SIGTERM shim process");
+
+    // SIGTERM goes through shim's signal handler which can take longer
+    // than a SIGKILL hard-kill; reuse the SIGKILL test's 5 s budget.
+    sleep(Duration::from_secs(5)).await;
+
+    let info = t.runtime.get_info(box_id.as_str()).await.unwrap().unwrap();
+    assert_eq!(
+        info.status,
+        BoxStatus::Stopped,
+        "Expected box status to be Stopped after SIGTERM, got {:?}",
+        info.status
+    );
+
+    let health_status = info.health_status;
+    assert!(
+        health_status.state == HealthState::Unhealthy || health_status.failures > 0,
+        "Expected unhealthy state or failures after SIGTERM, got state={:?}, failures={}",
+        health_status.state,
+        health_status.failures
+    );
+
+    let proc_status = std::fs::read_to_string(format!("/proc/{shim_pid}/status"));
+    if let Ok(s) = proc_status {
+        let state_line = s
+            .lines()
+            .find(|l| l.starts_with("State:"))
+            .unwrap_or("State: <missing>")
+            .to_string();
+        assert!(
+            !state_line.contains('Z'),
+            "shim PID {shim_pid} still a zombie after SIGTERM + health check fired: \
+             {state_line}"
+        );
+    }
 }

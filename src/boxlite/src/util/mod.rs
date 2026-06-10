@@ -1,8 +1,10 @@
 mod binary_finder;
+mod child_reaper;
 mod pid_file;
 pub mod process;
 
 pub use binary_finder::{RuntimeBinaryFinder, find_binary};
+pub use child_reaper::spawn_child_reaper;
 pub use pid_file::{PidFileReader, PidFileWriter, PidRecord, ProcessIdentity};
 
 use std::path::PathBuf;
@@ -15,7 +17,8 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, fmt};
 
 pub use process::{
-    ProcessExit, ProcessMonitor, is_process_alive, kill_process, process_start_time,
+    ProcessExit, ProcessMonitor, ReapOutcome, is_process_alive, kill_process, process_start_time,
+    reap_pid_async, reap_pid_blocking,
 };
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

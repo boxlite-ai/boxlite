@@ -166,6 +166,53 @@ impl VmmHandlerTrait for ShimHandler {
         Ok(())
     }
 
+    fn stop_force(&mut self) -> BoxliteResult<()> {
+        // Skip the SIGTERM graceful phase — operator asked for force.
+        // Path mirrors `stop()` except SIGTERM never goes out, so the
+        // `process.try_wait()` poll loop is also unnecessary; we kill
+        // and immediately block on Child::wait (which reaps).
+        if let Some(mut process) = self.process.take() {
+            // SIGKILL via Child::kill (sends signal, doesn't wait).
+            let _ = process.kill();
+            // Child::wait — blocks until the kernel reaps, returns
+            // ExitStatus. Same blocking behaviour as `stop()`'s
+            // timeout-fallback `process.wait()` branch; std worker
+            // pattern in this crate is sync-inside-async (see
+            // ShimHandler::stop documentation).
+            let _ = process.wait();
+            return Ok(());
+        }
+
+        // Attached mode: no Child handle (the shim was reattached after
+        // a daemon restart). SIGKILL by PID, then reap via pidfd helper
+        // — bounded, sleep-free, returns cleanly on a wedged shim.
+        unsafe {
+            libc::kill(self.pid as i32, libc::SIGKILL);
+        }
+        const REAP_DEADLINE_MS: u64 = 2000;
+        // Coderabbitai review on #613: previously this ignored the
+        // reap outcome and returned `Ok(())` unconditionally. That let
+        // `BoxImpl::stop_impl` clear the PID + remove the pid-file +
+        // persist `Stopped` even when the shim hadn't actually died
+        // (TimedOut) or wasn't ours (NotOurChild). Propagate the
+        // non-terminal cases as `Engine` errors so the caller bails
+        // before any destructive cleanup.
+        match crate::util::reap_pid_blocking(self.pid, REAP_DEADLINE_MS) {
+            crate::util::ReapOutcome::Reaped => Ok(()),
+            crate::util::ReapOutcome::TimedOut => Err(BoxliteError::Engine(format!(
+                "force-stop reap of shim pid {} timed out after {} ms; \
+                 shim may still be alive — refusing to declare success",
+                self.pid, REAP_DEADLINE_MS
+            ))),
+            crate::util::ReapOutcome::NotOurChild => Err(BoxliteError::Engine(format!(
+                "force-stop reap of shim pid {} returned NotOurChild; \
+                 the runtime doesn't own the SIGCHLD relationship and \
+                 cannot confirm the shim exited",
+                self.pid
+            ))),
+        }
+    }
+
     fn metrics(&self) -> BoxliteResult<VmmMetrics> {
         use sysinfo::Pid;
 

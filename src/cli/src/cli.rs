@@ -693,12 +693,24 @@ pub struct ManagementFlags {
     /// Automatically remove the box when it exits
     #[arg(long)]
     pub rm: bool,
+
+    /// Disable the per-box health check (Issue #523: also disables the
+    /// async-death zombie reaper that piggybacks on the health-check
+    /// loop). Use when the box is so short-lived or low-priority that
+    /// the 30 s background tick isn't worth its cost — typical case:
+    /// very large fleets where the operator runs their own monitoring
+    /// and accepts having to clean up zombies if a shim dies asynchronously.
+    #[arg(long = "no-health-check")]
+    pub no_health_check: bool,
 }
 
 impl ManagementFlags {
     pub fn apply_to(&self, opts: &mut BoxOptions) {
         opts.detach = self.detach;
         opts.auto_remove = self.rm;
+        if self.no_health_check {
+            opts.advanced.health_check = None;
+        }
     }
 }
 
@@ -707,6 +719,52 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    /// `--no-health-check` is the operator-level escape hatch for the
+    /// default-on health check introduced for zombie-shim reaping
+    /// (Issue #523 / #613). Setting it must clear
+    /// `BoxOptions.advanced.health_check` so the box-init pipeline
+    /// doesn't spawn a watcher task.
+    #[test]
+    fn management_flags_no_health_check_clears_advanced_field() {
+        let flags = ManagementFlags {
+            name: None,
+            detach: false,
+            rm: false,
+            no_health_check: true,
+        };
+        let mut opts = BoxOptions::default();
+        // Sanity-check the baseline default: health check is on at the
+        // schema level so `--no-health-check` actually has work to do.
+        assert!(
+            opts.advanced.health_check.is_some(),
+            "baseline must be health-check-on; otherwise this test isn't measuring the override"
+        );
+        flags.apply_to(&mut opts);
+        assert!(
+            opts.advanced.health_check.is_none(),
+            "--no-health-check must clear advanced.health_check"
+        );
+    }
+
+    /// Negative: leaving the flag off must leave the default-on
+    /// behaviour intact, so absence of the flag and presence of the
+    /// flag have distinguishable effects.
+    #[test]
+    fn management_flags_no_health_check_unset_keeps_default_on() {
+        let flags = ManagementFlags {
+            name: None,
+            detach: false,
+            rm: false,
+            no_health_check: false,
+        };
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts);
+        assert!(
+            opts.advanced.health_check.is_some(),
+            "without --no-health-check the schema default (Some) must win"
+        );
+    }
 
     #[test]
     fn test_apply_env_vars_with_lookup() {

@@ -283,6 +283,153 @@ fn is_process_zombie_macos(pid: u32) -> bool {
     info.pbi_status == libc::SZOMB
 }
 
+// ============================================================================
+// Bounded reap: wait for `pid` to exit (with deadline) then waitpid
+// ============================================================================
+//
+// Used by the rm-force / health-check / attached-stop force paths to
+// replace the WNOHANG-poll-sleep loops that were scattered across
+// `box_impl.rs`, `rt_impl.rs`, and `shim.rs`. Implemented on top of
+// pidfd (Linux 5.3+) so:
+//   - the wait is *bounded* (deadline) without a polling sleep loop,
+//   - the wait is *interruptible* in both sync (poll(2)) and async
+//     (tokio AsyncFd) contexts without spawn_blocking thread leaks,
+//   - shim wedge (D state, uninterruptible sleep) returns
+//     `TimedOut` cleanly instead of hanging forever or burning a
+//     blocking-pool slot.
+//
+// On `pidfd_open` failure (PID not our child, not found, pre-5.3
+// kernel) the helpers fall back to a single WNOHANG attempt — never
+// to a sleep loop, so the worst case is "reaper missed it once."
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ReapOutcome {
+    /// `waitpid` returned the exited child; PID slot freed.
+    Reaped,
+    /// `waitpid` returned -1 (ECHILD or similar). Common in attached
+    /// mode where the shim is owned by a different process.
+    NotOurChild,
+    /// Deadline elapsed; PID still alive (or in an uninterruptible
+    /// state the caller can't escape).
+    TimedOut,
+}
+
+/// One-shot non-blocking `waitpid(pid, _, WNOHANG)`. Fallback for the
+/// `pidfd_open` failure path — never invoked from the normal flow.
+fn reap_once(pid: u32) -> ReapOutcome {
+    let mut status: i32 = 0;
+    // SAFETY: documented C ABI; pid fits libc::pid_t.
+    let r = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) };
+    if r > 0 {
+        ReapOutcome::Reaped
+    } else if r < 0 {
+        ReapOutcome::NotOurChild
+    } else {
+        ReapOutcome::TimedOut
+    }
+}
+
+/// Best-effort open a pidfd for `pid`. Returns the raw fd on success,
+/// or -1 on any failure (including non-Linux targets where pidfd_open
+/// is not a thing — callers fall back to the WNOHANG reap_once path).
+#[cfg(target_os = "linux")]
+fn try_pidfd_open(pid: u32) -> i32 {
+    // pidfd_open is Linux 5.3+; libc 0.2 doesn't always have the
+    // wrapper, so go through SYS_pidfd_open directly.
+    let r = unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0_u32) };
+    if r < 0 { -1 } else { r as i32 }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn try_pidfd_open(_pid: u32) -> i32 {
+    -1
+}
+
+/// Block until `pid` exits, then waitpid. Returns within
+/// `deadline_ms` even if the pid never exits.
+pub fn reap_pid_blocking(pid: u32, deadline_ms: u64) -> ReapOutcome {
+    let pidfd = try_pidfd_open(pid);
+    if pidfd < 0 {
+        return reap_once(pid);
+    }
+    let mut pollfd = libc::pollfd {
+        fd: pidfd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: pollfd is a valid pointer to a single entry; nfds = 1.
+    let r = unsafe { libc::poll(&mut pollfd, 1, deadline_ms as libc::c_int) };
+    unsafe { libc::close(pidfd) };
+    if r > 0 {
+        let mut status: i32 = 0;
+        // SAFETY: pidfd was readable → target PID has exited; calling
+        // waitpid here is non-blocking even with `WNOHANG` cleared.
+        // Crucially, `pidfd_open` will *also* succeed for PIDs that
+        // are not our children, in which case `waitpid` returns
+        // -1/ECHILD instead of reaping — we must NOT report `Reaped`
+        // in that case, because the runtime then frees state (PID
+        // file, DB record) for a shim it never owned. Coderabbitai
+        // review on #613 flagged this; the man-page citation is in
+        // the thread for archaeology.
+        let w = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, 0) };
+        if w > 0 {
+            ReapOutcome::Reaped
+        } else {
+            // -1 → ECHILD (not our child) or another error. Either
+            // way: we did NOT reap. NotOurChild is the safer label
+            // because the runtime then routes through the inline
+            // SIGKILL+wait fallback rather than declaring success.
+            ReapOutcome::NotOurChild
+        }
+    } else if r == 0 {
+        ReapOutcome::TimedOut
+    } else {
+        ReapOutcome::NotOurChild
+    }
+}
+
+/// Async counterpart. Drops cleanly on timeout — no `spawn_blocking`
+/// thread leak.
+pub async fn reap_pid_async(pid: u32, deadline_ms: u64) -> ReapOutcome {
+    use std::os::fd::FromRawFd;
+
+    let pidfd = try_pidfd_open(pid);
+    if pidfd < 0 {
+        return reap_once(pid);
+    }
+    // SAFETY: pidfd is a fresh fd from the kernel; OwnedFd takes
+    // ownership so Drop closes it whether or not AsyncFd succeeds.
+    let owned = unsafe { std::os::fd::OwnedFd::from_raw_fd(pidfd) };
+    let async_fd =
+        match tokio::io::unix::AsyncFd::with_interest(owned, tokio::io::Interest::READABLE) {
+            Ok(f) => f,
+            Err(_) => return reap_once(pid),
+        };
+    match tokio::time::timeout(
+        std::time::Duration::from_millis(deadline_ms),
+        async_fd.readable(),
+    )
+    .await
+    {
+        Ok(Ok(_guard)) => {
+            // Same gotcha as `reap_pid_blocking`: pidfd_open succeeds
+            // for non-child PIDs, and `waitpid(non_child_pid, ..., 0)`
+            // returns -1/ECHILD instead of reaping. Report NotOurChild
+            // in that case so the caller routes through its inline
+            // fallback rather than declaring success.
+            let mut status: i32 = 0;
+            let w = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, 0) };
+            if w > 0 {
+                ReapOutcome::Reaped
+            } else {
+                ReapOutcome::NotOurChild
+            }
+        }
+        _ => ReapOutcome::TimedOut,
+    }
+    // async_fd Drop closes the pidfd.
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

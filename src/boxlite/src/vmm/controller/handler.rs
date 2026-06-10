@@ -16,8 +16,19 @@ use boxlite_shared::BoxliteResult;
 ///
 /// Other metadata (transport, boot duration) is stored in BoxConfig/BoxMetrics.
 pub trait VmmHandler: Send {
-    /// Stop the VM.
+    /// Stop the VM gracefully — SIGTERM, wait up to a budget, then
+    /// SIGKILL if needed.
     fn stop(&mut self) -> BoxliteResult<()>;
+
+    /// Stop the VM immediately with SIGKILL (no graceful SIGTERM phase).
+    ///
+    /// Used by `rm --force` so the kill+reap goes through the same
+    /// 持-Child path as the canonical `stop()` — instead of the
+    /// older `kill_process(pid) + libc::waitpid` shortcut that
+    /// bypassed the `Child` handle (Issue #523 / #613). Functionally
+    /// identical (kernel-level reap), but keeps a single canonical
+    /// kill path in the codebase.
+    fn stop_force(&mut self) -> BoxliteResult<()>;
 
     /// Get VM metrics (CPU, memory, disk usage).
     fn metrics(&self) -> BoxliteResult<VmmMetrics>;

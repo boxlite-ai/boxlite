@@ -279,6 +279,29 @@ impl RuntimeImpl {
 
         tracing::debug!("initialized runtime");
 
+        // Spawn runtime-wide SIGCHLD child reaper as a safety net for
+        // shim processes that die without going through the normal
+        // `Child::wait` path: external SIGKILL, OOM-kill, panic, or a
+        // dropped `Child` handle. Health-check still reaps per-pid via
+        // `reap_pid_async`; this task handles everything health-check
+        // doesn't see.
+        //
+        // Disabled under `cfg(test)`: cargo runs all unit tests in one
+        // process with parallel threads, and `waitpid(-1)` is
+        // process-wide — a reaper spawned by a `#[tokio::test]` would
+        // race-steal dummy `Child`ren that adjacent `#[test]` cases
+        // are about to `try_wait()`. Production binaries (release +
+        // integration-test binaries) keep the auto-spawn. The reaper's
+        // own behaviour is covered by `util::child_reaper::tests`,
+        // which spawns it directly and asserts on a pid it owns.
+        //
+        // Spawn only when a tokio runtime is available — some test
+        // paths construct `RuntimeImpl` synchronously.
+        #[cfg(not(test))]
+        if tokio::runtime::Handle::try_current().is_ok() {
+            let _reaper = crate::util::spawn_child_reaper(inner.shutdown_token.clone());
+        }
+
         // Recover boxes from database
         inner.recover_boxes()?;
 
@@ -831,10 +854,44 @@ impl RuntimeImpl {
             let mut state = state;
             if state.status.is_active() || state.pid.is_some() {
                 if force {
-                    // Force mode: kill the process directly
+                    // Force mode: kill the process directly, then reap.
+                    // Production async path goes through
+                    // `LiteBox::stop_force` → `ShimHandler::stop_force`
+                    // (持-Child); this is the sync fallback for direct
+                    // sync callers (Drop, unit tests). Bounded reap via
+                    // pidfd helper — no sleep loop, no blocking-pool
+                    // leak on a wedged shim.
                     if let Some(pid) = state.pid {
                         tracing::info!(box_id = %id, pid = pid, "Force killing box process");
                         crate::util::kill_process(pid);
+
+                        const FORCE_REAP_DEADLINE_MS: u64 = 2000;
+                        let outcome = crate::util::reap_pid_blocking(pid, FORCE_REAP_DEADLINE_MS);
+                        // Coderabbitai review on #613: previously this
+                        // logged the outcome and proceeded with full
+                        // destructive cleanup regardless. If the reap
+                        // timed out or returned NotOurChild, the shim
+                        // may still be alive while its home directory
+                        // and disks are being torn down. Gate the
+                        // remaining cleanup on a terminal Reaped
+                        // outcome.
+                        match outcome {
+                            crate::util::ReapOutcome::Reaped => {
+                                tracing::debug!(
+                                    box_id = %id, pid, ?outcome,
+                                    "rm-force sync fallback reaped shim"
+                                );
+                            }
+                            crate::util::ReapOutcome::TimedOut
+                            | crate::util::ReapOutcome::NotOurChild => {
+                                return Err(BoxliteError::Engine(format!(
+                                    "rm --force: shim pid {pid} did not reap cleanly \
+                                     (outcome={outcome:?}). Refusing to delete box state \
+                                     while the shim may still be alive. \
+                                     Investigate the pid manually and retry."
+                                )));
+                            }
+                        }
                     }
                     // Update status to stopped and save
                     state.set_status(BoxStatus::Stopped);
@@ -1578,6 +1635,20 @@ impl super::backend::RuntimeBackend for LocalRuntime {
     }
 
     async fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()> {
+        // Force path: route the kill through the canonical 持-Child
+        // `ShimHandler::stop_force` path so `rm --force` shares the
+        // same lifecycle teardown as `stop` / non-force `rm` /
+        // `restart`. After `stop_force()` returns, `state.pid` is
+        // None and the shim is reaped, so the sync `remove_box` call
+        // below skips its inline-waitpid fallback and only does the
+        // DB / disk cleanup.
+        //
+        // If lookup fails (box doesn't exist), let the sync path
+        // surface the not-found error so behaviour stays identical
+        // for that case.
+        if force && let Ok(Some(litebox)) = self.0.get(id_or_name).await {
+            litebox.stop_force().await?;
+        }
         self.0.remove(id_or_name, force)
     }
 

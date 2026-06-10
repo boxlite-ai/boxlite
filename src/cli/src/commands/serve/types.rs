@@ -39,6 +39,20 @@ pub(super) struct CreateBoxRequest {
     pub auto_remove: Option<bool>,
     #[serde(default)]
     pub detach: Option<bool>,
+    /// Disable the per-box health check (Issue #523: also disables the
+    /// async-death zombie reaper that piggybacks on health check).
+    /// `Some(true)` → disable; `Some(false)` / absent → server default
+    /// (currently `Some(HealthCheckOptions::default())`).
+    #[serde(default)]
+    pub health_check_disabled: Option<bool>,
+    /// Non-default health-check settings (interval / timeout /
+    /// retries / start_period). When present AND `health_check_disabled`
+    /// is not `Some(true)`, replaces the server's default
+    /// `HealthCheckOptions`. Added in response to coderabbitai review
+    /// on #613 — without this field a caller's custom settings were
+    /// silently rewritten to defaults on the server.
+    #[serde(default)]
+    pub health_check_settings: Option<boxlite::HealthCheckOptions>,
 }
 
 #[derive(Deserialize)]

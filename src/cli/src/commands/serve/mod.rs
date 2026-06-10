@@ -656,6 +656,23 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         None => NetworkSpec::default(),
     };
 
+    // Resolve health_check policy in priority order:
+    //  1. `health_check_disabled = Some(true)` → operator opt-out
+    //     wins, no watcher is spawned, even if custom settings are
+    //     also present (the operator is explicit; ignore the others).
+    //  2. `health_check_settings = Some(opts)` → use the caller's
+    //     custom settings verbatim. Added per coderabbitai review on
+    //     #613 — previously any caller-side `HealthCheckOptions`
+    //     diverging from defaults was silently rewritten server-side.
+    //  3. Neither → keep `AdvancedBoxOptions::default()`'s default-on
+    //     `Some(HealthCheckOptions::default())` behaviour.
+    let mut advanced = boxlite::AdvancedBoxOptions::default();
+    if req.health_check_disabled.unwrap_or(false) {
+        advanced.health_check = None;
+    } else if let Some(custom) = req.health_check_settings.clone() {
+        advanced.health_check = Some(custom);
+    }
+
     Ok(BoxOptions {
         rootfs,
         cpus: req.cpus,
@@ -669,6 +686,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         user: req.user.clone(),
         auto_remove: req.auto_remove.unwrap_or(false),
         detach: req.detach.unwrap_or(true),
+        advanced,
         ..Default::default()
     })
 }
@@ -1015,6 +1033,108 @@ mod tests {
         assert!(!constant_time_eq(b"abc", b"abd"));
         assert!(!constant_time_eq(b"abc", b"abcd"));
         assert!(constant_time_eq(b"", b""));
+    }
+
+    /// `POST /v1/boxes` body with `health_check_disabled: true` flips
+    /// `advanced.health_check` to `None` in the resulting BoxOptions —
+    /// the SDK→REST→server path's escape hatch for the default-on
+    /// behaviour introduced in Issue #523 / #613.
+    #[test]
+    fn build_box_options_health_check_disabled_true_clears_health_check() {
+        let json = r#"{"image": "alpine:latest", "health_check_disabled": true}"#;
+        let req: super::types::CreateBoxRequest =
+            serde_json::from_str(json).expect("must deserialize");
+        let opts = build_box_options(&req).expect("build_box_options");
+        assert!(
+            opts.advanced.health_check.is_none(),
+            "explicit health_check_disabled=true must clear advanced.health_check"
+        );
+    }
+
+    /// Backward compat: a request body that omits `health_check_disabled`
+    /// (i.e. every pre-#613 client) gets the server-side default, which
+    /// after #613 is `Some(HealthCheckOptions::default())`. The empty
+    /// body must not silently strip health check.
+    #[test]
+    fn build_box_options_no_health_check_field_keeps_default_on() {
+        let json = r#"{"image": "alpine:latest"}"#;
+        let req: super::types::CreateBoxRequest =
+            serde_json::from_str(json).expect("legacy body must still deserialize");
+        let opts = build_box_options(&req).expect("build_box_options");
+        assert!(
+            opts.advanced.health_check.is_some(),
+            "default-on health check must survive a request that doesn't mention it"
+        );
+    }
+
+    /// `Some(false)` is the explicit "I want the default" sentinel —
+    /// behaves identically to omitting the field. Documents the wire
+    /// contract so a confused client setting it to false doesn't get
+    /// the disabled behaviour.
+    #[test]
+    fn build_box_options_health_check_disabled_false_keeps_default_on() {
+        let json = r#"{"image": "alpine:latest", "health_check_disabled": false}"#;
+        let req: super::types::CreateBoxRequest =
+            serde_json::from_str(json).expect("must deserialize");
+        let opts = build_box_options(&req).expect("build_box_options");
+        assert!(
+            opts.advanced.health_check.is_some(),
+            "health_check_disabled=false must be treated as 'use default' (= on)"
+        );
+    }
+
+    /// Coderabbitai review #613: a request body carrying custom
+    /// `health_check_settings` must drive the server's
+    /// `advanced.health_check` with those exact settings — not the
+    /// server default. Reverting the `else if let Some(custom)` arm
+    /// in `build_box_options` flips this red.
+    #[test]
+    fn build_box_options_honours_custom_health_check_settings() {
+        let json = r#"{
+            "image": "alpine:latest",
+            "health_check_settings": {
+                "interval":     {"secs": 7,  "nanos": 0},
+                "timeout":      {"secs": 3,  "nanos": 0},
+                "retries":      2,
+                "start_period": {"secs": 11, "nanos": 0}
+            }
+        }"#;
+        let req: super::types::CreateBoxRequest =
+            serde_json::from_str(json).expect("must deserialize");
+        let opts = build_box_options(&req).expect("build_box_options");
+        let got = opts
+            .advanced
+            .health_check
+            .as_ref()
+            .expect("custom settings must produce a populated health_check");
+        assert_eq!(got.interval, std::time::Duration::from_secs(7));
+        assert_eq!(got.timeout, std::time::Duration::from_secs(3));
+        assert_eq!(got.retries, 2);
+        assert_eq!(got.start_period, std::time::Duration::from_secs(11));
+    }
+
+    /// Opt-out wins: if a request carries BOTH `health_check_disabled: true`
+    /// AND `health_check_settings`, the explicit disable is honoured
+    /// and the settings are ignored.
+    #[test]
+    fn build_box_options_disabled_wins_over_settings() {
+        let json = r#"{
+            "image": "alpine:latest",
+            "health_check_disabled": true,
+            "health_check_settings": {
+                "interval":     {"secs": 7,  "nanos": 0},
+                "timeout":      {"secs": 3,  "nanos": 0},
+                "retries":      2,
+                "start_period": {"secs": 11, "nanos": 0}
+            }
+        }"#;
+        let req: super::types::CreateBoxRequest =
+            serde_json::from_str(json).expect("must deserialize");
+        let opts = build_box_options(&req).expect("build_box_options");
+        assert!(
+            opts.advanced.health_check.is_none(),
+            "explicit disable must beat custom settings"
+        );
     }
 
     /// Build an `ActiveExecution` backed by a stub `Execution` whose

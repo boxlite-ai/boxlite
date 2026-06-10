@@ -5,6 +5,7 @@
 // ============================================================================
 
 use std::sync::Arc;
+use std::sync::Weak;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -29,7 +30,7 @@ use crate::metrics::{BoxMetrics, BoxMetricsStorage};
 use crate::portal::GuestSession;
 use crate::portal::interfaces::GuestInterface;
 use crate::runtime::layout::BoxFilesystemLayout;
-use crate::runtime::rt_impl::SharedRuntimeImpl;
+use crate::runtime::rt_impl::{RuntimeImpl, SharedRuntimeImpl};
 use crate::runtime::types::BoxStatus;
 use crate::vmm::controller::VmmHandler;
 use crate::{BoxID, BoxInfo, HealthCheckOptions, HealthState};
@@ -321,6 +322,24 @@ impl BoxImpl {
     }
 
     pub(crate) async fn stop(&self) -> BoxliteResult<()> {
+        self.stop_impl(false).await
+    }
+
+    /// Force-stop variant for `rm --force`: skips the SIGTERM grace
+    /// phase + the 10 s guest-agent shutdown wait, and goes straight to
+    /// SIGKILL via `ShimHandler::stop_force()`. Shares the rest of the
+    /// teardown pipeline with `stop()` (health-check cancel, PID-file
+    /// cleanup, state transition, DB sync, listener notification) so
+    /// the only behavioural delta is "no graceful steps". This aligns
+    /// `rm --force` with the canonical 持-Child kill path; the inline
+    /// `kill_process + libc::waitpid` block in `rt_impl::remove_box`'s
+    /// force branch is now a fallback for direct sync callers
+    /// (Drop / tests) that bypass the async surface.
+    pub(crate) async fn stop_force(&self) -> BoxliteResult<()> {
+        self.stop_impl(true).await
+    }
+
+    async fn stop_impl(&self, force: bool) -> BoxliteResult<()> {
         let t0 = Instant::now();
 
         // Early exit if already stopped (idempotent, prevents double-counting)
@@ -357,22 +376,33 @@ impl BoxImpl {
         if should_attach && let Ok(live) = self.live_state().await {
             // Recovered boxes lazy-attach here via vmm_attach (now
             // ProcessIdentity-gated). Live boxes hit the cached LiveState.
-            // Either way the teardown is identical:
-            let guest_shutdown = async {
-                if let Ok(mut guest) = live.guest_session.guest().await {
-                    let _ = guest.shutdown().await;
+            // Force path skips the graceful guest-agent shutdown
+            // (operator asked for `rm --force` precisely to not wait).
+            if !force {
+                let guest_shutdown = async {
+                    if let Ok(mut guest) = live.guest_session.guest().await {
+                        let _ = guest.shutdown().await;
+                    }
+                };
+                if tokio::time::timeout(Duration::from_secs(10), guest_shutdown)
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!(box_id = %self.config.id, "Guest shutdown timed out after 10s");
                 }
-            };
-            if tokio::time::timeout(Duration::from_secs(10), guest_shutdown)
-                .await
-                .is_err()
-            {
-                tracing::warn!(box_id = %self.config.id, "Guest shutdown timed out after 10s");
             }
 
-            // Stop handler
+            // Stop handler — SIGTERM-then-SIGKILL for `stop`, immediate
+            // SIGKILL for `stop_force`. Both paths block on
+            // `Child::wait()` (the 持-Child canonical reap) when the
+            // handler owns a Child, or fall back to `libc::waitpid`
+            // in attached mode.
             if let Ok(mut handler) = live.handler.lock() {
-                handler.stop()?;
+                if force {
+                    handler.stop_force()?;
+                } else {
+                    handler.stop()?;
+                }
             }
         }
         // If live_state() failed (vmm_attach said Absent — shim is gone),
@@ -446,7 +476,11 @@ impl BoxImpl {
             .boxes_stopped
             .fetch_add(1, Ordering::Relaxed);
 
-        if self.config.options.auto_remove {
+        // Skip auto_remove when force-stopping — `rm --force` is the
+        // caller, and it'll run `runtime.remove_box` itself once
+        // stop_force returns. Triggering remove_box from here would
+        // race with the caller's own removal.
+        if !force && self.config.options.auto_remove {
             self.runtime.remove_box(self.id(), false)?;
         }
 
@@ -703,21 +737,33 @@ impl BoxImpl {
         // Stash (rename → exit.previous) preserves forensic data.
         crate::runtime::rt_impl::stash_exit_file(&self.layout);
 
-        // Start health check task if configured
+        // Start health check task if configured. Failing to obtain the
+        // guest interface here is non-fatal: health check is best-effort
+        // (liveness ping + zombie reap on async shim death), and
+        // propagating the error would break recovered/attached boxes
+        // whose guest session can't be re-established — `stop_impl`'s
+        // kill branch depends on `live_state()` succeeding.
         if let Some(ref health_config) = self.config.options.advanced.health_check {
-            // Get guest interface from session
-            let guest = live_state.guest_session.guest().await?;
-
-            // Spawn health check task
-            let health_task = self.spawn_health_check(
-                Arc::clone(&self.state),
-                self.config.id.clone(),
-                health_config.to_owned(),
-                guest,
-                self.shutdown_token.child_token(),
-                Arc::clone(&self.runtime),
-            );
-            *self.health_check_task.write() = Some(health_task);
+            match live_state.guest_session.guest().await {
+                Ok(guest) => {
+                    let health_task = self.spawn_health_check(
+                        Arc::clone(&self.state),
+                        self.config.id.clone(),
+                        health_config.to_owned(),
+                        guest,
+                        self.shutdown_token.child_token(),
+                        Arc::downgrade(&self.runtime),
+                    );
+                    *self.health_check_task.write() = Some(health_task);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        box_id = %self.config.id,
+                        error = %e,
+                        "Skipping health check task: guest session unavailable"
+                    );
+                }
+            }
         }
 
         tracing::info!(
@@ -729,6 +775,16 @@ impl BoxImpl {
         Ok(live_state)
     }
 
+    /// Spawns the periodic health check task.
+    ///
+    /// The task holds a `Weak<RuntimeImpl>` (not Arc) so that an
+    /// out-of-band runtime drop — e.g. the user drops their
+    /// `BoxliteRuntime` handle while a box is detached and the
+    /// box-scoped `shutdown_token` was never cancelled — does not pin
+    /// the runtime alive forever. On each persistence write the task
+    /// `upgrade()`s the Weak; if the runtime is already gone, the
+    /// write is skipped (state would have nowhere to land anyway) and
+    /// the task exits on the next iteration.
     pub fn spawn_health_check(
         &self,
         state: Arc<RwLock<BoxState>>,
@@ -736,7 +792,7 @@ impl BoxImpl {
         health_config: HealthCheckOptions,
         mut guest: GuestInterface,
         shutdown_token: CancellationToken,
-        runtime: SharedRuntimeImpl,
+        runtime: Weak<RuntimeImpl>,
     ) -> JoinHandle<()> {
         let interval = health_config.interval;
         let check_timeout = health_config.timeout;
@@ -767,6 +823,19 @@ impl BoxImpl {
                         break;
                     }
                 }
+
+                // Bail out if the runtime has been dropped. Without
+                // this check the task would keep pinging the guest
+                // forever (no Arc on the runtime to extend its life
+                // and no shutdown_token to cancel us, e.g. detached
+                // box + runtime drop without explicit stop).
+                let Some(runtime) = runtime.upgrade() else {
+                    tracing::debug!(
+                        box_id = %box_id,
+                        "Health check task exiting: runtime dropped"
+                    );
+                    break;
+                };
 
                 let elapsed = start_time.elapsed();
                 let result = if elapsed < start_period {
@@ -842,7 +911,12 @@ impl BoxImpl {
                         false
                     };
 
-                    // If shim died, mark as Unhealthy and stop health check immediately
+                    // If shim died, mark as Unhealthy and stop health check immediately.
+                    // Zombie cleanup is not health-check's job — the runtime-wide
+                    // SIGCHLD reaper (`util::child_reaper::spawn_child_reaper`,
+                    // wired in `RuntimeImpl::new`) drains every zombie via
+                    // `waitpid(-1, ..., WNOHANG)` the moment the kernel posts
+                    // SIGCHLD, regardless of whether health-check has noticed.
                     if shim_died {
                         let mut state_guard = state.write();
                         state_guard.force_status(BoxStatus::Stopped);
@@ -1100,6 +1174,10 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
 
     async fn stop(&self) -> BoxliteResult<()> {
         self.stop().await
+    }
+
+    async fn stop_force(&self) -> BoxliteResult<()> {
+        self.stop_force().await
     }
 
     async fn copy_into(
