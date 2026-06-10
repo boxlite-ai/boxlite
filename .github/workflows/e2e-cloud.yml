@@ -371,7 +371,12 @@ jobs:
           # With -A -t output, the SELECT row is one line: "<uuid>|4|8192|20".
           # ECS Exec exit-code propagation through Session Manager is
           # historically unreliable; grep the output as ground truth.
-          grep -E '\|4\|8192\|20$' "$OUT" \
+          #
+          # ECS Exec routes through SSM Session Manager, which uses CRLF
+          # line endings, so each output line has a trailing \r. Strip
+          # CR before greping so the `$` anchor matches reliably.
+          tr -d '\r' < "$OUT" \
+            | grep -E '\|4\|8192\|20$' \
             || { echo "::error::admin-org quota SELECT did not show target values (|4|8192|20)"; exit 1; }
 
       # ──────────────────────────────────────────────────────────────────
