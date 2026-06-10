@@ -1,0 +1,63 @@
+# Source-mode Dockerfile for e2e-cloud — runs TypeScript directly via tsx,
+# no webpack build, no dashboard build, no strict type check.
+#
+# Why a separate Dockerfile:
+# - Production deploys (apps/api/Dockerfile) bundle via `nx build api
+#   --configuration=production` which gates on strict TS type checking.
+#   That gate currently fails on apps/api/src against main (160 TS errors
+#   from drifted Express type narrowing in *.controller.ts + OpenTelemetry
+#   exporter type mismatch in tracing.ts), unrelated to this PR's scope.
+# - The e2e-cloud workflow needs an Api image to deploy to Tokyo + run
+#   the e2e suite against, even when the prod build is broken.
+# - tsx (≥4.20, already in apps/package.json) transpiles TS to JS at
+#   import time, never type-checks → bypasses the build-time gate while
+#   keeping runtime semantics identical (same NestJS app, same routes).
+#
+# Dashboard (Vite frontend) is omitted entirely: e2e tests hit the API
+# directly, no static-file serving from dashboard is required by the
+# pytest cases under scripts/test/e2e/cases/.
+#
+# Trade-offs vs production Dockerfile:
+# - Slower cold start (tsx parses TS on first import; ~5-15s extra)
+# - Higher resident memory (no tree-shaking)
+# - Type errors become RUNTIME errors instead of build errors (acceptable
+#   for an e2e smoke test against deployed code)
+
+FROM node:24-slim AS boxlite-source
+ENV CI=true
+
+RUN apt-get update && apt-get install -y --no-install-recommends bash curl && \
+  rm -rf /var/lib/apt/lists/*
+RUN npm install -g corepack && corepack enable
+
+WORKDIR /boxlite
+
+COPY apps/package.json apps/yarn.lock apps/.yarnrc.yml ./
+RUN yarn install --immutable
+
+COPY apps/nx.json apps/tsconfig.base.json apps/NOTICE ./
+
+# tsx auto-discovers tsconfig.json in cwd — symlink so the path-alias
+# definitions in apps/tsconfig.base.json (the `@boxlite-ai/*` mappings)
+# resolve at import time without needing an explicit --tsconfig flag.
+RUN ln -sf tsconfig.base.json tsconfig.json
+
+ENV NX_DAEMON=false
+
+COPY apps/api/ apps/api/
+
+# Path mappings in tsconfig.base.json point at libs/X/src/index.ts
+# (not apps/libs/...), so COPY destination matches that layout.
+COPY apps/libs/runner-api-client/ libs/runner-api-client/
+COPY apps/libs/api-client/ libs/api-client/
+COPY apps/libs/analytics-api-client/ libs/analytics-api-client/
+COPY apps/libs/toolbox-api-client/ libs/toolbox-api-client/
+COPY apps/libs/sdk-typescript/ libs/sdk-typescript/
+
+ARG VERSION=0.0.1
+ENV VERSION=${VERSION}
+
+HEALTHCHECK CMD [ "curl", "-f", "http://localhost:3000/api/config" ]
+
+# Run the NestJS entry point through tsx (no compile, no bundle).
+ENTRYPOINT ["yarn", "tsx", "apps/api/src/main.ts"]

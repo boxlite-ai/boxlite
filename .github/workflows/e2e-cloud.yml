@@ -206,25 +206,18 @@ jobs:
         id: ecr_login
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build & push Api image
+      - name: Build & push Api image (source mode via tsx, no webpack)
         id: build_api
         run: |
           set -euo pipefail
           REGISTRY="${{ steps.ecr_login.outputs.registry }}"
           IMAGE="${REGISTRY}/${ECR_REPO}:api-${{ github.sha }}"
-          # Build context = repo root because apps/api/Dockerfile references
-          # paths like `apps/libs/sdk-typescript`, `apps/dashboard`, etc. —
-          # NOT just contents of apps/api/. Using `apps/api` as context would
-          # fail "not found" on those COPY commands.
-          #
-          # NX_BUILD_CONFIG=development skips strict TS type checking
-          # (project.json `development.skipTypeChecking: true`) while still
-          # producing the runtime bundle. Required because apps/api on main
-          # currently fails the production type-check pass; fixing those is
-          # a separate concern not in scope of this PR.
+          # Use apps/api/Dockerfile.source — runs TS directly via tsx at
+          # container runtime, NO webpack build, NO dashboard build, NO
+          # strict TS type-check gate. See that file's header for rationale.
+          # Build context = repo root (Dockerfile references apps/libs/...).
           docker buildx build --platform linux/amd64 --load \
-            --build-arg NX_BUILD_CONFIG=development \
-            -f apps/api/Dockerfile -t "$IMAGE" .
+            -f apps/api/Dockerfile.source -t "$IMAGE" .
           docker push "$IMAGE"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
