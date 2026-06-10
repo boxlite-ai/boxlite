@@ -727,3 +727,40 @@ func TestSdkExecSignalReturnsUnsupported(t *testing.T) {
 		t.Fatalf("expected ErrSignalUnsupported, got %v", err)
 	}
 }
+
+// Done-vs-closed race for the attach (WebSocket) control ops. Done (process
+// finished) is set before the closed flag in abnormal exits; these ops must
+// reject a finished exec rather than act on a dead handle. Two-side: without
+// the Done check the stub ops succeed (return nil); with it they error.
+
+func TestAttachSignalClosedExecErrors(t *testing.T) {
+	m := newQuietManager(t)
+	exec := registerStub(t, m, "attach-sig", &stubExecHandle{})
+	close(exec.Done)
+
+	if err := exec.AttachSignal(int(syscall.SIGTERM)); err == nil {
+		t.Fatal("AttachSignal on a Done exec must error, got nil")
+	}
+}
+
+func TestAttachResizeClosedExecErrors(t *testing.T) {
+	m := newQuietManager(t)
+	exec := registerStub(t, m, "attach-resize", &stubExecHandle{})
+	exec.TTY = true // ensure the only error source is the Done check, not !TTY
+	close(exec.Done)
+
+	if err := exec.AttachResize(40, 120); err == nil {
+		t.Fatal("AttachResize on a Done exec must error, got nil")
+	}
+}
+
+func TestAttachWriteStdinClosedExecErrors(t *testing.T) {
+	m := newQuietManager(t)
+	exec := registerStub(t, m, "attach-stdin", &stubExecHandle{})
+	exec.stdinW = writerOnly{} // a live writer, so only Done causes the error
+	close(exec.Done)
+
+	if _, err := exec.AttachWriteStdin([]byte("data")); err == nil {
+		t.Fatal("AttachWriteStdin on a Done exec must error, got nil")
+	}
+}

@@ -308,3 +308,20 @@ func TestBoxliteExecSignalClosedReturns409(t *testing.T) {
 		t.Fatalf("signal on closed exec: expected 409, got %d body=%s", w.Code, w.Body.String())
 	}
 }
+
+// Same Done-vs-closed race as the signal endpoint: resizing a finished exec
+// must return 409, not silently no-op against a dead handle.
+func TestBoxliteExecResizeClosedReturns409(t *testing.T) {
+	mgr := withFreshExecManager(t)
+	stub := &signalCapturingExec{}
+	exec := seedManagedExec(mgr, "exec-closed-resize", stub)
+	close(exec.Done)
+
+	w := runHandler(http.MethodPost,
+		"/v1/boxes/:boxId/executions/:execId/resize",
+		"/v1/boxes/box/executions/exec-closed-resize/resize",
+		strings.NewReader(`{"rows":40,"cols":120}`), BoxliteExecResize)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("resize on closed exec: expected 409, got %d body=%s", w.Code, w.Body.String())
+	}
+}
