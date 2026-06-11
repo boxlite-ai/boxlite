@@ -100,19 +100,34 @@ jobs:
 
       - name: Install Rust build system deps (build mode)
         if: inputs.libboxlite_source == 'build'
+        # Subset of scripts/setup/setup-ubuntu.sh's apt list — only what
+        # boxlite-c + boxlite-guest need under BOXLITE_DEPS_STUB=2:
+        #   - musl-tools: musl-gcc for boxlite-guest static linking
+        #   - gperf: build-libseccomp.sh uses it when compiling libseccomp.a
+        #           for the musl target (libseccomp.a is not in apt for musl)
+        #   - pkg-config: cargo build script dep resolution
+        #   - protobuf-compiler: boxlite-shared's build.rs invokes protoc
+        #   - libssl-dev: openssl-sys (transitive)
+        # DEPS_STUB=2 skips the bubblewrap/libkrun/e2fsprogs path entirely,
+        # so we DON'T need meson/ninja/libcap-dev/llvm/libclang-dev/etc.
         run: |
           sudo apt-get install -y --no-install-recommends \
-            musl-tools pkg-config protobuf-compiler
+            musl-tools gperf pkg-config protobuf-compiler libssl-dev
 
       - name: Build boxlite-guest (musl static, embedded into .a)
         if: inputs.libboxlite_source == 'build'
         env:
           BOXLITE_DEPS_STUB: "2"
+        # boxlite-guest links libseccomp.a for the *target* triple
+        # (x86_64-unknown-linux-musl). Ubuntu's libseccomp-dev only
+        # provides the host .so. scripts/build/build-guest.sh sources
+        # build-libseccomp.sh which cross-builds libseccomp.a from
+        # upstream source into target/native/ and exports the env vars
+        # libseccomp-sys's build.rs reads — same path build-c.yml takes
+        # via `make setup:build guest`.
         run: |
           set -euo pipefail
-          GUEST_TARGET=$(bash scripts/util.sh --target)
-          echo "Guest target: $GUEST_TARGET"
-          cargo build --release --target "$GUEST_TARGET" -p boxlite-guest
+          bash scripts/build/build-guest.sh --profile release
 
       - name: Build libboxlite.a from this checkout (build mode)
         if: inputs.libboxlite_source == 'build'
