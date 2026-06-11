@@ -315,3 +315,5 @@ jobs:
               --security-group-rule-ids "$RULE_ID" \
               --query 'Return' --output text
           echo "::notice::SG rule $RULE_ID revoked"
+
+# 2026-06-11T15:04:57Z — boundary removed; re-verify SSH+SCP CI path standalone
