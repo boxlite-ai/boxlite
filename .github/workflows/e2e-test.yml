@@ -17,7 +17,7 @@
 #
 # Authentication:
 #   AWS: GitHub OIDC → AWS STS (no stored AWS credentials)
-#   GitHub: GitHub App → short-lived installation token (no PAT)
+#   GitHub App: optional; only required when creating a new self-hosted runner
 #
 # Setup: ./scripts/ci/setup-ci-runner.sh
 name: E2E Tests
@@ -106,8 +106,22 @@ jobs:
     outputs:
       instance-id: ${{ steps.ensure-instance.outputs.instance-id }}
     steps:
+      - name: Detect GitHub App credentials
+        id: gh-app
+        env:
+          GH_APP_ID: ${{ vars.GH_APP_ID }}
+          GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
+        run: |
+          if [ -n "$GH_APP_ID" ] && [ -n "$GH_APP_PRIVATE_KEY" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::GH_APP_ID/GH_APP_PRIVATE_KEY not configured; reusing existing EC2 runner only."
+          fi
+
       - name: Generate GitHub App token
         id: app-token
+        if: steps.gh-app.outputs.available == 'true'
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ vars.GH_APP_ID }}
@@ -171,10 +185,14 @@ jobs:
 
           else
             echo "Instance not found or terminated. Creating new one..."
+            if [ -z "${GH_APP_TOKEN:-}" ]; then
+              echo "::error::GH_APP_ID/GH_APP_PRIVATE_KEY are required to register a newly-created self-hosted runner."
+              exit 1
+            fi
 
             # Generate runner registration token for user-data
             REG_TOKEN=$(curl -sf -X POST \
-              -H "Authorization: token ${{ steps.app-token.outputs.token }}" \
+              -H "Authorization: token ${GH_APP_TOKEN}" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${{ github.repository }}/actions/runners/registration-token" \
               | jq -r .token)
@@ -256,9 +274,19 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_APP_TOKEN: ${{ steps.app-token.outputs.token }}
 
       - name: Wait for runner to come online
+        env:
+          GH_APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
+          if [ -z "${GH_APP_TOKEN:-}" ]; then
+            echo "::notice::Skipping GitHub runner-online API poll because GitHub App credentials are not configured."
+            echo "The self-hosted e2e-tests job will queue until the existing EC2 runner connects."
+            sleep 30
+            exit 0
+          fi
+
           TIMEOUT=180
           ELAPSED=0
           INTERVAL=10
@@ -267,7 +295,7 @@ jobs:
 
           while [ $ELAPSED -lt $TIMEOUT ]; do
             STATUS=$(curl -sf \
-              -H "Authorization: token ${{ steps.app-token.outputs.token }}" \
+              -H "Authorization: token ${GH_APP_TOKEN}" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${{ github.repository }}/actions/runners" \
               | jq -r '.runners[] | select(.labels[].name == "${{ env.RUNNER_LABEL }}") | .status // empty' \
