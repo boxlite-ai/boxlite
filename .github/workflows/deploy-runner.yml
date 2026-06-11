@@ -1,0 +1,154 @@
+# Build + deploy the boxlite-runner binary to the Tokyo EC2 host.
+#
+# Self-contained: chains build-c.yml (libboxlite.a from THIS checkout's
+# Rust source) → build-runner-binary.yml (Go binary linking the .a) →
+# a deploy job that pushes to S3 and waits for the EC2-side systemd
+# timer to hot-swap the binary.
+#
+# Triggers:
+# - workflow_call:     reused from .github/workflows/e2e-cloud.yml so the
+#                      e2e job depends on a fresh runner being live
+#                      before pytest.
+# - workflow_dispatch: standalone trigger for verifying the deploy
+#                      pipeline (build + deploy) without going through
+#                      the API rebuild + pytest chain.
+#
+# The Tokyo runner's S3 poller (one-time install via PowerUserAccess
+# SSM) is the consumer end — see docs/runbook/runner-self-update.md
+# (TODO) or the installer at /usr/local/bin/boxlite-runner-poll.sh on
+# i-0198ebab64f67b9ff.
+#
+# All AWS interactions in the `deploy` job use the existing e2e-cloud
+# OIDC role's permissions (`s3:PutObject`/`GetObject`/`HeadObject` on
+# `${stack_prefix}-storagebucket-*/builds/*` + read-only resource
+# resolution). No IAM mutation needed.
+name: Deploy Runner Binary
+
+on:
+  workflow_call: {}
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Build libboxlite.a from THIS checkout's Rust source ────────────
+  # target_filter constrains the matrix to linux-x64-gnu (Tokyo runner
+  # is amd64; skip macOS / linux-arm64 entries from the platforms list).
+  build_c_sdk:
+    name: Build C SDK (linux-x64-gnu)
+    uses: ./.github/workflows/build-c.yml
+    with:
+      target_filter: linux-x64-gnu
+    permissions:
+      # Inherit defaults — build-c.yml's `upload-to-release` job declares
+      # contents: write; even though that job's `if:` skips for
+      # workflow_call, the caller still needs to grant at-least-as-much.
+      contents: write
+
+  # ── Build the Go runner binary linking the fresh libboxlite.a ──────
+  build_runner:
+    name: Build runner binary
+    needs: build_c_sdk
+    uses: ./.github/workflows/build-runner-binary.yml
+    with:
+      libboxlite_source: build
+    permissions:
+      contents: write
+
+  # ── Deploy: push to S3, EC2-side poller picks up + swaps ───────────
+  deploy:
+    name: Deploy runner to Tokyo EC2 (S3 polling)
+    needs: build_runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      # Reads from repo Variables (same pattern as e2e-cloud.yml). Stage
+      # / region / role ARN are not secrets; the role's safety is
+      # enforced by its OIDC trust policy.
+      AWS_REGION: ${{ vars.AWS_E2E_CLOUD_REGION }}
+      AWS_ROLE_ARN: ${{ vars.AWS_E2E_CLOUD_ROLE_ARN }}
+      STACK_PREFIX: boxlite-e2e-ci
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: deploy-runner-${{ github.run_id }}
+
+      - name: Resolve S3 bucket
+        id: resources
+        run: |
+          set -euo pipefail
+          BUCKETS=$(aws s3api list-buckets \
+            --query "Buckets[?starts_with(Name, '${STACK_PREFIX}-storagebucket')].Name" \
+            --output text)
+          COUNT=$(echo "$BUCKETS" | wc -w | tr -d ' ')
+          if [ "$COUNT" -ne 1 ]; then
+              echo "::error::Expected exactly 1 storagebucket starting with ${STACK_PREFIX}-storagebucket, found $COUNT"
+              exit 1
+          fi
+          echo "s3_bucket=$BUCKETS" >> "$GITHUB_OUTPUT"
+          echo "::notice::S3 bucket: $BUCKETS"
+
+      - name: Download runner binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: runner-linux-amd64
+          path: /tmp/runner-artifact/
+
+      - name: Upload runner binary to S3 + wait for self-update
+        run: |
+          set -euo pipefail
+          S3_BUCKET="${{ steps.resources.outputs.s3_bucket }}"
+          ARCHIVE=$(ls /tmp/runner-artifact/boxlite-runner-*-linux-amd64.tar.gz | head -1)
+          [ -n "$ARCHIVE" ] || { echo "::error::No runner artifact found"; exit 1; }
+
+          PREFIX="builds/runner-deploy"
+          BIN_KEY="${PREFIX}/binary.tar.gz"
+          REQ_KEY="${PREFIX}/request-${GITHUB_SHA}.txt"
+          DONE_KEY="${PREFIX}/done-${GITHUB_SHA}.txt"
+
+          aws s3 cp "$ARCHIVE" "s3://${S3_BUCKET}/${BIN_KEY}"
+          echo "::notice::Binary uploaded to s3://${S3_BUCKET}/${BIN_KEY}"
+
+          printf 'sha=%s\nrequested_at=%s\n' \
+              "${GITHUB_SHA}" \
+              "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              | aws s3 cp - "s3://${S3_BUCKET}/${REQ_KEY}"
+          echo "::notice::Request marker written to s3://${S3_BUCKET}/${REQ_KEY}"
+
+          # EC2-side systemd-timer poller runs every 30s. Allow 4 min
+          # total (cron 30 s + binary swap 5 s + systemctl start 5 s
+          # typical ≈ 60 s; extra slack for cold-start contention).
+          echo "Waiting for runner self-update (max 240 s)..."
+          for i in $(seq 1 48); do
+              sleep 5
+              if aws s3api head-object \
+                  --bucket "$S3_BUCKET" --key "$DONE_KEY" \
+                  >/dev/null 2>&1; then
+                  STATUS=$(aws s3 cp "s3://${S3_BUCKET}/${DONE_KEY}" - 2>/dev/null | head -1 || echo "")
+                  echo "::notice::Runner deploy status: $STATUS"
+                  case "$STATUS" in
+                      OK*)
+                          # Optional second line: binary_sha256=...
+                          aws s3 cp "s3://${S3_BUCKET}/${DONE_KEY}" - 2>/dev/null | tail -n +2 || true
+                          echo "::notice::Runner self-update complete (SHA ${GITHUB_SHA})"
+                          exit 0 ;;
+                      FAIL*)
+                          echo "::error::Runner self-update failed: $STATUS"
+                          aws s3 cp "s3://${S3_BUCKET}/${DONE_KEY}" - 2>/dev/null || true
+                          exit 1 ;;
+                      *)
+                          echo "::error::Unexpected status from poller: $STATUS"
+                          exit 1 ;;
+                  esac
+              fi
+              echo "  [$i/48] waiting for done-${GITHUB_SHA}.txt..."
+          done
+          echo "::error::Runner self-update timed out after 240 s — poller offline or SSM agent down?"
+          exit 1

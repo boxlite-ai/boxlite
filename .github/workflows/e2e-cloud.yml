@@ -133,58 +133,26 @@ jobs:
               - '.github/workflows/build-runner-binary.yml'
               - '.github/workflows/build-c.yml'
 
-  # Build libboxlite.a from THIS PR's Rust source using the existing
-  # build-c.yml workflow (manylinux container, libseccomp.a cross-build,
-  # fix-go-symbols.sh — same chain release builds use). target_filter
-  # constrains the matrix to just linux-x64-gnu (skip macos-15 +
-  # ubuntu-24.04-arm matrix entries; Tokyo runner is amd64).
-  # Uploads artifact c-sdk-linux-x64-gnu consumed by build_runner.
+  # Build + deploy runner binary as a single reusable workflow.
+  # Internally chains build-c.yml → build-runner-binary.yml → S3 push +
+  # EC2 self-update poll. See .github/workflows/deploy-runner.yml.
   #
-  # Fires only when libboxlite source OR runner Go OR Python SDK
-  # changed — pure API / dashboard / test-code PRs skip the ~9 min
-  # libboxlite compile entirely.
-  build_c_sdk:
-    name: Build C SDK (from PR source, linux-x64-gnu only)
+  # Fires only when runner_chain changed. Pure API/SDK/test PRs skip
+  # the ~11 min build chain + the EC2 self-update step entirely.
+  deploy_runner:
+    name: Deploy runner binary (build + push to Tokyo)
     needs: changes
     if: |
       needs.changes.outputs.runner_chain == 'true'
-      || needs.changes.outputs.sdk_py == 'true'
       || github.event_name == 'workflow_dispatch'
-    uses: ./.github/workflows/build-c.yml
-    with:
-      target_filter: linux-x64-gnu
+    uses: ./.github/workflows/deploy-runner.yml
     permissions:
-      contents: write
-
-  # Build the runner binary from THIS PR's source. Reuses
-  # .github/workflows/build-runner-binary.yml with libboxlite_source=build,
-  # which downloads the c-sdk-linux-x64-gnu artifact from build_c_sdk
-  # above (instead of pulling the release tarball). The e2e job
-  # downloads the produced runner-linux-amd64 artifact and SSM-deploys
-  # it to the Tokyo runner EC2.
-  #
-  # Fires only when runner_chain changed. Pure API/SDK/test PRs skip
-  # the ~2 min Go build + the EC2 self-update step downstream.
-  build_runner:
-    name: Build runner binary (from PR source)
-    needs: [changes, build_c_sdk]
-    if: |
-      needs.changes.outputs.runner_chain == 'true'
-      || github.event_name == 'workflow_dispatch'
-    uses: ./.github/workflows/build-runner-binary.yml
-    with:
-      libboxlite_source: build
-    # Inherit workflow defaults — the called workflow's `upload-to-release`
-    # job declares `contents: write`, and explicitly setting `contents: read`
-    # at the caller would fail GHA's "called job requests more permissions
-    # than caller grants" startup check even though that job's `if:` would
-    # skip it for our workflow_call invocation.
-    permissions:
+      id-token: write
       contents: write
 
   e2e:
     name: E2E suite (Tokyo)
-    needs: [changes, build_c_sdk, build_runner]
+    needs: [changes, deploy_runner]
     # Default GHA semantics: a job whose `needs:` is SKIPPED also gets
     # skipped. Override via !failure() && !cancelled() — runs as long
     # as nothing in the upstream chain actively failed (skipped is OK,
@@ -292,106 +260,10 @@ jobs:
         id: ecr_login
         uses: aws-actions/amazon-ecr-login@v2
 
-      # ──────────────────────────────────────────────────────────────────
-      # Runner deploy is ordered BEFORE the API image build/deploy:
-      # — fail fast on runner regressions (most pytest cases depend on
-      #   the runner being up; broken runner = no point spending the
-      #   10-15 min api build + ECS rolling deploy);
-      # — when the build_runner job was skipped (no runner_chain change),
-      #   both runner steps below skip too and we go straight to API.
-      #
-      # Download runner binary built by the `build_runner` job (which
-      # reuses .github/workflows/build-runner-binary.yml via workflow_call
-      # with libboxlite_source=build so libboxlite.a is compiled from
-      # THIS PR's source, not the v${VERSION} tarball).
-      # Push to the stack's S3 bucket; an EC2-side systemd-timer poller
-      # (installed out-of-band via PowerUserAccess) picks up new
-      # binaries every 30s and hot-swaps via systemctl restart.
-      # ──────────────────────────────────────────────────────────────────
-      - name: Download runner binary artifact
-        if: |
-          needs.changes.outputs.runner_chain == 'true'
-          || github.event_name == 'workflow_dispatch'
-        uses: actions/download-artifact@v4
-        with:
-          name: runner-linux-amd64
-          path: /tmp/runner-artifact/
-
-      # ──────────────────────────────────────────────────────────────────
-      # Polling-based deploy (zero IAM mutation required):
-      #
-      # 1. Upload binary to s3://${bucket}/builds/runner-deploy/binary.tar.gz
-      # 2. Write request marker s3://.../builds/runner-deploy/request-${SHA}.txt
-      # 3. EC2 poller (systemd timer installed once via PowerUserAccess
-      #    SSM, NOT via this workflow) picks up request, swaps binary,
-      #    writes done-${SHA}.txt with "OK" or "FAIL: ..." status
-      # 4. We poll for done-${SHA}.txt, gate on its content
-      #
-      # This replaces the original `aws ssm send-command` path which
-      # needed an IAM policy update (split condition on the
-      # AWS-RunShellScript document — blocked without admin perms).
-      # Now the only AWS interaction here is S3, which is already
-      # in our role's policy (`s3:PutObject`/`GetObject` on
-      # `${stack_prefix}-storagebucket-*/builds/*`).
-      # ──────────────────────────────────────────────────────────────────
-      - name: Upload runner binary to S3 + wait for runner self-update
-        if: |
-          needs.changes.outputs.runner_chain == 'true'
-          || github.event_name == 'workflow_dispatch'
-        run: |
-          set -euo pipefail
-          S3_BUCKET="${{ steps.resources.outputs.s3_bucket }}"
-          ARCHIVE=$(ls /tmp/runner-artifact/boxlite-runner-*-linux-amd64.tar.gz | head -1)
-          [ -n "$ARCHIVE" ] || { echo "::error::No runner artifact found"; exit 1; }
-
-          PREFIX="builds/runner-deploy"
-          BIN_KEY="${PREFIX}/binary.tar.gz"
-          REQ_KEY="${PREFIX}/request-${GITHUB_SHA}.txt"
-          DONE_KEY="${PREFIX}/done-${GITHUB_SHA}.txt"
-
-          # 1) Upload binary (canonical name; overwrite OK because the
-          #    workflow concurrency group is a singleton lock).
-          aws s3 cp "$ARCHIVE" "s3://${S3_BUCKET}/${BIN_KEY}"
-          echo "::notice::Binary uploaded to s3://${S3_BUCKET}/${BIN_KEY}"
-
-          # 2) Write request marker — content = git SHA so the poller
-          #    knows which request to answer with the matching done key.
-          printf 'sha=%s\nrequested_at=%s\n' \
-              "${GITHUB_SHA}" \
-              "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-              | aws s3 cp - "s3://${S3_BUCKET}/${REQ_KEY}"
-          echo "::notice::Request marker written to s3://${S3_BUCKET}/${REQ_KEY}"
-
-          # 3) Wait for the poller (runs every 30s on the Tokyo EC2)
-          #    to claim the request and write a done marker. Cap at
-          #    120 s (poller cron 30 s + binary swap 5 s + service
-          #    start 5 s = ~60 s typical; double for slack).
-          echo "Waiting for runner self-update (max 120 s)..."
-          for i in $(seq 1 24); do
-              sleep 5
-              if aws s3api head-object \
-                  --bucket "$S3_BUCKET" --key "$DONE_KEY" \
-                  >/dev/null 2>&1; then
-                  STATUS=$(aws s3 cp "s3://${S3_BUCKET}/${DONE_KEY}" - 2>/dev/null | head -1 || echo "")
-                  echo "::notice::Runner deploy status: $STATUS"
-                  case "$STATUS" in
-                      OK*)
-                          echo "::notice::Runner self-update complete (SHA ${GITHUB_SHA})"
-                          exit 0 ;;
-                      FAIL*)
-                          echo "::error::Runner self-update failed: $STATUS"
-                          # Pull full body for context
-                          aws s3 cp "s3://${S3_BUCKET}/${DONE_KEY}" - 2>/dev/null || true
-                          exit 1 ;;
-                      *)
-                          echo "::error::Unexpected status from poller: $STATUS"
-                          exit 1 ;;
-                  esac
-              fi
-              echo "  [$i/24] waiting for done-${GITHUB_SHA}.txt..."
-          done
-          echo "::error::Runner self-update timed out after 120 s — poller offline or SSM agent down?"
-          exit 1
+      # Runner deploy now handled by the `deploy_runner` job (workflow_call
+      # of .github/workflows/deploy-runner.yml). When that job ran for
+      # this CI run, the Tokyo EC2 is already on the new binary by the
+      # time we get here.
 
       - name: Build & push Api image (source mode via tsx, no webpack)
         id: build_api
