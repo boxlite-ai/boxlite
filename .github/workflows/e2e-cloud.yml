@@ -292,31 +292,21 @@ jobs:
         id: ecr_login
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build & push Api image (source mode via tsx, no webpack)
-        id: build_api
-        if: |
-          needs.changes.outputs.api == 'true'
-          || github.event_name == 'workflow_dispatch'
-        run: |
-          set -euo pipefail
-          REGISTRY="${{ steps.ecr_login.outputs.registry }}"
-          IMAGE="${REGISTRY}/${ECR_REPO}:api-${{ github.sha }}"
-          # Use apps/api/Dockerfile.source — runs TS directly via tsx at
-          # container runtime, NO webpack build, NO dashboard build, NO
-          # strict TS type-check gate. See that file's header for rationale.
-          # Build context = repo root (Dockerfile references apps/libs/...).
-          docker buildx build --platform linux/amd64 --load \
-            -f apps/api/Dockerfile.source -t "$IMAGE" .
-          docker push "$IMAGE"
-          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
-
       # ──────────────────────────────────────────────────────────────────
+      # Runner deploy is ordered BEFORE the API image build/deploy:
+      # — fail fast on runner regressions (most pytest cases depend on
+      #   the runner being up; broken runner = no point spending the
+      #   10-15 min api build + ECS rolling deploy);
+      # — when the build_runner job was skipped (no runner_chain change),
+      #   both runner steps below skip too and we go straight to API.
+      #
       # Download runner binary built by the `build_runner` job (which
       # reuses .github/workflows/build-runner-binary.yml via workflow_call
       # with libboxlite_source=build so libboxlite.a is compiled from
       # THIS PR's source, not the v${VERSION} tarball).
-      # Push to the stack's S3 bucket, then SSM the Tokyo runner EC2
-      # to download + hot-swap the systemd binary.
+      # Push to the stack's S3 bucket; an EC2-side systemd-timer poller
+      # (installed out-of-band via PowerUserAccess) picks up new
+      # binaries every 30s and hot-swaps via systemctl restart.
       # ──────────────────────────────────────────────────────────────────
       - name: Download runner binary artifact
         if: |
@@ -402,6 +392,24 @@ jobs:
           done
           echo "::error::Runner self-update timed out after 120 s — poller offline or SSM agent down?"
           exit 1
+
+      - name: Build & push Api image (source mode via tsx, no webpack)
+        id: build_api
+        if: |
+          needs.changes.outputs.api == 'true'
+          || github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          REGISTRY="${{ steps.ecr_login.outputs.registry }}"
+          IMAGE="${REGISTRY}/${ECR_REPO}:api-${{ github.sha }}"
+          # Use apps/api/Dockerfile.source — runs TS directly via tsx at
+          # container runtime, NO webpack build, NO dashboard build, NO
+          # strict TS type-check gate. See that file's header for rationale.
+          # Build context = repo root (Dockerfile references apps/libs/...).
+          docker buildx build --platform linux/amd64 --load \
+            -f apps/api/Dockerfile.source -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
       # ──────────────────────────────────────────────────────────────────
       # Deploy: register new Api task definition with the new image (all
