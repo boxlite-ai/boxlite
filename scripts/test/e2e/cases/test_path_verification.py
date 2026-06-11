@@ -18,6 +18,7 @@ production exec path.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -27,6 +28,11 @@ import pytest_asyncio
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from path_verification import runner_journal_seek, runner_hits_for_box
 from conftest import drain
+
+pytestmark = pytest.mark.skipif(
+    os.environ.get("BOXLITE_E2E_SKIP_PATH_VERIFY") == "1",
+    reason="cloud e2e can run against a remote API/runner without local journalctl or :3000",
+)
 
 
 @pytest.mark.asyncio

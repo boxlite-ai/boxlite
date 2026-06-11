@@ -7,15 +7,23 @@ controller surfaces.
 """
 from __future__ import annotations
 
+import os
+import uuid
+
 import boxlite
 import pytest
+
+
+def _unique_name() -> str:
+    run_id = os.environ.get("GITHUB_RUN_ID", "local")
+    return f"e2e-test-box-{run_id}-{uuid.uuid4().hex[:8]}"
 
 
 @pytest.mark.asyncio
 async def test_create_named_box(rt, image):
     """Box created with an explicit name carries it through to
     get_info."""
-    name = "e2e-test-box"
+    name = _unique_name()
     box = await rt.create(
         boxlite.BoxOptions(image=image, auto_remove=True), name=name,
     )

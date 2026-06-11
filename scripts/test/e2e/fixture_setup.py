@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import uuid
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -72,27 +73,43 @@ def me() -> dict:
     return body
 
 
-def patch_admin_quota():
+def _require_org_id(path_prefix: str | None) -> str:
+    if not path_prefix:
+        sys.exit("GET /v1/me returned no path_prefix; cannot patch org quota")
+    try:
+        return str(uuid.UUID(path_prefix))
+    except ValueError:
+        sys.exit(f"GET /v1/me returned non-UUID path_prefix: {path_prefix!r}")
+
+
+def patch_admin_quota(path_prefix: str | None):
     """The admin user is created on first API boot with org quotas at 0
     (config defaults are 0 unless ADMIN_* env vars override). Bump them
     so the box CREATE path doesn't 403 in tests."""
     import subprocess
+    org_id = _require_org_id(path_prefix)
     sql = """
-UPDATE organization SET
+WITH updated AS (
+  UPDATE organization SET
     max_cpu_per_box = 4,
     max_memory_per_box = 8,
     max_disk_per_box = 20
-WHERE personal = true;
+  WHERE id = :'org_id'::uuid
+  RETURNING id
+)
+SELECT count(*) FROM updated;
 """
     r = subprocess.run(
         ["psql", "-h", "localhost", "-U", "boxlite", "-d", "boxlite_dev",
-         "-tAc", sql],
+         "-v", f"org_id={org_id}", "-tAc", sql],
         env={**os.environ, "PGPASSWORD": "boxlite"},
         capture_output=True, text=True,
     )
     if r.returncode != 0:
         sys.exit(f"quota patch failed: {r.stderr}")
-    print("  admin org quota: ok")
+    if r.stdout.strip() != "1":
+        sys.exit(f"quota patch failed: org {org_id} was not updated")
+    print(f"  admin org quota: ok ({org_id})")
 
 
 def ensure_p1_profile(prefix: str):
@@ -140,13 +157,13 @@ def ensure_p1_profile(prefix: str):
 def main():
     print(f"API_URL={API_URL}")
     print()
-    print("1. Bumping admin org quota...")
-    patch_admin_quota()
-    print()
-    print("2. Querying /v1/me for prefix...")
+    print("1. Querying /v1/me for prefix...")
     info = me()
     prefix = info["path_prefix"]
     print(f"  prefix = {prefix}")
+    print()
+    print("2. Bumping admin org quota...")
+    patch_admin_quota(prefix)
     print()
     print("3. Writing ~/.boxlite/credentials.toml profile p1...")
     ensure_p1_profile(prefix)

@@ -28,6 +28,7 @@ from path_verification import runner_journal_seek, runner_hits_for_box
 
 DEFAULT_PROFILE = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
 DEFAULT_IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "base")
+SKIP_PATH_VERIFY = os.environ.get("BOXLITE_E2E_SKIP_PATH_VERIFY") == "1"
 CRED_PATH = Path.home() / ".boxlite" / "credentials.toml"
 
 
@@ -67,8 +68,31 @@ class _TrackingRuntime:
             pass  # never mask the real return
         return box
 
+    async def remove(self, box_id, *args, **kwargs):
+        """Retry transient lifecycle races from teardown cleanup paths."""
+        last_error = None
+        for attempt in range(1, 9):
+            try:
+                return await self._inner.remove(box_id, *args, **kwargs)
+            except Exception as exc:
+                last_error = exc
+                if not _is_transient_remove_error(exc) or attempt == 8:
+                    raise
+                await asyncio.sleep(min(0.5 * attempt, 2.0))
+        raise last_error
+
     def __getattr__(self, name):
         return getattr(self._inner, name)
+
+
+def _is_transient_remove_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return (
+        "state change in progress" in msg
+        or "transition" in msg
+        or "stopping" in msg
+        or "starting" in msg
+    )
 
 
 @pytest_asyncio.fixture(scope="session")
@@ -106,8 +130,12 @@ async def verify_runner_saw_all_boxes(rt):
     chain (e.g. degraded to local FFI, or the runner-side journal
     write broke). Tests that don't create any boxes are unaffected.
     """
-    since = runner_journal_seek()
     object.__setattr__(rt, "_created", [])
+    if SKIP_PATH_VERIFY:
+        yield
+        return
+
+    since = runner_journal_seek()
 
     yield
 

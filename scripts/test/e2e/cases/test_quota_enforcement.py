@@ -13,10 +13,12 @@ Quota violations must surface as 429 ResourceExhausted (or 400 if the API
 treats it as a validation error). 500 means the runner accepted a doomed
 job and crashed it later; that's the bug class this case covers.
 
-ALL cases in this file currently XFAIL — see module-level pytestmark.
+Over-quota cases currently XFAIL while the API lacks max quota enforcement.
+Lower-bound validation such as cpus=0 is active because CreateBoxDto now
+rejects undersized resources before a box is created.
 """
 
-# Production bug pinned by every case in this file: API silently clamps
+# Production bug pinned by the over-quota cases in this file: API silently clamps
 # out-of-range / over-quota resource values to org defaults instead of
 # rejecting at the boundary. Root cause at
 # apps/api/src/boxlite-rest/dto/create-box.dto.ts:24 (@Min present, no @Max,
@@ -24,7 +26,8 @@ ALL cases in this file currently XFAIL — see module-level pytestmark.
 # (createFromSnapshot doesn't consult max_*_per_box columns even though
 # fixture_setup.py:107-126 sets them).
 #
-# Two-sided requires API-side fix; tests pin the bug, NOT the test code.
+# Two-sided requires API-side fix for the over-quota paths; the lower-bound
+# path is already fixed by DTO validation and should stay active.
 
 from __future__ import annotations
 
@@ -37,7 +40,7 @@ from typing import Any
 
 import pytest
 
-pytestmark = pytest.mark.xfail(
+over_quota_xfail = pytest.mark.xfail(
     strict=True,
     reason=(
         "Production bug: API silently clamps out-of-range / over-quota "
@@ -90,6 +93,7 @@ def _delete_box(box_id: str) -> None:
         pass
 
 
+@over_quota_xfail
 @pytest.mark.asyncio
 async def test_cpus_above_per_box_limit_returns_4xx():
     """cpus far above max_cpu_per_box (4) → 429 or 400, not 5xx."""
@@ -100,6 +104,7 @@ async def test_cpus_above_per_box_limit_returns_4xx():
     assert 400 <= status < 500, f"cpus=999 leaked HTTP {status}: {body_str}"
 
 
+@over_quota_xfail
 @pytest.mark.asyncio
 async def test_memory_above_per_box_limit_returns_4xx():
     """memory far above max_memory_per_box (8 GiB) → 4xx, not 5xx."""
@@ -115,6 +120,7 @@ async def test_memory_above_per_box_limit_returns_4xx():
     assert 400 <= status < 500, f"memory=99999 leaked HTTP {status}: {body_str}"
 
 
+@over_quota_xfail
 @pytest.mark.asyncio
 async def test_disk_above_per_box_limit_returns_4xx():
     """disk far above max_disk_per_box (20 GiB) → 4xx, not 5xx."""
@@ -130,6 +136,7 @@ async def test_disk_above_per_box_limit_returns_4xx():
     assert 400 <= status < 500, f"disk=99999999 leaked HTTP {status}: {body_str}"
 
 
+@over_quota_xfail
 @pytest.mark.asyncio
 async def test_quota_violation_does_not_silently_create_box(rt):
     """A 4xx quota response must NOT have created a box. If we list
