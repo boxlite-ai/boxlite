@@ -2,6 +2,12 @@
 
 This project uses the **Expand and Contract** pattern for database migrations to support zero-downtime deployments.
 
+## Pre-launch Baseline
+
+Because BoxLite has not launched yet, the historical migration chain has been squashed into
+`pre-deploy/1782000000000-migration.ts`. Fresh databases should run this single baseline first.
+Future schema changes should use the expand-and-contract workflow below.
+
 ## Overview
 
 The expand and contract pattern splits database changes into two phases:
@@ -16,7 +22,8 @@ This allows the database and API to be updated independently while maintaining c
 - `pre-deploy/` - Migrations that run **before** the API is deployed
 - `post-deploy/` - Migrations that run **after** the API is deployed
 
-Note: Root folder migrations (not in pre-deploy or post-deploy) are legacy migrations created before the expand-and-contract pattern was introduced. These run during `migration:run:init` only.
+Note: historical root folder migrations were squashed into the pre-launch baseline. Do not add new root
+migrations; use `pre-deploy/` or `post-deploy/` for new changes.
 
 ## Developer Workflow
 
