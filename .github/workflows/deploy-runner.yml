@@ -211,10 +211,16 @@ jobs:
       - name: Resolve S3 bucket
         id: resources
         run: |
-          set -euo pipefail
+          set -euxo pipefail
+          echo '--- caller identity ---'
+          aws sts get-caller-identity
+          echo '--- raw list-buckets ---'
+          aws s3api list-buckets --query 'Buckets[].Name' --output text || true
+          echo '--- filtered ---'
           BUCKETS=$(aws s3api list-buckets \
             --query "Buckets[?starts_with(Name, '${STACK_PREFIX}-storagebucket')].Name" \
-            --output text)
+            --output text 2>&1) || { echo "::error::list-buckets failed: $BUCKETS"; exit 1; }
+          echo "BUCKETS='$BUCKETS'"
           COUNT=$(echo "$BUCKETS" | wc -w | tr -d ' ')
           if [ "$COUNT" -ne 1 ]; then
               echo "::error::Expected exactly 1 storagebucket starting with ${STACK_PREFIX}-storagebucket, found $COUNT"
