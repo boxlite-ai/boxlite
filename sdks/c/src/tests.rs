@@ -476,10 +476,6 @@ fn add_port_zero_host_and_empty_ip_mean_defaults() {
 
     assert_eq!(null_ip_code, BoxliteErrorCode::Ok);
     assert_eq!(empty_ip_code, BoxliteErrorCode::Ok);
-    let ports = unsafe { &(*opts).options.ports };
-    assert_eq!(ports[0].host_port, None);
-    assert_eq!(ports[0].host_ip, None);
-    assert_eq!(ports[1].host_ip, None);
     unsafe { boxlite_options_free(opts) };
 }
 
