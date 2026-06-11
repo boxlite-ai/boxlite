@@ -7,7 +7,6 @@
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { Type } from 'class-transformer'
 import { IsArray, IsDate, IsEmail, IsEnum, IsOptional, IsString } from 'class-validator'
-import { GlobalOrganizationRolesIds } from '../constants/global-organization-roles.constant'
 import { OrganizationMemberRole } from '../enums/organization-member-role.enum'
 
 @ApiSchema({ name: 'CreateOrganizationInvitation' })
@@ -32,11 +31,11 @@ export class CreateOrganizationInvitationDto {
   @ApiProperty({
     description: 'Array of assigned role IDs for the invitee',
     type: [String],
-    default: [GlobalOrganizationRolesIds.DEVELOPER],
+    default: [],
   })
   @IsArray()
   @IsString({ each: true })
-  assignedRoleIds: string[]
+  assignedRoleIds: string[] = []
 
   @ApiPropertyOptional({
     description: 'Expiration date of the invitation',

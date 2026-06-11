@@ -5,7 +5,7 @@ This project uses the **Expand and Contract** pattern for database migrations to
 ## Pre-launch Baseline
 
 Because BoxLite has not launched yet, the historical migration chain has been squashed into
-`pre-deploy/1782000000000-migration.ts`. Fresh databases should run this single baseline first.
+the root baseline `1741087887225-migration.ts`. Fresh databases should run this single baseline first.
 Future schema changes should use the expand-and-contract workflow below.
 
 ## Overview
@@ -22,8 +22,8 @@ This allows the database and API to be updated independently while maintaining c
 - `pre-deploy/` - Migrations that run **before** the API is deployed
 - `post-deploy/` - Migrations that run **after** the API is deployed
 
-Note: historical root folder migrations were squashed into the pre-launch baseline. Do not add new root
-migrations; use `pre-deploy/` or `post-deploy/` for new changes.
+Note: the root folder is reserved for the pre-launch baseline only. Do not add new root migrations;
+use `pre-deploy/` or `post-deploy/` for new changes.
 
 ## Developer Workflow
 
@@ -138,10 +138,10 @@ public async up(queryRunner: QueryRunner): Promise<void> {
 
 The trigger intercepts every INSERT and UPDATE on the table and automatically copies the value between columns:
 
-| API Version | Writes to | Trigger copies to | Result |
-|-------------|-----------|-------------------|--------|
-| Old API | `name` | `display_name` | Both columns have the value |
-| New API | `display_name` | `name` | Both columns have the value |
+| API Version | Writes to      | Trigger copies to | Result                      |
+| ----------- | -------------- | ----------------- | --------------------------- |
+| Old API     | `name`         | `display_name`    | Both columns have the value |
+| New API     | `display_name` | `name`            | Both columns have the value |
 
 **Deployment timeline:**
 

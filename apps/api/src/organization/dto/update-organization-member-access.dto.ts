@@ -6,7 +6,6 @@
 
 import { ApiProperty, ApiSchema } from '@nestjs/swagger'
 import { IsArray, IsEnum, IsString } from 'class-validator'
-import { GlobalOrganizationRolesIds } from '../constants/global-organization-roles.constant'
 import { OrganizationMemberRole } from '../enums/organization-member-role.enum'
 
 @ApiSchema({ name: 'UpdateOrganizationMemberAccess' })
@@ -22,9 +21,9 @@ export class UpdateOrganizationMemberAccessDto {
   @ApiProperty({
     description: 'Array of assigned role IDs',
     type: [String],
-    default: [GlobalOrganizationRolesIds.DEVELOPER],
+    default: [],
   })
   @IsArray()
   @IsString({ each: true })
-  assignedRoleIds: string[]
+  assignedRoleIds: string[] = []
 }
