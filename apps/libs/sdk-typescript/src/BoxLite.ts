@@ -17,7 +17,6 @@ import { BoxPythonCodeToolbox } from './code-toolbox/BoxPythonCodeToolbox'
 import { BoxTsCodeToolbox } from './code-toolbox/BoxTsCodeToolbox'
 import { BoxJsCodeToolbox } from './code-toolbox/BoxJsCodeToolbox'
 import { BoxliteError, BoxLiteNotFoundError, BoxLiteRateLimitError } from './errors/BoxliteError'
-import { Image } from './Image'
 import { Box, PaginatedBoxes } from './Box'
 import { VolumeService } from './Volume'
 import * as packageJson from '../package.json'
@@ -167,14 +166,17 @@ export type CreateBoxBaseParams = {
  * Parameters for creating a new Box.
  *
  * @interface
- * @property {string | Image} [image] - Custom Docker image to use for the Box. If an Image object is provided,
- * the image will be dynamically built.
+ * @property {string} [image] - Curated image key to use for the Box.
  * @property {Resources} [resources] - Resource allocation for the Box. If not provided, box will
  * have default resources.
  */
 export type CreateBoxFromImageParams = CreateBoxBaseParams & {
-  image: string | Image
+  image: string
   resources?: Resources
+}
+
+type CreateBoxWithCuratedImage = Parameters<BoxApi['createBox']>[0] & {
+  image?: string
 }
 
 /**
@@ -376,12 +378,9 @@ export class BoxLite implements AsyncDisposable {
    */
   public async create(params?: CreateBoxFromTemplateParams, options?: { timeout?: number }): Promise<Box>
   /**
-   * Creates Boxes from specified image available on some registry or declarative BoxLite Image.
+   * Creates Boxes from a curated image key.
    *
-   * @deprecated The API no longer supports image-based box creation (dynamic builds were
-   * removed). Calling create() with an `image` param throws a BoxliteError.
-   *
-   * @param {CreateBoxFromImageParams} [params] - Parameters for Box creation from image
+   * @param {CreateBoxFromImageParams} [params] - Parameters for Box creation from curated image
    * @param {object} [options] - Options for the create operation
    * @param {number} [options.timeout] - Timeout in seconds (0 means no timeout, default is 60)
    * @returns {Promise<Box>} The created Box instance
@@ -430,10 +429,10 @@ export class BoxLite implements AsyncDisposable {
 
     const codeToolbox = this.getCodeToolbox(params.language as CodeLanguage)
 
-    // The API removed image- and template-based creation (boxes use the
-    // standard runtime). Fail loudly instead of silently ignoring the params.
-    if ('image' in params) {
-      throw new BoxliteError('Image-based box creation is no longer supported by the API.')
+    // The API accepts curated image keys. Declarative Image objects require the
+    // removed dynamic-build path, so fail before the request instead of dropping them.
+    if ('image' in params && typeof params.image !== 'string') {
+      throw new BoxliteError('Declarative Image objects are no longer supported by the API; pass a curated image key.')
     }
     if ('templateId' in params && params.templateId !== undefined) {
       throw new BoxliteError('Box templates were removed from the API; remove the templateId parameter.')
@@ -446,23 +445,26 @@ export class BoxLite implements AsyncDisposable {
         resources = params.resources as Resources | undefined
       }
 
+      const createBoxBody: CreateBoxWithCuratedImage = {
+        name: params.name,
+        user: params.user,
+        env: params.envVars || {},
+        labels,
+        public: params.public,
+        ...('image' in params ? { image: params.image } : {}),
+        target: this.target,
+        cpu: resources?.cpu,
+        memory: resources?.memory,
+        disk: resources?.disk,
+        autoStopInterval: params.autoStopInterval,
+        autoDeleteInterval: params.autoDeleteInterval,
+        volumes: params.volumes,
+        networkBlockAll: params.networkBlockAll,
+        networkAllowList: params.networkAllowList,
+      }
+
       const response = await this.boxApi.createBox(
-        {
-          name: params.name,
-          user: params.user,
-          env: params.envVars || {},
-          labels: labels,
-          public: params.public,
-          target: this.target,
-          cpu: resources?.cpu,
-          memory: resources?.memory,
-          disk: resources?.disk,
-          autoStopInterval: params.autoStopInterval,
-          autoDeleteInterval: params.autoDeleteInterval,
-          volumes: params.volumes,
-          networkBlockAll: params.networkBlockAll,
-          networkAllowList: params.networkAllowList,
-        },
+        createBoxBody,
         undefined,
         {
           timeout: options.timeout * 1000,
