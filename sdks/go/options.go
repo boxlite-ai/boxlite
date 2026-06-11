@@ -151,12 +151,14 @@ func (p PortSpec) toCSpec() (cPortSpec, error) {
 
 // cPortProtocol maps by explicit switch: the Go enum reserves 0 for the unset
 // value while the C enum starts at Tcp = 0, so a numeric cast would be wrong.
-func cPortProtocol(p PortProtocol) C.BoxlitePortProtocol {
+// Returns plain uint32 because cgo maps C enum parameters to their underlying
+// integer type (same shape as cRegistryTransport).
+func cPortProtocol(p PortProtocol) uint32 {
 	switch p {
 	case PortProtocolUdp:
-		return C.BoxlitePortProtocolUdp
+		return uint32(C.BoxlitePortProtocolUdp)
 	default:
-		return C.BoxlitePortProtocolTcp
+		return uint32(C.BoxlitePortProtocolTcp)
 	}
 }
 
