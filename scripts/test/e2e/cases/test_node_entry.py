@@ -68,7 +68,7 @@ def test_node_sdk_create_exec_remove(node_runner):
         "BOXLITE_E2E_URL": p["url"],
         "BOXLITE_E2E_API_KEY": p["api_key"],
         "BOXLITE_E2E_PREFIX": p.get("path_prefix") or "",
-        "BOXLITE_E2E_IMAGE": "alpine:3.23",
+        "BOXLITE_E2E_IMAGE": "base",
     }
     # Use npx tsx to run the .ts directly without a separate compile step.
     # tsx is bundled with the apps workspace.
