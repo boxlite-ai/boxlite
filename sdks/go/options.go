@@ -74,39 +74,54 @@ type NetworkSpec struct {
 	AllowNet []string
 }
 
-type portProtocol string
+// PortProtocol selects the protocol used for a port forwarding rule.
+type PortProtocol uint8
 
 const (
-	portProtocolTCP portProtocol = "tcp"
-	portProtocolUDP portProtocol = "udp"
+	PortProtocolInvalid PortProtocol = iota
+	PortProtocolTCP
+	PortProtocolUDP
 )
 
-type portSpec struct {
-	host     *int
-	guest    int
-	protocol portProtocol
-	host_ip  string
+func (p PortProtocol) String() string {
+	switch p {
+	case PortProtocolTCP:
+		return "tcp"
+	case PortProtocolUDP:
+		return "udp"
+	default:
+		return fmt.Sprintf("unknown(%d)", p)
+	}
+}
+
+// PortSpec configures a host-to-guest port forwarding rule.
+type PortSpec struct {
+	Host     int
+	Guest    int
+	Protocol PortProtocol
+	HostIP   string
 }
 
 type cPortSpec struct {
 	host_port  int
 	guest_port int
-	protocol   portProtocol
+	protocol   PortProtocol
 	host_ip    string
 }
 
-func (p portSpec) toCSpec() cPortSpec {
-	hostPort := 0
-	if p.host != nil {
-		hostPort = *p.host
+func (p PortSpec) toCSpec() (cPortSpec, error) {
+	switch p.Protocol {
+	case PortProtocolTCP, PortProtocolUDP:
+	default:
+		return cPortSpec{}, fmt.Errorf("invalid port protocol %s", p.Protocol)
 	}
 
 	return cPortSpec{
-		host_port:  hostPort,
-		guest_port: p.guest,
-		protocol:   p.protocol,
-		host_ip:    p.host_ip,
-	}
+		host_port:  p.Host,
+		guest_port: p.Guest,
+		protocol:   p.Protocol,
+		host_ip:    p.HostIP,
+	}, nil
 }
 
 // Secret configures outbound HTTPS secret substitution.
@@ -125,7 +140,7 @@ type boxConfig struct {
 	rootfsPath string
 	env        [][2]string
 	volumes    []volumeEntry
-	ports      []portSpec
+	ports      []PortSpec
 	workDir    string
 	entrypoint []string
 	cmd        []string
@@ -200,12 +215,17 @@ func WithVolumeReadOnly(hostPath, containerPath string) BoxOption {
 // WithPort forwards a host port to a guest port. A host of 0 lets the runtime
 // assign one dynamically.
 func WithPort(host, guest int) BoxOption {
+	return WithPortSpec(PortSpec{
+		Host:     host,
+		Guest:    guest,
+		Protocol: PortProtocolTCP,
+	})
+}
+
+// WithPortSpec forwards a host port to a guest port with explicit bind settings.
+func WithPortSpec(spec PortSpec) BoxOption {
 	return func(c *boxConfig) {
-		c.ports = append(c.ports, portSpec{
-			host:     &host,
-			guest:    guest,
-			protocol: portProtocolTCP,
-		})
+		c.ports = append(c.ports, spec)
 	}
 }
 
@@ -319,7 +339,11 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 		C.free(unsafe.Pointer(cGuest))
 	}
 	for _, port := range cfg.ports {
-		cPort := port.toCSpec()
+		cPort, err := port.toCSpec()
+		if err != nil {
+			C.boxlite_options_free(cOpts)
+			return nil, err
+		}
 		C.boxlite_options_add_port(cOpts, C.int(cPort.guest_port), C.int(cPort.host_port))
 	}
 	if cfg.network != nil {

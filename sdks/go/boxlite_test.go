@@ -235,15 +235,18 @@ func TestBoxOptions(t *testing.T) {
 	if len(cfg.ports) != 1 {
 		t.Fatalf("ports: got %d", len(cfg.ports))
 	}
-	if cfg.ports[0].host == nil || *cfg.ports[0].host != 8080 {
-		t.Fatalf("port host: got %v", cfg.ports[0].host)
+	if cfg.ports[0].Host != 8080 {
+		t.Fatalf("port host: got %d", cfg.ports[0].Host)
 	}
-	if cfg.ports[0].guest != 3000 || cfg.ports[0].protocol != portProtocolTCP || cfg.ports[0].host_ip != "" {
-		t.Errorf("port: got guest=%d protocol=%q host_ip=%q", cfg.ports[0].guest, cfg.ports[0].protocol, cfg.ports[0].host_ip)
+	if cfg.ports[0].Guest != 3000 || cfg.ports[0].Protocol != PortProtocolTCP || cfg.ports[0].HostIP != "" {
+		t.Errorf("port: got guest=%d protocol=%s host_ip=%q", cfg.ports[0].Guest, cfg.ports[0].Protocol, cfg.ports[0].HostIP)
 	}
-	cPort := cfg.ports[0].toCSpec()
-	if cPort.host_port != 8080 || cPort.guest_port != 3000 || cPort.protocol != portProtocolTCP || cPort.host_ip != "" {
-		t.Errorf("c port: got host_port=%d guest_port=%d protocol=%q host_ip=%q", cPort.host_port, cPort.guest_port, cPort.protocol, cPort.host_ip)
+	cPort, err := cfg.ports[0].toCSpec()
+	if err != nil {
+		t.Fatalf("toCSpec: %v", err)
+	}
+	if cPort.host_port != 8080 || cPort.guest_port != 3000 || cPort.protocol != PortProtocolTCP || cPort.host_ip != "" {
+		t.Errorf("c port: got host_port=%d guest_port=%d protocol=%s host_ip=%q", cPort.host_port, cPort.guest_port, cPort.protocol, cPort.host_ip)
 	}
 	if cfg.workDir != "/app" {
 		t.Errorf("workDir: got %q", cfg.workDir)
@@ -262,6 +265,52 @@ func TestBoxOptions(t *testing.T) {
 	}
 	if cfg.secrets[0].Name != "openai" {
 		t.Errorf("secret name: got %q", cfg.secrets[0].Name)
+	}
+}
+
+func TestWithPortSpec(t *testing.T) {
+	cfg := &boxConfig{}
+	WithPortSpec(PortSpec{
+		Host:     5353,
+		Guest:    53,
+		Protocol: PortProtocolUDP,
+		HostIP:   "127.0.0.1",
+	})(cfg)
+
+	if len(cfg.ports) != 1 {
+		t.Fatalf("ports: got %d", len(cfg.ports))
+	}
+
+	cPort, err := cfg.ports[0].toCSpec()
+	if err != nil {
+		t.Fatalf("toCSpec: %v", err)
+	}
+	if cPort.host_port != 5353 || cPort.guest_port != 53 || cPort.protocol != PortProtocolUDP || cPort.host_ip != "127.0.0.1" {
+		t.Errorf("c port: got host_port=%d guest_port=%d protocol=%s host_ip=%q", cPort.host_port, cPort.guest_port, cPort.protocol, cPort.host_ip)
+	}
+}
+
+func TestPortSpecRejectsInvalidProtocol(t *testing.T) {
+	_, err := (PortSpec{Host: 8080, Guest: 80}).toCSpec()
+	if err == nil {
+		t.Fatal("toCSpec should reject an unset protocol")
+	}
+}
+
+func TestPortProtocolString(t *testing.T) {
+	tests := []struct {
+		protocol PortProtocol
+		want     string
+	}{
+		{PortProtocolTCP, "tcp"},
+		{PortProtocolUDP, "udp"},
+		{PortProtocolInvalid, "unknown(0)"},
+	}
+
+	for _, tt := range tests {
+		if got := tt.protocol.String(); got != tt.want {
+			t.Errorf("portProtocol(%d).String(): got %q, want %q", tt.protocol, got, tt.want)
+		}
 	}
 }
 
