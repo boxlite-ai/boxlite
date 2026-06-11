@@ -37,7 +37,7 @@ sys.path.insert(
 from path_verification import runner_journal_seek, runner_hits_for_box
 
 BOXLITE_BIN = os.environ.get("BOXLITE_E2E_CLI", shutil.which("boxlite"))
-IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "alpine:3.23")
+IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "base")
 UUID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 )
