@@ -28,11 +28,15 @@ on:
   workflow_call: {}
   workflow_dispatch: {}
   # `push:` trigger so we can verify the deploy pipeline standalone
-  # WHILE this workflow file is still on a feature branch (workflow_dispatch
-  # only works for workflow files that already exist on the default
-  # branch; this PR isn't merged yet). Filter on the runner build chain
-  # so unrelated commits don't refire — same paths as e2e-cloud.yml's
-  # `runner_chain` filter.
+  # WHILE this workflow file is still on a feature branch
+  # (workflow_dispatch only works for workflow files that already
+  # exist on the default branch; this PR isn't merged yet).
+  #
+  # Trigger-level paths filter is broad (intentionally includes the
+  # workflow files themselves, so commits to this file fire CI for
+  # verification). The internal `changes` job below narrows to actual
+  # source changes — workflow-only commits fire the workflow but the
+  # build + deploy jobs skip.
   push:
     paths:
       - 'apps/runner/**'
@@ -55,11 +59,60 @@ permissions:
   contents: read
 
 jobs:
+  # ── Detect real source changes so workflow-only commits don't build ──
+  # On push: dorny/paths-filter diffs HEAD against the prior commit. On
+  # workflow_call / workflow_dispatch, the comparison is meaningless
+  # (no diff or HEAD-vs-HEAD), so we force `should_build=true` for
+  # those events — caller (e2e-cloud) is responsible for its own
+  # changes detection before calling, and workflow_dispatch is an
+  # explicit "I want a fresh build + deploy" signal.
+  changes:
+    name: Detect runner source changes
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.decide.outputs.should_build }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: filter
+        if: github.event_name == 'push'
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            runner_source:
+              - 'apps/runner/**'
+              - 'apps/daemon/**'
+              - 'apps/common-go/**'
+              - 'apps/api-client-go/**'
+              - 'apps/libs/computer-use/**'
+              - 'sdks/go/**'
+              - 'src/boxlite/**'
+              - 'src/api-client/**'
+              - 'src/shared/**'
+              - 'src/deps/**'
+              - 'scripts/build/**'
+              - 'sdks/c/src/exec/**'
+      - id: decide
+        env:
+          PUSH_CHANGED: ${{ steps.filter.outputs.runner_source }}
+        run: |
+          if [ "${{ github.event_name }}" != 'push' ]; then
+              echo "Non-push event (${{ github.event_name }}) — force build."
+              echo "should_build=true" >> "$GITHUB_OUTPUT"
+          elif [ "${PUSH_CHANGED:-false}" = 'true' ]; then
+              echo "Push touched runner_source paths — build."
+              echo "should_build=true" >> "$GITHUB_OUTPUT"
+          else
+              echo "Push only touched workflow files — SKIP build + deploy."
+              echo "should_build=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # ── Build libboxlite.a from THIS checkout's Rust source ────────────
   # target_filter constrains the matrix to linux-x64-gnu (Tokyo runner
   # is amd64; skip macOS / linux-arm64 entries from the platforms list).
   build_c_sdk:
     name: Build C SDK (linux-x64-gnu)
+    needs: changes
+    if: needs.changes.outputs.should_build == 'true'
     uses: ./.github/workflows/build-c.yml
     with:
       target_filter: linux-x64-gnu
@@ -72,7 +125,8 @@ jobs:
   # ── Build the Go runner binary linking the fresh libboxlite.a ──────
   build_runner:
     name: Build runner binary
-    needs: build_c_sdk
+    needs: [changes, build_c_sdk]
+    if: needs.changes.outputs.should_build == 'true'
     uses: ./.github/workflows/build-runner-binary.yml
     with:
       libboxlite_source: build
@@ -82,7 +136,8 @@ jobs:
   # ── Deploy: push to S3, EC2-side poller picks up + swaps ───────────
   deploy:
     name: Deploy runner to Tokyo EC2 (S3 polling)
-    needs: build_runner
+    needs: [changes, build_runner]
+    if: needs.changes.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
