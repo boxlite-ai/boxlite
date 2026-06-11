@@ -115,12 +115,18 @@ jobs:
           PUSH_CHANGED: ${{ steps.filter.outputs.runner_source }}
           PREV_RUN_ID: ${{ inputs.runner_artifact_run_id }}
         run: |
-          # Resolve prev-run-id, in order of precedence:
-          #  1. workflow_dispatch input `runner_artifact_run_id`
-          #  2. commit-message tag `[runner-from: <run_id>]` (push-event
-          #     workaround: workflow_dispatch only works after the
-          #     workflow file lands on the default branch, so we offer
-          #     a commit-message override for testing pre-merge)
+          # TEMPORARY — force unconditional redeploy of a known-good
+          # prior-build artifact to validate the SSH+SCP CI path end-
+          # to-end on the Tokyo EC2. Revert this block once the deploy
+          # path is confirmed working; original gating logic preserved
+          # below for reference.
+          echo "FORCED redeploy of artifact from run 27345482938."
+          echo "should_build=false"        >> "$GITHUB_OUTPUT"
+          echo "should_deploy=true"        >> "$GITHUB_OUTPUT"
+          echo "prev_run_id=27345482938"   >> "$GITHUB_OUTPUT"
+          exit 0
+
+          # ── original gating logic (unreachable; restore after validation) ──
           PREV=""
           if [ -n "${PREV_RUN_ID:-}" ]; then
               PREV="$PREV_RUN_ID"
