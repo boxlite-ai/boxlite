@@ -46,6 +46,11 @@ RUN yarn install --immutable
 
 COPY apps/nx.json apps/tsconfig.base.json apps/NOTICE ./
 
+# apps/api/tsconfig.json extends ../tsconfig.base.json. Keep the
+# root-level copy for tsconfig-paths and also provide the real monorepo
+# path expected by the API tsconfig chain.
+RUN mkdir -p apps && cp tsconfig.base.json apps/tsconfig.base.json
+
 # ts-node defaults to looking at ./tsconfig.json. Symlink so the path
 # aliases in apps/tsconfig.base.json (the `@boxlite-ai/*` mappings
 # consumed by `-r tsconfig-paths/register`) resolve at import time.
