@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends bash curl && \
   rm -rf /var/lib/apt/lists/*
 RUN npm install -g corepack && corepack enable
 
-WORKDIR /boxlite/apps
+WORKDIR /boxlite
 
 COPY apps/package.json apps/yarn.lock apps/.yarnrc.yml ./
 RUN yarn install --immutable
@@ -17,8 +17,8 @@ ARG CACHE_BUST=1
 ENV NX_DAEMON=false
 ENV NX_SKIP_NX_CACHE=true
 
-COPY apps/api/ api/
-COPY apps/dashboard/ dashboard/
+COPY apps/api/ apps/api/
+COPY apps/dashboard/ apps/dashboard/
 
 COPY apps/libs/runner-api-client/ libs/runner-api-client/
 COPY apps/libs/api-client/ libs/api-client/
