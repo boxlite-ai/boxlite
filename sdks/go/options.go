@@ -186,12 +186,20 @@ type boxConfig struct {
 	detach     *bool
 	network    *NetworkSpec
 	secrets    []Secret
+	ports      []portMapping
 }
 
 type volumeEntry struct {
 	hostPath  string
 	guestPath string
 	readOnly  bool
+}
+
+// portMapping records a guest→host TCP port forward request. Stored on
+// boxConfig but not yet wired through the C FFI bridge; see WithPort.
+type portMapping struct {
+	guest int
+	host  int
 }
 
 // WithName sets a human-readable name for the box.
@@ -207,6 +215,24 @@ func WithCPUs(n int) BoxOption {
 // WithMemory sets the memory limit in MiB.
 func WithMemory(mib int) BoxOption {
 	return func(c *boxConfig) { c.memoryMiB = mib }
+}
+
+// WithPort declares a guest→host port mapping for a Box.
+//
+// STUB: PR #715 ("Converge A2 + MVP box journey") added call sites for
+// boxlite.WithPort in apps/runner/pkg/boxlite/{client,stubs}.go before
+// the corresponding function was added to this package, breaking the
+// runner build. Port forwarding is not yet plumbed through the C FFI
+// bridge (sdks/c has no port-mapping API), so this function records
+// the request on the box config but is otherwise a no-op — Box.create
+// ignores boxConfig.ports today.
+//
+// TODO: when the C bridge gains a port-forwarding API, wire boxConfig.ports
+// through bridge.c → libboxlite's libkrun networking layer.
+func WithPort(guestPort, hostPort int) BoxOption {
+	return func(c *boxConfig) {
+		c.ports = append(c.ports, portMapping{guest: guestPort, host: hostPort})
+	}
 }
 
 // WithDiskSize sets the per-box COW disk virtual size in GB.
