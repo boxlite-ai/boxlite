@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from path_verification import runner_journal_seek, runner_hits_for_box
 
 DEFAULT_PROFILE = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
-DEFAULT_IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "alpine:3.23")
+DEFAULT_IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "base")
 CRED_PATH = Path.home() / ".boxlite" / "credentials.toml"
 
 
