@@ -50,17 +50,16 @@ export class VolumeManager
 
     const endpoint = this.configService.getOrThrow('s3.endpoint')
     const region = this.configService.getOrThrow('s3.region')
-    const accessKeyId = this.configService.getOrThrow('s3.accessKey')
-    const secretAccessKey = this.configService.getOrThrow('s3.secretKey')
+    const accessKeyId = this.configService.get('s3.accessKey')
+    const secretAccessKey = this.configService.get('s3.secretKey')
     this.skipTestConnection = this.configService.get('skipConnections')
 
     this.s3Client = new S3Client({
       endpoint: endpoint.startsWith('http') ? endpoint : `http://${endpoint}`,
       region,
-      credentials: {
-        accessKeyId,
-        secretAccessKey,
-      },
+      // Static keys for S3-compatible deployments (MinIO); unset on AWS,
+      // where the SDK default chain supplies the ECS task-role credentials.
+      ...(accessKeyId && secretAccessKey ? { credentials: { accessKeyId, secretAccessKey } } : {}),
       forcePathStyle: true,
     })
   }
