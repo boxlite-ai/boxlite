@@ -82,7 +82,9 @@ UPDATE organization SET
     max_cpu_per_box = 4,
     max_memory_per_box = 8,
     max_disk_per_box = 20
-WHERE personal = true;
+FROM organization_user
+WHERE organization_user."organizationId" = organization.id
+  AND organization_user."isDefaultForUser" = true;
 """
     r = subprocess.run(
         ["psql", "-h", "localhost", "-U", "boxlite", "-d", "boxlite_dev",
