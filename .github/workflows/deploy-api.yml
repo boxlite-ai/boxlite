@@ -1,0 +1,292 @@
+# Build + deploy the Api Docker image to the Tokyo ECS service (PR #724).
+#
+# Mirrors deploy-runner.yml's pattern: build is conditional on actual
+# source changes, and a redeploy-current path lets us exercise the
+# ECS register-task-definition + UpdateService chain without rebuilding
+# — useful for isolating IAM/PassRole issues from build issues.
+#
+# Triggers:
+# - workflow_call:     reused from .github/workflows/e2e-cloud.yml so the
+#                      e2e job depends on the new API being live before
+#                      pytest.
+# - workflow_dispatch: standalone trigger; pass `redeploy_current=true`
+#                      to swap the current image's tag-equivalent into
+#                      a new task def and force-new-deployment (zero
+#                      image change — but it exercises PassRole).
+# - push:              paths-filter on api source + this workflow file,
+#                      so a commit landing on the PR branch fires CI
+#                      automatically. Internal `changes` job narrows
+#                      build vs deploy decisions per paths.
+#
+# Deploy mechanism (unchanged from main):
+#   1. ECR login + buildx build of apps/api/Dockerfile.source.
+#   2. Push image tagged with GITHUB_SHA.
+#   3. ecs:RegisterTaskDefinition — clone the live Api TD, swap the
+#      container image, strip readonly fields. Triggers an IAM
+#      PassRole check on the caller for the task / execution role
+#      (this is the step that may fail under BoxLiteDeveloperPermissions-
+#      Boundary, whose NotAction includes iam:*).
+#   4. ecs:UpdateService --force-new-deployment + wait services-stable.
+#   5. Assert PRIMARY deployment's taskDefinition == NEW_TD_ARN (catches
+#      DeploymentCircuitBreaker auto-rollback).
+#   6. Wait for at least one healthy ALB target.
+#
+# OIDC role perms used (already present on boxlite-e2e-cloud-github-
+# actions in the existing inline policy):
+#   ecr:GetAuthorizationToken + ecr:* on repository/sst-asset
+#   ecs:Describe*/List* (cluster-wide)
+#   ecs:RegisterTaskDefinition + ecs:DeregisterTaskDefinition
+#   ecs:UpdateService on cluster boxlite-e2e-ci-*/Api
+#   iam:PassRole on role/boxlite-e2e-ci-* with PassedToService=ecs-tasks
+#   elasticloadbalancing:Describe*
+name: Deploy API
+
+on:
+  workflow_call:
+    inputs:
+      redeploy_current:
+        description: 'Skip build, re-register the current TD with no image change (exercises PassRole + UpdateService only).'
+        type: boolean
+        required: false
+        default: false
+  workflow_dispatch:
+    inputs:
+      redeploy_current:
+        description: 'Skip build, re-register the current TD with no image change.'
+        type: boolean
+        required: false
+        default: false
+  push:
+    paths:
+      - 'apps/api/**'
+      - 'apps/libs/**'
+      - 'apps/common-go/**'
+      - 'apps/api-client-go/**'
+      - '.github/workflows/deploy-api.yml'
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_E2E_CLOUD_REGION }}
+  AWS_ROLE_ARN: ${{ vars.AWS_E2E_CLOUD_ROLE_ARN }}
+  STACK_PREFIX: boxlite-e2e-ci
+  ECR_REPO: sst-asset
+
+jobs:
+  # ── Detect real source changes so workflow-only commits don't build ──
+  changes:
+    name: Detect API source changes
+    runs-on: ubuntu-latest
+    outputs:
+      should_build:    ${{ steps.decide.outputs.should_build }}
+      should_deploy:   ${{ steps.decide.outputs.should_deploy }}
+      redeploy_current: ${{ steps.decide.outputs.redeploy_current }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: filter
+        if: github.event_name == 'push'
+        uses: dorny/paths-filter@v3
+        with:
+          base: ${{ github.event.before }}
+          filters: |
+            api_source:
+              - 'apps/api/**'
+              - 'apps/libs/**'
+              - 'apps/common-go/**'
+              - 'apps/api-client-go/**'
+      - id: decide
+        env:
+          PUSH_CHANGED:      ${{ steps.filter.outputs.api_source }}
+          INPUT_REDEPLOY:    ${{ inputs.redeploy_current }}
+        run: |
+          # Resolve redeploy-current mode, in order of precedence:
+          #  1. workflow_call/workflow_dispatch input `redeploy_current=true`
+          #  2. commit-message tag `[api-redeploy]`
+          REDEPLOY=false
+          if [ "${INPUT_REDEPLOY:-false}" = 'true' ]; then
+              REDEPLOY=true
+              echo "Using workflow input redeploy_current=true"
+          else
+              COMMIT_MSG=$(git log -1 --pretty=%B 2>/dev/null || true)
+              if [[ "$COMMIT_MSG" == *"[api-redeploy]"* ]]; then
+                  REDEPLOY=true
+                  echo "Using commit-message tag [api-redeploy]"
+              fi
+          fi
+
+          if [ "$REDEPLOY" = 'true' ]; then
+              echo "Re-register current TD without image change — SKIP build, RUN deploy."
+              echo "should_build=false"     >> "$GITHUB_OUTPUT"
+              echo "should_deploy=true"     >> "$GITHUB_OUTPUT"
+              echo "redeploy_current=true"  >> "$GITHUB_OUTPUT"
+              exit 0
+          fi
+          echo "redeploy_current=false"     >> "$GITHUB_OUTPUT"
+
+          if [ "${{ github.event_name }}" != 'push' ]; then
+              echo "Non-push event (${{ github.event_name }}) — build + deploy."
+              echo "should_build=true"   >> "$GITHUB_OUTPUT"
+              echo "should_deploy=true"  >> "$GITHUB_OUTPUT"
+          elif [ "${PUSH_CHANGED:-false}" = 'true' ]; then
+              echo "Push touched api_source paths — build + deploy."
+              echo "should_build=true"   >> "$GITHUB_OUTPUT"
+              echo "should_deploy=true"  >> "$GITHUB_OUTPUT"
+          else
+              echo "Push only touched workflow files — SKIP build + deploy."
+              echo "should_build=false"  >> "$GITHUB_OUTPUT"
+              echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── Deploy: ECR push (optional) + ECS register-TD + UpdateService ─
+  deploy:
+    name: Deploy API to Tokyo ECS
+    needs: changes
+    if: |
+      !failure() && !cancelled()
+      && needs.changes.outputs.should_deploy == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: deploy-api-${{ github.run_id }}
+
+      - name: Resolve cluster + target group
+        id: resources
+        run: |
+          set -euo pipefail
+
+          assert_one() {
+              local kind="$1" count="$2"
+              if [ "$count" -ne 1 ]; then
+                  echo "::error::Expected exactly 1 $kind, found $count"
+                  exit 1
+              fi
+          }
+
+          CLUSTER_COUNT=$(aws ecs list-clusters \
+            --query "length(clusterArns[?contains(@, '${STACK_PREFIX}-cluster')])" --output text)
+          assert_one "ECS cluster matching ${STACK_PREFIX}-cluster" "$CLUSTER_COUNT"
+          CLUSTER=$(aws ecs list-clusters \
+            --query "clusterArns[?contains(@, '${STACK_PREFIX}-cluster')]|[0]" \
+            --output text | awk -F/ '{print $NF}')
+          echo "cluster=$CLUSTER" >> "$GITHUB_OUTPUT"
+
+          LB_COUNT=$(aws elbv2 describe-load-balancers \
+            --query "length(LoadBalancers[?starts_with(LoadBalancerName,'ApiLoadBalancer-')])" --output text)
+          assert_one "ApiLoadBalancer-*" "$LB_COUNT"
+          TG_ARN=$(aws elbv2 describe-load-balancers \
+            --query "LoadBalancers[?starts_with(LoadBalancerName,'ApiLoadBalancer-')]|[0].LoadBalancerArn" \
+            --output text \
+            | xargs -I{} aws elbv2 describe-target-groups --load-balancer-arn {} \
+                --query "TargetGroups[0].TargetGroupArn" --output text)
+          echo "tg_arn=$TG_ARN" >> "$GITHUB_OUTPUT"
+          echo "::notice::cluster=$CLUSTER  tg=$TG_ARN"
+
+      - name: ECR login
+        if: needs.changes.outputs.should_build == 'true'
+        id: ecr_login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push API image (apps/api/Dockerfile.source)
+        id: build_api
+        if: needs.changes.outputs.should_build == 'true'
+        run: |
+          set -euo pipefail
+          REGISTRY="${{ steps.ecr_login.outputs.registry }}"
+          IMAGE="${REGISTRY}/${ECR_REPO}:api-${{ github.sha }}"
+          docker buildx build --platform linux/amd64 --load \
+            -f apps/api/Dockerfile.source -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve image for redeploy-current path
+        id: resolve_image
+        if: needs.changes.outputs.redeploy_current == 'true'
+        env:
+          CLUSTER: ${{ steps.resources.outputs.cluster }}
+        run: |
+          set -euo pipefail
+          OLD_TD_ARN=$(aws ecs describe-services --cluster "$CLUSTER" --services Api \
+            --query 'services[0].taskDefinition' --output text)
+          CURRENT_IMAGE=$(aws ecs describe-task-definition --task-definition "$OLD_TD_ARN" \
+            --query 'taskDefinition.containerDefinitions[0].image' --output text)
+          echo "Using current image (no rebuild): $CURRENT_IMAGE"
+          echo "image=$CURRENT_IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Register new task definition + UpdateService + wait stable
+        env:
+          CLUSTER: ${{ steps.resources.outputs.cluster }}
+          IMAGE:   ${{ steps.build_api.outputs.image || steps.resolve_image.outputs.image }}
+          TG_ARN:  ${{ steps.resources.outputs.tg_arn }}
+        run: |
+          set -euo pipefail
+          [ -n "$IMAGE" ] || { echo "::error::No image resolved (build skipped, redeploy_current also off)"; exit 1; }
+
+          OLD_TD_ARN=$(aws ecs describe-services --cluster "$CLUSTER" --services Api \
+            --query 'services[0].taskDefinition' --output text)
+          echo "Old TD: $OLD_TD_ARN"
+
+          # Clone old TD, swap image, strip readonly fields. Plaintext
+          # env (e.g. DB_PASSWORD) lives here — do NOT cat the file.
+          aws ecs describe-task-definition --task-definition "$OLD_TD_ARN" \
+            --query 'taskDefinition' --output json \
+            | jq --arg img "$IMAGE" '
+                .containerDefinitions[0].image = $img
+                | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                      .compatibilities, .registeredAt, .registeredBy)' \
+            > /tmp/new-td.json
+
+          NEW_TD_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file:///tmp/new-td.json \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "::notice::New TD: $NEW_TD_ARN"
+
+          aws ecs update-service --cluster "$CLUSTER" --service Api \
+            --task-definition "$NEW_TD_ARN" --force-new-deployment >/dev/null
+          aws ecs wait services-stable --cluster "$CLUSTER" --services Api
+          echo "Service stable — verifying PRIMARY is NEW_TD..."
+
+          PRIMARY_TD=$(aws ecs describe-services --cluster "$CLUSTER" --services Api \
+            --query 'services[0].deployments[?status==`PRIMARY`]|[0].taskDefinition' \
+            --output text)
+          if [ "$PRIMARY_TD" != "$NEW_TD_ARN" ]; then
+              echo "::error::ECS rolled back. PRIMARY=$PRIMARY_TD expected $NEW_TD_ARN"
+              aws ecs list-tasks --cluster "$CLUSTER" --service-name Api \
+                  --desired-status STOPPED --max-results 5 \
+                  --query 'taskArns' --output text \
+                | tr '\t' '\n' | head -3 \
+                | while read -r TASK; do
+                    [ -n "$TASK" ] || continue
+                    echo "--- stopped task $(basename "$TASK") ---"
+                    aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK" \
+                        --query 'tasks[0].[stoppedReason,containers[0].exitCode,containers[0].reason]' \
+                        --output text || true
+                  done
+              exit 1
+          fi
+          echo "::notice::PRIMARY deployment confirmed on $NEW_TD_ARN"
+
+          for i in $(seq 1 18); do
+              HEALTHY=$(aws elbv2 describe-target-health \
+                --target-group-arn "$TG_ARN" \
+                --query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" \
+                --output text)
+              if [ "$HEALTHY" -ge 1 ]; then
+                  echo "::notice::ALB target group: $HEALTHY healthy target(s)"
+                  exit 0
+              fi
+              echo "ALB healthy=0 — retry $i/18 in 10s"
+              sleep 10
+          done
+          echo "::error::ALB target group never reported a healthy target within 180s"
+          exit 1
