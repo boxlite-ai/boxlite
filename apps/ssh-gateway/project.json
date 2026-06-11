@@ -2,7 +2,7 @@
   "name": "ssh-gateway",
   "$schema": "../../runner_modules/nx/schemas/project-schema.json",
   "projectType": "application",
-  "sourceRoot": "apps/ssh-gateway",
+  "sourceRoot": "ssh-gateway",
   "tags": [],
   "targets": {
     "build": {

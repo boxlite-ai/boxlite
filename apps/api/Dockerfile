@@ -1,24 +1,31 @@
-FROM node:24-slim AS boxlite
-# build: 2026-04-28-v2
+# syntax=docker/dockerfile:1
+
+FROM node:24-slim AS base
 ENV CI=true
 
 RUN apt-get update && apt-get install -y --no-install-recommends bash curl && \
   rm -rf /var/lib/apt/lists/*
 RUN npm install -g corepack && corepack enable
 
-WORKDIR /boxlite
+WORKDIR /boxlite/apps
 
+FROM base AS deps
 COPY apps/package.json apps/yarn.lock apps/.yarnrc.yml ./
 RUN yarn install --immutable
 
+FROM base AS runtime-deps
+ENV NODE_ENV=production
+COPY apps/package.json apps/yarn.lock apps/.yarnrc.yml ./
+RUN yarn workspaces focus --all --production
+
+FROM deps AS build
 COPY apps/nx.json apps/tsconfig.base.json apps/NOTICE ./
 
-ARG CACHE_BUST=1
 ENV NX_DAEMON=false
 ENV NX_SKIP_NX_CACHE=true
 
-COPY apps/api/ apps/api/
-COPY apps/dashboard/ apps/dashboard/
+COPY apps/api/ api/
+COPY apps/dashboard/ dashboard/
 
 COPY apps/libs/runner-api-client/ libs/runner-api-client/
 COPY apps/libs/api-client/ libs/api-client/
@@ -26,21 +33,31 @@ COPY apps/libs/analytics-api-client/ libs/analytics-api-client/
 COPY apps/libs/toolbox-api-client/ libs/toolbox-api-client/
 COPY apps/libs/sdk-typescript/ libs/sdk-typescript/
 
-# Build configuration is overridable via build-arg. Defaults to `production`
-# so this Dockerfile stays a drop-in for the production deploy. The
-# e2e-cloud workflow passes `--build-arg NX_BUILD_CONFIG=development`
-# to skip the strict type-check pass (project.json's `development`
-# configuration has `skipTypeChecking: true`) — needed because main
-# currently has TS drift in apps/api that breaks the production build.
-ARG NX_BUILD_CONFIG=production
+RUN yarn nx build api --configuration=production --nxBail=true --output-style=stream && node --check dist/apps/api/main.js
 
-RUN echo 1777389170 && yarn nx build api --configuration=${NX_BUILD_CONFIG} --nxBail=true
+RUN VITE_BASE_API_URL=%BOXLITE_BASE_API_URL% yarn nx build dashboard --configuration=production --nxBail=true --output-style=stream
 
-RUN VITE_BASE_API_URL=%BOXLITE_BASE_API_URL% yarn nx build dashboard --configuration=${NX_BUILD_CONFIG} --nxBail=true --output-style=stream
+FROM node:24-slim AS boxlite
+ENV CI=true
+ENV NODE_ENV=production
+
+RUN apt-get update && apt-get install -y --no-install-recommends bash curl && \
+  rm -rf /var/lib/apt/lists/*
+
+WORKDIR /boxlite/apps
+
+COPY --from=runtime-deps --chown=node:node /boxlite/apps/package.json ./package.json
+COPY --from=runtime-deps --chown=node:node /boxlite/apps/node_modules ./node_modules
+COPY --from=build --chown=node:node /boxlite/apps/NOTICE ./NOTICE
+COPY --from=build --chown=node:node /boxlite/apps/dist/apps/api ./dist/apps/api
+COPY --from=build --chown=node:node /boxlite/apps/dist/apps/dashboard ./dist/apps/dashboard
 
 ARG VERSION=0.0.1
 ENV VERSION=${VERSION}
 
+EXPOSE 3000
 HEALTHCHECK CMD [ "curl", "-f", "http://localhost:3000/api/config" ]
+
+USER node
 
 ENTRYPOINT ["node", "dist/apps/api/main.js"]

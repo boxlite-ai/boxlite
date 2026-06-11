@@ -2,7 +2,7 @@
   "name": "proxy",
   "$schema": "../../runner_modules/nx/schemas/project-schema.json",
   "projectType": "application",
-  "sourceRoot": "apps/proxy",
+  "sourceRoot": "proxy",
   "tags": [],
   "targets": {
     "build": {
