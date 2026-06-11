@@ -244,16 +244,18 @@ jobs:
         id: ecr_login
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build & push Api image (production Dockerfile)
+      - name: Build & push Api image (source mode via ts-node, no webpack)
         id: build_api
         run: |
           set -euo pipefail
           REGISTRY="${{ steps.ecr_login.outputs.registry }}"
           IMAGE="${REGISTRY}/${ECR_REPO}:api-${{ github.sha }}"
-          # Validation branch for #730: build the production image path,
-          # not the e2e source-mode Dockerfile from #724.
+          # Use #724's source-mode image for Tokyo e2e. The #730
+          # production Dockerfile is validated separately by Docker build;
+          # source mode is needed here because #724's base carries known
+          # strict API type drift.
           docker buildx build --platform linux/amd64 --load \
-            --target boxlite -f apps/api/Dockerfile -t "$IMAGE" .
+            -f apps/api/Dockerfile.source -t "$IMAGE" .
           docker push "$IMAGE"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
