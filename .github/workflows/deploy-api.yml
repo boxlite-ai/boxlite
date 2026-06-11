@@ -183,6 +183,22 @@ jobs:
             --output text | awk -F/ '{print $NF}')
           echo "cluster=$CLUSTER" >> "$GITHUB_OUTPUT"
 
+          # Resolve the LIVE storagebucket. TD env vars may reference a
+          # stale name from a previous stack instantiation (the original
+          # bucket was deleted while the TD held the old name in
+          # SST_RESOURCE_Storage / S3_DEFAULT_BUCKET). Find what actually
+          # exists in S3 and patch the TD env to match — the application
+          # boots from these env vars (configuration.ts), not from SST
+          # state. Single-bucket assertion catches dangling orphans.
+          BUCKET_COUNT=$(aws s3api list-buckets \
+            --query "length(Buckets[?starts_with(Name,'${STACK_PREFIX}-storagebucket-')])" --output text)
+          assert_one "${STACK_PREFIX}-storagebucket-* S3 bucket" "$BUCKET_COUNT"
+          STORAGE_BUCKET=$(aws s3api list-buckets \
+            --query "Buckets[?starts_with(Name,'${STACK_PREFIX}-storagebucket-')]|[0].Name" \
+            --output text)
+          echo "storage_bucket=$STORAGE_BUCKET" >> "$GITHUB_OUTPUT"
+          echo "::notice::storagebucket=$STORAGE_BUCKET (will patch into TD env)"
+
           LB_COUNT=$(aws elbv2 describe-load-balancers \
             --query "length(LoadBalancers[?starts_with(LoadBalancerName,'ApiLoadBalancer-')])" --output text)
           assert_one "ApiLoadBalancer-*" "$LB_COUNT"
@@ -227,9 +243,10 @@ jobs:
 
       - name: Register new task definition + UpdateService + wait stable
         env:
-          CLUSTER: ${{ steps.resources.outputs.cluster }}
-          IMAGE:   ${{ steps.build_api.outputs.image || steps.resolve_image.outputs.image }}
-          TG_ARN:  ${{ steps.resources.outputs.tg_arn }}
+          CLUSTER:        ${{ steps.resources.outputs.cluster }}
+          IMAGE:          ${{ steps.build_api.outputs.image || steps.resolve_image.outputs.image }}
+          TG_ARN:         ${{ steps.resources.outputs.tg_arn }}
+          STORAGE_BUCKET: ${{ steps.resources.outputs.storage_bucket }}
         run: |
           set -euo pipefail
           [ -n "$IMAGE" ] || { echo "::error::No image resolved (build skipped, redeploy_current also off)"; exit 1; }
@@ -247,12 +264,29 @@ jobs:
           # on InvalidAccessKeyId at first S3 call. Stripping these env
           # vars forces the SDK default credential chain (= task role).
           # Plaintext env (e.g. DB_PASSWORD) lives in TD — do NOT cat the file.
+          # The jq pipeline:
+          #   - swap container image to the fresh build (or current image
+          #     for redeploy-current path)
+          #   - drop pre-#732 static-IAM env vars (S3_ACCESS_KEY / S3_SECRET_KEY)
+          #     so the SDK falls through to task-role credentials
+          #   - patch S3_DEFAULT_BUCKET + SST_RESOURCE_Storage to the LIVE
+          #     storage bucket name. The original bucket may have been
+          #     deleted out-of-band while the TD held the dead name; the
+          #     application boots from these env vars (VolumeManager
+          #     .testConnection NoSuchBuckets on container startup
+          #     otherwise) — see configuration.ts.
           aws ecs describe-task-definition --task-definition "$OLD_TD_ARN" \
             --query 'taskDefinition' --output json \
-            | jq --arg img "$IMAGE" '
+            | jq --arg img "$IMAGE" --arg bucket "$STORAGE_BUCKET" '
                 .containerDefinitions[0].image = $img
-                | .containerDefinitions[0].environment |= map(
-                    select(.name != "S3_ACCESS_KEY" and .name != "S3_SECRET_KEY")
+                | .containerDefinitions[0].environment |= (
+                    map(select(.name != "S3_ACCESS_KEY" and .name != "S3_SECRET_KEY"))
+                    | map(
+                        if .name == "S3_DEFAULT_BUCKET" then .value = $bucket
+                        elif .name == "SST_RESOURCE_Storage" then
+                            .value = (.value | fromjson | .name = $bucket | tojson)
+                        else . end
+                      )
                   )
                 | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
                       .compatibilities, .registeredAt, .registeredBy)' \
