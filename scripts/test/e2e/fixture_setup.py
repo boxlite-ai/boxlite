@@ -88,20 +88,20 @@ def patch_admin_quota(path_prefix: str | None):
     so the box CREATE path doesn't 403 in tests."""
     import subprocess
     org_id = _require_org_id(path_prefix)
-    sql = """
+    sql = f"""
 WITH updated AS (
   UPDATE organization SET
     max_cpu_per_box = 4,
     max_memory_per_box = 8,
     max_disk_per_box = 20
-  WHERE id = :'org_id'::uuid
+  WHERE id = '{org_id}'::uuid
   RETURNING id
 )
 SELECT count(*) FROM updated;
 """
     r = subprocess.run(
         ["psql", "-h", "localhost", "-U", "boxlite", "-d", "boxlite_dev",
-         "-v", f"org_id={org_id}", "-tAc", sql],
+         "-tAc", sql],
         env={**os.environ, "PGPASSWORD": "boxlite"},
         capture_output=True, text=True,
     )
