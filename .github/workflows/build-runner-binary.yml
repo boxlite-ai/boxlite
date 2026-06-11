@@ -108,11 +108,14 @@ jobs:
         #   - pkg-config: cargo build script dep resolution
         #   - protobuf-compiler: boxlite-shared's build.rs invokes protoc
         #   - libssl-dev: openssl-sys (transitive)
+        #   - llvm: llvm-objcopy used by fix-go-symbols.sh to rename
+        #          Go-conflicting symbols inside libboxlite.a after cargo
+        #          build (called automatically by boxlite-c's build.rs)
         # DEPS_STUB=2 skips the bubblewrap/libkrun/e2fsprogs path entirely,
-        # so we DON'T need meson/ninja/libcap-dev/llvm/libclang-dev/etc.
+        # so we DON'T need meson/ninja/libcap-dev/libclang-dev/etc.
         run: |
           sudo apt-get install -y --no-install-recommends \
-            musl-tools gperf pkg-config protobuf-compiler libssl-dev
+            musl-tools gperf pkg-config protobuf-compiler libssl-dev llvm
 
       - name: Build boxlite-guest (musl static, embedded into .a)
         if: inputs.libboxlite_source == 'build'
