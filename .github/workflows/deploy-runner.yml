@@ -1,4 +1,4 @@
-# Build + deploy the boxlite-runner binary to the Tokyo EC2 host.
+# Build + deploy the boxlite-runner binary to the Tokyo EC2 host (PR #724).
 #
 # Self-contained: chains build-c.yml (libboxlite.a from THIS checkout's
 # Rust source) → build-runner-binary.yml (Go binary linking the .a) →
