@@ -2,8 +2,8 @@
 #
 # Self-contained: chains build-c.yml (libboxlite.a from THIS checkout's
 # Rust source) → build-runner-binary.yml (Go binary linking the .a) →
-# a deploy job that pushes to S3 and waits for the EC2-side systemd
-# timer to hot-swap the binary.
+# a deploy job that SCPs the binary to the EC2 over SSH and swaps it
+# in place.
 #
 # Triggers:
 # - workflow_call:     reused from .github/workflows/e2e-cloud.yml so the
@@ -13,15 +13,21 @@
 #                      pipeline (build + deploy) without going through
 #                      the API rebuild + pytest chain.
 #
-# The Tokyo runner's S3 poller (one-time install via PowerUserAccess
-# SSM) is the consumer end — see docs/runbook/runner-self-update.md
-# (TODO) or the installer at /usr/local/bin/boxlite-runner-poll.sh on
-# i-0198ebab64f67b9ff.
-#
-# All AWS interactions in the `deploy` job use the existing e2e-cloud
-# OIDC role's permissions (`s3:PutObject`/`GetObject`/`HeadObject` on
-# `${stack_prefix}-storagebucket-*/builds/*` + read-only resource
-# resolution). No IAM mutation needed.
+# Deploy mechanism: SSH+SCP via EC2 Instance Connect.
+# main's runner deploy uses SSM Run Command (see sst.config.ts:746 +
+# scripts/deploy/runner-update-binary.sh). The Tokyo e2e-ci EC2 has had
+# its IAM instance profile drift (the original RunnerProfile was deleted
+# from IAM, leaving the agent with no valid STS identity → ConnectionLost).
+# Until that stack is reconciled via `sst deploy --stage e2e-ci`, e2e-ci
+# uses SSH+SCP as a side-channel that bypasses the agent:
+#   1. ec2-instance-connect:SendSSHPublicKey pushes a 60s ephemeral key
+#      to the ubuntu account (no pre-shared keypair, no GHA secret).
+#   2. SG inbound 22 is temporarily opened from the job runner's egress
+#      IP (resolved at runtime), and unconditionally revoked at job end.
+#   3. scp the tarball, ssh to stop / extract / start boxlite-runner.
+# OIDC perms needed: ec2:DescribeInstances, ec2:AuthorizeSecurityGroup-
+# Ingress, ec2:RevokeSecurityGroupIngress, ec2-instance-connect:Send-
+# SSHPublicKey. No IAM mutation.
 name: Deploy Runner Binary
 
 on:
@@ -176,26 +182,14 @@ jobs:
     permissions:
       contents: write
 
-  # ── Deploy: S3 upload + pre-signed URL + SSM Run Command ──────────
+  # ── Deploy: SSH+SCP via EC2 Instance Connect ──────────────────────
   #
-  # Pattern follows `scripts/deploy/runner-update-binary.sh` (main): use
-  # SSM Run Command to drive an in-place binary swap on the Tokyo EC2.
-  # Difference vs main's script: that one curls a tagged GitHub release;
-  # we curl an S3 pre-signed URL (PR builds aren't published as releases).
-  #
-  # Pre-signed URL has the AWS Sigv4 query auth baked in, so the EC2 host
-  # does NOT need IAM perms to read the bucket — curl-only. The OIDC role
-  # only needs s3:PutObject on the storagebucket (already in its policy).
-  #
-  # Bucket name: SST `sst.aws.Bucket('Storage')` generates a stable name
-  # with a random Pulumi-state suffix. Hardcoded here because:
-  #   - `s3api list-buckets` requires s3:ListAllMyBuckets, which has
-  #     been observed returning empty for this role in some sessions
-  #     (probably account-level SCP) — better to bypass.
-  #   - The suffix is stable across SST deploys (Pulumi state keeps it).
-  #     If the stack is destroyed and recreated, update this value.
+  # Mechanism (see header comment): push 60s ephemeral SSH pubkey via
+  # ec2-instance-connect, temporarily open the runner SG inbound 22 from
+  # this job runner's egress IP, scp the binary, ssh to swap it, and
+  # unconditionally revoke the SG rule on exit (success or failure).
   deploy:
-    name: Deploy runner to Tokyo EC2 (SSM Run Command)
+    name: Deploy runner to Tokyo EC2 (SSH+SCP)
     needs: [changes, build_runner]
     if: |
       !failure() && !cancelled()
@@ -208,7 +202,6 @@ jobs:
     env:
       AWS_REGION: ${{ vars.AWS_E2E_CLOUD_REGION }}
       AWS_ROLE_ARN: ${{ vars.AWS_E2E_CLOUD_ROLE_ARN }}
-      SSM_DOC_NAME: boxlite-runner-deploy
     steps:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -217,39 +210,22 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: deploy-runner-${{ github.run_id }}
 
-      - name: Resolve Tokyo runner instance + storage bucket
+      - name: Resolve Tokyo runner instance / IP / SG
         id: ec2
         run: |
           set -euo pipefail
-          ID=$(aws ec2 describe-instances \
+          read -r ID IP SG <<<"$(aws ec2 describe-instances \
             --filters "Name=tag:Name,Values=boxlite-runner" \
                       "Name=instance-state-name,Values=running" \
-            --query 'Reservations[0].Instances[0].InstanceId' --output text)
-          [ -n "$ID" ] && [ "$ID" != "None" ] || { echo "::error::No running boxlite-runner instance"; exit 1; }
-          echo "runner_id=$ID" >> "$GITHUB_OUTPUT"
-          echo "::notice::Runner instance: $ID"
-
-          echo '--- ALL buckets visible to this role ---'
-          aws s3api list-buckets --query 'Buckets[].Name' --output text || true
-          echo
-          echo '--- buckets containing "boxlite-e2e-ci" ---'
-          BUCKETS=$(aws s3api list-buckets --query "Buckets[?contains(Name,'boxlite-e2e-ci')].Name" --output text || true)
-          echo "matched: $BUCKETS"
-          COUNT=$(printf '%s\n' "$BUCKETS" | wc -w | tr -d ' ')
-          if [ "$COUNT" -ge 1 ]; then
-              # Pick the storagebucket among the matches
-              STORE=$(printf '%s\n' $BUCKETS | grep storagebucket | head -1 || true)
-              if [ -n "$STORE" ]; then
-                  echo "Resolved storagebucket: $STORE"
-                  echo "s3_bucket=$STORE" >> "$GITHUB_OUTPUT"
-              else
-                  echo "::error::No storagebucket among matched: $BUCKETS"
-                  exit 1
-              fi
-          else
-              echo "::error::No buckets matched 'boxlite-e2e-ci' — stack may not exist"
-              exit 1
-          fi
+            --query 'Reservations[0].Instances[0].[InstanceId,PublicIpAddress,SecurityGroups[0].GroupId]' \
+            --output text)"
+          [ -n "$ID"  ] && [ "$ID"  != "None" ] || { echo "::error::No running boxlite-runner instance"; exit 1; }
+          [ -n "$IP"  ] && [ "$IP"  != "None" ] || { echo "::error::Runner has no public IP — SSH path requires it"; exit 1; }
+          [ -n "$SG"  ] && [ "$SG"  != "None" ] || { echo "::error::Could not resolve runner SG"; exit 1; }
+          echo "runner_id=$ID"  >> "$GITHUB_OUTPUT"
+          echo "runner_ip=$IP"  >> "$GITHUB_OUTPUT"
+          echo "runner_sg=$SG"  >> "$GITHUB_OUTPUT"
+          echo "::notice::Runner $ID @ $IP  (SG $SG)"
 
       - name: Download runner binary artifact (this run)
         if: needs.changes.outputs.prev_run_id == ''
@@ -268,76 +244,74 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
 
-      - name: Upload to S3 + SSM Run Command swap binary
+      - name: Generate ephemeral SSH keypair + push via Instance Connect
+        id: keypush
         env:
-          S3_BUCKET: ${{ steps.ec2.outputs.s3_bucket }}
+          INSTANCE_ID: ${{ steps.ec2.outputs.runner_id }}
         run: |
           set -euo pipefail
-          RUNNER_ID="${{ steps.ec2.outputs.runner_id }}"
+          KEY=/tmp/deploy-runner-ed25519
+          ssh-keygen -t ed25519 -N '' -f "$KEY" -C "gha-deploy-runner-${GITHUB_RUN_ID}" >/dev/null
+          # 60s validity — must scp + ssh within that window.
+          aws ec2-instance-connect send-ssh-public-key \
+              --instance-id "$INSTANCE_ID" \
+              --instance-os-user ubuntu \
+              --ssh-public-key "file://${KEY}.pub" \
+              --query 'Success' --output text
+          echo "key_path=$KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Open SG 22 inbound from this runner IP (temporary)
+        id: sgopen
+        env:
+          SG: ${{ steps.ec2.outputs.runner_sg }}
+        run: |
+          set -euo pipefail
+          MY_IP=$(curl -fsSL --max-time 10 https://api.ipify.org)
+          [ -n "$MY_IP" ] || { echo "::error::Could not resolve own egress IP"; exit 1; }
+          echo "Runner egress IP: $MY_IP"
+          RULE_ID=$(aws ec2 authorize-security-group-ingress \
+              --group-id "$SG" \
+              --ip-permissions "IpProtocol=tcp,FromPort=22,ToPort=22,IpRanges=[{CidrIp=${MY_IP}/32,Description=gha-deploy-runner-${GITHUB_RUN_ID}}]" \
+              --query 'SecurityGroupRules[0].SecurityGroupRuleId' --output text)
+          [ -n "$RULE_ID" ] && [ "$RULE_ID" != "None" ] || { echo "::error::Failed to add SG rule"; exit 1; }
+          echo "rule_id=$RULE_ID" >> "$GITHUB_OUTPUT"
+          echo "::notice::SG rule $RULE_ID added (22/tcp from $MY_IP/32)"
+
+      - name: SCP artifact + SSH-driven binary swap
+        env:
+          IP: ${{ steps.ec2.outputs.runner_ip }}
+          KEY: ${{ steps.keypush.outputs.key_path }}
+        run: |
+          set -euo pipefail
           ARCHIVE=$(ls /tmp/runner-artifact/boxlite-runner-*-linux-amd64.tar.gz | head -1)
           [ -n "$ARCHIVE" ] || { echo "::error::No runner artifact found"; exit 1; }
 
-          KEY="builds/runner-deploy/binary-${GITHUB_SHA}.tar.gz"
-          aws s3 cp "$ARCHIVE" "s3://${S3_BUCKET}/${KEY}"
-          echo "::notice::Uploaded to s3://${S3_BUCKET}/${KEY}"
+          SSH_OPTS="-i $KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15"
 
-          # 15-min pre-signed URL — enough for SSM dispatch + curl on
-          # EC2; short enough to be tolerable if it leaks via logs.
-          URL=$(aws s3 presign "s3://${S3_BUCKET}/${KEY}" --expires-in 900)
+          # SCP the tarball
+          scp $SSH_OPTS "$ARCHIVE" "ubuntu@${IP}:/tmp/boxlite-runner.tar.gz"
 
-          # JSON-encode the commands array via python (URL has `&` and
-          # `=` which would otherwise break aws CLI's --parameters
-          # `key=value` shorthand). Custom doc `boxlite-runner-deploy`
-          # is a 1:1 clone of AWS-RunShellScript, tagged
-          # Name=boxlite-runner so the OIDC role's tag-conditioned
-          # ssm:SendCommand statement allows dispatch to it.
-          python3 - "$URL" >/tmp/params.json <<'PY'
-          import json, sys
-          url = sys.argv[1]
-          cmds = [
-              "set -euxo pipefail",
-              f"curl -fsSL --max-time 60 -o /tmp/boxlite-runner.tar.gz '{url}'",
-              "systemctl stop boxlite-runner",
-              "tar xzf /tmp/boxlite-runner.tar.gz -C /usr/local/bin/",
-              "chmod +x /usr/local/bin/boxlite-runner",
-              "systemctl start boxlite-runner",
-              "sleep 5",
-              "systemctl is-active --quiet boxlite-runner || { journalctl -u boxlite-runner -n 50 --no-pager; exit 1; }",
-              "/usr/local/bin/boxlite-runner --version 2>&1 || true",
-          ]
-          json.dump({"commands": cmds}, sys.stdout)
-          PY
+          # In-place swap + restart + smoke-check
+          ssh $SSH_OPTS "ubuntu@${IP}" 'bash -s' <<'REMOTE'
+          set -euxo pipefail
+          sudo systemctl stop boxlite-runner
+          sudo tar xzf /tmp/boxlite-runner.tar.gz -C /usr/local/bin/
+          sudo chmod +x /usr/local/bin/boxlite-runner
+          sudo systemctl start boxlite-runner
+          sleep 5
+          sudo systemctl is-active --quiet boxlite-runner || { sudo journalctl -u boxlite-runner -n 50 --no-pager; exit 1; }
+          /usr/local/bin/boxlite-runner --version 2>&1 || true
+          REMOTE
+          echo "::notice::Runner binary swap succeeded"
 
-          CMD_ID=$(aws ssm send-command \
-              --instance-ids "$RUNNER_ID" \
-              --document-name "$SSM_DOC_NAME" \
-              --comment "deploy-runner ${GITHUB_SHA}" \
-              --parameters file:///tmp/params.json \
-              --query 'Command.CommandId' --output text)
-          echo "::notice::SSM Command ID: $CMD_ID"
-
-          # Wait up to ~3 min (cold-start tar extract + systemd start).
-          for i in $(seq 1 36); do
-              sleep 5
-              STATUS=$(aws ssm get-command-invocation \
-                  --command-id "$CMD_ID" --instance-id "$RUNNER_ID" \
-                  --query Status --output text 2>/dev/null || echo "Pending")
-              echo "  [$i/36] $STATUS"
-              case "$STATUS" in
-                  Success)
-                      echo "::notice::Runner deploy succeeded"
-                      aws ssm get-command-invocation \
-                          --command-id "$CMD_ID" --instance-id "$RUNNER_ID" \
-                          --query 'StandardOutputContent' --output text | tail -10
-                      exit 0 ;;
-                  Failed|TimedOut|Cancelled)
-                      echo "::error::SSM deploy ended with status=$STATUS"
-                      aws ssm get-command-invocation \
-                          --command-id "$CMD_ID" --instance-id "$RUNNER_ID" \
-                          --query '{out:StandardOutputContent,err:StandardErrorContent}' \
-                          --output json || true
-                      exit 1 ;;
-              esac
-          done
-          echo "::error::SSM deploy did not complete within 180s"
-          exit 1
+      - name: Revoke SG 22 inbound rule (always)
+        if: always() && steps.sgopen.outputs.rule_id != ''
+        env:
+          SG: ${{ steps.ec2.outputs.runner_sg }}
+          RULE_ID: ${{ steps.sgopen.outputs.rule_id }}
+        run: |
+          aws ec2 revoke-security-group-ingress \
+              --group-id "$SG" \
+              --security-group-rule-ids "$RULE_ID" \
+              --query 'Return' --output text
+          echo "::notice::SG rule $RULE_ID revoked"
