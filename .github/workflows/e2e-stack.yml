@@ -61,6 +61,8 @@ jobs:
       # code under review, not whatever wheel happened to be installed.
       - name: Rebuild Python SDK wheel from this checkout
         run: |
+          source "$HOME/.cargo/env" 2>/dev/null || true
+          export PATH="$HOME/.cargo/bin:$PATH"
           cd sdks/python
           pip install --break-system-packages --quiet maturin
           maturin build --release --quiet

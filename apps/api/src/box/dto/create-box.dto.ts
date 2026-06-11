@@ -19,10 +19,6 @@ export class CreateBoxDto {
   @IsString()
   name?: string
 
-  @ApiPropertyOptional({
-    description: 'The curated image key for the box (one of: base, python, node). Defaults to base.',
-    example: 'base',
-  })
   @IsOptional()
   @IsString()
   image?: string

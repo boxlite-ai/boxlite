@@ -6,7 +6,6 @@
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **name** | **string** | The name of the box. If not provided, the box ID will be used as the name | [optional] [default to undefined]
-**image** | **string** | The curated image key for the box (one of: base, python, node). Defaults to base. | [optional] [default to undefined]
 **user** | **string** | The user associated with the project | [optional] [default to undefined]
 **env** | **{ [key: string]: string; }** | Environment variables for the box | [optional] [default to undefined]
 **labels** | **{ [key: string]: string; }** | Labels for the box | [optional] [default to undefined]
@@ -30,7 +29,6 @@ import { CreateBox } from './api';
 
 const instance: CreateBox = {
     name,
-    image,
     user,
     env,
     labels,

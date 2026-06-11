@@ -260,12 +260,12 @@ jobs:
             --query "Reservations[0].Instances[0].InstanceId" --output text)
           echo "runner_id=$RUNNER_ID" >> "$GITHUB_OUTPUT"
 
-          BUCKET_COUNT=$(aws s3api list-buckets \
-            --query "length(Buckets[?starts_with(Name,'${STACK_PREFIX}-storagebucket-')])" --output text)
-          assert_one "${STACK_PREFIX}-storagebucket-* S3 bucket" "$BUCKET_COUNT"
-          S3_BUCKET=$(aws s3api list-buckets \
-            --query "Buckets[?starts_with(Name,'${STACK_PREFIX}-storagebucket-')].Name|[0]" \
+          S3_BUCKETS=$(aws s3api list-buckets \
+            --query "Buckets[?starts_with(Name,'${STACK_PREFIX}-storagebucket')].Name" \
             --output text)
+          BUCKET_COUNT=$(echo "$S3_BUCKETS" | wc -w | tr -d ' ')
+          assert_one "${STACK_PREFIX}-storagebucket* S3 bucket" "$BUCKET_COUNT"
+          S3_BUCKET=$(echo "$S3_BUCKETS" | awk '{print $1}')
           echo "s3_bucket=$S3_BUCKET" >> "$GITHUB_OUTPUT"
 
           # Preflight: ECR repo must exist (hardcoded SST default — fail

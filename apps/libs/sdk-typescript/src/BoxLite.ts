@@ -175,6 +175,10 @@ export type CreateBoxFromImageParams = CreateBoxBaseParams & {
   resources?: Resources
 }
 
+type CreateBoxWithCuratedImage = Parameters<BoxApi['createBox']>[0] & {
+  image?: string
+}
+
 /**
  * Parameters for creating a new Box.
  *
@@ -441,24 +445,26 @@ export class BoxLite implements AsyncDisposable {
         resources = params.resources as Resources | undefined
       }
 
+      const createBoxBody: CreateBoxWithCuratedImage = {
+        name: params.name,
+        user: params.user,
+        env: params.envVars || {},
+        labels,
+        public: params.public,
+        ...('image' in params ? { image: params.image } : {}),
+        target: this.target,
+        cpu: resources?.cpu,
+        memory: resources?.memory,
+        disk: resources?.disk,
+        autoStopInterval: params.autoStopInterval,
+        autoDeleteInterval: params.autoDeleteInterval,
+        volumes: params.volumes,
+        networkBlockAll: params.networkBlockAll,
+        networkAllowList: params.networkAllowList,
+      }
+
       const response = await this.boxApi.createBox(
-        {
-          name: params.name,
-          user: params.user,
-          env: params.envVars || {},
-          labels: labels,
-          public: params.public,
-          image: 'image' in params ? params.image : undefined,
-          target: this.target,
-          cpu: resources?.cpu,
-          memory: resources?.memory,
-          disk: resources?.disk,
-          autoStopInterval: params.autoStopInterval,
-          autoDeleteInterval: params.autoDeleteInterval,
-          volumes: params.volumes,
-          networkBlockAll: params.networkBlockAll,
-          networkAllowList: params.networkAllowList,
-        },
+        createBoxBody,
         undefined,
         {
           timeout: options.timeout * 1000,

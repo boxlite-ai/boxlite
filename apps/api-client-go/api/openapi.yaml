@@ -10218,7 +10218,6 @@ components:
     CreateBox:
       example:
         name: MyBox
-        image: base
         user: boxlite
         env:
           NODE_ENV: production
@@ -10247,11 +10246,6 @@ components:
           description: "The name of the box. If not provided, the box ID will be used\
             \ as the name"
           example: MyBox
-          type: string
-        image:
-          description: "The curated image key for the box (one of: base, python, node).\
-            \ Defaults to base."
-          example: base
           type: string
         user:
           description: The user associated with the project

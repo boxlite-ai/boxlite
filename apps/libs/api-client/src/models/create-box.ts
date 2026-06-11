@@ -23,10 +23,6 @@ export interface CreateBox {
      */
     'name'?: string;
     /**
-     * The curated image key for the box (one of: base, python, node). Defaults to base.
-     */
-    'image'?: string;
-    /**
      * The user associated with the project
      */
     'user'?: string;
