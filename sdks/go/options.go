@@ -74,6 +74,41 @@ type NetworkSpec struct {
 	AllowNet []string
 }
 
+type portProtocol string
+
+const (
+	portProtocolTCP portProtocol = "tcp"
+	portProtocolUDP portProtocol = "udp"
+)
+
+type portSpec struct {
+	host     *int
+	guest    int
+	protocol portProtocol
+	host_ip  string
+}
+
+type cPortSpec struct {
+	host_port  int
+	guest_port int
+	protocol   portProtocol
+	host_ip    string
+}
+
+func (p portSpec) toCSpec() cPortSpec {
+	hostPort := 0
+	if p.host != nil {
+		hostPort = *p.host
+	}
+
+	return cPortSpec{
+		host_port:  hostPort,
+		guest_port: p.guest,
+		protocol:   p.protocol,
+		host_ip:    p.host_ip,
+	}
+}
+
 // Secret configures outbound HTTPS secret substitution.
 type Secret struct {
 	Name        string
@@ -90,7 +125,7 @@ type boxConfig struct {
 	rootfsPath string
 	env        [][2]string
 	volumes    []volumeEntry
-	ports      []portEntry
+	ports      []portSpec
 	workDir    string
 	entrypoint []string
 	cmd        []string
@@ -104,11 +139,6 @@ type volumeEntry struct {
 	hostPath  string
 	guestPath string
 	readOnly  bool
-}
-
-type portEntry struct {
-	guestPort int
-	hostPort  int
 }
 
 // WithName sets a human-readable name for the box.
@@ -167,11 +197,15 @@ func WithVolumeReadOnly(hostPath, containerPath string) BoxOption {
 	}
 }
 
-// WithPort forwards a guest port to a host port. A hostPort of 0 lets the
-// runtime assign one dynamically.
-func WithPort(guestPort, hostPort int) BoxOption {
+// WithPort forwards a host port to a guest port. A host of 0 lets the runtime
+// assign one dynamically.
+func WithPort(host, guest int) BoxOption {
 	return func(c *boxConfig) {
-		c.ports = append(c.ports, portEntry{guestPort, hostPort})
+		c.ports = append(c.ports, portSpec{
+			host:     &host,
+			guest:    guest,
+			protocol: portProtocolTCP,
+		})
 	}
 }
 
@@ -285,7 +319,8 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 		C.free(unsafe.Pointer(cGuest))
 	}
 	for _, port := range cfg.ports {
-		C.boxlite_options_add_port(cOpts, C.int(port.guestPort), C.int(port.hostPort))
+		cPort := port.toCSpec()
+		C.boxlite_options_add_port(cOpts, C.int(cPort.guest_port), C.int(cPort.host_port))
 	}
 	if cfg.network != nil {
 		switch cfg.network.Mode {

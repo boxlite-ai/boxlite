@@ -265,7 +265,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	if err != nil {
 		return "", "", err
 	}
-	opts = append(opts, boxlite.WithPort(ToolboxGuestPort, toolboxHostPort))
+	opts = append(opts, boxlite.WithPort(toolboxHostPort, ToolboxGuestPort))
 
 	opts = append(opts, boxlite.WithNetwork(networkSpec(boxDto.NetworkBlockAll, boxDto.NetworkAllowList)))
 

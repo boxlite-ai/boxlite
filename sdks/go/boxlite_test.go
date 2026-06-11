@@ -201,6 +201,7 @@ func TestBoxOptions(t *testing.T) {
 	WithEnv("FOO", "bar")(cfg)
 	WithVolume("/host", "/guest")(cfg)
 	WithVolumeReadOnly("/ro-host", "/ro-guest")(cfg)
+	WithPort(8080, 3000)(cfg)
 	WithWorkDir("/app")(cfg)
 	WithEntrypoint("/bin/sh")(cfg)
 	WithCmd("-c", "echo hi")(cfg)
@@ -230,6 +231,19 @@ func TestBoxOptions(t *testing.T) {
 	}
 	if !cfg.volumes[1].readOnly {
 		t.Error("second volume should be read-only")
+	}
+	if len(cfg.ports) != 1 {
+		t.Fatalf("ports: got %d", len(cfg.ports))
+	}
+	if cfg.ports[0].host == nil || *cfg.ports[0].host != 8080 {
+		t.Fatalf("port host: got %v", cfg.ports[0].host)
+	}
+	if cfg.ports[0].guest != 3000 || cfg.ports[0].protocol != portProtocolTCP || cfg.ports[0].host_ip != "" {
+		t.Errorf("port: got guest=%d protocol=%q host_ip=%q", cfg.ports[0].guest, cfg.ports[0].protocol, cfg.ports[0].host_ip)
+	}
+	cPort := cfg.ports[0].toCSpec()
+	if cPort.host_port != 8080 || cPort.guest_port != 3000 || cPort.protocol != portProtocolTCP || cPort.host_ip != "" {
+		t.Errorf("c port: got host_port=%d guest_port=%d protocol=%q host_ip=%q", cPort.host_port, cPort.guest_port, cPort.protocol, cPort.host_ip)
 	}
 	if cfg.workDir != "/app" {
 		t.Errorf("workDir: got %q", cfg.workDir)
