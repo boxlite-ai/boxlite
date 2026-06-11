@@ -201,6 +201,7 @@ func TestBoxOptions(t *testing.T) {
 	WithEnv("FOO", "bar")(cfg)
 	WithVolume("/host", "/guest")(cfg)
 	WithVolumeReadOnly("/ro-host", "/ro-guest")(cfg)
+	WithPort(8080, 3000)(cfg)
 	WithWorkDir("/app")(cfg)
 	WithEntrypoint("/bin/sh")(cfg)
 	WithCmd("-c", "echo hi")(cfg)
@@ -230,6 +231,12 @@ func TestBoxOptions(t *testing.T) {
 	}
 	if !cfg.volumes[1].readOnly {
 		t.Error("second volume should be read-only")
+	}
+	if len(cfg.ports) != 1 {
+		t.Fatalf("ports: got %d", len(cfg.ports))
+	}
+	if cfg.ports[0].host != 8080 || cfg.ports[0].guest != 3000 {
+		t.Errorf("port: got host=%d guest=%d", cfg.ports[0].host, cfg.ports[0].guest)
 	}
 	if cfg.workDir != "/app" {
 		t.Errorf("workDir: got %q", cfg.workDir)
