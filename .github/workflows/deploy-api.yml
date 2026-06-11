@@ -71,6 +71,8 @@ env:
   AWS_REGION: ${{ vars.AWS_E2E_CLOUD_REGION }}
   AWS_ROLE_ARN: ${{ vars.AWS_E2E_CLOUD_ROLE_ARN }}
   STACK_PREFIX: boxlite-e2e-ci
+  # SST auto-generates cluster names like boxlite-e2e-ci-ClusterCluster-xxx
+  ECS_CLUSTER_PATTERN: boxlite-e2e-ci-ClusterCluster-
   ECR_REPO: sst-asset
 
 jobs:
@@ -174,10 +176,10 @@ jobs:
           }
 
           CLUSTER_COUNT=$(aws ecs list-clusters \
-            --query "length(clusterArns[?contains(@, '${STACK_PREFIX}-cluster')])" --output text)
-          assert_one "ECS cluster matching ${STACK_PREFIX}-cluster" "$CLUSTER_COUNT"
+            --query "length(clusterArns[?contains(@, '${ECS_CLUSTER_PATTERN}')])" --output text)
+          assert_one "ECS cluster matching ${ECS_CLUSTER_PATTERN}" "$CLUSTER_COUNT"
           CLUSTER=$(aws ecs list-clusters \
-            --query "clusterArns[?contains(@, '${STACK_PREFIX}-cluster')]|[0]" \
+            --query "clusterArns[?contains(@, '${ECS_CLUSTER_PATTERN}')]|[0]" \
             --output text | awk -F/ '{print $NF}')
           echo "cluster=$CLUSTER" >> "$GITHUB_OUTPUT"
 
