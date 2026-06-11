@@ -176,15 +176,27 @@ jobs:
     permissions:
       contents: write
 
-  # ── Deploy: push to S3, EC2-side poller picks up + swaps ───────────
+  # ── Deploy: S3 upload + pre-signed URL + SSM Run Command ──────────
+  #
+  # Pattern follows `scripts/deploy/runner-update-binary.sh` (main): use
+  # SSM Run Command to drive an in-place binary swap on the Tokyo EC2.
+  # Difference vs main's script: that one curls a tagged GitHub release;
+  # we curl an S3 pre-signed URL (PR builds aren't published as releases).
+  #
+  # Pre-signed URL has the AWS Sigv4 query auth baked in, so the EC2 host
+  # does NOT need IAM perms to read the bucket — curl-only. The OIDC role
+  # only needs s3:PutObject on the storagebucket (already in its policy).
+  #
+  # Bucket name: SST `sst.aws.Bucket('Storage')` generates a stable name
+  # with a random Pulumi-state suffix. Hardcoded here because:
+  #   - `s3api list-buckets` requires s3:ListAllMyBuckets, which has
+  #     been observed returning empty for this role in some sessions
+  #     (probably account-level SCP) — better to bypass.
+  #   - The suffix is stable across SST deploys (Pulumi state keeps it).
+  #     If the stack is destroyed and recreated, update this value.
   deploy:
-    name: Deploy runner to Tokyo EC2 (S3 polling)
+    name: Deploy runner to Tokyo EC2 (SSM Run Command)
     needs: [changes, build_runner]
-    # Runs whenever we have an artifact to deploy — either built fresh
-    # by build_runner (default) OR pulled from a previous run via
-    # workflow_dispatch.runner_artifact_run_id. `!failure() && !cancelled()`
-    # lets us proceed when build_runner was SKIPPED (prev-run mode)
-    # but not when it FAILED.
     if: |
       !failure() && !cancelled()
       && needs.changes.outputs.should_deploy == 'true'
@@ -194,12 +206,10 @@ jobs:
       id-token: write
       contents: read
     env:
-      # Reads from repo Variables (same pattern as e2e-cloud.yml). Stage
-      # / region / role ARN are not secrets; the role's safety is
-      # enforced by its OIDC trust policy.
       AWS_REGION: ${{ vars.AWS_E2E_CLOUD_REGION }}
       AWS_ROLE_ARN: ${{ vars.AWS_E2E_CLOUD_ROLE_ARN }}
-      STACK_PREFIX: boxlite-e2e-ci
+      S3_BUCKET: boxlite-e2e-ci-storagebucket-zwbekfxn
+      SSM_DOC_NAME: boxlite-runner-deploy
     steps:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -208,26 +218,17 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: deploy-runner-${{ github.run_id }}
 
-      - name: Resolve S3 bucket
-        id: resources
+      - name: Resolve Tokyo runner instance ID
+        id: ec2
         run: |
-          set -euxo pipefail
-          echo '--- caller identity ---'
-          aws sts get-caller-identity
-          echo '--- raw list-buckets ---'
-          aws s3api list-buckets --query 'Buckets[].Name' --output text || true
-          echo '--- filtered ---'
-          BUCKETS=$(aws s3api list-buckets \
-            --query "Buckets[?starts_with(Name, '${STACK_PREFIX}-storagebucket')].Name" \
-            --output text 2>&1) || { echo "::error::list-buckets failed: $BUCKETS"; exit 1; }
-          echo "BUCKETS='$BUCKETS'"
-          COUNT=$(echo "$BUCKETS" | wc -w | tr -d ' ')
-          if [ "$COUNT" -ne 1 ]; then
-              echo "::error::Expected exactly 1 storagebucket starting with ${STACK_PREFIX}-storagebucket, found $COUNT"
-              exit 1
-          fi
-          echo "s3_bucket=$BUCKETS" >> "$GITHUB_OUTPUT"
-          echo "::notice::S3 bucket: $BUCKETS"
+          set -euo pipefail
+          ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=boxlite-runner" \
+                      "Name=instance-state-name,Values=running" \
+            --query 'Reservations[0].Instances[0].InstanceId' --output text)
+          [ -n "$ID" ] && [ "$ID" != "None" ] || { echo "::error::No running boxlite-runner instance"; exit 1; }
+          echo "runner_id=$ID" >> "$GITHUB_OUTPUT"
+          echo "::notice::Runner instance: $ID"
 
       - name: Download runner binary artifact (this run)
         if: needs.changes.outputs.prev_run_id == ''
@@ -246,54 +247,74 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
 
-      - name: Upload runner binary to S3 + wait for self-update
+      - name: Upload to S3 + SSM Run Command swap binary
         run: |
           set -euo pipefail
-          S3_BUCKET="${{ steps.resources.outputs.s3_bucket }}"
+          RUNNER_ID="${{ steps.ec2.outputs.runner_id }}"
           ARCHIVE=$(ls /tmp/runner-artifact/boxlite-runner-*-linux-amd64.tar.gz | head -1)
           [ -n "$ARCHIVE" ] || { echo "::error::No runner artifact found"; exit 1; }
 
-          PREFIX="builds/runner-deploy"
-          BIN_KEY="${PREFIX}/binary.tar.gz"
-          REQ_KEY="${PREFIX}/request-${GITHUB_SHA}.txt"
-          DONE_KEY="${PREFIX}/done-${GITHUB_SHA}.txt"
+          KEY="builds/runner-deploy/binary-${GITHUB_SHA}.tar.gz"
+          aws s3 cp "$ARCHIVE" "s3://${S3_BUCKET}/${KEY}"
+          echo "::notice::Uploaded to s3://${S3_BUCKET}/${KEY}"
 
-          aws s3 cp "$ARCHIVE" "s3://${S3_BUCKET}/${BIN_KEY}"
-          echo "::notice::Binary uploaded to s3://${S3_BUCKET}/${BIN_KEY}"
+          # 15-min pre-signed URL — enough for SSM dispatch + curl on
+          # EC2; short enough to be tolerable if it leaks via logs.
+          URL=$(aws s3 presign "s3://${S3_BUCKET}/${KEY}" --expires-in 900)
 
-          printf 'sha=%s\nrequested_at=%s\n' \
-              "${GITHUB_SHA}" \
-              "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-              | aws s3 cp - "s3://${S3_BUCKET}/${REQ_KEY}"
-          echo "::notice::Request marker written to s3://${S3_BUCKET}/${REQ_KEY}"
+          # JSON-encode the commands array via python (URL has `&` and
+          # `=` which would otherwise break aws CLI's --parameters
+          # `key=value` shorthand). Custom doc `boxlite-runner-deploy`
+          # is a 1:1 clone of AWS-RunShellScript, tagged
+          # Name=boxlite-runner so the OIDC role's tag-conditioned
+          # ssm:SendCommand statement allows dispatch to it.
+          python3 - "$URL" >/tmp/params.json <<'PY'
+          import json, sys
+          url = sys.argv[1]
+          cmds = [
+              "set -euxo pipefail",
+              f"curl -fsSL --max-time 60 -o /tmp/boxlite-runner.tar.gz '{url}'",
+              "systemctl stop boxlite-runner",
+              "tar xzf /tmp/boxlite-runner.tar.gz -C /usr/local/bin/",
+              "chmod +x /usr/local/bin/boxlite-runner",
+              "systemctl start boxlite-runner",
+              "sleep 5",
+              "systemctl is-active --quiet boxlite-runner || { journalctl -u boxlite-runner -n 50 --no-pager; exit 1; }",
+              "/usr/local/bin/boxlite-runner --version 2>&1 || true",
+          ]
+          json.dump({"commands": cmds}, sys.stdout)
+          PY
 
-          # EC2-side systemd-timer poller runs every 30s. Allow 4 min
-          # total (cron 30 s + binary swap 5 s + systemctl start 5 s
-          # typical ≈ 60 s; extra slack for cold-start contention).
-          echo "Waiting for runner self-update (max 240 s)..."
-          for i in $(seq 1 48); do
+          CMD_ID=$(aws ssm send-command \
+              --instance-ids "$RUNNER_ID" \
+              --document-name "$SSM_DOC_NAME" \
+              --comment "deploy-runner ${GITHUB_SHA}" \
+              --parameters file:///tmp/params.json \
+              --query 'Command.CommandId' --output text)
+          echo "::notice::SSM Command ID: $CMD_ID"
+
+          # Wait up to ~3 min (cold-start tar extract + systemd start).
+          for i in $(seq 1 36); do
               sleep 5
-              if aws s3api head-object \
-                  --bucket "$S3_BUCKET" --key "$DONE_KEY" \
-                  >/dev/null 2>&1; then
-                  STATUS=$(aws s3 cp "s3://${S3_BUCKET}/${DONE_KEY}" - 2>/dev/null | head -1 || echo "")
-                  echo "::notice::Runner deploy status: $STATUS"
-                  case "$STATUS" in
-                      OK*)
-                          # Optional second line: binary_sha256=...
-                          aws s3 cp "s3://${S3_BUCKET}/${DONE_KEY}" - 2>/dev/null | tail -n +2 || true
-                          echo "::notice::Runner self-update complete (SHA ${GITHUB_SHA})"
-                          exit 0 ;;
-                      FAIL*)
-                          echo "::error::Runner self-update failed: $STATUS"
-                          aws s3 cp "s3://${S3_BUCKET}/${DONE_KEY}" - 2>/dev/null || true
-                          exit 1 ;;
-                      *)
-                          echo "::error::Unexpected status from poller: $STATUS"
-                          exit 1 ;;
-                  esac
-              fi
-              echo "  [$i/48] waiting for done-${GITHUB_SHA}.txt..."
+              STATUS=$(aws ssm get-command-invocation \
+                  --command-id "$CMD_ID" --instance-id "$RUNNER_ID" \
+                  --query Status --output text 2>/dev/null || echo "Pending")
+              echo "  [$i/36] $STATUS"
+              case "$STATUS" in
+                  Success)
+                      echo "::notice::Runner deploy succeeded"
+                      aws ssm get-command-invocation \
+                          --command-id "$CMD_ID" --instance-id "$RUNNER_ID" \
+                          --query 'StandardOutputContent' --output text | tail -10
+                      exit 0 ;;
+                  Failed|TimedOut|Cancelled)
+                      echo "::error::SSM deploy ended with status=$STATUS"
+                      aws ssm get-command-invocation \
+                          --command-id "$CMD_ID" --instance-id "$RUNNER_ID" \
+                          --query '{out:StandardOutputContent,err:StandardErrorContent}' \
+                          --output json || true
+                      exit 1 ;;
+              esac
           done
-          echo "::error::Runner self-update timed out after 240 s — poller offline or SSM agent down?"
+          echo "::error::SSM deploy did not complete within 180s"
           exit 1
