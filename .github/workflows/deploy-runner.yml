@@ -208,7 +208,6 @@ jobs:
     env:
       AWS_REGION: ${{ vars.AWS_E2E_CLOUD_REGION }}
       AWS_ROLE_ARN: ${{ vars.AWS_E2E_CLOUD_ROLE_ARN }}
-      S3_BUCKET: boxlite-e2e-ci-storagebucket-zwbekfxn
       SSM_DOC_NAME: boxlite-runner-deploy
     steps:
       - name: Configure AWS credentials (OIDC)
@@ -218,7 +217,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: deploy-runner-${{ github.run_id }}
 
-      - name: Resolve Tokyo runner instance ID
+      - name: Resolve Tokyo runner instance + storage bucket
         id: ec2
         run: |
           set -euo pipefail
@@ -229,6 +228,28 @@ jobs:
           [ -n "$ID" ] && [ "$ID" != "None" ] || { echo "::error::No running boxlite-runner instance"; exit 1; }
           echo "runner_id=$ID" >> "$GITHUB_OUTPUT"
           echo "::notice::Runner instance: $ID"
+
+          echo '--- ALL buckets visible to this role ---'
+          aws s3api list-buckets --query 'Buckets[].Name' --output text || true
+          echo
+          echo '--- buckets containing "boxlite-e2e-ci" ---'
+          BUCKETS=$(aws s3api list-buckets --query "Buckets[?contains(Name,'boxlite-e2e-ci')].Name" --output text || true)
+          echo "matched: $BUCKETS"
+          COUNT=$(printf '%s\n' "$BUCKETS" | wc -w | tr -d ' ')
+          if [ "$COUNT" -ge 1 ]; then
+              # Pick the storagebucket among the matches
+              STORE=$(printf '%s\n' $BUCKETS | grep storagebucket | head -1 || true)
+              if [ -n "$STORE" ]; then
+                  echo "Resolved storagebucket: $STORE"
+                  echo "s3_bucket=$STORE" >> "$GITHUB_OUTPUT"
+              else
+                  echo "::error::No storagebucket among matched: $BUCKETS"
+                  exit 1
+              fi
+          else
+              echo "::error::No buckets matched 'boxlite-e2e-ci' — stack may not exist"
+              exit 1
+          fi
 
       - name: Download runner binary artifact (this run)
         if: needs.changes.outputs.prev_run_id == ''
@@ -248,6 +269,8 @@ jobs:
           repository: ${{ github.repository }}
 
       - name: Upload to S3 + SSM Run Command swap binary
+        env:
+          S3_BUCKET: ${{ steps.ec2.outputs.s3_bucket }}
         run: |
           set -euo pipefail
           RUNNER_ID="${{ steps.ec2.outputs.runner_id }}"
