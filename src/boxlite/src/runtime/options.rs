@@ -676,7 +676,7 @@ fn default_protocol() -> PortProtocol {
 /// Port mapping specification (host -> guest).
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct PortSpec {
-    pub host_port: Option<u16>, // None/0 => dynamically assigned
+    pub host_port: Option<u16>, // None => same as guest_port
     pub guest_port: u16,
     #[serde(default = "default_protocol")]
     pub protocol: PortProtocol,

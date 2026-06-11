@@ -64,6 +64,12 @@ typedef enum BoxliteErrorCode {
   SessionReaped = 21,
 } BoxliteErrorCode;
 
+// Transport protocol for a port forwarding rule.
+typedef enum BoxlitePortProtocol {
+  BoxlitePortProtocolTcp = 0,
+  BoxlitePortProtocolUdp = 1,
+} BoxlitePortProtocol;
+
 typedef enum BoxliteRegistryTransport {
   BoxliteRegistryTransportHttps = 0,
   BoxliteRegistryTransportHttp = 1,
@@ -500,7 +506,19 @@ void boxlite_options_add_volume(CBoxliteOptions *opts,
                                 const char *guest_path,
                                 int read_only);
 
-void boxlite_options_add_port(CBoxliteOptions *opts, int guest_port, int host_port);
+// Forward `host_port` on the host to `guest_port` inside the box.
+//
+// - `host_port`: 0 = use the same number as `guest_port`.
+// - `guest_port`: required, 1-65535.
+// - `host_ip`: bind address; NULL or "" = all host interfaces.
+//
+// Returns `InvalidArgument` if `opts` is NULL, `guest_port` is 0, or
+// `host_ip` is not valid UTF-8.
+enum BoxliteErrorCode boxlite_options_add_port(CBoxliteOptions *opts,
+                                               uint16_t host_port,
+                                               uint16_t guest_port,
+                                               enum BoxlitePortProtocol protocol,
+                                               const char *host_ip);
 
 void boxlite_options_set_network_enabled(CBoxliteOptions *opts);
 

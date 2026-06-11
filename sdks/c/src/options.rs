@@ -80,13 +80,31 @@ pub unsafe extern "C" fn boxlite_options_add_volume(
     options_add_volume(opts, host_path, guest_path, read_only)
 }
 
+/// Transport protocol for a port forwarding rule.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BoxlitePortProtocol {
+    BoxlitePortProtocolTcp = 0,
+    BoxlitePortProtocolUdp = 1,
+}
+
+/// Forward `host_port` on the host to `guest_port` inside the box.
+///
+/// - `host_port`: 0 = use the same number as `guest_port`.
+/// - `guest_port`: required, 1-65535.
+/// - `host_ip`: bind address; NULL or "" = all host interfaces.
+///
+/// Returns `InvalidArgument` if `opts` is NULL, `guest_port` is 0, or
+/// `host_ip` is not valid UTF-8.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_add_port(
     opts: *mut CBoxliteOptions,
-    guest_port: c_int,
-    host_port: c_int,
-) {
-    options_add_port(opts, guest_port, host_port)
+    host_port: u16,
+    guest_port: u16,
+    protocol: BoxlitePortProtocol,
+    host_ip: *const c_char,
+) -> BoxliteErrorCode {
+    options_add_port(opts, host_port, guest_port, protocol, host_ip)
 }
 
 #[unsafe(no_mangle)]
@@ -272,21 +290,40 @@ pub unsafe fn options_add_volume(
     }
 }
 
-pub unsafe fn options_add_port(handle: *mut OptionsHandle, guest_port: c_int, host_port: c_int) {
+pub unsafe fn options_add_port(
+    handle: *mut OptionsHandle,
+    host_port: u16,
+    guest_port: u16,
+    protocol: BoxlitePortProtocol,
+    host_ip: *const c_char,
+) -> BoxliteErrorCode {
     unsafe {
-        if handle.is_null() {
-            return;
+        if handle.is_null() || guest_port == 0 {
+            return BoxliteErrorCode::InvalidArgument;
         }
+        let host_ip = if host_ip.is_null() {
+            None
+        } else {
+            match c_str_to_string(host_ip) {
+                Ok(ip) if ip.is_empty() => None,
+                Ok(ip) => Some(ip),
+                Err(_) => return BoxliteErrorCode::InvalidArgument,
+            }
+        };
         (*handle).options.ports.push(PortSpec {
-            guest_port: guest_port as u16,
-            host_port: if host_port > 0 {
-                Some(host_port as u16)
-            } else {
+            host_port: if host_port == 0 {
                 None
+            } else {
+                Some(host_port)
             },
-            protocol: PortProtocol::Tcp,
-            host_ip: None,
+            guest_port,
+            protocol: match protocol {
+                BoxlitePortProtocol::BoxlitePortProtocolTcp => PortProtocol::Tcp,
+                BoxlitePortProtocol::BoxlitePortProtocolUdp => PortProtocol::Udp,
+            },
+            host_ip,
         });
+        BoxliteErrorCode::Ok
     }
 }
 

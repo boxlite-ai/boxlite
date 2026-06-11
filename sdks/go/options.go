@@ -82,8 +82,8 @@ const (
 	PortProtocolUnknown PortProtocol = iota
 	// PortProtocolTcp forwards TCP traffic.
 	PortProtocolTcp
-	// PortProtocolUdp represents UDP traffic. The current C runtime bridge does
-	// not support UDP forwarding yet, so PortSpec validation rejects it before FFI.
+	// PortProtocolUdp represents UDP traffic. The boxlite runtime does not
+	// support UDP forwarding yet, so PortSpec validation rejects it before FFI.
 	PortProtocolUdp
 )
 
@@ -100,11 +100,12 @@ func (p PortProtocol) String() string {
 
 // PortSpec configures a host-to-guest port forwarding rule.
 //
-// Host is the host-side port number. Use 0 to let the runtime assign a dynamic
-// host port; explicit host ports must be in 1..65535. Guest is the guest-side
-// port number and must be in 1..65535. Protocol selects the transport protocol;
-// only PortProtocolTcp is supported by the current C runtime bridge. HostIP is
-// reserved for future host interface binding support and must be empty today.
+// Host is the host-side port number. Use 0 to forward from the same number as
+// Guest; explicit host ports must be in 1..65535. Guest is the guest-side port
+// number and must be in 1..65535. Protocol selects the transport protocol;
+// PortProtocolUnknown defaults to TCP. The boxlite runtime currently forwards
+// TCP only and binds all host interfaces, so PortProtocolUdp and a non-empty
+// HostIP are rejected when options are built.
 type PortSpec struct {
 	Host     int
 	Guest    int
@@ -126,23 +127,37 @@ func (p PortSpec) toCSpec() (cPortSpec, error) {
 	if p.Host < 0 || p.Host > 65535 {
 		return cPortSpec{}, fmt.Errorf("host port must be in range 0-65535, got %d", p.Host)
 	}
-	switch p.Protocol {
+	protocol := p.Protocol
+	switch protocol {
+	case PortProtocolUnknown:
+		protocol = PortProtocolTcp
 	case PortProtocolTcp:
 	case PortProtocolUdp:
-		return cPortSpec{}, fmt.Errorf("port protocol %s is not supported by the C runtime bridge", p.Protocol)
+		return cPortSpec{}, fmt.Errorf("port protocol %s is not supported by the boxlite runtime yet", p.Protocol)
 	default:
 		return cPortSpec{}, fmt.Errorf("invalid port protocol %s", p.Protocol)
 	}
 	if p.HostIP != "" {
-		return cPortSpec{}, fmt.Errorf("host IP binding is not supported by the C runtime bridge")
+		return cPortSpec{}, fmt.Errorf("host IP binding is not supported by the boxlite runtime yet")
 	}
 
 	return cPortSpec{
 		host_port:  p.Host,
 		guest_port: p.Guest,
-		protocol:   p.Protocol,
+		protocol:   protocol,
 		host_ip:    p.HostIP,
 	}, nil
+}
+
+// cPortProtocol maps by explicit switch: the Go enum reserves 0 for the unset
+// value while the C enum starts at Tcp = 0, so a numeric cast would be wrong.
+func cPortProtocol(p PortProtocol) C.BoxlitePortProtocol {
+	switch p {
+	case PortProtocolUdp:
+		return C.BoxlitePortProtocolUdp
+	default:
+		return C.BoxlitePortProtocolTcp
+	}
 }
 
 // Secret configures outbound HTTPS secret substitution.
@@ -233,26 +248,12 @@ func WithVolumeReadOnly(hostPath, containerPath string) BoxOption {
 	}
 }
 
-// WithPort publishes a guest port on a host port using TCP.
+// WithPort publishes a guest port on a host port.
 //
-// Host is the host-side port number. Use 0 to let the runtime assign a dynamic
-// host port; explicit host ports must be in 1..65535. Guest is the guest-side
-// port number and must be in 1..65535. The returned BoxOption appends a
-// PortSpec with Protocol set to PortProtocolTcp.
-func WithPort(host, guest int) BoxOption {
-	return WithPortSpec(PortSpec{
-		Host:     host,
-		Guest:    guest,
-		Protocol: PortProtocolTcp,
-	})
-}
-
-// WithPortSpec publishes a guest port with an explicit PortSpec.
-//
-// The current C runtime bridge supports only TCP forwarding on all host
-// interfaces. PortSpec values using PortProtocolUdp or a non-empty HostIP are
-// rejected when options are built, before crossing the FFI boundary.
-func WithPortSpec(spec PortSpec) BoxOption {
+// The boxlite runtime currently forwards TCP only on all host interfaces;
+// specs using PortProtocolUdp or a non-empty HostIP are rejected when options
+// are built, before crossing the FFI boundary.
+func WithPort(spec PortSpec) BoxOption {
 	return func(c *boxConfig) {
 		c.ports = append(c.ports, spec)
 	}
@@ -373,10 +374,24 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 			C.boxlite_options_free(cOpts)
 			return nil, err
 		}
-		// cfg.ports stores the full PortSpec shape, but C.boxlite_options_add_port
-		// currently accepts only guest/host ports. toCSpec rejects Protocol/HostIP
-		// values the C/Rust layer cannot honor yet.
-		C.boxlite_options_add_port(cOpts, C.int(cPort.guest_port), C.int(cPort.host_port))
+		var cHostIP *C.char
+		if cPort.host_ip != "" {
+			cHostIP = toCString(cPort.host_ip)
+		}
+		code := C.boxlite_options_add_port(
+			cOpts,
+			C.uint16_t(cPort.host_port),
+			C.uint16_t(cPort.guest_port),
+			cPortProtocol(cPort.protocol),
+			cHostIP,
+		)
+		if cHostIP != nil {
+			C.free(unsafe.Pointer(cHostIP))
+		}
+		if code != C.Ok {
+			C.boxlite_options_free(cOpts)
+			return nil, fmt.Errorf("add port %d:%d failed with code %d", cPort.host_port, cPort.guest_port, int(code))
+		}
 	}
 	if cfg.network != nil {
 		switch cfg.network.Mode {

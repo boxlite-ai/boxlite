@@ -201,7 +201,7 @@ func TestBoxOptions(t *testing.T) {
 	WithEnv("FOO", "bar")(cfg)
 	WithVolume("/host", "/guest")(cfg)
 	WithVolumeReadOnly("/ro-host", "/ro-guest")(cfg)
-	WithPort(8080, 3000)(cfg)
+	WithPort(PortSpec{Host: 8080, Guest: 3000})(cfg)
 	WithWorkDir("/app")(cfg)
 	WithEntrypoint("/bin/sh")(cfg)
 	WithCmd("-c", "echo hi")(cfg)
@@ -238,7 +238,9 @@ func TestBoxOptions(t *testing.T) {
 	if cfg.ports[0].Host != 8080 {
 		t.Fatalf("port host: got %d", cfg.ports[0].Host)
 	}
-	if cfg.ports[0].Guest != 3000 || cfg.ports[0].Protocol != PortProtocolTcp || cfg.ports[0].HostIP != "" {
+	// WithPort stores the spec verbatim; the zero-value protocol is
+	// normalized to TCP only when the C spec is built.
+	if cfg.ports[0].Guest != 3000 || cfg.ports[0].Protocol != PortProtocolUnknown || cfg.ports[0].HostIP != "" {
 		t.Errorf("port: got guest=%d protocol=%s host_ip=%q", cfg.ports[0].Guest, cfg.ports[0].Protocol, cfg.ports[0].HostIP)
 	}
 	cPort, err := cfg.ports[0].toCSpec()
@@ -268,9 +270,9 @@ func TestBoxOptions(t *testing.T) {
 	}
 }
 
-func TestWithPortSpec(t *testing.T) {
+func TestWithPortExplicitSpec(t *testing.T) {
 	cfg := &boxConfig{}
-	WithPortSpec(PortSpec{
+	WithPort(PortSpec{
 		Host:     5353,
 		Guest:    53,
 		Protocol: PortProtocolTcp,
@@ -294,7 +296,6 @@ func TestPortSpecRejectsInvalidValues(t *testing.T) {
 		name string
 		port PortSpec
 	}{
-		{"unset protocol", PortSpec{Host: 8080, Guest: 80}},
 		{"udp unsupported", PortSpec{Host: 5353, Guest: 53, Protocol: PortProtocolUdp}},
 		{"host ip unsupported", PortSpec{Host: 8080, Guest: 80, Protocol: PortProtocolTcp, HostIP: "127.0.0.1"}},
 		{"guest zero", PortSpec{Host: 8080, Guest: 0, Protocol: PortProtocolTcp}},

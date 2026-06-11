@@ -408,3 +408,103 @@ fn shutdown_rejects_null_callback() {
     unsafe { boxlite_runtime_free(runtime) };
     let _ = std::fs::remove_dir_all(home_dir);
 }
+
+unsafe fn new_test_options() -> *mut CBoxliteOptions {
+    let image = CString::new("alpine:latest").expect("image cstring");
+    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
+    let mut error = FFIError::default();
+    let code =
+        unsafe { boxlite_options_new(image.as_ptr(), &mut opts as *mut _, &mut error as *mut _) };
+    assert_eq!(code, BoxliteErrorCode::Ok);
+    opts
+}
+
+#[test]
+fn add_port_stores_full_spec() {
+    use boxlite::runtime::options::PortProtocol;
+
+    let opts = unsafe { new_test_options() };
+    let host_ip = CString::new("127.0.0.1").expect("host ip cstring");
+
+    let code = unsafe {
+        boxlite_options_add_port(
+            opts,
+            8080,
+            80,
+            BoxlitePortProtocol::BoxlitePortProtocolUdp,
+            host_ip.as_ptr(),
+        )
+    };
+
+    assert_eq!(code, BoxliteErrorCode::Ok);
+    let ports = unsafe { &(*opts).options.ports };
+    assert_eq!(ports.len(), 1);
+    assert_eq!(ports[0].host_port, Some(8080));
+    assert_eq!(ports[0].guest_port, 80);
+    assert!(matches!(ports[0].protocol, PortProtocol::Udp));
+    assert_eq!(ports[0].host_ip.as_deref(), Some("127.0.0.1"));
+    unsafe { boxlite_options_free(opts) };
+}
+
+#[test]
+fn add_port_zero_host_and_empty_ip_mean_defaults() {
+    let opts = unsafe { new_test_options() };
+    let empty_ip = CString::new("").expect("empty cstring");
+
+    let null_ip_code = unsafe {
+        boxlite_options_add_port(
+            opts,
+            0,
+            80,
+            BoxlitePortProtocol::BoxlitePortProtocolTcp,
+            ptr::null(),
+        )
+    };
+    let empty_ip_code = unsafe {
+        boxlite_options_add_port(
+            opts,
+            443,
+            443,
+            BoxlitePortProtocol::BoxlitePortProtocolTcp,
+            empty_ip.as_ptr(),
+        )
+    };
+
+    assert_eq!(null_ip_code, BoxliteErrorCode::Ok);
+    assert_eq!(empty_ip_code, BoxliteErrorCode::Ok);
+    let ports = unsafe { &(*opts).options.ports };
+    assert_eq!(ports[0].host_port, None);
+    assert_eq!(ports[0].host_ip, None);
+    assert_eq!(ports[1].host_ip, None);
+    unsafe { boxlite_options_free(opts) };
+}
+
+#[test]
+fn add_port_rejects_zero_guest_port_and_null_options() {
+    let opts = unsafe { new_test_options() };
+
+    let zero_guest_code = unsafe {
+        boxlite_options_add_port(
+            opts,
+            8080,
+            0,
+            BoxlitePortProtocol::BoxlitePortProtocolTcp,
+            ptr::null(),
+        )
+    };
+    let null_opts_code = unsafe {
+        boxlite_options_add_port(
+            ptr::null_mut(),
+            8080,
+            80,
+            BoxlitePortProtocol::BoxlitePortProtocolTcp,
+            ptr::null(),
+        )
+    };
+
+    assert_eq!(zero_guest_code, BoxliteErrorCode::InvalidArgument);
+    assert_eq!(null_opts_code, BoxliteErrorCode::InvalidArgument);
+    let ports = unsafe { &(*opts).options.ports };
+    assert!(ports.is_empty(), "rejected spec must not be stored");
+    unsafe { boxlite_options_free(opts) };
+}

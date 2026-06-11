@@ -817,6 +817,25 @@ Callbacks are invoked on the **calling thread**. Do not block in callbacks.
 
 ## Migration Guide
 
+### Unreleased
+
+**Breaking Changes:**
+- `boxlite_options_add_port` signature changed. Parameters are now host-first
+  (matching `PortSpec`, the other SDKs, and Docker's `host:guest` convention),
+  ports are `uint16_t`, the new `BoxlitePortProtocol` enum and a nullable
+  `host_ip` bind address were added, and the function returns
+  `BoxliteErrorCode` instead of `void`.
+
+Before:
+```c
+boxlite_options_add_port(opts, 80, 8080);  /* guest, host */
+```
+
+After:
+```c
+boxlite_options_add_port(opts, 8080, 80, BoxlitePortProtocolTcp, NULL);  /* host, guest */
+```
+
 ### From 0.1.x to 0.2.0
 
 **Breaking Changes:**
