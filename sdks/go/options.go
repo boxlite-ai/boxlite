@@ -74,12 +74,16 @@ type NetworkSpec struct {
 	AllowNet []string
 }
 
-// PortProtocol selects the protocol used for a port forwarding rule.
+// PortProtocol selects the transport protocol for a port forwarding rule.
 type PortProtocol int
 
 const (
+	// PortProtocolUnknown is the unset port protocol value.
 	PortProtocolUnknown PortProtocol = iota
+	// PortProtocolTcp forwards TCP traffic.
 	PortProtocolTcp
+	// PortProtocolUdp represents UDP traffic. The current C runtime bridge does
+	// not support UDP forwarding yet, so PortSpec validation rejects it before FFI.
 	PortProtocolUdp
 )
 
@@ -95,6 +99,12 @@ func (p PortProtocol) String() string {
 }
 
 // PortSpec configures a host-to-guest port forwarding rule.
+//
+// Host is the host-side port number. Use 0 to let the runtime assign a dynamic
+// host port; explicit host ports must be in 1..65535. Guest is the guest-side
+// port number and must be in 1..65535. Protocol selects the transport protocol;
+// only PortProtocolTcp is supported by the current C runtime bridge. HostIP is
+// reserved for future host interface binding support and must be empty today.
 type PortSpec struct {
 	Host     int
 	Guest    int
@@ -110,10 +120,21 @@ type cPortSpec struct {
 }
 
 func (p PortSpec) toCSpec() (cPortSpec, error) {
+	if p.Guest < 1 || p.Guest > 65535 {
+		return cPortSpec{}, fmt.Errorf("guest port must be in range 1-65535, got %d", p.Guest)
+	}
+	if p.Host < 0 || p.Host > 65535 {
+		return cPortSpec{}, fmt.Errorf("host port must be in range 0-65535, got %d", p.Host)
+	}
 	switch p.Protocol {
-	case PortProtocolTcp, PortProtocolUdp:
+	case PortProtocolTcp:
+	case PortProtocolUdp:
+		return cPortSpec{}, fmt.Errorf("port protocol %s is not supported by the C runtime bridge", p.Protocol)
 	default:
 		return cPortSpec{}, fmt.Errorf("invalid port protocol %s", p.Protocol)
+	}
+	if p.HostIP != "" {
+		return cPortSpec{}, fmt.Errorf("host IP binding is not supported by the C runtime bridge")
 	}
 
 	return cPortSpec{
@@ -212,8 +233,12 @@ func WithVolumeReadOnly(hostPath, containerPath string) BoxOption {
 	}
 }
 
-// WithPort forwards a host port to a guest port. A host of 0 lets the runtime
-// assign one dynamically.
+// WithPort publishes a guest port on a host port using TCP.
+//
+// Host is the host-side port number. Use 0 to let the runtime assign a dynamic
+// host port; explicit host ports must be in 1..65535. Guest is the guest-side
+// port number and must be in 1..65535. The returned BoxOption appends a
+// PortSpec with Protocol set to PortProtocolTcp.
 func WithPort(host, guest int) BoxOption {
 	return WithPortSpec(PortSpec{
 		Host:     host,
@@ -222,7 +247,11 @@ func WithPort(host, guest int) BoxOption {
 	})
 }
 
-// WithPortSpec forwards a host port to a guest port with explicit bind settings.
+// WithPortSpec publishes a guest port with an explicit PortSpec.
+//
+// The current C runtime bridge supports only TCP forwarding on all host
+// interfaces. PortSpec values using PortProtocolUdp or a non-empty HostIP are
+// rejected when options are built, before crossing the FFI boundary.
 func WithPortSpec(spec PortSpec) BoxOption {
 	return func(c *boxConfig) {
 		c.ports = append(c.ports, spec)
@@ -344,6 +373,9 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 			C.boxlite_options_free(cOpts)
 			return nil, err
 		}
+		// cfg.ports stores the full PortSpec shape, but C.boxlite_options_add_port
+		// currently accepts only guest/host ports. toCSpec rejects Protocol/HostIP
+		// values the C/Rust layer cannot honor yet.
 		C.boxlite_options_add_port(cOpts, C.int(cPort.guest_port), C.int(cPort.host_port))
 	}
 	if cfg.network != nil {

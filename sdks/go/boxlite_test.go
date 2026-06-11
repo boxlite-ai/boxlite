@@ -273,8 +273,7 @@ func TestWithPortSpec(t *testing.T) {
 	WithPortSpec(PortSpec{
 		Host:     5353,
 		Guest:    53,
-		Protocol: PortProtocolUdp,
-		HostIP:   "127.0.0.1",
+		Protocol: PortProtocolTcp,
 	})(cfg)
 
 	if len(cfg.ports) != 1 {
@@ -285,15 +284,31 @@ func TestWithPortSpec(t *testing.T) {
 	if err != nil {
 		t.Fatalf("toCSpec: %v", err)
 	}
-	if cPort.host_port != 5353 || cPort.guest_port != 53 || cPort.protocol != PortProtocolUdp || cPort.host_ip != "127.0.0.1" {
+	if cPort.host_port != 5353 || cPort.guest_port != 53 || cPort.protocol != PortProtocolTcp || cPort.host_ip != "" {
 		t.Errorf("c port: got host_port=%d guest_port=%d protocol=%s host_ip=%q", cPort.host_port, cPort.guest_port, cPort.protocol, cPort.host_ip)
 	}
 }
 
-func TestPortSpecRejectsInvalidProtocol(t *testing.T) {
-	_, err := (PortSpec{Host: 8080, Guest: 80}).toCSpec()
-	if err == nil {
-		t.Fatal("toCSpec should reject an unset protocol")
+func TestPortSpecRejectsInvalidValues(t *testing.T) {
+	tests := []struct {
+		name string
+		port PortSpec
+	}{
+		{"unset protocol", PortSpec{Host: 8080, Guest: 80}},
+		{"udp unsupported", PortSpec{Host: 5353, Guest: 53, Protocol: PortProtocolUdp}},
+		{"host ip unsupported", PortSpec{Host: 8080, Guest: 80, Protocol: PortProtocolTcp, HostIP: "127.0.0.1"}},
+		{"guest zero", PortSpec{Host: 8080, Guest: 0, Protocol: PortProtocolTcp}},
+		{"guest too high", PortSpec{Host: 8080, Guest: 65536, Protocol: PortProtocolTcp}},
+		{"host negative", PortSpec{Host: -1, Guest: 80, Protocol: PortProtocolTcp}},
+		{"host too high", PortSpec{Host: 65536, Guest: 80, Protocol: PortProtocolTcp}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := tt.port.toCSpec(); err == nil {
+				t.Fatal("toCSpec should reject invalid port spec")
+			}
+		})
 	}
 }
 
