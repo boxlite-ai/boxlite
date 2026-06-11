@@ -1,33 +1,33 @@
 # Source-mode Dockerfile for e2e-cloud — runs TypeScript directly via ts-node,
 # no webpack build, no dashboard build, no strict type check.
 #
-# Why a separate Dockerfile:
-# - Production deploys (apps/api/Dockerfile) bundle via `nx build api
-#   --configuration=production` which gates on strict TS type checking.
-#   That gate currently fails on apps/api/src against main (160 TS errors
-#   from drifted Express type narrowing in *.controller.ts + OpenTelemetry
-#   exporter type mismatch in tracing.ts), unrelated to this PR's scope.
-# - The e2e-cloud workflow needs an Api image to deploy to Tokyo + run
-#   the e2e suite against, even when the prod build is broken.
+# Layout mirrors the codex-normalized apps/api/Dockerfile (PR #730):
+#   WORKDIR /boxlite/apps
+#   apps/api/        -> api/
+#   apps/libs/X/     -> libs/X/
+#   apps/tsconfig.base.json -> tsconfig.base.json (same dir as api/)
+#
+# So `api/tsconfig.json`'s `extends: ../tsconfig.base.json` resolves
+# correctly to /boxlite/apps/tsconfig.base.json.
+#
+# Why a separate Dockerfile (vs the codex one):
+# - apps/api/Dockerfile runs `nx build api --configuration=production`
+#   which gates on strict TS type checking. Main has 160 drifted-type
+#   errors there (Express type narrowing in controllers + OpenTelemetry
+#   tracing) — unrelated to this PR's scope, would block deploy.
+# - This source-mode runs ts-node at container startup instead. Slower
+#   cold boot (~10-30s extra) but doesn't gate on the broken types.
 # - ts-node uses tsc, which honors `emitDecoratorMetadata: true` from
-#   apps/api/tsconfig.app.json. TypeORM entity decorators
-#   (@PrimaryColumn / @Column / @Entity / etc.) need reflect-metadata at
-#   runtime; tsx (esbuild-based) does NOT emit decorator metadata, so
-#   the container crashes immediately with:
+#   apps/api/tsconfig.app.json — TypeORM entity decorators
+#   (@PrimaryColumn / @Column / etc.) need reflect-metadata at runtime;
+#   tsx (esbuild-based) does NOT emit decorator metadata, so the
+#   container would crash immediately with:
 #       ColumnTypeUndefinedError: Column type for User#id is not defined
 #       and cannot be guessed.
-#   ts-node honors the tsconfig and emits the metadata calls, so the
-#   entities load correctly.
 #
 # Dashboard (Vite frontend) is omitted entirely: e2e tests hit the API
 # directly, no static-file serving from dashboard is required by the
 # pytest cases under scripts/test/e2e/cases/.
-#
-# Trade-offs vs production Dockerfile:
-# - Slower cold start (ts-node compiles TS on first import; ~10-30s extra)
-# - Higher resident memory (no tree-shaking)
-# - Type errors become RUNTIME errors instead of build errors (acceptable
-#   for an e2e smoke test against deployed code)
 
 FROM node:24-slim AS boxlite-source
 ENV CI=true
@@ -39,24 +39,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends bash curl postg
   rm -rf /var/lib/apt/lists/*
 RUN npm install -g corepack && corepack enable
 
-WORKDIR /boxlite
+WORKDIR /boxlite/apps
 
 COPY apps/package.json apps/yarn.lock apps/.yarnrc.yml ./
 RUN yarn install --immutable
 
 COPY apps/nx.json apps/tsconfig.base.json apps/NOTICE ./
 
-# ts-node defaults to looking at ./tsconfig.json. Symlink so the path
-# aliases in apps/tsconfig.base.json (the `@boxlite-ai/*` mappings
-# consumed by `-r tsconfig-paths/register`) resolve at import time.
-RUN ln -sf tsconfig.base.json tsconfig.json
-
 ENV NX_DAEMON=false
 
-COPY apps/api/ apps/api/
+COPY apps/api/ api/
 
 # Path mappings in tsconfig.base.json point at libs/X/src/index.ts
-# (not apps/libs/...), so COPY destination matches that layout.
+# (relative to tsconfig.base.json, which lives at /boxlite/apps/).
 COPY apps/libs/runner-api-client/ libs/runner-api-client/
 COPY apps/libs/api-client/ libs/api-client/
 COPY apps/libs/analytics-api-client/ libs/analytics-api-client/
@@ -69,11 +64,11 @@ ENV VERSION=${VERSION}
 HEALTHCHECK CMD [ "curl", "-f", "http://localhost:3000/api/config" ]
 
 # Run the NestJS entry point through ts-node:
-# - --project: point at apps/api/tsconfig.app.json so emitDecoratorMetadata
+# - --project: point at api/tsconfig.app.json so emitDecoratorMetadata
 #   and experimentalDecorators are picked up (TypeORM entities need this).
 # - --transpile-only: skip type-checking at startup (faster cold boot;
-#   the prod webpack build is the source-of-truth type gate, and that's
+#   the prod nx build is the source-of-truth type gate, and that's
 #   already known to fail with 160 errors on main — see header).
 # - -r tsconfig-paths/register: resolve the `@boxlite-ai/*` path aliases
 #   defined in tsconfig.base.json at module-load time.
-ENTRYPOINT ["yarn", "ts-node", "--project", "apps/api/tsconfig.app.json", "--transpile-only", "-r", "tsconfig-paths/register", "apps/api/src/main.ts"]
+ENTRYPOINT ["yarn", "ts-node", "--project", "api/tsconfig.app.json", "--transpile-only", "-r", "tsconfig-paths/register", "api/src/main.ts"]

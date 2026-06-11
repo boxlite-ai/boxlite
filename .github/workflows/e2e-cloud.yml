@@ -446,7 +446,37 @@ jobs:
             --task-definition "$NEW_TD_ARN" --force-new-deployment \
             >/dev/null
           aws ecs wait services-stable --cluster "$CLUSTER" --services Api
-          echo "::notice::Api ECS service stable on $NEW_TD_ARN"
+          echo "Service stable — verifying PRIMARY is NEW_TD..."
+
+          # ECS DeploymentCircuitBreaker auto-rolls-back when new tasks
+          # keep failing to start. After rollback the SERVICE is stable
+          # again (running == desired on the OLD td), so `wait
+          # services-stable` returns success and the ALB target group
+          # reports healthy — but the new image is NOT running. Both
+          # the ALB check and `/api/health` below would talk to the
+          # OLD tasks and answer 2xx, masking a failed deploy.
+          # Explicitly assert the PRIMARY deployment's taskDefinition
+          # equals NEW_TD_ARN. If it differs, ECS rolled back.
+          PRIMARY_TD=$(aws ecs describe-services --cluster "$CLUSTER" --services Api \
+              --query 'services[0].deployments[?status==`PRIMARY`]|[0].taskDefinition' \
+              --output text)
+          if [ "$PRIMARY_TD" != "$NEW_TD_ARN" ]; then
+              echo "::error::ECS rolled back. PRIMARY=$PRIMARY_TD expected $NEW_TD_ARN"
+              # Pull stop reasons from recent failed tasks for context
+              aws ecs list-tasks --cluster "$CLUSTER" --service-name Api \
+                  --desired-status STOPPED --max-results 5 \
+                  --query 'taskArns' --output text \
+                | tr '\t' '\n' | head -3 \
+                | while read -r TASK; do
+                    [ -n "$TASK" ] || continue
+                    echo "--- stopped task $(basename "$TASK") ---"
+                    aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK" \
+                        --query 'tasks[0].[stoppedReason,containers[0].exitCode,containers[0].reason]' \
+                        --output text || true
+                  done
+              exit 1
+          fi
+          echo "::notice::PRIMARY deployment confirmed on $NEW_TD_ARN"
 
           # Now verify the ALB target group is actually serving — wait
           # for at least one healthy target. Up to ~3 minutes for health
