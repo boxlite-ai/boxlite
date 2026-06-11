@@ -1,6 +1,16 @@
 use predicates::prelude::*;
+use std::net::TcpListener;
 
 mod common;
+
+fn reserve_host_port() -> (TcpListener, u16) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral host port");
+    let port = listener
+        .local_addr()
+        .expect("read ephemeral host port")
+        .port();
+    (listener, port)
+}
 
 #[test]
 fn test_create_basic() {
@@ -70,16 +80,19 @@ fn test_create_resources() {
 fn test_create_with_publish_success() {
     let mut ctx = common::boxlite();
     let name = "create-publish";
+    let (port_guard, host_port) = reserve_host_port();
+    let publish = format!("{host_port}:9000");
 
+    ctx.cmd.args([
+        "create",
+        "--name",
+        name,
+        "-p",
+        publish.as_str(),
+        "alpine:latest",
+    ]);
+    drop(port_guard);
     ctx.cmd
-        .args([
-            "create",
-            "--name",
-            name,
-            "-p",
-            "19000:9000",
-            "alpine:latest",
-        ])
         .assert()
         .success()
         .stdout(predicate::str::is_match(r"^[0-9A-Za-z]{12}\n$").unwrap());

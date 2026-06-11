@@ -26,6 +26,17 @@ fn jailer_test_home_base_dir() -> PathBuf {
         .join(".boxlite-it")
 }
 
+#[cfg(target_os = "linux")]
+fn skip_linux_jailer_vm_test_in_ci() -> bool {
+    std::env::var_os("CI").is_some()
+        && std::env::var_os("BOXLITE_CI_ENABLE_LINUX_JAILER_TESTS").is_none()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn skip_linux_jailer_vm_test_in_ci() -> bool {
+    false
+}
+
 #[cfg(target_os = "macos")]
 fn assert_macos_socket_path_budget(home_dir: &std::path::Path) {
     let probe = home_dir
@@ -215,6 +226,13 @@ fn standard_mode_enables_jailer() {
 /// Box with jailer enabled starts and executes commands successfully.
 #[tokio::test]
 async fn jailer_enabled_box_starts_and_executes() {
+    if skip_linux_jailer_vm_test_in_ci() {
+        eprintln!(
+            "Skipping Linux jailer VM test in CI; set BOXLITE_CI_ENABLE_LINUX_JAILER_TESTS=1 to run it."
+        );
+        return;
+    }
+
     let jh = JailerHome::new();
     let t = BoxTestBase::with_home(jh.home, jailer_enabled_options()).await;
     t.bx.start().await.unwrap();
@@ -335,6 +353,13 @@ async fn jailer_disabled_with_same_profile_still_starts() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn jailer_creates_isolated_mount_namespace() {
+    if skip_linux_jailer_vm_test_in_ci() {
+        eprintln!(
+            "Skipping Linux jailer VM test in CI; set BOXLITE_CI_ENABLE_LINUX_JAILER_TESTS=1 to run it."
+        );
+        return;
+    }
+
     let jh = JailerHome::new();
     let t = BoxTestBase::with_home(jh.home, jailer_enabled_options()).await;
     t.bx.start().await.unwrap();

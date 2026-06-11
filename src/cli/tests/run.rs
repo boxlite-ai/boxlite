@@ -1,6 +1,16 @@
 use predicates::prelude::*;
+use std::net::TcpListener;
 
 mod common;
+
+fn reserve_host_port() -> (TcpListener, u16) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral host port");
+    let port = listener
+        .local_addr()
+        .expect("read ephemeral host port")
+        .port();
+    (listener, port)
+}
 
 // ============================================================================
 // Exit Code Tests
@@ -465,46 +475,55 @@ fn test_run_rm_cleanup() {
 #[test]
 fn test_run_with_publish_success() {
     let mut ctx = common::boxlite();
+    let (port_guard, host_port) = reserve_host_port();
+    let publish = format!("{host_port}:18789");
     ctx.cmd.args([
         "run",
         "--rm",
         "-p",
-        "18789:18789",
+        publish.as_str(),
         "alpine:latest",
         "echo",
         "ok",
     ]);
+    drop(port_guard);
     ctx.cmd.assert().success().stdout("ok\n");
 }
 
 #[test]
 fn test_run_with_publish_short_flag() {
     let mut ctx = common::boxlite();
+    let (port_guard, host_port) = reserve_host_port();
+    let publish = format!("{host_port}:80");
     ctx.cmd.args([
         "run",
         "--rm",
         "-p",
-        "8080:80",
+        publish.as_str(),
         "alpine:latest",
         "sh",
         "-c",
         "echo done",
     ]);
+    drop(port_guard);
     ctx.cmd.assert().success().stdout("done\n");
 }
 
 #[test]
 fn test_run_with_publish_tcp_suffix() {
     let mut ctx = common::boxlite();
+    let (port_guard, host_port) = reserve_host_port();
+    let publish = format!("{host_port}:9000/tcp");
     ctx.cmd.args([
         "run",
         "--rm",
         "--publish",
-        "9000:9000/tcp",
+        publish.as_str(),
         "alpine:latest",
         "echo",
         "tcp",
     ]);
+    drop(port_guard);
     ctx.cmd.assert().success().stdout("tcp\n");
 }
 

@@ -149,4 +149,6 @@ async fn health_check_becomes_unhealthy_when_shim_killed() {
         health_status.state,
         health_status.failures
     );
+
+    let _ = t.runtime.remove(box_id.as_str(), true).await;
 }
