@@ -26,7 +26,7 @@ function die(msg: string): never {
   const url = env('BOXLITE_E2E_URL', 'http://localhost:3000/api');
   const apiKey = env('BOXLITE_E2E_API_KEY', 'devkey');
   const prefix = env('BOXLITE_E2E_PREFIX', '');
-  const image = env('BOXLITE_E2E_IMAGE', 'alpine:3.23');
+  const image = env('BOXLITE_E2E_IMAGE', 'base');
 
   const rt = JsBoxlite.rest(new BoxliteRestOptions({
     url,
