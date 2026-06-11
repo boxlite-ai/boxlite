@@ -1524,7 +1524,11 @@ components:
           example: dev-box
         image:
           type: string
-          description: OCI image reference
+          description: |
+            OCI image reference.
+            Hosted multi-tenant deployments restrict this to a curated set of
+            image keys (`base`, `python`, `node`; default `base`) and reject
+            other values with 400.
           default: "alpine:latest"
           example: python:3.11-slim
         rootfs_path:

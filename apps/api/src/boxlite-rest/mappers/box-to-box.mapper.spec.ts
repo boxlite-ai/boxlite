@@ -6,6 +6,7 @@
 
 import { BoxDto } from '../../box/dto/box.dto'
 import { boxToBoxResponse, createBoxToCreateBox } from './box-to-box.mapper'
+import { BOX_IMAGE_REF_LABEL, resolveCuratedImageRef } from '../../box/constants/curated-images.constant'
 
 describe('box-to-box mapper', () => {
   it('maps REST box_id from the public box boxId instead of the internal UUID', () => {
@@ -44,5 +45,31 @@ describe('box-to-box mapper', () => {
     expect(dto.cpu).toBe(2)
     expect(dto.memory).toBe(2)
     expect(dto.disk).toBe(8)
+  })
+
+  it('threads the curated image key from the REST request into the internal create dto', () => {
+    const dto = createBoxToCreateBox({ image: 'python' })
+
+    expect(dto.image).toBe('python')
+  })
+
+  it('echoes the curated key for a box whose label holds a resolved curated ref', () => {
+    const response = boxToBoxResponse({
+      boxId: 'aB3cD4eF5gH6',
+      state: 'started',
+      labels: { [BOX_IMAGE_REF_LABEL]: resolveCuratedImageRef('node') },
+    } as unknown as BoxDto)
+
+    expect(response.image).toBe('node')
+  })
+
+  it('returns an empty image for boxes without an image-ref label', () => {
+    const response = boxToBoxResponse({
+      boxId: 'aB3cD4eF5gH6',
+      state: 'started',
+      labels: {},
+    } as unknown as BoxDto)
+
+    expect(response.image).toBe('')
   })
 })
