@@ -298,9 +298,7 @@ export class JobStateHandlerService {
             : null
 
       if (!previousState) {
-        this.logger.error(
-          `Box ${boxId} has unexpected desiredState ${box.desiredState} for RESIZE_BOX job ${job.id}`,
-        )
+        this.logger.error(`Box ${boxId} has unexpected desiredState ${box.desiredState} for RESIZE_BOX job ${job.id}`)
         return
       }
 

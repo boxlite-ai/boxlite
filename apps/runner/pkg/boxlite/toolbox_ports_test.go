@@ -78,7 +78,7 @@ func TestWaitForToolboxReadyReturnsAfterVersionEndpointResponds(t *testing.T) {
 		toolboxReadyTimeout: time.Second,
 	}
 	if err := client.writeToolboxPortRecord(toolboxPortRecord{
-		BoxID: "box-1",
+		BoxID:     "box-1",
 		GuestPort: ToolboxGuestPort,
 		HostPort:  port,
 	}); err != nil {
@@ -101,7 +101,7 @@ func TestWaitForToolboxReadyTimesOutWhenEndpointDoesNotRespond(t *testing.T) {
 		toolboxReadyTimeout: 20 * time.Millisecond,
 	}
 	if err := client.writeToolboxPortRecord(toolboxPortRecord{
-		BoxID: "box-1",
+		BoxID:     "box-1",
 		GuestPort: ToolboxGuestPort,
 		HostPort:  port,
 	}); err != nil {

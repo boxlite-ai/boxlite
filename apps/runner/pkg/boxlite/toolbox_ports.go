@@ -23,7 +23,7 @@ const (
 )
 
 type toolboxPortRecord struct {
-	BoxID string `json:"boxId"`
+	BoxID     string `json:"boxId"`
 	GuestPort int    `json:"guestPort"`
 	HostPort  int    `json:"hostPort"`
 }
@@ -42,7 +42,7 @@ func (c *Client) reserveToolboxHostPort(ctx context.Context, boxID string) (int,
 	}
 
 	record := toolboxPortRecord{
-		BoxID: boxID,
+		BoxID:     boxID,
 		GuestPort: ToolboxGuestPort,
 		HostPort:  port,
 	}
