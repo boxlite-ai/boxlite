@@ -187,18 +187,21 @@ PERMISSIONS_POLICY=$(cat <<EOF
             }
         },
         {
-            "Sid": "SsmSendCommandRunner",
+            "Sid": "SsmSendCommandInstance",
             "Effect": "Allow",
             "Action": ["ssm:SendCommand"],
-            "Resource": [
-                "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:instance/*",
-                "arn:aws:ssm:${AWS_REGION}::document/AWS-RunShellScript"
-            ],
+            "Resource": "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:instance/*",
             "Condition": {
                 "StringEquals": {
                     "ssm:resourceTag/Name": "boxlite-runner"
                 }
             }
+        },
+        {
+            "Sid": "SsmSendCommandDocument",
+            "Effect": "Allow",
+            "Action": ["ssm:SendCommand"],
+            "Resource": "arn:aws:ssm:${AWS_REGION}::document/AWS-RunShellScript"
         },
         {
             "Sid": "SsmReadCommandStatus",

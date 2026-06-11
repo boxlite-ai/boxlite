@@ -118,14 +118,31 @@ jobs:
               - '.github/workflows/e2e-cloud.yml'
               - '.github/workflows/build-runner-binary.yml'
 
+  # Build libboxlite.a from THIS PR's Rust source using the existing
+  # build-c.yml workflow (manylinux container, libseccomp.a cross-build,
+  # fix-go-symbols.sh — same chain release builds use). target_filter
+  # constrains the matrix to just linux-x64-gnu (skip macos-15 +
+  # ubuntu-24.04-arm matrix entries; Tokyo runner is amd64).
+  # Uploads artifact c-sdk-linux-x64-gnu consumed by build_runner.
+  build_c_sdk:
+    name: Build C SDK (from PR source, linux-x64-gnu only)
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true' || github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/build-c.yml
+    with:
+      target_filter: linux-x64-gnu
+    permissions:
+      contents: write
+
   # Build the runner binary from THIS PR's source. Reuses
-  # .github/workflows/build-runner-binary.yml as a reusable workflow with
-  # libboxlite_source=build, so libboxlite.a is compiled from current
-  # checkout (not downloaded from a tagged release). The e2e job downloads
-  # the produced artifact and SSM-deploys it to the Tokyo runner EC2.
+  # .github/workflows/build-runner-binary.yml with libboxlite_source=build,
+  # which downloads the c-sdk-linux-x64-gnu artifact from build_c_sdk
+  # above (instead of pulling the release tarball). The e2e job
+  # downloads the produced runner-linux-amd64 artifact and SSM-deploys
+  # it to the Tokyo runner EC2.
   build_runner:
     name: Build runner binary (from PR source)
-    needs: changes
+    needs: [changes, build_c_sdk]
     if: needs.changes.outputs.relevant == 'true' || github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/build-runner-binary.yml
     with:

@@ -92,56 +92,36 @@ jobs:
           curl -fsSL "${URL}" | tar xz -C /tmp/
           cp "/tmp/boxlite-c-v${VERSION}-linux-x64-gnu/lib/libboxlite.a" sdks/go/libboxlite.a
 
-      - name: Install Rust toolchain (build mode)
+      - name: Download libboxlite.a from sibling build-c.yml job (build mode)
         if: inputs.libboxlite_source == 'build'
-        uses: dtolnay/rust-toolchain@stable
+        # In "build" mode the caller workflow (e2e-cloud.yml) runs
+        # .github/workflows/build-c.yml as a sibling job FIRST, which
+        # uploads the c-sdk-linux-x64-gnu artifact containing
+        # boxlite-c-v${VERSION}-linux-x64-gnu/lib/libboxlite.a built
+        # from THIS checkout's Rust source (with proper manylinux
+        # container, libseccomp.a cross-build, fix-go-symbols.sh).
+        # Reusing that artifact avoids duplicating the libboxlite
+        # build chain here (which would otherwise need musl-tools,
+        # gperf, llvm, protobuf-compiler, libssl-dev, etc., AND
+        # diverge from how release builds the .a).
+        uses: actions/download-artifact@v4
         with:
-          targets: x86_64-unknown-linux-musl
+          name: c-sdk-linux-x64-gnu
+          path: /tmp/c-sdk/
 
-      - name: Install Rust build system deps (build mode)
+      - name: Stage libboxlite.a into sdks/go/ (build mode)
         if: inputs.libboxlite_source == 'build'
-        # Subset of scripts/setup/setup-ubuntu.sh's apt list — only what
-        # boxlite-c + boxlite-guest need under BOXLITE_DEPS_STUB=2:
-        #   - musl-tools: musl-gcc for boxlite-guest static linking
-        #   - gperf: build-libseccomp.sh uses it when compiling libseccomp.a
-        #           for the musl target (libseccomp.a is not in apt for musl)
-        #   - pkg-config: cargo build script dep resolution
-        #   - protobuf-compiler: boxlite-shared's build.rs invokes protoc
-        #   - libssl-dev: openssl-sys (transitive)
-        #   - llvm: llvm-objcopy used by fix-go-symbols.sh to rename
-        #          Go-conflicting symbols inside libboxlite.a after cargo
-        #          build (called automatically by boxlite-c's build.rs)
-        # DEPS_STUB=2 skips the bubblewrap/libkrun/e2fsprogs path entirely,
-        # so we DON'T need meson/ninja/libcap-dev/libclang-dev/etc.
-        run: |
-          sudo apt-get install -y --no-install-recommends \
-            musl-tools gperf pkg-config protobuf-compiler libssl-dev llvm
-
-      - name: Build boxlite-guest (musl static, embedded into .a)
-        if: inputs.libboxlite_source == 'build'
-        env:
-          BOXLITE_DEPS_STUB: "2"
-        # boxlite-guest links libseccomp.a for the *target* triple
-        # (x86_64-unknown-linux-musl). Ubuntu's libseccomp-dev only
-        # provides the host .so. scripts/build/build-guest.sh sources
-        # build-libseccomp.sh which cross-builds libseccomp.a from
-        # upstream source into target/native/ and exports the env vars
-        # libseccomp-sys's build.rs reads — same path build-c.yml takes
-        # via `make setup:build guest`.
         run: |
           set -euo pipefail
-          bash scripts/build/build-guest.sh --profile release
-
-      - name: Build libboxlite.a from this checkout (build mode)
-        if: inputs.libboxlite_source == 'build'
-        env:
-          BOXLITE_DEPS_STUB: "2"
-        run: |
-          set -euo pipefail
-          cargo build --release -p boxlite-c
-          bash scripts/build/fix-go-symbols.sh target/release/libboxlite.a
+          # The build-c.yml archive is `boxlite-c-v${VERSION}-linux-x64-gnu.tar.gz`
+          # containing `boxlite-c-v${VERSION}-linux-x64-gnu/lib/libboxlite.a`.
+          ARCHIVE=$(ls /tmp/c-sdk/boxlite-c-v*-linux-x64-gnu.tar.gz | head -1)
+          [ -n "$ARCHIVE" ] || { echo "::error::No c-sdk archive in artifact"; exit 1; }
+          tar xzf "$ARCHIVE" -C /tmp/c-sdk/
+          A=$(find /tmp/c-sdk -name libboxlite.a | head -1)
+          [ -n "$A" ] || { echo "::error::libboxlite.a not found in archive"; exit 1; }
           mkdir -p sdks/go
-          cp target/release/libboxlite.a sdks/go/libboxlite.a
+          cp "$A" sdks/go/libboxlite.a
           ls -lh sdks/go/libboxlite.a
 
       - name: Rewrite go.work for minimal modules
