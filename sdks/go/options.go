@@ -75,22 +75,22 @@ type NetworkSpec struct {
 }
 
 // PortProtocol selects the protocol used for a port forwarding rule.
-type PortProtocol uint8
+type PortProtocol int
 
 const (
-	PortProtocolInvalid PortProtocol = iota
-	PortProtocolTCP
-	PortProtocolUDP
+	PortProtocolUnknown PortProtocol = iota
+	PortProtocolTcp
+	PortProtocolUdp
 )
 
 func (p PortProtocol) String() string {
 	switch p {
-	case PortProtocolTCP:
-		return "tcp"
-	case PortProtocolUDP:
-		return "udp"
+	case PortProtocolTcp:
+		return "TCP"
+	case PortProtocolUdp:
+		return "UDP"
 	default:
-		return fmt.Sprintf("unknown(%d)", p)
+		return "Unknown"
 	}
 }
 
@@ -111,7 +111,7 @@ type cPortSpec struct {
 
 func (p PortSpec) toCSpec() (cPortSpec, error) {
 	switch p.Protocol {
-	case PortProtocolTCP, PortProtocolUDP:
+	case PortProtocolTcp, PortProtocolUdp:
 	default:
 		return cPortSpec{}, fmt.Errorf("invalid port protocol %s", p.Protocol)
 	}
@@ -218,7 +218,7 @@ func WithPort(host, guest int) BoxOption {
 	return WithPortSpec(PortSpec{
 		Host:     host,
 		Guest:    guest,
-		Protocol: PortProtocolTCP,
+		Protocol: PortProtocolTcp,
 	})
 }
 

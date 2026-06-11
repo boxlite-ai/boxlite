@@ -238,14 +238,14 @@ func TestBoxOptions(t *testing.T) {
 	if cfg.ports[0].Host != 8080 {
 		t.Fatalf("port host: got %d", cfg.ports[0].Host)
 	}
-	if cfg.ports[0].Guest != 3000 || cfg.ports[0].Protocol != PortProtocolTCP || cfg.ports[0].HostIP != "" {
+	if cfg.ports[0].Guest != 3000 || cfg.ports[0].Protocol != PortProtocolTcp || cfg.ports[0].HostIP != "" {
 		t.Errorf("port: got guest=%d protocol=%s host_ip=%q", cfg.ports[0].Guest, cfg.ports[0].Protocol, cfg.ports[0].HostIP)
 	}
 	cPort, err := cfg.ports[0].toCSpec()
 	if err != nil {
 		t.Fatalf("toCSpec: %v", err)
 	}
-	if cPort.host_port != 8080 || cPort.guest_port != 3000 || cPort.protocol != PortProtocolTCP || cPort.host_ip != "" {
+	if cPort.host_port != 8080 || cPort.guest_port != 3000 || cPort.protocol != PortProtocolTcp || cPort.host_ip != "" {
 		t.Errorf("c port: got host_port=%d guest_port=%d protocol=%s host_ip=%q", cPort.host_port, cPort.guest_port, cPort.protocol, cPort.host_ip)
 	}
 	if cfg.workDir != "/app" {
@@ -273,7 +273,7 @@ func TestWithPortSpec(t *testing.T) {
 	WithPortSpec(PortSpec{
 		Host:     5353,
 		Guest:    53,
-		Protocol: PortProtocolUDP,
+		Protocol: PortProtocolUdp,
 		HostIP:   "127.0.0.1",
 	})(cfg)
 
@@ -285,7 +285,7 @@ func TestWithPortSpec(t *testing.T) {
 	if err != nil {
 		t.Fatalf("toCSpec: %v", err)
 	}
-	if cPort.host_port != 5353 || cPort.guest_port != 53 || cPort.protocol != PortProtocolUDP || cPort.host_ip != "127.0.0.1" {
+	if cPort.host_port != 5353 || cPort.guest_port != 53 || cPort.protocol != PortProtocolUdp || cPort.host_ip != "127.0.0.1" {
 		t.Errorf("c port: got host_port=%d guest_port=%d protocol=%s host_ip=%q", cPort.host_port, cPort.guest_port, cPort.protocol, cPort.host_ip)
 	}
 }
@@ -302,9 +302,9 @@ func TestPortProtocolString(t *testing.T) {
 		protocol PortProtocol
 		want     string
 	}{
-		{PortProtocolTCP, "tcp"},
-		{PortProtocolUDP, "udp"},
-		{PortProtocolInvalid, "unknown(0)"},
+		{PortProtocolTcp, "TCP"},
+		{PortProtocolUdp, "UDP"},
+		{PortProtocolUnknown, "Unknown"},
 	}
 
 	for _, tt := range tests {
