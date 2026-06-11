@@ -74,3 +74,4 @@ HEALTHCHECK CMD [ "curl", "-f", "http://localhost:3000/api/config" ]
 ENTRYPOINT ["yarn", "ts-node", "--project", "api/tsconfig.app.json", "--transpile-only", "-r", "tsconfig-paths/register", "api/src/main.ts"]
 
 # 2026-06-11T15:34:47Z — trigger full Api rebuild + deploy after IAM resources recreated
+# 2026-06-11T15:48:35Z — full rebuild after main merge
