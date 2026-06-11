@@ -289,17 +289,38 @@ jobs:
           aws ecr describe-repositories --repository-names "${ECR_REPO}" >/dev/null \
             || { echo "::error::ECR repo ${ECR_REPO} not found — SST may have been reconfigured. Update ECR_REPO env in this workflow."; exit 1; }
 
-          # Preflight: SSM agent on runner must be online (avoid 5-minute
-          # queue-and-timeout if the agent is dead).
-          PING=$(aws ssm describe-instance-information \
-            --filters "Key=InstanceIds,Values=$RUNNER_ID" \
-            --query "InstanceInformationList[0].PingStatus" --output text)
+          # SSM is useful for diagnostics, but runner self-update uses the
+          # EC2-side S3 poller. If SSM is wedged, try one reboot recovery and
+          # continue so the real deploy/test path decides the run.
+          get_ssm_ping() {
+              aws ssm describe-instance-information \
+                --filters "Key=InstanceIds,Values=$RUNNER_ID" \
+                --query "InstanceInformationList[0].PingStatus" --output text
+          }
+
+          PING=$(get_ssm_ping)
           if [ "$PING" != "Online" ]; then
-              echo "::error::SSM agent on runner $RUNNER_ID is not Online (PingStatus=$PING) — runner binary update would hang."
-              exit 1
+              echo "::warning::SSM agent on runner $RUNNER_ID is not Online (PingStatus=$PING). Rebooting once and waiting for recovery."
+              if aws ec2 reboot-instances --instance-ids "$RUNNER_ID"; then
+                  aws ec2 wait instance-status-ok --instance-ids "$RUNNER_ID" || true
+                  for i in $(seq 1 60); do
+                      PING=$(get_ssm_ping)
+                      if [ "$PING" = "Online" ]; then
+                          break
+                      fi
+                      echo "  [$i/60] waiting for SSM Online (current=$PING)..."
+                      sleep 5
+                  done
+              else
+                  echo "::warning::Could not reboot runner $RUNNER_ID. Continuing because runner deploy uses the S3 poller, not SSM."
+              fi
+
+              if [ "$PING" != "Online" ]; then
+                  echo "::warning::SSM agent on runner $RUNNER_ID is still not Online (PingStatus=$PING). Continuing; failure logs may be incomplete."
+              fi
           fi
 
-          echo "::notice::cluster=$CLUSTER api_lb=$API_LB_DNS runner=$RUNNER_ID (SSM=Online) s3=$S3_BUCKET"
+          echo "::notice::cluster=$CLUSTER api_lb=$API_LB_DNS runner=$RUNNER_ID (SSM=$PING) s3=$S3_BUCKET"
 
       # ──────────────────────────────────────────────────────────────────
       # Build & push Api container image (Node.js / NestJS), tag = git sha.
