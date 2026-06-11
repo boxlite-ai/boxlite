@@ -58,11 +58,22 @@ export function resolveCuratedImageRef(key: string | undefined): string {
   const resolvedKey = key ?? DEFAULT_CURATED_IMAGE_KEY
 
   if (!isCuratedImageKey(resolvedKey)) {
-    throw new BadRequestError(
-      `Invalid image '${resolvedKey}'. Allowed images: ${CURATED_IMAGE_KEYS.join(', ')}`,
-    )
+    throw new BadRequestError(`Invalid image '${resolvedKey}'. Allowed images: ${CURATED_IMAGE_KEYS.join(', ')}`)
   }
 
   const { envVar, fallbackRef } = CURATED_IMAGE_ENV[resolvedKey]
   return process.env[envVar] || fallbackRef
+}
+
+/**
+ * Reverse-map a resolved OCI ref back to its curated key, so API responses echo the
+ * opaque key the box was created with instead of the internal registry ref. Undefined
+ * when the ref is not one of the currently-resolved curated refs (e.g. boxes created
+ * before an env-var rotation).
+ */
+export function curatedImageKeyForRef(ref: string | undefined): CuratedImageKey | undefined {
+  if (!ref) {
+    return undefined
+  }
+  return CURATED_IMAGE_KEYS.find((key) => resolveCuratedImageRef(key) === ref)
 }

@@ -132,7 +132,12 @@ export class BoxService {
     box.mem = warmPoolItem.mem
     box.disk = warmPoolItem.disk
 
-    // TODO(image-rewrite): box image/artifact resolution removed with box_template; rebuild here.
+    // Warm-pool boxes have no per-request image key, so they boot from the default curated
+    // image. Stash its resolved ref on the same reserved label the start action reads; without
+    // it, box-start drives the box to ERROR (missing image ref) and the warm-pool refill loop
+    // recreates it indefinitely.
+    box.labels = { [BOX_IMAGE_REF_LABEL]: resolveCuratedImageRef(undefined) }
+
     const runner = await this.runnerService.getRandomAvailableRunner({
       regions: [box.region],
       boxClass: box.class,
@@ -1182,9 +1187,19 @@ export class BoxService {
   async replaceLabels(boxIdOrName: string, labels: { [key: string]: string }, organizationId?: string): Promise<Box> {
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
 
-    // Replace all labels
+    // Replace all labels, but never let a user-supplied label clobber the reserved image-ref
+    // label: it holds the resolved curated OCI ref the runner pulls. A user who could overwrite
+    // it would escape the curated allowlist and make the runner pull an arbitrary image with its
+    // own private-registry token. Drop any incoming reserved key and preserve the existing value.
+    const sanitizedLabels = { ...labels }
+    delete sanitizedLabels[BOX_IMAGE_REF_LABEL]
+    const existingImageRef = box.labels?.[BOX_IMAGE_REF_LABEL]
+    if (existingImageRef !== undefined) {
+      sanitizedLabels[BOX_IMAGE_REF_LABEL] = existingImageRef
+    }
+
     const updateData: Partial<Box> = {
-      labels,
+      labels: sanitizedLabels,
     }
 
     return await this.boxRepository.update(box.id, { updateData, entity: box })
