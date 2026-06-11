@@ -59,7 +59,7 @@ func (c *Client) Resize(ctx context.Context, boxId string, resizeDto dto.ResizeB
 	if err != nil {
 		return fmt.Errorf("failed to reserve toolbox port during resize: %w", err)
 	}
-	opts = append(opts, boxlite.WithPort(ToolboxGuestPort, toolboxHostPort))
+	opts = append(opts, boxlite.WithPort(toolboxHostPort, ToolboxGuestPort))
 
 	if resizeDto.Disk > 0 {
 		opts = append(opts, boxlite.WithDiskSize(int(resizeDto.Disk)))

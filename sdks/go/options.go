@@ -90,6 +90,7 @@ type boxConfig struct {
 	rootfsPath string
 	env        [][2]string
 	volumes    []volumeEntry
+	ports      []portEntry
 	workDir    string
 	entrypoint []string
 	cmd        []string
@@ -103,6 +104,11 @@ type volumeEntry struct {
 	hostPath  string
 	guestPath string
 	readOnly  bool
+}
+
+type portEntry struct {
+	host  int
+	guest int
 }
 
 // WithName sets a human-readable name for the box.
@@ -158,6 +164,14 @@ func WithVolume(hostPath, containerPath string) BoxOption {
 func WithVolumeReadOnly(hostPath, containerPath string) BoxOption {
 	return func(c *boxConfig) {
 		c.volumes = append(c.volumes, volumeEntry{hostPath, containerPath, true})
+	}
+}
+
+// WithPort forwards a host port to a guest port. A host of 0 lets the runtime
+// assign one dynamically.
+func WithPort(host, guest int) BoxOption {
+	return func(c *boxConfig) {
+		c.ports = append(c.ports, portEntry{host: host, guest: guest})
 	}
 }
 
@@ -269,6 +283,9 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 		C.boxlite_options_add_volume(cOpts, cHost, cGuest, readOnly)
 		C.free(unsafe.Pointer(cHost))
 		C.free(unsafe.Pointer(cGuest))
+	}
+	for _, port := range cfg.ports {
+		C.boxlite_options_add_port(cOpts, C.int(port.guest), C.int(port.host))
 	}
 	if cfg.network != nil {
 		switch cfg.network.Mode {
