@@ -130,8 +130,13 @@ jobs:
     uses: ./.github/workflows/build-runner-binary.yml
     with:
       libboxlite_source: build
+    # Inherit workflow defaults — the called workflow's `upload-to-release`
+    # job declares `contents: write`, and explicitly setting `contents: read`
+    # at the caller would fail GHA's "called job requests more permissions
+    # than caller grants" startup check even though that job's `if:` would
+    # skip it for our workflow_call invocation.
     permissions:
-      contents: read
+      contents: write
 
   e2e:
     name: E2E suite (Tokyo)
