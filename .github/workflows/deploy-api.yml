@@ -292,3 +292,5 @@ jobs:
           done
           echo "::error::ALB target group never reported a healthy target within 180s"
           exit 1
+
+# 2026-06-11T15:06:13Z — boundary removed; re-verify ECS PassRole standalone
