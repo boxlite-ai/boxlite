@@ -258,8 +258,6 @@ export default $config({
       image: {
         context: '../..',
         dockerfile: 'apps/api/Dockerfile',
-        cache: false,
-        args: { CACHE_BUST: Date.now().toString() },
       },
       loadBalancer: {
         domain: serviceDomain('api'),

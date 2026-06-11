@@ -1,7 +1,7 @@
 {
   "name": "api",
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
-  "sourceRoot": "apps/api/src",
+  "sourceRoot": "api/src",
   "projectType": "application",
   "tags": [],
   "targets": {
@@ -10,16 +10,16 @@
       "options": {
         "outputPath": "dist/apps/api",
         "deleteOutputPath": false,
-        "main": "apps/api/src/main.ts",
-        "tsConfig": "apps/api/tsconfig.app.json",
-        "generatePackageJson": true,
+        "main": "api/src/main.ts",
+        "tsConfig": "api/tsconfig.app.json",
+        "generatePackageJson": false,
         "target": "node",
         "compiler": "tsc",
         "sourceMap": true,
-        "webpackConfig": "apps/api/webpack.config.js",
+        "webpackConfig": "api/webpack.config.js",
         "assets": [
           {
-            "input": "apps/api/src/assets",
+            "input": "api/src/assets",
             "glob": "**/*",
             "output": "./assets/"
           }
@@ -27,7 +27,6 @@
       },
       "configurations": {
         "development": {
-          "generatePackageJson": false,
           "skipTypeChecking": true
         },
         "production": {
@@ -95,14 +94,10 @@
     "check-version-env": {},
     "docker": {
       "options": {
-        "target": "boxlite"
-      },
-      "dependsOn": [
-        {
-          "target": "build-amd64",
-          "projects": "runner"
-        }
-      ]
+        "target": "boxlite",
+        "context": "..",
+        "file": "apps/api/Dockerfile"
+      }
     },
     "push-manifest": {},
     "lint": {

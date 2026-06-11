@@ -12,6 +12,11 @@ apps/.nx
 
 # Build outputs
 target
+dist
+apps/dist
+coverage
+apps/coverage
+*.log
 
 # Git
 .git

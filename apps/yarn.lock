@@ -16543,7 +16543,6 @@ __metadata:
     gtx-cli: "npm:^2.6.24"
     husky: "npm:^9.1.7"
     ioredis: "npm:^5.5.0"
-    is-ci: "npm:^4.1.0"
     isomorphic-ws: "npm:^5.0.0"
     jest: "npm:30.0.5"
     jest-environment-node: "npm:^29.7.0"
@@ -17287,7 +17286,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"ci-info@npm:^4.0.0, ci-info@npm:^4.1.0, ci-info@npm:^4.2.0, ci-info@npm:^4.4.0":
+"ci-info@npm:^4.0.0, ci-info@npm:^4.2.0, ci-info@npm:^4.4.0":
   version: 4.4.0
   resolution: "ci-info@npm:4.4.0"
   checksum: 10c0/44156201545b8dde01aa8a09ee2fe9fc7a73b1bef9adbd4606c9f61c8caeeb73fb7a575c88b0443f7b4edb5ee45debaa59ed54ba5f99698339393ca01349eb3a
@@ -24015,17 +24014,6 @@ __metadata:
   version: 1.2.7
   resolution: "is-callable@npm:1.2.7"
   checksum: 10c0/ceebaeb9d92e8adee604076971dd6000d38d6afc40bb843ea8e45c5579b57671c3f3b50d7f04869618242c6cee08d1b67806a8cb8edaaaf7c0748b3720d6066f
-  languageName: node
-  linkType: hard
-
-"is-ci@npm:^4.1.0":
-  version: 4.1.0
-  resolution: "is-ci@npm:4.1.0"
-  dependencies:
-    ci-info: "npm:^4.1.0"
-  bin:
-    is-ci: bin.js
-  checksum: 10c0/c58e733d21f8d7e6ba3d70686124004576b369b4a02a37c4783159ed5a668b3a9e4b359efa955e4a675bd021eca7305010c45a1e646bf77cce14b08808eda88d
   languageName: node
   linkType: hard
 
