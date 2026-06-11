@@ -9,15 +9,19 @@ import { BoxState } from '../../box/enums/box-state.enum'
 import { BoxResponseDto } from '../dto/box-response.dto'
 import { CreateBoxDto as RestCreateBoxDto } from '../dto/create-box.dto'
 import { CreateBoxDto } from '../../box/dto/create-box.dto'
+import { BOX_IMAGE_REF_LABEL, curatedImageKeyForRef } from '../../box/constants/curated-images.constant'
 
 export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
+  // Echo the curated key the box was created with; fall back to the raw label ref for
+  // boxes whose ref no longer matches the curated set (env rotation, legacy boxes).
+  const imageRef = box.labels?.[BOX_IMAGE_REF_LABEL]
   return {
     box_id: box.boxId,
     name: box.name,
     status: mapState(box.state),
     created_at: box.createdAt || new Date().toISOString(),
     updated_at: box.updatedAt || new Date().toISOString(),
-    image: '',
+    image: curatedImageKeyForRef(imageRef) ?? imageRef ?? '',
     cpus: box.cpu || 1,
     memory_mib: (box.memory || 1) * 1024,
     labels: box.labels || {},
