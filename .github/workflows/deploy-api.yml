@@ -294,3 +294,4 @@ jobs:
           exit 1
 
 # 2026-06-11T15:06:13Z — boundary removed; re-verify ECS PassRole standalone
+# 2026-06-11T15:25:51Z — retest after recreating Api{Task,Execution}Role
