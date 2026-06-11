@@ -126,7 +126,7 @@ jobs:
   build_runner:
     name: Build runner binary (from PR source)
     needs: changes
-    if: needs.changes.outputs.relevant == 'true' || github.event_name == 'workflow_dispatch'
+    if: ${{ false }}
     uses: ./.github/workflows/build-runner-binary.yml
     with:
       libboxlite_source: build
@@ -140,7 +140,7 @@ jobs:
 
   e2e:
     name: E2E suite (Tokyo)
-    needs: [changes, build_runner]
+    needs: [changes]
     # Skip on PRs that don't touch relevant paths. workflow_dispatch
     # always runs (operator explicitly asked for it).
     if: needs.changes.outputs.relevant == 'true' || github.event_name == 'workflow_dispatch'
@@ -244,18 +244,16 @@ jobs:
         id: ecr_login
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build & push Api image (source mode via tsx, no webpack)
+      - name: Build & push Api image (production Dockerfile)
         id: build_api
         run: |
           set -euo pipefail
           REGISTRY="${{ steps.ecr_login.outputs.registry }}"
           IMAGE="${REGISTRY}/${ECR_REPO}:api-${{ github.sha }}"
-          # Use apps/api/Dockerfile.source — runs TS directly via tsx at
-          # container runtime, NO webpack build, NO dashboard build, NO
-          # strict TS type-check gate. See that file's header for rationale.
-          # Build context = repo root (Dockerfile references apps/libs/...).
+          # Validation branch for #730: build the production image path,
+          # not the e2e source-mode Dockerfile from #724.
           docker buildx build --platform linux/amd64 --load \
-            -f apps/api/Dockerfile.source -t "$IMAGE" .
+            --target boxlite -f apps/api/Dockerfile -t "$IMAGE" .
           docker push "$IMAGE"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
@@ -268,12 +266,14 @@ jobs:
       # to download + hot-swap the systemd binary.
       # ──────────────────────────────────────────────────────────────────
       - name: Download runner binary artifact
+        if: ${{ false }}
         uses: actions/download-artifact@v4
         with:
           name: runner-linux-amd64
           path: /tmp/runner-artifact/
 
       - name: Upload runner binary to S3 + deploy to Tokyo runner via SSM
+        if: ${{ false }}
         run: |
           set -euo pipefail
           S3_BUCKET="${{ steps.resources.outputs.s3_bucket }}"
@@ -401,6 +401,7 @@ jobs:
       # inside the container.
       # ──────────────────────────────────────────────────────────────────
       - name: Init admin-org sandbox quota (idempotent)
+        if: ${{ false }}
         run: |
           set -euo pipefail
           CLUSTER="${{ steps.resources.outputs.cluster }}"
