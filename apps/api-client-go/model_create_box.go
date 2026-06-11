@@ -22,6 +22,8 @@ var _ MappedNullable = &CreateBox{}
 type CreateBox struct {
 	// The name of the box. If not provided, the box ID will be used as the name
 	Name *string `json:"name,omitempty"`
+	// The curated image key for the box (one of: base, python, node). Defaults to base.
+	Image *string `json:"image,omitempty"`
 	// The user associated with the project
 	User *string `json:"user,omitempty"`
 	// Environment variables for the box
@@ -104,6 +106,38 @@ func (o *CreateBox) HasName() bool {
 // SetName gets a reference to the given string and assigns it to the Name field.
 func (o *CreateBox) SetName(v string) {
 	o.Name = &v
+}
+
+// GetImage returns the Image field value if set, zero value otherwise.
+func (o *CreateBox) GetImage() string {
+	if o == nil || IsNil(o.Image) {
+		var ret string
+		return ret
+	}
+	return *o.Image
+}
+
+// GetImageOk returns a tuple with the Image field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *CreateBox) GetImageOk() (*string, bool) {
+	if o == nil || IsNil(o.Image) {
+		return nil, false
+	}
+	return o.Image, true
+}
+
+// HasImage returns a boolean if a field has been set.
+func (o *CreateBox) HasImage() bool {
+	if o != nil && !IsNil(o.Image) {
+		return true
+	}
+
+	return false
+}
+
+// SetImage gets a reference to the given string and assigns it to the Image field.
+func (o *CreateBox) SetImage(v string) {
+	o.Image = &v
 }
 
 // GetUser returns the User field value if set, zero value otherwise.
@@ -599,6 +633,9 @@ func (o CreateBox) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.Name) {
 		toSerialize["name"] = o.Name
 	}
+	if !IsNil(o.Image) {
+		toSerialize["image"] = o.Image
+	}
 	if !IsNil(o.User) {
 		toSerialize["user"] = o.User
 	}
@@ -667,6 +704,7 @@ func (o *CreateBox) UnmarshalJSON(data []byte) (err error) {
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "name")
+		delete(additionalProperties, "image")
 		delete(additionalProperties, "user")
 		delete(additionalProperties, "env")
 		delete(additionalProperties, "labels")
