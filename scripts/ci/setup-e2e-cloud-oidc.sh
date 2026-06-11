@@ -30,8 +30,8 @@
 # can mint an STS token, regardless of who pushed the workflow file.
 #
 # Usage:
-#   AWS_ACCOUNT_ID=064212132677 scripts/ci/setup-e2e-cloud-oidc.sh
-#   AWS_ACCOUNT_ID=064212132677 STAGE=e2e-ci scripts/ci/setup-e2e-cloud-oidc.sh
+#   AWS_ACCOUNT_ID=YOUR_ACCOUNT_ID scripts/ci/setup-e2e-cloud-oidc.sh
+#   AWS_ACCOUNT_ID=YOUR_ACCOUNT_ID STAGE=e2e-ci scripts/ci/setup-e2e-cloud-oidc.sh
 
 set -euo pipefail
 
@@ -40,7 +40,7 @@ CI_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$CI_SCRIPT_DIR/../common.sh"
 
 # ─── Config ──────────────────────────────────────────────────────────────
-: "${AWS_ACCOUNT_ID:?AWS_ACCOUNT_ID is required (e.g. 064212132677)}"
+: "${AWS_ACCOUNT_ID:?AWS_ACCOUNT_ID is required (e.g. YOUR_ACCOUNT_ID)}"
 GITHUB_ORG="${GITHUB_ORG:-boxlite-ai}"
 GITHUB_REPO="${GITHUB_REPO:-boxlite}"
 ROLE_NAME="${ROLE_NAME:-boxlite-e2e-cloud-github-actions}"

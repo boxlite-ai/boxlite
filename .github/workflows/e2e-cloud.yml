@@ -56,18 +56,17 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # NOTE: hardcoded because `${{ vars.* }}` context is NOT passed to
-  # workflow runs triggered by pull_request from forks (GitHub security
-  # rule). The PR for this workflow is sourced from G4614/boxlite (fork),
-  # so we cannot rely on the repo variables AWS_E2E_CLOUD_REGION /
-  # AWS_E2E_CLOUD_ROLE_ARN being readable here. Region and role ARN are
-  # not secrets (account ID is "sensitive, not secret" per AWS docs; the
-  # role's safety is enforced by its trust policy, not by hiding the
-  # ARN). When this PR lands, future PRs from same-repo branches WILL
-  # see the vars and could optionally fall back to them, but the
-  # hardcoded values remain the source of truth.
-  AWS_REGION: ap-northeast-1
-  AWS_ROLE_ARN: arn:aws:iam::064212132677:role/boxlite-e2e-cloud-github-actions
+  # AWS identifiers come from repo variables (same pattern as
+  # .github/workflows/e2e-test.yml). `vars.*` is stripped by GitHub
+  # for fork-PR runs, but this workflow is gated on same-repo branches
+  # (push to main + workflow_dispatch + same-repo PR), so the context
+  # is always populated. Set via repo Settings → Variables:
+  #   AWS_ACCOUNT_ID, AWS_E2E_CLOUD_REGION, AWS_E2E_CLOUD_ROLE_ARN
+  # Keeps the account ID out of the public repo source — defense in
+  # depth (AWS treats account ID as "sensitive, not secret", but no
+  # reason to surface it when we don't have to).
+  AWS_REGION: ${{ vars.AWS_E2E_CLOUD_REGION }}
+  AWS_ROLE_ARN: ${{ vars.AWS_E2E_CLOUD_ROLE_ARN }}
   STAGE: e2e-ci
   STACK_PREFIX: boxlite-e2e-ci
   ECS_CLUSTER_PATTERN: boxlite-e2e-ci-ClusterCluster-
