@@ -100,6 +100,13 @@ describe('ObjectStorageService', () => {
     )
   })
 
+  it('rejects a lone static key instead of silently using the default chain', async () => {
+    const service = buildService({ ...awsConfig, 's3.accessKey': 'static-id' })
+
+    await expect(service.getPushAccess('org-1')).rejects.toThrow(/S3_ACCESS_KEY and S3_SECRET_KEY must be set together/)
+    expect(STSClient).not.toHaveBeenCalled()
+  })
+
   it('rejects the MinIO path without static keys instead of sending an unsigned request', async () => {
     const service = buildService({
       ...awsConfig,
