@@ -42,12 +42,15 @@ function createOrganizationService() {
     }),
   }
 
+  // Argument positions must match OrganizationService's constructor signature
+  // (organization.service.ts): orgRepo, boxRepo, eventEmitter, configService,
+  // redisLockProvider, regionRepo, regionService, encryptionService.
   return new OrganizationService(
     { manager: {} } as never,
     {} as never,
-    {} as never,
     { emitAsync: jest.fn() } as never,
     configService as never,
+    {} as never,
     {} as never,
     {} as never,
     {} as never,
