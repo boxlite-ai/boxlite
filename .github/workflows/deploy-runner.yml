@@ -27,6 +27,29 @@ name: Deploy Runner Binary
 on:
   workflow_call: {}
   workflow_dispatch: {}
+  # `push:` trigger so we can verify the deploy pipeline standalone
+  # WHILE this workflow file is still on a feature branch (workflow_dispatch
+  # only works for workflow files that already exist on the default
+  # branch; this PR isn't merged yet). Filter on the runner build chain
+  # so unrelated commits don't refire — same paths as e2e-cloud.yml's
+  # `runner_chain` filter.
+  push:
+    paths:
+      - 'apps/runner/**'
+      - 'apps/daemon/**'
+      - 'apps/common-go/**'
+      - 'apps/api-client-go/**'
+      - 'apps/libs/computer-use/**'
+      - 'sdks/go/**'
+      - 'src/boxlite/**'
+      - 'src/api-client/**'
+      - 'src/shared/**'
+      - 'src/deps/**'
+      - 'scripts/build/**'
+      - 'sdks/c/src/exec/**'
+      - '.github/workflows/deploy-runner.yml'
+      - '.github/workflows/build-c.yml'
+      - '.github/workflows/build-runner-binary.yml'
 
 permissions:
   contents: read
