@@ -290,47 +290,78 @@ jobs:
           name: runner-linux-amd64
           path: /tmp/runner-artifact/
 
-      - name: Upload runner binary to S3 + deploy to Tokyo runner via SSM
+      # ──────────────────────────────────────────────────────────────────
+      # Polling-based deploy (zero IAM mutation required):
+      #
+      # 1. Upload binary to s3://${bucket}/builds/runner-deploy/binary.tar.gz
+      # 2. Write request marker s3://.../builds/runner-deploy/request-${SHA}.txt
+      # 3. EC2 poller (systemd timer installed once via PowerUserAccess
+      #    SSM, NOT via this workflow) picks up request, swaps binary,
+      #    writes done-${SHA}.txt with "OK" or "FAIL: ..." status
+      # 4. We poll for done-${SHA}.txt, gate on its content
+      #
+      # This replaces the original `aws ssm send-command` path which
+      # needed an IAM policy update (split condition on the
+      # AWS-RunShellScript document — blocked without admin perms).
+      # Now the only AWS interaction here is S3, which is already
+      # in our role's policy (`s3:PutObject`/`GetObject` on
+      # `${stack_prefix}-storagebucket-*/builds/*`).
+      # ──────────────────────────────────────────────────────────────────
+      - name: Upload runner binary to S3 + wait for runner self-update
         run: |
           set -euo pipefail
           S3_BUCKET="${{ steps.resources.outputs.s3_bucket }}"
-          RUNNER_ID="${{ steps.resources.outputs.runner_id }}"
-          # The reusable workflow uploads a `boxlite-runner-v${VERSION}-linux-amd64.tar.gz`;
-          # we don't bind to ${VERSION} here so a glob picks whatever it landed.
           ARCHIVE=$(ls /tmp/runner-artifact/boxlite-runner-*-linux-amd64.tar.gz | head -1)
           [ -n "$ARCHIVE" ] || { echo "::error::No runner artifact found"; exit 1; }
-          KEY="builds/$(basename "$ARCHIVE")"
-          aws s3 cp "$ARCHIVE" "s3://${S3_BUCKET}/${KEY}"
-          echo "::notice::Runner binary uploaded to s3://${S3_BUCKET}/${KEY}"
 
-          # In-place hot-swap on the tagged Name=boxlite-runner instance.
-          # stop → replace binary → start → verify is-active.
-          CMD_ID=$(aws ssm send-command \
-            --instance-ids "$RUNNER_ID" \
-            --document-name "AWS-RunShellScript" \
-            --comment "e2e-cloud runner deploy ${GITHUB_SHA}" \
-            --parameters "{\"commands\":[\"set -euo pipefail\",\"aws s3 cp s3://${S3_BUCKET}/${KEY} /tmp/boxlite-runner.tar.gz\",\"systemctl stop boxlite-runner || true\",\"tar xzf /tmp/boxlite-runner.tar.gz -C /usr/local/bin/\",\"chmod +x /usr/local/bin/boxlite-runner\",\"systemctl start boxlite-runner\",\"sleep 5\",\"systemctl is-active boxlite-runner\"]}" \
-            --query 'Command.CommandId' --output text)
-          echo "SSM Command ID: $CMD_ID"
+          PREFIX="builds/runner-deploy"
+          BIN_KEY="${PREFIX}/binary.tar.gz"
+          REQ_KEY="${PREFIX}/request-${GITHUB_SHA}.txt"
+          DONE_KEY="${PREFIX}/done-${GITHUB_SHA}.txt"
 
-          for i in $(seq 1 60); do
+          # 1) Upload binary (canonical name; overwrite OK because the
+          #    workflow concurrency group is a singleton lock).
+          aws s3 cp "$ARCHIVE" "s3://${S3_BUCKET}/${BIN_KEY}"
+          echo "::notice::Binary uploaded to s3://${S3_BUCKET}/${BIN_KEY}"
+
+          # 2) Write request marker — content = git SHA so the poller
+          #    knows which request to answer with the matching done key.
+          printf 'sha=%s\nrequested_at=%s\n' \
+              "${GITHUB_SHA}" \
+              "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              | aws s3 cp - "s3://${S3_BUCKET}/${REQ_KEY}"
+          echo "::notice::Request marker written to s3://${S3_BUCKET}/${REQ_KEY}"
+
+          # 3) Wait for the poller (runs every 30s on the Tokyo EC2)
+          #    to claim the request and write a done marker. Cap at
+          #    120 s (poller cron 30 s + binary swap 5 s + service
+          #    start 5 s = ~60 s typical; double for slack).
+          echo "Waiting for runner self-update (max 120 s)..."
+          for i in $(seq 1 24); do
               sleep 5
-              STATUS=$(aws ssm get-command-invocation \
-                  --command-id "$CMD_ID" --instance-id "$RUNNER_ID" \
-                  --query Status --output text 2>/dev/null || echo "Pending")
-              echo "  [$i/60] runner deploy: $STATUS"
-              case "$STATUS" in
-                  Success)   break ;;
-                  Failed|TimedOut|Cancelled)
-                      echo "::error::Runner SSM deploy failed (status=$STATUS)"
-                      aws ssm get-command-invocation \
-                          --command-id "$CMD_ID" --instance-id "$RUNNER_ID" \
-                          --query 'StandardErrorContent' --output text || true
-                      exit 1 ;;
-              esac
+              if aws s3api head-object \
+                  --bucket "$S3_BUCKET" --key "$DONE_KEY" \
+                  >/dev/null 2>&1; then
+                  STATUS=$(aws s3 cp "s3://${S3_BUCKET}/${DONE_KEY}" - 2>/dev/null | head -1 || echo "")
+                  echo "::notice::Runner deploy status: $STATUS"
+                  case "$STATUS" in
+                      OK*)
+                          echo "::notice::Runner self-update complete (SHA ${GITHUB_SHA})"
+                          exit 0 ;;
+                      FAIL*)
+                          echo "::error::Runner self-update failed: $STATUS"
+                          # Pull full body for context
+                          aws s3 cp "s3://${S3_BUCKET}/${DONE_KEY}" - 2>/dev/null || true
+                          exit 1 ;;
+                      *)
+                          echo "::error::Unexpected status from poller: $STATUS"
+                          exit 1 ;;
+                  esac
+              fi
+              echo "  [$i/24] waiting for done-${GITHUB_SHA}.txt..."
           done
-          [ "$STATUS" = "Success" ] || { echo "::error::Runner deploy poll timed out"; exit 1; }
-          echo "::notice::Runner deploy completed on $RUNNER_ID"
+          echo "::error::Runner self-update timed out after 120 s — poller offline or SSM agent down?"
+          exit 1
 
       # ──────────────────────────────────────────────────────────────────
       # Deploy: register new Api task definition with the new image (all
