@@ -238,12 +238,22 @@ jobs:
             --query 'services[0].taskDefinition' --output text)
           echo "Old TD: $OLD_TD_ARN"
 
-          # Clone old TD, swap image, strip readonly fields. Plaintext
-          # env (e.g. DB_PASSWORD) lives here — do NOT cat the file.
+          # Clone old TD, swap image, strip readonly fields, drop stale
+          # static-IAM env vars left over from before #732 ("vend box S3
+          # credentials from the ECS task role, not a static IAM user").
+          # If S3_ACCESS_KEY is set in the env, configuration.ts:87 honors
+          # it and short-circuits the task-role fallback — but the IAM
+          # user backing that key no longer exists, so the app crashes
+          # on InvalidAccessKeyId at first S3 call. Stripping these env
+          # vars forces the SDK default credential chain (= task role).
+          # Plaintext env (e.g. DB_PASSWORD) lives in TD — do NOT cat the file.
           aws ecs describe-task-definition --task-definition "$OLD_TD_ARN" \
             --query 'taskDefinition' --output json \
             | jq --arg img "$IMAGE" '
                 .containerDefinitions[0].image = $img
+                | .containerDefinitions[0].environment |= map(
+                    select(.name != "S3_ACCESS_KEY" and .name != "S3_SECRET_KEY")
+                  )
                 | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
                       .compatibilities, .registeredAt, .registeredBy)' \
             > /tmp/new-td.json
