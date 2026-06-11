@@ -78,12 +78,18 @@ jobs:
     outputs:
       should_build: ${{ steps.decide.outputs.should_build }}
       should_deploy: ${{ steps.decide.outputs.should_deploy }}
+      prev_run_id: ${{ steps.decide.outputs.prev_run_id }}
     steps:
       - uses: actions/checkout@v5
       - id: filter
         if: github.event_name == 'push'
         uses: dorny/paths-filter@v3
         with:
+          # `base: github.event.before` makes the diff "what this push
+          # introduced" (HEAD vs parent). Default `base` is the default
+          # branch's HEAD, which means a feature branch with N prior
+          # commits would see ALL its commits in the diff every push.
+          base: ${{ github.event.before }}
           filters: |
             runner_source:
               - 'apps/runner/**'
@@ -103,14 +109,32 @@ jobs:
           PUSH_CHANGED: ${{ steps.filter.outputs.runner_source }}
           PREV_RUN_ID: ${{ inputs.runner_artifact_run_id }}
         run: |
-          # When the operator passes a prev-run artifact, skip build
-          # entirely and have `deploy` download from that run.
+          # Resolve prev-run-id, in order of precedence:
+          #  1. workflow_dispatch input `runner_artifact_run_id`
+          #  2. commit-message tag `[runner-from: <run_id>]` (push-event
+          #     workaround: workflow_dispatch only works after the
+          #     workflow file lands on the default branch, so we offer
+          #     a commit-message override for testing pre-merge)
+          PREV=""
           if [ -n "${PREV_RUN_ID:-}" ]; then
-              echo "Reusing artifact from run ${PREV_RUN_ID} — SKIP build, RUN deploy."
-              echo "should_build=false"  >> "$GITHUB_OUTPUT"
-              echo "should_deploy=true"  >> "$GITHUB_OUTPUT"
+              PREV="$PREV_RUN_ID"
+              echo "Using workflow_dispatch input runner_artifact_run_id=$PREV"
+          else
+              COMMIT_MSG=$(git log -1 --pretty=%B 2>/dev/null || true)
+              if [[ "$COMMIT_MSG" =~ \[runner-from:\ ([0-9]+)\] ]]; then
+                  PREV="${BASH_REMATCH[1]}"
+                  echo "Using commit-message tag [runner-from: $PREV]"
+              fi
+          fi
+
+          if [ -n "$PREV" ]; then
+              echo "Reusing artifact from run $PREV — SKIP build, RUN deploy."
+              echo "should_build=false"   >> "$GITHUB_OUTPUT"
+              echo "should_deploy=true"   >> "$GITHUB_OUTPUT"
+              echo "prev_run_id=$PREV"    >> "$GITHUB_OUTPUT"
               exit 0
           fi
+
           if [ "${{ github.event_name }}" != 'push' ]; then
               echo "Non-push event (${{ github.event_name }}) — force build + deploy."
               echo "should_build=true"   >> "$GITHUB_OUTPUT"
@@ -200,19 +224,19 @@ jobs:
           echo "::notice::S3 bucket: $BUCKETS"
 
       - name: Download runner binary artifact (this run)
-        if: ${{ inputs.runner_artifact_run_id == '' || inputs.runner_artifact_run_id == null }}
+        if: needs.changes.outputs.prev_run_id == ''
         uses: actions/download-artifact@v4
         with:
           name: runner-linux-amd64
           path: /tmp/runner-artifact/
 
       - name: Download runner binary artifact (from prior run)
-        if: ${{ inputs.runner_artifact_run_id != '' && inputs.runner_artifact_run_id != null }}
+        if: needs.changes.outputs.prev_run_id != ''
         uses: actions/download-artifact@v4
         with:
           name: runner-linux-amd64
           path: /tmp/runner-artifact/
-          run-id: ${{ inputs.runner_artifact_run_id }}
+          run-id: ${{ needs.changes.outputs.prev_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
 
