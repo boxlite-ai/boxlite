@@ -159,8 +159,7 @@ const configuration = {
     publicKey: process.env.SSH_GATEWAY_PUBLIC_KEY,
     url: process.env.SSH_GATEWAY_URL,
   },
-  organizationBoxDefaultLimitedNetworkEgress:
-    process.env.ORGANIZATION_BOX_DEFAULT_LIMITED_NETWORK_EGRESS === 'true',
+  organizationBoxDefaultLimitedNetworkEgress: process.env.ORGANIZATION_BOX_DEFAULT_LIMITED_NETWORK_EGRESS === 'true',
   pylonAppId: process.env.PYLON_APP_ID,
   billingApiUrl: process.env.BILLING_API_URL,
   analyticsApiUrl: process.env.ANALYTICS_API_URL,
@@ -246,9 +245,7 @@ const configuration = {
         : undefined,
     },
     boxCreate: {
-      ttl: process.env.RATE_LIMIT_BOX_CREATE_TTL
-        ? parseInt(process.env.RATE_LIMIT_BOX_CREATE_TTL, 10)
-        : undefined,
+      ttl: process.env.RATE_LIMIT_BOX_CREATE_TTL ? parseInt(process.env.RATE_LIMIT_BOX_CREATE_TTL, 10) : undefined,
       limit: process.env.RATE_LIMIT_BOX_CREATE_LIMIT
         ? parseInt(process.env.RATE_LIMIT_BOX_CREATE_LIMIT, 10)
         : undefined,
