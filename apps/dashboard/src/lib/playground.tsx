@@ -5,7 +5,7 @@
  */
 
 import { ReactNode } from 'react'
-import { CodeLanguage } from '@boxlite-ai/sdk'
+import { CodeLanguage } from '@/lib/cloudBox'
 
 export const createErrorMessageOutput = (error: unknown): ReactNode => {
   return (

@@ -16,7 +16,7 @@ import {
 } from '@/contexts/PlaygroundContext'
 import { KeyboardActions } from '@/enums/Playground'
 import { usePlayground } from '@/hooks/usePlayground'
-import { ComputerUse } from '@boxlite-ai/sdk'
+import { CloudBoxComputerUse } from '@/lib/cloudBox'
 import PlaygroundActionForm from '../../ActionForm'
 import InlineInputFormControl from '../../Inputs/InlineInputFormControl'
 import FormNumberInput from '../../Inputs/NumberInput'
@@ -80,7 +80,7 @@ const VNCKeyboardOperations: React.FC<VNCInteractionOptionsSectionComponentProps
 
   // Disable logic ensures that this method is called when ComputerUseClient exists -> we use as ComputerUse to silence TS compiler
   const keyboardActionAPICall: PlaygroundActionInvokeApi = async (keyboardActionFormData) => {
-    const KeyboardActionsClient = (ComputerUseClient as ComputerUse).keyboard
+    const KeyboardActionsClient = (ComputerUseClient as CloudBoxComputerUse).keyboard
     // All keyboard actions have Promise<void> return type -> we don't need the reponse
     switch (keyboardActionFormData.methodName) {
       case KeyboardActions.HOTKEY:

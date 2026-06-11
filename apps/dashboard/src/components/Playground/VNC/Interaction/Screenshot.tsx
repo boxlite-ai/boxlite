@@ -16,9 +16,8 @@ import {
 } from '@/contexts/PlaygroundContext'
 import { ScreenshotActions, ScreenshotFormatOption } from '@/enums/Playground'
 import { usePlayground } from '@/hooks/usePlayground'
-import { CompressedScreenshotResponse, RegionScreenshotResponse } from '@boxlite-ai/api-client'
-import { ComputerUse, ScreenshotRegion } from '@boxlite-ai/sdk'
-import { ScreenshotResponse } from '@boxlite-ai/toolbox-api-client'
+import { CloudBoxComputerUse, ScreenshotRegion } from '@/lib/cloudBox'
+import { CompressedScreenshotResponse, RegionScreenshotResponse, ScreenshotResponse } from '@boxlite-ai/api-client'
 import PlaygroundActionForm from '../../ActionForm'
 import FormCheckboxInput from '../../Inputs/CheckboxInput'
 import InlineInputFormControl from '../../Inputs/InlineInputFormControl'
@@ -127,7 +126,7 @@ const VNCScreenshotOperations: React.FC<VNCInteractionOptionsSectionComponentPro
 
   // Disable logic ensures that this method is called when ComputerUseClient exists -> we use as ComputerUse to silence TS compiler
   const screenshotActionAPICall: PlaygroundActionInvokeApi = async (screenshotActionFormData) => {
-    const ScreenshotActionsClient = (ComputerUseClient as ComputerUse).screenshot
+    const ScreenshotActionsClient = (ComputerUseClient as CloudBoxComputerUse).screenshot
     let screenshotActionResponse: ScreenshotResponse | RegionScreenshotResponse | CompressedScreenshotResponse = {
       screenshot: '',
     }
