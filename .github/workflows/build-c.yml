@@ -15,12 +15,23 @@
 # Triggers:
 # - release: When a GitHub release is published
 # - workflow_dispatch: Manual trigger for testing
+# - workflow_call:     Reusable from .github/workflows/e2e-cloud.yml.
+#                      Pass target_filter='linux-x64-gnu' to skip the
+#                      macOS/arm64 matrix entries (only the Tokyo
+#                      runner target is needed).
 name: Build C SDK
 
 on:
   release:
     types: [ published ]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      target_filter:
+        description: 'Optional. Build only the given target (e.g. "linux-x64-gnu"). Empty = build all matrix platforms.'
+        type: string
+        default: ''
+        required: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -29,6 +40,33 @@ env:
 jobs:
   config:
     uses: ./.github/workflows/config.yml
+
+  # Compute the matrix the `build` job iterates over. When called via
+  # workflow_call with target_filter set, narrow to that single entry.
+  # `matrix` context is not available in job-level if:, so we filter
+  # the JSON here and have `build` consume `setup_matrix.outputs.platforms`.
+  setup_matrix:
+    name: Setup matrix
+    needs: config
+    runs-on: ubuntu-latest
+    outputs:
+      platforms: ${{ steps.filter.outputs.platforms }}
+    steps:
+      - id: filter
+        env:
+          ALL_PLATFORMS: ${{ needs.config.outputs.platforms }}
+          TARGET_FILTER: ${{ inputs.target_filter }}
+        run: |
+          if [ -n "${TARGET_FILTER:-}" ]; then
+            FILTERED=$(printf '%s' "$ALL_PLATFORMS" | jq -c --arg t "$TARGET_FILTER" '[.[] | select(.target == $t)]')
+            COUNT=$(printf '%s' "$FILTERED" | jq 'length')
+            [ "$COUNT" -ge 1 ] || { echo "::error::No matrix entry matches target_filter=$TARGET_FILTER"; exit 1; }
+            echo "Filtered to $COUNT entry(ies): $FILTERED"
+          else
+            FILTERED="$ALL_PLATFORMS"
+            echo "No filter — full matrix"
+          fi
+          echo "platforms=$FILTERED" >> "$GITHUB_OUTPUT"
 
   # ============================================================================
   # BUILD
@@ -48,12 +86,12 @@ jobs:
   # ============================================================================
   build:
     name: Build (${{ matrix.target }})
-    needs: config
+    needs: [config, setup_matrix]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(needs.config.outputs.platforms) }}
+        include: ${{ fromJson(needs.setup_matrix.outputs.platforms) }}
 
     steps:
       - uses: actions/checkout@v4
