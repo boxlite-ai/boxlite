@@ -26,7 +26,13 @@ name: Deploy Runner Binary
 
 on:
   workflow_call: {}
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      runner_artifact_run_id:
+        description: 'Optional: GHA run ID to pull the runner-linux-amd64 artifact from (e.g. a previous deploy-runner or e2e-cloud run). When set, skips build_c_sdk + build_runner and goes straight to deploy — useful for verifying the deploy path against a known-good binary.'
+        type: string
+        required: false
+        default: ''
   # `push:` trigger so we can verify the deploy pipeline standalone
   # WHILE this workflow file is still on a feature branch
   # (workflow_dispatch only works for workflow files that already
@@ -71,6 +77,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       should_build: ${{ steps.decide.outputs.should_build }}
+      should_deploy: ${{ steps.decide.outputs.should_deploy }}
     steps:
       - uses: actions/checkout@v5
       - id: filter
@@ -94,16 +101,28 @@ jobs:
       - id: decide
         env:
           PUSH_CHANGED: ${{ steps.filter.outputs.runner_source }}
+          PREV_RUN_ID: ${{ inputs.runner_artifact_run_id }}
         run: |
+          # When the operator passes a prev-run artifact, skip build
+          # entirely and have `deploy` download from that run.
+          if [ -n "${PREV_RUN_ID:-}" ]; then
+              echo "Reusing artifact from run ${PREV_RUN_ID} — SKIP build, RUN deploy."
+              echo "should_build=false"  >> "$GITHUB_OUTPUT"
+              echo "should_deploy=true"  >> "$GITHUB_OUTPUT"
+              exit 0
+          fi
           if [ "${{ github.event_name }}" != 'push' ]; then
-              echo "Non-push event (${{ github.event_name }}) — force build."
-              echo "should_build=true" >> "$GITHUB_OUTPUT"
+              echo "Non-push event (${{ github.event_name }}) — force build + deploy."
+              echo "should_build=true"   >> "$GITHUB_OUTPUT"
+              echo "should_deploy=true"  >> "$GITHUB_OUTPUT"
           elif [ "${PUSH_CHANGED:-false}" = 'true' ]; then
-              echo "Push touched runner_source paths — build."
-              echo "should_build=true" >> "$GITHUB_OUTPUT"
+              echo "Push touched runner_source paths — build + deploy."
+              echo "should_build=true"   >> "$GITHUB_OUTPUT"
+              echo "should_deploy=true"  >> "$GITHUB_OUTPUT"
           else
               echo "Push only touched workflow files — SKIP build + deploy."
-              echo "should_build=false" >> "$GITHUB_OUTPUT"
+              echo "should_build=false"  >> "$GITHUB_OUTPUT"
+              echo "should_deploy=false" >> "$GITHUB_OUTPUT"
           fi
 
   # ── Build libboxlite.a from THIS checkout's Rust source ────────────
@@ -137,7 +156,14 @@ jobs:
   deploy:
     name: Deploy runner to Tokyo EC2 (S3 polling)
     needs: [changes, build_runner]
-    if: needs.changes.outputs.should_build == 'true'
+    # Runs whenever we have an artifact to deploy — either built fresh
+    # by build_runner (default) OR pulled from a previous run via
+    # workflow_dispatch.runner_artifact_run_id. `!failure() && !cancelled()`
+    # lets us proceed when build_runner was SKIPPED (prev-run mode)
+    # but not when it FAILED.
+    if: |
+      !failure() && !cancelled()
+      && needs.changes.outputs.should_deploy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -173,11 +199,22 @@ jobs:
           echo "s3_bucket=$BUCKETS" >> "$GITHUB_OUTPUT"
           echo "::notice::S3 bucket: $BUCKETS"
 
-      - name: Download runner binary artifact
+      - name: Download runner binary artifact (this run)
+        if: ${{ inputs.runner_artifact_run_id == '' || inputs.runner_artifact_run_id == null }}
         uses: actions/download-artifact@v4
         with:
           name: runner-linux-amd64
           path: /tmp/runner-artifact/
+
+      - name: Download runner binary artifact (from prior run)
+        if: ${{ inputs.runner_artifact_run_id != '' && inputs.runner_artifact_run_id != null }}
+        uses: actions/download-artifact@v4
+        with:
+          name: runner-linux-amd64
+          path: /tmp/runner-artifact/
+          run-id: ${{ inputs.runner_artifact_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
 
       - name: Upload runner binary to S3 + wait for self-update
         run: |
