@@ -61,7 +61,7 @@ def test_go_sdk_create_exec_remove(go_binary):
         "BOXLITE_E2E_URL": p["url"],
         "BOXLITE_E2E_API_KEY": p["api_key"],
         "BOXLITE_E2E_PREFIX": p.get("path_prefix") or "",
-        "BOXLITE_E2E_IMAGE": "alpine:3.23",
+        "BOXLITE_E2E_IMAGE": "base",
         # CGO dev tag — uses libboxlite.so from the workspace target/release,
         # not a vendored prebuilt one.
         "LD_LIBRARY_PATH": str(REPO / "target/release"),
