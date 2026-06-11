@@ -11,6 +11,11 @@
 # Triggers:
 # - workflow_run: After "Build C SDK" completes (ensures libboxlite.a exists)
 # - workflow_dispatch: Manual trigger for testing
+# - workflow_call:    Reusable from .github/workflows/e2e-cloud.yml — caller
+#                     can switch `libboxlite_source` to `build` to compile
+#                     libboxlite.a from THIS checkout's Rust source (needed
+#                     when apps/runner references C symbols that the
+#                     latest tagged release's libboxlite.a doesn't have).
 name: Build Runner Binary
 
 on:
@@ -18,6 +23,13 @@ on:
     workflows: ["Build C SDK"]
     types: [completed]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      libboxlite_source:
+        description: 'How to obtain libboxlite.a — "release" (download v${VERSION} tarball, default) or "build" (compile from this checkout)'
+        type: string
+        default: 'release'
+        required: false
 
 permissions:
   contents: read
@@ -56,7 +68,20 @@ jobs:
           VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Download prebuilt libboxlite.a
+      # ── libboxlite.a — TWO PATHS based on caller's libboxlite_source input ──
+      # (a) "release" (default): download the prebuilt tarball that the
+      #     v${VERSION} GitHub release shipped. Fast, used by main build
+      #     after a "Build C SDK" workflow_run completes.
+      # (b) "build": compile from THIS checkout's Rust source. Used by
+      #     e2e-cloud so the runner binary picks up symbols that are
+      #     ahead of the tagged release (e.g. boxlite_rest_options_set_path_prefix
+      #     introduced after v0.9.5). BOXLITE_DEPS_STUB=2 skips the
+      #     vendor -sys crates (bubblewrap/libkrun/e2fsprogs) and pulls
+      #     their runtime tarball at startup — saves ~10 min vs full
+      #     source build, still produces a fully-functional .a because
+      #     vendor symbols aren't in the .a's exported table anyway.
+      - name: Download prebuilt libboxlite.a (release mode)
+        if: inputs.libboxlite_source != 'build'
         env:
           VERSION: ${{ steps.version.outputs.version }}
           GH_REPO: ${{ github.repository }}
@@ -66,6 +91,40 @@ jobs:
           echo "Downloading $URL"
           curl -fsSL "${URL}" | tar xz -C /tmp/
           cp "/tmp/boxlite-c-v${VERSION}-linux-x64-gnu/lib/libboxlite.a" sdks/go/libboxlite.a
+
+      - name: Install Rust toolchain (build mode)
+        if: inputs.libboxlite_source == 'build'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install Rust build system deps (build mode)
+        if: inputs.libboxlite_source == 'build'
+        run: |
+          sudo apt-get install -y --no-install-recommends \
+            musl-tools pkg-config protobuf-compiler
+
+      - name: Build boxlite-guest (musl static, embedded into .a)
+        if: inputs.libboxlite_source == 'build'
+        env:
+          BOXLITE_DEPS_STUB: "2"
+        run: |
+          set -euo pipefail
+          GUEST_TARGET=$(bash scripts/util.sh --target)
+          echo "Guest target: $GUEST_TARGET"
+          cargo build --release --target "$GUEST_TARGET" -p boxlite-guest
+
+      - name: Build libboxlite.a from this checkout (build mode)
+        if: inputs.libboxlite_source == 'build'
+        env:
+          BOXLITE_DEPS_STUB: "2"
+        run: |
+          set -euo pipefail
+          cargo build --release -p boxlite-c
+          bash scripts/build/fix-go-symbols.sh target/release/libboxlite.a
+          mkdir -p sdks/go
+          cp target/release/libboxlite.a sdks/go/libboxlite.a
+          ls -lh sdks/go/libboxlite.a
 
       - name: Rewrite go.work for minimal modules
         run: |
