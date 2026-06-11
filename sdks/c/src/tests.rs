@@ -416,6 +416,7 @@ unsafe fn new_test_options() -> *mut CBoxliteOptions {
     let code =
         unsafe { boxlite_options_new(image.as_ptr(), &mut opts as *mut _, &mut error as *mut _) };
     assert_eq!(code, BoxliteErrorCode::Ok);
+    assert!(!opts.is_null(), "boxlite_options_new returned null options pointer");
     opts
 }
 
