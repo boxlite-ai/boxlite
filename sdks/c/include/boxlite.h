@@ -64,6 +64,12 @@ typedef enum BoxliteErrorCode {
   SessionReaped = 21,
 } BoxliteErrorCode;
 
+typedef enum BoxlitePortProtocol {
+  BoxlitePortProtocolUnknown = 0,
+  BoxlitePortProtocolTcp = 1,
+  BoxlitePortProtocolUdp = 2,
+} BoxlitePortProtocol;
+
 typedef enum BoxliteRegistryTransport {
   BoxliteRegistryTransportHttps = 0,
   BoxliteRegistryTransportHttp = 1,
@@ -279,6 +285,13 @@ typedef struct CRuntimeMetrics {
 
 // Runtime metrics completion.
 typedef void (*CRuntimeMetricsCb)(struct CRuntimeMetrics*, CBoxliteError*, void*);
+
+typedef struct BoxlitePortSpec {
+  int host_port;
+  int guest_port;
+  enum BoxlitePortProtocol protocol;
+  const char *host_ip;
+} BoxlitePortSpec;
 
 typedef struct CredentialHandle CBoxliteCredential;
 
@@ -500,7 +513,11 @@ void boxlite_options_add_volume(CBoxliteOptions *opts,
                                 const char *guest_path,
                                 int read_only);
 
-void boxlite_options_add_port(CBoxliteOptions *opts, int guest_port, int host_port);
+void boxlite_options_add_port(CBoxliteOptions *opts, int host_port, int guest_port);
+
+enum BoxliteErrorCode boxlite_options_add_port_spec(CBoxliteOptions *opts,
+                                                    const struct BoxlitePortSpec *spec,
+                                                    CBoxliteError *out_error);
 
 void boxlite_options_set_network_enabled(CBoxliteOptions *opts);
 

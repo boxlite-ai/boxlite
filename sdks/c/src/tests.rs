@@ -2,6 +2,7 @@ use crate::error::error_to_c_error;
 use crate::*;
 use boxlite::BoxliteError;
 use boxlite::runtime::BoxliteRuntime;
+use boxlite::runtime::options::PortProtocol;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_void;
 use std::path::PathBuf;
@@ -239,6 +240,114 @@ fn test_runtime_images_unsupported_on_rest_runtime() {
 
     unsafe {
         boxlite_error_free(&mut error as *mut _);
+    }
+}
+
+#[test]
+fn test_options_add_port_uses_host_guest_order() {
+    let image = CString::new("alpine:latest").expect("image cstring");
+    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
+    let mut error = FFIError::default();
+
+    let code =
+        unsafe { boxlite_options_new(image.as_ptr(), &mut opts as *mut _, &mut error as *mut _) };
+    assert_eq!(code, BoxliteErrorCode::Ok);
+    assert!(!opts.is_null());
+
+    unsafe {
+        boxlite_options_add_port(opts, 8080, 3000);
+        let ports = &(*opts).options.ports;
+        assert_eq!(ports.len(), 1);
+        let port = &ports[0];
+        assert_eq!(port.host_port, Some(8080));
+        assert_eq!(port.guest_port, 3000);
+        assert!(matches!(port.protocol, PortProtocol::Tcp));
+        assert_eq!(port.host_ip, None);
+        boxlite_options_free(opts);
+    }
+}
+
+#[test]
+fn test_options_add_port_spec_exposes_protocol_and_host_ip() {
+    let image = CString::new("alpine:latest").expect("image cstring");
+    let host_ip = CString::new("127.0.0.1").expect("host ip cstring");
+    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
+    let mut error = FFIError::default();
+
+    let code =
+        unsafe { boxlite_options_new(image.as_ptr(), &mut opts as *mut _, &mut error as *mut _) };
+    assert_eq!(code, BoxliteErrorCode::Ok);
+    assert!(!opts.is_null());
+
+    let spec = BoxlitePortSpec {
+        host_port: 5353,
+        guest_port: 53,
+        protocol: BoxlitePortProtocol::BoxlitePortProtocolUdp,
+        host_ip: host_ip.as_ptr(),
+    };
+
+    let code = unsafe {
+        boxlite_options_add_port_spec(opts, &spec as *const _, &mut error as *mut _)
+    };
+    assert_eq!(code, BoxliteErrorCode::Ok);
+
+    unsafe {
+        let ports = &(*opts).options.ports;
+        assert_eq!(ports.len(), 1);
+        let port = &ports[0];
+        assert_eq!(port.host_port, Some(5353));
+        assert_eq!(port.guest_port, 53);
+        assert!(matches!(port.protocol, PortProtocol::Udp));
+        assert_eq!(port.host_ip.as_deref(), Some("127.0.0.1"));
+        boxlite_options_free(opts);
+    }
+}
+
+#[test]
+fn test_options_add_port_spec_rejects_invalid_values() {
+    let image = CString::new("alpine:latest").expect("image cstring");
+    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
+    let mut error = FFIError::default();
+
+    let code =
+        unsafe { boxlite_options_new(image.as_ptr(), &mut opts as *mut _, &mut error as *mut _) };
+    assert_eq!(code, BoxliteErrorCode::Ok);
+    assert!(!opts.is_null());
+
+    let cases = [
+        BoxlitePortSpec {
+            host_port: 8080,
+            guest_port: 0,
+            protocol: BoxlitePortProtocol::BoxlitePortProtocolTcp,
+            host_ip: ptr::null(),
+        },
+        BoxlitePortSpec {
+            host_port: 65536,
+            guest_port: 80,
+            protocol: BoxlitePortProtocol::BoxlitePortProtocolTcp,
+            host_ip: ptr::null(),
+        },
+        BoxlitePortSpec {
+            host_port: 8080,
+            guest_port: 80,
+            protocol: BoxlitePortProtocol::BoxlitePortProtocolUnknown,
+            host_ip: ptr::null(),
+        },
+    ];
+
+    for spec in cases {
+        let code = unsafe {
+            boxlite_options_add_port_spec(opts, &spec as *const _, &mut error as *mut _)
+        };
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        unsafe { boxlite_error_free(&mut error as *mut _) };
+    }
+
+    unsafe {
+        let ports = &(*opts).options.ports;
+        assert!(ports.is_empty());
+        boxlite_options_free(opts);
     }
 }
 

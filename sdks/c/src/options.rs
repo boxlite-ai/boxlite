@@ -1,5 +1,6 @@
 use std::os::raw::{c_char, c_int};
 
+use boxlite::BoxliteError;
 use boxlite::runtime::options::{
     BoxOptions, NetworkSpec, PortProtocol, PortSpec, RootfsSpec, Secret, VolumeSpec,
 };
@@ -11,6 +12,23 @@ use crate::{CBoxliteError, CBoxliteOptions};
 pub struct OptionsHandle {
     pub options: BoxOptions,
     pub name: Option<String>,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BoxlitePortProtocol {
+    BoxlitePortProtocolUnknown = 0,
+    BoxlitePortProtocolTcp = 1,
+    BoxlitePortProtocolUdp = 2,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BoxlitePortSpec {
+    pub host_port: c_int,
+    pub guest_port: c_int,
+    pub protocol: BoxlitePortProtocol,
+    pub host_ip: *const c_char,
 }
 
 #[unsafe(no_mangle)]
@@ -83,10 +101,19 @@ pub unsafe extern "C" fn boxlite_options_add_volume(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_add_port(
     opts: *mut CBoxliteOptions,
-    guest_port: c_int,
     host_port: c_int,
+    guest_port: c_int,
 ) {
-    options_add_port(opts, guest_port, host_port)
+    options_add_port(opts, host_port, guest_port)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_add_port_spec(
+    opts: *mut CBoxliteOptions,
+    spec: *const BoxlitePortSpec,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    options_add_port_spec(opts, spec, out_error)
 }
 
 #[unsafe(no_mangle)]
@@ -272,22 +299,93 @@ pub unsafe fn options_add_volume(
     }
 }
 
-pub unsafe fn options_add_port(handle: *mut OptionsHandle, guest_port: c_int, host_port: c_int) {
+pub unsafe fn options_add_port(handle: *mut OptionsHandle, host_port: c_int, guest_port: c_int) {
     unsafe {
         if handle.is_null() {
             return;
         }
-        (*handle).options.ports.push(PortSpec {
-            guest_port: guest_port as u16,
-            host_port: if host_port > 0 {
-                Some(host_port as u16)
-            } else {
-                None
-            },
-            protocol: PortProtocol::Tcp,
-            host_ip: None,
-        });
+        let spec = BoxlitePortSpec {
+            host_port,
+            guest_port,
+            protocol: BoxlitePortProtocol::BoxlitePortProtocolTcp,
+            host_ip: std::ptr::null(),
+        };
+        if let Ok(port) = parse_port_spec(&spec) {
+            (*handle).options.ports.push(port);
+        }
     }
+}
+
+pub unsafe fn options_add_port_spec(
+    handle: *mut OptionsHandle,
+    spec: *const BoxlitePortSpec,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if handle.is_null() {
+            write_error(out_error, null_pointer_error("opts"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        if spec.is_null() {
+            write_error(out_error, null_pointer_error("spec"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+
+        match parse_port_spec(&*spec) {
+            Ok(port) => {
+                (*handle).options.ports.push(port);
+                BoxliteErrorCode::Ok
+            }
+            Err(err) => {
+                write_error(out_error, err);
+                BoxliteErrorCode::InvalidArgument
+            }
+        }
+    }
+}
+
+fn parse_port_spec(spec: &BoxlitePortSpec) -> Result<PortSpec, BoxliteError> {
+    if spec.guest_port < 1 || spec.guest_port > 65535 {
+        return Err(BoxliteError::InvalidArgument(format!(
+            "guest_port must be in range 1-65535, got {}",
+            spec.guest_port
+        )));
+    }
+    if spec.host_port < 0 || spec.host_port > 65535 {
+        return Err(BoxliteError::InvalidArgument(format!(
+            "host_port must be in range 0-65535, got {}",
+            spec.host_port
+        )));
+    }
+
+    let protocol = match spec.protocol {
+        BoxlitePortProtocol::BoxlitePortProtocolTcp => PortProtocol::Tcp,
+        BoxlitePortProtocol::BoxlitePortProtocolUdp => PortProtocol::Udp,
+        BoxlitePortProtocol::BoxlitePortProtocolUnknown => {
+            return Err(BoxliteError::InvalidArgument(
+                "port protocol must be TCP or UDP".to_string(),
+            ));
+        }
+    };
+
+    let host_ip = if spec.host_ip.is_null() {
+        None
+    } else {
+        let value = unsafe { c_str_to_string(spec.host_ip) }
+            .map_err(|e| BoxliteError::InvalidArgument(format!("invalid host_ip: {e}")))?;
+        if value.is_empty() { None } else { Some(value) }
+    };
+
+    Ok(PortSpec {
+        host_port: if spec.host_port > 0 {
+            Some(spec.host_port as u16)
+        } else {
+            None
+        },
+        guest_port: spec.guest_port as u16,
+        protocol,
+        host_ip,
+    })
 }
 
 pub unsafe fn options_set_network_enabled(handle: *mut OptionsHandle) {
