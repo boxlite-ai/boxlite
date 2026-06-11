@@ -5,20 +5,47 @@
 import { BoxLite } from '../BoxLite'
 import { BoxliteError } from '../errors/BoxliteError'
 
-// The API removed image- and template-based box creation; create() must fail
-// loudly on those params instead of silently dropping them. Both guards throw
-// before any network call, so a dummy config is safe here.
-describe('BoxLite.create removed-parameter guards', () => {
-  const boxlite = new BoxLite({ apiKey: 'test-key', apiUrl: 'http://127.0.0.1:1', target: 'test' })
+const createStartedBoxDto = () => ({
+  id: 'box-uuid',
+  boxId: 'box_public',
+  name: 'box-name',
+  organizationId: 'org-uuid',
+  user: 'boxlite',
+  env: {},
+  labels: {},
+  public: false,
+  target: 'test',
+  cpu: 2,
+  gpu: 0,
+  memory: 4,
+  disk: 10,
+  state: 'started',
+  recoverable: false,
+  networkBlockAll: false,
+  toolboxProxyUrl: 'http://127.0.0.1:9999',
+})
 
-  it('rejects image-based creation', async () => {
-    await expect(boxlite.create({ image: 'debian:12.9' })).rejects.toThrow(BoxliteError)
-    await expect(boxlite.create({ image: 'debian:12.9' })).rejects.toThrow(
-      'Image-based box creation is no longer supported',
-    )
+describe('BoxLite.create image and template guards', () => {
+  it('passes curated image keys to the API', async () => {
+    const boxlite = new BoxLite({ apiKey: 'test-key', apiUrl: 'http://127.0.0.1:1', target: 'test' })
+    const createBox = jest.fn().mockResolvedValue({ data: createStartedBoxDto() })
+    ;(boxlite as unknown as { boxApi: { createBox: typeof createBox } }).boxApi.createBox = createBox
+
+    await boxlite.create({ image: 'base' })
+
+    expect(createBox).toHaveBeenCalledWith(expect.objectContaining({ image: 'base' }), undefined, expect.any(Object))
+  })
+
+  it('rejects declarative Image object creation', async () => {
+    const boxlite = new BoxLite({ apiKey: 'test-key', apiUrl: 'http://127.0.0.1:1', target: 'test' })
+
+    await expect(boxlite.create({ image: {} } as any)).rejects.toThrow(BoxliteError)
+    await expect(boxlite.create({ image: {} } as any)).rejects.toThrow('Declarative Image objects are no longer supported')
   })
 
   it('rejects templateId-based creation', async () => {
+    const boxlite = new BoxLite({ apiKey: 'test-key', apiUrl: 'http://127.0.0.1:1', target: 'test' })
+
     await expect(boxlite.create({ templateId: 'my-template' })).rejects.toThrow(BoxliteError)
     await expect(boxlite.create({ templateId: 'my-template' })).rejects.toThrow('Box templates were removed')
   })

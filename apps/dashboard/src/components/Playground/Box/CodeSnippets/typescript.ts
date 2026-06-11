@@ -10,11 +10,7 @@ import { getLanguageCodeToRun } from '@/lib/playground'
 export const TypeScriptSnippetGenerator: CodeSnippetGenerator = {
   getImports(p) {
     return (
-      [
-        'import { BoxLite as BoxLite',
-        p.actions.useConfigObject ? 'BoxliteConfig as BoxLiteConfig' : '',
-        p.config.createBoxFromImage ? 'Image' : '',
-      ]
+      ['import { BoxLite as BoxLite', p.actions.useConfigObject ? 'BoxliteConfig as BoxLiteConfig' : '']
         .filter(Boolean)
         .join(', ') + " } from '@boxlite-ai/sdk'\n"
     )
@@ -59,7 +55,7 @@ export const TypeScriptSnippetGenerator: CodeSnippetGenerator = {
     const ind = '\t\t\t'
     return [
       `{`,
-      p.config.createBoxFromImage ? `${ind}image: Image.debianSlim("3.13"),` : '',
+      p.config.createBoxFromImage ? `${ind}image: 'base',` : '',
       this.getResources(p),
       p.config.useLanguageParam ? `${ind}language: '${p.state['language']}',` : '',
       ...(p.config.createBoxParamsExist
