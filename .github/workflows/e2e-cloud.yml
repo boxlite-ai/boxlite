@@ -81,42 +81,57 @@ jobs:
     name: Detect relevant changes
     runs-on: ubuntu-latest
     outputs:
-      relevant: ${{ steps.filter.outputs.relevant }}
+      # Each downstream job/step gates on the narrow component that
+      # would actually be invalidated by its source paths, instead of
+      # one giant `relevant` flag — saves the ~11 min libboxlite +
+      # runner build chain when a PR only touches API or SDK code.
+      api: ${{ steps.filter.outputs.api }}
+      runner_chain: ${{ steps.filter.outputs.runner_chain }}
+      sdk_py: ${{ steps.filter.outputs.sdk_py }}
+      tests_or_workflow: ${{ steps.filter.outputs.tests_or_workflow }}
+      any: ${{ steps.filter.outputs.api == 'true' || steps.filter.outputs.runner_chain == 'true' || steps.filter.outputs.sdk_py == 'true' || steps.filter.outputs.tests_or_workflow == 'true' }}
     steps:
       - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v3
         id: filter
         with:
-          # Anything that ultimately bakes into the API container, the
-          # runner binary, or the Python SDK exercised by pytest. The
-          # filter is intentionally loose — over-firing burns CI time
-          # but never misses a real regression.
           filters: |
-            relevant:
-              # API container
+            # API container — apps/api Dockerfile.source bakes from these.
+            api:
               - 'apps/api/**'
               - 'apps/dashboard/**'
               - 'apps/libs/**'
-              # Runner binary build chain
+            # Runner binary build chain. libboxlite.a (Rust src/**) is
+            # statically linked into the runner via CGo, so any Rust src
+            # change OR any Go runner-side change invalidates the runner
+            # binary. Touching scripts/build/** also invalidates the
+            # libboxlite build chain output.
+            runner_chain:
               - 'apps/runner/**'
               - 'apps/daemon/**'
               - 'apps/common-go/**'
               - 'apps/api-client-go/**'
+              - 'apps/libs/computer-use/**'
               - 'sdks/go/**'
-              # libboxlite.a → linked into runner via CGo
               - 'src/boxlite/**'
               - 'src/api-client/**'
               - 'src/shared/**'
               - 'src/deps/**'
-              # Python SDK consumed by pytest
-              - 'sdks/python/**'
-              - 'sdks/c/src/exec/**'
-              # CI machinery + tests + IAM
-              - 'scripts/test/e2e/**'
-              - 'scripts/ci/setup-e2e-cloud-oidc.sh'
               - 'scripts/build/**'
+              - 'sdks/c/src/exec/**'
+            # Python SDK. PyO3 wheel pulls libboxlite.a sources too via
+            # boxlite-c crate, so Rust src changes also invalidate the
+            # SDK. (No separate "sdk needs libboxlite rebuild" output —
+            # build_c_sdk gates on either runner_chain or sdk_py.)
+            sdk_py:
+              - 'sdks/python/**'
+            # Test code + workflow self-modifications. Doesn't trigger
+            # any rebuild — just runs the existing deployed stack.
+            tests_or_workflow:
+              - 'scripts/test/e2e/**'
               - '.github/workflows/e2e-cloud.yml'
               - '.github/workflows/build-runner-binary.yml'
+              - '.github/workflows/build-c.yml'
 
   # Build libboxlite.a from THIS PR's Rust source using the existing
   # build-c.yml workflow (manylinux container, libseccomp.a cross-build,
@@ -124,10 +139,17 @@ jobs:
   # constrains the matrix to just linux-x64-gnu (skip macos-15 +
   # ubuntu-24.04-arm matrix entries; Tokyo runner is amd64).
   # Uploads artifact c-sdk-linux-x64-gnu consumed by build_runner.
+  #
+  # Fires only when libboxlite source OR runner Go OR Python SDK
+  # changed — pure API / dashboard / test-code PRs skip the ~9 min
+  # libboxlite compile entirely.
   build_c_sdk:
     name: Build C SDK (from PR source, linux-x64-gnu only)
     needs: changes
-    if: needs.changes.outputs.relevant == 'true' || github.event_name == 'workflow_dispatch'
+    if: |
+      needs.changes.outputs.runner_chain == 'true'
+      || needs.changes.outputs.sdk_py == 'true'
+      || github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/build-c.yml
     with:
       target_filter: linux-x64-gnu
@@ -140,10 +162,15 @@ jobs:
   # above (instead of pulling the release tarball). The e2e job
   # downloads the produced runner-linux-amd64 artifact and SSM-deploys
   # it to the Tokyo runner EC2.
+  #
+  # Fires only when runner_chain changed. Pure API/SDK/test PRs skip
+  # the ~2 min Go build + the EC2 self-update step downstream.
   build_runner:
     name: Build runner binary (from PR source)
     needs: [changes, build_c_sdk]
-    if: needs.changes.outputs.relevant == 'true' || github.event_name == 'workflow_dispatch'
+    if: |
+      needs.changes.outputs.runner_chain == 'true'
+      || github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/build-runner-binary.yml
     with:
       libboxlite_source: build
@@ -157,10 +184,14 @@ jobs:
 
   e2e:
     name: E2E suite (Tokyo)
-    needs: [changes, build_runner]
-    # Skip on PRs that don't touch relevant paths. workflow_dispatch
-    # always runs (operator explicitly asked for it).
-    if: needs.changes.outputs.relevant == 'true' || github.event_name == 'workflow_dispatch'
+    needs: [changes, build_c_sdk, build_runner]
+    # Default GHA semantics: a job whose `needs:` is SKIPPED also gets
+    # skipped. Override via !failure() && !cancelled() — runs as long
+    # as nothing in the upstream chain actively failed (skipped is OK,
+    # which is exactly what happens on pure API / test PRs).
+    if: |
+      !failure() && !cancelled()
+      && (needs.changes.outputs.any == 'true' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -263,6 +294,9 @@ jobs:
 
       - name: Build & push Api image (source mode via tsx, no webpack)
         id: build_api
+        if: |
+          needs.changes.outputs.api == 'true'
+          || github.event_name == 'workflow_dispatch'
         run: |
           set -euo pipefail
           REGISTRY="${{ steps.ecr_login.outputs.registry }}"
@@ -285,6 +319,9 @@ jobs:
       # to download + hot-swap the systemd binary.
       # ──────────────────────────────────────────────────────────────────
       - name: Download runner binary artifact
+        if: |
+          needs.changes.outputs.runner_chain == 'true'
+          || github.event_name == 'workflow_dispatch'
         uses: actions/download-artifact@v4
         with:
           name: runner-linux-amd64
@@ -308,6 +345,9 @@ jobs:
       # `${stack_prefix}-storagebucket-*/builds/*`).
       # ──────────────────────────────────────────────────────────────────
       - name: Upload runner binary to S3 + wait for runner self-update
+        if: |
+          needs.changes.outputs.runner_chain == 'true'
+          || github.event_name == 'workflow_dispatch'
         run: |
           set -euo pipefail
           S3_BUCKET="${{ steps.resources.outputs.s3_bucket }}"
@@ -372,6 +412,9 @@ jobs:
       # run can race a 503 from the LB.
       # ──────────────────────────────────────────────────────────────────
       - name: Deploy Api (rolling)
+        if: |
+          needs.changes.outputs.api == 'true'
+          || github.event_name == 'workflow_dispatch'
         run: |
           set -euo pipefail
           CLUSTER="${{ steps.resources.outputs.cluster }}"
