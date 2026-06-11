@@ -5,16 +5,13 @@
  */
 
 import { BoxState } from '@boxlite-ai/api-client'
-import { CheckCircle, Circle, AlertTriangle, Timer, Archive } from 'lucide-react'
+import { CheckCircle, Circle, AlertTriangle, Timer } from 'lucide-react'
 import { FacetedFilterOption } from './types'
 
 const STATE_LABEL_MAPPING: Record<BoxState, string> = {
-  [BoxState.STARTED]: 'Started',
+  [BoxState.STARTED]: 'Running',
   [BoxState.STOPPED]: 'Stopped',
   [BoxState.ERROR]: 'Error',
-  [BoxState.BUILD_FAILED]: 'Build Failed',
-  [BoxState.BUILDING_SNAPSHOT]: 'Building Snapshot',
-  [BoxState.PENDING_BUILD]: 'Pending Build',
   [BoxState.RESTORING]: 'Restoring',
   [BoxState.ARCHIVED]: 'Archived',
   [BoxState.CREATING]: 'Creating',
@@ -22,8 +19,8 @@ const STATE_LABEL_MAPPING: Record<BoxState, string> = {
   [BoxState.STOPPING]: 'Stopping',
   [BoxState.DESTROYING]: 'Deleting',
   [BoxState.DESTROYED]: 'Deleted',
-  [BoxState.PULLING_SNAPSHOT]: 'Pulling Snapshot',
   [BoxState.UNKNOWN]: 'Unknown',
+  [BoxState.UNKNOWN_DEFAULT_OPEN_API]: 'Unknown',
   [BoxState.ARCHIVING]: 'Archiving',
   [BoxState.RESIZING]: 'Resizing',
 }
@@ -36,12 +33,9 @@ export const STATUSES: FacetedFilterOption[] = [
   },
   { label: getStateLabel(BoxState.STOPPED), value: BoxState.STOPPED, icon: Circle },
   { label: getStateLabel(BoxState.ERROR), value: BoxState.ERROR, icon: AlertTriangle },
-  { label: getStateLabel(BoxState.BUILD_FAILED), value: BoxState.BUILD_FAILED, icon: AlertTriangle },
   { label: getStateLabel(BoxState.STARTING), value: BoxState.STARTING, icon: Timer },
   { label: getStateLabel(BoxState.STOPPING), value: BoxState.STOPPING, icon: Timer },
   { label: getStateLabel(BoxState.DESTROYING), value: BoxState.DESTROYING, icon: Timer },
-  { label: getStateLabel(BoxState.ARCHIVED), value: BoxState.ARCHIVED, icon: Archive },
-  { label: getStateLabel(BoxState.ARCHIVING), value: BoxState.ARCHIVING, icon: Timer },
 ]
 
 export function getStateLabel(state?: BoxState): string {

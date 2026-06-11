@@ -83,11 +83,8 @@ export function useBoxWsSync({ boxId, refetchOnCreate = false }: UseBoxWsSyncOpt
 
       let updatedState = data.newState
 
-      // error/build_failed with desiredState=DESTROYED should display as destroyed
-      if (
-        data.box.desiredState === BoxDesiredState.DESTROYED &&
-        (data.newState === BoxState.ERROR || data.newState === BoxState.BUILD_FAILED)
-      ) {
+      // error with desiredState=DESTROYED should display as destroyed
+      if (data.box.desiredState === BoxDesiredState.DESTROYED && data.newState === BoxState.ERROR) {
         updatedState = BoxState.DESTROYED
       }
 
@@ -103,7 +100,7 @@ export function useBoxWsSync({ boxId, refetchOnCreate = false }: UseBoxWsSyncOpt
       if (boxId && data.box.id !== boxId) return
 
       if (data.newDesiredState !== BoxDesiredState.DESTROYED) return
-      if (data.box.state !== BoxState.ERROR && data.box.state !== BoxState.BUILD_FAILED) return
+      if (data.box.state !== BoxState.ERROR) return
 
       optimisticUpdate(data.box.id, BoxState.DESTROYED)
       invalidate()

@@ -3,13 +3,11 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
-import { Field, FieldDescription, FieldError, FieldLabel } from '@/components/ui/field'
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
+import { Field, FieldError, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   Sheet,
   SheetContent,
@@ -20,154 +18,113 @@ import {
   SheetTrigger,
 } from '@/components/ui/sheet'
 import { Spinner } from '@/components/ui/spinner'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { FeatureFlags } from '@/enums/FeatureFlags'
 import { RoutePath } from '@/enums/RoutePath'
 import { useCreateBoxMutation } from '@/hooks/mutations/useCreateBoxMutation'
-import { useSnapshotsQuery } from '@/hooks/queries/useSnapshotsQuery'
-import { useConfig } from '@/hooks/useConfig'
-import { useIsCompactScreen } from '@/hooks/use-mobile'
-import { useRegions } from '@/hooks/useRegions'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { parseEnvFile } from '@/lib/env'
 import { handleApiError } from '@/lib/error-handling'
-import { imageNameSchema } from '@/lib/schema'
-import { cn, getRegionFullDisplayName } from '@/lib/utils'
-import { Box } from '@boxlite-ai/sdk'
+import { getBoxRouteId } from '@/lib/box-identity'
+import { cn } from '@/lib/utils'
+import type { Box } from '@boxlite-ai/api-client'
 import { useForm } from '@tanstack/react-form'
-import { Info, Minus, Plus, Upload } from 'lucide-react'
-import { useFeatureFlagEnabled } from 'posthog-js/react'
-import { ComponentProps, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Cpu, HardDrive, MemoryStick, Plus, type LucideIcon } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { NumericFormat } from 'react-number-format'
 import { createSearchParams, generatePath, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { z } from 'zod'
-import { Tooltip } from '../Tooltip'
 import { ScrollArea } from '../ui/scroll-area'
 
 const NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
+const MAX_INTERVAL_MINUTES = 2_147_483_647
 
-const NONE_VALUE = '__none__'
+const isOptionalIntegerInRange = (value: string | undefined, min: number) => {
+  const trimmedValue = value?.trim()
+  if (!trimmedValue) return true
+  if (!/^-?\d+$/.test(trimmedValue)) return false
 
-enum Source {
-  SNAPSHOT = 'snapshot',
-  IMAGE = 'image',
+  const numericValue = Number(trimmedValue)
+  return Number.isSafeInteger(numericValue) && numericValue >= min && numericValue <= MAX_INTERVAL_MINUTES
 }
 
-const keyValuePairSchema = z.object({
-  key: z.string(),
-  value: z.string(),
+const isOptionalPositiveInteger = (value: string | undefined) => {
+  const trimmedValue = value?.trim()
+  if (!trimmedValue) return true
+  if (!/^\d+$/.test(trimmedValue)) return false
+
+  const numericValue = Number(trimmedValue)
+  return Number.isSafeInteger(numericValue) && numericValue >= 1
+}
+
+const parseOptionalInteger = (value: string | undefined) => {
+  const trimmedValue = value?.trim()
+  return trimmedValue ? Number(trimmedValue) : undefined
+}
+
+const formSchema = z.object({
+  name: z
+    .string()
+    .optional()
+    .refine((val) => !val || NAME_REGEX.test(val), 'Only letters, digits, dots, underscores and dashes are allowed'),
+  autoStopInterval: z
+    .string()
+    .optional()
+    .refine((val) => isOptionalIntegerInRange(val, 0), 'Enter a whole number of minutes, 0 or greater'),
+  autoDeleteInterval: z
+    .string()
+    .optional()
+    .refine((val) => isOptionalIntegerInRange(val, -1), 'Enter a whole number of minutes, -1 or greater'),
+  cpu: z.string().optional().refine(isOptionalPositiveInteger, 'Enter a whole number, 1 or greater'),
+  memory: z.string().optional().refine(isOptionalPositiveInteger, 'Enter a whole number, 1 or greater'),
+  disk: z.string().optional().refine(isOptionalPositiveInteger, 'Enter a whole number, 1 or greater'),
 })
 
-const noDuplicateKeys = (pairs: { key: string; value: string }[] | undefined) => {
-  if (!pairs) return true
-  const keys = pairs.filter((p) => p.key).map((p) => p.key)
-  return new Set(keys).size === keys.length
-}
-
-const resourceSchema = (name: string, max: number | undefined) =>
-  z
-    .number()
-    .optional()
-    .refine(
-      (val) => val === undefined || (val >= 1 && (!max || val <= max)),
-      max ? `${name} must be between 1 and ${max}` : `${name} must be at least 1`,
-    )
-
-const buildBaseFormSchema = (maxCpu?: number, maxMemory?: number, maxDisk?: number) =>
-  z.object({
-    name: z
-      .string()
-      .optional()
-      .refine((val) => !val || NAME_REGEX.test(val), 'Only letters, digits, dots, underscores and dashes are allowed'),
-    regionId: z.string().optional(),
-    cpu: resourceSchema('CPU', maxCpu),
-    memory: resourceSchema('Memory', maxMemory),
-    disk: resourceSchema('Storage', maxDisk),
-    autoStopInterval: z.number().min(0).optional(),
-    autoArchiveInterval: z.number().min(0).optional(),
-    autoDeleteInterval: z
-      .number()
-      .refine((val) => val === -1 || val >= 0, 'Must be -1 (disabled) or a non-negative number')
-      .optional(),
-    envVars: z.array(keyValuePairSchema).optional().refine(noDuplicateKeys, 'Duplicate keys are not allowed'),
-    labels: z.array(keyValuePairSchema).optional().refine(noDuplicateKeys, 'Duplicate keys are not allowed'),
-    public: z.boolean().optional(),
-    networkBlockAll: z.boolean().optional(),
-    ephemeral: z.boolean().optional(),
-  })
-
-const buildFormSchema = (maxCpu?: number, maxMemory?: number, maxDisk?: number) => {
-  const base = buildBaseFormSchema(maxCpu, maxMemory, maxDisk)
-  return z.discriminatedUnion('source', [
-    base.extend({
-      source: z.literal(Source.SNAPSHOT),
-      snapshot: z.string().optional(),
-      image: z.string().optional(),
-    }),
-    base.extend({
-      source: z.literal(Source.IMAGE),
-      snapshot: z.string().optional(),
-      image: imageNameSchema,
-    }),
-  ])
-}
-
-type FormValues = z.input<ReturnType<typeof buildBaseFormSchema>> & {
-  source: Source
-  snapshot?: string
-  image?: string
-}
+type FormValues = z.input<typeof formSchema>
 
 const defaultValues: FormValues = {
   name: '',
-  source: Source.SNAPSHOT,
-  snapshot: undefined,
-  image: '',
-  regionId: undefined,
-  cpu: undefined,
-  memory: undefined,
-  disk: undefined,
-  autoStopInterval: undefined,
-  autoArchiveInterval: undefined,
-  autoDeleteInterval: undefined,
-  envVars: [],
-  labels: [],
-  public: false,
-  networkBlockAll: false,
-  ephemeral: false,
+  autoStopInterval: '',
+  autoDeleteInterval: '',
+  cpu: '',
+  memory: '',
+  disk: '',
 }
 
-const InfoTooltipButton = ({ className, ...props }: ComponentProps<'button'>) => {
-  return (
-    <button className={cn('rounded-full', className)} {...props}>
-      <Info className="size-3 text-muted-foreground" />
-    </button>
-  )
-}
+type ResourceFieldName = 'cpu' | 'memory' | 'disk'
 
-export const CreateBoxSheet = ({ className, triggerClassName }: { className?: string; triggerClassName?: string }) => {
+const RESOURCE_FIELDS: Array<{
+  name: ResourceFieldName
+  label: string
+  unit: string
+  Icon: LucideIcon
+}> = [
+  { name: 'cpu', label: 'CPU', unit: 'vCPU', Icon: Cpu },
+  { name: 'memory', label: 'Memory', unit: 'GiB', Icon: MemoryStick },
+  { name: 'disk', label: 'Disk', unit: 'GiB', Icon: HardDrive },
+]
+
+export const CreateBoxSheet = ({
+  className,
+  triggerClassName,
+  open: controlledOpen,
+  onOpenChange,
+  onCreated,
+}: {
+  className?: string
+  triggerClassName?: string
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+  onCreated?: (box: Box) => void
+}) => {
   const navigate = useNavigate()
-  const isCompactScreen = useIsCompactScreen()
-  const createBoxEnabled = useFeatureFlagEnabled(FeatureFlags.DASHBOARD_CREATE_BOX)
-  const [open, setOpen] = useState(false)
+  const [internalOpen, setInternalOpen] = useState(false)
+  const [advancedOptionsOpen, setAdvancedOptionsOpen] = useState(false)
+  const [focusedAdvancedField, setFocusedAdvancedField] = useState<string | null>(null)
+  const open = controlledOpen ?? internalOpen
+  const setOpen = onOpenChange ?? setInternalOpen
 
-  const config = useConfig()
-  const { availableRegions: regions, loadingAvailableRegions: loadingRegions } = useRegions()
   const { selectedOrganization } = useSelectedOrganization()
   const { reset: resetCreateBoxMutation, ...createBoxMutation } = useCreateBoxMutation()
   const formRef = useRef<HTMLFormElement>(null)
-
-  const maxCpu = selectedOrganization?.maxCpuPerBox
-  const maxMemory = selectedOrganization?.maxMemoryPerBox
-  const maxDisk = selectedOrganization?.maxDiskPerBox
-
-  const formSchema = useMemo(() => buildFormSchema(maxCpu, maxMemory, maxDisk), [maxCpu, maxMemory, maxDisk])
-
-  const { data: snapshotsData, isLoading: snapshotsLoading } = useSnapshotsQuery({
-    page: 1,
-    pageSize: 100,
-  })
 
   const form = useForm({
     defaultValues,
@@ -189,56 +146,35 @@ export const CreateBoxSheet = ({ className, triggerClassName }: { className?: st
         return
       }
 
-      const envVars: Record<string, string> = {}
-      value.envVars?.forEach(({ key, value: val }) => {
-        if (key) envVars[key] = val
-      })
-
-      const labels: Record<string, string> = {}
-      value.labels?.forEach(({ key, value: val }) => {
-        if (key) labels[key] = val
-      })
-
-      const isImage = value.source === Source.IMAGE
-
-      const baseParams = {
-        name: value.name?.trim() || undefined,
-        target: value.regionId || undefined,
-        autoStopInterval: value.autoStopInterval,
-        autoArchiveInterval: value.autoArchiveInterval,
-        autoDeleteInterval: value.autoDeleteInterval,
-        ephemeral: value.ephemeral || undefined,
-        envVars: Object.keys(envVars).length > 0 ? envVars : undefined,
-        labels: Object.keys(labels).length > 0 ? labels : undefined,
-        public: value.public || undefined,
-        networkBlockAll: value.networkBlockAll || undefined,
-      }
-
-      let box: Box | undefined = undefined
+      let boxId: string | undefined = undefined
       try {
-        if (isImage && value.image) {
-          box = await createBoxMutation.mutateAsync({
-            ...baseParams,
-            image: value.image,
-            resources:
-              value.cpu || value.memory || value.disk
-                ? { cpu: value.cpu, memory: value.memory, disk: value.disk }
-                : undefined,
-          })
-        } else {
-          box = await createBoxMutation.mutateAsync({
-            ...baseParams,
-            snapshot: value.snapshot || undefined,
-          })
+        const resources = {
+          cpu: parseOptionalInteger(value.cpu),
+          memory: parseOptionalInteger(value.memory),
+          disk: parseOptionalInteger(value.disk),
         }
+        const hasResourceOverrides = Object.values(resources).some((resource) => resource !== undefined)
 
-        toast.success(`Box created`)
+        // TODO(image-rewrite): the image/template picker was removed with the image/template
+        // subsystem; box creation no longer selects an image. Rebuild image selection here once
+        // the new model lands.
+        const box = await createBoxMutation.mutateAsync({
+          name: value.name?.trim() || undefined,
+          public: false,
+          networkBlockAll: false,
+          autoStopInterval: parseOptionalInteger(value.autoStopInterval),
+          autoDeleteInterval: parseOptionalInteger(value.autoDeleteInterval),
+          ...(hasResourceOverrides ? { resources } : {}),
+        })
+        boxId = getBoxRouteId(box)
+        onCreated?.(box)
 
+        toast.success('Box created')
         setOpen(false)
 
-        if (box?.id) {
+        if (boxId) {
           navigate({
-            pathname: generatePath(RoutePath.BOX_DETAILS, { boxId: box.id }),
+            pathname: generatePath(RoutePath.BOX_DETAILS, { boxId }),
             search: `${createSearchParams({
               tab: 'terminal',
             })}`,
@@ -250,64 +186,12 @@ export const CreateBoxSheet = ({ className, triggerClassName }: { className?: st
     },
   })
 
-  const handleSourceChange = useCallback(
-    (val: string) => {
-      form.setFieldValue('source', val as Source)
-      if (val === Source.SNAPSHOT) {
-        form.setFieldValue('image', '')
-        form.setFieldValue('cpu', undefined)
-        form.setFieldValue('memory', undefined)
-        form.setFieldValue('disk', undefined)
-      } else {
-        form.setFieldValue('snapshot', undefined)
-      }
-    },
-    [form],
-  )
-
   const resetState = useCallback(() => {
     form.reset(defaultValues)
+    setAdvancedOptionsOpen(false)
+    setFocusedAdvancedField(null)
     resetCreateBoxMutation()
   }, [resetCreateBoxMutation, form])
-
-  const handleEnvFileImport = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0]
-      if (!file) return
-
-      const reader = new FileReader()
-      reader.onload = () => {
-        const parsed = parseEnvFile(reader.result as string)
-        if (parsed.length === 0) return
-
-        const existing = form.getFieldValue('envVars') ?? []
-        const nonEmpty = existing.filter((p) => p.key || p.value)
-        form.setFieldValue('envVars', [...nonEmpty, ...parsed])
-      }
-      reader.readAsText(file)
-      e.target.value = ''
-    },
-    [form],
-  )
-
-  const handleEnvPaste = useCallback(
-    (e: React.ClipboardEvent<HTMLInputElement>, index: number) => {
-      const text = e.clipboardData.getData('text')
-      if (!text.includes('=') || !text.includes('\n')) return
-      e.preventDefault()
-      const parsed = parseEnvFile(text)
-      if (parsed.length === 0) return
-
-      const existing = form.getFieldValue('envVars') ?? []
-      const current = existing[index]
-      const isEmptyRow = !current?.key && !current?.value
-      const before = existing.slice(0, index)
-      const after = existing.slice(index + (isEmptyRow ? 1 : 0))
-
-      form.setFieldValue('envVars', [...before, ...parsed, ...after])
-    },
-    [form],
-  )
 
   useEffect(() => {
     if (open) {
@@ -315,33 +199,24 @@ export const CreateBoxSheet = ({ className, triggerClassName }: { className?: st
     }
   }, [open, resetState])
 
-  if (!createBoxEnabled) {
-    return null
-  }
-
   return (
-    <Sheet
-      open={open}
-      onOpenChange={(isOpen) => {
-        setOpen(isOpen)
-      }}
-    >
+    <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>
         <Button variant="default" size="sm" title="Create Box" className={cn('w-full sm:w-auto', triggerClassName)}>
           <Plus className="size-4" />
-          <span>{isCompactScreen ? 'Create' : 'Create Box'}</span>
+          <span>Create Box</span>
         </Button>
       </SheetTrigger>
-      <SheetContent className={`w-dvw sm:w-[500px] p-0 flex flex-col gap-0 ${className ?? ''}`}>
-        <SheetHeader className="border-b border-border p-4 px-5 items-center flex text-left flex-row">
-          <SheetTitle className="text-2xl">Create Box</SheetTitle>
+      <SheetContent className={`w-dvw sm:w-[600px] p-0 flex flex-col gap-0 ${className ?? ''}`}>
+        <SheetHeader className="border-b border-border p-5 px-6 items-center flex text-left flex-row">
+          <SheetTitle className="text-lg font-semibold leading-tight">Create Box</SheetTitle>
           <SheetDescription className="sr-only">Create a new box in your organization.</SheetDescription>
         </SheetHeader>
         <ScrollArea fade="mask" className="flex-1 min-h-0">
           <form
             ref={formRef}
             id="create-box-form"
-            className="gap-6 flex flex-col p-5"
+            className="gap-5 flex flex-col p-5 sm:p-6"
             onSubmit={(e) => {
               e.preventDefault()
               e.stopPropagation()
@@ -353,7 +228,9 @@ export const CreateBoxSheet = ({ className, triggerClassName }: { className?: st
                 const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid
                 return (
                   <Field data-invalid={isInvalid}>
-                    <FieldLabel htmlFor={field.name}>Name</FieldLabel>
+                    <FieldLabel htmlFor={field.name} className="text-sm font-semibold">
+                      Name
+                    </FieldLabel>
                     <Input
                       aria-invalid={isInvalid}
                       id={field.name}
@@ -363,10 +240,6 @@ export const CreateBoxSheet = ({ className, triggerClassName }: { className?: st
                       onChange={(e) => field.handleChange(e.target.value)}
                       placeholder="my-box"
                     />
-                    <FieldDescription>
-                      Optional. If not provided, the box ID will be used as the name. Names are reusable once a box is
-                      destroyed.
-                    </FieldDescription>
                     {field.state.meta.errors.length > 0 && field.state.meta.isTouched && (
                       <FieldError errors={field.state.meta.errors} />
                     )}
@@ -375,542 +248,186 @@ export const CreateBoxSheet = ({ className, triggerClassName }: { className?: st
               }}
             </form.Field>
 
-            <form.Subscribe selector={(state) => state.values.source}>
-              {(source) => (
-                <Tabs value={source} onValueChange={handleSourceChange} className="gap-3">
-                  <div className="flex flex-col gap-2">
-                    <FieldLabel>Source</FieldLabel>
-                    <TabsList className="w-full">
-                      <TabsTrigger value={Source.SNAPSHOT} className="flex-1">
-                        Snapshot
-                      </TabsTrigger>
-                      <TabsTrigger value={Source.IMAGE} className="flex-1">
-                        Image
-                      </TabsTrigger>
-                    </TabsList>
-                  </div>
+            {/* TODO(image-rewrite): image/template picker removed with the image/template subsystem; rebuild here. */}
 
-                  <TabsContent value={Source.SNAPSHOT}>
-                    <form.Field name="snapshot">
-                      {(field) => (
-                        <Field>
-                          <FieldLabel htmlFor={field.name}>Snapshot</FieldLabel>
-                          <Select
-                            value={field.state.value || NONE_VALUE}
-                            onValueChange={(val) => field.handleChange(val === NONE_VALUE ? '' : val)}
-                          >
-                            <SelectTrigger
-                              className="h-8"
-                              id={field.name}
-                              disabled={snapshotsLoading}
-                              loading={snapshotsLoading}
-                            >
-                              <SelectValue
-                                placeholder={snapshotsLoading ? 'Loading snapshots...' : 'Select a snapshot'}
-                              />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value={NONE_VALUE}>
-                                {config.defaultSnapshot} <Badge variant="secondary">default</Badge>
-                              </SelectItem>
-                              {snapshotsData?.items?.map((snapshot) => (
-                                <SelectItem key={snapshot.id} value={snapshot.name}>
-                                  {snapshot.name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </Field>
-                      )}
-                    </form.Field>
-                  </TabsContent>
-
-                  <TabsContent value={Source.IMAGE} className="flex flex-col gap-4">
-                    <form.Field name="image">
-                      {(field) => {
-                        const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid
-                        return (
-                          <Field data-invalid={isInvalid}>
-                            <FieldLabel htmlFor={field.name}>Image</FieldLabel>
-                            <Input
-                              aria-invalid={isInvalid}
-                              id={field.name}
-                              value={field.state.value}
-                              onBlur={field.handleBlur}
-                              onChange={(e) => field.handleChange(e.target.value)}
-                              placeholder="ubuntu:22.04"
-                            />
-                            <FieldDescription>
-                              Must include either a tag (e.g., ubuntu:22.04) or a digest. The tag &quot;latest&quot; is
-                              not allowed.
-                            </FieldDescription>
-                            {field.state.meta.errors.length > 0 && field.state.meta.isTouched && (
-                              <FieldError errors={field.state.meta.errors} />
-                            )}
-                          </Field>
-                        )
-                      }}
-                    </form.Field>
-                    <div className="flex flex-col gap-2">
-                      <Label className="text-sm font-medium">Resources</Label>
-                      <div className="flex flex-col gap-2">
-                        <form.Field name="cpu">
-                          {(field) => {
-                            const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid
-                            return (
-                              <div className="flex flex-col gap-1">
-                                <div className="flex items-center gap-4">
-                                  <Label htmlFor={field.name} className="w-32 flex-shrink-0">
-                                    Compute (vCPU):
-                                  </Label>
-                                  <NumericFormat
-                                    customInput={Input}
-                                    aria-invalid={isInvalid}
-                                    id={field.name}
-                                    className="w-full"
-                                    placeholder="1"
-                                    decimalScale={0}
-                                    allowNegative={false}
-                                    isAllowed={(values) => {
-                                      if (values.floatValue === undefined) return true
-                                      return !maxCpu || values.floatValue <= maxCpu
-                                    }}
-                                    value={field.state.value ?? ''}
-                                    onBlur={field.handleBlur}
-                                    onValueChange={(values) => field.handleChange(values.floatValue ?? undefined)}
-                                  />
-                                </div>
-                                {field.state.meta.errors.length > 0 && field.state.meta.isTouched && (
-                                  <FieldError errors={field.state.meta.errors} />
-                                )}
-                              </div>
-                            )
-                          }}
-                        </form.Field>
-                        <form.Field name="memory">
-                          {(field) => {
-                            const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid
-                            return (
-                              <div className="flex flex-col gap-1">
-                                <div className="flex items-center gap-4">
-                                  <Label htmlFor={field.name} className="w-32 flex-shrink-0">
-                                    Memory (GiB):
-                                  </Label>
-                                  <NumericFormat
-                                    customInput={Input}
-                                    aria-invalid={isInvalid}
-                                    id={field.name}
-                                    className="w-full"
-                                    placeholder="1"
-                                    decimalScale={0}
-                                    allowNegative={false}
-                                    isAllowed={(values) => {
-                                      if (values.floatValue === undefined) return true
-                                      return !maxMemory || values.floatValue <= maxMemory
-                                    }}
-                                    value={field.state.value ?? ''}
-                                    onBlur={field.handleBlur}
-                                    onValueChange={(values) => field.handleChange(values.floatValue ?? undefined)}
-                                  />
-                                </div>
-                                {field.state.meta.errors.length > 0 && field.state.meta.isTouched && (
-                                  <FieldError errors={field.state.meta.errors} />
-                                )}
-                              </div>
-                            )
-                          }}
-                        </form.Field>
-                        <form.Field name="disk">
-                          {(field) => {
-                            const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid
-                            return (
-                              <div className="flex flex-col gap-1">
-                                <div className="flex items-center gap-4">
-                                  <Label htmlFor={field.name} className="w-32 flex-shrink-0">
-                                    Storage (GiB):
-                                  </Label>
-                                  <NumericFormat
-                                    customInput={Input}
-                                    aria-invalid={isInvalid}
-                                    id={field.name}
-                                    className="w-full"
-                                    placeholder="3"
-                                    decimalScale={0}
-                                    allowNegative={false}
-                                    isAllowed={(values) => {
-                                      if (values.floatValue === undefined) return true
-                                      return !maxDisk || values.floatValue <= maxDisk
-                                    }}
-                                    value={field.state.value ?? ''}
-                                    onBlur={field.handleBlur}
-                                    onValueChange={(values) => field.handleChange(values.floatValue ?? undefined)}
-                                  />
-                                </div>
-                                {field.state.meta.errors.length > 0 && field.state.meta.isTouched && (
-                                  <FieldError errors={field.state.meta.errors} />
-                                )}
-                              </div>
-                            )
-                          }}
-                        </form.Field>
-                      </div>
-                      <FieldDescription>
-                        {`Defaults: 1 vCPU, 1 GiB memory, 3 GiB storage.`}
-                        <br />
-                        {maxCpu ? ` Limits: ${maxCpu} vCPU, ${maxMemory} GiB memory, ${maxDisk} GiB storage.` : ''}
-                      </FieldDescription>
-                    </div>
-                  </TabsContent>
-                </Tabs>
-              )}
-            </form.Subscribe>
-
-            <form.Field name="regionId">
-              {(field) => (
-                <Field>
-                  <FieldLabel htmlFor={field.name}>Region</FieldLabel>
-                  <Select value={field.state.value} onValueChange={field.handleChange}>
-                    <SelectTrigger className="h-8" id={field.name} disabled={loadingRegions} loading={loadingRegions}>
-                      <SelectValue placeholder={loadingRegions ? 'Loading regions...' : 'Select a region'} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {regions.map((region) => (
-                        <SelectItem key={region.id} value={region.id}>
-                          {getRegionFullDisplayName(region)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FieldDescription>
-                    The region where the box will be created. If not specified, your organization's default region will
-                    be used.
-                  </FieldDescription>
-                </Field>
-              )}
-            </form.Field>
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">Lifecycle</Label>
-              <div className="flex flex-col gap-2">
-                <form.Field name="autoStopInterval">
-                  {(field) => (
-                    <div className="flex items-center gap-4">
-                      <Label htmlFor={field.name} className="w-40 flex-shrink-0 flex items-center gap-1">
-                        Auto-stop (min):
-                        <Tooltip
-                          label={<InfoTooltipButton aria-label="Auto-stop information" />}
-                          content={
-                            <p>
-                              Minutes of inactivity before stopping. Resets on preview access, SSH, or Toolbox API
-                              calls.
-                              <br />
-                              <span className="text-muted-foreground">0 = disabled</span>
-                            </p>
-                          }
-                          side="right"
-                          contentClassName="max-w-xs"
-                        />
-                      </Label>
-                      <NumericFormat
-                        customInput={Input}
-                        id={field.name}
-                        className="w-full"
-                        placeholder="15"
-                        decimalScale={0}
-                        allowNegative={false}
-                        value={field.state.value ?? ''}
-                        onValueChange={(values) => field.handleChange(values.floatValue ?? undefined)}
-                      />
-                    </div>
-                  )}
-                </form.Field>
-                <form.Field name="autoArchiveInterval">
-                  {(field) => (
-                    <div className="flex items-center gap-4">
-                      <Label htmlFor={field.name} className="w-40 flex-shrink-0 flex items-center gap-1">
-                        Auto-archive (min):
-                        <Tooltip
-                          label={<InfoTooltipButton aria-label="Auto-archive information" />}
-                          content={
-                            <p>
-                              Minutes a box must remain continuously stopped before archiving.
-                              <br />
-                              <span className="text-muted-foreground">0 = max (30 days)</span>
-                            </p>
-                          }
-                          side="right"
-                          contentClassName="max-w-xs"
-                        />
-                      </Label>
-                      <NumericFormat
-                        customInput={Input}
-                        id={field.name}
-                        className="w-full"
-                        placeholder="10080 (7 days)"
-                        decimalScale={0}
-                        allowNegative={false}
-                        value={field.state.value ?? ''}
-                        onValueChange={(values) => field.handleChange(values.floatValue ?? undefined)}
-                      />
-                    </div>
-                  )}
-                </form.Field>
-                <form.Field name="autoDeleteInterval">
-                  {(field) => (
-                    <form.Subscribe selector={(state) => state.values.ephemeral}>
-                      {(ephemeral) => (
-                        <div className="flex items-center gap-4">
-                          <Label htmlFor={field.name} className="w-40 flex-shrink-0 flex items-center gap-1">
-                            Auto-delete (min):
-                            <Tooltip
-                              label={<InfoTooltipButton aria-label="Auto-delete information" />}
-                              content={
-                                <p>
-                                  Minutes a box must remain continuously stopped before permanent deletion.
-                                  <br />
-                                  <span className="text-muted-foreground">0 = deleted on stop</span>
-                                  <br />
-                                  <span className="text-muted-foreground">-1 = disabled</span>
-                                </p>
-                              }
-                              side="right"
-                              contentClassName="max-w-xs"
-                            />
-                          </Label>
-                          <NumericFormat
-                            customInput={Input}
-                            id={field.name}
-                            className="w-full"
-                            placeholder="Disabled"
-                            disabled={ephemeral}
-                            decimalScale={0}
-                            allowNegative
-                            isAllowed={(values) => {
-                              if (values.floatValue === undefined) return true
-                              return values.floatValue === -1 || values.floatValue >= 0
-                            }}
-                            value={ephemeral ? 0 : (field.state.value ?? '')}
-                            onValueChange={(values) => field.handleChange(values.floatValue ?? undefined)}
-                          />
-                        </div>
-                      )}
-                    </form.Subscribe>
-                  )}
-                </form.Field>
-                <form.Field name="ephemeral">
-                  {(field) => (
-                    <div className="flex items-start gap-2">
-                      <Checkbox
-                        className="mt-0.5"
-                        id={field.name}
-                        checked={field.state.value ?? false}
-                        onCheckedChange={(checked) => {
-                          const isEphemeral = checked === true
-                          field.handleChange(isEphemeral)
-                          if (isEphemeral) {
-                            form.setFieldValue('autoDeleteInterval', 0)
-                          }
-                        }}
-                      />
-                      <div className="flex flex-col gap-1">
-                        <Label htmlFor={field.name} className="text-sm font-normal">
-                          Ephemeral
-                        </Label>
-                        <FieldDescription>Automatically delete the box when it stops.</FieldDescription>
-                      </div>
-                    </div>
-                  )}
-                </form.Field>
-              </div>
-            </div>
-
-            <form.Field name="envVars">
-              {(field) => {
-                const hasErrors = field.state.meta.errors.length > 0
-                return (
-                  <Field data-invalid={hasErrors}>
-                    <FieldLabel>Environment Variables</FieldLabel>
-                    <div className="flex flex-col gap-2">
-                      {(field.state.value ?? []).map((_, index) => (
-                        <div key={index} className="flex items-center gap-2">
-                          <Input
-                            placeholder="Key"
-                            value={field.state.value?.[index]?.key ?? ''}
-                            onChange={(e) => {
-                              const updated = [...(field.state.value ?? [])]
-                              updated[index] = { ...updated[index], key: e.target.value }
-                              field.handleChange(updated)
-                            }}
-                            onPaste={(e) => handleEnvPaste(e, index)}
-                          />
-                          <Input
-                            placeholder="Value"
-                            value={field.state.value?.[index]?.value ?? ''}
-                            onChange={(e) => {
-                              const updated = [...(field.state.value ?? [])]
-                              updated[index] = { ...updated[index], value: e.target.value }
-                              field.handleChange(updated)
-                            }}
-                          />
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            aria-label="Remove variable"
-                            className="flex-shrink-0 h-8 w-8"
-                            onClick={() => {
-                              const updated = (field.state.value ?? []).filter((_, i) => i !== index)
-                              field.handleChange(updated)
-                            }}
-                          >
-                            <Minus className="size-4" />
-                          </Button>
-                        </div>
-                      ))}
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="w-fit"
-                        onClick={() => field.handleChange([...(field.state.value ?? []), { key: '', value: '' }])}
-                      >
-                        <Plus className="size-4" />
-                        Add Variable
-                      </Button>
-                    </div>
-                    <FieldDescription asChild>
+            <Accordion
+              type="single"
+              collapsible
+              value={advancedOptionsOpen ? 'advanced-options' : ''}
+              onValueChange={(value) => setAdvancedOptionsOpen(value === 'advanced-options')}
+              className="mt-3 flex flex-col gap-3"
+            >
+              <AccordionItem value="advanced-options" className="border-b-0">
+                <AccordionTrigger className="py-1 text-sm font-semibold hover:no-underline [&>svg]:size-5">
+                  Advanced options
+                </AccordionTrigger>
+                <AccordionContent className="pb-0 pt-4">
+                  <div className="space-y-5">
+                    <div className="space-y-3">
                       <div>
-                        <input
-                          type="file"
-                          accept="env"
-                          className="sr-only peer"
-                          onChange={handleEnvFileImport}
-                          id="env-file-input"
-                        />
-                        <label
-                          className="inline-flex items-center gap-1 underline hover:text-foreground cursor-pointer peer-focus-visible:text-primary"
-                          htmlFor="env-file-input"
-                        >
-                          <Upload className="size-3" />
-                          Import .env file
-                        </label>{' '}
-                        or paste .env contents into any key field.
+                        <Label className="text-sm font-semibold">Resources</Label>
+                        <p className="text-xs text-muted-foreground">Blank uses defaults.</p>
                       </div>
-                    </FieldDescription>
-                    {hasErrors && <FieldError errors={field.state.meta.errors} />}
-                  </Field>
-                )
-              }}
-            </form.Field>
-
-            <form.Field name="labels">
-              {(field) => {
-                const hasErrors = field.state.meta.errors.length > 0
-                return (
-                  <Field data-invalid={hasErrors}>
-                    <FieldLabel>Labels</FieldLabel>
-                    <div className="flex flex-col gap-2">
-                      {(field.state.value ?? []).map((_, index) => (
-                        <div key={index} className="flex items-center gap-2">
-                          <Input
-                            placeholder="Key"
-                            value={field.state.value?.[index]?.key ?? ''}
-                            onChange={(e) => {
-                              const updated = [...(field.state.value ?? [])]
-                              updated[index] = { ...updated[index], key: e.target.value }
-                              field.handleChange(updated)
+                      <div className="grid gap-3">
+                        {RESOURCE_FIELDS.map(({ name, label, unit, Icon }) => (
+                          <form.Field key={name} name={name}>
+                            {(field) => {
+                              const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid
+                              return (
+                                <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_11rem] sm:items-center">
+                                  <div className="min-w-0">
+                                    <Label
+                                      htmlFor={field.name}
+                                      className="flex items-center gap-1 text-xs font-medium text-muted-foreground"
+                                    >
+                                      <Icon className="size-3.5" />
+                                      {label}
+                                    </Label>
+                                    <p className="mt-0.5 text-xs text-muted-foreground">Optional.</p>
+                                  </div>
+                                  <div className="relative min-w-0">
+                                    <NumericFormat
+                                      customInput={Input}
+                                      aria-invalid={isInvalid}
+                                      id={field.name}
+                                      className="h-8 w-full pr-11 text-right font-medium tabular-nums placeholder:font-normal placeholder:text-muted-foreground/45"
+                                      placeholder={focusedAdvancedField === field.name ? '' : 'Default'}
+                                      decimalScale={0}
+                                      allowNegative={false}
+                                      isAllowed={(values) => values.floatValue === undefined || values.floatValue >= 1}
+                                      value={field.state.value ?? ''}
+                                      onFocus={() => setFocusedAdvancedField(field.name)}
+                                      onBlur={() => {
+                                        field.handleBlur()
+                                        setFocusedAdvancedField((currentField) =>
+                                          currentField === field.name ? null : currentField,
+                                        )
+                                      }}
+                                      onValueChange={(values) => field.handleChange(values.value)}
+                                    />
+                                    <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground">
+                                      {unit}
+                                    </span>
+                                    {field.state.meta.errors.length > 0 && field.state.meta.isTouched && (
+                                      <FieldError errors={field.state.meta.errors} />
+                                    )}
+                                  </div>
+                                </div>
+                              )
                             }}
-                          />
-                          <Input
-                            placeholder="Value"
-                            value={field.state.value?.[index]?.value ?? ''}
-                            onChange={(e) => {
-                              const updated = [...(field.state.value ?? [])]
-                              updated[index] = { ...updated[index], value: e.target.value }
-                              field.handleChange(updated)
-                            }}
-                          />
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            aria-label="Remove label"
-                            className="flex-shrink-0 h-8 w-8"
-                            onClick={() => {
-                              const updated = (field.state.value ?? []).filter((_, i) => i !== index)
-                              field.handleChange(updated)
-                            }}
-                          >
-                            <Minus className="size-4" />
-                          </Button>
-                        </div>
-                      ))}
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="w-fit"
-                        onClick={() => field.handleChange([...(field.state.value ?? []), { key: '', value: '' }])}
-                      >
-                        <Plus className="size-4" />
-                        Add Label
-                      </Button>
+                          </form.Field>
+                        ))}
+                      </div>
                     </div>
-                    {hasErrors && <FieldError errors={field.state.meta.errors} />}
-                  </Field>
-                )
-              }}
-            </form.Field>
 
-            <div className="flex flex-col gap-4">
-              <Label className="text-sm font-medium">Network</Label>
-              <form.Field name="public">
-                {(field) => (
-                  <div className="flex items-start gap-2">
-                    <Checkbox
-                      id={field.name}
-                      className="mt-0.5"
-                      checked={field.state.value ?? false}
-                      onCheckedChange={(checked) => field.handleChange(checked === true)}
-                    />
-                    <div className="flex flex-col gap-1">
-                      <Label htmlFor={field.name} className="text-sm font-normal">
-                        Public HTTP Preview
-                      </Label>
-                      <FieldDescription>Allow public access to HTTP preview URLs.</FieldDescription>
+                    <div className="space-y-3 border-t pt-4">
+                      <div>
+                        <Label className="text-sm font-semibold">Lifecycle</Label>
+                        <p className="text-xs text-muted-foreground">Blank uses defaults.</p>
+                      </div>
+                      <div className="grid gap-3">
+                        <form.Field name="autoStopInterval">
+                          {(field) => {
+                            const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid
+                            return (
+                              <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_11rem] sm:items-center">
+                                <div className="min-w-0">
+                                  <Label htmlFor={field.name} className="text-xs font-medium text-muted-foreground">
+                                    Auto-stop
+                                  </Label>
+                                  <p className="mt-0.5 text-xs text-muted-foreground">Default: 15 min</p>
+                                </div>
+                                <div className="relative min-w-0">
+                                  <NumericFormat
+                                    customInput={Input}
+                                    aria-invalid={isInvalid}
+                                    id={field.name}
+                                    className="h-8 w-full pr-10 text-right font-medium tabular-nums placeholder:font-normal placeholder:text-muted-foreground/45"
+                                    placeholder={focusedAdvancedField === field.name ? '' : '15'}
+                                    decimalScale={0}
+                                    allowNegative={false}
+                                    value={field.state.value ?? ''}
+                                    onFocus={() => setFocusedAdvancedField(field.name)}
+                                    onBlur={() => {
+                                      field.handleBlur()
+                                      setFocusedAdvancedField((currentField) =>
+                                        currentField === field.name ? null : currentField,
+                                      )
+                                    }}
+                                    onValueChange={(values) => field.handleChange(values.value)}
+                                  />
+                                  <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground">
+                                    min
+                                  </span>
+                                  {field.state.meta.errors.length > 0 && field.state.meta.isTouched && (
+                                    <FieldError errors={field.state.meta.errors} />
+                                  )}
+                                </div>
+                              </div>
+                            )
+                          }}
+                        </form.Field>
+
+                        <form.Field name="autoDeleteInterval">
+                          {(field) => {
+                            const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid
+                            return (
+                              <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_11rem] sm:items-center">
+                                <div className="min-w-0">
+                                  <Label htmlFor={field.name} className="text-xs font-medium text-muted-foreground">
+                                    Auto-delete
+                                  </Label>
+                                  <p className="mt-0.5 text-xs text-muted-foreground">Default: Disabled</p>
+                                </div>
+                                <div className="min-w-0">
+                                  <NumericFormat
+                                    customInput={Input}
+                                    aria-invalid={isInvalid}
+                                    id={field.name}
+                                    className="h-8 w-full text-right font-medium tabular-nums placeholder:font-normal placeholder:text-muted-foreground/45"
+                                    placeholder={focusedAdvancedField === field.name ? '' : 'Disabled'}
+                                    decimalScale={0}
+                                    allowNegative
+                                    isAllowed={(values) => {
+                                      if (values.floatValue === undefined) return true
+                                      return values.floatValue === -1 || values.floatValue >= 0
+                                    }}
+                                    value={field.state.value ?? ''}
+                                    onFocus={() => setFocusedAdvancedField(field.name)}
+                                    onBlur={() => {
+                                      field.handleBlur()
+                                      setFocusedAdvancedField((currentField) =>
+                                        currentField === field.name ? null : currentField,
+                                      )
+                                    }}
+                                    onValueChange={(values) => field.handleChange(values.value)}
+                                  />
+                                  {field.state.meta.errors.length > 0 && field.state.meta.isTouched && (
+                                    <FieldError errors={field.state.meta.errors} />
+                                  )}
+                                </div>
+                              </div>
+                            )
+                          }}
+                        </form.Field>
+                      </div>
                     </div>
                   </div>
-                )}
-              </form.Field>
-              <form.Field name="networkBlockAll">
-                {(field) => (
-                  <div className="flex items-start gap-2">
-                    <Checkbox
-                      id={field.name}
-                      className="mt-0.5"
-                      checked={field.state.value ?? false}
-                      onCheckedChange={(checked) => field.handleChange(checked === true)}
-                    />
-                    <div className="flex flex-col gap-1">
-                      <Label htmlFor={field.name} className="text-sm font-normal">
-                        Block All Network Access
-                      </Label>
-                      <FieldDescription>Block all outbound network access from the box.</FieldDescription>
-                    </div>
-                  </div>
-                )}
-              </form.Field>
-            </div>
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
           </form>
         </ScrollArea>
-        <SheetFooter className="p-5 pt-3 border-t border-border sm:justify-start">
+        <SheetFooter className="border-t border-border p-5 pt-3 sm:justify-start">
           <form.Subscribe
-            selector={(state) => [state.canSubmit, state.isSubmitting]}
-            children={([canSubmit, isSubmitting]) => (
+            selector={(state) => state.isSubmitting}
+            children={(isSubmitting) => (
               <Button
                 type="submit"
                 form="create-box-form"
                 variant="default"
-                disabled={!canSubmit || isSubmitting || !selectedOrganization?.id}
+                disabled={isSubmitting || !selectedOrganization?.id}
+                className="w-full sm:w-auto"
               >
                 {isSubmitting && <Spinner />}
                 Create

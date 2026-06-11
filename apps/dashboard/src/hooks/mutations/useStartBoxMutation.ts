@@ -10,6 +10,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 
 interface StartBoxVariables {
   boxId: string
+  detailRef?: string
 }
 
 export const useStartBoxMutation = () => {
@@ -21,10 +22,15 @@ export const useStartBoxMutation = () => {
     mutationFn: async ({ boxId }: StartBoxVariables) => {
       await boxApi.startBox(boxId, selectedOrganization?.id)
     },
-    onSuccess: (_, { boxId }) => {
+    onSuccess: (_, { boxId, detailRef }) => {
       queryClient.invalidateQueries({
         queryKey: queryKeys.boxes.detail(selectedOrganization?.id ?? '', boxId),
       })
+      if (detailRef && detailRef !== boxId) {
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.boxes.detail(selectedOrganization?.id ?? '', detailRef),
+        })
+      }
     },
   })
 }
