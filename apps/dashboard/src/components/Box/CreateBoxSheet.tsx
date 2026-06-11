@@ -148,6 +148,13 @@ export const CreateBoxSheet = ({
 
       let boxId: string | undefined = undefined
       try {
+        const resources = {
+          cpu: parseOptionalInteger(value.cpu),
+          memory: parseOptionalInteger(value.memory),
+          disk: parseOptionalInteger(value.disk),
+        }
+        const hasResourceOverrides = Object.values(resources).some((resource) => resource !== undefined)
+
         // TODO(image-rewrite): the image/template picker was removed with the image/template
         // subsystem; box creation no longer selects an image. Rebuild image selection here once
         // the new model lands.
@@ -157,9 +164,7 @@ export const CreateBoxSheet = ({
           networkBlockAll: false,
           autoStopInterval: parseOptionalInteger(value.autoStopInterval),
           autoDeleteInterval: parseOptionalInteger(value.autoDeleteInterval),
-          cpu: parseOptionalInteger(value.cpu),
-          memory: parseOptionalInteger(value.memory),
-          disk: parseOptionalInteger(value.disk),
+          ...(hasResourceOverrides ? { resources } : {}),
         })
         boxId = getBoxRouteId(box)
         onCreated?.(box)

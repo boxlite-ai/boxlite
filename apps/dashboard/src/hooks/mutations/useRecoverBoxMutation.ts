@@ -8,19 +8,19 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { queryKeys } from '@/hooks/queries/queryKeys'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 
-interface DeleteBoxVariables {
+interface RecoverBoxVariables {
   boxId: string
   detailRef?: string
 }
 
-export const useDeleteBoxMutation = () => {
+export const useRecoverBoxMutation = () => {
   const { boxApi } = useApi()
   const { selectedOrganization } = useSelectedOrganization()
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ boxId }: DeleteBoxVariables) => {
-      await boxApi.deleteBox(boxId, selectedOrganization?.id)
+    mutationFn: async ({ boxId }: RecoverBoxVariables) => {
+      await boxApi.recoverBox(boxId, selectedOrganization?.id)
     },
     onSuccess: (_, { boxId, detailRef }) => {
       queryClient.invalidateQueries({

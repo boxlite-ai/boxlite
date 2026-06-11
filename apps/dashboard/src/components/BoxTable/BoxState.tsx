@@ -22,7 +22,7 @@ export function BoxState({ state, errorReason, recoverable, className }: BoxStat
   const stateIcon = recoverable ? STATE_ICONS['RECOVERY'] : STATE_ICONS[state] || STATE_ICONS[BoxStateType.UNKNOWN]
   const label = getStateLabel(state)
 
-  if (state === BoxStateType.ERROR || state === BoxStateType.BUILD_FAILED) {
+  if (state === BoxStateType.ERROR) {
     const errorColor = recoverable ? 'text-yellow-600 dark:text-yellow-400' : 'text-red-600 dark:text-red-400'
 
     const errorContent = (

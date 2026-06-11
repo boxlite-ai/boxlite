@@ -320,11 +320,8 @@ const Boxes: React.FC = () => {
 
       let updatedState = data.newState
 
-      // error,build_failed | destroyed should be displayed as destroyed in the UI
-      if (
-        data.box.desiredState === BoxDesiredState.DESTROYED &&
-        (data.newState === BoxState.ERROR || data.newState === BoxState.BUILD_FAILED)
-      ) {
+      // error | destroyed should be displayed as destroyed in the UI
+      if (data.box.desiredState === BoxDesiredState.DESTROYED && data.newState === BoxState.ERROR) {
         updatedState = BoxState.DESTROYED
       }
 
@@ -342,13 +339,13 @@ const Boxes: React.FC = () => {
       oldDesiredState: BoxDesiredState
       newDesiredState: BoxDesiredState
     }) => {
-      // error,build_failed | destroyed should be displayed as destroyed in the UI
+      // error | destroyed should be displayed as destroyed in the UI
 
       if (data.newDesiredState !== BoxDesiredState.DESTROYED) {
         return
       }
 
-      if (data.box.state !== BoxState.ERROR && data.box.state !== BoxState.BUILD_FAILED) {
+      if (data.box.state !== BoxState.ERROR) {
         return
       }
 
