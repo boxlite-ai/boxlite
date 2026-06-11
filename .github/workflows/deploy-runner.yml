@@ -277,7 +277,7 @@ jobs:
           echo "rule_id=$RULE_ID" >> "$GITHUB_OUTPUT"
           echo "::notice::SG rule $RULE_ID added (22/tcp from $MY_IP/32)"
 
-      - name: SCP artifact + SSH-driven binary swap
+      - name: SCP artifact + SSH-driven binary swap (verify PID + SHA256 changed)
         env:
           IP: ${{ steps.ec2.outputs.runner_ip }}
           KEY: ${{ steps.keypush.outputs.key_path }}
@@ -286,20 +286,65 @@ jobs:
           ARCHIVE=$(ls /tmp/runner-artifact/boxlite-runner-*-linux-amd64.tar.gz | head -1)
           [ -n "$ARCHIVE" ] || { echo "::error::No runner artifact found"; exit 1; }
 
+          # Compute expected binary sha256 from the artifact tarball — the
+          # remote `sha256sum /usr/local/bin/boxlite-runner` after swap must
+          # match this, otherwise the file on disk isn't what we shipped.
+          EXPECTED_SHA=$(tar -xzOf "$ARCHIVE" boxlite-runner 2>/dev/null | sha256sum | awk '{print $1}') \
+            || EXPECTED_SHA=$(tar -tzf "$ARCHIVE" | grep -E 'boxlite-runner$' | head -1 \
+                              | xargs -I{} sh -c "tar -xzOf '$ARCHIVE' {} | sha256sum | awk '{print \$1}'")
+          [ -n "$EXPECTED_SHA" ] || { echo "::error::Could not compute expected sha256 from $ARCHIVE"; exit 1; }
+          echo "::notice::expected sha256: $EXPECTED_SHA"
+
           SSH_OPTS="-i $KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15"
 
           # SCP the tarball
           scp $SSH_OPTS "$ARCHIVE" "ubuntu@${IP}:/tmp/boxlite-runner.tar.gz"
 
-          # In-place swap + restart + smoke-check
-          ssh $SSH_OPTS "ubuntu@${IP}" 'bash -s' <<'REMOTE'
+          # In-place swap + restart + verification. The remote script
+          # captures MainPID + ActiveEnterTimestamp BEFORE the swap, then
+          # asserts after restart: (a) new MainPID != old MainPID
+          # (proves a real process replacement, not the old one still
+          # running), (b) ActiveEnterTimestampMonotonic strictly
+          # advanced (proves systemd marked it active after our start),
+          # and (c) /usr/local/bin/boxlite-runner sha256 matches
+          # EXPECTED_SHA passed from the GHA runner.
+          ssh $SSH_OPTS "ubuntu@${IP}" "EXPECTED_SHA='$EXPECTED_SHA' bash -s" <<'REMOTE'
           set -euxo pipefail
+
+          BEFORE_PID=$(systemctl show -p MainPID --value boxlite-runner 2>/dev/null || echo 0)
+          BEFORE_TS=$(systemctl show -p ActiveEnterTimestampMonotonic --value boxlite-runner 2>/dev/null || echo 0)
+          echo "BEFORE: MainPID=$BEFORE_PID  ActiveEnterTimestampMonotonic=$BEFORE_TS"
+
           sudo systemctl stop boxlite-runner
           sudo tar xzf /tmp/boxlite-runner.tar.gz -C /usr/local/bin/
           sudo chmod +x /usr/local/bin/boxlite-runner
           sudo systemctl start boxlite-runner
           sleep 5
           sudo systemctl is-active --quiet boxlite-runner || { sudo journalctl -u boxlite-runner -n 50 --no-pager; exit 1; }
+
+          AFTER_PID=$(systemctl show -p MainPID --value boxlite-runner)
+          AFTER_TS=$(systemctl show -p ActiveEnterTimestampMonotonic --value boxlite-runner)
+          INSTALLED_SHA=$(sudo sha256sum /usr/local/bin/boxlite-runner | awk '{print $1}')
+          echo "AFTER:  MainPID=$AFTER_PID  ActiveEnterTimestampMonotonic=$AFTER_TS"
+          echo "AFTER:  sha256=$INSTALLED_SHA"
+          echo "EXPECT: sha256=$EXPECTED_SHA"
+
+          # (a) PID must have changed (proves real restart)
+          if [ "$AFTER_PID" = "$BEFORE_PID" ] && [ "$BEFORE_PID" != "0" ]; then
+              echo "::error::MainPID did not change ($AFTER_PID) — service did not actually restart"
+              exit 1
+          fi
+          # (b) systemd's monotonic timestamp for last active-enter must have advanced
+          if [ "$AFTER_TS" -le "$BEFORE_TS" ]; then
+              echo "::error::ActiveEnterTimestampMonotonic did not advance ($BEFORE_TS -> $AFTER_TS)"
+              exit 1
+          fi
+          # (c) installed binary sha256 must match the artifact we uploaded
+          if [ "$INSTALLED_SHA" != "$EXPECTED_SHA" ]; then
+              echo "::error::Installed binary sha256 mismatch — got $INSTALLED_SHA expected $EXPECTED_SHA"
+              exit 1
+          fi
+          echo "Verified: PID swap + monotonic ts advance + sha256 match"
           /usr/local/bin/boxlite-runner --version 2>&1 || true
           REMOTE
           echo "::notice::Runner binary swap succeeded"
