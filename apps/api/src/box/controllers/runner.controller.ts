@@ -20,15 +20,7 @@ import {
 } from '@nestjs/common'
 import { CreateRunnerDto } from '../dto/create-runner.dto'
 import { RunnerService } from '../services/runner.service'
-import {
-  ApiOAuth2,
-  ApiTags,
-  ApiOperation,
-  ApiBearerAuth,
-  ApiResponse,
-  ApiParam,
-  ApiHeader,
-} from '@nestjs/swagger'
+import { ApiOAuth2, ApiTags, ApiOperation, ApiBearerAuth, ApiResponse, ApiParam, ApiHeader } from '@nestjs/swagger'
 import { SystemActionGuard } from '../../auth/system-action.guard'
 import { RequiredApiRole } from '../../common/decorators/required-role.decorator'
 import { SystemRole } from '../../user/enums/system-role.enum'

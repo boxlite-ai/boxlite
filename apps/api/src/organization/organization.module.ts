@@ -70,11 +70,6 @@ import { EncryptionModule } from '../encryption/encryption.module'
       ) => new BoxRepository(dataSource, eventEmitter, boxLookupCacheInvalidationService),
     },
   ],
-  exports: [
-    OrganizationService,
-    OrganizationRoleService,
-    OrganizationUserService,
-    OrganizationInvitationService,
-  ],
+  exports: [OrganizationService, OrganizationRoleService, OrganizationUserService, OrganizationInvitationService],
 })
 export class OrganizationModule {}

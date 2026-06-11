@@ -162,14 +162,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       networkAllowList: box.networkAllowList,
       errorReason: box.errorReason,
     }
-    await this.jobService.createJob(
-      null,
-      JobType.RECOVER_BOX,
-      this.runner.id,
-      ResourceType.BOX,
-      box.id,
-      recoverBoxDTO,
-    )
+    await this.jobService.createJob(null, JobType.RECOVER_BOX, this.runner.id, ResourceType.BOX, box.id, recoverBoxDTO)
 
     this.logger.debug(`Created RECOVER_BOX job for box ${box.id} on runner ${this.runner.id}`)
   }

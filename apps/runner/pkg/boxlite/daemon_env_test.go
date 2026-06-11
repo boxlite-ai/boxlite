@@ -24,7 +24,7 @@ func TestDaemonBoxEnvIncludesRequiredBoxIdentity(t *testing.T) {
 	})
 
 	want := map[string]string{
-		"BOXLITE_BOX_ID":      "box-1",
+		"BOXLITE_BOX_ID":          "box-1",
 		"BOXLITE_ORGANIZATION_ID": "org-1",
 		"BOXLITE_REGION_ID":       "region-1",
 		"BOXLITE_OTEL_ENDPOINT":   "http://otel.local:4318",

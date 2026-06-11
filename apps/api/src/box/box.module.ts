@@ -58,16 +58,7 @@ import { BoxStateWaiterService } from './services/box-state-waiter.service'
     UserModule,
     OrganizationModule,
     RegionModule,
-    TypeOrmModule.forFeature([
-      Box,
-      Runner,
-      WarmPool,
-      Volume,
-      SshAccess,
-      Region,
-      Job,
-      BoxLastActivity,
-    ]),
+    TypeOrmModule.forFeature([Box, Runner, WarmPool, Volume, SshAccess, Region, Job, BoxLastActivity]),
   ],
   controllers: [
     BoxController,

@@ -8,11 +8,7 @@ import { Inject, Injectable, ServiceUnavailableException } from '@nestjs/common'
 import { ClickHouseService } from '../../clickhouse/clickhouse.service'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { LogEntryDto } from '../../box-telemetry/dto/log-entry.dto'
-import {
-  MetricsResponseDto,
-  MetricDataPointDto,
-  MetricSeriesDto,
-} from '../../box-telemetry/dto/metrics-response.dto'
+import { MetricsResponseDto, MetricDataPointDto, MetricSeriesDto } from '../../box-telemetry/dto/metrics-response.dto'
 import { PaginatedLogsDto } from '../../box-telemetry/dto/paginated-logs.dto'
 import { PaginatedTracesDto } from '../../box-telemetry/dto/paginated-traces.dto'
 import { TraceSpanDto } from '../../box-telemetry/dto/trace-span.dto'
