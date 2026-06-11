@@ -1,0 +1,45 @@
+# Build the four control-plane service images (api, otel-collector, proxy,
+# ssh-gateway) exactly the way `sst deploy` builds them: repo-root build
+# context + apps/<service>/Dockerfile.
+#
+# Why: these Dockerfiles are exercised only by SST deploys, which no CI job
+# runs. The #715 converge silently broke the api and otel-collector image
+# builds (monorepo path drift) and the breakage only surfaced at deploy time.
+# This workflow makes that class of regression fail the PR instead.
+#
+# Build-only gate: images are never tagged or pushed.
+#
+# Triggers:
+# - pull_request touching apps/** (service sources, shared libs, lockfiles,
+#   Dockerfiles) or this workflow file. apps/infra* is excluded: those
+#   directories don't feed any image content.
+# - workflow_dispatch: manual run.
+name: Build Service Images
+
+on:
+  pull_request:
+    paths:
+      - 'apps/**'
+      - '!apps/infra/**'
+      - '!apps/infra-local/**'
+      - '.github/workflows/build-service-images.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: docker build (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [api, otel-collector, proxy, ssh-gateway]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image (repo-root context, same as sst deploy)
+        run: docker build -f apps/${{ matrix.service }}/Dockerfile .
