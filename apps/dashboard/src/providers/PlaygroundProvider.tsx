@@ -28,7 +28,7 @@ import {
 } from '@/contexts/PlaygroundContext'
 import { MouseButton, MouseScrollDirection, BoxParametersSections, ScreenshotFormatOption } from '@/enums/Playground'
 import { getLanguageCodeToRun, objectHasAnyValue } from '@/lib/playground'
-import { CreateBoxBaseParams, CreateBoxFromImageParams, CreateBoxFromTemplateParams } from '@boxlite-ai/sdk'
+import { CreateBoxBaseParams, CreateBoxFromImageParams, CreateBoxFromTemplateParams } from '@/lib/cloudBox'
 import { useCallback, useState } from 'react'
 
 const PARAM_SECTION_MAP: Partial<Record<keyof BoxParams, BoxParametersSections>> = {
