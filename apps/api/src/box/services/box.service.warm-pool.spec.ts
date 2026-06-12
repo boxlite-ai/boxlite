@@ -21,7 +21,7 @@ function warmPoolItem(): WarmPool {
 }
 
 describe('BoxService.createForWarmPool image', () => {
-  it('defaults warm-pool boxes to the base curated image so they can boot', async () => {
+  it('defaults warm-pool boxes to the base image ref so they can boot', async () => {
     const insert = jest.fn().mockResolvedValue(undefined)
     const getRandomAvailableRunner = jest.fn().mockResolvedValue({ id: 'runner-1' })
 
@@ -31,7 +31,9 @@ describe('BoxService.createForWarmPool image', () => {
 
     const box = await service.createForWarmPool(warmPoolItem())
 
-    expect(box.image).toBe('base')
+    expect(box.image).toBe(
+      'ghcr.io/boxlite-ai/boxlite-agent-base@sha256:834dcb65465985fc2f648451d76c81d166bc7672391c9064a0a115ce6306c85f',
+    )
     expect(insert).toHaveBeenCalledWith(box)
   })
 })

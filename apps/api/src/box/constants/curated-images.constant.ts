@@ -7,64 +7,52 @@
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 
 /**
- * Curated image keys are the only image identifiers a create request may supply.
- * They are opaque keys, NOT raw OCI refs: users cannot pass an arbitrary image.
+ * Temporary curated-image gate: boxes may only boot from this fixed set of pinned OCI
+ * refs, because the runner pulls with its own private-registry token and must never be
+ * handed an arbitrary user-supplied image. The gate is deliberately thin and sits only
+ * at the request boundary (BoxService create / warm-pool); everything downstream treats
+ * `image` as an opaque OCI ref. When per-org custom images land, delete this file and
+ * its call sites — no other layer knows the curated set exists.
+ *
+ * Env overrides (set on the Api service in apps/infra/sst.config.ts) allow digest
+ * rotation without a code deploy; the fallbacks cover local/dev runs.
  */
-export type CuratedImageKey = 'base' | 'python' | 'node'
-
-export const CURATED_IMAGE_KEYS: CuratedImageKey[] = ['base', 'python', 'node']
-
-const DEFAULT_CURATED_IMAGE_KEY: CuratedImageKey = 'base'
-
-/**
- * Each curated key maps to an env var holding a sha256-pinned, private ghcr OCI ref.
- * These env vars are set on the Api service (apps/infra/sst.config.ts). The digests
- * below are fallbacks kept in sync with that config for local/dev runs where the env
- * is unset; the runner already authenticates to the private registry via its own token.
- */
-const CURATED_IMAGE_ENV: Record<CuratedImageKey, { envVar: string; fallbackRef: string }> = {
-  base: {
+const SUPPORTED_IMAGE_SOURCES: Array<{ envVar: string; fallbackRef: string }> = [
+  {
     envVar: 'BOXLITE_SYSTEM_BASE_IMAGE',
     fallbackRef:
       'ghcr.io/boxlite-ai/boxlite-agent-base@sha256:834dcb65465985fc2f648451d76c81d166bc7672391c9064a0a115ce6306c85f',
   },
-  python: {
+  {
     envVar: 'BOXLITE_SYSTEM_PYTHON_IMAGE',
     fallbackRef:
       'ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6',
   },
-  node: {
+  {
     envVar: 'BOXLITE_SYSTEM_NODE_IMAGE',
     fallbackRef:
       'ghcr.io/boxlite-ai/boxlite-agent-node@sha256:fcb8b840ab68567975853666c82fb6c59a3c1d14a0cdc31d7cbf3a01e6c6d247',
   },
-}
+]
 
-function isCuratedImageKey(key: string): key is CuratedImageKey {
-  return (CURATED_IMAGE_KEYS as string[]).includes(key)
+/** Pinned OCI refs a box may boot from. The first entry is the default image. */
+export function supportedImages(): string[] {
+  return SUPPORTED_IMAGE_SOURCES.map(({ envVar, fallbackRef }) => process.env[envVar] || fallbackRef)
 }
 
 /**
- * Validate a curated image key at the request boundary. Undefined defaults to 'base'.
- * The key (not the resolved OCI ref) is what gets persisted on the Box entity, so a
- * later env-var rotation transparently applies to existing boxes.
+ * Validate a user-supplied OCI ref at the request boundary. Undefined selects the
+ * default image; anything outside the supported set is rejected with the full list so
+ * callers can self-correct.
  */
-export function validateCuratedImageKey(key: string | undefined): CuratedImageKey {
-  const resolvedKey = key ?? DEFAULT_CURATED_IMAGE_KEY
+export function assertSupportedImage(image: string | undefined): string {
+  const supported = supportedImages()
 
-  if (!isCuratedImageKey(resolvedKey)) {
-    throw new BadRequestError(`Invalid image '${resolvedKey}'. Allowed images: ${CURATED_IMAGE_KEYS.join(', ')}`)
+  if (image === undefined) {
+    return supported[0]
   }
-
-  return resolvedKey
-}
-
-/**
- * Resolve a curated image key to its sha256-pinned OCI ref. Called when the CREATE_BOX
- * job payload is built, so the runner always receives a concrete ref and never needs to
- * know the curated mapping.
- */
-export function resolveCuratedImageRef(key: string | undefined): string {
-  const { envVar, fallbackRef } = CURATED_IMAGE_ENV[validateCuratedImageKey(key)]
-  return process.env[envVar] || fallbackRef
+  if (!supported.includes(image)) {
+    throw new BadRequestError(`Unsupported image '${image}'. Supported images: ${supported.join(', ')}`)
+  }
+  return image
 }

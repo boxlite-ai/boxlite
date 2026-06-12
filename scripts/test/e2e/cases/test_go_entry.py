@@ -16,6 +16,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from path_verification import runner_journal_seek, runner_hits_for_box
 
+from conftest import DEFAULT_IMAGE
+
 REPO = Path(__file__).resolve().parents[4]
 SRC = REPO / "scripts/test/e2e/sdks/go/e2e_basic.go"
 UUID_RE = re.compile(
@@ -61,7 +63,7 @@ def test_go_sdk_create_exec_remove(go_binary):
         "BOXLITE_E2E_URL": p["url"],
         "BOXLITE_E2E_API_KEY": p["api_key"],
         "BOXLITE_E2E_PREFIX": p.get("path_prefix") or "",
-        "BOXLITE_E2E_IMAGE": "base",
+        "BOXLITE_E2E_IMAGE": DEFAULT_IMAGE,
         # CGO dev tag — uses libboxlite.so from the workspace target/release,
         # not a vendored prebuilt one.
         "LD_LIBRARY_PATH": str(REPO / "target/release"),

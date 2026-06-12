@@ -9,7 +9,7 @@ type CreateBoxDTO struct {
 	BoxId            string            `json:"boxId,omitempty"`
 	FromVolumeId     string            `json:"fromVolumeId,omitempty"`
 	UserId           string            `json:"userId,omitempty"`
-	OCIImageRef      string            `json:"ociImageRef" validate:"required"`
+	Image            string            `json:"image" validate:"required"`
 	OsUser           string            `json:"osUser,omitempty"`
 	CpuQuota         int64             `json:"cpuQuota" validate:"min=1"`
 	MemoryQuota      int64             `json:"memoryQuota" validate:"min=1"`

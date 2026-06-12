@@ -74,8 +74,9 @@ export class BoxDto {
   env: Record<string, string>
 
   @ApiProperty({
-    description: 'The curated image key the box boots from',
-    example: 'python',
+    description: 'The OCI image ref the box boots from',
+    example:
+      'ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6',
   })
   image: string
 

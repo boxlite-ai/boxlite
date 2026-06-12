@@ -56,7 +56,7 @@ export class BoxStartAction extends BoxAction {
     return DONT_SYNC_AGAIN
   }
 
-  //  A freshly created box (UNKNOWN state, desired STARTED) boots from its curated image key
+  //  A freshly created box (UNKNOWN state, desired STARTED) boots from its image ref
   //  (box.image, validated at create time). Enqueue a CREATE_BOX job and move to CREATING; the
   //  job-completion path then drives CREATING -> STARTED.
   private async handleRunnerBoxUnknownStateOnDesiredStateStart(box: Box, lockCode: LockCode): Promise<SyncState> {

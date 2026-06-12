@@ -16,7 +16,6 @@ import { JobType } from '../enums/job-type.enum'
 import { JobStatus } from '../enums/job-status.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { JobService } from '../services/job.service'
-import { resolveCuratedImageRef } from '../constants/curated-images.constant'
 import { BoxRepository } from '../repositories/box.repository'
 import { UpdateNetworkSettingsDTO, RecoverBoxDTO } from '@boxlite-ai/runner-api-client'
 
@@ -117,13 +116,13 @@ export class RunnerAdapterV2 implements RunnerAdapter {
 
   async createBox(box: Box): Promise<void> {
     // Hand-built payload: keys MUST match the Go dto.CreateBoxDTO json tags
-    // (apps/runner/pkg/api/dto/box.go). The curated image key is resolved to a pinned
-    // OCI ref here — the last point before the payload leaves the API — so the runner
-    // never needs to know the curated mapping.
+    // (apps/runner/pkg/api/dto/box.go). `id` is the internal uuid the runner uses for
+    // job reporting; `boxId` is the user-facing short id the runner shows in logs.
     const payload = {
       id: box.id,
+      boxId: box.boxId,
       userId: box.organizationId,
-      ociImageRef: resolveCuratedImageRef(box.image),
+      image: box.image,
       osUser: box.osUser,
       cpuQuota: box.cpu,
       memoryQuota: box.mem,

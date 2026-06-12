@@ -20,6 +20,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from path_verification import runner_journal_seek, runner_hits_for_box
 
+from conftest import DEFAULT_IMAGE
+
 REPO = Path(__file__).resolve().parents[4]
 SRC = REPO / "scripts/test/e2e/sdks/node/e2e_basic.ts"
 NODE_SDK = REPO / "sdks/node"
@@ -68,7 +70,7 @@ def test_node_sdk_create_exec_remove(node_runner):
         "BOXLITE_E2E_URL": p["url"],
         "BOXLITE_E2E_API_KEY": p["api_key"],
         "BOXLITE_E2E_PREFIX": p.get("path_prefix") or "",
-        "BOXLITE_E2E_IMAGE": "base",
+        "BOXLITE_E2E_IMAGE": DEFAULT_IMAGE,
     }
     # Use npx tsx to run the .ts directly without a separate compile step.
     # tsx is bundled with the apps workspace.

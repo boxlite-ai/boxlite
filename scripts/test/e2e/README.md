@@ -67,9 +67,10 @@ This:
 - Sets reasonable per-box quotas on the admin org
 - Adds a `[profiles.p1]` entry in `~/.boxlite/credentials.toml` pointing at the local API
 
-Box images need no registration: tests pass a curated image key (`base` |
-`python` | `node`), which the API resolves through `BOXLITE_SYSTEM_*_IMAGE`
-env vars — bootstrap.sh points them at public refs for the local stack.
+Box images need no registration: tests pass a full OCI image ref that must be
+in the API's supported allowlist (`BOXLITE_SYSTEM_*_IMAGE` env vars —
+bootstrap.sh points them at public refs for the local stack; fixture_setup.py
+records the base entry in the profile so tests pick it up automatically).
 
 ## Running
 

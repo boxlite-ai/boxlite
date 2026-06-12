@@ -46,20 +46,28 @@ describe('box-to-box mapper', () => {
     expect(dto.disk).toBe(8)
   })
 
-  it('threads the curated image key from the REST request into the internal create dto', () => {
-    const dto = createBoxToCreateBox({ image: 'python' })
+  it('threads the image ref from the REST request into the internal create dto', () => {
+    const dto = createBoxToCreateBox({
+      image:
+        'ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6',
+    })
 
-    expect(dto.image).toBe('python')
+    expect(dto.image).toBe(
+      'ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6',
+    )
   })
 
-  it('echoes the curated image key stored on the box', () => {
+  it('echoes the image ref stored on the box', () => {
     const response = boxToBoxResponse({
       boxId: 'aB3cD4eF5gH6',
       state: 'started',
-      image: 'node',
+      image:
+        'ghcr.io/boxlite-ai/boxlite-agent-node@sha256:fcb8b840ab68567975853666c82fb6c59a3c1d14a0cdc31d7cbf3a01e6c6d247',
       labels: {},
     } as unknown as BoxDto)
 
-    expect(response.image).toBe('node')
+    expect(response.image).toBe(
+      'ghcr.io/boxlite-ai/boxlite-agent-node@sha256:fcb8b840ab68567975853666c82fb6c59a3c1d14a0cdc31d7cbf3a01e6c6d247',
+    )
   })
 })

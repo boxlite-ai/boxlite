@@ -93,10 +93,10 @@ export class Box {
   @Column()
   osUser: string
 
-  // Curated image key ('base' | 'python' | 'node'), not an OCI ref. Resolved to a
-  // pinned ref only when the CREATE_BOX job payload is built.
-  @Column({ default: 'base' })
-  image = 'base'
+  // Full OCI ref the box boots from (validated against the supported-image allowlist
+  // at create time, then passed to the runner untranslated).
+  @Column()
+  image: string
 
   @Column({ nullable: true })
   errorReason?: string

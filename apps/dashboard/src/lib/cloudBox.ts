@@ -171,7 +171,7 @@ export function toCreateBoxRequest(params?: CreateBoxParams, target?: string): C
   }
 
   if ('image' in resolvedParams && typeof resolvedParams.image !== 'string') {
-    throw new Error('Declarative Image objects are no longer supported by the API; pass a curated image key.')
+    throw new Error('Declarative Image objects are no longer supported by the API; pass a supported OCI image ref.')
   }
 
   const resources = 'resources' in resolvedParams ? resolvedParams.resources : undefined

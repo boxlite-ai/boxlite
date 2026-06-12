@@ -143,8 +143,8 @@ RUN_MIGRATIONS=true
 VERSION=0.1.0
 DEFAULT_REGION_ENFORCE_QUOTAS=false
 DEFAULT_SNAPSHOT=ubuntu:22.04
-# Curated image keys resolve to public refs on the local stack so the runner
-# can pull without private-registry credentials (prod resolves to pinned ghcr).
+# Supported-image allowlist for the local stack: public refs so the runner
+# can pull without private-registry credentials (prod pins ghcr digests).
 BOXLITE_SYSTEM_BASE_IMAGE=alpine:3.23
 BOXLITE_SYSTEM_PYTHON_IMAGE=python:3.11-alpine
 BOXLITE_SYSTEM_NODE_IMAGE=node:18-alpine

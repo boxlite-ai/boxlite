@@ -1524,7 +1524,10 @@ components:
           example: dev-box
         image:
           type: string
-          description: OCI image reference
+          description: |
+            OCI image reference. The hosted API accepts only the supported set of
+            pinned images; an unsupported value is rejected with a 400 error that
+            lists the currently supported references.
           default: "alpine:latest"
           example: python:3.11-slim
         rootfs_path:

@@ -24,7 +24,8 @@ describe('RunnerAdapterV2.createBox (CREATE_BOX job payload)', () => {
     const box = new Box('us', 'data-loader')
     box.organizationId = '057963b2-60ca-4356-81fc-11503e15f249'
     box.osUser = 'root'
-    box.image = 'python'
+    box.image =
+      'ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6'
     box.cpu = 2
     box.mem = 4
     box.disk = 10
@@ -47,7 +48,7 @@ describe('RunnerAdapterV2.createBox (CREATE_BOX job payload)', () => {
     expect(resourceId).toBe(box.id)
   })
 
-  it('resolves the curated key to a pinned OCI ref under `ociImageRef` (Go validate:"required" trap)', async () => {
+  it('passes the box image ref through untranslated under `image` (Go validate:"required" trap)', async () => {
     const createJob = jest.fn().mockResolvedValue(undefined)
     const adapter = createAdapter(createJob)
     const box = buildBox()
@@ -55,24 +56,29 @@ describe('RunnerAdapterV2.createBox (CREATE_BOX job payload)', () => {
     await adapter.createBox(box)
 
     const payload = createJob.mock.calls[0][5] as Record<string, unknown>
-    // the payload must carry the resolved ref, never the raw curated key
-    expect(payload.ociImageRef).toContain('boxlite-agent-python')
-    expect(payload.ociImageRef).not.toBe('python')
+    // the payload carries box.image verbatim -- no curated-key translation layer
+    expect(payload.image).toBe(
+      'ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6',
+    )
     expect('snapshot' in payload).toBe(false)
     expect('artifactRef' in payload).toBe(false)
+    expect('ociImageRef' in payload).toBe(false)
     // resources must reach the runner so the VM is sized correctly
     expect(payload.cpuQuota).toBe(2)
     expect(payload.memoryQuota).toBe(4)
     expect(payload.storageQuota).toBe(10)
   })
 
-  it('rejects a box whose image key escaped validation instead of sending a bogus ref', async () => {
+  it('sends both ids: uuid for job reporting, boxId for human-facing runner logs', async () => {
     const createJob = jest.fn().mockResolvedValue(undefined)
     const adapter = createAdapter(createJob)
     const box = buildBox()
-    box.image = 'ghcr.io/attacker/evil@sha256:0000'
 
-    await expect(adapter.createBox(box)).rejects.toThrow(/Invalid image/)
-    expect(createJob).not.toHaveBeenCalled()
+    await adapter.createBox(box)
+
+    const payload = createJob.mock.calls[0][5] as Record<string, unknown>
+    expect(payload.id).toBe(box.id)
+    expect(payload.boxId).toBe(box.boxId)
+    expect(payload.boxId).not.toBe(box.id)
   })
 })

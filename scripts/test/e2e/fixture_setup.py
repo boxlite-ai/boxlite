@@ -7,9 +7,9 @@ Configures:
   1. Admin org has non-zero per-box quotas
   2. `[profiles.p1]` in ~/.boxlite/credentials.toml points at the local API
 
-Box images need no registration: create requests carry a curated image key
-(base | python | node) that the API resolves via BOXLITE_SYSTEM_*_IMAGE env
-(bootstrap.sh points them at public refs for the local stack).
+Box images need no registration: create requests carry a full OCI image ref
+that must be in the API's supported allowlist (BOXLITE_SYSTEM_*_IMAGE env;
+bootstrap.sh points the local stack at public refs).
 """
 from __future__ import annotations
 
@@ -45,6 +45,25 @@ ADMIN_KEY = (
     or _read_admin_key_from_secrets()
     or "devkey"   # only used when bootstrap hasn't run yet
 )
+
+
+def _read_base_image_from_api_env() -> str | None:
+    """bootstrap.sh writes the local stack's supported-image allowlist into the
+    API env file. Record its base entry in the profile so conftest creates
+    boxes with an image this stack actually accepts."""
+    env_file = Path(os.environ.get("ENV_FILE", "/etc/boxlite-api.env"))
+    if not env_file.exists():
+        return None
+    try:
+        for ln in env_file.read_text().splitlines():
+            if ln.startswith("BOXLITE_SYSTEM_BASE_IMAGE="):
+                return ln.split("=", 1)[1].strip()
+    except PermissionError:
+        return None
+    return None
+
+
+DEFAULT_IMAGE = os.environ.get("BOXLITE_E2E_IMAGE") or _read_base_image_from_api_env()
 CRED_PATH = Path.home() / ".boxlite" / "credentials.toml"
 
 
@@ -121,6 +140,8 @@ def ensure_p1_profile(prefix: str):
         "auth_method": "api_key",
         "path_prefix": prefix,
     }
+    if DEFAULT_IMAGE:
+        entry["default_image"] = DEFAULT_IMAGE
     profiles["p1"] = entry
     profiles["default"] = entry.copy()
 

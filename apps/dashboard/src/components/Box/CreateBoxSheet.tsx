@@ -37,13 +37,19 @@ import { ScrollArea } from '../ui/scroll-area'
 
 const NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
 const MAX_INTERVAL_MINUTES = 2_147_483_647
-const CURATED_IMAGE_KEYS = ['base', 'python', 'node'] as const
-type CuratedImageKey = (typeof CURATED_IMAGE_KEYS)[number]
+// Pinned OCI refs the API accepts (mirrors the server-side allowlist fallbacks in
+// apps/api/src/box/constants/curated-images.constant.ts -- keep in sync on rotation).
+const SUPPORTED_IMAGES = [
+  'ghcr.io/boxlite-ai/boxlite-agent-base@sha256:834dcb65465985fc2f648451d76c81d166bc7672391c9064a0a115ce6306c85f',
+  'ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6',
+  'ghcr.io/boxlite-ai/boxlite-agent-node@sha256:fcb8b840ab68567975853666c82fb6c59a3c1d14a0cdc31d7cbf3a01e6c6d247',
+] as const
+type SupportedImage = (typeof SUPPORTED_IMAGES)[number]
 
-const CURATED_IMAGE_OPTIONS: Array<{ key: CuratedImageKey; label: string; description: string }> = [
-  { key: 'base', label: 'Base', description: 'Core runtime' },
-  { key: 'python', label: 'Python', description: 'Python tooling' },
-  { key: 'node', label: 'Node', description: 'Node.js tooling' },
+const SUPPORTED_IMAGE_OPTIONS: Array<{ key: SupportedImage; label: string; description: string }> = [
+  { key: SUPPORTED_IMAGES[0], label: 'Base', description: 'Core runtime' },
+  { key: SUPPORTED_IMAGES[1], label: 'Python', description: 'Python tooling' },
+  { key: SUPPORTED_IMAGES[2], label: 'Node', description: 'Node.js tooling' },
 ]
 
 const isOptionalIntegerInRange = (value: string | undefined, min: number) => {
@@ -74,7 +80,7 @@ const formSchema = z.object({
     .string()
     .optional()
     .refine((val) => !val || NAME_REGEX.test(val), 'Only letters, digits, dots, underscores and dashes are allowed'),
-  image: z.enum(CURATED_IMAGE_KEYS),
+  image: z.enum(SUPPORTED_IMAGES),
   autoStopInterval: z
     .string()
     .optional()
@@ -92,7 +98,7 @@ type FormValues = z.input<typeof formSchema>
 
 const defaultValues: FormValues = {
   name: '',
-  image: 'base',
+  image: SUPPORTED_IMAGES[0],
   autoStopInterval: '',
   autoDeleteInterval: '',
   cpu: '',
@@ -263,10 +269,10 @@ export const CreateBoxSheet = ({
                   <FieldLabel className="text-sm font-semibold">Image</FieldLabel>
                   <RadioGroup
                     value={field.state.value}
-                    onValueChange={(value) => field.handleChange(value as CuratedImageKey)}
+                    onValueChange={(value) => field.handleChange(value as SupportedImage)}
                     className="grid gap-2 sm:grid-cols-3"
                   >
-                    {CURATED_IMAGE_OPTIONS.map((option) => (
+                    {SUPPORTED_IMAGE_OPTIONS.map((option) => (
                       <div
                         key={option.key}
                         className={cn(

@@ -18,7 +18,7 @@ import { BoxError } from '../../exceptions/box-error.exception'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
-import { validateCuratedImageKey } from '../constants/curated-images.constant'
+import { assertSupportedImage } from '../constants/curated-images.constant'
 import { BoxWarmPoolService } from './box-warm-pool.service'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
 import { WarmPoolEvents } from '../constants/warmpool-events.constants'
@@ -132,8 +132,8 @@ export class BoxService {
     box.mem = warmPoolItem.mem
     box.disk = warmPoolItem.disk
 
-    // Warm-pool boxes have no per-request image key; they boot from the default curated image.
-    box.image = validateCuratedImageKey(undefined)
+    // Warm-pool boxes have no per-request image; they boot from the default supported image.
+    box.image = assertSupportedImage(undefined)
 
     const runner = await this.runnerService.getRandomAvailableRunner({
       regions: [box.region],
@@ -161,9 +161,9 @@ export class BoxService {
       const disk = createBoxDto.disk ?? DEFAULT_BOX_DISK
       const gpu = createBoxDto.gpu ?? DEFAULT_BOX_GPU
 
-      // Reject any image key outside the curated allowlist at the request boundary. Only the
-      // key is persisted; it resolves to a pinned OCI ref when the CREATE_BOX job is built.
-      const image = validateCuratedImageKey(createBoxDto.image)
+      // Reject any image outside the supported allowlist at the request boundary. The full
+      // OCI ref is persisted and flows to the runner untranslated.
+      const image = assertSupportedImage(createBoxDto.image)
 
       this.organizationService.assertOrganizationIsNotSuspended(organization)
 

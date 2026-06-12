@@ -61,7 +61,9 @@ export const PythonSnippetGenerator: CodeSnippetGenerator = {
     const ind = '\t'
     return [
       `\n\nparams = CreateBoxFromImageParams(`,
-      p.config.createBoxFromImage ? `${ind}image="base",` : '',
+      p.config.createBoxFromImage
+        ? `${ind}image="ghcr.io/boxlite-ai/boxlite-agent-base@sha256:834dcb65465985fc2f648451d76c81d166bc7672391c9064a0a115ce6306c85f",`
+        : '',
       p.config.useResources ? `${ind}resources=resources,` : '',
       p.config.useLanguageParam ? `${ind}language="${p.state['language']}",` : '',
       ...(p.config.createBoxParamsExist
