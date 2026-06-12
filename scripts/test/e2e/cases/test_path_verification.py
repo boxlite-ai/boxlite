@@ -18,6 +18,7 @@ production exec path.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -27,6 +28,21 @@ import pytest_asyncio
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from path_verification import runner_journal_seek, runner_hits_for_box
 from conftest import drain
+
+# Both checks in this module are local-stack-only:
+#   * `:3000 in url` assumes the SDK targets a colocated NestJS API,
+#     which is true for the local profile but not for the Tokyo cloud
+#     stack where the SDK hits an ALB DNS name without a port.
+#   * `runner_hits_for_box` reads `journalctl -u boxlite-runner` on
+#     the pytest host, which only works when runner + pytest share a
+#     host (local) — in cloud the runner lives on a separate EC2 host.
+# The e2e-cloud workflow sets BOXLITE_E2E_SKIP_PATH_VERIFY=1 to opt
+# out; the autouse runner-journal fixture in conftest.py honors the
+# same variable, so the semantics are consistent across the module.
+pytestmark = pytest.mark.skipif(
+    os.environ.get("BOXLITE_E2E_SKIP_PATH_VERIFY", "").lower() in ("1", "true", "yes", "on"),
+    reason="path-verification tests are local-only (assume :3000 + journalctl on pytest host)",
+)
 
 
 @pytest.mark.asyncio
