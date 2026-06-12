@@ -89,7 +89,12 @@ jobs:
       runner_chain: ${{ steps.filter.outputs.runner_chain }}
       sdk_py: ${{ steps.filter.outputs.sdk_py }}
       tests_or_workflow: ${{ steps.filter.outputs.tests_or_workflow }}
-      any: ${{ steps.filter.outputs.api == 'true' || steps.filter.outputs.runner_chain == 'true' || steps.filter.outputs.sdk_py == 'true' || steps.filter.outputs.tests_or_workflow == 'true' }}
+      proxy: ${{ steps.filter.outputs.proxy }}
+      otel_collector: ${{ steps.filter.outputs.otel_collector }}
+      ssh_gateway: ${{ steps.filter.outputs.ssh_gateway }}
+      app_services_any: ${{ steps.filter.outputs.proxy == 'true' || steps.filter.outputs.otel_collector == 'true' || steps.filter.outputs.ssh_gateway == 'true' }}
+      app_services_list: ${{ steps.appsvc.outputs.list }}
+      any: ${{ steps.filter.outputs.api == 'true' || steps.filter.outputs.runner_chain == 'true' || steps.filter.outputs.sdk_py == 'true' || steps.filter.outputs.tests_or_workflow == 'true' || steps.filter.outputs.proxy == 'true' || steps.filter.outputs.otel_collector == 'true' || steps.filter.outputs.ssh_gateway == 'true' }}
     steps:
       - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v3
@@ -132,6 +137,28 @@ jobs:
               - '.github/workflows/e2e-cloud.yml'
               - '.github/workflows/build-runner-binary.yml'
               - '.github/workflows/build-c.yml'
+            # Supporting ECS services (Proxy / OtelCollector / SshGateway).
+            # Each per-service deploy fires only when its own paths
+            # change, see deploy-app-services.yml.
+            proxy:
+              - 'apps/proxy/**'
+            otel_collector:
+              - 'apps/otel-collector/**'
+            ssh_gateway:
+              - 'apps/ssh-gateway/**'
+      # Build a comma-separated list of changed app-services to pass
+      # into deploy-app-services.yml's `services` workflow_call input.
+      # Empty when no app-service changed.
+      - id: appsvc
+        run: |
+          set -euo pipefail
+          LIST=()
+          [ '${{ steps.filter.outputs.proxy }}' = 'true' ]          && LIST+=(Proxy)
+          [ '${{ steps.filter.outputs.otel_collector }}' = 'true' ] && LIST+=(OtelCollector)
+          [ '${{ steps.filter.outputs.ssh_gateway }}' = 'true' ]    && LIST+=(SshGateway)
+          IFS=','
+          echo "list=${LIST[*]:-}" >> "$GITHUB_OUTPUT"
+          echo "Changed app-services: ${LIST[*]:-(none)}"
 
   # Build + deploy runner binary as a single reusable workflow.
   # Internally chains build-c.yml → build-runner-binary.yml → S3 push +
@@ -166,9 +193,27 @@ jobs:
       id-token: write
       contents: read
 
+  # Build + deploy supporting ECS services (Proxy / OtelCollector /
+  # SshGateway) as a reusable workflow. Inner workflow has per-service
+  # gating; we pass the comma-separated list of services whose source
+  # actually changed. Empty list / workflow_dispatch → inner workflow
+  # decides ("all 3" for workflow_dispatch without subset).
+  deploy_app_services:
+    name: Deploy supporting ECS services
+    needs: changes
+    if: |
+      needs.changes.outputs.app_services_any == 'true'
+      || github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/deploy-app-services.yml
+    with:
+      services: ${{ needs.changes.outputs.app_services_list }}
+    permissions:
+      id-token: write
+      contents: read
+
   e2e:
     name: E2E suite (Tokyo)
-    needs: [changes, deploy_runner, deploy_api]
+    needs: [changes, deploy_runner, deploy_api, deploy_app_services]
     # Default GHA semantics: a job whose `needs:` is SKIPPED also gets
     # skipped. Override via !failure() && !cancelled() — runs as long
     # as nothing in the upstream chain actively failed (skipped is OK,

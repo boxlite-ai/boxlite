@@ -19,7 +19,13 @@
 name: Deploy App Services
 
 on:
-  workflow_call: {}
+  workflow_call:
+    inputs:
+      services:
+        description: 'Comma-separated subset of {Proxy,OtelCollector,SshGateway} to redeploy. Empty = all 3 (default for workflow_call).'
+        type: string
+        required: false
+        default: ''
   workflow_dispatch:
     inputs:
       services:
