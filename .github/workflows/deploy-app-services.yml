@@ -40,6 +40,16 @@ on:
       - 'apps/ssh-gateway/**'
       - '.github/workflows/deploy-app-services.yml'
 
+# Serialize against the shared Tokyo ECS services. Concurrent
+# Proxy/OtelCollector/SshGateway deploys race for task-definition
+# revisions — observed live: two parallel runs both registered TDs,
+# one's UpdateService rolled the other back with "ECS rolled back.
+# PRIMARY=...:7 expected ...:6". cancel-in-progress: false because a
+# half-applied rolling update is worse than waiting.
+concurrency:
+  group: deploy-app-services-shared
+  cancel-in-progress: false
+
 permissions:
   contents: read
 

@@ -29,6 +29,14 @@ on:
         type: string
         required: true
 
+# Belt-and-suspenders against the outer-workflow concurrency: also
+# serialize per-service here, so any caller (deploy-app-services or
+# a future direct dispatch) racing on the same ECS service queues
+# instead of fighting over TD revisions. Different services parallelize.
+concurrency:
+  group: deploy-single-service-${{ inputs.service_name }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
   id-token: write

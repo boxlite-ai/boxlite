@@ -64,6 +64,15 @@ on:
       - 'apps/api-client-go/**'
       - '.github/workflows/deploy-api.yml'
 
+# Serialize against the shared Tokyo ECS service. Concurrent Api
+# deploys race for task-definition revision numbers and one's
+# UpdateService rolls back the other (see #724 OtelCollector race).
+# cancel-in-progress: false because a half-applied ECS rolling update
+# is worse than waiting.
+concurrency:
+  group: deploy-api-shared
+  cancel-in-progress: false
+
 permissions:
   contents: read
 

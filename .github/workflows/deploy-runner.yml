@@ -67,6 +67,15 @@ on:
       - '.github/workflows/build-c.yml'
       - '.github/workflows/build-runner-binary.yml'
 
+# Serialize against the shared Tokyo runner binary in S3 + EC2 user
+# data. Concurrent runner deploys race on the same artifact path and
+# the same userdata-poll loop on the EC2 host. cancel-in-progress:
+# false because killing a deploy mid-rollout leaves the EC2 host on
+# an unknown binary.
+concurrency:
+  group: deploy-runner-shared
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
