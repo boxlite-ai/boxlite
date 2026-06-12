@@ -49,6 +49,10 @@ export interface Box {
      */
     'env': { [key: string]: string; };
     /**
+     * The OCI image ref the box boots from
+     */
+    'image': string;
+    /**
      * Labels for the box
      */
     'labels': { [key: string]: string; };

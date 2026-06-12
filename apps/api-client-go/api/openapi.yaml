@@ -9565,8 +9565,7 @@ components:
           - member
           type: string
         assignedRoleIds:
-          default:
-          - 00000000-0000-0000-0000-000000000001
+          default: []
           description: Array of assigned role IDs
           items:
             type: string
@@ -9596,8 +9595,7 @@ components:
           - member
           type: string
         assignedRoleIds:
-          default:
-          - 00000000-0000-0000-0000-000000000001
+          default: []
           description: Array of assigned role IDs for the invitee
           items:
             type: string
@@ -9945,6 +9943,7 @@ components:
         user: boxlite
         env:
           NODE_ENV: production
+        image: ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6
         labels:
           boxlite.io/public: "true"
         public: false
@@ -10002,6 +10001,10 @@ components:
           example:
             NODE_ENV: production
           type: object
+        image:
+          description: The OCI image ref the box boots from
+          example: ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6
+          type: string
         labels:
           additionalProperties:
             type: string
@@ -10110,6 +10113,7 @@ components:
       - env
       - gpu
       - id
+      - image
       - labels
       - memory
       - name
@@ -10130,6 +10134,7 @@ components:
           user: boxlite
           env:
             NODE_ENV: production
+          image: ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6
           labels:
             boxlite.io/public: "true"
           public: false
@@ -10166,6 +10171,7 @@ components:
           user: boxlite
           env:
             NODE_ENV: production
+          image: ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6
           labels:
             boxlite.io/public: "true"
           public: false
@@ -12494,6 +12500,7 @@ components:
         user: boxlite
         env:
           NODE_ENV: production
+        image: ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6
         labels:
           boxlite.io/public: "true"
         public: false
@@ -12523,7 +12530,6 @@ components:
         daemonVersion: 1.0.0
         runnerId: runner123
         toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
-        image: boxlite-ai/workspace:latest
         info: ""
       properties:
         id:
@@ -12553,6 +12559,10 @@ components:
           example:
             NODE_ENV: production
           type: object
+        image:
+          description: The OCI image ref the box boots from
+          example: ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6
+          type: string
         labels:
           additionalProperties:
             type: string
@@ -12654,10 +12664,6 @@ components:
           description: The toolbox proxy URL for the box
           example: https://proxy.app.boxlite.io/toolbox
           type: string
-        image:
-          description: The image used for the workspace
-          example: boxlite-ai/workspace:latest
-          type: string
         info:
           allOf:
           - $ref: "#/components/schemas/BoxInfo"
@@ -12669,6 +12675,7 @@ components:
       - env
       - gpu
       - id
+      - image
       - labels
       - memory
       - name

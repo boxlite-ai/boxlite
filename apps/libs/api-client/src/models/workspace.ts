@@ -52,6 +52,10 @@ export interface Workspace {
      */
     'env': { [key: string]: string; };
     /**
+     * The OCI image ref the box boots from
+     */
+    'image': string;
+    /**
      * Labels for the box
      */
     'labels': { [key: string]: string; };
@@ -140,10 +144,6 @@ export interface Workspace {
      * The toolbox proxy URL for the box
      */
     'toolboxProxyUrl': string;
-    /**
-     * The image used for the workspace
-     */
-    'image'?: string;
     /**
      * Additional information about the box
      */

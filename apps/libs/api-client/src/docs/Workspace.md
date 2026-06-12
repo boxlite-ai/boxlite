@@ -11,6 +11,7 @@ Name | Type | Description | Notes
 **name** | **string** | The name of the box | [default to undefined]
 **user** | **string** | The user associated with the project | [default to undefined]
 **env** | **{ [key: string]: string; }** | Environment variables for the box | [default to undefined]
+**image** | **string** | The OCI image ref the box boots from | [default to undefined]
 **labels** | **{ [key: string]: string; }** | Labels for the box | [default to undefined]
 **_public** | **boolean** | Whether the box http preview is public | [default to undefined]
 **networkBlockAll** | **boolean** | Whether to block all network access for the box | [default to undefined]
@@ -33,7 +34,6 @@ Name | Type | Description | Notes
 **daemonVersion** | **string** | The version of the daemon running in the box | [optional] [default to undefined]
 **runnerId** | **string** | The runner ID of the box | [optional] [default to undefined]
 **toolboxProxyUrl** | **string** | The toolbox proxy URL for the box | [default to undefined]
-**image** | **string** | The image used for the workspace | [optional] [default to undefined]
 **info** | [**BoxInfo**](BoxInfo.md) | Additional information about the box | [optional] [default to undefined]
 
 ## Example
@@ -48,6 +48,7 @@ const instance: Workspace = {
     name,
     user,
     env,
+    image,
     labels,
     _public,
     networkBlockAll,
@@ -70,7 +71,6 @@ const instance: Workspace = {
     daemonVersion,
     runnerId,
     toolboxProxyUrl,
-    image,
     info,
 };
 ```

@@ -11,6 +11,7 @@ Name | Type | Description | Notes
 **name** | **string** | The name of the box | [default to undefined]
 **user** | **string** | The user associated with the project | [default to undefined]
 **env** | **{ [key: string]: string; }** | Environment variables for the box | [default to undefined]
+**image** | **string** | The OCI image ref the box boots from | [default to undefined]
 **labels** | **{ [key: string]: string; }** | Labels for the box | [default to undefined]
 **_public** | **boolean** | Whether the box http preview is public | [default to undefined]
 **networkBlockAll** | **boolean** | Whether to block all network access for the box | [default to undefined]
@@ -46,6 +47,7 @@ const instance: Box = {
     name,
     user,
     env,
+    image,
     labels,
     _public,
     networkBlockAll,
