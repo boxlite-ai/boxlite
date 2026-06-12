@@ -81,9 +81,6 @@ export const queryKeys = {
     detail: (organizationId: string, boxId: string) =>
       [...queryKeys.boxes.all, organizationId, boxId, 'detail'] as const,
     terminalSession: (boxId: string) => [...queryKeys.boxes.all, boxId, 'terminal-session'] as const,
-    vncInitialStatus: (boxId: string) => [...queryKeys.boxes.all, boxId, 'vnc-initial-status'] as const,
-    vncPollStatus: (boxId: string) => [...queryKeys.boxes.all, boxId, 'vnc-poll-status'] as const,
-    vncSession: (boxId: string) => [...queryKeys.boxes.all, boxId, 'vnc-session'] as const,
   },
   telemetry: {
     all: ['telemetry'] as const,
@@ -94,12 +91,6 @@ export const queryKeys = {
   },
   box: {
     all: ['box'] as const,
-    session: (scope: string) => [...queryKeys.box.all, scope] as const,
-    currentId: (scope: string) => [...queryKeys.box.all, scope, 'current-id'] as const,
-    instance: (scope: string, id: string) => [...queryKeys.box.all, scope, id] as const,
-    terminalUrl: (scope: string, id: string) => [...queryKeys.box.all, scope, id, 'terminal-url'] as const,
-    vncStatus: (scope: string, id: string) => [...queryKeys.box.all, scope, id, 'vnc-status'] as const,
-    vncUrl: (scope: string, id: string) => [...queryKeys.box.all, scope, id, 'vnc-url'] as const,
   },
   analytics: {
     all: ['analytics'] as const,

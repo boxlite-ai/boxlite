@@ -4,6 +4,7 @@
  */
 
 import { useApi } from '@/hooks/useApi'
+import { startBoxViaBoxApi } from '@/lib/cloudBox'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { queryKeys } from '@/hooks/queries/queryKeys'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
@@ -14,13 +15,14 @@ interface StartBoxVariables {
 }
 
 export const useStartBoxMutation = () => {
-  const { boxApi } = useApi()
+  const api = useApi()
   const { selectedOrganization } = useSelectedOrganization()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async ({ boxId }: StartBoxVariables) => {
-      await boxApi.startBox(boxId, selectedOrganization?.id)
+      if (!selectedOrganization?.id) throw new Error('Missing organization')
+      await startBoxViaBoxApi(api, selectedOrganization.id, boxId)
     },
     onSuccess: (_, { boxId, detailRef }) => {
       queryClient.invalidateQueries({

@@ -9,10 +9,10 @@ import { NotificationSocketProvider } from '@/providers/NotificationSocketProvid
 import { OrganizationsProvider } from '@/providers/OrganizationsProvider'
 import { SelectedOrganizationProvider } from '@/providers/SelectedOrganizationProvider'
 import { initPylon } from '@/vendor/pylon'
-import { useFeatureFlagEnabled, usePostHog } from 'posthog-js/react'
+import { usePostHog } from 'posthog-js/react'
 import React, { Suspense, useEffect } from 'react'
 import { useAuth } from 'react-oidc-context'
-import { generatePath, Navigate, Outlet, Route, Routes, useLocation, useParams } from 'react-router-dom'
+import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 import { BannerProvider } from './components/Banner'
 import { CommandPaletteProvider } from './components/CommandPalette'
 import LoadingFallback from './components/LoadingFallback'
@@ -26,10 +26,8 @@ import {
   DialogTitle,
 } from './components/ui/dialog'
 import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from './constants/ExternalLinks'
-import { FeatureFlags } from './enums/FeatureFlags'
 import { RoutePath, getRouteSubPath } from './enums/RoutePath'
 import { useConfig } from './hooks/useConfig'
-import { isDashboardVncEnabled } from './lib/dashboard-features'
 import Dashboard from './pages/Dashboard'
 import EmailVerify from './pages/EmailVerify'
 import Keys from './pages/Keys'
@@ -39,7 +37,7 @@ import NotFound from './pages/NotFound'
 import Admin from './pages/Admin'
 import Billing from './pages/Billing'
 import Boxes from './pages/Boxes'
-import { BoxDetails, BoxTerminalFullscreen, BoxVncFullscreen } from './components/boxes'
+import { BoxDetails, BoxTerminalFullscreen } from './components/boxes'
 import { ApiProvider } from './providers/ApiProvider'
 import { RegionsProvider } from './providers/RegionsProvider'
 import { BoxSessionProvider } from './providers/BoxSessionProvider'
@@ -56,7 +54,6 @@ const HIDDEN_DASHBOARD_ROUTES = [
   RoutePath.REGIONS,
   RoutePath.RUNNERS,
   RoutePath.EXPERIMENTAL,
-  RoutePath.PLAYGROUND,
   RoutePath.WEBHOOKS,
   RoutePath.WEBHOOK_ENDPOINT_DETAILS,
 ]
@@ -78,16 +75,6 @@ const SlackRedirect = () => {
   return null
 }
 
-const BoxVncFeatureRoute = ({ enabled }: { enabled: boolean }) => {
-  const { boxId } = useParams()
-
-  if (!enabled) {
-    return <Navigate to={boxId ? generatePath(RoutePath.BOX_DETAILS, { boxId }) : RoutePath.BOXES} replace />
-  }
-
-  return <BoxVncFullscreen />
-}
-
 // Same-origin OIDC silent-renew iframes are legitimate, so frame refusal
 // belongs in deployment headers. The terminal Paste action also refuses to
 // read clipboard when the dashboard itself is framed.
@@ -96,7 +83,6 @@ function App() {
   const config = useConfig()
   const location = useLocation()
   const posthog = usePostHog()
-  const vncEnabled = isDashboardVncEnabled(useFeatureFlagEnabled(FeatureFlags.DASHBOARD_VNC))
   const { error: authError, isAuthenticated, user, removeUser } = useAuth()
   const boxesRedirect = `${RoutePath.BOXES}${location.search}`
 
@@ -209,7 +195,6 @@ function App() {
           }
         >
           <Route path={getRouteSubPath(RoutePath.BOX_TERMINAL)} element={<BoxTerminalFullscreen />} />
-          <Route path={getRouteSubPath(RoutePath.BOX_VNC)} element={<BoxVncFeatureRoute enabled={vncEnabled} />} />
           <Route path={getRouteSubPath(RoutePath.BOX_DETAILS)} element={<BoxDetails />} />
         </Route>
         {HIDDEN_DASHBOARD_ROUTES.map((path) => (

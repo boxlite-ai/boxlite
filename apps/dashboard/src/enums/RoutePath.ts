@@ -35,7 +35,6 @@ export enum RoutePath {
   REGIONS = '/dashboard/regions',
   RUNNERS = '/dashboard/runners',
   EXPERIMENTAL = '/dashboard/experimental',
-  PLAYGROUND = '/dashboard/playground',
 
   // User routes
   USER_INVITATIONS = '/dashboard/user/invitations',
@@ -47,7 +46,6 @@ export enum RoutePath {
   // Boxes
   BOX_DETAILS = '/dashboard/boxes/:boxId',
   BOX_TERMINAL = '/dashboard/boxes/:boxId/terminal',
-  BOX_VNC = '/dashboard/boxes/:boxId/vnc',
 
   // Email verification
   EMAIL_VERIFY = '/dashboard/organization/:organizationId/verify-email/:email/:token',

@@ -4,13 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { FeatureFlags } from '@/enums/FeatureFlags'
 import { RoutePath } from '@/enums/RoutePath'
-import { isDashboardVncEnabled } from '@/lib/dashboard-features'
 import { getBoxRouteId } from '@/lib/box-identity'
 import { BoxState } from '@boxlite-ai/api-client'
 import { Terminal, MoreVertical, Play, Square, Loader2, Wrench } from 'lucide-react'
-import { useFeatureFlagEnabled } from 'posthog-js/react'
 import { generatePath, useNavigate } from 'react-router-dom'
 import { useMemo } from 'react'
 import TooltipButton from '../TooltipButton'
@@ -33,7 +30,6 @@ export function BoxTableActions({
   onStart,
   onStop,
   onDelete,
-  onVnc,
   onOpenWebTerminal,
   onCreateSshAccess,
   onRevokeSshAccess,
@@ -41,7 +37,6 @@ export function BoxTableActions({
   onScreenRecordings,
 }: BoxTableActionsProps) {
   const navigate = useNavigate()
-  const vncEnabled = isDashboardVncEnabled(useFeatureFlagEnabled(FeatureFlags.DASHBOARD_VNC))
   const isTransitioning = box.state === BoxState.STARTING || box.state === BoxState.STOPPING
 
   const primaryAction = useMemo(() => {
@@ -94,14 +89,6 @@ export function BoxTableActions({
           onClick: () => onOpenWebTerminal(box.id),
           disabled: isLoading,
         })
-        if (vncEnabled) {
-          items.push({
-            key: 'vnc',
-            label: 'VNC',
-            onClick: () => onVnc(getBoxRouteId(box)),
-            disabled: isLoading,
-          })
-        }
         items.push({
           key: 'screen-recordings',
           label: 'Screen Recordings',
@@ -171,13 +158,11 @@ export function BoxTableActions({
     onStart,
     onStop,
     onDelete,
-    onVnc,
     onOpenWebTerminal,
     onCreateSshAccess,
     onRevokeSshAccess,
     onRecover,
     onScreenRecordings,
-    vncEnabled,
     navigate,
   ])
 

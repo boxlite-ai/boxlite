@@ -33,7 +33,7 @@ import { useMatchMedia } from '@/hooks/useMatchMedia'
 import { useRegions } from '@/hooks/useRegions'
 import { useBoxWsSync } from '@/hooks/useBoxWsSync'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { isDashboardVncEnabled, isBoxContentTabAvailable } from '@/lib/dashboard-features'
+import { isBoxContentTabAvailable } from '@/lib/dashboard-features'
 import { handleApiError } from '@/lib/error-handling'
 import { setLocalStorageItem } from '@/lib/local-storage'
 import {
@@ -76,7 +76,6 @@ export default function BoxDetails() {
   const { getRegionName } = useRegions()
 
   const experimentsEnabled = useFeatureFlagEnabled(FeatureFlags.ORGANIZATION_EXPERIMENTS)
-  const vncEnabled = isDashboardVncEnabled(useFeatureFlagEnabled(FeatureFlags.DASHBOARD_VNC))
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [createSshDialogOpen, setCreateSshDialogOpen] = useState(false)
@@ -157,10 +156,10 @@ export default function BoxDetails() {
 
   // Coerce hidden tabs back to a supported default.
   useEffect(() => {
-    if (!isBoxContentTabAvailable(tab, { experimentsEnabled, vncEnabled })) {
+    if (!isBoxContentTabAvailable(tab, { experimentsEnabled })) {
       setTab('terminal')
     }
-  }, [experimentsEnabled, tab, setTab, vncEnabled])
+  }, [experimentsEnabled, tab, setTab])
 
   const { data: box, isLoading, isError, error, refetch, isFetching } = useBoxQuery(boxId ?? '')
   const isNotFound = isError && isAxiosError(error.cause) && error.cause?.status === 404
@@ -374,7 +373,6 @@ export default function BoxDetails() {
               box={box}
               isLoading={isLoading}
               experimentsEnabled={experimentsEnabled}
-              vncEnabled={vncEnabled}
               tab={tab}
               onTabChange={setTab}
             />
