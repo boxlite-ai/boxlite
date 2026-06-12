@@ -9565,8 +9565,7 @@ components:
           - member
           type: string
         assignedRoleIds:
-          default:
-          - 00000000-0000-0000-0000-000000000001
+          default: []
           description: Array of assigned role IDs
           items:
             type: string
@@ -9596,8 +9595,7 @@ components:
           - member
           type: string
         assignedRoleIds:
-          default:
-          - 00000000-0000-0000-0000-000000000001
+          default: []
           description: Array of assigned role IDs for the invitee
           items:
             type: string
