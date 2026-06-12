@@ -6,7 +6,6 @@
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **id** | **string** | The internal UUID of the box | [default to undefined]
-**boxId** | **string** | The public Box ID shown to users and SDK clients | [default to undefined]
 **organizationId** | **string** | The organization ID of the box | [default to undefined]
 **name** | **string** | The name of the box | [default to undefined]
 **user** | **string** | The user associated with the project | [default to undefined]
@@ -43,7 +42,6 @@ import { Workspace } from './api';
 
 const instance: Workspace = {
     id,
-    boxId,
     organizationId,
     name,
     user,

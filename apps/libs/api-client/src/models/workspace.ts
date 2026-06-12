@@ -32,10 +32,6 @@ export interface Workspace {
      */
     'id': string;
     /**
-     * The public Box ID shown to users and SDK clients
-     */
-    'boxId': string;
-    /**
      * The organization ID of the box
      */
     'organizationId': string;

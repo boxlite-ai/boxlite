@@ -44,16 +44,13 @@ export function useBoxWsSync({ boxId, refetchOnCreate = false }: UseBoxWsSyncOpt
       })
     }
 
-    const matchesActiveBox = (box: Box) => !boxId || box.id === boxId || box.boxId === boxId
+    const matchesActiveBox = (box: Box) => !boxId || box.id === boxId
 
     const optimisticUpdate = (box: Box, state: BoxState) => {
       updateStateInListCache(box.id, state)
       if (boxId) {
         updateStateInDetailCache(boxId, state)
         updateStateInDetailCache(box.id, state)
-        if (box.boxId) {
-          updateStateInDetailCache(box.boxId, state)
-        }
       }
     }
 

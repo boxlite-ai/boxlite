@@ -6,25 +6,26 @@
 
 import { Box, BoxDesiredState } from '@boxlite-ai/api-client'
 
-type BoxIdentity = Pick<Box, 'id' | 'name'> & Partial<Pick<Box, 'boxId' | 'desiredState'>>
+type BoxIdentity = Pick<Box, 'id' | 'name'> & Partial<Pick<Box, 'desiredState'>>
 
 export const MISSING_BOX_ID_LABEL = 'Not available'
 
-export function getBoxPublicId(box: Partial<Pick<Box, 'boxId'>> | undefined): string {
-  return box?.boxId || ''
+export function getBoxPublicId(box: Partial<Pick<Box, 'id'>> | undefined): string {
+  return box?.id || ''
 }
 
-export function getBoxPublicIdLabel(box: Partial<Pick<Box, 'boxId'>> | undefined): string {
+export function getBoxPublicIdLabel(box: Partial<Pick<Box, 'id'>> | undefined): string {
   return getBoxPublicId(box) || MISSING_BOX_ID_LABEL
 }
 
-export function getBoxRouteId(box: Partial<Pick<Box, 'boxId' | 'id'>> | undefined): string {
-  return box?.boxId || box?.id || ''
+export function getBoxRouteId(box: Partial<Pick<Box, 'id'>> | undefined): string {
+  return box?.id || ''
 }
 
 export function getBoxDisplayName(box: BoxIdentity): string {
   const name = getNormalizedBoxName(box)
-  if (name && name !== box.id && !isUuidLike(name)) {
+  // An unnamed box falls back to name === id at create time; show the id label then.
+  if (name && name !== box.id) {
     return name
   }
   return getBoxPublicId(box) || 'Box'
@@ -41,8 +42,4 @@ function getNormalizedBoxName(box: BoxIdentity): string {
   }
 
   return box.name
-}
-
-function isUuidLike(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
 }

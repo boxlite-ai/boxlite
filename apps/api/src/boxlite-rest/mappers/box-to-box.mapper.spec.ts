@@ -11,7 +11,6 @@ describe('box-to-box mapper', () => {
   it('maps REST box_id from the single box id', () => {
     const response = boxToBoxResponse({
       id: 'aB3cD4eF5gH6',
-      boxId: 'aB3cD4eF5gH6',
       organizationId: '057963b2-60ca-4356-81fc-11503e15f249',
       name: 'data-loader',
       state: 'started',
@@ -59,7 +58,6 @@ describe('box-to-box mapper', () => {
 
   it('echoes the image ref stored on the box', () => {
     const response = boxToBoxResponse({
-      boxId: 'aB3cD4eF5gH6',
       state: 'started',
       image:
         'ghcr.io/boxlite-ai/boxlite-agent-node@sha256:fcb8b840ab68567975853666c82fb6c59a3c1d14a0cdc31d7cbf3a01e6c6d247',

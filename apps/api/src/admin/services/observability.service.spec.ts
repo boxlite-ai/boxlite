@@ -398,7 +398,6 @@ describe('AdminObservabilityService', () => {
     overviewService.listBoxes.mockResolvedValue([
       {
         id: 'box-1',
-        boxId: 'box-1',
         organizationId: 'org-1',
         state: 'started',
         runnerId: 'runner-1',
@@ -408,7 +407,6 @@ describe('AdminObservabilityService', () => {
       },
       {
         id: 'box-2',
-        boxId: 'box-2',
         organizationId: 'org-1',
         state: 'started',
         runnerId: 'runner-2',
@@ -435,7 +433,6 @@ describe('AdminObservabilityService', () => {
       serviceNames: ['box-box-1'],
     })
     expect(result.boxes.map((box) => box.id)).toEqual(['box-1'])
-    expect(result.boxes.map((box) => box.boxId)).toEqual(['box-1'])
     expect(result.runners.map((runner) => runner.id)).toEqual(['runner-1'])
     expect(result.machines.map((machine) => machine.host)).toEqual(['runner-1'])
     expect(cloudWatchLogReader.getRelatedLogs).toHaveBeenCalledWith(
@@ -479,7 +476,6 @@ describe('AdminObservabilityService', () => {
     overviewService.listBoxes.mockResolvedValue([
       {
         id: 'box-1',
-        boxId: 'box-1',
         organizationId: 'org-1',
         state: 'started',
         runnerId: 'runner-1',
@@ -593,7 +589,6 @@ describe('AdminObservabilityService', () => {
     overviewService.listBoxes.mockResolvedValue([
       {
         id: 'box-1',
-        boxId: 'box-1',
         organizationId: 'org-1',
         state: 'started',
         runnerId: 'runner-1',
@@ -809,7 +804,6 @@ describe('AdminObservabilityService', () => {
     overviewService.listBoxes.mockResolvedValue([
       {
         id: 'box-1',
-        boxId: 'box-1',
         organizationId: 'org-1',
         state: 'stopped',
         runnerId: 'runner-1',
@@ -876,7 +870,6 @@ describe('AdminObservabilityService', () => {
     overviewService.listBoxes.mockResolvedValue([
       {
         id: 'box-1',
-        boxId: 'box-1',
         organizationId: 'org-1',
         state: 'started',
         runnerId: 'runner-1',
