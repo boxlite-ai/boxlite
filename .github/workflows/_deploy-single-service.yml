@@ -1,0 +1,140 @@
+# Reusable inner workflow: build + deploy ONE ECS service.
+# Called from deploy-app-services.yml's matrix-equivalent (3 jobs, one
+# per service). Parameterized by service_name + dockerfile so the same
+# logic services Proxy / OtelCollector / SshGateway.
+#
+# Mirrors deploy-api.yml's deploy job (minus the S3-related env patches
+# which only apply to Api):
+#   1. Resolve cluster
+#   2. ECR login + buildx build of the parameterized Dockerfile
+#   3. Clone live TD, swap image, strip readonly fields, register
+#   4. UpdateService --force-new-deployment + wait services-stable
+#   5. Assert PRIMARY taskDefinition == NEW_TD_ARN
+#
+# Unlike Api, these services don't sit behind ApiLoadBalancer (only Api
+# has an ALB target group; Proxy/SshGateway have their own LBs;
+# OtelCollector is internal). So the ALB-healthy poll is omitted here —
+# `wait services-stable` + PRIMARY assertion are sufficient.
+name: _deploy-single-service
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        description: 'Exact ECS service name (e.g. Proxy, OtelCollector, SshGateway)'
+        type: string
+        required: true
+      dockerfile:
+        description: 'Repo-relative Dockerfile path (build context = repo root)'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ${{ vars.AWS_E2E_CLOUD_REGION }}
+  AWS_ROLE_ARN: ${{ vars.AWS_E2E_CLOUD_ROLE_ARN }}
+  STACK_PREFIX: boxlite-e2e-ci
+  ECS_CLUSTER_PATTERN: boxlite-e2e-ci-ClusterCluster-
+  ECR_REPO: sst-asset
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.service_name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: deploy-${{ inputs.service_name }}-${{ github.run_id }}
+
+      - name: Resolve cluster
+        id: resources
+        run: |
+          set -euo pipefail
+          CLUSTER_COUNT=$(aws ecs list-clusters \
+            --query "length(clusterArns[?contains(@, '${ECS_CLUSTER_PATTERN}')])" --output text)
+          [ "$CLUSTER_COUNT" -eq 1 ] || { echo "::error::Expected 1 cluster, found $CLUSTER_COUNT"; exit 1; }
+          CLUSTER=$(aws ecs list-clusters \
+            --query "clusterArns[?contains(@, '${ECS_CLUSTER_PATTERN}')]|[0]" \
+            --output text | awk -F/ '{print $NF}')
+          echo "cluster=$CLUSTER" >> "$GITHUB_OUTPUT"
+          echo "::notice::cluster=$CLUSTER service=${{ inputs.service_name }}"
+
+      - name: ECR login
+        id: ecr_login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push image (${{ inputs.dockerfile }})
+        id: build
+        run: |
+          set -euo pipefail
+          REGISTRY="${{ steps.ecr_login.outputs.registry }}"
+          # Lowercase service for the ECR tag (deterministic + matches
+          # the convention "${service-lowercase}-${sha}").
+          TAG_NAME=$(echo "${{ inputs.service_name }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE="${REGISTRY}/${ECR_REPO}:${TAG_NAME}-${{ github.sha }}"
+          docker buildx build --platform linux/amd64 --load \
+            -f "${{ inputs.dockerfile }}" -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "::notice::Built and pushed $IMAGE"
+
+      - name: Register new TD + UpdateService + wait stable
+        env:
+          CLUSTER: ${{ steps.resources.outputs.cluster }}
+          IMAGE:   ${{ steps.build.outputs.image }}
+          SERVICE: ${{ inputs.service_name }}
+        run: |
+          set -euo pipefail
+
+          OLD_TD_ARN=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+            --query 'services[0].taskDefinition' --output text)
+          echo "Old TD: $OLD_TD_ARN"
+
+          # Clone old TD, swap container image, strip readonly fields.
+          # Plaintext env (e.g. credentials) lives in TD — do NOT cat the file.
+          aws ecs describe-task-definition --task-definition "$OLD_TD_ARN" \
+            --query 'taskDefinition' --output json \
+            | jq --arg img "$IMAGE" '
+                .containerDefinitions[0].image = $img
+                | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                      .compatibilities, .registeredAt, .registeredBy)' \
+            > /tmp/new-td.json
+
+          NEW_TD_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file:///tmp/new-td.json \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "::notice::New TD: $NEW_TD_ARN"
+
+          aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" \
+            --task-definition "$NEW_TD_ARN" --force-new-deployment >/dev/null
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
+          echo "Service stable — verifying PRIMARY..."
+
+          PRIMARY_TD=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+            --query 'services[0].deployments[?status==`PRIMARY`]|[0].taskDefinition' \
+            --output text)
+          if [ "$PRIMARY_TD" != "$NEW_TD_ARN" ]; then
+              echo "::error::ECS rolled back. PRIMARY=$PRIMARY_TD expected $NEW_TD_ARN"
+              aws ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" \
+                  --desired-status STOPPED --max-results 5 \
+                  --query 'taskArns' --output json \
+                | python3 -c "import json,sys; [print(t) for t in json.load(sys.stdin)]" \
+                | while read TASK; do
+                    [ -n "$TASK" ] || continue
+                    echo "--- stopped task $(basename "$TASK") ---"
+                    aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK" \
+                        --query 'tasks[0].[stoppedReason,containers[0].exitCode,containers[0].reason]' \
+                        --output text || true
+                  done
+              exit 1
+          fi
+          echo "::notice::PRIMARY deployment confirmed for ${SERVICE} on $NEW_TD_ARN"

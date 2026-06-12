@@ -1,0 +1,154 @@
+# Build + deploy the supporting ECS services for the Tokyo e2e-ci stack:
+# Proxy, OtelCollector, SshGateway. Each has its own Dockerfile in apps/
+# and an ECS service of the same name in the e2e-ci cluster.
+#
+# Mirrors deploy-api.yml's pattern:
+#   - paths-filter per service so a commit only redeploys the touched ones
+#   - clone live TD, swap image, strip readonly fields, register, update
+#     service, wait services-stable, assert PRIMARY == new TD
+#   - reuses the boxlite-e2e-cloud-github-actions OIDC role; perms already
+#     in its inline policy (ecr:* on sst-asset, ecs:Describe*/List*/
+#     RegisterTaskDefinition/UpdateService on boxlite-e2e-ci-*, iam:PassRole
+#     on boxlite-e2e-ci-* with PassedToService=ecs-tasks).
+#
+# Coverage gap motivation: prior to this workflow, only Api + Runner had
+# automated deploy. Changes to apps/{proxy,otel-collector,ssh-gateway}/**
+# went live only when an admin ran `sst deploy --stage e2e-ci`. Those
+# three services have similar Docker build + ECS rolling deploy shape,
+# so they fit one matrix.
+name: Deploy App Services
+
+on:
+  workflow_call: {}
+  workflow_dispatch:
+    inputs:
+      services:
+        description: 'Comma-separated subset of {Proxy,OtelCollector,SshGateway} to redeploy. Default = all detected via paths.'
+        type: string
+        required: false
+        default: ''
+  push:
+    paths:
+      - 'apps/proxy/**'
+      - 'apps/otel-collector/**'
+      - 'apps/ssh-gateway/**'
+      - '.github/workflows/deploy-app-services.yml'
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_E2E_CLOUD_REGION }}
+  AWS_ROLE_ARN: ${{ vars.AWS_E2E_CLOUD_ROLE_ARN }}
+  STACK_PREFIX: boxlite-e2e-ci
+  ECS_CLUSTER_PATTERN: boxlite-e2e-ci-ClusterCluster-
+  ECR_REPO: sst-asset
+
+jobs:
+  # ── Detect which app services to redeploy ─────────────────────────
+  changes:
+    name: Detect app-service source changes
+    runs-on: ubuntu-latest
+    outputs:
+      proxy:           ${{ steps.decide.outputs.proxy }}
+      otel_collector:  ${{ steps.decide.outputs.otel_collector }}
+      ssh_gateway:     ${{ steps.decide.outputs.ssh_gateway }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: filter
+        if: github.event_name == 'push'
+        uses: dorny/paths-filter@v3
+        with:
+          base: ${{ github.event.before }}
+          filters: |
+            proxy:
+              - 'apps/proxy/**'
+            otel_collector:
+              - 'apps/otel-collector/**'
+            ssh_gateway:
+              - 'apps/ssh-gateway/**'
+      - id: decide
+        env:
+          PUSH_PROXY:  ${{ steps.filter.outputs.proxy }}
+          PUSH_OTEL:   ${{ steps.filter.outputs.otel_collector }}
+          PUSH_SSHGW:  ${{ steps.filter.outputs.ssh_gateway }}
+          INPUT_SVCS:  ${{ inputs.services }}
+        run: |
+          set -euo pipefail
+
+          # Helper: emit per-service output. Precedence:
+          #   1. workflow_dispatch `services` input (comma-separated)
+          #   2. push paths-filter
+          #   3. non-push event (workflow_call) → redeploy ALL by default
+          declare -A SHOULD_DEPLOY=( [Proxy]=false [OtelCollector]=false [SshGateway]=false )
+
+          if [ -n "${INPUT_SVCS:-}" ]; then
+              # Explicit subset
+              IFS=',' read -ra REQ <<<"$INPUT_SVCS"
+              for s in "${REQ[@]}"; do
+                  case "$s" in
+                      Proxy)         SHOULD_DEPLOY[Proxy]=true ;;
+                      OtelCollector) SHOULD_DEPLOY[OtelCollector]=true ;;
+                      SshGateway)    SHOULD_DEPLOY[SshGateway]=true ;;
+                      *) echo "::warning::Unknown service in input: $s (ignored)" ;;
+                  esac
+              done
+              echo "Using workflow_dispatch services=$INPUT_SVCS"
+          elif [ "${{ github.event_name }}" = 'push' ]; then
+              [ "${PUSH_PROXY:-false}" = 'true' ]  && SHOULD_DEPLOY[Proxy]=true
+              [ "${PUSH_OTEL:-false}"  = 'true' ]  && SHOULD_DEPLOY[OtelCollector]=true
+              [ "${PUSH_SSHGW:-false}" = 'true' ]  && SHOULD_DEPLOY[SshGateway]=true
+              echo "Push paths-filter: proxy=${PUSH_PROXY:-false} otel=${PUSH_OTEL:-false} sshgw=${PUSH_SSHGW:-false}"
+          else
+              # workflow_call without explicit input — assume caller wants all
+              SHOULD_DEPLOY[Proxy]=true
+              SHOULD_DEPLOY[OtelCollector]=true
+              SHOULD_DEPLOY[SshGateway]=true
+              echo "Non-push event (${{ github.event_name }}) — deploy all 3"
+          fi
+
+          echo "proxy=${SHOULD_DEPLOY[Proxy]}"                 >> "$GITHUB_OUTPUT"
+          echo "otel_collector=${SHOULD_DEPLOY[OtelCollector]}" >> "$GITHUB_OUTPUT"
+          echo "ssh_gateway=${SHOULD_DEPLOY[SshGateway]}"      >> "$GITHUB_OUTPUT"
+          echo "Decision: proxy=${SHOULD_DEPLOY[Proxy]} otel=${SHOULD_DEPLOY[OtelCollector]} sshgw=${SHOULD_DEPLOY[SshGateway]}"
+
+  # ── One job per service, matrix-style via `if` gating ──────────────
+  # Note: GitHub Actions matrix doesn't combine cleanly with per-entry
+  # `if:` skipping (the matrix expands first, then if filters). Three
+  # explicit jobs reading from the same outputs is cleaner and keeps the
+  # logs grouped per service.
+  deploy_proxy:
+    name: Deploy Proxy
+    needs: changes
+    if: |
+      !failure() && !cancelled()
+      && needs.changes.outputs.proxy == 'true'
+    uses: ./.github/workflows/_deploy-single-service.yml
+    with:
+      service_name: Proxy
+      dockerfile: apps/proxy/Dockerfile
+    secrets: inherit
+
+  deploy_otel_collector:
+    name: Deploy OtelCollector
+    needs: changes
+    if: |
+      !failure() && !cancelled()
+      && needs.changes.outputs.otel_collector == 'true'
+    uses: ./.github/workflows/_deploy-single-service.yml
+    with:
+      service_name: OtelCollector
+      dockerfile: apps/otel-collector/Dockerfile
+    secrets: inherit
+
+  deploy_ssh_gateway:
+    name: Deploy SshGateway
+    needs: changes
+    if: |
+      !failure() && !cancelled()
+      && needs.changes.outputs.ssh_gateway == 'true'
+    uses: ./.github/workflows/_deploy-single-service.yml
+    with:
+      service_name: SshGateway
+      dockerfile: apps/ssh-gateway/Dockerfile
+    secrets: inherit
