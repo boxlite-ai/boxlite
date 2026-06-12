@@ -191,6 +191,21 @@ jobs:
           # subquery so it always reads back the row we just wrote.
           SQL='UPDATE "organization" SET max_cpu_per_box=4, max_memory_per_box=8192, max_disk_per_box=20 WHERE id = (SELECT "organizationId" FROM "organization_user" WHERE "userId" = '\''boxlite-admin'\'' AND "isDefaultForUser" = true LIMIT 1); SELECT id, max_cpu_per_box, max_memory_per_box, max_disk_per_box FROM "organization" WHERE id = (SELECT "organizationId" FROM "organization_user" WHERE "userId" = '\''boxlite-admin'\'' AND "isDefaultForUser" = true LIMIT 1);'
 
+          # Base64-encode the SQL before embedding in the --command
+          # argument. The previous form interpolated $SQL directly into a
+          # triple-escaped shell-double-quote stack
+          # (GHA bash → aws ecs --command → sh -c → psql -c). The SQL's
+          # own PG identifier double-quotes ("organizationId", etc.)
+          # then collided with the inner `\"...\"` boundaries, dropping
+          # them by the time psql received the string — PG case-folded
+          # the unquoted identifier and reported
+          # `column "organizationid" does not exist` (lowercase),
+          # masquerading as a missing-column bug. Base64 has no quote /
+          # space / dollar chars, so it survives every escape layer
+          # untouched. We then `base64 -d | psql -f -` inside the
+          # container so psql still sees the literal SQL byte-for-byte.
+          SQL_B64=$(printf '%s' "$SQL" | base64 -w0)
+
           # Capture the ECS Exec session output to a temp file so we can
           # grep it for the SELECT result. --interactive is required by
           # ECS Exec, but a non-TTY shell works because we feed nothing
@@ -204,8 +219,9 @@ jobs:
           #                 which wraps long lines and adds "--More--" prompts
           #                 that broke the previous grep
           # PAGER=cat       belt-and-braces in case psql calls $PAGER directly
+          # -f -            read SQL from stdin (the base64-decoded pipe)
           aws ecs execute-command --cluster "$CLUSTER" --task "$TASK" --container Api --interactive \
-            --command "sh -c \"PAGER=cat PGPASSWORD=\\\"\\\$DB_PASSWORD\\\" psql -h \\\"\\\$DB_HOST\\\" -U \\\"\\\$DB_USERNAME\\\" -d \\\"\\\$DB_DATABASE\\\" -A -t -P pager=off -v ON_ERROR_STOP=1 -c \\\"${SQL}\\\"\"" \
+            --command "sh -c \"echo ${SQL_B64} | base64 -d | PAGER=cat PGPASSWORD=\\\"\\\$DB_PASSWORD\\\" psql -h \\\"\\\$DB_HOST\\\" -U \\\"\\\$DB_USERNAME\\\" -d \\\"\\\$DB_DATABASE\\\" -A -t -P pager=off -v ON_ERROR_STOP=1 -f -\"" \
             2>&1 | tee "$OUT"
 
           # Verify the SELECT result actually shows the target values.
