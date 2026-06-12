@@ -19,7 +19,7 @@ import {
 } from '@/contexts/PlaygroundContext'
 import { MouseActions, MouseButton, MouseScrollDirection } from '@/enums/Playground'
 import { usePlayground } from '@/hooks/usePlayground'
-import { CloudBoxComputerUse } from '@/lib/cloudBox'
+import { ComputerUse } from '@boxlite-ai/sdk'
 import React from 'react'
 import PlaygroundActionForm from '../../ActionForm'
 import FormCheckboxInput from '../../Inputs/CheckboxInput'
@@ -164,7 +164,7 @@ const VNCMouseOperations: React.FC<VNCInteractionOptionsSectionComponentProps> =
 
   // Disable logic ensures that this method is called when ComputerUseClient exists -> we use as ComputerUse to silence TS compiler
   const mouseActionAPICall: PlaygroundActionInvokeApi = async (mouseActionFormData) => {
-    const MouseActionsClient = (ComputerUseClient as CloudBoxComputerUse).mouse
+    const MouseActionsClient = (ComputerUseClient as ComputerUse).mouse
     let mouseActionResponseText = ''
     switch (mouseActionFormData.methodName) {
       case MouseActions.CLICK: {

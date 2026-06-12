@@ -5,6 +5,7 @@
  */
 
 import PythonIcon from '@/assets/python.svg'
+import TypescriptIcon from '@/assets/typescript.svg'
 import CodeBlock from '@/components/CodeBlock'
 import { CopyButton } from '@/components/CopyButton'
 import TooltipButton from '@/components/TooltipButton'
@@ -21,7 +22,7 @@ import { usePlayground } from '@/hooks/usePlayground'
 import { usePlaygroundBox } from '@/hooks/usePlaygroundBox'
 import { createErrorMessageOutput, getLanguageCodeToRun } from '@/lib/playground'
 import { cn } from '@/lib/utils'
-import { Box, CodeLanguage } from '@/lib/cloudBox'
+import { CodeLanguage, Box } from '@boxlite-ai/sdk'
 import { ChevronUpIcon, Loader2, PanelBottom, Play, XIcon } from 'lucide-react'
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Group, Panel, usePanelRef } from 'react-resizable-panels'
@@ -29,7 +30,10 @@ import ResponseCard from '../ResponseCard'
 import { Window, WindowContent, WindowTitleBar } from '../Window'
 import { codeSnippetGenerators, CodeSnippetParams } from './CodeSnippets'
 
-const codeSnippetSupportedLanguages = [{ value: CodeLanguage.PYTHON, label: 'Python', icon: PythonIcon }] as const
+const codeSnippetSupportedLanguages = [
+  { value: CodeLanguage.PYTHON, label: 'Python', icon: PythonIcon },
+  { value: CodeLanguage.TYPESCRIPT, label: 'TypeScript', icon: TypescriptIcon },
+] as const
 
 const SECTION_SCROLL_MARKERS: Partial<Record<BoxParametersSections, string[]>> = {
   [BoxParametersSections.FILE_SYSTEM]: [
@@ -192,6 +196,11 @@ const BoxCodeSnippetsResponse = ({ className }: { className?: string }) => {
     () => ({
       [CodeLanguage.PYTHON]: {
         code: codeSnippetGenerators[CodeLanguage.PYTHON].buildFullSnippet(createCodeSnippetParams(CodeLanguage.PYTHON)),
+      },
+      [CodeLanguage.TYPESCRIPT]: {
+        code: codeSnippetGenerators[CodeLanguage.TYPESCRIPT].buildFullSnippet(
+          createCodeSnippetParams(CodeLanguage.TYPESCRIPT),
+        ),
       },
     }),
     [createCodeSnippetParams],

@@ -17,6 +17,7 @@
     "paths": {
       "@boxlite-ai/api-client": ["libs/api-client/src/index.ts"],
       "@boxlite-ai/runner-api-client": ["libs/runner-api-client/src/index.ts"],
+      "@boxlite-ai/sdk": ["libs/sdk-typescript/src/index.ts"],
       "@boxlite-ai/toolbox-api-client": ["libs/toolbox-api-client/src/index.ts"],
       "@boxlite-ai/analytics-api-client": ["libs/analytics-api-client/src/index.ts"]
     }

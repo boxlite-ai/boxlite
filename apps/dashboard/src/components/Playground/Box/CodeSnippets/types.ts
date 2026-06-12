@@ -4,7 +4,7 @@
  */
 
 import { BoxParams, BoxParametersInfo } from '@/contexts/PlaygroundContext'
-import { CodeLanguage } from '@/lib/cloudBox'
+import { CodeLanguage } from '@boxlite-ai/sdk'
 
 export interface CodeSnippetActionFlags {
   codeSnippetLanguage: CodeLanguage

@@ -28,7 +28,7 @@ import {
 } from '@/contexts/PlaygroundContext'
 import { MouseButton, MouseScrollDirection, BoxParametersSections, ScreenshotFormatOption } from '@/enums/Playground'
 import { getLanguageCodeToRun, objectHasAnyValue } from '@/lib/playground'
-import { CreateBoxBaseParams, CreateBoxFromImageParams, CreateBoxFromTemplateParams } from '@/lib/cloudBox'
+import { CreateBoxBaseParams, CreateBoxFromImageParams, CreateBoxFromTemplateParams, Image } from '@boxlite-ai/sdk'
 import { useCallback, useState } from 'react'
 
 const PARAM_SECTION_MAP: Partial<Record<keyof BoxParams, BoxParametersSections>> = {
@@ -297,7 +297,7 @@ export const PlaygroundProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     const useAutoDeleteInterval =
       createBoxParamsExist && boxParametersState['createBoxBaseParams']['autoDeleteInterval'] !== undefined
 
-    const createBoxFromImageParams: CreateBoxFromImageParams = { image: 'base' }
+    const createBoxFromImageParams: CreateBoxFromImageParams = { image: Image.debianSlim('3.13') } // Default and fixed image if CreateBoxFromImageParams are used
     const templateName = boxParametersState['templateName']
     const useCustomImageName = templateName !== undefined && templateName !== BOX_TEMPLATE_DEFAULT_VALUE
     // TODO(image-rewrite): templateId param was removed with the image/template subsystem.

@@ -12,6 +12,7 @@
       "@boxlite-ai/*": ["../libs/*"],
       "@boxlite-ai/api-client": ["../dist/libs/api-client/src/index.d.ts"],
       "@boxlite-ai/analytics-api-client": ["../dist/libs/analytics-api-client/src/index.d.ts"],
+      "@boxlite-ai/sdk": ["../dist/libs/sdk-typescript/src/index.d.ts"],
       "@boxlite-ai/toolbox-api-client": ["../dist/libs/toolbox-api-client/src/index.d.ts"]
     }
   },

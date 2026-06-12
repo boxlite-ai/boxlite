@@ -11,8 +11,8 @@ import {
 } from '@/contexts/PlaygroundContext'
 import { DisplayActions } from '@/enums/Playground'
 import { usePlayground } from '@/hooks/usePlayground'
-import { CloudBoxComputerUse } from '@/lib/cloudBox'
 import { DisplayInfoResponse, WindowsResponse } from '@boxlite-ai/api-client'
+import { ComputerUse } from '@boxlite-ai/sdk'
 import PlaygroundActionForm from '../../ActionForm'
 
 const VNCDisplayOperations: React.FC<VNCInteractionOptionsSectionComponentProps> = ({
@@ -37,7 +37,7 @@ const VNCDisplayOperations: React.FC<VNCInteractionOptionsSectionComponentProps>
 
   // Disable logic ensures that this method is called when ComputerUseClient exists -> we use as ComputerUse to silence TS compiler
   const displayActionAPICall: PlaygroundActionInvokeApi = async (displayActionFormData) => {
-    const displayActionResponse = await (ComputerUseClient as CloudBoxComputerUse).display[
+    const displayActionResponse = await (ComputerUseClient as ComputerUse).display[
       displayActionFormData.methodName as DisplayActions
     ]()
     let displayActionResponseText = ''

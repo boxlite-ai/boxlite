@@ -210,10 +210,10 @@ start_dashboard() {
     sleep 1
   fi
   log "starting dashboard (Vite dev)..."
-  # VITE_API_URL=/api tells dashboard API calls to use the Vite dev
+  # VITE_API_URL=/api tells the @boxlite-ai/sdk client to use the Vite dev
   # proxy (configured in vite.config.mts to forward /api → localhost:3001)
   # rather than the hard-coded prod default `https://app.boxlite.io/api`.
-  # Without this, dashboard create-box calls escape to prod
+  # Without this, dashboard SDK calls (e.g. create-box) escape to prod
   # and fail with ERR_CONNECTION_CLOSED.
   ( cd "${APPS_DIR}" && \
     VITE_API_URL=/api nohup corepack yarn nx serve dashboard \

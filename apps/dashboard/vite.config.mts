@@ -7,6 +7,7 @@ import path from 'path'
 import { defineConfig } from 'vite'
 import { analyzer } from 'vite-bundle-analyzer'
 import checker from 'vite-plugin-checker'
+import { nodePolyfills } from 'vite-plugin-node-polyfills'
 
 const outDir = '../dist/apps/dashboard'
 
@@ -30,6 +31,14 @@ export default defineConfig((mode) => ({
   },
   plugins: [
     react(),
+    // Required for @boxlite-ai/sdk
+    nodePolyfills({
+      globals: { global: true, process: true, Buffer: true },
+      overrides: {
+        path: 'path-browserify-win32',
+      },
+      protocolImports: true,
+    }),
     nxViteTsPaths(),
     nxCopyAssetsPlugin(['*.md']),
     // enforce typechecking for build mode
@@ -62,6 +71,11 @@ export default defineConfig((mode) => ({
   ],
   resolve: {
     alias: [
+      // Resolve @boxlite-ai/sdk to the local source
+      {
+        find: '@boxlite-ai/sdk',
+        replacement: path.resolve(__dirname, '../libs/sdk-typescript/src'),
+      },
       // Target @ but not @boxlite-ai,
       {
         // find: /^@(?!boxlite-ai)/,
@@ -74,12 +88,19 @@ export default defineConfig((mode) => ({
   // worker: {
   //  plugins: [ nxViteTsPaths() ],
   // },
+  optimizeDeps: {
+    exclude: ['tar'],
+  },
   build: {
     outDir,
     emptyOutDir: true,
     reportCompressedSize: true,
     commonjsOptions: {
       transformMixedEsModules: true,
+    },
+    // we'd ideally polyfill it but until https://github.com/davidmyersdev/vite-plugin-node-polyfills/issues/118 gets resolved we can just exclude it
+    rollupOptions: {
+      external: ['tar'],
     },
   },
 }))

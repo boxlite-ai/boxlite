@@ -19,14 +19,14 @@ import {
 } from '@/enums/Playground'
 import {
   CodeLanguage,
-  CloudBoxComputerUse,
+  ComputerUse,
   CreateBoxBaseParams,
   CreateBoxFromImageParams,
   CreateBoxFromTemplateParams,
   Resources,
   ScreenshotOptions,
   ScreenshotRegion,
-} from '@/lib/cloudBox'
+} from '@boxlite-ai/sdk'
 import { createContext, ReactNode } from 'react'
 
 export interface ParameterFormItem {
@@ -119,7 +119,7 @@ export type WrapVNCInvokeApiType = (
 
 export type VNCInteractionOptionsSectionComponentProps = {
   disableActions: boolean
-  ComputerUseClient: CloudBoxComputerUse | null
+  ComputerUseClient: ComputerUse | null
   wrapVNCInvokeApi: WrapVNCInvokeApiType
 }
 

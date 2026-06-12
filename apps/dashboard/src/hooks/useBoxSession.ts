@@ -5,16 +5,25 @@
 
 import { queryKeys } from '@/hooks/queries/queryKeys'
 import { useApi } from '@/hooks/useApi'
+import { useConfig } from '@/hooks/useConfig'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { createCloudBox, Box, CreateBoxParams, toCreateBoxRequest, waitUntilStarted } from '@/lib/cloudBox'
+import {
+  CreateBoxBaseParams,
+  CreateBoxFromImageParams,
+  CreateBoxFromTemplateParams,
+  BoxLite,
+  Box,
+} from '@boxlite-ai/sdk'
 import { QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useAuth } from 'react-oidc-context'
 import { toast } from 'sonner'
+
+type CreateBoxParams = CreateBoxBaseParams | CreateBoxFromImageParams | CreateBoxFromTemplateParams
 
 const TERMINAL_PORT = 22222
 const VNC_PORT = 6080
 const DEFAULT_URL_EXPIRY_SECONDS = 600
-const DEFAULT_CREATE_TIMEOUT_SECONDS = 60
 
 export type UseBoxSessionOptions = {
   scope?: string
@@ -78,25 +87,26 @@ export function useBoxSession(options?: UseBoxSessionOptions): UseBoxSessionResu
   } = options ?? {}
   const notifyRef = useRef({ box: true, terminal: true, vnc: true, ...notify })
   notifyRef.current = { box: true, terminal: true, vnc: true, ...notify }
+  const { user } = useAuth()
   const { selectedOrganization } = useSelectedOrganization()
-  const api = useApi()
-  const { boxApi, toolboxApi } = api
+  const { boxApi, toolboxApi } = useApi()
+  const { apiUrl } = useConfig()
   const queryClient = useQueryClient()
+
+  const client = useMemo(() => {
+    if (!user?.access_token || !selectedOrganization?.id) return null
+    return new BoxLite({
+      jwtToken: user.access_token,
+      apiUrl,
+      organizationId: selectedOrganization.id,
+    })
+  }, [apiUrl, user?.access_token, selectedOrganization?.id])
 
   const createMutation = useMutation<Box, Error, CreateBoxParams | undefined>({
     mutationKey: ['create-box', scope ?? 'default'],
     mutationFn: async (params) => {
-      if (!selectedOrganization?.id) throw new Error('Unable to create box: missing organization ID.')
-      const response = await boxApi.createBox(toCreateBoxRequest(params ?? createParams), selectedOrganization.id, {
-        timeout: DEFAULT_CREATE_TIMEOUT_SECONDS * 1000,
-      })
-      const startedBox = await waitUntilStarted(
-        response.data,
-        api,
-        selectedOrganization.id,
-        DEFAULT_CREATE_TIMEOUT_SECONDS,
-      )
-      return createCloudBox(startedBox, api, selectedOrganization.id)
+      if (!client) throw new Error('Unable to create BoxLite client: missing access token or organization ID.')
+      return await client.create(params ?? createParams)
     },
     onSuccess: (newBox) => {
       if (scope) queryClient.setQueryData(queryKeys.box.currentId(scope), newBox.id)
@@ -117,12 +127,8 @@ export function useBoxSession(options?: UseBoxSessionOptions): UseBoxSessionResu
 
   const boxQuery = useQuery<Box>({
     queryKey: queryKeys.box.instance(resolvedScope, boxId),
-    queryFn: async () => {
-      if (!selectedOrganization?.id) throw new Error('Unable to load box: missing organization ID.')
-      const response = await boxApi.getBox(boxId, selectedOrganization.id)
-      return createCloudBox(response.data, api, selectedOrganization.id)
-    },
-    enabled: !!resolvedScope && !!boxId && !!selectedOrganization?.id,
+    queryFn: () => client?.get(boxId) ?? Promise.reject(new Error('Client not initialized')),
+    enabled: !!resolvedScope && !!boxId && !!client,
   })
 
   const box = boxQuery.data ?? createMutation.data ?? null
