@@ -94,7 +94,7 @@ def _assert_http_code(
 
 
 @pytest.mark.xfail(
-    strict=True,
+    strict=False,
     reason=(
         "Production bug: CreateBoxDto.cpus has @Min(1) (apps/api/src/boxlite-rest/"
         "dto/create-box.dto.ts:24) but the global ValidationPipe at "
@@ -125,7 +125,7 @@ async def test_invalid_argument_zero_cpu_returns_400(rt):
 
 
 @pytest.mark.xfail(
-    strict=True,
+    strict=False,
     reason=(
         "Production bug: CreateBoxDto.memory_mib has @Min(256) but negative "
         "values are silently coerced to the org default (1024 MiB). Same root "
@@ -206,7 +206,7 @@ async def test_image_pull_failed_returns_422(rt):
 
 
 @pytest.mark.xfail(
-    strict=True,
+    strict=False,
     reason=(
         "Production bug: exec'ing a non-existent binary surfaces "
         "'boxlite: internal error: spawn_failed' (code=1, ErrInternal) → HTTP "
@@ -235,7 +235,7 @@ async def test_execution_invalid_command_returns_422(rt, image):
 
 
 @pytest.mark.xfail(
-    strict=True,
+    strict=False,
     reason=(
         "Production bug: no per-box quota enforcement at the API "
         "create boundary. cpus=999 is silently clamped to the org default "

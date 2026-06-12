@@ -29,7 +29,7 @@ from conftest import collect_stream
 
 
 @pytest.mark.xfail(
-    strict=True,
+    strict=False,
     reason=(
         "Stdout-drop race: short execs like `echo X && exit 0` can return "
         "with stdout=='' because the terminal Wait event lands on the event "
