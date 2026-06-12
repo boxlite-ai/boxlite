@@ -268,11 +268,18 @@ jobs:
           API_LB_DNS=$(aws elbv2 describe-load-balancers \
             --query "LoadBalancers[?starts_with(LoadBalancerName,'ApiLoadBalancer-')]|[0].DNSName" \
             --output text)
-          API_LB_TG_ARN=$(aws elbv2 describe-load-balancers \
+          API_LB_ARN=$(aws elbv2 describe-load-balancers \
             --query "LoadBalancers[?starts_with(LoadBalancerName,'ApiLoadBalancer-')]|[0].LoadBalancerArn" \
-            --output text \
-            | xargs -I{} aws elbv2 describe-target-groups --load-balancer-arn {} \
-                --query "TargetGroups[0].TargetGroupArn" --output text)
+            --output text)
+          # Blue/green or extra listeners can attach >1 target group to
+          # an ALB; TargetGroups[0] would silently pick the wrong one.
+          API_LB_TG_COUNT=$(aws elbv2 describe-target-groups \
+            --load-balancer-arn "$API_LB_ARN" \
+            --query "length(TargetGroups)" --output text)
+          assert_one "target group on ApiLoadBalancer-*" "$API_LB_TG_COUNT"
+          API_LB_TG_ARN=$(aws elbv2 describe-target-groups \
+            --load-balancer-arn "$API_LB_ARN" \
+            --query "TargetGroups[0].TargetGroupArn" --output text)
           echo "api_lb_dns=$API_LB_DNS" >> "$GITHUB_OUTPUT"
           echo "api_lb_tg_arn=$API_LB_TG_ARN" >> "$GITHUB_OUTPUT"
 
