@@ -46,6 +46,11 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
+# Default GITHUB_TOKEN to read-only. Each job that needs more (OIDC,
+# release writes) opts in via its own job-level permissions block.
+permissions:
+  contents: read
+
 # Singleton lock — every run must serialize against the SHARED Tokyo
 # stack. Per-ref grouping is wrong here: two merges to main race on
 # the same ECS service / runner binary / RDS row. cancel-in-progress:
