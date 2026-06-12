@@ -76,15 +76,11 @@ type APIClient struct {
 
 	RunnersAPI RunnersAPI
 
-	ToolboxAPI ToolboxAPI
-
 	UsersAPI UsersAPI
 
 	VolumesAPI VolumesAPI
 
 	WebhooksAPI WebhooksAPI
-
-	WorkspaceAPI WorkspaceAPI
 }
 
 type service struct {
@@ -116,11 +112,9 @@ func NewAPIClient(cfg *Configuration) *APIClient {
 	c.PreviewAPI = (*PreviewAPIService)(&c.common)
 	c.RegionsAPI = (*RegionsAPIService)(&c.common)
 	c.RunnersAPI = (*RunnersAPIService)(&c.common)
-	c.ToolboxAPI = (*ToolboxAPIService)(&c.common)
 	c.UsersAPI = (*UsersAPIService)(&c.common)
 	c.VolumesAPI = (*VolumesAPIService)(&c.common)
 	c.WebhooksAPI = (*WebhooksAPIService)(&c.common)
-	c.WorkspaceAPI = (*WorkspaceAPIService)(&c.common)
 
 	return c
 }

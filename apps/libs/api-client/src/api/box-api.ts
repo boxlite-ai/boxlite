@@ -26,8 +26,6 @@ import type { Box } from '../models';
 // @ts-ignore
 import type { BoxLabels } from '../models';
 // @ts-ignore
-import type { CreateBox } from '../models';
-// @ts-ignore
 import type { MetricsResponse } from '../models';
 // @ts-ignore
 import type { PaginatedBoxes } from '../models';
@@ -56,51 +54,6 @@ import type { UpdateBoxStateDto } from '../models';
  */
 export const BoxApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
-        /**
-         * 
-         * @summary Create a new box
-         * @param {CreateBox} createBox 
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        createBox: async (createBox: CreateBox, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'createBox' is not null or undefined
-            assertParamExists('createBox', 'createBox', createBox)
-            const localVarPath = `/box`;
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-            localVarHeaderParameter['Content-Type'] = 'application/json';
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            if (xBoxLiteOrganizationID != null) {
-                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
-            }
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-            localVarRequestOptions.data = serializeDataIfNeeded(createBox, localVarRequestOptions, configuration)
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
         /**
          * 
          * @summary Create SSH access for box
@@ -135,50 +88,6 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
             if (expiresInMinutes !== undefined) {
                 localVarQueryParameter['expiresInMinutes'] = expiresInMinutes;
             }
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            if (xBoxLiteOrganizationID != null) {
-                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
-            }
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * 
-         * @summary Delete box
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        deleteBox: async (boxIdOrName: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxIdOrName' is not null or undefined
-            assertParamExists('deleteBox', 'boxIdOrName', boxIdOrName)
-            const localVarPath = `/box/{boxIdOrName}`
-                .replace('{boxIdOrName}', encodeURIComponent(String(boxIdOrName)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'DELETE', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
 
             localVarHeaderParameter['Accept'] = 'application/json';
 
@@ -1236,99 +1145,6 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
         },
         /**
          * 
-         * @summary Start box
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        startBox: async (boxIdOrName: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxIdOrName' is not null or undefined
-            assertParamExists('startBox', 'boxIdOrName', boxIdOrName)
-            const localVarPath = `/box/{boxIdOrName}/start`
-                .replace('{boxIdOrName}', encodeURIComponent(String(boxIdOrName)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            if (xBoxLiteOrganizationID != null) {
-                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
-            }
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * 
-         * @summary Stop box
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {boolean} [force] Force stop the box using SIGKILL instead of SIGTERM
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        stopBox: async (boxIdOrName: string, xBoxLiteOrganizationID?: string, force?: boolean, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxIdOrName' is not null or undefined
-            assertParamExists('stopBox', 'boxIdOrName', boxIdOrName)
-            const localVarPath = `/box/{boxIdOrName}/stop`
-                .replace('{boxIdOrName}', encodeURIComponent(String(boxIdOrName)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-            if (force !== undefined) {
-                localVarQueryParameter['force'] = force;
-            }
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            if (xBoxLiteOrganizationID != null) {
-                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
-            }
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * 
          * @summary Update box state
          * @param {string} boxId ID of the box
          * @param {UpdateBoxStateDto} updateBoxStateDto 
@@ -1524,20 +1340,6 @@ export const BoxApiFp = function(configuration?: Configuration) {
     return {
         /**
          * 
-         * @summary Create a new box
-         * @param {CreateBox} createBox 
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async createBox(createBox: CreateBox, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Box>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.createBox(createBox, xBoxLiteOrganizationID, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.createBox']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
          * @summary Create SSH access for box
          * @param {string} boxIdOrName ID or name of the box
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -1549,20 +1351,6 @@ export const BoxApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.createSshAccess(boxIdOrName, xBoxLiteOrganizationID, expiresInMinutes, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['BoxApi.createSshAccess']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
-         * @summary Delete box
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async deleteBox(boxIdOrName: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Box>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.deleteBox(boxIdOrName, xBoxLiteOrganizationID, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.deleteBox']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -1864,35 +1652,6 @@ export const BoxApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
-         * @summary Start box
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async startBox(boxIdOrName: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Box>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.startBox(boxIdOrName, xBoxLiteOrganizationID, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.startBox']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
-         * @summary Stop box
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {boolean} [force] Force stop the box using SIGKILL instead of SIGTERM
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async stopBox(boxIdOrName: string, xBoxLiteOrganizationID?: string, force?: boolean, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Box>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.stopBox(boxIdOrName, xBoxLiteOrganizationID, force, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.stopBox']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
          * @summary Update box state
          * @param {string} boxId ID of the box
          * @param {UpdateBoxStateDto} updateBoxStateDto 
@@ -1960,17 +1719,6 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
     return {
         /**
          * 
-         * @summary Create a new box
-         * @param {CreateBox} createBox 
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        createBox(createBox: CreateBox, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Box> {
-            return localVarFp.createBox(createBox, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
          * @summary Create SSH access for box
          * @param {string} boxIdOrName ID or name of the box
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -1980,17 +1728,6 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
          */
         createSshAccess(boxIdOrName: string, xBoxLiteOrganizationID?: string, expiresInMinutes?: number, options?: RawAxiosRequestConfig): AxiosPromise<SshAccessDto> {
             return localVarFp.createSshAccess(boxIdOrName, xBoxLiteOrganizationID, expiresInMinutes, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
-         * @summary Delete box
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        deleteBox(boxIdOrName: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Box> {
-            return localVarFp.deleteBox(boxIdOrName, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -2237,29 +1974,6 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
         },
         /**
          * 
-         * @summary Start box
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        startBox(boxIdOrName: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Box> {
-            return localVarFp.startBox(boxIdOrName, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
-         * @summary Stop box
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {boolean} [force] Force stop the box using SIGKILL instead of SIGTERM
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        stopBox(boxIdOrName: string, xBoxLiteOrganizationID?: string, force?: boolean, options?: RawAxiosRequestConfig): AxiosPromise<Box> {
-            return localVarFp.stopBox(boxIdOrName, xBoxLiteOrganizationID, force, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
          * @summary Update box state
          * @param {string} boxId ID of the box
          * @param {UpdateBoxStateDto} updateBoxStateDto 
@@ -2313,18 +2027,6 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
 export class BoxApi extends BaseAPI {
     /**
      * 
-     * @summary Create a new box
-     * @param {CreateBox} createBox 
-     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public createBox(createBox: CreateBox, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).createBox(createBox, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
      * @summary Create SSH access for box
      * @param {string} boxIdOrName ID or name of the box
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -2334,18 +2036,6 @@ export class BoxApi extends BaseAPI {
      */
     public createSshAccess(boxIdOrName: string, xBoxLiteOrganizationID?: string, expiresInMinutes?: number, options?: RawAxiosRequestConfig) {
         return BoxApiFp(this.configuration).createSshAccess(boxIdOrName, xBoxLiteOrganizationID, expiresInMinutes, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
-     * @summary Delete box
-     * @param {string} boxIdOrName ID or name of the box
-     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public deleteBox(boxIdOrName: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).deleteBox(boxIdOrName, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -2607,31 +2297,6 @@ export class BoxApi extends BaseAPI {
      */
     public setAutostopInterval(boxIdOrName: string, interval: number, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return BoxApiFp(this.configuration).setAutostopInterval(boxIdOrName, interval, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
-     * @summary Start box
-     * @param {string} boxIdOrName ID or name of the box
-     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public startBox(boxIdOrName: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).startBox(boxIdOrName, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
-     * @summary Stop box
-     * @param {string} boxIdOrName ID or name of the box
-     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {boolean} [force] Force stop the box using SIGKILL instead of SIGTERM
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public stopBox(boxIdOrName: string, xBoxLiteOrganizationID?: string, force?: boolean, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).stopBox(boxIdOrName, xBoxLiteOrganizationID, force, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

@@ -69,6 +69,10 @@ export interface Box {
      */
     'target': string;
     /**
+     * The image used for the box
+     */
+    'image'?: string;
+    /**
      * The CPU quota for the box
      */
     'cpu': number;
