@@ -6,8 +6,7 @@
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **id** | **string** | Box ID | [default to undefined]
-**boxId** | **string** | Public box ID shown to users | [optional] [default to undefined]
-**organizationId** | **string** | Organization ID | [default to undefined]
+**organizationId** | **string** | Public box ID shown to users | [optional] [default to undefined]
 **state** | [**BoxState**](BoxState.md) |  | [default to undefined]
 **runnerId** | **string** | Runner ID the box is assigned to | [optional] [default to undefined]
 **cpu** | **number** | Allocated CPU (vCPUs) | [default to undefined]
@@ -22,7 +21,6 @@ import { AdminBoxItem } from './api';
 
 const instance: AdminBoxItem = {
     id,
-    boxId,
     organizationId,
     state,
     runnerId,

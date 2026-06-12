@@ -289,6 +289,10 @@ pub struct BoxInfo {
     /// User-defined name (optional).
     pub name: Option<String>,
 
+    /// Orchestrator-issued external reference (optional; omitted when unset).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_ref: Option<String>,
+
     /// Current lifecycle status.
     pub status: BoxStatus,
 
@@ -325,6 +329,7 @@ impl BoxInfo {
         Self {
             id: config.id.clone(),
             name: config.name.clone(),
+            external_ref: config.options.external_ref.clone(),
             status: state.status,
             created_at: config.created_at,
             last_updated: state.last_updated,

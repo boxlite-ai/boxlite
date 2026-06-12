@@ -24,9 +24,7 @@ type AdminBoxItem struct {
 	// Box ID
 	Id string `json:"id"`
 	// Public box ID shown to users
-	BoxId *string `json:"boxId,omitempty"`
-	// Organization ID
-	OrganizationId string `json:"organizationId"`
+	OrganizationId *string `json:"organizationId,omitempty"`
 	State BoxState `json:"state"`
 	// Runner ID the box is assigned to
 	RunnerId *string `json:"runnerId,omitempty"`
@@ -46,10 +44,9 @@ type _AdminBoxItem AdminBoxItem
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewAdminBoxItem(id string, organizationId string, state BoxState, cpu float32, createdAt string, owner AdminBoxOwner) *AdminBoxItem {
+func NewAdminBoxItem(id string, state BoxState, cpu float32, createdAt string, owner AdminBoxOwner) *AdminBoxItem {
 	this := AdminBoxItem{}
 	this.Id = id
-	this.OrganizationId = organizationId
 	this.State = state
 	this.Cpu = cpu
 	this.CreatedAt = createdAt
@@ -89,60 +86,36 @@ func (o *AdminBoxItem) SetId(v string) {
 	o.Id = v
 }
 
-// GetBoxId returns the BoxId field value if set, zero value otherwise.
-func (o *AdminBoxItem) GetBoxId() string {
-	if o == nil || IsNil(o.BoxId) {
+// GetOrganizationId returns the OrganizationId field value if set, zero value otherwise.
+func (o *AdminBoxItem) GetOrganizationId() string {
+	if o == nil || IsNil(o.OrganizationId) {
 		var ret string
 		return ret
 	}
-	return *o.BoxId
+	return *o.OrganizationId
 }
 
-// GetBoxIdOk returns a tuple with the BoxId field value if set, nil otherwise
+// GetOrganizationIdOk returns a tuple with the OrganizationId field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *AdminBoxItem) GetBoxIdOk() (*string, bool) {
-	if o == nil || IsNil(o.BoxId) {
+func (o *AdminBoxItem) GetOrganizationIdOk() (*string, bool) {
+	if o == nil || IsNil(o.OrganizationId) {
 		return nil, false
 	}
-	return o.BoxId, true
+	return o.OrganizationId, true
 }
 
-// HasBoxId returns a boolean if a field has been set.
-func (o *AdminBoxItem) HasBoxId() bool {
-	if o != nil && !IsNil(o.BoxId) {
+// HasOrganizationId returns a boolean if a field has been set.
+func (o *AdminBoxItem) HasOrganizationId() bool {
+	if o != nil && !IsNil(o.OrganizationId) {
 		return true
 	}
 
 	return false
 }
 
-// SetBoxId gets a reference to the given string and assigns it to the BoxId field.
-func (o *AdminBoxItem) SetBoxId(v string) {
-	o.BoxId = &v
-}
-
-// GetOrganizationId returns the OrganizationId field value
-func (o *AdminBoxItem) GetOrganizationId() string {
-	if o == nil {
-		var ret string
-		return ret
-	}
-
-	return o.OrganizationId
-}
-
-// GetOrganizationIdOk returns a tuple with the OrganizationId field value
-// and a boolean to check if the value has been set.
-func (o *AdminBoxItem) GetOrganizationIdOk() (*string, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.OrganizationId, true
-}
-
-// SetOrganizationId sets field value
+// SetOrganizationId gets a reference to the given string and assigns it to the OrganizationId field.
 func (o *AdminBoxItem) SetOrganizationId(v string) {
-	o.OrganizationId = v
+	o.OrganizationId = &v
 }
 
 // GetState returns the State field value
@@ -316,10 +289,9 @@ func (o AdminBoxItem) MarshalJSON() ([]byte, error) {
 func (o AdminBoxItem) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["id"] = o.Id
-	if !IsNil(o.BoxId) {
-		toSerialize["boxId"] = o.BoxId
+	if !IsNil(o.OrganizationId) {
+		toSerialize["organizationId"] = o.OrganizationId
 	}
-	toSerialize["organizationId"] = o.OrganizationId
 	toSerialize["state"] = o.State
 	if !IsNil(o.RunnerId) {
 		toSerialize["runnerId"] = o.RunnerId
@@ -344,7 +316,6 @@ func (o *AdminBoxItem) UnmarshalJSON(data []byte) (err error) {
 	// that every required field exists as a key in the generic map.
 	requiredProperties := []string{
 		"id",
-		"organizationId",
 		"state",
 		"cpu",
 		"createdAt",
@@ -379,7 +350,6 @@ func (o *AdminBoxItem) UnmarshalJSON(data []byte) (err error) {
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "id")
-		delete(additionalProperties, "boxId")
 		delete(additionalProperties, "organizationId")
 		delete(additionalProperties, "state")
 		delete(additionalProperties, "runnerId")

@@ -9937,7 +9937,6 @@ components:
     Box:
       example:
         id: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
-        boxId: aB3cD4eF5gH6
         organizationId: organization123
         name: MyBox
         user: boxlite
@@ -9977,10 +9976,6 @@ components:
         id:
           description: The internal UUID of the box
           example: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
-          type: string
-        boxId:
-          description: The public Box ID shown to users and SDK clients
-          example: aB3cD4eF5gH6
           type: string
         organizationId:
           description: The organization ID of the box
@@ -10107,7 +10102,6 @@ components:
           example: https://proxy.app.boxlite.io/toolbox
           type: string
       required:
-      - boxId
       - cpu
       - disk
       - env
@@ -10128,7 +10122,6 @@ components:
       example:
         items:
         - id: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
-          boxId: aB3cD4eF5gH6
           organizationId: organization123
           name: MyBox
           user: boxlite
@@ -10165,7 +10158,6 @@ components:
           runnerId: runner123
           toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
         - id: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
-          boxId: aB3cD4eF5gH6
           organizationId: organization123
           name: MyBox
           user: boxlite
@@ -12494,7 +12486,6 @@ components:
     Workspace:
       example:
         id: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
-        boxId: aB3cD4eF5gH6
         organizationId: organization123
         name: MyBox
         user: boxlite
@@ -12535,10 +12526,6 @@ components:
         id:
           description: The internal UUID of the box
           example: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
-          type: string
-        boxId:
-          description: The public Box ID shown to users and SDK clients
-          example: aB3cD4eF5gH6
           type: string
         organizationId:
           description: The organization ID of the box
@@ -12669,7 +12656,6 @@ components:
           - $ref: "#/components/schemas/BoxInfo"
           description: Additional information about the box
       required:
-      - boxId
       - cpu
       - disk
       - env
@@ -13463,8 +13449,7 @@ components:
     AdminBoxItem:
       example:
         id: box_abc123
-        boxId: abc123XYZ
-        organizationId: org_xyz
+        organizationId: abc123XYZ
         state: started
         runnerId: runner-uuid
         cpu: 2
@@ -13481,13 +13466,9 @@ components:
           description: Box ID
           example: box_abc123
           type: string
-        boxId:
+        organizationId:
           description: Public box ID shown to users
           example: abc123XYZ
-          type: string
-        organizationId:
-          description: Organization ID
-          example: org_xyz
           type: string
         state:
           allOf:
@@ -13515,7 +13496,6 @@ components:
       - cpu
       - createdAt
       - id
-      - organizationId
       - owner
       - state
       type: object
@@ -14807,8 +14787,7 @@ components:
               value: 0.8008281904610115
         boxes:
         - id: box_abc123
-          boxId: abc123XYZ
-          organizationId: org_xyz
+          organizationId: abc123XYZ
           state: started
           runnerId: runner-uuid
           cpu: 2
@@ -14821,8 +14800,7 @@ components:
             orgName: Alice Personal
             personal: true
         - id: box_abc123
-          boxId: abc123XYZ
-          organizationId: org_xyz
+          organizationId: abc123XYZ
           state: started
           runnerId: runner-uuid
           cpu: 2

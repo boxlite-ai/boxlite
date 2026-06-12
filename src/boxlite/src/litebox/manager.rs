@@ -115,6 +115,13 @@ impl BoxManager {
             }
         }
 
+        // Exact external_ref match (orchestrator-issued correlation key)
+        for (config, state) in &all {
+            if config.options.external_ref.as_deref() == Some(id_or_name) {
+                return Ok(Some((config.clone(), state.clone())));
+            }
+        }
+
         // ID prefix match
         let matches: Vec<_> = all
             .iter()
@@ -320,6 +327,22 @@ mod tests {
         let result = manager.lookup_box("my-box").unwrap();
         assert!(result.is_some());
         assert_eq!(result.unwrap().0.id.as_str(), TEST_ID_1);
+    }
+
+    #[test]
+    fn test_lookup_box_by_external_ref() {
+        let store = create_test_store();
+        let manager = BoxManager::new(store);
+        let mut config = create_test_config(TEST_ID_1);
+        config.options.external_ref = Some("a7Kf93mQpX2z".to_string());
+        manager
+            .add_box(&config, &create_test_state(BoxStatus::Configured))
+            .unwrap();
+
+        let found = manager.lookup_box("a7Kf93mQpX2z").unwrap();
+        assert_eq!(found.unwrap().0.id.as_str(), TEST_ID_1);
+
+        assert!(manager.lookup_box("not-a-ref-anywhere").unwrap().is_none());
     }
 
     #[test]
