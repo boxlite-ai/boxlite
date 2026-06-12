@@ -123,6 +123,9 @@ jobs:
     if: |
       !failure() && !cancelled()
       && needs.changes.outputs.proxy == 'true'
+    permissions:
+      id-token: write
+      contents: read
     uses: ./.github/workflows/_deploy-single-service.yml
     with:
       service_name: Proxy
@@ -135,6 +138,9 @@ jobs:
     if: |
       !failure() && !cancelled()
       && needs.changes.outputs.otel_collector == 'true'
+    permissions:
+      id-token: write
+      contents: read
     uses: ./.github/workflows/_deploy-single-service.yml
     with:
       service_name: OtelCollector
@@ -147,6 +153,9 @@ jobs:
     if: |
       !failure() && !cancelled()
       && needs.changes.outputs.ssh_gateway == 'true'
+    permissions:
+      id-token: write
+      contents: read
     uses: ./.github/workflows/_deploy-single-service.yml
     with:
       service_name: SshGateway

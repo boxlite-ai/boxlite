@@ -55,3 +55,5 @@ HEALTHCHECK CMD [ "curl", "-f", "http://localhost:4000/health" ]
 ENTRYPOINT ["boxlite-proxy"]
 
 # 2026-06-12T04:21:06Z — trigger deploy-app-services CI test
+
+# 2026-06-12T04:23:31Z — retest after id-token perm fix
