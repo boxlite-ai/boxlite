@@ -23,6 +23,16 @@ name: E2E test (Tokyo)
 on:
   workflow_call: {}
   workflow_dispatch: {}
+  # PRE-MERGE ONLY — drop before landing on main. workflow_dispatch
+  # rejects this file until GH has seen it run at least once. While
+  # it lives on this feature branch with no caller in main, we need a
+  # push trigger so the first push registers it as a known workflow
+  # (and validates the SQL escape fix in the same shot). Same trick
+  # build-runner-binary.yml documents in its header.
+  push:
+    branches: [chore/e2e-required-merge-gate]
+    paths:
+      - '.github/workflows/e2e-cloud-test.yml'
 
 permissions:
   contents: read
