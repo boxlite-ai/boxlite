@@ -150,9 +150,25 @@ jobs:
       id-token: write
       contents: write
 
+  # Build + deploy Api container as a reusable workflow. Internal logic
+  # in deploy-api.yml handles: ECR build/push, register-TD (with S3 env
+  # patch + Api role reuse via the cloned TD), UpdateService, wait stable,
+  # PRIMARY assertion, ALB-healthy poll. Fires only when api source
+  # changed — pure runner / test PRs skip the Docker build + ECS deploy.
+  deploy_api:
+    name: Deploy Api (build + ECS rolling update)
+    needs: changes
+    if: |
+      needs.changes.outputs.api == 'true'
+      || github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/deploy-api.yml
+    permissions:
+      id-token: write
+      contents: read
+
   e2e:
     name: E2E suite (Tokyo)
-    needs: [changes, deploy_runner]
+    needs: [changes, deploy_runner, deploy_api]
     # Default GHA semantics: a job whose `needs:` is SKIPPED also gets
     # skipped. Override via !failure() && !cancelled() — runs as long
     # as nothing in the upstream chain actively failed (skipped is OK,
@@ -236,146 +252,26 @@ jobs:
             --output text)
           echo "s3_bucket=$S3_BUCKET" >> "$GITHUB_OUTPUT"
 
-          # Preflight: ECR repo must exist (hardcoded SST default — fail
-          # fast if SST is reconfigured to a per-stage repo).
-          aws ecr describe-repositories --repository-names "${ECR_REPO}" >/dev/null \
-            || { echo "::error::ECR repo ${ECR_REPO} not found — SST may have been reconfigured. Update ECR_REPO env in this workflow."; exit 1; }
-
-          # Preflight: SSM agent on runner must be online (avoid 5-minute
-          # queue-and-timeout if the agent is dead).
-          PING=$(aws ssm describe-instance-information \
-            --filters "Key=InstanceIds,Values=$RUNNER_ID" \
-            --query "InstanceInformationList[0].PingStatus" --output text)
-          if [ "$PING" != "Online" ]; then
-              echo "::error::SSM agent on runner $RUNNER_ID is not Online (PingStatus=$PING) — runner binary update would hang."
-              exit 1
-          fi
+          # Note: ECR repo check + SSM agent online preflight were dropped.
+          # ECR is now exercised by deploy-api.yml's own ECR login step
+          # (fails there with a clear message if the repo is gone).
+          # SSM-agent-online preflight is obsolete since deploy-runner.yml
+          # switched to SSH+SCP via EC2 Instance Connect — the SSM agent's
+          # health no longer gates runner deploy.
 
           echo "::notice::cluster=$CLUSTER api_lb=$API_LB_DNS runner=$RUNNER_ID (SSM=Online) s3=$S3_BUCKET"
 
       # ──────────────────────────────────────────────────────────────────
-      # Build & push Api container image (Node.js / NestJS), tag = git sha.
+      # Api + Runner deploys are handled by reusable workflows:
+      #   - .github/workflows/deploy-runner.yml  (workflow_call: deploy_runner)
+      #   - .github/workflows/deploy-api.yml     (workflow_call: deploy_api)
+      # By the time this job runs, the deployed Tokyo stack already has
+      # the new Api image + Runner binary (or skipped them, if the PR
+      # didn't touch those code paths — that's the source-gated path).
+      # Belt-and-suspenders /api/health probe before we run the suite:
       # ──────────────────────────────────────────────────────────────────
-      - name: ECR login
-        id: ecr_login
-        uses: aws-actions/amazon-ecr-login@v2
-
-      # Runner deploy now handled by the `deploy_runner` job (workflow_call
-      # of .github/workflows/deploy-runner.yml). When that job ran for
-      # this CI run, the Tokyo EC2 is already on the new binary by the
-      # time we get here.
-
-      - name: Build & push Api image (source mode via tsx, no webpack)
-        id: build_api
-        if: |
-          needs.changes.outputs.api == 'true'
-          || github.event_name == 'workflow_dispatch'
+      - name: Probe /api/health through the LB
         run: |
-          set -euo pipefail
-          REGISTRY="${{ steps.ecr_login.outputs.registry }}"
-          IMAGE="${REGISTRY}/${ECR_REPO}:api-${{ github.sha }}"
-          # Use apps/api/Dockerfile.source — runs TS directly via tsx at
-          # container runtime, NO webpack build, NO dashboard build, NO
-          # strict TS type-check gate. See that file's header for rationale.
-          # Build context = repo root (Dockerfile references apps/libs/...).
-          docker buildx build --platform linux/amd64 --load \
-            -f apps/api/Dockerfile.source -t "$IMAGE" .
-          docker push "$IMAGE"
-          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
-
-      # ──────────────────────────────────────────────────────────────────
-      # Deploy: register new Api task definition with the new image (all
-      # other env vars preserved verbatim), force-redeploy the service,
-      # wait for stable, then verify the ALB target group reports healthy.
-      # `wait services-stable` alone is NOT sufficient — ECS service can
-      # be stable before the ALB health check passes; an immediate test
-      # run can race a 503 from the LB.
-      # ──────────────────────────────────────────────────────────────────
-      - name: Deploy Api (rolling)
-        if: |
-          needs.changes.outputs.api == 'true'
-          || github.event_name == 'workflow_dispatch'
-        run: |
-          set -euo pipefail
-          CLUSTER="${{ steps.resources.outputs.cluster }}"
-          IMAGE="${{ steps.build_api.outputs.image }}"
-          TG_ARN="${{ steps.resources.outputs.api_lb_tg_arn }}"
-
-          OLD_TD_ARN=$(aws ecs describe-services --cluster "$CLUSTER" --services Api \
-            --query 'services[0].taskDefinition' --output text)
-          echo "Old TD: $OLD_TD_ARN"
-
-          # jq deep-clone the task def, swap container image, strip
-          # readonly fields. The task def env contains plaintext
-          # DB_PASSWORD; never `cat`/echo new-td.json — it goes
-          # straight to AWS via --cli-input-json.
-          aws ecs describe-task-definition --task-definition "$OLD_TD_ARN" \
-            --query 'taskDefinition' --output json \
-            | jq --arg img "$IMAGE" '
-                .containerDefinitions[0].image = $img
-                | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
-                      .compatibilities, .registeredAt, .registeredBy)' \
-            > /tmp/new-td.json
-
-          NEW_TD_ARN=$(aws ecs register-task-definition \
-            --cli-input-json file:///tmp/new-td.json \
-            --query 'taskDefinition.taskDefinitionArn' --output text)
-          echo "New TD: $NEW_TD_ARN"
-
-          aws ecs update-service --cluster "$CLUSTER" --service Api \
-            --task-definition "$NEW_TD_ARN" --force-new-deployment \
-            >/dev/null
-          aws ecs wait services-stable --cluster "$CLUSTER" --services Api
-          echo "Service stable — verifying PRIMARY is NEW_TD..."
-
-          # ECS DeploymentCircuitBreaker auto-rolls-back when new tasks
-          # keep failing to start. After rollback the SERVICE is stable
-          # again (running == desired on the OLD td), so `wait
-          # services-stable` returns success and the ALB target group
-          # reports healthy — but the new image is NOT running. Both
-          # the ALB check and `/api/health` below would talk to the
-          # OLD tasks and answer 2xx, masking a failed deploy.
-          # Explicitly assert the PRIMARY deployment's taskDefinition
-          # equals NEW_TD_ARN. If it differs, ECS rolled back.
-          PRIMARY_TD=$(aws ecs describe-services --cluster "$CLUSTER" --services Api \
-              --query 'services[0].deployments[?status==`PRIMARY`]|[0].taskDefinition' \
-              --output text)
-          if [ "$PRIMARY_TD" != "$NEW_TD_ARN" ]; then
-              echo "::error::ECS rolled back. PRIMARY=$PRIMARY_TD expected $NEW_TD_ARN"
-              # Pull stop reasons from recent failed tasks for context
-              aws ecs list-tasks --cluster "$CLUSTER" --service-name Api \
-                  --desired-status STOPPED --max-results 5 \
-                  --query 'taskArns' --output text \
-                | tr '\t' '\n' | head -3 \
-                | while read -r TASK; do
-                    [ -n "$TASK" ] || continue
-                    echo "--- stopped task $(basename "$TASK") ---"
-                    aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK" \
-                        --query 'tasks[0].[stoppedReason,containers[0].exitCode,containers[0].reason]' \
-                        --output text || true
-                  done
-              exit 1
-          fi
-          echo "::notice::PRIMARY deployment confirmed on $NEW_TD_ARN"
-
-          # Now verify the ALB target group is actually serving — wait
-          # for at least one healthy target. Up to ~3 minutes for health
-          # check thresholds to clear.
-          for i in $(seq 1 18); do
-              HEALTHY=$(aws elbv2 describe-target-health \
-                --target-group-arn "$TG_ARN" \
-                --query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" \
-                --output text)
-              if [ "$HEALTHY" -ge 1 ]; then
-                  echo "::notice::ALB target group reports $HEALTHY healthy target(s)"
-                  break
-              fi
-              echo "ALB target group has 0 healthy targets — retry $i/18 in 10s"
-              sleep 10
-          done
-          [ "$HEALTHY" -ge 1 ] || { echo "::error::ALB target group never reported healthy"; exit 1; }
-
-          # Belt-and-suspenders: hit /api/health through the LB
           API_DNS="${{ steps.resources.outputs.api_lb_dns }}"
           curl -fsS --retry 6 --retry-delay 5 --retry-all-errors --max-time 10 \
                -o /dev/null "http://${API_DNS}/api/health"
