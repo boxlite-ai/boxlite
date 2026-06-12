@@ -21,6 +21,11 @@
 #                      runner target is needed).
 name: Build C SDK
 
+# Default GITHUB_TOKEN to read-only. The upload_release job opts into
+# `contents: write` explicitly when it needs to publish release assets.
+permissions:
+  contents: read
+
 on:
   release:
     types: [ published ]
