@@ -401,8 +401,12 @@ function createComputerUseClient(api: ApiClient, boxId: string, organizationId?:
   }
 }
 
+function shellQuote(value: string): string {
+  return "'" + value.replace(/'/g, "'\\''") + "'"
+}
+
 function getRunCommand(code: string, language = CodeLanguage.PYTHON, params?: CodeRunParams): string {
-  const argv = params?.argv?.join(' ') ?? ''
+  const argv = params?.argv?.map(shellQuote).join(' ') ?? ''
 
   switch (language) {
     case CodeLanguage.JAVASCRIPT:
