@@ -230,6 +230,9 @@ impl BoxResponse {
 
         Ok(crate::BoxInfo {
             id,
+            // In REST mode the id IS the control plane's id; there is no
+            // separate orchestrator reference to carry.
+            external_ref: None,
             name: self.name.clone(),
             status,
             created_at,

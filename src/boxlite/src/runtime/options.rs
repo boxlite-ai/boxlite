@@ -314,6 +314,12 @@ mod registry_options_tests {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct BoxOptions {
+    /// Opaque reference attached by an external orchestrator (e.g. the cloud
+    /// control plane's box id), mirroring CRI's `PodSandboxMetadata.uid`.
+    /// The engine never interprets it; it is unique when present and boxes
+    /// can be looked up by it. Locally created boxes leave it unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_ref: Option<String>,
     pub cpus: Option<u8>,
     pub memory_mib: Option<u32>,
     /// Disk size in GB for the container rootfs (sparse, grows as needed).
@@ -481,6 +487,7 @@ fn default_detach() -> bool {
 impl Default for BoxOptions {
     fn default() -> Self {
         Self {
+            external_ref: None,
             cpus: None,
             memory_mib: None,
             disk_size_gb: None,

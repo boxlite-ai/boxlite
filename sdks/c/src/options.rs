@@ -35,6 +35,19 @@ pub unsafe extern "C" fn boxlite_options_set_name(opts: *mut CBoxliteOptions, na
     options_set_name(opts, name)
 }
 
+/// Set an orchestrator-issued external reference on the box (opaque, unique
+/// when present; boxes can be looked up by it). See BoxOptions::external_ref.
+///
+/// # Safety
+/// `opts` must be a valid options handle; `external_ref` a valid C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_external_ref(
+    opts: *mut CBoxliteOptions,
+    external_ref: *const c_char,
+) {
+    options_set_external_ref(opts, external_ref)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_set_cpus(opts: *mut CBoxliteOptions, cpus: c_int) {
     options_set_cpus(opts, cpus)
@@ -220,6 +233,17 @@ pub unsafe fn options_set_name(handle: *mut OptionsHandle, name: *const c_char) 
         }
         if let Ok(s) = c_str_to_string(name) {
             (*handle).name = Some(s);
+        }
+    }
+}
+
+pub unsafe fn options_set_external_ref(handle: *mut OptionsHandle, external_ref: *const c_char) {
+    unsafe {
+        if handle.is_null() || external_ref.is_null() {
+            return;
+        }
+        if let Ok(s) = c_str_to_string(external_ref) {
+            (*handle).options.external_ref = Some(s);
         }
     }
 }
