@@ -10,7 +10,12 @@ ENV PATH="/usr/local/go/bin:${PATH}"
 
 RUN apk add --no-cache git
 
-WORKDIR /boxlite/apps
+# Native add-ons in the yarn workspace (e.g. cpu-features) need a
+# C/C++ toolchain + python3 to compile during `yarn install`. Alpine
+# base image doesn't ship these by default.
+RUN apk add --no-cache python3 make g++
+
+WORKDIR /boxlite
 
 # Yarn caching layer
 COPY apps/package.json apps/yarn.lock apps/.yarnrc.yml ./
