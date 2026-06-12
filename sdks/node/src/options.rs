@@ -407,6 +407,9 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             .collect();
 
         Ok(BoxOptions {
+            // Not exposed in the Node SDK yet: external refs are an
+            // orchestrator-facing knob (see the Go SDK's WithExternalRef).
+            external_ref: None,
             cpus: js_opts.cpus,
             memory_mib: js_opts.memory_mib,
             disk_size_gb: js_opts.disk_size_gb.map(|v| v as u64),
