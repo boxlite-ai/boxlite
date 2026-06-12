@@ -62,3 +62,5 @@ EXPOSE 8888
 ENTRYPOINT ["boxlite-otel-collector"]
 
 CMD ["--config", "/otelcol/collector-config.yaml"]
+
+# 2026-06-12T07:53:02Z — trigger deploy-app-services for OtelCollector

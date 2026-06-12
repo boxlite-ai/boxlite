@@ -47,3 +47,5 @@ RUN chmod +x boxlite-ssh-gateway
 EXPOSE 2222
 
 ENTRYPOINT ["boxlite-ssh-gateway"]
+
+# 2026-06-12T07:53:02Z — trigger deploy-app-services for SshGateway
