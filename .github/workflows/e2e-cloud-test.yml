@@ -316,64 +316,9 @@ jobs:
           } > ~/.boxlite/credentials.toml
           chmod 600 ~/.boxlite/credentials.toml
 
-          # Register snapshots the e2e suite needs. POST /api/snapshots
-          # is async — the runner pulls the image in the background and
-          # the snapshot row transitions PENDING → PULLING → ACTIVE.
-          # Box creation requires ACTIVE state, so poll until each
-          # snapshot reports active.
-          export ADMIN_KEY API_DNS
-          python3 - <<'PY'
-          import json, os, sys, time, urllib.request, urllib.error, urllib.parse
-          API = f"http://{os.environ['API_DNS']}/api"
-          KEY = os.environ['ADMIN_KEY']
-          SNAPS = ["alpine:3.23", "ubuntu:22.04", "ubuntu:24.04"]
-          WAIT  = 240  # seconds per snapshot
-
-          def req(method, path, body=None):
-              r = urllib.request.Request(
-                  API + path, method=method,
-                  headers={"Authorization": f"Bearer {KEY}",
-                           "Content-Type": "application/json"},
-                  data=json.dumps(body).encode() if body is not None else None,
-              )
-              try:
-                  with urllib.request.urlopen(r, timeout=30) as resp:
-                      return resp.status, json.loads(resp.read() or "null")
-              except urllib.error.HTTPError as e:
-                  return e.code, json.loads(e.read() or "null")
-
-          def state_of(name):
-              s, b = req("GET", f"/snapshots?name={urllib.parse.quote(name)}")
-              if s != 200: return None
-              for it in (b or {}).get("items", []):
-                  if it.get("name") == name:
-                      return it.get("state")
-              return None
-
-          for name in SNAPS:
-              st = state_of(name)
-              if st is None:
-                  s, b = req("POST", "/snapshots",
-                             {"name": name, "imageName": name,
-                              "cpu": 1, "memory": 1, "disk": 2})
-                  if s not in (200, 201):
-                      sys.exit(f"POST /snapshots {name} → {s} {b}")
-                  print(f"  created {name}")
-              else:
-                  print(f"  {name}: existing state={st}")
-
-              deadline = time.time() + WAIT
-              while time.time() < deadline:
-                  st = state_of(name)
-                  if st == "active":
-                      print(f"  {name}: active ✓"); break
-                  if st in ("error", "build_failed"):
-                      sys.exit(f"  {name}: {st}")
-                  time.sleep(5)
-              else:
-                  sys.exit(f"  {name} not active within {WAIT}s (last state={st})")
-          PY
-          unset ADMIN_KEY
+          # Snapshot pre-registration removed: the API no longer exposes
+          # /api/snapshots (#735 replaced it with curated-image boot —
+          # boxes pull their image on first start, no pre-create step).
 
       - name: Run E2E suite
         env:
