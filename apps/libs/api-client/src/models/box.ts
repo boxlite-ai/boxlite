@@ -29,10 +29,6 @@ export interface Box {
      */
     'id': string;
     /**
-     * The public Box ID shown to users and SDK clients
-     */
-    'boxId': string;
-    /**
      * The organization ID of the box
      */
     'organizationId': string;
@@ -48,6 +44,10 @@ export interface Box {
      * Environment variables for the box
      */
     'env': { [key: string]: string; };
+    /**
+     * The OCI image ref the box boots from
+     */
+    'image': string;
     /**
      * Labels for the box
      */

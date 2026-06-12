@@ -1519,7 +1519,6 @@ export class AdminObservabilityService {
       for (const box of boxes) {
         this.addUnique(correlation.orgIds, box.organizationId)
         this.addUnique(correlation.boxIds, box.id)
-        this.addUnique(correlation.boxIds, box.boxId)
         this.addUnique(correlation.runnerIds, box.runnerId)
       }
 
@@ -1676,7 +1675,7 @@ export class AdminObservabilityService {
   }
 
   private matchesBox(box: AdminBoxItemDto, correlation: AdminObservabilityCorrelationDto): boolean {
-    if (correlation.boxIds.includes(box.id) || (box.boxId && correlation.boxIds.includes(box.boxId))) {
+    if (correlation.boxIds.includes(box.id)) {
       return true
     }
 

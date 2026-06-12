@@ -28,11 +28,7 @@ export interface AdminBoxItem {
     /**
      * Public box ID shown to users
      */
-    'boxId'?: string;
-    /**
-     * Organization ID
-     */
-    'organizationId': string;
+    'organizationId'?: string;
     'state': BoxState;
     /**
      * Runner ID the box is assigned to

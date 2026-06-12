@@ -42,12 +42,6 @@ export class BoxDto {
   id: string
 
   @ApiProperty({
-    description: 'The public Box ID shown to users and SDK clients',
-    example: 'aB3cD4eF5gH6',
-  })
-  boxId: string
-
-  @ApiProperty({
     description: 'The organization ID of the box',
     example: 'organization123',
   })
@@ -251,7 +245,6 @@ export class BoxDto {
   static fromBox(box: Box, toolboxProxyUrl: string): BoxDto {
     return {
       id: box.id,
-      boxId: box.id,
       organizationId: box.organizationId,
       name: box.name,
       target: box.region,

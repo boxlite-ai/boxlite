@@ -32,10 +32,6 @@ export interface Workspace {
      */
     'id': string;
     /**
-     * The public Box ID shown to users and SDK clients
-     */
-    'boxId': string;
-    /**
      * The organization ID of the box
      */
     'organizationId': string;
@@ -51,6 +47,10 @@ export interface Workspace {
      * Environment variables for the box
      */
     'env': { [key: string]: string; };
+    /**
+     * The OCI image ref the box boots from
+     */
+    'image': string;
     /**
      * Labels for the box
      */
@@ -140,10 +140,6 @@ export interface Workspace {
      * The toolbox proxy URL for the box
      */
     'toolboxProxyUrl': string;
-    /**
-     * The image used for the workspace
-     */
-    'image'?: string;
     /**
      * Additional information about the box
      */
