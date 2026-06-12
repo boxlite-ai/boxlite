@@ -87,11 +87,42 @@ jobs:
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
           echo "::notice::Built and pushed $IMAGE"
 
+      - name: Resolve Api role ARNs (borrow source for missing per-service roles)
+        id: api_roles
+        run: |
+          set -euo pipefail
+          # The e2e-ci stack's per-service Task/Execution roles
+          # (Proxy/Otel/SshGw{Task,Execution}Role-*) were deleted from
+          # IAM out-of-band, but the live ECS TDs still reference the
+          # dead ARNs → AssumeRole NoSuchEntity → new tasks can't start.
+          # As a temporary unblock (until admin runs `sst deploy
+          # --stage e2e-ci` to recreate properly), borrow the Api
+          # service's roles which were recreated earlier in this PR's
+          # session. Both Api roles trust ecs-tasks.amazonaws.com (no
+          # principal restriction), so any service can assume them. The
+          # cost is least-privilege: borrowed task role grants S3 +
+          # CloudWatch perms the borrower may not need. Acceptable for
+          # e2e-ci which has no production traffic.
+          API_TD=$(aws ecs describe-services --cluster "${{ steps.resources.outputs.cluster }}" \
+            --services Api --query 'services[0].taskDefinition' --output text)
+          read -r TASK_ROLE EXEC_ROLE <<<"$(aws ecs describe-task-definition \
+            --task-definition "$API_TD" \
+            --query 'taskDefinition.[taskRoleArn,executionRoleArn]' --output text)"
+          [ -n "$TASK_ROLE" ] && [ "$TASK_ROLE" != "None" ] \
+            || { echo "::error::Could not resolve Api taskRoleArn"; exit 1; }
+          [ -n "$EXEC_ROLE" ] && [ "$EXEC_ROLE" != "None" ] \
+            || { echo "::error::Could not resolve Api executionRoleArn"; exit 1; }
+          echo "task_role_arn=$TASK_ROLE" >> "$GITHUB_OUTPUT"
+          echo "exec_role_arn=$EXEC_ROLE" >> "$GITHUB_OUTPUT"
+          echo "::notice::Will borrow Api roles for ${{ inputs.service_name }}: $(basename "$TASK_ROLE"), $(basename "$EXEC_ROLE")"
+
       - name: Register new TD + UpdateService + wait stable
         env:
-          CLUSTER: ${{ steps.resources.outputs.cluster }}
-          IMAGE:   ${{ steps.build.outputs.image }}
-          SERVICE: ${{ inputs.service_name }}
+          CLUSTER:   ${{ steps.resources.outputs.cluster }}
+          IMAGE:     ${{ steps.build.outputs.image }}
+          SERVICE:   ${{ inputs.service_name }}
+          TASK_ROLE: ${{ steps.api_roles.outputs.task_role_arn }}
+          EXEC_ROLE: ${{ steps.api_roles.outputs.exec_role_arn }}
         run: |
           set -euo pipefail
 
@@ -99,12 +130,16 @@ jobs:
             --query 'services[0].taskDefinition' --output text)
           echo "Old TD: $OLD_TD_ARN"
 
-          # Clone old TD, swap container image, strip readonly fields.
+          # Clone old TD, swap container image, OVERRIDE task & execution
+          # roles to point at Api's (the per-service roles are gone from
+          # IAM — see api_roles step above), strip readonly fields.
           # Plaintext env (e.g. credentials) lives in TD — do NOT cat the file.
           aws ecs describe-task-definition --task-definition "$OLD_TD_ARN" \
             --query 'taskDefinition' --output json \
-            | jq --arg img "$IMAGE" '
+            | jq --arg img "$IMAGE" --arg trole "$TASK_ROLE" --arg erole "$EXEC_ROLE" '
                 .containerDefinitions[0].image = $img
+                | .taskRoleArn = $trole
+                | .executionRoleArn = $erole
                 | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
                       .compatibilities, .registeredAt, .registeredBy)' \
             > /tmp/new-td.json

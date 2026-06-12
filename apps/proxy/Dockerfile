@@ -59,3 +59,5 @@ ENTRYPOINT ["boxlite-proxy"]
 # 2026-06-12T04:23:31Z — retest after id-token perm fix
 
 # 2026-06-12T07:31:12Z — retest after OIDC policy patched
+
+# 2026-06-12T07:42:31Z — retest after role-borrow patch
