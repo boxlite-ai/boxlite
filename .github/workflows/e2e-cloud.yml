@@ -331,10 +331,15 @@ jobs:
 
       # ──────────────────────────────────────────────────────────────────
       # One-time init: admin-org sandbox quota. Naturally idempotent
-      # because the SET clause always writes the same target values; we
-      # drop the `AND max_cpu_per_box=0` guard the first draft had —
-      # it prevented convergence from partial-update states. The SELECT
-      # afterwards prints the post-state for the workflow log.
+      # because the SET clause always writes the same target values.
+      #
+      # Org id resolution: dynamic via subquery against organization_user
+      # for userId='boxlite-admin' AND isDefaultForUser=true. App boot
+      # auto-creates a default org under the admin user with a randomly-
+      # generated UUID, so a hardcoded id would only work until the next
+      # DB schema reset (and silently mismatch after). The subquery
+      # follows the admin's default-org membership row instead, which
+      # survives schema rebuilds.
       #
       # Credentials: ECS Exec into the Api container so DB_PASSWORD is
       # read from the container's env at runtime, not from the SSM
@@ -362,6 +367,13 @@ jobs:
           [ -n "$TASK" ] || { echo "::error::No Api task on PRIMARY deployment"; exit 1; }
           echo "Api task on PRIMARY deployment: $TASK"
 
+          # SQL: UPDATE quotas on admin's default org (resolved via subquery
+          # against organization_user.isDefaultForUser=true), then SELECT
+          # the post-state for verification. RETURNING-style fallback via
+          # subquery means a single round-trip; the SELECT uses the same
+          # subquery so it always reads back the row we just wrote.
+          SQL='UPDATE "organization" SET max_cpu_per_box=4, max_memory_per_box=8192, max_disk_per_box=20 WHERE id = (SELECT "organizationId" FROM "organization_user" WHERE "userId" = '\''boxlite-admin'\'' AND "isDefaultForUser" = true LIMIT 1); SELECT id, max_cpu_per_box, max_memory_per_box, max_disk_per_box FROM "organization" WHERE id = (SELECT "organizationId" FROM "organization_user" WHERE "userId" = '\''boxlite-admin'\'' AND "isDefaultForUser" = true LIMIT 1);'
+
           # Capture the ECS Exec session output to a temp file so we can
           # grep it for the SELECT result. --interactive is required by
           # ECS Exec, but a non-TTY shell works because we feed nothing
@@ -376,7 +388,7 @@ jobs:
           #                 that broke the previous grep
           # PAGER=cat       belt-and-braces in case psql calls $PAGER directly
           aws ecs execute-command --cluster "$CLUSTER" --task "$TASK" --container Api --interactive \
-            --command 'sh -c "PAGER=cat PGPASSWORD=\"\$DB_PASSWORD\" psql -h \"\$DB_HOST\" -U \"\$DB_USERNAME\" -d \"\$DB_DATABASE\" -A -t -P pager=off -v ON_ERROR_STOP=1 -c \"UPDATE \\\"organization\\\" SET max_cpu_per_box=4, max_memory_per_box=8192, max_disk_per_box=20 WHERE id='\''4a1eef70-8734-4814-b7a5-0ca3522a8760'\''; SELECT id, max_cpu_per_box, max_memory_per_box, max_disk_per_box FROM \\\"organization\\\" WHERE id='\''4a1eef70-8734-4814-b7a5-0ca3522a8760'\'';\""' \
+            --command "sh -c \"PAGER=cat PGPASSWORD=\\\"\\\$DB_PASSWORD\\\" psql -h \\\"\\\$DB_HOST\\\" -U \\\"\\\$DB_USERNAME\\\" -d \\\"\\\$DB_DATABASE\\\" -A -t -P pager=off -v ON_ERROR_STOP=1 -c \\\"${SQL}\\\"\"" \
             2>&1 | tee "$OUT"
 
           # Verify the SELECT result actually shows the target values.
