@@ -113,7 +113,10 @@ async def verify_runner_saw_all_boxes(rt):
     apply on a stock GitHub-hosted runner (no KVM, libkrun can't start
     a VM), so disabling it there loses no real safety net.
     """
-    if os.environ.get("BOXLITE_E2E_SKIP_PATH_VERIFY"):
+    # Truthy values only. Plain `if os.environ.get(...)` treats "0"
+    # and "false" as truthy because they're non-empty strings, which
+    # is the opposite of what someone setting the var to "0" expects.
+    if os.environ.get("BOXLITE_E2E_SKIP_PATH_VERIFY", "").lower() in ("1", "true", "yes", "on"):
         yield
         return
 
