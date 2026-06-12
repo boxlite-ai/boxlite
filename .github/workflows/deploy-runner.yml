@@ -93,6 +93,11 @@ jobs:
     outputs:
       should_build: ${{ steps.decide.outputs.should_build }}
       should_deploy: ${{ steps.decide.outputs.should_deploy }}
+      # libboxlite_changed=true → Rust source under `boxlite-c`'s dep
+      # graph changed, libboxlite.a must be rebuilt from source.
+      # false → Go-only diff, runner binary can link against the
+      # tagged-release libboxlite.a (skips ~10min Rust build).
+      libboxlite_changed: ${{ steps.decide.outputs.libboxlite_changed }}
       prev_run_id: ${{ steps.decide.outputs.prev_run_id }}
     steps:
       - uses: actions/checkout@v5
@@ -106,22 +111,31 @@ jobs:
           # commits would see ALL its commits in the diff every push.
           base: ${{ github.event.before }}
           filters: |
-            runner_source:
+            # Paths whose change must rebuild libboxlite.a from source:
+            # boxlite-c crate + its transitive Rust dep graph + the
+            # build scripts that affect the final .a bytes.
+            libboxlite_chain:
+              - 'src/boxlite/**'
+              - 'src/shared/**'
+              - 'src/deps/**'
+              - 'sdks/c/**'
+              - 'scripts/build/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+            # Go-only paths: linked against libboxlite.a but don't
+            # contribute to its content. Safe to pull a pre-tagged
+            # release .a instead of rebuilding.
+            go_runner_chain:
               - 'apps/runner/**'
               - 'apps/daemon/**'
               - 'apps/common-go/**'
               - 'apps/api-client-go/**'
               - 'apps/libs/computer-use/**'
               - 'sdks/go/**'
-              - 'src/boxlite/**'
-              - 'src/api-client/**'
-              - 'src/shared/**'
-              - 'src/deps/**'
-              - 'scripts/build/**'
-              - 'sdks/c/src/exec/**'
       - id: decide
         env:
-          PUSH_CHANGED: ${{ steps.filter.outputs.runner_source }}
+          LIBBOXLITE_CHANGED: ${{ steps.filter.outputs.libboxlite_chain }}
+          GO_RUNNER_CHANGED:  ${{ steps.filter.outputs.go_runner_chain }}
           PREV_RUN_ID: ${{ inputs.runner_artifact_run_id }}
         run: |
           # Resolve prev-run-id, in order of precedence:
@@ -144,33 +158,52 @@ jobs:
 
           if [ -n "$PREV" ]; then
               echo "Reusing artifact from run $PREV — SKIP build, RUN deploy."
-              echo "should_build=false"   >> "$GITHUB_OUTPUT"
-              echo "should_deploy=true"   >> "$GITHUB_OUTPUT"
-              echo "prev_run_id=$PREV"    >> "$GITHUB_OUTPUT"
+              echo "should_build=false"        >> "$GITHUB_OUTPUT"
+              echo "should_deploy=true"        >> "$GITHUB_OUTPUT"
+              echo "libboxlite_changed=false"  >> "$GITHUB_OUTPUT"
+              echo "prev_run_id=$PREV"         >> "$GITHUB_OUTPUT"
               exit 0
           fi
 
+          # Non-push triggers (workflow_call, workflow_dispatch) skip
+          # paths-filter and force full rebuild from source — they're
+          # explicit "I want everything fresh" signals.
           if [ "${{ github.event_name }}" != 'push' ]; then
-              echo "Non-push event (${{ github.event_name }}) — force build + deploy."
-              echo "should_build=true"   >> "$GITHUB_OUTPUT"
-              echo "should_deploy=true"  >> "$GITHUB_OUTPUT"
-          elif [ "${PUSH_CHANGED:-false}" = 'true' ]; then
-              echo "Push touched runner_source paths — build + deploy."
-              echo "should_build=true"   >> "$GITHUB_OUTPUT"
-              echo "should_deploy=true"  >> "$GITHUB_OUTPUT"
+              echo "Non-push event (${{ github.event_name }}) — force libboxlite rebuild + runner build + deploy."
+              echo "should_build=true"        >> "$GITHUB_OUTPUT"
+              echo "should_deploy=true"       >> "$GITHUB_OUTPUT"
+              echo "libboxlite_changed=true"  >> "$GITHUB_OUTPUT"
+              exit 0
+          fi
+
+          # Push branch: gate each stage on the narrowest change-set
+          # that affects its inputs.
+          if [ "${LIBBOXLITE_CHANGED:-false}" = 'true' ]; then
+              echo "Push touched libboxlite_chain — rebuild .a + runner + deploy."
+              echo "should_build=true"        >> "$GITHUB_OUTPUT"
+              echo "should_deploy=true"       >> "$GITHUB_OUTPUT"
+              echo "libboxlite_changed=true"  >> "$GITHUB_OUTPUT"
+          elif [ "${GO_RUNNER_CHANGED:-false}" = 'true' ]; then
+              echo "Push touched go_runner_chain only — reuse release libboxlite.a, rebuild runner + deploy."
+              echo "should_build=true"        >> "$GITHUB_OUTPUT"
+              echo "should_deploy=true"       >> "$GITHUB_OUTPUT"
+              echo "libboxlite_changed=false" >> "$GITHUB_OUTPUT"
           else
               echo "Push only touched workflow files — SKIP build + deploy."
-              echo "should_build=false"  >> "$GITHUB_OUTPUT"
-              echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+              echo "should_build=false"       >> "$GITHUB_OUTPUT"
+              echo "should_deploy=false"      >> "$GITHUB_OUTPUT"
+              echo "libboxlite_changed=false" >> "$GITHUB_OUTPUT"
           fi
 
   # ── Build libboxlite.a from THIS checkout's Rust source ────────────
-  # target_filter constrains the matrix to linux-x64-gnu (Tokyo runner
-  # is amd64; skip macOS / linux-arm64 entries from the platforms list).
+  # Skipped when libboxlite_chain didn't change (Go-only PR); the
+  # runner build will pull the v${VERSION} tarball from GitHub Release
+  # instead. target_filter constrains the matrix to linux-x64-gnu
+  # (Tokyo runner is amd64; skip macOS / linux-arm64 matrix entries).
   build_c_sdk:
     name: Build C SDK (linux-x64-gnu)
     needs: changes
-    if: needs.changes.outputs.should_build == 'true'
+    if: needs.changes.outputs.libboxlite_changed == 'true'
     uses: ./.github/workflows/build-c.yml
     with:
       target_filter: linux-x64-gnu
@@ -180,14 +213,20 @@ jobs:
       # workflow_call, the caller still needs to grant at-least-as-much.
       contents: write
 
-  # ── Build the Go runner binary linking the fresh libboxlite.a ──────
+  # ── Build the Go runner binary, linking libboxlite.a ───────────────
+  # `libboxlite_source: build` consumes the artifact from build_c_sdk;
+  # `release` pulls the tagged-release tarball. !failure() && !cancelled()
+  # is required because build_c_sdk is intentionally skipped on Go-only
+  # diffs — default `needs:` semantics would cascade-skip this job.
   build_runner:
     name: Build runner binary
     needs: [changes, build_c_sdk]
-    if: needs.changes.outputs.should_build == 'true'
+    if: |
+      !failure() && !cancelled()
+      && needs.changes.outputs.should_build == 'true'
     uses: ./.github/workflows/build-runner-binary.yml
     with:
-      libboxlite_source: build
+      libboxlite_source: ${{ needs.changes.outputs.libboxlite_changed == 'true' && 'build' || 'release' }}
     permissions:
       contents: write
 

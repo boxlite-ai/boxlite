@@ -120,7 +120,6 @@ jobs:
               - 'apps/libs/computer-use/**'
               - 'sdks/go/**'
               - 'src/boxlite/**'
-              - 'src/api-client/**'
               - 'src/shared/**'
               - 'src/deps/**'
               - 'scripts/build/**'
