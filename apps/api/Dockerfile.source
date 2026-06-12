@@ -61,6 +61,12 @@ COPY apps/libs/sdk-typescript/ libs/sdk-typescript/
 ARG VERSION=0.0.1
 ENV VERSION=${VERSION}
 
+# Run as the pre-existing unprivileged `node` user (UID 1000 in
+# node:24-slim) — fixes Trivy DS-0002 root-runtime finding. All
+# installs above happened as root; switching here means the runtime
+# process can read but not modify the installed tree.
+USER node
+
 HEALTHCHECK CMD [ "curl", "-f", "http://localhost:3000/api/config" ]
 
 # Run the NestJS entry point through ts-node:
