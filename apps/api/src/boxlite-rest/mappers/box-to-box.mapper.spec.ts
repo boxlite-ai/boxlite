@@ -45,4 +45,18 @@ describe('box-to-box mapper', () => {
     expect(dto.memory).toBe(2)
     expect(dto.disk).toBe(8)
   })
+
+  it('maps cloud-only create fields onto the internal create dto', () => {
+    const dto = createBoxToCreateBox({
+      labels: { team: 'core' },
+      public: true,
+      auto_stop_interval: 30,
+      auto_delete_interval: -1,
+    })
+
+    expect(dto.labels).toEqual({ team: 'core' })
+    expect(dto.public).toBe(true)
+    expect(dto.autoStopInterval).toBe(30)
+    expect(dto.autoDeleteInterval).toBe(-1)
+  })
 })

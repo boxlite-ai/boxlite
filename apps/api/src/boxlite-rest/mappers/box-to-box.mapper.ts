@@ -34,6 +34,10 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
   createDto.memory = dto.memory_mib ? Math.ceil(dto.memory_mib / 1024) : undefined
   createDto.disk = dto.disk_size_gb
   createDto.target = target
+  createDto.labels = dto.labels
+  createDto.public = dto.public
+  createDto.autoStopInterval = dto.auto_stop_interval
+  createDto.autoDeleteInterval = dto.auto_delete_interval
   return createDto
 }
 

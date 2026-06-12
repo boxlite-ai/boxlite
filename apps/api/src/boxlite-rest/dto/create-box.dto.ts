@@ -60,4 +60,23 @@ export class CreateBoxDto {
   @IsOptional()
   @IsBoolean()
   detach?: boolean
+
+  // Cloud-only fields below: part of the Box API contract so one SDK dialect
+  // works against local, self-hosted, and cloud servers. Local engine servers
+  // ignore them (serde drops unknown fields).
+  @IsOptional()
+  @IsObject()
+  labels?: Record<string, string>
+
+  @IsOptional()
+  @IsBoolean()
+  public?: boolean
+
+  @IsOptional()
+  @IsNumber()
+  auto_stop_interval?: number
+
+  @IsOptional()
+  @IsNumber()
+  auto_delete_interval?: number
 }
