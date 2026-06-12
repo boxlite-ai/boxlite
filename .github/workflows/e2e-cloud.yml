@@ -36,31 +36,27 @@
 
 name: E2E cloud
 
-# No path filter on triggers: must always start so branch protection
-# can require this workflow's gate as a status check. Path matching
-# happens inside the `changes` job and gates the expensive `e2e` job.
+# Runs only on push-to-main and manual dispatch — PR triggering would
+# serialize every PR against the shared Tokyo stack (see concurrency
+# below), and the E2E suite is too slow to gate every PR on. Path
+# matching happens inside the `changes` job and gates the expensive
+# `e2e` job.
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch: {}
 
-# Singleton lock — every run (every PR + every push) must serialize
-# against the SHARED Tokyo stack. Per-ref grouping is wrong here:
-# PR-A and PR-B have different refs but compete for the same ECS
-# service / runner binary / RDS row. cancel-in-progress: false because
-# a half-applied ECS rolling update is worse than waiting.
+# Singleton lock — every run must serialize against the SHARED Tokyo
+# stack. Per-ref grouping is wrong here: two merges to main race on
+# the same ECS service / runner binary / RDS row. cancel-in-progress:
+# false because a half-applied ECS rolling update is worse than waiting.
 concurrency:
   group: e2e-cloud-shared
   cancel-in-progress: false
 
 env:
   # AWS identifiers come from repo variables (same pattern as
-  # .github/workflows/e2e-test.yml). `vars.*` is stripped by GitHub
-  # for fork-PR runs, but this workflow is gated on same-repo branches
-  # (push to main + workflow_dispatch + same-repo PR), so the context
-  # is always populated. Set via repo Settings → Variables:
+  # .github/workflows/e2e-test.yml). Set via repo Settings → Variables:
   #   AWS_ACCOUNT_ID, AWS_E2E_CLOUD_REGION, AWS_E2E_CLOUD_ROLE_ARN
   # Keeps the account ID out of the public repo source — defense in
   # depth (AWS treats account ID as "sensitive, not secret", but no
