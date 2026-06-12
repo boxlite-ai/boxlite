@@ -149,4 +149,15 @@ async fn health_check_becomes_unhealthy_when_shim_killed() {
         health_status.state,
         health_status.failures
     );
+
+    // Teardown through the production path. Without this, PerTestBoxHome's
+    // leak check fails: a live shim remains even though status is Stopped —
+    // the pid killed above (BoxInfo.pid) is evidently not the process that
+    // wrote shim.pid. Pre-existing on main (reproduces at 577f4a57).
+    // FIXME(health): reconcile BoxInfo.pid with shim.pid and decide what
+    // the surviving process is.
+    t.runtime
+        .remove(box_id.as_str(), true)
+        .await
+        .expect("force remove at teardown");
 }
