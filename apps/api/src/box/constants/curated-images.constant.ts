@@ -14,12 +14,6 @@ export type CuratedImageKey = 'base' | 'python' | 'node'
 
 export const CURATED_IMAGE_KEYS: CuratedImageKey[] = ['base', 'python', 'node']
 
-/**
- * Reserved box label that holds the resolved OCI ref between create and the start action.
- * Ephemeral storage in box.labels avoids a new entity column / migration.
- */
-export const BOX_IMAGE_REF_LABEL = 'boxlite.io/image-ref'
-
 const DEFAULT_CURATED_IMAGE_KEY: CuratedImageKey = 'base'
 
 /**
@@ -51,29 +45,26 @@ function isCuratedImageKey(key: string): key is CuratedImageKey {
 }
 
 /**
- * Resolve a curated image key to its OCI ref. Undefined defaults to 'base'.
- * Rejects any key outside the curated allowlist at the request boundary.
+ * Validate a curated image key at the request boundary. Undefined defaults to 'base'.
+ * The key (not the resolved OCI ref) is what gets persisted on the Box entity, so a
+ * later env-var rotation transparently applies to existing boxes.
  */
-export function resolveCuratedImageRef(key: string | undefined): string {
+export function validateCuratedImageKey(key: string | undefined): CuratedImageKey {
   const resolvedKey = key ?? DEFAULT_CURATED_IMAGE_KEY
 
   if (!isCuratedImageKey(resolvedKey)) {
     throw new BadRequestError(`Invalid image '${resolvedKey}'. Allowed images: ${CURATED_IMAGE_KEYS.join(', ')}`)
   }
 
-  const { envVar, fallbackRef } = CURATED_IMAGE_ENV[resolvedKey]
-  return process.env[envVar] || fallbackRef
+  return resolvedKey
 }
 
 /**
- * Reverse-map a resolved OCI ref back to its curated key, so API responses echo the
- * opaque key the box was created with instead of the internal registry ref. Undefined
- * when the ref is not one of the currently-resolved curated refs (e.g. boxes created
- * before an env-var rotation).
+ * Resolve a curated image key to its sha256-pinned OCI ref. Called when the CREATE_BOX
+ * job payload is built, so the runner always receives a concrete ref and never needs to
+ * know the curated mapping.
  */
-export function curatedImageKeyForRef(ref: string | undefined): CuratedImageKey | undefined {
-  if (!ref) {
-    return undefined
-  }
-  return CURATED_IMAGE_KEYS.find((key) => resolveCuratedImageRef(key) === ref)
+export function resolveCuratedImageRef(key: string | undefined): string {
+  const { envVar, fallbackRef } = CURATED_IMAGE_ENV[validateCuratedImageKey(key)]
+  return process.env[envVar] || fallbackRef
 }

@@ -18,7 +18,7 @@ import { BoxError } from '../../exceptions/box-error.exception'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
-import { BOX_IMAGE_REF_LABEL, resolveCuratedImageRef } from '../constants/curated-images.constant'
+import { validateCuratedImageKey } from '../constants/curated-images.constant'
 import { BoxWarmPoolService } from './box-warm-pool.service'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
 import { WarmPoolEvents } from '../constants/warmpool-events.constants'
@@ -132,11 +132,8 @@ export class BoxService {
     box.mem = warmPoolItem.mem
     box.disk = warmPoolItem.disk
 
-    // Warm-pool boxes have no per-request image key, so they boot from the default curated
-    // image. Stash its resolved ref on the same reserved label the start action reads; without
-    // it, box-start drives the box to ERROR (missing image ref) and the warm-pool refill loop
-    // recreates it indefinitely.
-    box.labels = { [BOX_IMAGE_REF_LABEL]: resolveCuratedImageRef(undefined) }
+    // Warm-pool boxes have no per-request image key; they boot from the default curated image.
+    box.image = validateCuratedImageKey(undefined)
 
     const runner = await this.runnerService.getRandomAvailableRunner({
       regions: [box.region],
@@ -164,9 +161,9 @@ export class BoxService {
       const disk = createBoxDto.disk ?? DEFAULT_BOX_DISK
       const gpu = createBoxDto.gpu ?? DEFAULT_BOX_GPU
 
-      // Resolve the curated image key (default 'base') to its pinned OCI ref. Rejects any
-      // key outside the curated allowlist at the request boundary.
-      const artifactRef = resolveCuratedImageRef(createBoxDto.image)
+      // Reject any image key outside the curated allowlist at the request boundary. Only the
+      // key is persisted; it resolves to a pinned OCI ref when the CREATE_BOX job is built.
+      const image = validateCuratedImageKey(createBoxDto.image)
 
       this.organizationService.assertOrganizationIsNotSuspended(organization)
 
@@ -190,9 +187,8 @@ export class BoxService {
       //  TODO: default user should be configurable
       box.osUser = createBoxDto.user || 'boxlite'
       box.env = createBoxDto.env || {}
-      // Stash the resolved OCI ref under a reserved label so the start action can pass it
-      // to the runner as artifactRef. Merge into user labels; don't clobber them.
-      box.labels = { ...(createBoxDto.labels || {}), [BOX_IMAGE_REF_LABEL]: artifactRef }
+      box.image = image
+      box.labels = createBoxDto.labels || {}
 
       box.cpu = cpu
       box.gpu = gpu
@@ -1187,19 +1183,9 @@ export class BoxService {
   async replaceLabels(boxIdOrName: string, labels: { [key: string]: string }, organizationId?: string): Promise<Box> {
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
 
-    // Replace all labels, but never let a user-supplied label clobber the reserved image-ref
-    // label: it holds the resolved curated OCI ref the runner pulls. A user who could overwrite
-    // it would escape the curated allowlist and make the runner pull an arbitrary image with its
-    // own private-registry token. Drop any incoming reserved key and preserve the existing value.
-    const sanitizedLabels = { ...labels }
-    delete sanitizedLabels[BOX_IMAGE_REF_LABEL]
-    const existingImageRef = box.labels?.[BOX_IMAGE_REF_LABEL]
-    if (existingImageRef !== undefined) {
-      sanitizedLabels[BOX_IMAGE_REF_LABEL] = existingImageRef
-    }
-
+    // Replace all labels
     const updateData: Partial<Box> = {
-      labels: sanitizedLabels,
+      labels,
     }
 
     return await this.boxRepository.update(box.id, { updateData, entity: box })

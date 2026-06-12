@@ -8,15 +8,13 @@ type CreateBoxDTO struct {
 	Id               string            `json:"id" validate:"required"`
 	BoxId            string            `json:"boxId,omitempty"`
 	FromVolumeId     string            `json:"fromVolumeId,omitempty"`
-	UserId           string            `json:"userId" validate:"required"`
-	ArtifactRef      string            `json:"artifactRef" validate:"required"`
-	OsUser           string            `json:"osUser" validate:"required"`
+	UserId           string            `json:"userId,omitempty"`
+	OCIImageRef      string            `json:"ociImageRef" validate:"required"`
+	OsUser           string            `json:"osUser,omitempty"`
 	CpuQuota         int64             `json:"cpuQuota" validate:"min=1"`
-	GpuQuota         int64             `json:"gpuQuota" validate:"min=0"`
 	MemoryQuota      int64             `json:"memoryQuota" validate:"min=1"`
 	StorageQuota     int64             `json:"storageQuota" validate:"min=1"`
 	Env              map[string]string `json:"env,omitempty"`
-	Registry         *RegistryDTO      `json:"registry,omitempty"`
 	Entrypoint       []string          `json:"entrypoint,omitempty"`
 	Volumes          []VolumeDTO       `json:"volumes,omitempty"`
 	NetworkBlockAll  *bool             `json:"networkBlockAll,omitempty"`

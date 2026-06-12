@@ -7,7 +7,6 @@
 import { BoxService } from './box.service'
 import { BoxClass } from '../enums/box-class.enum'
 import { WarmPool } from '../entities/warm-pool.entity'
-import { BOX_IMAGE_REF_LABEL } from '../constants/curated-images.constant'
 
 function warmPoolItem(): WarmPool {
   const item = new WarmPool()
@@ -21,8 +20,8 @@ function warmPoolItem(): WarmPool {
   return item
 }
 
-describe('BoxService.createForWarmPool image ref', () => {
-  it('stashes the default curated image ref so warm-pool boxes can boot', async () => {
+describe('BoxService.createForWarmPool image', () => {
+  it('defaults warm-pool boxes to the base curated image so they can boot', async () => {
     const insert = jest.fn().mockResolvedValue(undefined)
     const getRandomAvailableRunner = jest.fn().mockResolvedValue({ id: 'runner-1' })
 
@@ -32,10 +31,7 @@ describe('BoxService.createForWarmPool image ref', () => {
 
     const box = await service.createForWarmPool(warmPoolItem())
 
-    // Without this label, box-start drives the box to ERROR ("missing image ref") and the
-    // warm-pool refill loop recreates it forever. It must point at the base curated image.
-    expect(box.labels[BOX_IMAGE_REF_LABEL]).toBeDefined()
-    expect(box.labels[BOX_IMAGE_REF_LABEL]).toContain('boxlite-agent-base')
+    expect(box.image).toBe('base')
     expect(insert).toHaveBeenCalledWith(box)
   })
 })

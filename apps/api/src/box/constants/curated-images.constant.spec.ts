@@ -5,7 +5,7 @@
  */
 
 import { BadRequestError } from '../../exceptions/bad-request.exception'
-import { CURATED_IMAGE_KEYS, resolveCuratedImageRef } from './curated-images.constant'
+import { CURATED_IMAGE_KEYS, resolveCuratedImageRef, validateCuratedImageKey } from './curated-images.constant'
 
 describe('curated image allowlist', () => {
   const ENV_KEYS = ['BOXLITE_SYSTEM_BASE_IMAGE', 'BOXLITE_SYSTEM_PYTHON_IMAGE', 'BOXLITE_SYSTEM_NODE_IMAGE']
@@ -49,5 +49,11 @@ describe('curated image allowlist', () => {
     expect(() => resolveCuratedImageRef('alpine:3.23')).toThrow(BadRequestError)
     expect(() => resolveCuratedImageRef('ghcr.io/evil/image:latest')).toThrow(BadRequestError)
     expect(() => resolveCuratedImageRef('ubuntu')).toThrow(BadRequestError)
+  })
+
+  it('validates keys without resolving: returns the key itself, defaulting to base', () => {
+    expect(validateCuratedImageKey('python')).toBe('python')
+    expect(validateCuratedImageKey(undefined)).toBe('base')
+    expect(() => validateCuratedImageKey('alpine:3.23')).toThrow(BadRequestError)
   })
 })

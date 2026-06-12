@@ -74,6 +74,12 @@ export class BoxDto {
   env: Record<string, string>
 
   @ApiProperty({
+    description: 'The curated image key the box boots from',
+    example: 'python',
+  })
+  image: string
+
+  @ApiProperty({
     description: 'Labels for the box',
     type: 'object',
     additionalProperties: { type: 'string' },
@@ -250,6 +256,7 @@ export class BoxDto {
       target: box.region,
       user: box.osUser,
       env: box.env,
+      image: box.image,
       cpu: box.cpu,
       gpu: box.gpu,
       memory: box.mem,

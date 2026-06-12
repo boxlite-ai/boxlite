@@ -93,6 +93,11 @@ export class Box {
   @Column()
   osUser: string
 
+  // Curated image key ('base' | 'python' | 'node'), not an OCI ref. Resolved to a
+  // pinned ref only when the CREATE_BOX job payload is built.
+  @Column({ default: 'base' })
+  image = 'base'
+
   @Column({ nullable: true })
   errorReason?: string
 
