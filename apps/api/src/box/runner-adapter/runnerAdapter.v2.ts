@@ -116,11 +116,10 @@ export class RunnerAdapterV2 implements RunnerAdapter {
 
   async createBox(box: Box): Promise<void> {
     // Hand-built payload: keys MUST match the Go dto.CreateBoxDTO json tags
-    // (apps/runner/pkg/api/dto/box.go). `id` is the internal uuid the runner uses for
-    // job reporting; `boxId` is the user-facing short id the runner shows in logs.
+    // (apps/runner/pkg/api/dto/box.go). `id` is the box's single identity: the
+    // 12-char public id, which the runner also uses as the engine VM name.
     const payload = {
       id: box.id,
-      boxId: box.boxId,
       userId: box.organizationId,
       image: box.image,
       osUser: box.osUser,

@@ -17,7 +17,3 @@ export function generateBoxId(): string {
   }
   return boxId
 }
-
-export function isBoxId(value: string): boolean {
-  return BOX_ID_REGEX.test(value)
-}

@@ -12,7 +12,7 @@ import { CreateBoxDto } from '../../box/dto/create-box.dto'
 
 export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
   return {
-    box_id: box.boxId,
+    box_id: box.id,
     name: box.name,
     status: mapState(box.state),
     created_at: box.createdAt || new Date().toISOString(),

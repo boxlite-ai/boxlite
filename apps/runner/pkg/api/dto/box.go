@@ -6,7 +6,6 @@ package dto
 
 type CreateBoxDTO struct {
 	Id               string            `json:"id" validate:"required"`
-	BoxId            string            `json:"boxId,omitempty"`
 	FromVolumeId     string            `json:"fromVolumeId,omitempty"`
 	UserId           string            `json:"userId,omitempty"`
 	Image            string            `json:"image" validate:"required"`

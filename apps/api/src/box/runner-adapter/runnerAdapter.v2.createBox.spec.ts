@@ -69,7 +69,7 @@ describe('RunnerAdapterV2.createBox (CREATE_BOX job payload)', () => {
     expect(payload.storageQuota).toBe(10)
   })
 
-  it('sends both ids: uuid for job reporting, boxId for human-facing runner logs', async () => {
+  it('sends the single box id (12-char base62, also the engine VM name)', async () => {
     const createJob = jest.fn().mockResolvedValue(undefined)
     const adapter = createAdapter(createJob)
     const box = buildBox()
@@ -78,7 +78,7 @@ describe('RunnerAdapterV2.createBox (CREATE_BOX job payload)', () => {
 
     const payload = createJob.mock.calls[0][5] as Record<string, unknown>
     expect(payload.id).toBe(box.id)
-    expect(payload.boxId).toBe(box.boxId)
-    expect(payload.boxId).not.toBe(box.id)
+    expect(payload.id).toMatch(/^[0-9A-Za-z]{12}$/)
+    expect('boxId' in payload).toBe(false)
   })
 })

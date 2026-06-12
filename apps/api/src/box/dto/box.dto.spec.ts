@@ -7,8 +7,8 @@
 import { Box } from '../entities/box.entity'
 import { BoxDto } from './box.dto'
 
-describe('BoxDto public identity', () => {
-  it('exposes the public boxId separately from the internal UUID', () => {
+describe('BoxDto identity', () => {
+  it('exposes the single box id under both id and the legacy boxId field', () => {
     const box = new Box('us', 'data-loader')
     box.organizationId = '057963b2-60ca-4356-81fc-11503e15f249'
     box.osUser = 'boxlite'
@@ -16,7 +16,6 @@ describe('BoxDto public identity', () => {
     const dto = BoxDto.fromBox(box, 'https://proxy.boxlite.dev/toolbox')
 
     expect(dto.id).toBe(box.id)
-    expect(dto.boxId).toBe(box.boxId)
-    expect(dto.boxId).not.toBe(box.id)
+    expect(dto.boxId).toBe(box.id)
   })
 })

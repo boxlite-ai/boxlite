@@ -64,10 +64,8 @@ import {
   BOX_LOOKUP_CACHE_TTL_MS,
   BOX_ORG_ID_CACHE_TTL_MS,
   TOOLBOX_PROXY_URL_CACHE_TTL_S,
-  boxLookupCacheKeyByBoxId,
   boxLookupCacheKeyById,
   boxLookupCacheKeyByName,
-  boxOrgIdCacheKeyByBoxId,
   boxOrgIdCacheKeyById,
   boxOrgIdCacheKeyByName,
   toolboxProxyUrlCacheKey,
@@ -300,7 +298,6 @@ export class BoxService {
     // Defensive invalidation of orgId cache since the box moved from unassigned to a real organization
     this.boxLookupCacheInvalidationService.invalidateOrgId({
       id: warmPoolBox.id,
-      boxId: warmPoolBox.boxId,
       organizationId: organization.id,
       name: warmPoolBox.name,
       previousOrganizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
@@ -468,11 +465,6 @@ export class BoxService {
       {
         ...baseFindOptions,
         ...nameFilter,
-        boxId: idFilter,
-      },
-      {
-        ...baseFindOptions,
-        ...nameFilter,
         id: idFilter,
       },
       {
@@ -528,32 +520,18 @@ export class BoxService {
     const stateFilter = returnDestroyed ? {} : { state: Not(BoxState.DESTROYED) }
     const organizationFilter = organizationId ? { organizationId } : {}
 
-    // Public Box ID is the user-facing stable identity. UUID and name are legacy-compatible fallbacks.
+    // The 12-char public box id IS the primary key; name is a legacy-compatible fallback.
     let box = await this.boxRepository.findOne({
       where: {
-        boxId: boxIdOrName,
+        id: boxIdOrName,
         ...organizationFilter,
         ...stateFilter,
       },
       cache: {
-        id: boxLookupCacheKeyByBoxId({ organizationId, returnDestroyed, boxId: boxIdOrName }),
+        id: boxLookupCacheKeyById({ organizationId, returnDestroyed, boxId: boxIdOrName }),
         milliseconds: BOX_LOOKUP_CACHE_TTL_MS,
       },
     })
-
-    if (!box) {
-      box = await this.boxRepository.findOne({
-        where: {
-          id: boxIdOrName,
-          ...organizationFilter,
-          ...stateFilter,
-        },
-        cache: {
-          id: boxLookupCacheKeyById({ organizationId, returnDestroyed, boxId: boxIdOrName }),
-          milliseconds: BOX_LOOKUP_CACHE_TTL_MS,
-        },
-      })
-    }
 
     if (!box) {
       box = await this.boxRepository.findOne({
@@ -570,7 +548,7 @@ export class BoxService {
     }
 
     if (!box || (!returnDestroyed && box.state === BoxState.ERROR && box.desiredState === BoxDesiredState.DESTROYED)) {
-      throw new NotFoundException(`Box with Box ID, UUID, or name ${boxIdOrName} not found`)
+      throw new NotFoundException(`Box with ID or name ${boxIdOrName} not found`)
     }
 
     return box
@@ -596,29 +574,15 @@ export class BoxService {
 
     let box = await this.boxRepository.findOne({
       where: {
-        boxId: boxIdOrName,
+        id: boxIdOrName,
         ...organizationFilter,
       },
       select: ['organizationId'],
       cache: {
-        id: boxOrgIdCacheKeyByBoxId({ organizationId, boxId: boxIdOrName }),
+        id: boxOrgIdCacheKeyById({ organizationId, boxId: boxIdOrName }),
         milliseconds: BOX_ORG_ID_CACHE_TTL_MS,
       },
     })
-
-    if (!box) {
-      box = await this.boxRepository.findOne({
-        where: {
-          id: boxIdOrName,
-          ...organizationFilter,
-        },
-        select: ['organizationId'],
-        cache: {
-          id: boxOrgIdCacheKeyById({ organizationId, boxId: boxIdOrName }),
-          milliseconds: BOX_ORG_ID_CACHE_TTL_MS,
-        },
-      })
-    }
 
     if (!box && organizationId) {
       box = await this.boxRepository.findOne({
@@ -635,7 +599,7 @@ export class BoxService {
     }
 
     if (!box || !box.organizationId) {
-      throw new NotFoundException(`Box with Box ID, UUID, or name ${boxIdOrName} not found`)
+      throw new NotFoundException(`Box with ID or name ${boxIdOrName} not found`)
     }
 
     return box.organizationId
@@ -643,13 +607,13 @@ export class BoxService {
 
   async getRunnerId(boxIdOrName: string): Promise<string | null> {
     const box = await this.boxRepository.findOne({
-      where: [{ boxId: boxIdOrName }, { id: boxIdOrName }, { name: boxIdOrName }],
+      where: [{ id: boxIdOrName }, { name: boxIdOrName }],
       select: ['runnerId'],
       loadEagerRelations: false,
     })
 
     if (!box) {
-      throw new NotFoundException(`Box with Box ID, UUID, or name ${boxIdOrName} not found`)
+      throw new NotFoundException(`Box with ID or name ${boxIdOrName} not found`)
     }
 
     return box.runnerId || null
@@ -657,13 +621,13 @@ export class BoxService {
 
   async getRegionId(boxIdOrName: string): Promise<string> {
     const box = await this.boxRepository.findOne({
-      where: [{ boxId: boxIdOrName }, { id: boxIdOrName }, { name: boxIdOrName }],
+      where: [{ id: boxIdOrName }, { name: boxIdOrName }],
       select: ['region'],
       loadEagerRelations: false,
     })
 
     if (!box) {
-      throw new NotFoundException(`Box with Box ID, UUID, or name ${boxIdOrName} not found`)
+      throw new NotFoundException(`Box with ID or name ${boxIdOrName} not found`)
     }
 
     return box.region

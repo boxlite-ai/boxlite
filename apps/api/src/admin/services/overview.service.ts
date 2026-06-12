@@ -116,7 +116,7 @@ export class AdminOverviewService {
 
     return boxes.map((s) => ({
       id: s.id,
-      boxId: s.boxId,
+      boxId: s.id,
       organizationId: s.organizationId,
       state: s.state,
       runnerId: s.runnerId,

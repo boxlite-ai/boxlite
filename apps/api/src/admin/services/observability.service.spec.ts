@@ -398,7 +398,7 @@ describe('AdminObservabilityService', () => {
     overviewService.listBoxes.mockResolvedValue([
       {
         id: 'box-1',
-        boxId: 'public-box-1',
+        boxId: 'box-1',
         organizationId: 'org-1',
         state: 'started',
         runnerId: 'runner-1',
@@ -408,7 +408,7 @@ describe('AdminObservabilityService', () => {
       },
       {
         id: 'box-2',
-        boxId: 'public-box-2',
+        boxId: 'box-2',
         organizationId: 'org-1',
         state: 'started',
         runnerId: 'runner-2',
@@ -429,24 +429,24 @@ describe('AdminObservabilityService', () => {
     expect(result.correlation).toMatchObject({
       traceIds: ['trace-box-1'],
       orgIds: ['org-1'],
-      boxIds: ['box-1', 'public-box-1'],
+      boxIds: ['box-1'],
       runnerIds: ['runner-1'],
       machineIds: ['runner-1'],
       serviceNames: ['box-box-1'],
     })
     expect(result.boxes.map((box) => box.id)).toEqual(['box-1'])
-    expect(result.boxes.map((box) => box.boxId)).toEqual(['public-box-1'])
+    expect(result.boxes.map((box) => box.boxId)).toEqual(['box-1'])
     expect(result.runners.map((runner) => runner.id)).toEqual(['runner-1'])
     expect(result.machines.map((machine) => machine.host)).toEqual(['runner-1'])
     expect(cloudWatchLogReader.getRelatedLogs).toHaveBeenCalledWith(
       expect.any(Object),
       expect.objectContaining({
-        boxIds: ['box-1', 'public-box-1'],
+        boxIds: ['box-1'],
       }),
     )
     expect(s3ObjectReader.listRelatedObjects).toHaveBeenCalledWith(
       expect.objectContaining({
-        boxIds: ['box-1', 'public-box-1'],
+        boxIds: ['box-1'],
       }),
     )
   })
@@ -479,7 +479,7 @@ describe('AdminObservabilityService', () => {
     overviewService.listBoxes.mockResolvedValue([
       {
         id: 'box-1',
-        boxId: 'public-box-1',
+        boxId: 'box-1',
         organizationId: 'org-1',
         state: 'started',
         runnerId: 'runner-1',
@@ -592,7 +592,7 @@ describe('AdminObservabilityService', () => {
     })
     overviewService.listBoxes.mockResolvedValue([
       {
-        id: 'box-internal-1',
+        id: 'box-1',
         boxId: 'box-1',
         organizationId: 'org-1',
         state: 'started',
@@ -675,7 +675,7 @@ describe('AdminObservabilityService', () => {
       traceIds: expect.arrayContaining(['trace-1']),
       orgIds: expect.arrayContaining(['org-1']),
       userIds: expect.arrayContaining(['user-1']),
-      boxIds: expect.arrayContaining(['box-1', 'box-internal-1']),
+      boxIds: expect.arrayContaining(['box-1']),
       runnerIds: expect.arrayContaining(['runner-1']),
       machineIds: expect.arrayContaining(['machine-1']),
       requestIds: expect.arrayContaining(['req-1']),
@@ -687,7 +687,7 @@ describe('AdminObservabilityService', () => {
     expect(result.traceSpans).toHaveLength(1)
     expect(result.logs).toHaveLength(2)
     expect(result.metrics.series).toHaveLength(1)
-    expect(result.boxes.map((box) => box.id)).toEqual(['box-internal-1'])
+    expect(result.boxes.map((box) => box.id)).toEqual(['box-1'])
     expect(result.runners.map((runner) => runner.id)).toEqual(['runner-1'])
     expect(result.machines.map((machine) => machine.host)).toEqual(['machine-1'])
     expect(result.auditLogs.map((log) => log.id)).toEqual(['audit-1'])
@@ -771,22 +771,22 @@ describe('AdminObservabilityService', () => {
     })
     expect(result.operations).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: 'recover:box-internal-1', state: 'disabled' }),
+        expect.objectContaining({ id: 'recover:box-1', state: 'disabled' }),
         expect.objectContaining({ id: 'cordon:runner-1', state: 'enabled' }),
         expect.objectContaining({ id: 'drain:runner-1', state: 'enabled' }),
-        expect.objectContaining({ id: 'resize:box-internal-1', state: 'request_only' }),
+        expect.objectContaining({ id: 'resize:box-1', state: 'request_only' }),
       ]),
     )
     expect(cloudWatchLogReader.getRelatedLogs).toHaveBeenCalledWith(
       expect.any(Object),
       expect.objectContaining({
         traceIds: ['trace-1'],
-        boxIds: ['box-1', 'box-internal-1'],
+        boxIds: ['box-1'],
       }),
     )
     expect(s3ObjectReader.listRelatedObjects).toHaveBeenCalledWith(
       expect.objectContaining({
-        boxIds: ['box-1', 'box-internal-1'],
+        boxIds: ['box-1'],
         executionIds: ['exec-1'],
       }),
     )
@@ -808,8 +808,8 @@ describe('AdminObservabilityService', () => {
 
     overviewService.listBoxes.mockResolvedValue([
       {
-        id: 'box-internal-1',
-        boxId: 'box-public-1',
+        id: 'box-1',
+        boxId: 'box-1',
         organizationId: 'org-1',
         state: 'stopped',
         runnerId: 'runner-1',
@@ -830,20 +830,9 @@ describe('AdminObservabilityService', () => {
           organizationId: 'admin-org',
           action: 'read',
           targetType: 'observability',
-          targetId: 'boxId:box-public-1',
+          targetId: 'boxId:box-1',
           source: 'agent',
           createdAt: new Date('2026-06-05T00:00:02.000Z'),
-        },
-        {
-          id: 'audit-prefixed-box-internal',
-          actorId: 'agent-1',
-          actorEmail: 'agent@example.com',
-          organizationId: 'admin-org',
-          action: 'read',
-          targetType: 'observability',
-          targetId: 'boxId:box-internal-1',
-          source: 'agent',
-          createdAt: new Date('2026-06-05T00:00:03.000Z'),
         },
         {
           id: 'audit-other',
@@ -865,14 +854,14 @@ describe('AdminObservabilityService', () => {
     const result = await service.investigate({
       from: '2026-06-05T00:00:00.000Z',
       to: '2026-06-05T01:00:00.000Z',
-      boxId: 'box-public-1',
+      boxId: 'box-1',
       runnerId: 'runner-1',
       machineId: 'runner-1',
     })
 
-    expect(result.auditLogs.map((log) => log.id)).toEqual(['audit-prefixed-box', 'audit-prefixed-box-internal'])
+    expect(result.auditLogs.map((log) => log.id)).toEqual(['audit-prefixed-box'])
     expect(result.sources).toEqual(
-      expect.arrayContaining([expect.objectContaining({ source: 'audit', state: 'available', count: 2 })]),
+      expect.arrayContaining([expect.objectContaining({ source: 'audit', state: 'available', count: 1 })]),
     )
   })
 
@@ -886,7 +875,7 @@ describe('AdminObservabilityService', () => {
 
     overviewService.listBoxes.mockResolvedValue([
       {
-        id: 'box-internal-1',
+        id: 'box-1',
         boxId: 'box-1',
         organizationId: 'org-1',
         state: 'started',
@@ -932,7 +921,7 @@ describe('AdminObservabilityService', () => {
       title: 'User user-1',
       identifiers: expect.objectContaining({ userId: 'user-1', orgId: 'org-1' }),
     })
-    expect(userResult.boxes.map((box) => box.id)).toEqual(['box-internal-1'])
+    expect(userResult.boxes.map((box) => box.id)).toEqual(['box-1'])
     expect(userResult.auditLogs.map((log) => log.id)).toEqual(['audit-user-actor'])
     expect(userResult.externalLinks.clickstack.query).toContain('boxlite.user_id')
     expect(userResult.commands.api).toContain('userId=user-1')

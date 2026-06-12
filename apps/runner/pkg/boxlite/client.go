@@ -211,11 +211,6 @@ func (c *Client) Close() error {
 // Create creates a new box (VM) from the given image and configuration.
 // Returns the box ID and daemon version.
 func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error) {
-	publicBoxId := boxDto.BoxId
-	if publicBoxId == "" {
-		publicBoxId = boxDto.Id
-	}
-
 	// API sends cores / GB / GB as small integers (see apps/api Box entity).
 	cpus := int(boxDto.CpuQuota)
 	if cpus < 1 {
@@ -292,8 +287,6 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		bx.ID(),
 		"boxId",
 		boxDto.Id,
-		"boxId",
-		publicBoxId,
 		"name",
 		bx.Name(),
 		"image",

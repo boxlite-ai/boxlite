@@ -17,8 +17,8 @@ function createService(findOne: jest.Mock): BoxService {
   return service
 }
 
-describe('BoxService public identity lookup', () => {
-  it('resolves the public boxId before falling back to the internal UUID or name', async () => {
+describe('BoxService identity lookup', () => {
+  it('resolves the box by its single id in one query, falling back to name only', async () => {
     const organizationId = '057963b2-60ca-4356-81fc-11503e15f249'
     const box = new Box('us', 'data-loader')
     box.organizationId = organizationId
@@ -26,13 +26,13 @@ describe('BoxService public identity lookup', () => {
     const findOne = jest.fn().mockResolvedValueOnce(box)
     const service = createService(findOne)
 
-    await expect(service.findOneByIdOrName(box.boxId, organizationId)).resolves.toBe(box)
+    await expect(service.findOneByIdOrName(box.id, organizationId)).resolves.toBe(box)
 
     expect(findOne).toHaveBeenCalledTimes(1)
     expect(findOne).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
-          boxId: box.boxId,
+          id: box.id,
           organizationId,
           state: Not(BoxState.DESTROYED),
         },

@@ -251,7 +251,7 @@ export class BoxDto {
   static fromBox(box: Box, toolboxProxyUrl: string): BoxDto {
     return {
       id: box.id,
-      boxId: box.boxId,
+      boxId: box.id,
       organizationId: box.organizationId,
       name: box.name,
       target: box.region,

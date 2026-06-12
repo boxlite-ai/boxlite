@@ -626,7 +626,7 @@ export class AdminObservabilityService {
       return {
         ...base,
         type: 'box',
-        title: box.boxId ? `Box ${box.boxId}` : `Box ${box.id}`,
+        title: `Box ${box.id}`,
         subtitle: box.id,
         state: box.state,
         owner: box.owner?.email || box.owner?.name,
