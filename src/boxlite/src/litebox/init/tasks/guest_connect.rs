@@ -53,9 +53,13 @@ impl PipelineTask<InitCtx> for GuestConnectTask {
             let exit_file = layout.exit_file_path();
             let console_log = layout.console_output_path();
             let stderr_file = layout.stderr_file_path();
+            // Self-heal: the macOS /tmp cleaner can reap the binding symlink
+            // of a box idle for days; re-ensuring here (cheap, idempotent)
+            // covers reattach, where FilesystemTask::prepare never runs.
+            layout.sockets().ensure()?;
             (
-                ctx.config.transport.clone(),
-                Transport::unix(ctx.config.ready_socket_path.clone()),
+                ctx.config.transport(),
+                ctx.config.ready_transport(),
                 ctx.skip_guest_wait,
                 ctx.guard.handler_pid(),
                 exit_file,

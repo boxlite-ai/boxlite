@@ -190,12 +190,23 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
 
     // Writable directories (shim creates files inside these at runtime)
     // Note: mounts_dir not included — host writes before spawn, shim accesses via shared_dir
-    for dir in [layout.sockets_dir(), layout.tmp_dir(), layout.logs_dir()] {
+    for dir in [layout.tmp_dir(), layout.logs_dir()] {
         if dir.exists() {
             paths.push(PathAccess {
                 path: dir,
                 writable: true,
             });
+        }
+    }
+
+    // Socket paths: the real sockets dir (inodes are created there through
+    // the symlink), the /tmp/bl-{uid}/{box_id} binding symlink (the literal
+    // path used at bind/connect time), and read-only traversal of the
+    // per-user parent. Gated on the REAL dir only (box prepared) — never on
+    // global /tmp state, so the emitted profile is deterministic.
+    if layout.sockets_dir().exists() {
+        for (path, writable) in layout.sockets().policy_paths() {
+            paths.push(PathAccess { path, writable });
         }
     }
 
@@ -506,6 +517,32 @@ mod tests {
 
         // Empty box dir: no subdirectories exist yet, so no paths
         assert!(paths.is_empty(), "No paths for empty box dir");
+    }
+
+    #[test]
+    fn test_build_path_access_socket_policy_entries() {
+        // Security regression guard: when the box is prepared, the policy
+        // must contain all three socket entries — the real sockets dir
+        // (writable), the /tmp binding symlink (writable: the literal path
+        // used at bind/connect time), and the per-user parent (read-only
+        // traversal). Missing any of them breaks sandboxed boots.
+        let dir = tempdir().unwrap();
+        let layout = test_layout(dir.path().to_path_buf());
+        std::fs::create_dir_all(layout.sockets_dir()).unwrap();
+        let sockets = layout.sockets();
+        sockets.ensure().unwrap();
+
+        let paths = build_path_access(&layout, &[]);
+
+        let find = |p: &std::path::Path| paths.iter().find(|pa| pa.path == p);
+        let real = find(&layout.sockets_dir()).expect("real sockets dir entry");
+        assert!(real.writable, "real sockets dir must be writable");
+        let binding = find(&sockets.binding_dir()).expect("binding symlink entry");
+        assert!(binding.writable, "binding symlink must be writable");
+        let parent = find(sockets.binding_dir().parent().unwrap()).expect("per-user parent entry");
+        assert!(!parent.writable, "per-user parent must be read-only");
+
+        sockets.remove();
     }
 
     #[test]

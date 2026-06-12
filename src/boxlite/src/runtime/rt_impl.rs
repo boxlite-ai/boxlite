@@ -5,7 +5,6 @@ use crate::litebox::{BoxManager, LiteBox, LocalSnapshotBackend, SharedBoxImpl};
 use crate::lock::{FileLockManager, LockManager};
 use crate::metrics::{RuntimeMetrics, RuntimeMetricsStorage};
 use crate::rootfs::guest::{GuestRootfs, GuestRootfsManager};
-use crate::runtime::constants::filenames;
 use crate::runtime::id::{BoxID, BoxIDMint};
 use crate::runtime::layout::{BoxFilesystemLayout, FilesystemLayout, FsLayoutConfig};
 use crate::runtime::lock::RuntimeLock;
@@ -13,7 +12,7 @@ use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
 use crate::runtime::signal_handler::timeout_to_duration;
 use crate::runtime::types::{BoxInfo, BoxState, BoxStatus, ContainerID};
 use crate::vmm::VmmKind;
-use boxlite_shared::{BoxliteError, BoxliteResult, Transport};
+use boxlite_shared::{BoxliteError, BoxliteResult};
 use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock, Weak};
@@ -212,6 +211,10 @@ impl RuntimeImpl {
                 }
             }
         }
+
+        // Sweep socket binding symlinks whose boxes are gone (crash leftovers
+        // that per-box removal never saw).
+        crate::net::socket_path::BoxSockets::sweep_stale();
 
         let db = Database::open(&layout.db_dir().join("boxlite.db")).map_err(|e| {
             BoxliteError::Storage(format!(
@@ -903,7 +906,8 @@ impl RuntimeImpl {
                 self.base_disk_mgr.try_gc_base(&base_id);
             }
 
-            // Delete box directory
+            // Delete box directory + its socket binding symlink
+            config.sockets().remove();
             let box_home = config.box_home;
             if box_home.exists()
                 && let Err(e) = std::fs::remove_dir_all(&box_home)
@@ -966,7 +970,8 @@ impl RuntimeImpl {
             // Invalidate cache (removes from in-memory maps)
             self.invalidate_box_impl(id, box_impl.config.name.as_deref());
 
-            // Delete box directory if it exists
+            // Delete box directory + its socket binding symlink
+            box_impl.config.sockets().remove();
             let box_home = &box_impl.config.box_home;
             if box_home.exists()
                 && let Err(e) = std::fs::remove_dir_all(box_home)
@@ -1013,13 +1018,12 @@ impl RuntimeImpl {
 
         // Derive paths from ID (computed from layout + ID)
         let box_home = self.layout.boxes_dir().join(box_id.as_str());
-        let socket_path = filenames::unix_socket_path(self.layout.home_dir(), box_id.as_str());
-        let ready_socket_path = box_home.join("sockets").join("ready.sock");
-
         // Create container runtime config
         let container = ContainerRuntimeConfig { id: container_id };
 
-        // Create config with defaults + user options
+        // Create config with defaults + user options. Socket paths are NOT
+        // stored — they derive from (box_home, id) at point of use via
+        // BoxConfig::sockets(), so they can never go stale.
         let config = BoxConfig {
             id: box_id,
             name,
@@ -1027,9 +1031,7 @@ impl RuntimeImpl {
             container,
             options: options.clone(),
             engine_kind: VmmKind::Libkrun,
-            transport: Transport::unix(socket_path),
             box_home,
-            ready_socket_path,
         };
 
         // Create initial state (status = Configured)
@@ -1071,9 +1073,6 @@ impl RuntimeImpl {
             ))
         })?;
 
-        let socket_path = filenames::unix_socket_path(self.layout.home_dir(), box_id.as_str());
-        let ready_socket_path = box_home.join("sockets").join("ready.sock");
-
         let config = BoxConfig {
             id: box_id.clone(),
             name,
@@ -1081,9 +1080,7 @@ impl RuntimeImpl {
             container: ContainerRuntimeConfig { id: container_id },
             options,
             engine_kind: VmmKind::Libkrun,
-            transport: Transport::unix(socket_path),
             box_home,
-            ready_socket_path,
         };
 
         let mut state = BoxState::new();
@@ -1095,6 +1092,7 @@ impl RuntimeImpl {
         if let Err(e) = self.box_manager.add_box(&config, &state) {
             let _ = self.lock_manager.free(lock_id);
             let _ = std::fs::remove_dir_all(&config.box_home);
+            config.sockets().remove();
             return Err(e);
         }
 
@@ -1162,7 +1160,8 @@ impl RuntimeImpl {
         for box_id in &boxes_to_remove {
             // Find the config to get box_home path
             if let Some((config, _)) = persisted.iter().find(|(c, _)| &c.id == box_id) {
-                // Clean up box directory if it exists
+                // Clean up box directory + binding symlink if they exist
+                config.sockets().remove();
                 if config.box_home.exists()
                     && let Err(e) = std::fs::remove_dir_all(&config.box_home)
                 {
@@ -1397,6 +1396,11 @@ impl RuntimeImpl {
                 "Removing orphaned box directory (no database record)"
             );
 
+            crate::net::socket_path::BoxSockets::new(
+                orphan_id.clone(),
+                orphan_dir.join(crate::runtime::layout::dirs::SOCKETS_DIR),
+            )
+            .remove();
             if let Err(e) = std::fs::remove_dir_all(&orphan_dir) {
                 tracing::error!(
                     box_id = %orphan_id,
@@ -1675,11 +1679,7 @@ mod tests {
                 ..Default::default()
             },
             engine_kind: VmmKind::Libkrun,
-            transport: Transport::Unix {
-                socket_path: "/tmp/test.sock".into(),
-            },
             box_home: std::path::PathBuf::from("/tmp/test-box"),
-            ready_socket_path: std::path::PathBuf::from("/tmp/test-ready.sock"),
         }
     }
 
@@ -1733,11 +1733,7 @@ mod tests {
                 ..Default::default()
             },
             engine_kind: VmmKind::Libkrun,
-            transport: Transport::Unix {
-                socket_path: "/tmp/test.sock".into(),
-            },
             box_home,
-            ready_socket_path: std::path::PathBuf::from("/tmp/test-ready.sock"),
         }
     }
 
@@ -2739,8 +2735,17 @@ mod tests {
 
         runtime.box_manager.add_box(&config, &state).unwrap();
 
+        // The socket binding symlink must be removed with the box.
+        config.sockets().ensure().unwrap();
+        let binding_dir = config.sockets().binding_dir();
+        assert!(std::fs::symlink_metadata(&binding_dir).is_ok());
+
         let result = runtime.remove_box(&config.id, false);
         assert!(result.is_ok());
+        assert!(
+            std::fs::symlink_metadata(&binding_dir).is_err(),
+            "remove_box must unlink the socket binding symlink"
+        );
     }
 
     #[test]

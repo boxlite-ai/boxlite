@@ -1160,7 +1160,6 @@ mod tests {
     use crate::runtime::types::ContainerID;
     use crate::util::is_process_alive;
     use crate::vmm::VmmKind;
-    use boxlite_shared::Transport;
     use chrono::Utc;
     use tempfile::TempDir;
 
@@ -1218,11 +1217,7 @@ mod tests {
                 ..Default::default()
             },
             engine_kind: VmmKind::Libkrun,
-            transport: Transport::Unix {
-                socket_path: "/tmp/test.sock".into(),
-            },
             box_home: box_home.clone(),
-            ready_socket_path: std::path::PathBuf::from("/tmp/test-ready.sock"),
         };
 
         let mut state = BoxState::new();

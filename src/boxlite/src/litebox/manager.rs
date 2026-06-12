@@ -205,7 +205,6 @@ mod tests {
     use crate::runtime::id::BoxID;
     use crate::runtime::types::{BoxStatus, ContainerID};
     use crate::vmm::VmmKind;
-    use boxlite_shared::Transport;
     use chrono::Utc;
     use std::path::PathBuf;
     use tempfile::tempdir;
@@ -233,9 +232,7 @@ mod tests {
                 ..Default::default()
             },
             engine_kind: VmmKind::Libkrun,
-            transport: Transport::unix(PathBuf::from("/tmp/test.sock")),
             box_home: PathBuf::from("/tmp/box"),
-            ready_socket_path: PathBuf::from("/tmp/ready"),
         }
     }
 

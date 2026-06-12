@@ -71,20 +71,6 @@ pub mod vm_defaults {
 
 /// File naming patterns
 pub mod filenames {
-    use crate::runtime::layout::dirs;
-    use std::path::{Path, PathBuf};
-
     /// Lock file name
     pub const LOCK_FILE: &str = ".lock";
-
-    pub fn box_home(home_dir: &Path, box_id: &str) -> PathBuf {
-        home_dir.join(dirs::BOXES_DIR).join(box_id)
-    }
-
-    /// Get full path for Unix socket
-    pub fn unix_socket_path(home_dir: &Path, box_id: &str) -> PathBuf {
-        box_home(home_dir, box_id)
-            .join(dirs::SOCKETS_DIR)
-            .join("box.sock")
-    }
 }

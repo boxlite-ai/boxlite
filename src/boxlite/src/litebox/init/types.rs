@@ -386,7 +386,6 @@ mod tests {
         use crate::runtime::rt_impl::RuntimeImpl;
         use crate::runtime::types::{BoxState, BoxStatus, ContainerID};
         use crate::vmm::VmmKind;
-        use boxlite_shared::Transport;
         use boxlite_test_utils::home::PerTestBoxHome;
         use chrono::Utc;
         use std::path::PathBuf;
@@ -411,9 +410,7 @@ mod tests {
                 ..Default::default()
             },
             engine_kind: VmmKind::Libkrun,
-            transport: Transport::unix(PathBuf::from("/tmp/test.sock")),
             box_home: PathBuf::from("/tmp/box"),
-            ready_socket_path: PathBuf::from("/tmp/ready"),
         };
         runtime
             .box_manager

@@ -439,7 +439,6 @@ mod tests {
     use super::*;
     use crate::litebox::config::{BoxConfig, ContainerRuntimeConfig};
     use crate::runtime::options::{BoxOptions, RootfsSpec};
-    use boxlite_shared::Transport;
     use std::path::PathBuf;
 
     #[test]
@@ -460,9 +459,7 @@ mod tests {
                 ..Default::default()
             },
             engine_kind: crate::vmm::VmmKind::Libkrun,
-            transport: Transport::unix(PathBuf::from("/tmp/boxlite.sock")),
             box_home: PathBuf::from("/tmp/box"),
-            ready_socket_path: PathBuf::from("/tmp/ready.sock"),
         };
 
         let mut state = BoxState::new();

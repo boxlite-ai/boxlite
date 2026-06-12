@@ -1,3 +1,4 @@
+use crate::net::socket_path::BoxSockets;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use boxlite_shared::layout::{SharedGuestLayout, dirs as shared_dirs};
 use std::path::{Path, PathBuf};
@@ -367,29 +368,42 @@ impl BoxFilesystemLayout {
     // ========================================================================
 
     /// Sockets directory: ~/.boxlite/boxes/{box_id}/sockets
+    ///
+    /// This is the REAL directory (for mkdir, sandbox policies, inspection).
+    /// Paths handed to `bind()`/`connect()` come from [`Self::sockets`] —
+    /// every socket is bound through the short `/tmp/bl-{uid}/{box_id}`
+    /// symlink to stay inside the `sun_path` limit.
     pub fn sockets_dir(&self) -> PathBuf {
         self.box_dir.join(dirs::SOCKETS_DIR)
     }
 
-    /// Unix socket path: ~/.boxlite/boxes/{box_id}/sockets/box.sock
+    /// The socket-path authority for this box (binding paths, symlink
+    /// lifecycle, sandbox policy paths). See [`BoxSockets`].
+    pub fn sockets(&self) -> BoxSockets {
+        // Box ids are minted ASCII (see runtime::id), so lossy is exact.
+        let box_id = self
+            .box_dir
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy();
+        BoxSockets::new(box_id, self.sockets_dir())
+    }
+
+    /// gRPC control socket binding path (see [`BoxSockets::box_sock`]).
     pub fn socket_path(&self) -> PathBuf {
-        self.sockets_dir().join("box.sock")
+        self.sockets().box_sock()
     }
 
-    /// Ready notification socket: ~/.boxlite/boxes/{box_id}/sockets/ready.sock
-    ///
-    /// Guest connects to this socket to signal it's ready to serve.
+    /// Guest-ready notification socket binding path
+    /// (see [`BoxSockets::ready_sock`]).
     pub fn ready_socket_path(&self) -> PathBuf {
-        self.sockets_dir().join("ready.sock")
+        self.sockets().ready_sock()
     }
 
-    /// Network backend socket: ~/.boxlite/boxes/{box_id}/sockets/net.sock
-    ///
-    /// Used by the network backend (e.g., gvisor-tap-vsock) to provide
-    /// virtio-net connectivity to the guest VM. Each box gets its own
-    /// socket to prevent collisions between concurrent instances.
+    /// Network backend socket binding path (gvproxy; libkrun derives a
+    /// sibling `net.sock-krun.sock` — see [`BoxSockets::net_backend_sock`]).
     pub fn net_backend_socket_path(&self) -> PathBuf {
-        self.sockets_dir().join("net.sock")
+        self.sockets().net_backend_sock()
     }
 
     // ========================================================================
@@ -555,6 +569,10 @@ impl BoxFilesystemLayout {
         std::fs::create_dir_all(self.sockets_dir())
             .map_err(|e| BoxliteError::Storage(format!("failed to create sockets dir: {e}")))?;
 
+        // All sockets bind through the short /tmp symlink (sun_path limit) —
+        // it must exist BEFORE anything binds, or boot fails on ENOENT.
+        self.sockets().ensure()?;
+
         std::fs::create_dir_all(self.tmp_dir())
             .map_err(|e| BoxliteError::Storage(format!("failed to create tmp dir: {e}")))?;
 
@@ -580,6 +598,7 @@ impl BoxFilesystemLayout {
             std::fs::remove_dir_all(&self.box_dir)
                 .map_err(|e| BoxliteError::Storage(format!("failed to cleanup box dir: {e}")))?;
         }
+        self.sockets().remove();
         Ok(())
     }
 }
@@ -836,13 +855,62 @@ mod tests {
             "Two different boxes must have different net backend socket paths"
         );
 
-        // Verify paths are under their respective box directories
-        assert!(path_a.starts_with("/home/user/.boxlite/boxes/box-aaa/sockets/"));
-        assert!(path_b.starts_with("/home/user/.boxlite/boxes/box-bbb/sockets/"));
+        // Binding paths live under the per-box /tmp symlink; the real dirs
+        // stay distinct per box too.
+        assert!(path_a.parent().unwrap().ends_with("box-aaa"));
+        assert!(path_b.parent().unwrap().ends_with("box-bbb"));
+        assert_ne!(box_a.sockets_dir(), box_b.sockets_dir());
 
         // Verify the socket filename
         assert_eq!(path_a.file_name().unwrap(), "net.sock");
         assert_eq!(path_b.file_name().unwrap(), "net.sock");
+    }
+
+    #[test]
+    fn test_long_home_routes_sockets_through_binding_symlink() {
+        // A home deep enough that sockets/net.sock-krun.sock would exceed the
+        // sun_path limit. prepare() must create the binding symlink and the
+        // socket getters must bind through it; sockets_dir() stays real.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let deep_boxes = tmp
+            .path()
+            .join("a_very_long_segment_to_push_paths_over_the_limit")
+            .join("and_one_more_for_good_measure")
+            .join("boxes");
+        let box_dir = deep_boxes.join("sunpathbox1");
+        let layout =
+            BoxFilesystemLayout::new(box_dir.clone(), FsLayoutConfig::without_bind_mount(), false);
+        assert!(
+            layout
+                .sockets_dir()
+                .join("net.sock-krun.sock")
+                .as_os_str()
+                .len()
+                >= 104,
+            "test setup must exceed sun_path"
+        );
+
+        layout.prepare().unwrap();
+
+        let binding_dir = layout.sockets().binding_dir();
+        let bound = layout.net_backend_socket_path();
+        assert!(
+            bound.starts_with(&binding_dir),
+            "expected binding path under {}, got {}",
+            binding_dir.display(),
+            bound.display()
+        );
+        assert!(bound.as_os_str().len() + "-krun.sock".len() < 104);
+        assert_eq!(layout.sockets_dir(), box_dir.join("sockets"));
+        // The symlink resolves to the real sockets dir.
+        assert_eq!(
+            std::fs::read_link(&binding_dir).unwrap(),
+            layout.sockets_dir()
+        );
+
+        // cleanup() removes the symlink together with the box dir.
+        layout.cleanup().unwrap();
+        assert!(std::fs::symlink_metadata(&binding_dir).is_err());
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use crate::BoxID;
+use crate::net::socket_path::BoxSockets;
 use crate::runtime::types::ContainerID;
 use boxlite_shared::Transport;
 use chrono::{DateTime, Utc};
@@ -41,10 +42,32 @@ pub struct BoxConfig {
     // === Runtime-Generated Configuration ===
     /// VMM engine type.
     pub engine_kind: crate::vmm::VmmKind,
-    /// Transport mechanism for guest communication.
-    pub transport: Transport,
     /// Box home directory.
     pub box_home: PathBuf,
-    /// Ready signal socket path.
-    pub ready_socket_path: PathBuf,
+}
+
+impl BoxConfig {
+    /// Socket-path authority for this box, derived from identity
+    /// (`box_home` + `id`) — never persisted. Legacy DB rows may still
+    /// carry old `transport` / `ready_socket_path` fields; they are
+    /// ignored on deserialize and must never be read: socket paths are
+    /// derived at point of use so they can never go stale.
+    pub fn sockets(&self) -> BoxSockets {
+        BoxSockets::new(
+            self.id.as_str(),
+            self.box_home
+                .join(crate::runtime::layout::dirs::SOCKETS_DIR),
+        )
+    }
+
+    /// Transport for guest gRPC communication (Unix socket via the
+    /// short binding path).
+    pub fn transport(&self) -> Transport {
+        Transport::unix(self.sockets().box_sock())
+    }
+
+    /// Transport for the guest-ready notification socket.
+    pub fn ready_transport(&self) -> Transport {
+        Transport::unix(self.sockets().ready_sock())
+    }
 }

@@ -326,7 +326,27 @@ fn build_dynamic_write_paths(paths: &[PathAccess]) -> String {
 // ============================================================================
 
 /// Canonicalize a path, falling back to the original if canonicalization fails.
+///
+/// When the path ITSELF is a symlink (e.g. the `/tmp/bl-{uid}/{box_id}`
+/// socket binding symlink — see `net::socket_path::BoxSockets`), only the
+/// parent is canonicalized and the leaf is kept literal: the sandbox checks
+/// `bind()`/`connect()` against the symlink's own location
+/// (`/private/tmp/bl-{uid}/{box_id}/...`), not its fully-resolved target —
+/// resolving through the leaf would emit a rule for the target instead and
+/// the access would be denied. The target directory is covered by its own
+/// policy entry.
 fn canonicalize_or_original(path: &Path) -> PathBuf {
+    let is_symlink = std::fs::symlink_metadata(path)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false);
+    if is_symlink {
+        if let (Some(parent), Some(leaf)) = (path.parent(), path.file_name())
+            && let Ok(canonical_parent) = parent.canonicalize()
+        {
+            return canonical_parent.join(leaf);
+        }
+        return path.to_path_buf();
+    }
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
@@ -426,6 +446,38 @@ mod tests {
         let nonexistent = Path::new("/this/does/not/exist");
         let result = canonicalize_or_original(nonexistent);
         assert_eq!(result, nonexistent);
+    }
+
+    #[test]
+    fn test_canonicalize_keeps_symlink_leaf_literal() {
+        // Security regression guard: a symlink leaf (the socket binding
+        // symlink) must NOT be resolved to its target — the sandbox checks
+        // bind()/connect() against the symlink's own location. Resolving
+        // through it would emit a rule for the target and deny the bind.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let target = tmp.path().join("real_sockets");
+        std::fs::create_dir_all(&target).unwrap();
+        let link = tmp.path().join("binding_link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let result = canonicalize_or_original(&link);
+
+        assert_eq!(
+            result.file_name().unwrap(),
+            "binding_link",
+            "symlink leaf must stay literal, got {}",
+            result.display()
+        );
+        assert_eq!(
+            result.parent().unwrap(),
+            tmp.path().canonicalize().unwrap(),
+            "parent must be canonicalized"
+        );
+        assert_ne!(
+            result,
+            target.canonicalize().unwrap(),
+            "must not resolve through the symlink to its target"
+        );
     }
 
     #[test]

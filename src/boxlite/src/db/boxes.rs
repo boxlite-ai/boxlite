@@ -348,7 +348,6 @@ mod tests {
     use crate::runtime::id::BoxID;
     use crate::runtime::types::{BoxStatus, ContainerID};
     use crate::vmm::VmmKind;
-    use boxlite_shared::Transport;
     use std::path::PathBuf;
     use tempfile::tempdir;
 
@@ -376,9 +375,7 @@ mod tests {
                 ..Default::default()
             },
             engine_kind: VmmKind::Libkrun,
-            transport: Transport::unix(PathBuf::from("/tmp/test.sock")),
             box_home: PathBuf::from("/tmp/boxes/test"),
-            ready_socket_path: PathBuf::from("/tmp/ready.sock"),
         }
     }
 
@@ -398,6 +395,32 @@ mod tests {
         let loaded = store.load_config(config.id.as_str()).unwrap();
         assert!(loaded.is_some());
         assert_eq!(loaded.unwrap().id, config.id);
+    }
+
+    #[test]
+    fn test_legacy_config_rows_with_persisted_socket_paths_load() {
+        // Rows written before the BoxSockets redesign persisted `transport`
+        // and `ready_socket_path`. They must still deserialize (unknown
+        // fields ignored) and the DERIVED socket paths must win over the
+        // stale stored strings.
+        let config = create_test_config(TEST_ID_1);
+        let mut row = serde_json::to_value(&config).unwrap();
+        row["transport"] =
+            serde_json::json!({"Unix": {"socket_path": "/very/long/stale/path/box.sock"}});
+        row["ready_socket_path"] = serde_json::json!("/very/long/stale/path/ready.sock");
+
+        let loaded: BoxConfig = serde_json::from_value(row).unwrap();
+        assert_eq!(loaded.id, config.id);
+        // Paths derive from identity, never from the stored strings.
+        assert_eq!(loaded.sockets().box_sock(), config.sockets().box_sock());
+        assert!(
+            !loaded
+                .sockets()
+                .box_sock()
+                .to_string_lossy()
+                .contains("stale"),
+            "derived path must ignore the persisted legacy value"
+        );
     }
 
     #[test]
