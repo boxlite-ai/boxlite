@@ -199,8 +199,17 @@ pub(crate) struct BoxResponse {
     pub updated_at: String,
     pub pid: Option<u32>,
     pub image: String,
-    pub cpus: u8,
-    pub memory_mib: u32,
+    // Widened deserialization types. The server's cpu / memory columns
+    // are pre-#735-era integers with no per-box quota enforcement, so a
+    // single legacy row with cpus=999 (or memory_mib past 4 GiB) used to
+    // blow up every list_info round-trip with
+    // `invalid value: integer N, expected u{8,32}`. Accept whatever the
+    // server returns at the deserialize boundary, then saturate-cast to
+    // the SDK's narrow public types in `to_box_info`. Legitimate values
+    // round-trip; legacy garbage clamps to the type max instead of
+    // crashing the whole list.
+    pub cpus: u32,
+    pub memory_mib: u64,
     #[serde(default)]
     pub labels: HashMap<String, String>,
 }
@@ -236,8 +245,12 @@ impl BoxResponse {
             last_updated,
             pid: self.pid,
             image: self.image.clone(),
-            cpus: self.cpus,
-            memory_mib: self.memory_mib,
+            // Saturating cast: see BoxResponse cpus/memory_mib note. A
+            // value past the BoxInfo narrow type just clamps to MAX; we
+            // do NOT want the whole list_info call to fail just because
+            // one legacy row has out-of-band numbers.
+            cpus: u8::try_from(self.cpus).unwrap_or(u8::MAX),
+            memory_mib: u32::try_from(self.memory_mib).unwrap_or(u32::MAX),
             labels: self.labels.clone(),
             health_status: crate::litebox::HealthStatus::new(), // REST API doesn't provide health status
         })
@@ -640,6 +653,37 @@ mod tests {
         assert!(mk("a/b").to_box_info().is_err(), "slash");
         assert!(mk("a b").to_box_info().is_err(), "whitespace");
         assert!(mk("a.b").to_box_info().is_err(), "dot");
+    }
+
+    #[test]
+    fn test_box_response_legacy_oversize_cpus_memory_does_not_break_list() {
+        // Pre-#735 rows could carry cpus / memory_mib values past the
+        // SDK's narrow public BoxInfo types (cpus: u8, memory_mib: u32).
+        // The deserialize boundary must accept whatever the server
+        // returns so a single legacy row does NOT poison the whole
+        // list_info response — the prior u8/u32 form blew up with
+        // `invalid value: integer N, expected u{8,32}` and the entire
+        // list call returned an error.
+        let json = r#"{
+            "box_id": "abcdEFGH1234",
+            "name": null,
+            "status": "stopped",
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:01:00Z",
+            "pid": null,
+            "image": "alpine:latest",
+            "cpus": 999,
+            "memory_mib": 8192000000,
+            "labels": {}
+        }"#;
+        // Boundary: server-returned legacy values must deserialize.
+        let resp: BoxResponse =
+            serde_json::from_str(json).expect("legacy cpus/memory_mib must deserialize");
+        // Saturating cast through the SDK boundary clamps to the narrow
+        // type max, never panics.
+        let info = resp.to_box_info().expect("to_box_info must succeed on legacy");
+        assert_eq!(info.cpus, u8::MAX);
+        assert_eq!(info.memory_mib, u32::MAX);
     }
 
     #[test]
