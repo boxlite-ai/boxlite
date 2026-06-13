@@ -39,14 +39,14 @@ import pytest
 
 from conftest import DEFAULT_IMAGE
 
-pytestmark = pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Production bug: API silently clamps out-of-range / over-quota "
-        "resource values to org defaults instead of returning 400/429. See "
-        "module docstring for full root cause."
-    ),
-)
+# The pre-#735 implementation silently clamped out-of-range / over-quota
+# resource values to org defaults and returned 201. Tests previously
+# wore xfail(strict=True) to pin that bug. The current Tokyo Api
+# rejects the same payloads with a 4xx (see the Tokyo e2e run on
+# d35cbe4f where every case in this file flipped to XPASS-strict), so
+# the marker is no longer accurate and pytest-strict now treats the
+# pass as a regression of the pin. Drop the marker; the assertion
+# bodies still hold the actual contract.
 
 
 def _profile() -> dict:

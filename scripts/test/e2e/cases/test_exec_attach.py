@@ -28,18 +28,6 @@ import pytest
 from conftest import collect_stream
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Stdout-drop race: short execs like `echo X && exit 0` can return "
-        "with stdout=='' because the terminal Wait event lands on the event "
-        "queue ahead of the still-flushing stream pumps. Fix is in #563 "
-        "(fix(go-sdk): fold stream drain into Execution.Wait). When the "
-        "stream-drain barrier lands the assertion `\"first-output\" in out` "
-        "starts holding and this xfail flips to xpass-strict — at which "
-        "point this marker should be removed."
-    ),
-)
 @pytest.mark.asyncio
 async def test_reattach_after_original_completes(box):
     """Run an exec to completion, then re-attach to the same id. The
