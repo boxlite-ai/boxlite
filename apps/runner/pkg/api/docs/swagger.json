@@ -1265,7 +1265,7 @@
     },
     "CreateBoxDTO": {
       "type": "object",
-      "required": ["id", "osUser", "image", "userId"],
+      "required": ["id", "osUser", "image"],
       "properties": {
         "authToken": {
           "type": "string"
@@ -1337,9 +1337,6 @@
         "storageQuota": {
           "type": "integer",
           "minimum": 1
-        },
-        "userId": {
-          "type": "string"
         },
         "volumes": {
           "type": "array",
@@ -1433,7 +1430,7 @@
     },
     "RecoverBoxDTO": {
       "type": "object",
-      "required": ["errorReason", "osUser", "userId"],
+      "required": ["errorReason", "osUser"],
       "properties": {
         "backupErrorReason": {
           "type": "string"
@@ -1477,9 +1474,6 @@
         "storageQuota": {
           "type": "integer",
           "minimum": 1
-        },
-        "userId": {
-          "type": "string"
         },
         "volumes": {
           "type": "array",

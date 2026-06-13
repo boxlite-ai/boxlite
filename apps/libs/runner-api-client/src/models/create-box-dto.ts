@@ -43,7 +43,6 @@ export interface CreateBoxDTO {
     'skipStart'?: boolean;
     'image': string;
     'storageQuota'?: number;
-    'userId': string;
     'volumes'?: Array<DtoVolumeDTO>;
 }
 

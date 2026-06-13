@@ -98,8 +98,6 @@ definitions:
       storageQuota:
         minimum: 1
         type: integer
-      userId:
-        type: string
       volumes:
         items:
           $ref: '#/definitions/dto.VolumeDTO'
@@ -108,7 +106,6 @@ definitions:
       - id
       - osUser
       - image
-      - userId
     type: object
   ErrorResponse:
     description: Error response
@@ -206,8 +203,6 @@ definitions:
       storageQuota:
         minimum: 1
         type: integer
-      userId:
-        type: string
       volumes:
         items:
           $ref: '#/definitions/dto.VolumeDTO'
@@ -215,7 +210,6 @@ definitions:
     required:
       - errorReason
       - osUser
-      - userId
     type: object
   RegistryDTO:
     properties:

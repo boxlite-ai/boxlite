@@ -121,7 +121,6 @@ export class RunnerAdapterV2 implements RunnerAdapter {
 
     const payload = {
       id: box.id,
-      userId: box.organizationId,
       image: box.image,
       osUser: box.osUser,
       cpuQuota: box.cpu,
@@ -182,7 +181,6 @@ export class RunnerAdapterV2 implements RunnerAdapter {
 
   async recoverBox(box: Box): Promise<void> {
     const recoverBoxDTO: RecoverBoxDTO = {
-      userId: box.organizationId,
       osUser: box.osUser,
       cpuQuota: box.cpu,
       gpuQuota: box.gpu,

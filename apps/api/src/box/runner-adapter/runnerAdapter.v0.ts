@@ -147,7 +147,6 @@ export class RunnerAdapterV0 implements RunnerAdapter {
   async createBox(box: Box, metadata?: { [key: string]: string }): Promise<StartBoxResponse | undefined> {
     const response = await this.boxApiClient.create({
       id: box.id,
-      userId: box.organizationId,
       image: box.image ?? '',
       osUser: box.osUser,
       cpuQuota: box.cpu,
@@ -213,7 +212,6 @@ export class RunnerAdapterV0 implements RunnerAdapter {
 
   async recoverBox(box: Box): Promise<void> {
     const recoverBoxDTO: RecoverBoxDTO = {
-      userId: box.organizationId,
       osUser: box.osUser,
       cpuQuota: box.cpu,
       gpuQuota: box.gpu,

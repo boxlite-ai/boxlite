@@ -30,7 +30,6 @@ export interface RecoverBoxDTO {
     'osUser': string;
     'snapshot'?: string;
     'storageQuota'?: number;
-    'userId': string;
     'volumes'?: Array<DtoVolumeDTO>;
 }
 

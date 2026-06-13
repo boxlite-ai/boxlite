@@ -1360,8 +1360,7 @@ const docTemplate = `{
             "required": [
                 "id",
                 "osUser",
-                "image",
-                "userId"
+                "image"
             ],
             "properties": {
                 "authToken": {
@@ -1434,9 +1433,6 @@ const docTemplate = `{
                 "storageQuota": {
                     "type": "integer",
                     "minimum": 1
-                },
-                "userId": {
-                    "type": "string"
                 },
                 "volumes": {
                     "type": "array",
@@ -1543,8 +1539,7 @@ const docTemplate = `{
             "type": "object",
             "required": [
                 "errorReason",
-                "osUser",
-                "userId"
+                "osUser"
             ],
             "properties": {
                 "backupErrorReason": {
@@ -1589,9 +1584,6 @@ const docTemplate = `{
                 "storageQuota": {
                     "type": "integer",
                     "minimum": 1
-                },
-                "userId": {
-                    "type": "string"
                 },
                 "volumes": {
                     "type": "array",
