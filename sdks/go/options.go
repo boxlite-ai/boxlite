@@ -171,22 +171,21 @@ type Secret struct {
 }
 
 type boxConfig struct {
-	name        string
-	externalRef string
-	cpus        int
-	memoryMiB   int
-	diskSizeGB  int
-	rootfsPath  string
-	env         [][2]string
-	volumes     []volumeEntry
-	ports       []PortSpec
-	workDir     string
-	entrypoint  []string
-	cmd         []string
-	autoRemove  *bool
-	detach      *bool
-	network     *NetworkSpec
-	secrets     []Secret
+	name       string
+	cpus       int
+	memoryMiB  int
+	diskSizeGB int
+	rootfsPath string
+	env        [][2]string
+	volumes    []volumeEntry
+	ports      []PortSpec
+	workDir    string
+	entrypoint []string
+	cmd        []string
+	autoRemove *bool
+	detach     *bool
+	network    *NetworkSpec
+	secrets    []Secret
 }
 
 type volumeEntry struct {
@@ -198,13 +197,6 @@ type volumeEntry struct {
 // WithName sets a human-readable name for the box.
 func WithName(name string) BoxOption {
 	return func(c *boxConfig) { c.name = name }
-}
-
-// WithExternalRef attaches an orchestrator-issued reference to the box
-// (opaque to the engine, unique when present). The box can later be
-// retrieved with runtime.Get(externalRef).
-func WithExternalRef(externalRef string) BoxOption {
-	return func(c *boxConfig) { c.externalRef = externalRef }
 }
 
 // WithCPUs sets the number of virtual CPUs.
@@ -345,11 +337,6 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 		cName := toCString(cfg.name)
 		C.boxlite_options_set_name(cOpts, cName)
 		C.free(unsafe.Pointer(cName))
-	}
-	if cfg.externalRef != "" {
-		cRef := toCString(cfg.externalRef)
-		C.boxlite_options_set_external_ref(cOpts, cRef)
-		C.free(unsafe.Pointer(cRef))
 	}
 	if cfg.cpus > 0 {
 		C.boxlite_options_set_cpus(cOpts, C.int(cfg.cpus))

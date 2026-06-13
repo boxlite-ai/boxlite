@@ -237,8 +237,6 @@ typedef void (*CBoxImageListCb)(struct CImageInfoList*, CBoxliteError*, void*);
 typedef struct CBoxInfo {
   char *id;
   char *name;
-  // Orchestrator-issued external reference; NULL when unset.
-  char *external_ref;
   char *image;
   char *status;
   int running;
@@ -492,13 +490,6 @@ enum BoxliteErrorCode boxlite_options_new(const char *image,
 void boxlite_options_set_rootfs_path(CBoxliteOptions *opts, const char *path);
 
 void boxlite_options_set_name(CBoxliteOptions *opts, const char *name);
-
-// Set an orchestrator-issued external reference on the box (opaque, unique
-// when present; boxes can be looked up by it). See BoxOptions::external_ref.
-//
-// # Safety
-// `opts` must be a valid options handle; `external_ref` a valid C string.
-void boxlite_options_set_external_ref(CBoxliteOptions *opts, const char *external_ref);
 
 void boxlite_options_set_cpus(CBoxliteOptions *opts, int cpus);
 

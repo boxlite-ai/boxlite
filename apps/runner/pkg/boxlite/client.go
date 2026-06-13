@@ -221,10 +221,10 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		memoryMiB = 128
 	}
 	opts := []boxlite.BoxOption{
-		// Attach the control-plane box id as the orchestrator reference (CRI
-		// PodSandboxMetadata.uid analog); the engine mints its own internal id
-		// and the name slot stays free for a future user-facing name.
-		boxlite.WithExternalRef(boxDto.Id),
+		// The control-plane box id rides in the engine's name slot (the engine
+		// mints its own internal id). User-facing names live only in the cloud's
+		// PG; the engine never needs a separate user name in cloud mode.
+		boxlite.WithName(boxDto.Id),
 		boxlite.WithCPUs(cpus),
 		boxlite.WithMemory(memoryMiB),
 		boxlite.WithAutoRemove(false),

@@ -1118,7 +1118,6 @@ mod owned_ffi_ptr_nested_leak_tests {
         let payload = Box::new(CBoxInfo {
             id: test_cstr("box-id-1"),
             name: test_cstr("test-box"),
-            external_ref: test_cstr("ext-ref-1"),
             image: test_cstr("alpine:latest"),
             status: test_cstr("running"),
             running: 1,
@@ -1134,9 +1133,9 @@ mod owned_ffi_ptr_nested_leak_tests {
         let after = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
         assert_eq!(
             after - before,
-            5,
+            4,
             "OwnedFfiPtr<CBoxInfo>::drop reclaimed {} inner CStrings; \
-             expected 5 (id + name + external_ref + image + status). Inner allocations leak.",
+             expected 4 (id + name + image + status). Inner allocations leak.",
             after - before
         );
     }
@@ -1186,7 +1185,6 @@ mod owned_ffi_ptr_nested_leak_tests {
         let mut items_vec = vec![CBoxInfo {
             id: test_cstr("box-id-2"),
             name: test_cstr("another-box"),
-            external_ref: std::ptr::null_mut(),
             image: test_cstr("ubuntu:24.04"),
             status: test_cstr("stopped"),
             running: 0,

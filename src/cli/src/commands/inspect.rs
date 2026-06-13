@@ -29,8 +29,6 @@ struct InspectPresenter {
     id: String,
     #[serde(rename = "Name")]
     name: String,
-    #[serde(rename = "ExternalRef", skip_serializing_if = "Option::is_none")]
-    external_ref: Option<String>,
     #[serde(rename = "Image")]
     image: String,
     #[serde(rename = "Created")]
@@ -61,7 +59,6 @@ impl From<&BoxInfo> for InspectPresenter {
         Self {
             id: info.id.to_string(),
             name: info.name.as_deref().unwrap_or("").to_string(),
-            external_ref: info.external_ref.clone(),
             image: info.image.clone(),
             created: info.created_at.to_rfc3339(),
             status: info.status.as_str().to_string(),

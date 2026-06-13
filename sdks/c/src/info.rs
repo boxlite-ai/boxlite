@@ -20,8 +20,6 @@ use crate::{CBoxHandle, CBoxliteError, CBoxliteRuntime};
 pub struct CBoxInfo {
     pub id: *mut c_char,
     pub name: *mut c_char,
-    /// Orchestrator-issued external reference; NULL when unset.
-    pub external_ref: *mut c_char,
     pub image: *mut c_char,
     pub status: *mut c_char,
     pub running: c_int,
@@ -64,11 +62,6 @@ impl CBoxInfo {
                 .as_deref()
                 .map(to_c_str)
                 .unwrap_or(ptr::null_mut()),
-            external_ref: info
-                .external_ref
-                .as_deref()
-                .map(to_c_str)
-                .unwrap_or(ptr::null_mut()),
             image: to_c_str(&info.image),
             status: to_c_str(status_to_str(info.status)),
             running: if info.status.is_running() { 1 } else { 0 },
@@ -88,7 +81,6 @@ pub unsafe fn free_box_info(info: *mut CBoxInfo) {
         let info_ref = &mut *info;
         free_str(info_ref.id);
         free_str(info_ref.name);
-        free_str(info_ref.external_ref);
         free_str(info_ref.image);
         free_str(info_ref.status);
     }

@@ -366,17 +366,6 @@ impl RuntimeImpl {
             };
         }
 
-        // external_ref is an orchestrator-issued correlation key; like name it
-        // must resolve to at most one box, so reject duplicates at create time.
-        if let Some(ref external_ref) = options.external_ref
-            && self.box_manager.lookup_box(external_ref)?.is_some()
-        {
-            return Err(BoxliteError::InvalidArgument(format!(
-                "box with external_ref '{}' already exists",
-                external_ref
-            )));
-        }
-
         // Initialize box variables with defaults
         let (config, mut state) = self.init_box_variables(&options, name.clone());
 
