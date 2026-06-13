@@ -684,7 +684,7 @@ impl ImageStore {
 
         let platform_manifest = self.select_platform_manifest(index, platform_os, platform_arch)?;
 
-        let platform_ref = format!("{}@{}", reference.whole(), platform_manifest.digest);
+        let platform_ref = build_platform_ref(reference, &platform_manifest.digest);
         let platform_reference: Reference = platform_ref
             .parse()
             .map_err(|e| BoxliteError::Storage(format!("invalid platform reference: {e}")))?;
@@ -1082,6 +1082,23 @@ fn validate_image_registries(image_registries: &[ImageRegistry]) -> BoxliteResul
 /// Used by `ImageManager` and `ImageObject` to share the same store.
 pub type SharedImageStore = Arc<ImageStore>;
 
+/// Build the per-platform pull reference from registry+repository only.
+///
+/// `Reference::whole()` preserves any incoming tag *or* digest, so naively
+/// appending `"@{platform_digest}"` produces the invalid double-`@` form
+/// `repo@sha256:idx@sha256:plat` for digest-pinned refs (e.g.
+/// `ghcr.io/.../base@sha256:...`). The OCI distribution spec accepts at
+/// most one tag-or-digest qualifier per reference, so the per-platform
+/// ref must be rebuilt from the host+path components.
+fn build_platform_ref(reference: &Reference, platform_digest: &str) -> String {
+    format!(
+        "{}/{}@{}",
+        reference.registry(),
+        reference.repository(),
+        platform_digest
+    )
+}
+
 // ============================================================================
 // TESTS
 // ============================================================================
@@ -1098,6 +1115,49 @@ mod tests {
 
     fn test_bearer_token() -> String {
         String::from_utf8(vec![111, 112, 97, 113, 117, 101]).unwrap()
+    }
+
+    #[test]
+    fn build_platform_ref_collapses_digest_pinned_input_to_single_digest() {
+        // Digest-pinned input — previous impl returned
+        // `ghcr.io/.../base@sha256:idx@sha256:plat`, which fails to parse.
+        let reference: Reference =
+            "ghcr.io/boxlite-ai/boxlite-agent-base@sha256:834dcb65465985fc2f648451d76c81d166bc7672391c9064a0a115ce6306c85f"
+                .parse()
+                .expect("parse digest-pinned input");
+        let platform_digest =
+            "sha256:abc1230000000000000000000000000000000000000000000000000000000000";
+
+        let platform_ref = build_platform_ref(&reference, platform_digest);
+
+        assert_eq!(
+            platform_ref,
+            "ghcr.io/boxlite-ai/boxlite-agent-base@sha256:abc1230000000000000000000000000000000000000000000000000000000000",
+        );
+        // Has exactly one `@` qualifier and round-trips through Reference.
+        assert_eq!(platform_ref.matches('@').count(), 1);
+        let _: Reference = platform_ref
+            .parse()
+            .expect("rebuilt platform ref must parse");
+    }
+
+    #[test]
+    fn build_platform_ref_drops_tag_when_resolving_to_platform_digest() {
+        let reference: Reference = "docker.io/library/alpine:3.23"
+            .parse()
+            .expect("parse tagged input");
+        let platform_digest =
+            "sha256:def4560000000000000000000000000000000000000000000000000000000000";
+
+        let platform_ref = build_platform_ref(&reference, platform_digest);
+
+        let parsed: Reference = platform_ref
+            .parse()
+            .expect("rebuilt platform ref must parse");
+        assert_eq!(parsed.registry(), "docker.io");
+        assert_eq!(parsed.repository(), "library/alpine");
+        assert_eq!(parsed.digest(), Some(platform_digest));
+        assert_eq!(parsed.tag(), None);
     }
 
     #[test]
