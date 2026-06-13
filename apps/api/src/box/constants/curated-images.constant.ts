@@ -15,7 +15,11 @@ import { BadRequestError } from '../../exceptions/bad-request.exception'
  * its call sites — no other layer knows the curated set exists.
  *
  * Env overrides (set on the Api service in apps/infra/sst.config.ts) allow digest
- * rotation without a code deploy; the fallbacks cover local/dev runs.
+ * rotation without a code deploy; the fallbacks cover local/dev runs. An override in the
+ * privileged ghcr.io/boxlite-ai namespace must be digest-pinned — a tag there would let
+ * the runner pull mutable content with its GHCR token, silently widening the gate. Refs
+ * to other registries (e.g. the localhost registry used by dev:dex / e2e:local) sit
+ * outside that token and pass through.
  */
 const SUPPORTED_IMAGE_SOURCES: Array<{ envVar: string; fallbackRef: string }> = [
   {
@@ -35,9 +39,26 @@ const SUPPORTED_IMAGE_SOURCES: Array<{ envVar: string; fallbackRef: string }> = 
   },
 ]
 
+/** The runner pulls images in this namespace with its privileged GHCR token. */
+const PRIVILEGED_NAMESPACE = 'ghcr.io/boxlite-ai/'
+
+/** A digest-pinned ref in the privileged namespace, e.g. `ghcr.io/boxlite-ai/x@sha256:<64-hex>`. */
+const PINNED_GHCR_REF = /^ghcr\.io\/boxlite-ai\/[a-z0-9._-]+@sha256:[a-f0-9]{64}$/
+
 /** Pinned OCI refs a box may boot from. The first entry is the default image. */
 export function supportedImages(): string[] {
-  return SUPPORTED_IMAGE_SOURCES.map(({ envVar, fallbackRef }) => process.env[envVar] || fallbackRef)
+  return SUPPORTED_IMAGE_SOURCES.map(({ envVar, fallbackRef }) => {
+    const ref = process.env[envVar]?.trim() || fallbackRef
+    // A privileged-namespace ref must be digest-pinned: a tag there would let the runner
+    // pull mutable content with its GHCR token. Refs to other registries (e.g. the
+    // localhost registry used by dev:dex / e2e:local) are outside that token and pass through.
+    if (ref.startsWith(PRIVILEGED_NAMESPACE) && !PINNED_GHCR_REF.test(ref)) {
+      throw new Error(
+        `${envVar} is in the privileged namespace and must be digest-pinned (${PRIVILEGED_NAMESPACE}<name>@sha256:<64-hex>), got '${ref}'`,
+      )
+    }
+    return ref
+  })
 }
 
 /**

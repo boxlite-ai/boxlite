@@ -45,10 +45,24 @@ describe('supported image allowlist', () => {
   })
 
   it('prefers the env-configured ref over the pinned fallback', () => {
-    process.env.BOXLITE_SYSTEM_PYTHON_IMAGE = 'ghcr.io/boxlite-ai/override@sha256:deadbeef'
-    expect(assertSupportedImage('ghcr.io/boxlite-ai/override@sha256:deadbeef')).toBe(
-      'ghcr.io/boxlite-ai/override@sha256:deadbeef',
-    )
+    const rotated = 'ghcr.io/boxlite-ai/boxlite-agent-python@sha256:' + 'a'.repeat(64)
+    process.env.BOXLITE_SYSTEM_PYTHON_IMAGE = rotated
+    expect(supportedImages()[1]).toBe(rotated)
+  })
+
+  it('rejects an unpinned override in the privileged namespace instead of trusting it', () => {
+    // A tag (not a digest) on a ghcr.io/boxlite-ai ref would let the runner pull mutable
+    // content with its privileged token -- such an override must be pinned or it is refused.
+    process.env.BOXLITE_SYSTEM_BASE_IMAGE = 'ghcr.io/boxlite-ai/boxlite-agent-base:latest'
+    expect(() => supportedImages()).toThrow(/BOXLITE_SYSTEM_BASE_IMAGE/)
+  })
+
+  it('passes overrides outside the privileged namespace through (e.g. the local dev registry)', () => {
+    // dev:dex / e2e:local point these at localhost:5001 with a tag; that registry is outside
+    // the runner's privileged ghcr token, so a tag there must not be rejected.
+    const local = 'localhost:5001/boxlite/base:20260605-p0-r5-local'
+    process.env.BOXLITE_SYSTEM_BASE_IMAGE = local
+    expect(supportedImages()[0]).toBe(local)
   })
 
   it('rejects anything outside the allowlist, naming the supported refs', () => {
