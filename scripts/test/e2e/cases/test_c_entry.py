@@ -27,9 +27,10 @@ REPO = Path(__file__).resolve().parents[4]
 SRC = REPO / "scripts/test/e2e/sdks/c/e2e_basic.c"
 HDR = REPO / "sdks/c/include"
 LIB_DIR = REPO / "target/release"
-UUID_RE = re.compile(
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-)
+# Box ids are 12-char base62 (case-sensitive), printed on their own line by
+# `boxlite run -d` / `create`. Anchor to a full line so we don't match a
+# 12-char substring of unrelated output.
+BOX_ID_RE = re.compile(r"^[0-9A-Za-z]{12}$", re.MULTILINE)
 
 
 def _profile():
@@ -86,7 +87,7 @@ def test_c_sdk_create_remove(c_binary):
         f"C driver exit={r.returncode}\nstdout:\n{r.stdout}\nstderr:\n{r.stderr}"
     )
 
-    m = UUID_RE.search(r.stdout)
+    m = BOX_ID_RE.search(r.stdout)
     assert m, f"C driver did not print BOX_ID: {r.stdout!r}"
     box_id = m.group(0)
     assert "OK" in r.stdout

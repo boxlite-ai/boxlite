@@ -38,9 +38,10 @@ from path_verification import runner_journal_seek, runner_hits_for_box
 
 BOXLITE_BIN = os.environ.get("BOXLITE_E2E_CLI", shutil.which("boxlite"))
 from conftest import DEFAULT_IMAGE as IMAGE  # noqa: E402  (stack-aware default)
-UUID_RE = re.compile(
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-)
+# Box ids are 12-char base62 (case-sensitive), printed on their own line by
+# `boxlite run -d` / `create`. Anchor to a full line so we don't match a
+# 12-char substring of unrelated output.
+BOX_ID_RE = re.compile(r"^[0-9A-Za-z]{12}$", re.MULTILINE)
 
 
 @pytest.fixture(scope="module")
@@ -80,8 +81,8 @@ def test_detached_box_survives_cli_exit_and_is_reusable(cli):
 
     # 1) detach run in one CLI process
     r_run = run(cli, "run", "-d", IMAGE, "--", "sleep", "300", timeout=120)
-    m = UUID_RE.search(r_run.stdout)
-    assert m, f"`boxlite run -d` did not print a uuid: {r_run.stdout!r}"
+    m = BOX_ID_RE.search(r_run.stdout)
+    assert m, f"`boxlite run -d` did not print a box id: {r_run.stdout!r}"
     box_id = m.group(0)
 
     try:
@@ -127,7 +128,7 @@ def test_detached_box_exec_propagates_exit_code_on_fresh_cli(cli):
     still propagate when the exec is launched from a fresh CLI process
     (i.e. no in-memory SDK state to lean on)."""
     r_run = run(cli, "run", "-d", IMAGE, "--", "sleep", "300", timeout=120)
-    m = UUID_RE.search(r_run.stdout)
+    m = BOX_ID_RE.search(r_run.stdout)
     assert m
     box_id = m.group(0)
 

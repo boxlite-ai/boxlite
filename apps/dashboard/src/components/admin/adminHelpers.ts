@@ -220,9 +220,11 @@ export function selectErroringOwners(groups: OwnerGroup[]): ErroringOwner[] {
 }
 
 export function findBoxById(groups: OwnerGroup[], boxId: string): { box: AdminBox; group: OwnerGroup } | undefined {
-  const targetBoxId = boxId.trim().toLowerCase()
+  // Box ids are 12-char base62 and case-sensitive; a case-insensitive match could resolve
+  // to the wrong box when two valid ids differ only by case.
+  const targetBoxId = boxId.trim()
   for (const group of groups) {
-    const box = group.boxes.find((b) => b.id.toLowerCase() === targetBoxId)
+    const box = group.boxes.find((b) => b.id === targetBoxId)
     if (box) return { box, group }
   }
   return undefined

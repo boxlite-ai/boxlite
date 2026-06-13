@@ -21,6 +21,23 @@ function warmPoolItem(): WarmPool {
 }
 
 describe('BoxService.createForWarmPool image', () => {
+  // Isolate from env-configured curated refs so the pinned fallback is deterministic;
+  // otherwise BOXLITE_SYSTEM_BASE_IMAGE in the host env would make this assertion flaky.
+  const ENV_KEYS = ['BOXLITE_SYSTEM_BASE_IMAGE', 'BOXLITE_SYSTEM_PYTHON_IMAGE', 'BOXLITE_SYSTEM_NODE_IMAGE']
+  const saved: Record<string, string | undefined> = {}
+  beforeEach(() => {
+    for (const k of ENV_KEYS) {
+      saved[k] = process.env[k]
+      delete process.env[k]
+    }
+  })
+  afterEach(() => {
+    for (const k of ENV_KEYS) {
+      if (saved[k] === undefined) delete process.env[k]
+      else process.env[k] = saved[k]
+    }
+  })
+
   it('defaults warm-pool boxes to the base image ref so they can boot', async () => {
     const insert = jest.fn().mockResolvedValue(undefined)
     const getRandomAvailableRunner = jest.fn().mockResolvedValue({ id: 'runner-1' })
