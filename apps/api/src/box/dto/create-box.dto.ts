@@ -20,6 +20,15 @@ export class CreateBoxDto {
   name?: string
 
   @ApiPropertyOptional({
+    description: 'OCI image ref to boot from. Must be one of the deployment-supported pinned refs.',
+    example:
+      'ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6',
+  })
+  @IsOptional()
+  @IsString()
+  image?: string
+
+  @ApiPropertyOptional({
     description: 'The user associated with the project',
     example: 'boxlite',
   })

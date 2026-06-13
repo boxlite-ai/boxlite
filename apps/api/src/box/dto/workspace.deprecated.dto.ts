@@ -37,12 +37,6 @@ export class BoxInfoDto {
 @ApiSchema({ name: 'Workspace' })
 export class WorkspaceDto extends BoxDto {
   @ApiPropertyOptional({
-    description: 'The image used for the workspace',
-    example: 'boxlite-ai/workspace:latest',
-  })
-  image: string
-
-  @ApiPropertyOptional({
     description: 'Additional information about the box',
     type: BoxInfoDto,
     required: false,

@@ -197,7 +197,7 @@ const AdminPeopleBoxesView: React.FC<AdminPeopleBoxesViewProps> = ({
                               variant="ghost"
                               size="sm"
                               className="h-7 px-2 text-xs"
-                              aria-label={`Diagnose box ${box.boxId ?? box.id}`}
+                              aria-label={`Diagnose box ${box.id}`}
                               onClick={(event) => {
                                 event.stopPropagation()
                                 onOpenBox(box)

@@ -8,10 +8,9 @@ import { BoxDto } from '../../box/dto/box.dto'
 import { boxToBoxResponse, createBoxToCreateBox } from './box-to-box.mapper'
 
 describe('box-to-box mapper', () => {
-  it('maps REST box_id from the public box boxId instead of the internal UUID', () => {
+  it('maps REST box_id from the single box id', () => {
     const response = boxToBoxResponse({
-      id: 'fd955d93-e74a-48e7-9f2d-fcbe6dd9e920',
-      boxId: 'aB3cD4eF5gH6',
+      id: 'aB3cD4eF5gH6',
       organizationId: '057963b2-60ca-4356-81fc-11503e15f249',
       name: 'data-loader',
       state: 'started',
@@ -44,5 +43,29 @@ describe('box-to-box mapper', () => {
     expect(dto.cpu).toBe(2)
     expect(dto.memory).toBe(2)
     expect(dto.disk).toBe(8)
+  })
+
+  it('threads the image ref from the REST request into the internal create dto', () => {
+    const dto = createBoxToCreateBox({
+      image:
+        'ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6',
+    })
+
+    expect(dto.image).toBe(
+      'ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6',
+    )
+  })
+
+  it('echoes the image ref stored on the box', () => {
+    const response = boxToBoxResponse({
+      state: 'started',
+      image:
+        'ghcr.io/boxlite-ai/boxlite-agent-node@sha256:fcb8b840ab68567975853666c82fb6c59a3c1d14a0cdc31d7cbf3a01e6c6d247',
+      labels: {},
+    } as unknown as BoxDto)
+
+    expect(response.image).toBe(
+      'ghcr.io/boxlite-ai/boxlite-agent-node@sha256:fcb8b840ab68567975853666c82fb6c59a3c1d14a0cdc31d7cbf3a01e6c6d247',
+    )
   })
 })

@@ -46,6 +46,7 @@ export interface RunnerAdapter {
   runnerInfo(signal?: AbortSignal): Promise<RunnerInfo>
 
   boxInfo(boxId: string): Promise<RunnerBoxInfo>
+  createBox(box: Box): Promise<void>
   startBox(
     boxId: string,
     authToken: string,

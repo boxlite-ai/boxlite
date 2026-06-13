@@ -27,8 +27,24 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from path_verification import runner_journal_seek, runner_hits_for_box
 
 DEFAULT_PROFILE = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
-DEFAULT_IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "alpine:3.23")
 CRED_PATH = Path.home() / ".boxlite" / "credentials.toml"
+
+
+def _default_image() -> str:
+    """The image must be in the API's supported allowlist, which differs per
+    stack (bootstrap.sh points the local stack at public refs; prod pins ghcr
+    digests). fixture_setup.py records the stack's base image in the profile;
+    the ghcr fallback only covers runs against prod-like stacks without it."""
+    if env_image := os.environ.get("BOXLITE_E2E_IMAGE"):
+        return env_image
+    if CRED_PATH.exists():
+        profile = tomllib.loads(CRED_PATH.read_text()).get("profiles", {}).get(DEFAULT_PROFILE, {})
+        if profile.get("default_image"):
+            return profile["default_image"]
+    return "ghcr.io/boxlite-ai/boxlite-agent-base@sha256:834dcb65465985fc2f648451d76c81d166bc7672391c9064a0a115ce6306c85f"
+
+
+DEFAULT_IMAGE = _default_image()
 
 
 def _profile(name: str) -> dict:

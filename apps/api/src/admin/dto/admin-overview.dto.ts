@@ -110,8 +110,6 @@ export class AdminBoxItemDto {
   id: string
 
   @ApiPropertyOptional({ description: 'Public box ID shown to users', example: 'abc123XYZ' })
-  boxId?: string
-
   @ApiProperty({ description: 'Organization ID', example: 'org_xyz' })
   organizationId: string
 

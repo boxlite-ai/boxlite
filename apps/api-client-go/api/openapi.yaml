@@ -9565,8 +9565,7 @@ components:
           - member
           type: string
         assignedRoleIds:
-          default:
-          - 00000000-0000-0000-0000-000000000001
+          default: []
           description: Array of assigned role IDs
           items:
             type: string
@@ -9596,8 +9595,7 @@ components:
           - member
           type: string
         assignedRoleIds:
-          default:
-          - 00000000-0000-0000-0000-000000000001
+          default: []
           description: Array of assigned role IDs for the invitee
           items:
             type: string
@@ -9939,12 +9937,12 @@ components:
     Box:
       example:
         id: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
-        boxId: aB3cD4eF5gH6
         organizationId: organization123
         name: MyBox
         user: boxlite
         env:
           NODE_ENV: production
+        image: ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6
         labels:
           boxlite.io/public: "true"
         public: false
@@ -9979,10 +9977,6 @@ components:
           description: The internal UUID of the box
           example: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
           type: string
-        boxId:
-          description: The public Box ID shown to users and SDK clients
-          example: aB3cD4eF5gH6
-          type: string
         organizationId:
           description: The organization ID of the box
           example: organization123
@@ -10002,6 +9996,10 @@ components:
           example:
             NODE_ENV: production
           type: object
+        image:
+          description: The OCI image ref the box boots from
+          example: ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6
+          type: string
         labels:
           additionalProperties:
             type: string
@@ -10104,12 +10102,12 @@ components:
           example: https://proxy.app.boxlite.io/toolbox
           type: string
       required:
-      - boxId
       - cpu
       - disk
       - env
       - gpu
       - id
+      - image
       - labels
       - memory
       - name
@@ -10124,12 +10122,12 @@ components:
       example:
         items:
         - id: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
-          boxId: aB3cD4eF5gH6
           organizationId: organization123
           name: MyBox
           user: boxlite
           env:
             NODE_ENV: production
+          image: ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6
           labels:
             boxlite.io/public: "true"
           public: false
@@ -10160,12 +10158,12 @@ components:
           runnerId: runner123
           toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
         - id: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
-          boxId: aB3cD4eF5gH6
           organizationId: organization123
           name: MyBox
           user: boxlite
           env:
             NODE_ENV: production
+          image: ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6
           labels:
             boxlite.io/public: "true"
           public: false
@@ -12488,12 +12486,12 @@ components:
     Workspace:
       example:
         id: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
-        boxId: aB3cD4eF5gH6
         organizationId: organization123
         name: MyBox
         user: boxlite
         env:
           NODE_ENV: production
+        image: ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6
         labels:
           boxlite.io/public: "true"
         public: false
@@ -12523,16 +12521,11 @@ components:
         daemonVersion: 1.0.0
         runnerId: runner123
         toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
-        image: boxlite-ai/workspace:latest
         info: ""
       properties:
         id:
           description: The internal UUID of the box
           example: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
-          type: string
-        boxId:
-          description: The public Box ID shown to users and SDK clients
-          example: aB3cD4eF5gH6
           type: string
         organizationId:
           description: The organization ID of the box
@@ -12553,6 +12546,10 @@ components:
           example:
             NODE_ENV: production
           type: object
+        image:
+          description: The OCI image ref the box boots from
+          example: ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6
+          type: string
         labels:
           additionalProperties:
             type: string
@@ -12654,21 +12651,17 @@ components:
           description: The toolbox proxy URL for the box
           example: https://proxy.app.boxlite.io/toolbox
           type: string
-        image:
-          description: The image used for the workspace
-          example: boxlite-ai/workspace:latest
-          type: string
         info:
           allOf:
           - $ref: "#/components/schemas/BoxInfo"
           description: Additional information about the box
       required:
-      - boxId
       - cpu
       - disk
       - env
       - gpu
       - id
+      - image
       - labels
       - memory
       - name
@@ -13456,8 +13449,7 @@ components:
     AdminBoxItem:
       example:
         id: box_abc123
-        boxId: abc123XYZ
-        organizationId: org_xyz
+        organizationId: abc123XYZ
         state: started
         runnerId: runner-uuid
         cpu: 2
@@ -13474,13 +13466,9 @@ components:
           description: Box ID
           example: box_abc123
           type: string
-        boxId:
+        organizationId:
           description: Public box ID shown to users
           example: abc123XYZ
-          type: string
-        organizationId:
-          description: Organization ID
-          example: org_xyz
           type: string
         state:
           allOf:
@@ -13508,7 +13496,6 @@ components:
       - cpu
       - createdAt
       - id
-      - organizationId
       - owner
       - state
       type: object
@@ -14800,8 +14787,7 @@ components:
               value: 0.8008281904610115
         boxes:
         - id: box_abc123
-          boxId: abc123XYZ
-          organizationId: org_xyz
+          organizationId: abc123XYZ
           state: started
           runnerId: runner-uuid
           cpu: 2
@@ -14814,8 +14800,7 @@ components:
             orgName: Alice Personal
             personal: true
         - id: box_abc123
-          boxId: abc123XYZ
-          organizationId: org_xyz
+          organizationId: abc123XYZ
           state: started
           runnerId: runner-uuid
           cpu: 2

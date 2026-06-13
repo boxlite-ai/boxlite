@@ -42,12 +42,6 @@ export class BoxDto {
   id: string
 
   @ApiProperty({
-    description: 'The public Box ID shown to users and SDK clients',
-    example: 'aB3cD4eF5gH6',
-  })
-  boxId: string
-
-  @ApiProperty({
     description: 'The organization ID of the box',
     example: 'organization123',
   })
@@ -72,6 +66,13 @@ export class BoxDto {
     example: { NODE_ENV: 'production' },
   })
   env: Record<string, string>
+
+  @ApiProperty({
+    description: 'The OCI image ref the box boots from',
+    example:
+      'ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6',
+  })
+  image: string
 
   @ApiProperty({
     description: 'Labels for the box',
@@ -244,12 +245,12 @@ export class BoxDto {
   static fromBox(box: Box, toolboxProxyUrl: string): BoxDto {
     return {
       id: box.id,
-      boxId: box.boxId,
       organizationId: box.organizationId,
       name: box.name,
       target: box.region,
       user: box.osUser,
       env: box.env,
+      image: box.image,
       cpu: box.cpu,
       gpu: box.gpu,
       memory: box.mem,

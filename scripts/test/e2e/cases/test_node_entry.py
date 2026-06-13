@@ -20,12 +20,15 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from path_verification import runner_journal_seek, runner_hits_for_box
 
+from conftest import DEFAULT_IMAGE
+
 REPO = Path(__file__).resolve().parents[4]
 SRC = REPO / "scripts/test/e2e/sdks/node/e2e_basic.ts"
 NODE_SDK = REPO / "sdks/node"
-UUID_RE = re.compile(
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-)
+# Box ids are 12-char base62 (case-sensitive), printed on their own line by
+# `boxlite run -d` / `create`. Anchor to a full line so we don't match a
+# 12-char substring of unrelated output.
+BOX_ID_RE = re.compile(r"^[0-9A-Za-z]{12}$", re.MULTILINE)
 
 
 def _profile():
@@ -68,7 +71,7 @@ def test_node_sdk_create_exec_remove(node_runner):
         "BOXLITE_E2E_URL": p["url"],
         "BOXLITE_E2E_API_KEY": p["api_key"],
         "BOXLITE_E2E_PREFIX": p.get("path_prefix") or "",
-        "BOXLITE_E2E_IMAGE": "alpine:3.23",
+        "BOXLITE_E2E_IMAGE": DEFAULT_IMAGE,
     }
     # Use npx tsx to run the .ts directly without a separate compile step.
     # tsx is bundled with the apps workspace.
@@ -81,7 +84,7 @@ def test_node_sdk_create_exec_remove(node_runner):
         f"node driver exit={r.returncode}\nstdout:\n{r.stdout}\nstderr:\n{r.stderr}"
     )
 
-    m = UUID_RE.search(r.stdout)
+    m = BOX_ID_RE.search(r.stdout)
     assert m, f"node driver did not print BOX_ID: {r.stdout!r}"
     box_id = m.group(0)
 

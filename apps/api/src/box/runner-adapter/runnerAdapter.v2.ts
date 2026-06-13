@@ -114,6 +114,30 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     }
   }
 
+  async createBox(box: Box): Promise<void> {
+    // Hand-built payload: keys MUST match the Go dto.CreateBoxDTO json tags
+    // (apps/runner/pkg/api/dto/box.go). `id` is the box's single identity: the
+    // 12-char public id, which the runner also uses as the engine VM name.
+    const payload = {
+      id: box.id,
+      userId: box.organizationId,
+      image: box.image,
+      osUser: box.osUser,
+      cpuQuota: box.cpu,
+      memoryQuota: box.mem,
+      storageQuota: box.disk,
+      env: box.env,
+      networkBlockAll: box.networkBlockAll,
+      networkAllowList: box.networkAllowList,
+      organizationId: box.organizationId,
+      regionId: box.region,
+    }
+
+    await this.jobService.createJob(null, JobType.CREATE_BOX, this.runner.id, ResourceType.BOX, box.id, payload)
+
+    this.logger.debug(`Created CREATE_BOX job for box ${box.id} on runner ${this.runner.id}`)
+  }
+
   async startBox(
     boxId: string,
     authToken: string,

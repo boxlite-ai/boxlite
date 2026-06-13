@@ -56,9 +56,9 @@ export interface BoxCodeToolbox {
  *   Currently supports only Python. For other languages, use the `process.codeRun` method.
  * @property {ComputerUse} computerUse - Computer use operations interface for desktop automation
  * @property {string} id - Unique identifier for the Box
- * @property {string} boxId - Public Box ID shown to users and SDK clients
  * @property {string} organizationId - Organization ID of the Box
  * @property {string} user - OS user running in the Box
+ * @property {string} image - OCI image the Box boots from
  * @property {Record<string, string>} env - Environment variables set in the Box
  * @property {Record<string, string>} labels - Custom labels attached to the Box
  * @property {boolean} public - Whether the Box is publicly accessible
@@ -88,10 +88,10 @@ export class Box implements BoxDto {
   public readonly codeInterpreter: CodeInterpreter
 
   public id!: string
-  public boxId!: string
   public name!: string
   public organizationId!: string
   public user!: string
+  public image!: string
   public env!: Record<string, string>
   public labels!: Record<string, string>
   public public!: boolean
@@ -665,10 +665,10 @@ export class Box implements BoxDto {
    */
   private processBoxDto(boxDto: BoxDto) {
     this.id = boxDto.id
-    this.boxId = boxDto.boxId
     this.name = boxDto.name
     this.organizationId = boxDto.organizationId
     this.user = boxDto.user
+    this.image = boxDto.image
     this.env = boxDto.env
     this.labels = boxDto.labels
     this.public = boxDto.public

@@ -23,8 +23,6 @@ var _ MappedNullable = &Box{}
 type Box struct {
 	// The internal UUID of the box
 	Id string `json:"id"`
-	// The public Box ID shown to users and SDK clients
-	BoxId string `json:"boxId"`
 	// The organization ID of the box
 	OrganizationId string `json:"organizationId"`
 	// The name of the box
@@ -33,6 +31,8 @@ type Box struct {
 	User string `json:"user"`
 	// Environment variables for the box
 	Env map[string]string `json:"env"`
+	// The OCI image ref the box boots from
+	Image string `json:"image"`
 	// Labels for the box
 	Labels map[string]string `json:"labels"`
 	// Whether the box http preview is public
@@ -87,14 +87,14 @@ type _Box Box
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewBox(id string, boxId string, organizationId string, name string, user string, env map[string]string, labels map[string]string, public bool, networkBlockAll bool, target string, cpu float32, gpu float32, memory float32, disk float32, toolboxProxyUrl string) *Box {
+func NewBox(id string, organizationId string, name string, user string, env map[string]string, image string, labels map[string]string, public bool, networkBlockAll bool, target string, cpu float32, gpu float32, memory float32, disk float32, toolboxProxyUrl string) *Box {
 	this := Box{}
 	this.Id = id
-	this.BoxId = boxId
 	this.OrganizationId = organizationId
 	this.Name = name
 	this.User = user
 	this.Env = env
+	this.Image = image
 	this.Labels = labels
 	this.Public = public
 	this.NetworkBlockAll = networkBlockAll
@@ -137,30 +137,6 @@ func (o *Box) GetIdOk() (*string, bool) {
 // SetId sets field value
 func (o *Box) SetId(v string) {
 	o.Id = v
-}
-
-// GetBoxId returns the BoxId field value
-func (o *Box) GetBoxId() string {
-	if o == nil {
-		var ret string
-		return ret
-	}
-
-	return o.BoxId
-}
-
-// GetBoxIdOk returns a tuple with the BoxId field value
-// and a boolean to check if the value has been set.
-func (o *Box) GetBoxIdOk() (*string, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.BoxId, true
-}
-
-// SetBoxId sets field value
-func (o *Box) SetBoxId(v string) {
-	o.BoxId = v
 }
 
 // GetOrganizationId returns the OrganizationId field value
@@ -257,6 +233,30 @@ func (o *Box) GetEnvOk() (*map[string]string, bool) {
 // SetEnv sets field value
 func (o *Box) SetEnv(v map[string]string) {
 	o.Env = v
+}
+
+// GetImage returns the Image field value
+func (o *Box) GetImage() string {
+	if o == nil {
+		var ret string
+		return ret
+	}
+
+	return o.Image
+}
+
+// GetImageOk returns a tuple with the Image field value
+// and a boolean to check if the value has been set.
+func (o *Box) GetImageOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.Image, true
+}
+
+// SetImage sets field value
+func (o *Box) SetImage(v string) {
+	o.Image = v
 }
 
 // GetLabels returns the Labels field value
@@ -905,11 +905,11 @@ func (o Box) MarshalJSON() ([]byte, error) {
 func (o Box) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["id"] = o.Id
-	toSerialize["boxId"] = o.BoxId
 	toSerialize["organizationId"] = o.OrganizationId
 	toSerialize["name"] = o.Name
 	toSerialize["user"] = o.User
 	toSerialize["env"] = o.Env
+	toSerialize["image"] = o.Image
 	toSerialize["labels"] = o.Labels
 	toSerialize["public"] = o.Public
 	toSerialize["networkBlockAll"] = o.NetworkBlockAll
@@ -972,11 +972,11 @@ func (o *Box) UnmarshalJSON(data []byte) (err error) {
 	// that every required field exists as a key in the generic map.
 	requiredProperties := []string{
 		"id",
-		"boxId",
 		"organizationId",
 		"name",
 		"user",
 		"env",
+		"image",
 		"labels",
 		"public",
 		"networkBlockAll",
@@ -1016,11 +1016,11 @@ func (o *Box) UnmarshalJSON(data []byte) (err error) {
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "id")
-		delete(additionalProperties, "boxId")
 		delete(additionalProperties, "organizationId")
 		delete(additionalProperties, "name")
 		delete(additionalProperties, "user")
 		delete(additionalProperties, "env")
+		delete(additionalProperties, "image")
 		delete(additionalProperties, "labels")
 		delete(additionalProperties, "public")
 		delete(additionalProperties, "networkBlockAll")

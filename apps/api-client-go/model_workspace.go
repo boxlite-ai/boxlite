@@ -23,8 +23,6 @@ var _ MappedNullable = &Workspace{}
 type Workspace struct {
 	// The internal UUID of the box
 	Id string `json:"id"`
-	// The public Box ID shown to users and SDK clients
-	BoxId string `json:"boxId"`
 	// The organization ID of the box
 	OrganizationId string `json:"organizationId"`
 	// The name of the box
@@ -33,6 +31,8 @@ type Workspace struct {
 	User string `json:"user"`
 	// Environment variables for the box
 	Env map[string]string `json:"env"`
+	// The OCI image ref the box boots from
+	Image string `json:"image"`
 	// Labels for the box
 	Labels map[string]string `json:"labels"`
 	// Whether the box http preview is public
@@ -78,8 +78,6 @@ type Workspace struct {
 	RunnerId *string `json:"runnerId,omitempty"`
 	// The toolbox proxy URL for the box
 	ToolboxProxyUrl string `json:"toolboxProxyUrl"`
-	// The image used for the workspace
-	Image *string `json:"image,omitempty"`
 	// Additional information about the box
 	Info *BoxInfo `json:"info,omitempty"`
 	AdditionalProperties map[string]interface{}
@@ -91,14 +89,14 @@ type _Workspace Workspace
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewWorkspace(id string, boxId string, organizationId string, name string, user string, env map[string]string, labels map[string]string, public bool, networkBlockAll bool, target string, cpu float32, gpu float32, memory float32, disk float32, toolboxProxyUrl string) *Workspace {
+func NewWorkspace(id string, organizationId string, name string, user string, env map[string]string, image string, labels map[string]string, public bool, networkBlockAll bool, target string, cpu float32, gpu float32, memory float32, disk float32, toolboxProxyUrl string) *Workspace {
 	this := Workspace{}
 	this.Id = id
-	this.BoxId = boxId
 	this.OrganizationId = organizationId
 	this.Name = name
 	this.User = user
 	this.Env = env
+	this.Image = image
 	this.Labels = labels
 	this.Public = public
 	this.NetworkBlockAll = networkBlockAll
@@ -141,30 +139,6 @@ func (o *Workspace) GetIdOk() (*string, bool) {
 // SetId sets field value
 func (o *Workspace) SetId(v string) {
 	o.Id = v
-}
-
-// GetBoxId returns the BoxId field value
-func (o *Workspace) GetBoxId() string {
-	if o == nil {
-		var ret string
-		return ret
-	}
-
-	return o.BoxId
-}
-
-// GetBoxIdOk returns a tuple with the BoxId field value
-// and a boolean to check if the value has been set.
-func (o *Workspace) GetBoxIdOk() (*string, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.BoxId, true
-}
-
-// SetBoxId sets field value
-func (o *Workspace) SetBoxId(v string) {
-	o.BoxId = v
 }
 
 // GetOrganizationId returns the OrganizationId field value
@@ -261,6 +235,30 @@ func (o *Workspace) GetEnvOk() (*map[string]string, bool) {
 // SetEnv sets field value
 func (o *Workspace) SetEnv(v map[string]string) {
 	o.Env = v
+}
+
+// GetImage returns the Image field value
+func (o *Workspace) GetImage() string {
+	if o == nil {
+		var ret string
+		return ret
+	}
+
+	return o.Image
+}
+
+// GetImageOk returns a tuple with the Image field value
+// and a boolean to check if the value has been set.
+func (o *Workspace) GetImageOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.Image, true
+}
+
+// SetImage sets field value
+func (o *Workspace) SetImage(v string) {
+	o.Image = v
 }
 
 // GetLabels returns the Labels field value
@@ -898,38 +896,6 @@ func (o *Workspace) SetToolboxProxyUrl(v string) {
 	o.ToolboxProxyUrl = v
 }
 
-// GetImage returns the Image field value if set, zero value otherwise.
-func (o *Workspace) GetImage() string {
-	if o == nil || IsNil(o.Image) {
-		var ret string
-		return ret
-	}
-	return *o.Image
-}
-
-// GetImageOk returns a tuple with the Image field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *Workspace) GetImageOk() (*string, bool) {
-	if o == nil || IsNil(o.Image) {
-		return nil, false
-	}
-	return o.Image, true
-}
-
-// HasImage returns a boolean if a field has been set.
-func (o *Workspace) HasImage() bool {
-	if o != nil && !IsNil(o.Image) {
-		return true
-	}
-
-	return false
-}
-
-// SetImage gets a reference to the given string and assigns it to the Image field.
-func (o *Workspace) SetImage(v string) {
-	o.Image = &v
-}
-
 // GetInfo returns the Info field value if set, zero value otherwise.
 func (o *Workspace) GetInfo() BoxInfo {
 	if o == nil || IsNil(o.Info) {
@@ -973,11 +939,11 @@ func (o Workspace) MarshalJSON() ([]byte, error) {
 func (o Workspace) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["id"] = o.Id
-	toSerialize["boxId"] = o.BoxId
 	toSerialize["organizationId"] = o.OrganizationId
 	toSerialize["name"] = o.Name
 	toSerialize["user"] = o.User
 	toSerialize["env"] = o.Env
+	toSerialize["image"] = o.Image
 	toSerialize["labels"] = o.Labels
 	toSerialize["public"] = o.Public
 	toSerialize["networkBlockAll"] = o.NetworkBlockAll
@@ -1026,9 +992,6 @@ func (o Workspace) ToMap() (map[string]interface{}, error) {
 		toSerialize["runnerId"] = o.RunnerId
 	}
 	toSerialize["toolboxProxyUrl"] = o.ToolboxProxyUrl
-	if !IsNil(o.Image) {
-		toSerialize["image"] = o.Image
-	}
 	if !IsNil(o.Info) {
 		toSerialize["info"] = o.Info
 	}
@@ -1046,11 +1009,11 @@ func (o *Workspace) UnmarshalJSON(data []byte) (err error) {
 	// that every required field exists as a key in the generic map.
 	requiredProperties := []string{
 		"id",
-		"boxId",
 		"organizationId",
 		"name",
 		"user",
 		"env",
+		"image",
 		"labels",
 		"public",
 		"networkBlockAll",
@@ -1090,11 +1053,11 @@ func (o *Workspace) UnmarshalJSON(data []byte) (err error) {
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "id")
-		delete(additionalProperties, "boxId")
 		delete(additionalProperties, "organizationId")
 		delete(additionalProperties, "name")
 		delete(additionalProperties, "user")
 		delete(additionalProperties, "env")
+		delete(additionalProperties, "image")
 		delete(additionalProperties, "labels")
 		delete(additionalProperties, "public")
 		delete(additionalProperties, "networkBlockAll")
@@ -1117,7 +1080,6 @@ func (o *Workspace) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "daemonVersion")
 		delete(additionalProperties, "runnerId")
 		delete(additionalProperties, "toolboxProxyUrl")
-		delete(additionalProperties, "image")
 		delete(additionalProperties, "info")
 		o.AdditionalProperties = additionalProperties
 	}

@@ -211,11 +211,6 @@ func (c *Client) Close() error {
 // Create creates a new box (VM) from the given image and configuration.
 // Returns the box ID and daemon version.
 func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error) {
-	publicBoxId := boxDto.BoxId
-	if publicBoxId == "" {
-		publicBoxId = boxDto.Id
-	}
-
 	// API sends cores / GB / GB as small integers (see apps/api Box entity).
 	cpus := int(boxDto.CpuQuota)
 	if cpus < 1 {
@@ -226,6 +221,9 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		memoryMiB = 128
 	}
 	opts := []boxlite.BoxOption{
+		// The control-plane box id rides in the engine's name slot (the engine
+		// mints its own internal id). User-facing names live only in the cloud's
+		// PG; the engine never needs a separate user name in cloud mode.
 		boxlite.WithName(boxDto.Id),
 		boxlite.WithCPUs(cpus),
 		boxlite.WithMemory(memoryMiB),
@@ -269,7 +267,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 
 	opts = append(opts, boxlite.WithNetwork(networkSpec(boxDto.NetworkBlockAll, boxDto.NetworkAllowList)))
 
-	bx, err := c.runtime.Create(ctx, boxDto.ArtifactRef, opts...)
+	bx, err := c.runtime.Create(ctx, boxDto.Image, opts...)
 	if err != nil {
 		if len(volumeMounts) > 0 {
 			if cleanupErr := c.removeBoxVolumeMountRecord(ctx, boxDto.Id); cleanupErr != nil {
@@ -292,12 +290,10 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		bx.ID(),
 		"boxId",
 		boxDto.Id,
-		"boxId",
-		publicBoxId,
 		"name",
 		bx.Name(),
-		"artifactRef",
-		boxDto.ArtifactRef,
+		"image",
+		boxDto.Image,
 	)
 
 	skipStart := boxDto.SkipStart != nil && *boxDto.SkipStart

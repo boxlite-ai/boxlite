@@ -4,16 +4,18 @@
 Idempotent. Safe to re-run after bootstrap.sh.
 
 Configures:
-  1. Required snapshots active (alpine:3.23, ubuntu:22.04)
-  2. Admin org has non-zero per-box quotas
-  3. `[profiles.p1]` in ~/.boxlite/credentials.toml points at the local API
+  1. Admin org has non-zero per-box quotas
+  2. `[profiles.p1]` in ~/.boxlite/credentials.toml points at the local API
+
+Box images need no registration: create requests carry a full OCI image ref
+that must be in the API's supported allowlist (BOXLITE_SYSTEM_*_IMAGE env;
+bootstrap.sh points the local stack at public refs).
 """
 from __future__ import annotations
 
 import json
 import os
 import sys
-import time
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -43,8 +45,25 @@ ADMIN_KEY = (
     or _read_admin_key_from_secrets()
     or "devkey"   # only used when bootstrap hasn't run yet
 )
-SNAPSHOTS_TO_REGISTER = ["alpine:3.23", "ubuntu:22.04", "ubuntu:24.04"]
-SNAPSHOT_WAIT_SECONDS = 180
+
+
+def _read_base_image_from_api_env() -> str | None:
+    """bootstrap.sh writes the local stack's supported-image allowlist into the
+    API env file. Record its base entry in the profile so conftest creates
+    boxes with an image this stack actually accepts."""
+    env_file = Path(os.environ.get("ENV_FILE", "/etc/boxlite-api.env"))
+    if not env_file.exists():
+        return None
+    try:
+        for ln in env_file.read_text().splitlines():
+            if ln.startswith("BOXLITE_SYSTEM_BASE_IMAGE="):
+                return ln.split("=", 1)[1].strip()
+    except PermissionError:
+        return None
+    return None
+
+
+DEFAULT_IMAGE = os.environ.get("BOXLITE_E2E_IMAGE") or _read_base_image_from_api_env()
 CRED_PATH = Path.home() / ".boxlite" / "credentials.toml"
 
 
@@ -72,60 +91,6 @@ def me() -> dict:
     return body
 
 
-def _snapshot_state(name: str) -> tuple[str | None, str | None]:
-    """Read snapshot state directly from Postgres — the API's snapshot GET
-    routes are scoped behind a different controller surface, but the
-    fixture lives next to the DB anyway, so use the canonical source."""
-    import subprocess
-    sql = f"SELECT state, \"errorReason\" FROM snapshot WHERE name = '{name}' LIMIT 1;"
-    r = subprocess.run(
-        ["psql", "-h", "localhost", "-U", "boxlite", "-d", "boxlite_dev",
-         "-tAF", "|", "-c", sql],
-        env={**os.environ, "PGPASSWORD": "boxlite"},
-        capture_output=True, text=True,
-    )
-    line = r.stdout.strip()
-    if not line:
-        return None, None
-    parts = line.split("|", 1)
-    return parts[0], (parts[1] if len(parts) > 1 else None)
-
-
-def register_snapshot(name: str):
-    """POST /snapshots if missing; waits (polling DB) until state == active."""
-    state, _ = _snapshot_state(name)
-    if state is None:
-        status, body = http("POST", "/snapshots", {
-            "name": name, "imageName": name,
-            "cpu": 1, "memory": 1, "disk": 2,
-        })
-        if status not in (200, 201):
-            sys.exit(f"  POST /snapshots → {status} {body}")
-        print(f"  created {name} — waiting for runner pull")
-    elif state == "error":
-        # Wipe + recreate so the runner retries (e.g. registry was down before).
-        import subprocess
-        subprocess.run(
-            ["psql", "-h", "localhost", "-U", "boxlite", "-d", "boxlite_dev",
-             "-c", f"DELETE FROM snapshot WHERE name = '{name}';"],
-            env={**os.environ, "PGPASSWORD": "boxlite"}, check=True,
-        )
-        return register_snapshot(name)
-    else:
-        print(f"  {name}: state = {state} (existing)")
-
-    deadline = time.time() + SNAPSHOT_WAIT_SECONDS
-    while time.time() < deadline:
-        st, err = _snapshot_state(name)
-        if st == "active":
-            print(f"  {name}: active ✓")
-            return
-        if st == "error":
-            sys.exit(f"  {name}: {err}")
-        time.sleep(3)
-    sys.exit(f"  {name} did not reach active within {SNAPSHOT_WAIT_SECONDS}s")
-
-
 def patch_admin_quota():
     """The admin user is created on first API boot with org quotas at 0
     (config defaults are 0 unless ADMIN_* env vars override). Bump them
@@ -136,7 +101,9 @@ UPDATE organization SET
     max_cpu_per_box = 4,
     max_memory_per_box = 8,
     max_disk_per_box = 20
-WHERE personal = true;
+FROM organization_user
+WHERE organization_user."organizationId" = organization.id
+  AND organization_user."isDefaultForUser" = true;
 """
     r = subprocess.run(
         ["psql", "-h", "localhost", "-U", "boxlite", "-d", "boxlite_dev",
@@ -173,6 +140,8 @@ def ensure_p1_profile(prefix: str):
         "auth_method": "api_key",
         "path_prefix": prefix,
     }
+    if DEFAULT_IMAGE:
+        entry["default_image"] = DEFAULT_IMAGE
     profiles["p1"] = entry
     profiles["default"] = entry.copy()
 
@@ -202,11 +171,7 @@ def main():
     prefix = info["path_prefix"]
     print(f"  prefix = {prefix}")
     print()
-    print("3. Registering snapshots...")
-    for snap in SNAPSHOTS_TO_REGISTER:
-        register_snapshot(snap)
-    print()
-    print("4. Writing ~/.boxlite/credentials.toml profile p1...")
+    print("3. Writing ~/.boxlite/credentials.toml profile p1...")
     ensure_p1_profile(prefix)
     print()
     print("fixture_setup: done.")
