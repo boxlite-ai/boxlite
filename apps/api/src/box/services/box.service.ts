@@ -18,6 +18,7 @@ import { BoxError } from '../../exceptions/box-error.exception'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
+import { assertSupportedImage } from '../constants/curated-images.constant'
 import { BoxWarmPoolService } from './box-warm-pool.service'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
 import { WarmPoolEvents } from '../constants/warmpool-events.constants'
@@ -158,7 +159,9 @@ export class BoxService {
       const mem = createBoxDto.memory ?? DEFAULT_BOX_MEM
       const disk = createBoxDto.disk ?? DEFAULT_BOX_DISK
       const gpu = createBoxDto.gpu ?? DEFAULT_BOX_GPU
-      const image = createBoxDto.image
+      // Restrict box creation to the supported pinned images; reject anything else
+      // at the request boundary (defaults undefined -> base image).
+      const image = assertSupportedImage(createBoxDto.image)
 
       this.organizationService.assertOrganizationIsNotSuspended(organization)
 
