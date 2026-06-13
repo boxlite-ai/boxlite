@@ -193,6 +193,22 @@ impl GlobalFlags {
             .to_string()
     }
 
+    /// REST URL the runtime would talk to, applying the same precedence as
+    /// `create_runtime`: `--url` / `BOXLITE_REST_URL` > stored profile's
+    /// URL > none. Returns `None` when no REST destination is configured
+    /// (the local runtime case). Used by commands like `info` to render
+    /// "where am I pointing at" without rebuilding the precedence ladder.
+    pub fn resolved_url(&self) -> Option<String> {
+        if let Some(u) = self.url.as_deref().filter(|s| !s.is_empty()) {
+            return Some(u.to_string());
+        }
+        crate::credentials::load_named(&self.resolved_profile())
+            .ok()
+            .flatten()
+            .map(|p| p.url)
+            .filter(|u| !u.is_empty())
+    }
+
     /// Resolve runtime options from config file and CLI overrides (--home, --registry).
     pub fn resolve_runtime_options(&self) -> anyhow::Result<BoxliteOptions> {
         let mut options = if let Some(config_path) = &self.config {
@@ -1141,5 +1157,121 @@ mod tests {
             panic!("expected AuthCommand::Login");
         };
         assert!(login.api_key_stdin);
+    }
+
+    /// Lay down a credentials file readable by `credentials::load_named`
+    /// rooted at `home`, and point `BOXLITE_HOME` at it for the duration of
+    /// the test. Returns a guard that restores the previous `BOXLITE_HOME`
+    /// (and releases the cross-test lock) on drop.
+    fn install_creds(home: &std::path::Path, body: &str) -> EnvGuard {
+        std::fs::create_dir_all(home).unwrap();
+        std::fs::write(home.join("credentials.toml"), body).unwrap();
+        EnvGuard::set("BOXLITE_HOME", home.to_str().unwrap())
+    }
+
+    /// All tests that mutate `BOXLITE_HOME` must serialize through this
+    /// mutex — `cargo test` runs tests in the same process by default and
+    /// env vars are process-global, so a parallel test would see another
+    /// test's override and pick up the wrong credentials.toml.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct EnvGuard {
+        key: String,
+        prev: Option<std::ffi::OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+    impl EnvGuard {
+        fn set(key: &str, val: &str) -> Self {
+            let lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let prev = std::env::var_os(key);
+            // SAFETY: the mutex above guarantees no other test in this
+            // module is touching env vars; the lock outlives the set/remove
+            // calls below via `_lock` held in this struct.
+            unsafe { std::env::set_var(key, val) };
+            Self {
+                key: key.to_string(),
+                prev,
+                _lock: lock,
+            }
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.prev {
+                    Some(v) => std::env::set_var(&self.key, v),
+                    None => std::env::remove_var(&self.key),
+                }
+            }
+        }
+    }
+
+    fn flags_with_profile(profile: Option<&str>, url: Option<&str>) -> GlobalFlags {
+        GlobalFlags {
+            debug: false,
+            home: None,
+            registry: vec![],
+            config: None,
+            url: url.map(str::to_string),
+            profile: profile.map(str::to_string),
+            path_prefix: None,
+        }
+    }
+
+    /// `--url` / `BOXLITE_REST_URL` beats whatever the profile carries —
+    /// same precedence as `create_runtime`, exercised at the helper boundary
+    /// so `info` / `logs` can render "where am I pointing at" without
+    /// re-deriving the ladder.
+    #[test]
+    fn resolved_url_prefers_explicit_url_over_profile() {
+        let tmp = TempDir::new().unwrap();
+        let _g = install_creds(
+            tmp.path(),
+            "[profiles.p1]\nurl = \"http://from-profile:1\"\nauth_method = \"api_key\"\n",
+        );
+        let flags = flags_with_profile(Some("p1"), Some("http://from-flag:2"));
+        assert_eq!(flags.resolved_url().as_deref(), Some("http://from-flag:2"));
+    }
+
+    /// With no `--url`, the stored profile's URL wins — the path that POL-30
+    /// / POL-31 broke for `info` and `logs` while every other command
+    /// already honored it.
+    #[test]
+    fn resolved_url_falls_back_to_profile_url() {
+        let tmp = TempDir::new().unwrap();
+        let _g = install_creds(
+            tmp.path(),
+            "[profiles.p1]\nurl = \"http://from-profile:1\"\nauth_method = \"api_key\"\n",
+        );
+        let flags = flags_with_profile(Some("p1"), None);
+        assert_eq!(
+            flags.resolved_url().as_deref(),
+            Some("http://from-profile:1")
+        );
+    }
+
+    /// No `--url`, no matching profile → `None`. Caller (e.g. `info`)
+    /// then knows it's looking at a local runtime and can render local
+    /// fields (`home_dir`, virtualization probe).
+    #[test]
+    fn resolved_url_is_none_when_profile_missing() {
+        let tmp = TempDir::new().unwrap();
+        let _g = install_creds(tmp.path(), ""); // empty credentials file
+        let flags = flags_with_profile(Some("missing"), None);
+        assert!(flags.resolved_url().is_none());
+    }
+
+    /// An explicitly empty URL in the profile is treated as "no URL" —
+    /// otherwise `info --profile p1` would silently produce an
+    /// unreachable connect on a malformed profile.
+    #[test]
+    fn resolved_url_treats_empty_string_as_none() {
+        let tmp = TempDir::new().unwrap();
+        let _g = install_creds(
+            tmp.path(),
+            "[profiles.p1]\nurl = \"\"\nauth_method = \"api_key\"\n",
+        );
+        let flags = flags_with_profile(Some("p1"), None);
+        assert!(flags.resolved_url().is_none());
     }
 }

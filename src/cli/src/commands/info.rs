@@ -1,11 +1,18 @@
 use crate::cli::GlobalFlags;
 use crate::formatter;
-use boxlite::BoxStatus;
+use boxlite::{BoxStatus, BoxliteError};
 use clap::Args;
 use clap::ValueEnum;
 use serde::Serialize;
 
 /// System-wide runtime information (CLI output shape).
+///
+/// `homeDir` / `virtualization` are populated for the local backend; for
+/// REST they become the URL string and a `"remote"` sentinel so the user
+/// can see at a glance which environment the count fields describe.
+/// `imagesCount` is omitted (set to `None`) when the backend doesn't
+/// expose image listing — currently the REST backend, until image
+/// endpoints land.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SystemInfo {
@@ -18,7 +25,8 @@ struct SystemInfo {
     boxes_running: u32,
     boxes_stopped: u32,
     boxes_configured: u32,
-    images_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    images_count: Option<u32>,
 }
 
 /// Display system-wide runtime information (default: YAML).
@@ -37,14 +45,26 @@ pub enum InfoFormat {
 }
 
 pub async fn execute(args: InfoArgs, global: &GlobalFlags) -> anyhow::Result<()> {
-    let options = global.resolve_runtime_options()?;
-    let home_dir = options.home_dir.to_string_lossy().to_string();
+    let rt = global.create_runtime()?;
+    let is_rest = rt.is_rest();
 
-    let rt = global.create_runtime_with_options(options)?;
+    let (home_dir, virtualization) = if is_rest {
+        // Local-only fields don't describe the environment the box/image
+        // counts come from; render the URL we're talking to instead.
+        let url = global
+            .resolved_url()
+            .unwrap_or_else(|| "(remote)".to_string());
+        (url, "remote".to_string())
+    } else {
+        let options = global.resolve_runtime_options()?;
+        let home = options.home_dir.to_string_lossy().to_string();
+        let virt = boxlite::system_check::SystemCheck::run()
+            .map(|_| "available".to_string())
+            .unwrap_or_else(|e| format!("unavailable: {}", e));
+        (home, virt)
+    };
+
     let version = boxlite::VERSION.to_string();
-    let virtualization = boxlite::system_check::SystemCheck::run()
-        .map(|_| "available".to_string())
-        .unwrap_or_else(|e| format!("unavailable: {}", e));
     let os = std::env::consts::OS.to_string();
     let arch = std::env::consts::ARCH.to_string();
 
@@ -60,7 +80,15 @@ pub async fn execute(args: InfoArgs, global: &GlobalFlags) -> anyhow::Result<()>
         .filter(|b| b.status == BoxStatus::Configured)
         .count() as u32;
 
-    let images_count = rt.images()?.list().await?.len() as u32;
+    // Image listing is local-only today; surface it when the backend
+    // supports it and omit the field otherwise (rather than misreporting
+    // 0). When REST image endpoints land, removing this branch keeps the
+    // count visible.
+    let images_count = match rt.images() {
+        Ok(handle) => Some(handle.list().await?.len() as u32),
+        Err(BoxliteError::Unsupported(_)) => None,
+        Err(e) => return Err(e.into()),
+    };
 
     let info = SystemInfo {
         version,

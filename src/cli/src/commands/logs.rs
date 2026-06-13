@@ -24,9 +24,22 @@ pub struct LogsArgs {
 }
 
 pub async fn execute(args: LogsArgs, global: &GlobalFlags) -> anyhow::Result<()> {
-    let options = global.resolve_runtime_options()?;
-    let home_dir = options.home_dir.clone();
-    let rt = global.create_runtime_with_options(options)?;
+    let rt = global.create_runtime()?;
+
+    // `logs` reads the box's console.log file directly from the local
+    // host's $BOXLITE_HOME — there is no REST endpoint for log streaming
+    // yet. Falling back to local would silently misdirect a `--profile`
+    // user to the wrong environment (POL-30/31). Error cleanly instead.
+    if rt.is_rest() {
+        return Err(anyhow::anyhow!(
+            "`logs` is not yet supported over REST — re-run without --profile / \
+             BOXLITE_PROFILE / --url to read logs from the local runtime"
+        ));
+    }
+
+    // Re-resolve options to learn the local home_dir. (We can't get it
+    // off the runtime — only the construction-time options had it.)
+    let home_dir = global.resolve_runtime_options()?.home_dir;
 
     let litebox = rt
         .get(&args.target)

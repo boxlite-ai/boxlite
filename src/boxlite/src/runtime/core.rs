@@ -455,6 +455,19 @@ impl BoxliteRuntime {
             )),
         }
     }
+
+    /// True iff this runtime is REST-backed (vs. a local VM backend).
+    ///
+    /// CLI commands that mix capabilities only meaningful on one side
+    /// (e.g. `info` showing host home_dir + virtualization vs. a remote
+    /// URL, or `logs` reading a host file that doesn't exist over REST)
+    /// need to render different output by backend kind. Keying on
+    /// `auth_backend` is stable across the planned image-over-REST
+    /// expansion — REST is identified by "has a remote identity," not
+    /// by "lacks image ops."
+    pub fn is_rest(&self) -> bool {
+        self.auth_backend.is_some()
+    }
 }
 
 // ============================================================================
