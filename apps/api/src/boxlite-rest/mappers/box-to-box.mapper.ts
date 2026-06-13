@@ -17,7 +17,7 @@ export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
     status: mapState(box.state),
     created_at: box.createdAt || new Date().toISOString(),
     updated_at: box.updatedAt || new Date().toISOString(),
-    image: '',
+    image: box.image || '',
     cpus: box.cpu || 1,
     memory_mib: (box.memory || 1) * 1024,
     labels: box.labels || {},
@@ -27,6 +27,7 @@ export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
 export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): CreateBoxDto {
   const createDto = new CreateBoxDto()
   createDto.name = dto.name
+  createDto.image = dto.image
   createDto.user = dto.user
   createDto.env = dto.env
   createDto.cpu = dto.cpus

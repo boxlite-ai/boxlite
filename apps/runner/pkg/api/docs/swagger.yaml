@@ -93,7 +93,7 @@ definitions:
         $ref: '#/definitions/RegistryDTO'
       skipStart:
         type: boolean
-      snapshot:
+      image:
         type: string
       storageQuota:
         minimum: 1
@@ -107,7 +107,7 @@ definitions:
     required:
       - id
       - osUser
-      - snapshot
+      - image
       - userId
     type: object
   ErrorResponse:

@@ -56,24 +56,31 @@ export class BoxStartAction extends BoxAction {
     return DONT_SYNC_AGAIN
   }
 
-  // TODO(image-rewrite): the box boot pipeline (image resolution, runner artifact scheduling,
-  // pull orchestration, and runner createBox) was removed with the box_template subsystem. Boxes
-  // can no longer be booted until the image resolution layer is rebuilt; this handler fails the
-  // box explicitly instead.
   private async handleRunnerBoxUnknownStateOnDesiredStateStart(box: Box, lockCode: LockCode): Promise<SyncState> {
     const runner = await this.runnerService.findOneOrFail(box.runnerId)
     if (runner.state !== RunnerState.READY) {
       return DONT_SYNC_AGAIN
     }
 
-    await this.updateBoxState(
-      box,
-      BoxState.ERROR,
-      lockCode,
-      undefined,
-      'Box image resolution is unavailable: the image/template subsystem was removed',
-    )
-    return DONT_SYNC_AGAIN
+    if (!box.image) {
+      await this.updateBoxState(box, BoxState.ERROR, lockCode, undefined, 'Box has no image to create from')
+      return DONT_SYNC_AGAIN
+    }
+
+    const organization = await this.organizationService.findOne(box.organizationId)
+
+    const metadata: { [key: string]: string } = { ...organization?.boxMetadata }
+    if (box.volumes?.length) {
+      metadata['volumes'] = JSON.stringify(
+        box.volumes.map((v) => ({ volumeId: v.volumeId, mountPath: v.mountPath, subpath: v.subpath })),
+      )
+    }
+
+    const runnerAdapter = await this.runnerAdapterFactory.create(runner)
+    await runnerAdapter.createBox(box, metadata)
+
+    await this.updateBoxState(box, BoxState.CREATING, lockCode)
+    return SYNC_AGAIN
   }
 
   private async handleRunnerBoxStoppedStateOnDesiredStateStart(box: Box, lockCode: LockCode): Promise<SyncState> {

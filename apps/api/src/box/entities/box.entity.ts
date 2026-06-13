@@ -35,6 +35,7 @@ import { BOX_ID_LENGTH, BOX_ID_REGEX, generateBoxId } from '../utils/box-id.util
   where: `"pending" = true`,
 })
 @Index('idx_box_authtoken', ['authToken'])
+@Index('box_image_idx', ['image'])
 @Index('box_labels_gin_full_idx', { synchronize: false })
 @Index('idx_box_volumes_gin', { synchronize: false })
 export class Box {
@@ -54,6 +55,9 @@ export class Box {
 
   @Column()
   region: string
+
+  @Column({ nullable: true })
+  image?: string
 
   @Column({
     type: 'uuid',

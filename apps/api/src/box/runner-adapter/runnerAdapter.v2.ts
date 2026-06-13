@@ -114,6 +114,42 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     }
   }
 
+  async createBox(box: Box, metadata?: { [key: string]: string }): Promise<StartBoxResponse | undefined> {
+    if (!box.image) {
+      throw new Error(`Box ${box.id} has no image; cannot create on runner`)
+    }
+
+    const payload = {
+      id: box.id,
+      userId: box.organizationId,
+      image: box.image,
+      osUser: box.osUser,
+      cpuQuota: box.cpu,
+      gpuQuota: box.gpu,
+      memoryQuota: box.mem,
+      storageQuota: box.disk,
+      env: box.env,
+      volumes: box.volumes?.map((volume) => ({
+        volumeId: volume.volumeId,
+        mountPath: volume.mountPath,
+        subpath: volume.subpath,
+      })),
+      networkBlockAll: box.networkBlockAll,
+      networkAllowList: box.networkAllowList,
+      metadata,
+      authToken: box.authToken,
+      organizationId: box.organizationId,
+      regionId: box.region,
+    }
+
+    await this.jobService.createJob(null, JobType.CREATE_BOX, this.runner.id, ResourceType.BOX, box.id, payload)
+
+    this.logger.debug(`Created CREATE_BOX job for box ${box.id} on runner ${this.runner.id}`)
+
+    //  Daemon version is set in the job result metadata once the runner completes the job.
+    return undefined
+  }
+
   async startBox(
     boxId: string,
     authToken: string,

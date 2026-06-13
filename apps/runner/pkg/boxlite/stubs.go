@@ -94,7 +94,7 @@ func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.Re
 
 	createDto := dto.CreateBoxDTO{
 		Id:               boxId,
-		ArtifactRef:      "alpine:latest",
+		Image:            "alpine:latest",
 		OsUser:           recoverDto.OsUser,
 		CpuQuota:         recoverDto.CpuQuota,
 		MemoryQuota:      recoverDto.MemoryQuota,

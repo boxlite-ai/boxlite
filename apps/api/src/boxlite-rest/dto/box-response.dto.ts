@@ -45,7 +45,7 @@ export class BoxResponseDto {
   pid?: number
 
   @ApiProperty({
-    description: 'Approved image/template used for the box',
+    description: 'Approved image used for the box',
     example: 'boxlite/base',
   })
   image: string

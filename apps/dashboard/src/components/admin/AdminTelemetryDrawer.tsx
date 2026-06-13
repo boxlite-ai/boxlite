@@ -230,7 +230,11 @@ const AdminTelemetryDrawer: React.FC<AdminTelemetryDrawerProps> = ({
   const requestOnlyOperations = operations.filter((operation) => operation.state === 'request_only')
   const hasPartialContract = Boolean(
     evidence &&
-    (!evidence.resource || !evidence.externalLinks || !evidence.commands || !evidence.operations || !evidence.timeline),
+      (!evidence.resource ||
+        !evidence.externalLinks ||
+        !evidence.commands ||
+        !evidence.operations ||
+        !evidence.timeline),
   )
   const displayTitle = evidence?.resource?.title ?? target.title
   const displaySubtitle =

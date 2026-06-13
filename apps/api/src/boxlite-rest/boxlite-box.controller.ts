@@ -87,7 +87,7 @@ export class BoxliteBoxController {
     const organization = authContext.organization
     const createBoxDto = createBoxToCreateBox(dto)
 
-    let box = await this.boxService.createFromTemplate(createBoxDto, organization)
+    let box = await this.boxService.create(createBoxDto, organization)
     if (box.state !== BoxState.STARTED) {
       box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
     }

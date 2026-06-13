@@ -1265,7 +1265,7 @@
     },
     "CreateBoxDTO": {
       "type": "object",
-      "required": ["id", "osUser", "snapshot", "userId"],
+      "required": ["id", "osUser", "image", "userId"],
       "properties": {
         "authToken": {
           "type": "string"
@@ -1331,7 +1331,7 @@
         "skipStart": {
           "type": "boolean"
         },
-        "snapshot": {
+        "image": {
           "type": "string"
         },
         "storageQuota": {

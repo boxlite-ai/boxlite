@@ -59,8 +59,8 @@ export class JobStateHandlerService {
       case JobType.RESIZE_BOX:
         await this.handleResizeBoxJobCompletion(job)
         break
-      // TODO(image-rewrite): PULL_ARTIFACT / REMOVE_ARTIFACT job handling removed with
-      // runner_artifact_cache + box_template; rebuild artifact lifecycle handling here.
+      // TODO(image-rewrite): PULL_IMAGE / REMOVE_IMAGE job handling removed with
+      // the runner image subsystems; rebuild artifact lifecycle handling here.
       case JobType.RECOVER_BOX:
         await this.handleRecoverBoxJobCompletion(job)
         break

@@ -45,18 +45,7 @@ export class BoxliteMeController {
       // TODO: source scopes from ctx.apiKey?.scopes once the ApiKey entity
       // has a `scopes` column. For now grant the full set used by the OpenAPI
       // spec's documented scope vocabulary.
-      scopes: [
-        'box:read',
-        'box:write',
-        'box:exec',
-        'box:delete',
-        'image:read',
-        'image:write',
-        'template:read',
-        'template:write',
-        'template:delete',
-        'me:read',
-      ],
+      scopes: ['box:read', 'box:write', 'box:exec', 'box:delete', 'image:read', 'image:write', 'me:read'],
       // Source of truth for key expiry is ApiKey.expiresAt — the same column the
       // dashboard's `/api-keys` list renders. Returning a hardcoded null here let
       // clients believe a soon-to-expire key was permanent (P1-2). `null` stays

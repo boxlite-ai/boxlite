@@ -144,6 +144,34 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     }
   }
 
+  async createBox(box: Box, metadata?: { [key: string]: string }): Promise<StartBoxResponse | undefined> {
+    const response = await this.boxApiClient.create({
+      id: box.id,
+      userId: box.organizationId,
+      image: box.image ?? '',
+      osUser: box.osUser,
+      cpuQuota: box.cpu,
+      gpuQuota: box.gpu,
+      memoryQuota: box.mem,
+      storageQuota: box.disk,
+      env: box.env,
+      networkBlockAll: box.networkBlockAll,
+      networkAllowList: box.networkAllowList,
+      metadata,
+      authToken: box.authToken,
+      organizationId: box.organizationId,
+      regionId: box.region,
+    })
+
+    if (!response?.data?.daemonVersion) {
+      return undefined
+    }
+
+    return {
+      daemonVersion: response.data.daemonVersion,
+    }
+  }
+
   async startBox(
     boxId: string,
     authToken: string,

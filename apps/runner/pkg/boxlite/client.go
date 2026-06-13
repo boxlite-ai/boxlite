@@ -269,7 +269,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 
 	opts = append(opts, boxlite.WithNetwork(networkSpec(boxDto.NetworkBlockAll, boxDto.NetworkAllowList)))
 
-	bx, err := c.runtime.Create(ctx, boxDto.ArtifactRef, opts...)
+	bx, err := c.runtime.Create(ctx, boxDto.Image, opts...)
 	if err != nil {
 		if len(volumeMounts) > 0 {
 			if cleanupErr := c.removeBoxVolumeMountRecord(ctx, boxDto.Id); cleanupErr != nil {
@@ -296,8 +296,8 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		publicBoxId,
 		"name",
 		bx.Name(),
-		"artifactRef",
-		boxDto.ArtifactRef,
+		"image",
+		boxDto.Image,
 	)
 
 	skipStart := boxDto.SkipStart != nil && *boxDto.SkipStart

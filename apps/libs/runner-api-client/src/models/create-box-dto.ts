@@ -41,7 +41,7 @@ export interface CreateBoxDTO {
     'regionId'?: string;
     'registry'?: RegistryDTO;
     'skipStart'?: boolean;
-    'snapshot': string;
+    'image': string;
     'storageQuota'?: number;
     'userId': string;
     'volumes'?: Array<DtoVolumeDTO>;

@@ -40,7 +40,7 @@ export class WorkspaceDto extends BoxDto {
     description: 'The image used for the workspace',
     example: 'boxlite-ai/workspace:latest',
   })
-  image: string
+  image = ''
 
   @ApiPropertyOptional({
     description: 'Additional information about the box',

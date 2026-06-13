@@ -105,6 +105,14 @@ export class BoxDto {
   })
   target: string
 
+  @ApiPropertyOptional({
+    description: 'The image used for the box',
+    example: 'boxlite/base',
+    required: false,
+  })
+  @IsOptional()
+  image?: string
+
   @ApiProperty({
     description: 'The CPU quota for the box',
     example: 2,
@@ -248,6 +256,7 @@ export class BoxDto {
       organizationId: box.organizationId,
       name: box.name,
       target: box.region,
+      image: box.image,
       user: box.osUser,
       env: box.env,
       cpu: box.cpu,

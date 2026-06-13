@@ -1360,7 +1360,7 @@ const docTemplate = `{
             "required": [
                 "id",
                 "osUser",
-                "snapshot",
+                "image",
                 "userId"
             ],
             "properties": {
@@ -1428,7 +1428,7 @@ const docTemplate = `{
                 "skipStart": {
                     "type": "boolean"
                 },
-                "snapshot": {
+                "image": {
                     "type": "string"
                 },
                 "storageQuota": {

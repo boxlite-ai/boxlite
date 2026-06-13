@@ -264,7 +264,7 @@ export class BoxController {
     const organization = authContext.organization
     let box: BoxDto
 
-    box = await this.boxService.createFromTemplate(createBoxDto, organization)
+    box = await this.boxService.create(createBoxDto, organization)
     if (box.state === BoxState.STARTED) {
       return box
     }

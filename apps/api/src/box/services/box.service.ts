@@ -75,10 +75,10 @@ import { BoxLookupCacheInvalidationService } from './box-lookup-cache-invalidati
 import { Region } from '../../region/entities/region.entity'
 import { BoxActivityService } from './box-activity.service'
 
-// TODO(image-rewrite): resource defaults previously came from box_template; these mirror the
-// Box entity column defaults until image/template resolution is rebuilt.
-const DEFAULT_BOX_CPU = 2
-const DEFAULT_BOX_MEM = 4
+// TODO(image-rewrite): resource defaults previously came from the removed image subsystem;
+// these mirror the Box entity column defaults until image resolution is rebuilt.
+const DEFAULT_BOX_CPU = 1
+const DEFAULT_BOX_MEM = 1
 const DEFAULT_BOX_DISK = 10
 const DEFAULT_BOX_GPU = 0
 
@@ -122,6 +122,7 @@ export class BoxService {
     box.organizationId = BOX_WARM_POOL_UNASSIGNED_ORGANIZATION
 
     box.class = warmPoolItem.class
+    box.image = warmPoolItem.image
     //  TODO: default user should be configurable
     box.osUser = 'boxlite'
     box.env = warmPoolItem.env || {}
@@ -131,7 +132,7 @@ export class BoxService {
     box.mem = warmPoolItem.mem
     box.disk = warmPoolItem.disk
 
-    // TODO(image-rewrite): box image/artifact resolution removed with box_template; rebuild here.
+    // TODO(image-rewrite): box image resolution removed with the image subsystem; rebuild here.
     const runner = await this.runnerService.getRandomAvailableRunner({
       regions: [box.region],
       boxClass: box.class,
@@ -144,26 +145,49 @@ export class BoxService {
     return box
   }
 
-  private async createBoxInternal(createBoxDto: CreateBoxDto, organization: Organization): Promise<BoxDto> {
+  async create(createBoxDto: CreateBoxDto, organization: Organization): Promise<BoxDto> {
     const region = await this.getValidatedOrDefaultRegion(organization, createBoxDto.target)
 
     try {
       const boxClass = this.getValidatedOrDefaultClass(createBoxDto.class)
 
-      // TODO(image-rewrite): box_template lookup + artifact resolution removed; boxes can no
+      // TODO(image-rewrite): image resolution removed; boxes can no
       // longer resolve an image at create time. Resource sizing falls back to request values
-      // (or Box entity defaults). Rebuild image/template resolution here.
+      // (or Box entity defaults). Rebuild image resolution here.
       const cpu = createBoxDto.cpu ?? DEFAULT_BOX_CPU
       const mem = createBoxDto.memory ?? DEFAULT_BOX_MEM
       const disk = createBoxDto.disk ?? DEFAULT_BOX_DISK
       const gpu = createBoxDto.gpu ?? DEFAULT_BOX_GPU
+      const image = createBoxDto.image
 
       this.organizationService.assertOrganizationIsNotSuspended(organization)
 
-      // TODO(image-rewrite): warm-pool reuse path removed with box_template; rebuild here.
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
         await this.volumeService.validateVolumes(organization.id, volumeIdOrNames)
+      } else if (image) {
+        //  No volumes requested — try to claim a pre-warmed box matching this image/spec
+        //  before creating a fresh one.
+        const skipWarmPool = (await this.redis.exists(`warm-pool:skip:${image}`)) === 1
+        if (!skipWarmPool) {
+          const warmPoolBox = await this.warmPoolService.fetchWarmPoolBox({
+            organizationId: organization.id,
+            image,
+            target: region.id,
+            class: boxClass,
+            cpu,
+            mem,
+            disk,
+            gpu,
+            osUser: createBoxDto.user || 'boxlite',
+            env: createBoxDto.env || {},
+            state: BoxState.STARTED,
+          })
+
+          if (warmPoolBox) {
+            return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization)
+          }
+        }
       }
 
       const runner = await this.runnerService.getRandomAvailableRunner({
@@ -182,6 +206,7 @@ export class BoxService {
       box.env = createBoxDto.env || {}
       box.labels = createBoxDto.labels || {}
 
+      box.image = image
       box.cpu = cpu
       box.gpu = gpu
       box.mem = mem
@@ -226,10 +251,6 @@ export class BoxService {
 
       throw error
     }
-  }
-
-  async createFromTemplate(createBoxDto: CreateBoxDto, organization: Organization): Promise<BoxDto> {
-    return this.createBoxInternal(createBoxDto, organization)
   }
 
   private async assignWarmPoolBox(

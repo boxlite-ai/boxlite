@@ -29,7 +29,7 @@ import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
 export type FetchWarmPoolBoxParams = {
-  template: string
+  image: string
   target: string
   class: BoxClass
   cpu: number
@@ -65,14 +65,10 @@ export class BoxWarmPoolService {
   }
 
   async fetchWarmPoolBox(params: FetchWarmPoolBoxParams): Promise<Box | null> {
-    // TODO(image-rewrite): box_template validation removed; the warm pool now matches on the
-    // raw template name string carried by the warm_pool config. Rebuild template resolution here.
-    const templateName = params.template || this.configService.get<string>('defaultTemplate')
-
     //  check if box is warm pool
     const warmPoolItem = await this.warmPoolRepository.findOne({
       where: {
-        template: templateName,
+        image: params.image,
         target: params.target,
         class: params.class,
         cpu: params.cpu,
@@ -96,7 +92,8 @@ export class BoxWarmPoolService {
 
       const queryBuilder = this.boxRepository
         .createQueryBuilder('box')
-        .where('box.class = :class', { class: warmPoolItem.class })
+        .where('box.image = :image', { image: warmPoolItem.image })
+        .andWhere('box.class = :class', { class: warmPoolItem.class })
         .andWhere('box.cpu = :cpu', { cpu: warmPoolItem.cpu })
         .andWhere('box.mem = :mem', { mem: warmPoolItem.mem })
         .andWhere('box.disk = :disk', { disk: warmPoolItem.disk })
@@ -131,8 +128,8 @@ export class BoxWarmPoolService {
       return warmPoolBox
     }
 
-    //  no warm pool config exists for this template — cache it so callers can skip
-    await this.redis.set(`warm-pool:skip:${templateName}`, '1', 'EX', 60)
+    //  no warm pool config exists for this image — cache it so callers can skip
+    await this.redis.set(`warm-pool:skip:${params.image}`, '1', 'EX', 60)
 
     return null
   }
@@ -151,11 +148,10 @@ export class BoxWarmPoolService {
           return
         }
 
-        // TODO(image-rewrite): Box.template column removed with box_template; warm pool boxes
-        // can no longer be matched by template. Rebuild template-aware matching here.
         const boxCount = await this.boxRepository.count({
           where: {
             organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+            image: warmPoolItem.image,
             class: warmPoolItem.class,
             osUser: warmPoolItem.osUser,
             env: warmPoolItem.env,
@@ -194,10 +190,9 @@ export class BoxWarmPoolService {
     if (event.newOrganizationId === BOX_WARM_POOL_UNASSIGNED_ORGANIZATION) {
       return
     }
-    // TODO(image-rewrite): Box.template column removed with box_template; warm pool matching no
-    // longer constrains on template. Rebuild template-aware matching here.
     const warmPoolItem = await this.warmPoolRepository.findOne({
       where: {
+        image: event.box.image,
         class: event.box.class,
         cpu: event.box.cpu,
         mem: event.box.mem,
@@ -216,6 +211,7 @@ export class BoxWarmPoolService {
     const boxCount = await this.boxRepository.count({
       where: {
         organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+        image: warmPoolItem.image,
         class: warmPoolItem.class,
         osUser: warmPoolItem.osUser,
         env: warmPoolItem.env,

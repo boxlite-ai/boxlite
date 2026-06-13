@@ -20,6 +20,14 @@ export class CreateBoxDto {
   name?: string
 
   @ApiPropertyOptional({
+    description: 'The image to use for the box',
+    example: 'boxlite/base',
+  })
+  @IsOptional()
+  @IsString()
+  image?: string
+
+  @ApiPropertyOptional({
     description: 'The user associated with the project',
     example: 'boxlite',
   })

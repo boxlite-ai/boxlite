@@ -732,8 +732,8 @@ export class RunnerService {
     return availableRunners[randomIntFromInterval(0, availableRunners.length - 1)]
   }
 
-  // TODO(image-rewrite): the artifact-cache + template based runner/artifact lookup helpers were
-  // removed with the image/template subsystem. Rebuild artifact-cache aware scheduling here.
+  // TODO(image-rewrite): the image based runner lookup helpers were
+  // removed with the image subsystem.
 
   async getRunnerApiVersion(runnerId: string): Promise<string> {
     const result = await this.runnerRepository.findOneOrFail({

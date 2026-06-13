@@ -153,7 +153,7 @@ export class WorkspaceController {
     const organization = authContext.organization
 
     const workspace = WorkspaceDto.fromBoxDto(
-      await this.workspaceService.createFromTemplate(
+      await this.workspaceService.create(
         {
           ...createWorkspaceDto,
         },
