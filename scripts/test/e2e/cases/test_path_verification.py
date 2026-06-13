@@ -18,6 +18,7 @@ production exec path.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -27,6 +28,25 @@ import pytest_asyncio
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from path_verification import runner_journal_seek, runner_hits_for_box
 from conftest import drain
+
+# Both cases in this file are LOCAL-only meta-tests:
+#   (1) inspects ~/.boxlite/credentials for url=':3000' — only true for
+#       the local-bootstrap profile, never for a cloud profile pointing at
+#       the ELB DNS.
+#   (2) reads the local boxlite-runner systemd journal via journalctl —
+#       on the Tokyo cloud profile p1 the runner journal lives on an
+#       EC2 instance the test client can't reach.
+# Skip the whole module when the test session is configured against
+# anything other than the default (= local) profile so these don't
+# spam the cloud failure tally with environment-mismatch noise.
+pytestmark = pytest.mark.skipif(
+    os.environ.get("BOXLITE_E2E_PROFILE", "default") != "default",
+    reason=(
+        "LOCAL-only meta-test (checks credentials.toml url=:3000 and "
+        "reads host's boxlite-runner journalctl). Cannot run against a "
+        "remote profile."
+    ),
+)
 
 
 @pytest.mark.asyncio
