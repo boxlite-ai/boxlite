@@ -118,7 +118,6 @@ func run() int {
 		VolumeCleanupInterval:        cfg.VolumeCleanupInterval,
 		VolumeCleanupDryRun:          cfg.VolumeCleanupDryRun,
 		VolumeCleanupExclusionPeriod: cfg.VolumeCleanupExclusionPeriod,
-		ToolboxReadyTimeout:          time.Duration(cfg.DaemonStartTimeoutSec) * time.Second,
 	})
 	if err != nil {
 		logger.Error("Error creating BoxLite client", "error", err)

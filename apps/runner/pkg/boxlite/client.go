@@ -37,7 +37,6 @@ type Client struct {
 	volumeMutexesMutex  sync.Mutex
 	volumeCleanupMutex  sync.Mutex
 	toolboxPortMutex    sync.Mutex
-	toolboxReadyTimeout time.Duration
 	lastVolumeCleanup   time.Time
 	volumeCleanup       volumeCleanupConfig
 }
@@ -56,7 +55,6 @@ type ClientConfig struct {
 	VolumeCleanupInterval        time.Duration
 	VolumeCleanupDryRun          bool
 	VolumeCleanupExclusionPeriod time.Duration
-	ToolboxReadyTimeout          time.Duration
 }
 
 func networkSpec(blockAll *bool, allowList *string) boxlite.NetworkSpec {
@@ -136,11 +134,6 @@ func buildImageRegistries(insecureRegistries []string, ghcrUsername, ghcrToken s
 
 // NewClient creates a new BoxLite client backed by the BoxLite VM runtime.
 func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
-	toolboxReadyTimeout := config.ToolboxReadyTimeout
-	if toolboxReadyTimeout <= 0 {
-		toolboxReadyTimeout = 30 * time.Second
-	}
-
 	var opts []boxlite.RuntimeOption
 	if config.HomeDir != "" {
 		opts = append(opts, boxlite.WithHomeDir(config.HomeDir))
@@ -171,7 +164,6 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 		awsAccessKeyId:      config.AWSAccessKeyId,
 		awsSecretAccessKey:  config.AWSSecretAccessKey,
 		volumeMutexes:       make(map[string]*sync.Mutex),
-		toolboxReadyTimeout: toolboxReadyTimeout,
 		volumeCleanup: volumeCleanupConfig{
 			interval:        config.VolumeCleanupInterval,
 			dryRun:          config.VolumeCleanupDryRun,
@@ -305,9 +297,6 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		if err := bx.Start(ctx); err != nil {
 			return bx.ID(), "", fmt.Errorf("failed to start box: %w", err)
 		}
-		if err := c.waitForToolboxReady(ctx, boxDto.Id); err != nil {
-			return bx.ID(), "", err
-		}
 	}
 
 	return bx.ID(), "boxlite", nil
@@ -324,9 +313,6 @@ func (c *Client) Start(ctx context.Context, boxId string, authToken *string, met
 		return "", err
 	}
 	if err := bx.Start(ctx); err != nil {
-		return "", err
-	}
-	if err := c.waitForToolboxReady(ctx, boxId); err != nil {
 		return "", err
 	}
 	return "boxlite", nil
