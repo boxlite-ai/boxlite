@@ -277,9 +277,19 @@ async def test_invalid_state_stop_already_stopped_returns_4xx(rt, image):
             f"double-stop leaked HTTP {status2} (5xx); body={body_str}"
         )
         if status2 not in (200, 204, 409):
-            assert "state change" in body_str.lower(), (
-                f"double-stop got HTTP {status2} but body doesn't explain the "
-                f"race-protection rejection: {body_str}"
+            # 400 'Box is not started' / 'already stopped' / 'state change in
+            # progress' are all valid race-protection rejections — the API
+            # has picked different wording across deploys for the same
+            # invariant (current state doesn't admit this transition).
+            body_lower = body_str.lower()
+            assert (
+                "state change" in body_lower
+                or "not started" in body_lower
+                or "already stopped" in body_lower
+                or "invalid state" in body_lower
+            ), (
+                f"double-stop got HTTP {status2} but body doesn't explain "
+                f"the race-protection rejection: {body_str}"
             )
     finally:
         # Tolerate the race here too — the runner may still be in
