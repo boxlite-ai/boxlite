@@ -37,6 +37,9 @@ env:
   SCCACHE_GHA_ENABLED: 'true'
   RUSTC_WRAPPER: 'sccache'
 
+permissions:
+  contents: read
+
 jobs:
   config:
     uses: ./.github/workflows/config.yml

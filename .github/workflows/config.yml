@@ -36,6 +36,8 @@ on:
         description: 'Number of days to retain artifacts'
         value: ${{ jobs.config.outputs.artifact-retention-days }}
 
+permissions: {}
+
 jobs:
   config:
     name: Load configuration

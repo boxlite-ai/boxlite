@@ -9,6 +9,9 @@ env:
   SKIP_INSTALL_NODEJS: '1'
   CARGO_INCREMENTAL: '0'
 
+permissions:
+  contents: read
+
 jobs:
   # Load shared configuration
   config:

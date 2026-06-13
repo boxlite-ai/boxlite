@@ -43,6 +43,9 @@ env:
   CARGO_INCREMENTAL: '0'
   SKIP_INSTALL_NODEJS: '1'
 
+permissions:
+  contents: read
+
 jobs:
   config:
     uses: ./.github/workflows/config.yml
@@ -312,6 +315,8 @@ jobs:
     needs: upload_to_release
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
+    permissions:
+      contents: read
     env:
       BOXLITE_DEPS_STUB: "1"
 
