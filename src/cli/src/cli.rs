@@ -5,6 +5,7 @@
 use boxlite::runtime::options::{PortProtocol, PortSpec, VolumeSpec};
 use boxlite::{
     BoxCommand, BoxOptions, BoxliteOptions, BoxliteRestOptions, BoxliteRuntime, ImageRegistry,
+    RootfsSpec,
 };
 use clap::{Args, Command, Parser, Subcommand, ValueEnum};
 use clap_complete::shells::{Bash, Fish, Zsh};
@@ -702,6 +703,66 @@ impl ManagementFlags {
     }
 }
 
+// ============================================================================
+// ROOTFS FLAGS
+// ============================================================================
+
+/// Source for the box rootfs: either a registry image reference (positional
+/// `IMAGE`) or a pre-exported OCI bundle directory (`--rootfs PATH`).
+///
+/// Exactly one must be provided; clap's `ArgGroup` enforces this at parse time.
+/// When `--rootfs` is used together with `boxlite run`, place `--` before
+/// `COMMAND` to avoid the first command word being parsed as `IMAGE`.
+#[derive(Args, Debug, Clone)]
+#[group(required = true, multiple = false)]
+pub struct RootfsFlags {
+    /// Image to create the box from (e.g. `alpine:latest`)
+    #[arg(index = 1)]
+    pub image: Option<String>,
+
+    /// Use a pre-exported OCI bundle directory instead of pulling an image.
+    ///
+    /// The directory must contain an `oci-layout` file (i.e. it must be a
+    /// valid OCI image layout, as produced by `skopeo copy oci:` or similar).
+    #[arg(long, value_name = "PATH")]
+    pub rootfs: Option<std::path::PathBuf>,
+}
+
+impl RootfsFlags {
+    /// Convert the parsed flags into a `RootfsSpec`. Validates the bundle
+    /// path when `--rootfs` is set. Returns an error if neither field is
+    /// populated (clap's group should prevent this, but be defensive).
+    pub fn resolve(&self) -> anyhow::Result<RootfsSpec> {
+        if let Some(path) = &self.rootfs {
+            validate_oci_bundle(path)?;
+            Ok(RootfsSpec::RootfsPath(path.to_string_lossy().into_owned()))
+        } else if let Some(image) = &self.image {
+            Ok(RootfsSpec::Image(image.clone()))
+        } else {
+            anyhow::bail!("either IMAGE or --rootfs must be provided")
+        }
+    }
+}
+
+/// Verify `path` looks like an OCI image layout: directory containing an
+/// `oci-layout` file. Deeper validation (parsing `index.json`, checking
+/// blobs) is left to the runtime's `image_manager.load_from_local()`.
+fn validate_oci_bundle(path: &std::path::Path) -> anyhow::Result<()> {
+    if !path.exists() {
+        anyhow::bail!("rootfs path does not exist: {}", path.display());
+    }
+    if !path.is_dir() {
+        anyhow::bail!("rootfs path is not a directory: {}", path.display());
+    }
+    if !path.join("oci-layout").exists() {
+        anyhow::bail!(
+            "rootfs path {} is not an OCI bundle (missing oci-layout file)",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1141,5 +1202,83 @@ mod tests {
             panic!("expected AuthCommand::Login");
         };
         assert!(login.api_key_stdin);
+    }
+
+    // ─── RootfsFlags tests ───────────────────────────────────────────────
+    // (these live inside the existing `mod tests`, which already does
+    // `use super::*;`, so `RootfsSpec`, `RootfsFlags`, and
+    // `validate_oci_bundle` are all in scope.)
+
+    #[test]
+    fn rootfs_flags_image_only_resolves_to_image() {
+        let flags = RootfsFlags {
+            image: Some("alpine:latest".into()),
+            rootfs: None,
+        };
+        match flags.resolve().unwrap() {
+            RootfsSpec::Image(r) => assert_eq!(r, "alpine:latest"),
+            other => panic!("expected Image, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn rootfs_flags_rootfs_only_resolves_to_path() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("oci-layout"), "{}").unwrap();
+        let flags = RootfsFlags {
+            image: None,
+            rootfs: Some(dir.path().to_path_buf()),
+        };
+        match flags.resolve().unwrap() {
+            RootfsSpec::RootfsPath(p) => assert_eq!(p, dir.path().to_string_lossy()),
+            other => panic!("expected RootfsPath, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn validate_oci_bundle_missing_path_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("does-not-exist");
+        let err = validate_oci_bundle(&missing).unwrap_err();
+        assert!(err.to_string().contains("does not exist"), "got: {}", err);
+    }
+
+    #[test]
+    fn validate_oci_bundle_not_a_dir_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("regular-file");
+        std::fs::write(&file, b"not a bundle").unwrap();
+        let err = validate_oci_bundle(&file).unwrap_err();
+        assert!(err.to_string().contains("not a directory"), "got: {}", err);
+    }
+
+    #[test]
+    fn validate_oci_bundle_missing_oci_layout_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = validate_oci_bundle(dir.path()).unwrap_err();
+        assert!(err.to_string().contains("oci-layout"), "got: {}", err);
+    }
+
+    #[test]
+    fn validate_oci_bundle_minimal_bundle_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("oci-layout"), "{}").unwrap();
+        validate_oci_bundle(dir.path()).expect("minimal bundle should pass");
+    }
+
+    #[test]
+    fn cli_rejects_image_and_rootfs_together() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("oci-layout"), "{}").unwrap();
+        let path_str = dir.path().to_str().unwrap();
+        let result =
+            Cli::try_parse_from(["boxlite", "create", "--rootfs", path_str, "alpine:latest"]);
+        assert!(result.is_err(), "expected mutex error when both set");
+    }
+
+    #[test]
+    fn cli_rejects_neither_image_nor_rootfs_on_create() {
+        let result = Cli::try_parse_from(["boxlite", "create"]);
+        assert!(result.is_err(), "expected required-group error");
     }
 }

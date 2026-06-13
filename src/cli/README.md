@@ -298,7 +298,7 @@ Scopes:          box:read, box:write, box:exec, image:read, snapshot:read
 
 Create a box from an image and run a command.
 
-**Usage:** `boxlite run [OPTIONS] IMAGE [COMMAND]...`
+**Usage:** `boxlite run [OPTIONS] (IMAGE | --rootfs PATH) [COMMAND]...`
 
 | Option | Short | Description |
 |--------|-------|-------------|
@@ -310,6 +310,7 @@ Create a box from an image and run a command.
 | `--volume VOLUME` | `-v` | Mount a volume (e.g. `hostPath:boxPath`, `boxPath` for anonymous) |
 | `--cpus N` | | CPU limit |
 | `--memory MiB` | | Memory limit (MiB) |
+| `--rootfs PATH` | | Use a pre-exported OCI bundle directory instead of pulling an image. Mutually exclusive with `IMAGE`. When combined with a `COMMAND`, use `--` before the command. |
 | `--name NAME` | | Name the box |
 | `--detach` | `-d` | Run in background, print box ID |
 | `--rm` | | Remove the box when it exits |
@@ -321,13 +322,16 @@ boxlite run alpine:latest echo "Hello"
 boxlite run -it --rm alpine:latest /bin/sh
 boxlite run -d --name openclaw -p 18789:18789 ghcr.io/openclaw/openclaw:main
 boxlite run -v /host/data:/app/data alpine:latest cat /app/data/hello.txt
+
+# Run from a pre-exported OCI bundle (no registry pull)
+boxlite run --rootfs /path/to/oci-bundle -- echo "Hello from local rootfs"
 ```
 
 ### `boxlite create`
 
 Create a new box without running a command.
 
-**Usage:** `boxlite create [OPTIONS] IMAGE`
+**Usage:** `boxlite create [OPTIONS] (IMAGE | --rootfs PATH)`
 
 | Option | Short | Description |
 |--------|-------|-------------|
@@ -338,6 +342,7 @@ Create a new box without running a command.
 | `--volume VOLUME` | `-v` | Mount a volume (e.g. `hostPath:boxPath`, or box path for anonymous) |
 | `--cpus N` | | CPU limit |
 | `--memory MiB` | | Memory limit (MiB) |
+| `--rootfs PATH` | | Use a pre-exported OCI bundle directory instead of pulling an image. Mutually exclusive with `IMAGE`. |
 | `--detach` | `-d` | (create always “detaches”) |
 | `--rm` | | Auto-remove when stopped |
 
@@ -348,6 +353,9 @@ boxlite create --name mybox alpine:latest
 boxlite create -p 18789:18789 -v /data:/app/data --name openclaw ghcr.io/openclaw/openclaw:main
 boxlite start mybox
 boxlite start openclaw
+
+# Create a box from a pre-exported OCI bundle
+boxlite create --rootfs /path/to/oci-bundle --name offline-box
 ```
 
 ### `boxlite exec`
