@@ -31,6 +31,24 @@ DEFAULT_IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "alpine:3.23")
 CRED_PATH = Path.home() / ".boxlite" / "credentials.toml"
 
 
+def skip_or_fail_unless_sdk_build_required(reason: str) -> None:
+    """SDK entry-point fixtures (test_c_entry, test_go_entry,
+    test_node_entry, test_cli_entry, test_cli_detach_recovery) skip
+    when their build artifact is missing — convenient for the local
+    dev path where someone hasn't built every SDK yet. On the cloud
+    gate the workflow produces every artifact up front; set
+    BOXLITE_E2E_REQUIRE_SDK_BUILDS=1 there so a regression in the
+    build step surfaces as a test failure, not a silent skip."""
+    require = os.environ.get("BOXLITE_E2E_REQUIRE_SDK_BUILDS", "")
+    if require.lower() in ("1", "true", "yes", "on"):
+        pytest.fail(
+            f"BOXLITE_E2E_REQUIRE_SDK_BUILDS=1 forbids skipping this case "
+            f"but the prerequisite is missing: {reason}"
+        )
+    pytest.skip(reason)
+
+
+
 def _profile(name: str) -> dict:
     if not CRED_PATH.exists():
         pytest.exit(

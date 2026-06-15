@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import skip_or_fail_unless_sdk_build_required
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from path_verification import runner_journal_seek, runner_hits_for_box
 
@@ -36,9 +38,9 @@ def _go_bin():
 @pytest.fixture(scope="module")
 def go_binary():
     if not _go_bin():
-        pytest.skip("go toolchain not installed")
+        skip_or_fail_unless_sdk_build_required("go toolchain not installed")
     if not SRC.exists():
-        pytest.skip(f"{SRC} missing")
+        skip_or_fail_unless_sdk_build_required(f"{SRC} missing")
 
     bin_path = Path("/tmp/boxlite_e2e_go")
     try:
@@ -48,7 +50,7 @@ def go_binary():
             check=True, capture_output=True, text=True, timeout=180,
         )
     except subprocess.CalledProcessError as e:
-        pytest.skip(f"go build failed: {e.stderr[:600]}")
+        skip_or_fail_unless_sdk_build_required(f"go build failed: {e.stderr[:600]}")
     return bin_path
 
 

@@ -30,6 +30,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import skip_or_fail_unless_sdk_build_required
+
 sys.path.insert(
     0,
     str(Path(__file__).resolve().parents[4] / "scripts" / "test" / "e2e" / "lib"),
@@ -46,7 +48,7 @@ UUID_RE = re.compile(
 @pytest.fixture(scope="module")
 def cli():
     if not BOXLITE_BIN or not Path(BOXLITE_BIN).exists():
-        pytest.skip(f"boxlite CLI not found at {BOXLITE_BIN!r}")
+        skip_or_fail_unless_sdk_build_required(f"boxlite CLI not found at {BOXLITE_BIN!r}")
     return BOXLITE_BIN
 
 

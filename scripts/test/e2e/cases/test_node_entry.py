@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import skip_or_fail_unless_sdk_build_required
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from path_verification import runner_journal_seek, runner_hits_for_box
 
@@ -46,13 +48,13 @@ def _has_node_napi_build() -> bool:
 @pytest.fixture(scope="module")
 def node_runner():
     if not shutil.which("node"):
-        pytest.skip("node not installed")
+        skip_or_fail_unless_sdk_build_required("node not installed")
     if not shutil.which("npx"):
-        pytest.skip("npx not installed")
+        skip_or_fail_unless_sdk_build_required("npx not installed")
     if not SRC.exists():
-        pytest.skip(f"{SRC} missing")
+        skip_or_fail_unless_sdk_build_required(f"{SRC} missing")
     if not _has_node_napi_build():
-        pytest.skip(
+        skip_or_fail_unless_sdk_build_required(
             "Node SDK napi binding not built — run "
             "`cd sdks/node && yarn install && yarn build:native` first"
         )

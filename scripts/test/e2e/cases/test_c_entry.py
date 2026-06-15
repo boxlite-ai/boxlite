@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import skip_or_fail_unless_sdk_build_required
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from path_verification import runner_journal_seek, runner_hits_for_box
 
@@ -39,12 +41,12 @@ def _profile():
 @pytest.fixture(scope="module")
 def c_binary():
     if not shutil.which("gcc"):
-        pytest.skip("gcc not installed")
+        skip_or_fail_unless_sdk_build_required("gcc not installed")
     if not SRC.exists():
-        pytest.skip(f"{SRC} missing")
+        skip_or_fail_unless_sdk_build_required(f"{SRC} missing")
     if not (LIB_DIR / "libboxlite.so").exists() and \
        not (LIB_DIR / "libboxlite.a").exists():
-        pytest.skip(
+        skip_or_fail_unless_sdk_build_required(
             f"libboxlite.so / .a missing under {LIB_DIR}; build with "
             f"`cargo build --release -p boxlite-c` first"
         )
@@ -60,7 +62,7 @@ def c_binary():
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=120)
     except subprocess.CalledProcessError as e:
-        pytest.skip(f"gcc build failed: {e.stderr[:600]}")
+        skip_or_fail_unless_sdk_build_required(f"gcc build failed: {e.stderr[:600]}")
     return bin_path
 
 
