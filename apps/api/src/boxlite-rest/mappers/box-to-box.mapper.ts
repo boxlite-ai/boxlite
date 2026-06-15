@@ -34,6 +34,7 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
   createDto.memory = dto.memory_mib ? Math.ceil(dto.memory_mib / 1024) : undefined
   createDto.disk = dto.disk_size_gb
   createDto.target = target
+  createDto.public = dto.public
   return createDto
 }
 

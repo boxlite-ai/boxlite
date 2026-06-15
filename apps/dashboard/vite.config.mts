@@ -7,7 +7,6 @@ import path from 'path'
 import { defineConfig } from 'vite'
 import { analyzer } from 'vite-bundle-analyzer'
 import checker from 'vite-plugin-checker'
-import { nodePolyfills } from 'vite-plugin-node-polyfills'
 
 const outDir = '../dist/apps/dashboard'
 
@@ -31,14 +30,6 @@ export default defineConfig((mode) => ({
   },
   plugins: [
     react(),
-    // Required for @boxlite-ai/sdk
-    nodePolyfills({
-      globals: { global: true, process: true, Buffer: true },
-      overrides: {
-        path: 'path-browserify-win32',
-      },
-      protocolImports: true,
-    }),
     nxViteTsPaths(),
     nxCopyAssetsPlugin(['*.md']),
     // enforce typechecking for build mode
@@ -71,11 +62,6 @@ export default defineConfig((mode) => ({
   ],
   resolve: {
     alias: [
-      // Resolve @boxlite-ai/sdk to the local source
-      {
-        find: '@boxlite-ai/sdk',
-        replacement: path.resolve(__dirname, '../libs/sdk-typescript/src'),
-      },
       // Target @ but not @boxlite-ai,
       {
         // find: /^@(?!boxlite-ai)/,

@@ -45,4 +45,12 @@ describe('box-to-box mapper', () => {
     expect(dto.memory).toBe(2)
     expect(dto.disk).toBe(8)
   })
+
+  it('maps supported cloud create fields onto the internal create dto', () => {
+    const dto = createBoxToCreateBox({
+      public: true,
+    })
+
+    expect(dto.public).toBe(true)
+  })
 })

@@ -35,16 +35,6 @@ import { z } from 'zod'
 import { ScrollArea } from '../ui/scroll-area'
 
 const NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
-const MAX_INTERVAL_MINUTES = 2_147_483_647
-
-const isOptionalIntegerInRange = (value: string | undefined, min: number) => {
-  const trimmedValue = value?.trim()
-  if (!trimmedValue) return true
-  if (!/^-?\d+$/.test(trimmedValue)) return false
-
-  const numericValue = Number(trimmedValue)
-  return Number.isSafeInteger(numericValue) && numericValue >= min && numericValue <= MAX_INTERVAL_MINUTES
-}
 
 const isOptionalPositiveInteger = (value: string | undefined) => {
   const trimmedValue = value?.trim()
@@ -65,14 +55,6 @@ const formSchema = z.object({
     .string()
     .optional()
     .refine((val) => !val || NAME_REGEX.test(val), 'Only letters, digits, dots, underscores and dashes are allowed'),
-  autoStopInterval: z
-    .string()
-    .optional()
-    .refine((val) => isOptionalIntegerInRange(val, 0), 'Enter a whole number of minutes, 0 or greater'),
-  autoDeleteInterval: z
-    .string()
-    .optional()
-    .refine((val) => isOptionalIntegerInRange(val, -1), 'Enter a whole number of minutes, -1 or greater'),
   cpu: z.string().optional().refine(isOptionalPositiveInteger, 'Enter a whole number, 1 or greater'),
   memory: z.string().optional().refine(isOptionalPositiveInteger, 'Enter a whole number, 1 or greater'),
   disk: z.string().optional().refine(isOptionalPositiveInteger, 'Enter a whole number, 1 or greater'),
@@ -82,8 +64,6 @@ type FormValues = z.input<typeof formSchema>
 
 const defaultValues: FormValues = {
   name: '',
-  autoStopInterval: '',
-  autoDeleteInterval: '',
   cpu: '',
   memory: '',
   disk: '',
@@ -161,9 +141,6 @@ export const CreateBoxSheet = ({
         const box = await createBoxMutation.mutateAsync({
           name: value.name?.trim() || undefined,
           public: false,
-          networkBlockAll: false,
-          autoStopInterval: parseOptionalInteger(value.autoStopInterval),
-          autoDeleteInterval: parseOptionalInteger(value.autoDeleteInterval),
           ...(hasResourceOverrides ? { resources } : {}),
         })
         boxId = getBoxRouteId(box)
@@ -320,98 +297,6 @@ export const CreateBoxSheet = ({
                       </div>
                     </div>
 
-                    <div className="space-y-3 border-t pt-4">
-                      <div>
-                        <Label className="text-sm font-semibold">Lifecycle</Label>
-                        <p className="text-xs text-muted-foreground">Blank uses defaults.</p>
-                      </div>
-                      <div className="grid gap-3">
-                        <form.Field name="autoStopInterval">
-                          {(field) => {
-                            const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid
-                            return (
-                              <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_11rem] sm:items-center">
-                                <div className="min-w-0">
-                                  <Label htmlFor={field.name} className="text-xs font-medium text-muted-foreground">
-                                    Auto-stop
-                                  </Label>
-                                  <p className="mt-0.5 text-xs text-muted-foreground">Default: 15 min</p>
-                                </div>
-                                <div className="relative min-w-0">
-                                  <NumericFormat
-                                    customInput={Input}
-                                    aria-invalid={isInvalid}
-                                    id={field.name}
-                                    className="h-8 w-full pr-10 text-right font-medium tabular-nums placeholder:font-normal placeholder:text-muted-foreground/45"
-                                    placeholder={focusedAdvancedField === field.name ? '' : '15'}
-                                    decimalScale={0}
-                                    allowNegative={false}
-                                    value={field.state.value ?? ''}
-                                    onFocus={() => setFocusedAdvancedField(field.name)}
-                                    onBlur={() => {
-                                      field.handleBlur()
-                                      setFocusedAdvancedField((currentField) =>
-                                        currentField === field.name ? null : currentField,
-                                      )
-                                    }}
-                                    onValueChange={(values) => field.handleChange(values.value)}
-                                  />
-                                  <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground">
-                                    min
-                                  </span>
-                                  {field.state.meta.errors.length > 0 && field.state.meta.isTouched && (
-                                    <FieldError errors={field.state.meta.errors} />
-                                  )}
-                                </div>
-                              </div>
-                            )
-                          }}
-                        </form.Field>
-
-                        <form.Field name="autoDeleteInterval">
-                          {(field) => {
-                            const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid
-                            return (
-                              <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_11rem] sm:items-center">
-                                <div className="min-w-0">
-                                  <Label htmlFor={field.name} className="text-xs font-medium text-muted-foreground">
-                                    Auto-delete
-                                  </Label>
-                                  <p className="mt-0.5 text-xs text-muted-foreground">Default: Disabled</p>
-                                </div>
-                                <div className="min-w-0">
-                                  <NumericFormat
-                                    customInput={Input}
-                                    aria-invalid={isInvalid}
-                                    id={field.name}
-                                    className="h-8 w-full text-right font-medium tabular-nums placeholder:font-normal placeholder:text-muted-foreground/45"
-                                    placeholder={focusedAdvancedField === field.name ? '' : 'Disabled'}
-                                    decimalScale={0}
-                                    allowNegative
-                                    isAllowed={(values) => {
-                                      if (values.floatValue === undefined) return true
-                                      return values.floatValue === -1 || values.floatValue >= 0
-                                    }}
-                                    value={field.state.value ?? ''}
-                                    onFocus={() => setFocusedAdvancedField(field.name)}
-                                    onBlur={() => {
-                                      field.handleBlur()
-                                      setFocusedAdvancedField((currentField) =>
-                                        currentField === field.name ? null : currentField,
-                                      )
-                                    }}
-                                    onValueChange={(values) => field.handleChange(values.value)}
-                                  />
-                                  {field.state.meta.errors.length > 0 && field.state.meta.isTouched && (
-                                    <FieldError errors={field.state.meta.errors} />
-                                  )}
-                                </div>
-                              </div>
-                            )
-                          }}
-                        </form.Field>
-                      </div>
-                    </div>
                   </div>
                 </AccordionContent>
               </AccordionItem>

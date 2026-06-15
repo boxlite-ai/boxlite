@@ -3,41 +3,27 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { CreateBoxFromImageParams, CreateBoxFromTemplateParams, BoxLite, Box } from '@boxlite-ai/sdk'
+import { useApi } from '@/hooks/useApi'
+import { CreateBoxParams, createBoxViaBoxApi } from '@/lib/cloudBox'
+import type { Box } from '@boxlite-ai/api-client'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useAuth } from 'react-oidc-context'
-import { useConfig } from '../useConfig'
 import { useSelectedOrganization } from '../useSelectedOrganization'
 import { getBoxesQueryKey } from '../useBoxes'
 
-export type CreateBoxParams = (CreateBoxFromTemplateParams | CreateBoxFromImageParams) & {
-  target?: string
-}
+export type { CreateBoxParams }
 
 export const useCreateBoxMutation = () => {
-  const { user } = useAuth()
-  const { apiUrl } = useConfig()
+  const api = useApi()
   const { selectedOrganization } = useSelectedOrganization()
   const queryClient = useQueryClient()
 
   return useMutation<Box, unknown, CreateBoxParams>({
     mutationFn: async (params) => {
-      if (!user?.access_token || !selectedOrganization?.id) {
-        throw new Error('Missing authentication or organization')
-      }
-
-      const { target, ...createParams } = params
-      const client = new BoxLite({
-        jwtToken: user.access_token,
-        apiUrl,
-        organizationId: selectedOrganization.id,
-        target,
-      })
-
-      if ('image' in createParams) {
-        return await client.create(createParams as CreateBoxFromImageParams)
-      }
-      return await client.create(createParams as CreateBoxFromTemplateParams)
+      if (!selectedOrganization?.id) throw new Error('Missing organization')
+      const created = await createBoxViaBoxApi(api, selectedOrganization.id, params)
+      // The Box API response is dialect-shaped (box_id/status); re-read through
+      // the cloud api-client so callers keep the full organization-scoped Box.
+      return (await api.boxApi.getBox(created.box_id, selectedOrganization.id)).data
     },
     onSuccess: async () => {
       if (selectedOrganization?.id) {

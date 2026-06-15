@@ -1599,6 +1599,11 @@ components:
           default: false
         security:
           $ref: "#/components/schemas/SecurityPreset"
+        public:
+          type: boolean
+          description: |
+            Cloud-only: make the box HTTP preview publicly accessible.
+            Local and self-hosted engine servers ignore this field.
 
     VolumeSpec:
       type: object

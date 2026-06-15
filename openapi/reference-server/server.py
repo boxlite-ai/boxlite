@@ -142,6 +142,7 @@ class CreateBoxRequest(BaseModel):
     auto_remove: Optional[bool] = True
     detach: Optional[bool] = False
     security: Optional[str] = None
+    public: Optional[bool] = False
 
 
 class StopBoxRequest(BaseModel):

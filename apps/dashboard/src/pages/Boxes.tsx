@@ -26,6 +26,7 @@ import { LocalStorageKey } from '@/enums/LocalStorageKey'
 import { RoutePath } from '@/enums/RoutePath'
 import { CopyableValue } from '@/components/ui/copyable-value'
 import { useApi } from '@/hooks/useApi'
+import { deleteBoxViaBoxApi, startBoxViaBoxApi, stopBoxViaBoxApi } from '@/lib/cloudBox'
 import { useConfig } from '@/hooks/useConfig'
 import { useNotificationSocket } from '@/hooks/useNotificationSocket'
 import { useRegions } from '@/hooks/useRegions'
@@ -70,7 +71,8 @@ interface BoxesLocationState {
 }
 
 const Boxes: React.FC = () => {
-  const { boxApi } = useApi()
+  const api = useApi()
+  const { boxApi } = api
   const { user } = useAuth()
   const userId = user?.profile.sub
   const navigate = useNavigate()
@@ -398,7 +400,8 @@ const Boxes: React.FC = () => {
     performBoxStateOptimisticUpdate(id, BoxState.STARTING)
 
     try {
-      await boxApi.startBox(id, selectedOrganization?.id)
+      if (!selectedOrganization?.id) throw new Error('Missing organization')
+      await startBoxViaBoxApi(api, selectedOrganization.id, id)
       toast.success(`Starting box with ID: ${id}`)
       await markAllBoxQueriesAsStale()
     } catch (error) {
@@ -457,7 +460,8 @@ const Boxes: React.FC = () => {
     performBoxStateOptimisticUpdate(id, BoxState.STOPPING)
 
     try {
-      await boxApi.stopBox(id, selectedOrganization?.id)
+      if (!selectedOrganization?.id) throw new Error('Missing organization')
+      await stopBoxViaBoxApi(api, selectedOrganization.id, id)
       toast.success(
         `Stopping box with ID: ${id}`,
         boxToStop?.autoDeleteInterval !== undefined && boxToStop.autoDeleteInterval >= 0
@@ -489,7 +493,8 @@ const Boxes: React.FC = () => {
     performBoxStateOptimisticUpdate(id, BoxState.DESTROYING)
 
     try {
-      await boxApi.deleteBox(id, selectedOrganization?.id)
+      if (!selectedOrganization?.id) throw new Error('Missing organization')
+      await deleteBoxViaBoxApi(api, selectedOrganization.id, id)
       setBoxToDelete(null)
       setShowDeleteDialog(false)
       removeBoxFromCache(id)
@@ -601,7 +606,10 @@ const Boxes: React.FC = () => {
       ids,
       actionName: 'Starting',
       optimisticState: BoxState.STARTING,
-      apiCall: (id) => boxApi.startBox(id, selectedOrganization?.id),
+      apiCall: (id) => {
+        if (!selectedOrganization?.id) throw new Error('Missing organization')
+        return startBoxViaBoxApi(api, selectedOrganization.id, id)
+      },
       toastMessages: {
         successTitle: `${pluralize(ids.length, 'box', 'boxes')} started.`,
         errorTitle: `Failed to start ${pluralize(ids.length, 'box', 'boxes')}.`,
@@ -615,7 +623,10 @@ const Boxes: React.FC = () => {
       ids,
       actionName: 'Stopping',
       optimisticState: BoxState.STOPPING,
-      apiCall: (id) => boxApi.stopBox(id, selectedOrganization?.id),
+      apiCall: (id) => {
+        if (!selectedOrganization?.id) throw new Error('Missing organization')
+        return stopBoxViaBoxApi(api, selectedOrganization.id, id)
+      },
       toastMessages: {
         successTitle: `${pluralize(ids.length, 'box', 'boxes')} stopped.`,
         errorTitle: `Failed to stop ${pluralize(ids.length, 'box', 'boxes')}.`,
@@ -629,7 +640,10 @@ const Boxes: React.FC = () => {
       ids,
       actionName: 'Deleting',
       optimisticState: BoxState.DESTROYING,
-      apiCall: (id) => boxApi.deleteBox(id, selectedOrganization?.id),
+      apiCall: (id) => {
+        if (!selectedOrganization?.id) throw new Error('Missing organization')
+        return deleteBoxViaBoxApi(api, selectedOrganization.id, id)
+      },
       toastMessages: {
         successTitle: `${pluralize(ids.length, 'box', 'boxes')} deleted.`,
         errorTitle: `Failed to delete ${pluralize(ids.length, 'box', 'boxes')}.`,

@@ -60,4 +60,8 @@ export class CreateBoxDto {
   @IsOptional()
   @IsBoolean()
   detach?: boolean
+
+  @IsOptional()
+  @IsBoolean()
+  public?: boolean
 }
