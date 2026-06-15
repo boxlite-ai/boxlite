@@ -140,7 +140,7 @@ export const CreateBoxSheet = ({
         // the new model lands.
         const box = await createBoxMutation.mutateAsync({
           name: value.name?.trim() || undefined,
-          public: false,
+          network: { mode: 'enabled' },
           ...(hasResourceOverrides ? { resources } : {}),
         })
         boxId = getBoxRouteId(box)

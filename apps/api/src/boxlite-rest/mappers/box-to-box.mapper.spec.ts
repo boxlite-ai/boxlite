@@ -46,11 +46,21 @@ describe('box-to-box mapper', () => {
     expect(dto.disk).toBe(8)
   })
 
-  it('maps supported cloud create fields onto the internal create dto', () => {
+  it('maps disabled network onto the internal create dto', () => {
     const dto = createBoxToCreateBox({
-      public: true,
+      network: { mode: 'disabled' },
     })
 
-    expect(dto.public).toBe(true)
+    expect(dto.networkBlockAll).toBe(true)
+    expect(dto.networkAllowList).toBeUndefined()
+  })
+
+  it('maps enabled network allowlist onto the internal create dto', () => {
+    const dto = createBoxToCreateBox({
+      network: { mode: 'enabled', allow_net: ['api.openai.com', 'github.com'] },
+    })
+
+    expect(dto.networkBlockAll).toBe(false)
+    expect(dto.networkAllowList).toBe('api.openai.com,github.com')
   })
 })

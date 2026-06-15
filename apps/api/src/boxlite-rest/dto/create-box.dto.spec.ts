@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import 'reflect-metadata'
 import { validate } from 'class-validator'
 import { plainToInstance } from 'class-transformer'
 import { CreateBoxDto } from './create-box.dto'

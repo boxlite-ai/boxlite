@@ -16,12 +16,17 @@ export interface Resources {
   disk?: number
 }
 
+export type BoxApiNetworkSpec = {
+  mode: 'enabled' | 'disabled'
+  allow_net?: string[]
+}
+
 export type CreateBoxParams = {
   name?: string
   image?: string
   user?: string
   envVars?: Record<string, string>
-  public?: boolean
+  network?: BoxApiNetworkSpec
   resources?: Resources
 }
 
@@ -34,7 +39,7 @@ export type BoxApiCreateRequest = {
   disk_size_gb?: number
   env?: Record<string, string>
   user?: string
-  public?: boolean
+  network?: BoxApiNetworkSpec
 }
 
 export type BoxApiBoxResponse = {
@@ -60,7 +65,7 @@ export function toBoxApiCreateRequest(params?: CreateBoxParams): BoxApiCreateReq
     // The dashboard form works in GiB; the Box API contract takes MiB.
     memory_mib: p.resources?.memory !== undefined ? p.resources.memory * 1024 : undefined,
     disk_size_gb: p.resources?.disk,
-    public: p.public,
+    network: p.network,
   }
 }
 

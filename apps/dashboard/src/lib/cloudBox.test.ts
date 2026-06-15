@@ -16,7 +16,7 @@ describe('toBoxApiCreateRequest', () => {
       image: 'python:3.12',
       user: '1000:1000',
       envVars: { PYTHONPATH: '/app' },
-      public: true,
+      network: { mode: 'enabled', allow_net: ['api.openai.com'] },
     })
 
     expect(request).toMatchObject({
@@ -24,8 +24,9 @@ describe('toBoxApiCreateRequest', () => {
       image: 'python:3.12',
       user: '1000:1000',
       env: { PYTHONPATH: '/app' },
-      public: true,
+      network: { mode: 'enabled', allow_net: ['api.openai.com'] },
     })
+    expect(request).not.toHaveProperty('public')
   })
 
   it('leaves memory undefined when no resources are given', () => {

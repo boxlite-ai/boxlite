@@ -34,7 +34,11 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
   createDto.memory = dto.memory_mib ? Math.ceil(dto.memory_mib / 1024) : undefined
   createDto.disk = dto.disk_size_gb
   createDto.target = target
-  createDto.public = dto.public
+  if (dto.network) {
+    createDto.networkBlockAll = dto.network.mode === 'disabled'
+    createDto.networkAllowList =
+      dto.network.mode === 'enabled' && dto.network.allow_net?.length ? dto.network.allow_net.join(',') : undefined
+  }
   return createDto
 }
 
