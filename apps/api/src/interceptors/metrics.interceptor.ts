@@ -428,7 +428,6 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
       box_memory_mb_request: request.memory_mib,
       box_memory_mb: response.memory_mib,
       box_disk_gb_request: request.disk_size_gb,
-      box_public_request: request.public,
       box_env_vars_length_request: envVarsLength,
     }
 
