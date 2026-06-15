@@ -208,6 +208,11 @@ npx sst shell  --stage dev       # open shell with SST-linked env vars
 npx sst remove --stage dev       # destroy everything
 ```
 
+For the standard dev release path, prefer the GitHub Actions workflow
+`Deploy Dev`. It wraps SST deploy plus optional runner rollout modes:
+`skip`, `existing-release`, `temporary-build`, and `rollback`. See
+[`docs/deploy/dev-deploy.md`](../../docs/deploy/dev-deploy.md).
+
 ## Runner lifecycle
 
 The Runner EC2 instance (`tag:Name=boxlite-runner`) holds load-bearing state:

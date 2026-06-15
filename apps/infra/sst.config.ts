@@ -156,6 +156,24 @@ export default $config({
     const db = new sst.aws.Postgres('Database', { vpc, instance: 't4g.micro', storage: '20 GB' })
     const redis = new sst.aws.Redis('Cache', { vpc, cluster: false }) // NestJS uses SELECT (multi-DB)
     const storage = new sst.aws.Bucket('Storage')
+    const deployArtifactsBucketName = $interpolate`${$app.name}-${$app.stage}-deploy-artifacts-${aws.getCallerIdentityOutput().accountId}-${REGION}`
+    const deployArtifacts = new aws.s3.Bucket('DeployArtifacts', {
+      bucket: deployArtifactsBucketName,
+      forceDestroy: input?.stage !== 'production',
+      tags: { App: $app.name, Stage: $app.stage, Role: 'deploy-artifacts' },
+    })
+    new aws.s3.BucketLifecycleConfigurationV2('DeployArtifactsLifecycle', {
+      bucket: deployArtifacts.id,
+      rules: [
+        {
+          id: 'expire-runner-temp-artifacts',
+          status: 'Enabled',
+          filter: { prefix: 'runner-temp/' },
+          expiration: { days: 30 },
+          abortIncompleteMultipartUpload: { daysAfterInitiation: 1 },
+        },
+      ],
+    })
     const cluster = new sst.aws.Cluster('Cluster', { vpc, forceUpgrade: 'v2' })
 
     // ─── 3. IAM ──────────────────────────────────────────────────────────────
@@ -735,6 +753,7 @@ export default $config({
     ]).apply(([apiUrl, token, otelEndpoint, ghcrSecretArn]) =>
       buildRunnerUserData({ apiUrl, token, otelEndpoint, ghcrSecretArn: ghcrSecretArn || undefined, ghcrUsername }),
     )
+    const runnerTags = (name: string) => ({ App: $app.name, Stage: $app.stage, Role: 'runner', Name: name })
 
     // Runner holds load-bearing box state (/var/lib/boxlite + in-memory
     // libkrun VMs). Two Pulumi resource options keep it persistent across
@@ -761,7 +780,7 @@ export default $config({
         associatePublicIpAddress: true,
         userDataBase64: runnerUserData,
         rootBlockDevice: { volumeSize: RUNNER.rootDiskGB },
-        tags: { Name: 'boxlite-runner' },
+        tags: runnerTags('boxlite-runner'),
       },
       {
         ignoreChanges: ['ami', 'userDataBase64'],
@@ -801,7 +820,7 @@ export default $config({
               buildRunnerUserData({ apiUrl, token, otelEndpoint, ghcrSecretArn: ghcrSecretArn || undefined, ghcrUsername }),
           ),
           rootBlockDevice: { volumeSize: RUNNER.rootDiskGB },
-          tags: { Name: `boxlite-runner-${name}` },
+          tags: runnerTags(`boxlite-runner-${name}`),
         },
         {
           ignoreChanges: ['ami', 'userDataBase64'],

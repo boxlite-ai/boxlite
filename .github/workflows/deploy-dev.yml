@@ -1,0 +1,159 @@
+name: Deploy Dev
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_mode:
+        description: 'SST action to run'
+        required: true
+        type: choice
+        default: diff-only
+        options:
+          - diff-only
+          - deploy
+      runner_mode:
+        description: 'Runner rollout strategy'
+        required: true
+        type: choice
+        default: auto
+        options:
+          - auto
+          - skip
+          - existing-release
+          - temporary-build
+          - rollback
+      runner_ref:
+        description: 'Runner release version for existing-release, e.g. 0.9.5'
+        required: false
+        type: string
+      confirm:
+        description: 'Type dev to confirm this targets the dev environment'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  config:
+    uses: ./.github/workflows/config.yml
+
+  deploy:
+    name: Deploy dev
+    needs: config
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      STACK_DOMAIN: ${{ vars.DEV_STACK_DOMAIN }}
+      RUNNER_ARTIFACT_BUCKET: ${{ vars.DEV_RUNNER_ARTIFACT_BUCKET }}
+      RUNNER_MANIFEST_PREFIX: ${{ vars.DEV_RUNNER_MANIFEST_PREFIX }}
+      ADMIN_API_KEY: ${{ secrets.DEV_ADMIN_API_KEY }}
+      CLOUDFLARE_DEFAULT_ACCOUNT_ID: ${{ vars.CLOUDFLARE_DEFAULT_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      OIDC_ISSUER_BASE_URL: ${{ vars.DEV_OIDC_ISSUER_BASE_URL }}
+      OIDC_CLIENT_ID: ${{ vars.DEV_OIDC_CLIENT_ID }}
+      OIDC_AUDIENCE: ${{ vars.DEV_OIDC_AUDIENCE }}
+      PUBLIC_OIDC_DOMAIN: ${{ vars.DEV_PUBLIC_OIDC_DOMAIN }}
+      PUBLIC_OIDC_AUDIENCE: ${{ vars.DEV_PUBLIC_OIDC_AUDIENCE }}
+      PUBLIC_OIDC_CLIENT_ID: ${{ vars.DEV_PUBLIC_OIDC_CLIENT_ID }}
+      GHCR_USERNAME: ${{ vars.GHCR_USERNAME }}
+      GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+      POSTHOG_API_KEY: ${{ secrets.DEV_POSTHOG_API_KEY }}
+      POSTHOG_HOST: ${{ vars.DEV_POSTHOG_HOST }}
+      CLICKHOUSE_WRITER_ENDPOINT: ${{ vars.DEV_CLICKHOUSE_WRITER_ENDPOINT }}
+      CLICKHOUSE_WRITER_DATABASE: ${{ vars.DEV_CLICKHOUSE_WRITER_DATABASE }}
+      CLICKHOUSE_WRITER_USERNAME: ${{ vars.DEV_CLICKHOUSE_WRITER_USERNAME }}
+      CLICKHOUSE_WRITER_PASSWORD: ${{ secrets.DEV_CLICKHOUSE_WRITER_PASSWORD }}
+      CLICKHOUSE_CREATE_SCHEMA: ${{ vars.DEV_CLICKHOUSE_CREATE_SCHEMA }}
+      CLICKHOUSE_COMPRESS: ${{ vars.DEV_CLICKHOUSE_COMPRESS }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Validate dispatch inputs
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirm }}" = "dev"
+          if [ "${{ inputs.deploy_mode }}" = "diff-only" ] && \
+            [ "${{ inputs.runner_mode }}" != "skip" ] && \
+            [ "${{ inputs.runner_mode }}" != "auto" ]; then
+            echo "runner rollout requires deploy_mode=deploy" >&2
+            exit 1
+          fi
+          if [ "${{ inputs.runner_mode }}" = "existing-release" ] && [ -z "${{ inputs.runner_ref }}" ]; then
+            echo "runner_ref is required for existing-release" >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ needs.config.outputs.node-build-version }}
+
+      - name: Set up Go for temporary runner builds
+        if: inputs.runner_mode == 'temporary-build'
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ needs.config.outputs.go-version }}
+
+      - name: Set up Rust for temporary runner builds
+        if: inputs.runner_mode == 'temporary-build'
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ needs.config.outputs.rust-toolchain }}
+
+      - name: Install temporary runner build dependencies
+        if: inputs.runner_mode == 'temporary-build'
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxtst-dev libxinerama-dev
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.BOXLITE_DEV_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION || 'ap-southeast-1' }}
+          role-session-name: deploy-dev-${{ github.run_id }}
+
+      - name: Install infra dependencies
+        run: npm ci
+        working-directory: apps/infra
+
+      - name: Deploy dev
+        env:
+          DEPLOY_MODE: ${{ inputs.deploy_mode }}
+          RUNNER_MODE: ${{ inputs.runner_mode }}
+          RUNNER_REF: ${{ inputs.runner_ref }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          scripts/deploy/dev-full.sh \
+            --deploy-mode "$DEPLOY_MODE" \
+            --runner-mode "$RUNNER_MODE" \
+            --runner-ref "$RUNNER_REF" \
+            --stage dev \
+            --confirm "$CONFIRM"
+
+      - name: Write summary
+        if: always()
+        run: |
+          {
+            echo "### Deploy Dev"
+            echo
+            echo "- Branch: \`${GITHUB_REF_NAME}\`"
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Deploy mode: \`${{ inputs.deploy_mode }}\`"
+            echo "- Runner mode: \`${{ inputs.runner_mode }}\`"
+            echo "- Runner ref: \`${{ inputs.runner_ref }}\`"
+            echo "- Stage: \`dev\`"
+            echo "- Stack domain: \`${STACK_DOMAIN:-unset}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
