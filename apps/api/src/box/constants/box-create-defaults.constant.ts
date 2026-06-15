@@ -8,7 +8,7 @@
 // these mirror the BoxService create fallback until image resolution is rebuilt.
 export const BOX_CREATE_DEFAULTS = {
   cpu: 1,
-  memory: 1,
+  memory: 2,
   disk: 10,
   gpu: 0,
 } as const

@@ -106,7 +106,7 @@ export class BoxCreateDefaults {
 
   @ApiProperty({
     description: 'Default memory in GiB used when create omits memory',
-    example: 1,
+    example: 2,
   })
   @IsNumber()
   memory: number

@@ -5113,7 +5113,7 @@ components:
           type: number
         memory:
           description: Default memory in GiB used when create omits memory
-          example: 1
+          example: 2
           type: number
         disk:
           description: Default disk in GiB used when create omits disk
