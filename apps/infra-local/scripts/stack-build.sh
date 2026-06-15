@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the two native Go binaries that L2 needs:
-#   - /tmp/boxlite-runner  (apps/runner)
-#   - /tmp/boxlite-proxy   (apps/proxy)
+#   - .apps-local/bin/boxlite-runner  (apps/runner)
+#   - .apps-local/bin/boxlite-proxy   (apps/proxy)
 #
 # Also runs `yarn install` if node_modules is missing. Idempotent.
 

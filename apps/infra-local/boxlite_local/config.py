@@ -77,15 +77,37 @@ def _parse_int_env(name: str, default: str) -> int:
         raise ValueError(f"{name} must be an integer, got: {raw!r}") from e
 
 
-def _detect_repo_root() -> Path:
-    """Walk up from this file's directory until we find one containing apps/infra-local/."""
-    here = Path(__file__).resolve().parent
+def find_repo_root_from(here: Path) -> Path:
+    """Walk up from `here` to the first dir containing apps/infra-local/.
+
+    `apps` must be a REAL directory: older stack-up versions created an
+    `apps/apps -> .` symlink (webpack path quirk), which would otherwise make
+    `apps/` itself satisfy the predicate and mis-root all generated state at
+    `apps/.apps-local/`. The guard keeps the walk safe on checkouts where
+    that symlink still exists.
+    """
     for parent in (here, *here.parents):
-        if (parent / "apps" / "infra-local" / "pyproject.toml").exists():
+        apps = parent / "apps"
+        if not apps.is_symlink() and (apps / "infra-local" / "pyproject.toml").exists():
             return parent
     raise RuntimeError(
         f"could not locate repo root (no apps/infra-local/pyproject.toml found above {here})"
     )
+
+
+def _detect_repo_root() -> Path:
+    return find_repo_root_from(Path(__file__).resolve().parent)
+
+
+def _default_state_root() -> Path:
+    """Repo-scoped root for ALL generated local-stack state: <repo>/.apps-local/.
+
+    One gitignored dir holds the data volumes, the L1 SDK home, the runner
+    home, the native binaries, and the L2 logs — discoverable footprint,
+    per-checkout isolation, and deliberately NOT under cargo's target/ so a
+    `cargo clean` can never delete a live Postgres volume.
+    """
+    return _detect_repo_root() / ".apps-local"
 
 
 @dataclass
@@ -132,7 +154,12 @@ class InfraConfig:
     otel_http_port: int = 24318
     otel_health_port: int = 23133
 
-    data_dir: Path = field(default_factory=lambda: Path.home() / ".boxlite-local" / "data")
+    data_dir: Path = field(default_factory=lambda: _default_state_root() / "data")
+    # SDK home for the L1 boxes (exported as BOXLITE_HOME before the runtime
+    # singleton is built — see orchestrator.ensure_home_env). Separate from the
+    # runner's home (.apps-local/boxlite-runner): each BoxliteRuntime takes an
+    # exclusive lock on its home dir.
+    boxlite_home: Path = field(default_factory=lambda: _default_state_root() / "boxlite")
     repo_root: Path = field(default_factory=_detect_repo_root)
 
     @classmethod
@@ -160,11 +187,17 @@ class InfraConfig:
             otel_http_port=_parse_int_env("BOXLITE_OTEL_HTTP_PORT", "24318"),
             otel_health_port=_parse_int_env("BOXLITE_OTEL_HEALTH_PORT", "23133"),
             # .expanduser() so a documented value like
-            # BOXLITE_DATA_DIR=~/.boxlite-local/data expands the leading ~
-            # instead of creating a literal "~" dir under the cwd.
+            # BOXLITE_DATA_DIR=~/my-data expands the leading ~ instead of
+            # creating a literal "~" dir under the cwd.
             data_dir=Path(
                 os.environ.get("BOXLITE_DATA_DIR")
-                or str(Path.home() / ".boxlite-local" / "data")
+                or str(_default_state_root() / "data")
+            ).expanduser(),
+            # BOXLITE_HOME is the SDK's own env var — respecting it here keeps
+            # InfraConfig and a user-pinned SDK home in agreement.
+            boxlite_home=Path(
+                os.environ.get("BOXLITE_HOME")
+                or str(_default_state_root() / "boxlite")
             ).expanduser(),
         )
 

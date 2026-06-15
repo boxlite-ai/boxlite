@@ -88,6 +88,17 @@ def ensure_runtime_env() -> None:
         print(f"  pinned BOXLITE_RUNTIME_DIR to cached runtime: {runtime_dir}")
 
 
+def ensure_home_env(config: InfraConfig) -> None:
+    """Export BOXLITE_HOME from config so the SDK uses the repo-scoped home.
+
+    Must run before the FIRST `Boxlite.default()` anywhere in the process
+    (doctor's runtime-reachable check included): the default runtime is a
+    process-wide singleton that captures its home dir at construction.
+    Idempotent — config already respects a pre-set BOXLITE_HOME.
+    """
+    os.environ["BOXLITE_HOME"] = str(config.boxlite_home)
+
+
 def get_runtime():
     ensure_runtime_env()
     try:
@@ -127,60 +138,6 @@ def _http_probe(url: str) -> bool:
         return False
 
 
-# ─── image-cache writable workaround ──────────────────────────────────────
-
-_IMAGE_CACHE = Path.home() / ".boxlite" / "images" / "extracted"
-_TMP_CACHE = Path.home() / ".boxlite" / "tmp"
-
-
-def _ensure_image_cache_writable() -> None:
-    """Workaround for SDK rootfs-merge failures on images whose layers contain
-    `r-x` directories (e.g. RHEL UBI-based images like minio/minio:latest,
-    minio/mc:latest).
-
-    The SDK's per-start rootfs merge tries to write into directories whose
-    owner-write bit is unset in the extracted layer cache, which produces
-    `RuntimeError: storage error: Failed to ... Permission denied (os error 13)`
-    and (sometimes) `RustPanic: rust future panicked: unknown error`.
-
-    Walks `~/.boxlite/images/extracted/` AND `~/.boxlite/tmp/` adding owner-write
-    to every directory. Idempotent + cheap (~10ms on a populated cache).
-    Remove when the SDK relaxes dir perms at extract time.
-    """
-    import os, stat
-    for root_path in (_IMAGE_CACHE, _TMP_CACHE):
-        if not root_path.exists():
-            continue
-        for root, dirs, _files in os.walk(root_path):
-            for d in dirs:
-                p = os.path.join(root, d)
-                try:
-                    st = os.stat(p).st_mode
-                    if not (st & stat.S_IWUSR):
-                        os.chmod(p, st | stat.S_IWUSR | stat.S_IXUSR | stat.S_IRUSR)
-                except OSError:
-                    pass  # best-effort
-
-
-def _is_rootfs_perm_error(exc: Exception) -> bool:
-    """Detect the SDK's rootfs-merge permission-denied error so we can retry after chmod."""
-    msg = str(exc)
-    return "Permission denied (os error 13)" in msg and "/usr/bin/" in msg
-
-
-async def _start_with_perm_retry(box, label: str) -> None:
-    """Call `box.start()`. If it hits the SDK's r-x rootfs-perm bug, chmod the
-    image cache (which is now populated post-extract) and retry once."""
-    try:
-        await box.start()
-    except Exception as e:
-        if not _is_rootfs_perm_error(e):
-            raise
-        print(f"  {label}: hit SDK rootfs perm error; re-chmodding cache and retrying")
-        _ensure_image_cache_writable()
-        await box.start()
-
-
 # ─── start / stop / wait ──────────────────────────────────────────────────
 
 async def start_service(runtime, spec: ServiceSpec, config: InfraConfig) -> None:
@@ -188,7 +145,6 @@ async def start_service(runtime, spec: ServiceSpec, config: InfraConfig) -> None
     volumes = spec.volumes(config)
     opts = _build_box_options_with_volumes(spec, config, volumes)
     config.data_dir.mkdir(parents=True, exist_ok=True)
-    _ensure_image_cache_writable()
     for host_path, _ in volumes:
         p = Path(host_path)
         # Heuristic: only auto-create directory mounts. Paths with a suffix
@@ -209,10 +165,11 @@ async def start_service(runtime, spec: ServiceSpec, config: InfraConfig) -> None
                 pass
             await runtime.remove(name)
             box, _ = await runtime.get_or_create(opts, name=name)
-        await _start_with_perm_retry(box, label=spec.name)
+        await box.start()
         await _wait_one_shot_exit(runtime, name, label=spec.name)
-        # One-shot box's VM is still "running" per SDK even after init exited;
-        # force=True stops the VM as part of remove.
+        # One-shot box's VM is still "running" per the SDK even after init
+        # exited; force=True stops the VM as part of remove (SDK gotcha —
+        # see the README gotcha table).
         try:
             await runtime.remove(name, force=True)
         except Exception as e:
@@ -221,10 +178,10 @@ async def start_service(runtime, spec: ServiceSpec, config: InfraConfig) -> None
         return
 
     if created:
-        await _start_with_perm_retry(box, label=spec.name)
+        await box.start()
     else:
         try:
-            await _start_with_perm_retry(box, label=spec.name)
+            await box.start()
         except Exception as e:
             if not _is_already_running_error(e):
                 raise
@@ -331,19 +288,19 @@ async def _wait_one_shot_exit(runtime, name: str, *, label: str, timeout_s: floa
     """Wait until the named one-shot box's init process exits.
 
     SDK's `list_info().state.status` stays "running" as long as the VM is up,
-    independent of whether the OCI container's init process inside has exited.
-    For one-shot bootstrap services we need the init-exit signal — which the
-    SDK only surfaces by failing `box.exec(...)` with a specific error message
+    independent of whether the OCI container's init process inside has exited
+    (SDK gotcha — see the README gotcha table; re-verified still present on
+    current main). The init-exit signal only
+    surfaces by `box.exec(...)` failing with a specific error message
     ("incorrect container status" / "Container init process exited").
 
-    We probe via `box.exec("true")` every second: success means init still
-    running; the specific exit-related failure means we're done.
+    Fast path: poll `list_info()` in case the SDK starts reporting it.
+    Slow path: probe via `box.exec("true")` every second — success means init
+    is still running; the specific exit-related failure means we're done.
     """
     start = time.monotonic()
     last_err: str = ""
     while time.monotonic() - start < timeout_s:
-        # First, fast path: if list_info DOES update (older SDK versions did),
-        # use it.
         infos = await runtime.list_info()
         info = next((i for i in infos if i.name == name), None)
         if info is None:
@@ -353,22 +310,18 @@ async def _wait_one_shot_exit(runtime, name: str, *, label: str, timeout_s: floa
             print(f"  {label}: one-shot exited with state={status}")
             return
 
-        # Slow path: probe via exec; init-exited returns a specific error.
         try:
             box = await runtime.get(name)
             if box is not None:
-                exec_collect_was_ok = False
                 try:
                     rc, _o, _e = await exec_collect(box, "true", [])
-                    exec_collect_was_ok = (rc == 0)
+                    _ = rc  # init still running; keep polling
                 except Exception as e:
                     msg = str(e)
                     last_err = msg
                     if "Container init process exited" in msg or "incorrect container status" in msg:
                         print(f"  {label}: one-shot init process has exited")
                         return
-                # If exec_collect succeeded, init is still running; loop.
-                _ = exec_collect_was_ok  # quiet linter
         except Exception:
             pass
 
@@ -387,8 +340,10 @@ async def up(
     only: list[str] | None = None,
     skip_doctor: bool = False,
 ) -> None:
-    # Pin the runtime dir before anything builds a Boxlite.default() singleton
-    # (doctor below does), so box starts find boxlite-guest deterministically.
+    # Pin home + runtime dir before anything builds a Boxlite.default()
+    # singleton (doctor below does), so box starts hit the repo-scoped home
+    # and find boxlite-guest deterministically.
+    ensure_home_env(config)
     ensure_runtime_env()
     if not skip_doctor:
         await doctor(config, services, strict=True)
@@ -411,6 +366,7 @@ async def down(
     only: list[str] | None = None,
     wipe: bool = False,
 ) -> None:
+    ensure_home_env(config)
     runtime = get_runtime()
     for layer in reversed(topo_sort(services)):
         targets = [n for n in layer if only is None or n in only]
@@ -424,6 +380,7 @@ async def down(
 
 async def ps(config: InfraConfig) -> list[tuple[str, str, str]]:
     """Return list of (name, status, image) for boxlite-local-* boxes. Also prints."""
+    ensure_home_env(config)
     runtime = get_runtime()
     infos = await runtime.list_info()
     rows: list[tuple[str, str, str]] = []

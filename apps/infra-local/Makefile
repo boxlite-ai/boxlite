@@ -6,6 +6,12 @@
 
 PY ?= python
 
+# All recipes must agree with scripts/_stack-common.sh (and the python
+# orchestrator's own default) on where the L1 SDK home lives, so the
+# `boxlite` CLI here (stack-rebuild-l1-box) sees the same boxes.
+REPO_ROOT := $(abspath $(CURDIR)/../..)
+export BOXLITE_HOME ?= $(REPO_ROOT)/.apps-local/boxlite
+
 .PHONY: help up down ps doctor logs wipe itest test install migrate e2e itest-all \
         stack-build stack-up stack-down stack-restart stack-status stack-logs stack-reset stack-reset-hard stack-nuke \
         seed-init-data stack-rebuild-l1-box
@@ -34,23 +40,23 @@ doctor:                ## run preflight checks (SDK + runtime + port conflicts)
 	$(PY) -m boxlite_local doctor
 
 test:                  ## run unit tests (no BoxLite required)
-	pytest tests/unit -q
+	$(PY) -m pytest tests/unit -q
 
 itest:                 ## run integration smoke test (requires BoxLite runtime, ~30s)
-	BOXLITE_INTEGRATION=1 pytest tests/integration/test_multi_service.py -v -s
+	BOXLITE_INTEGRATION=1 $(PY) -m pytest tests/integration/test_multi_service.py -v -s
 
 e2e:                   ## run comprehensive E2E suite (~60s, ~90s with smoke)
-	BOXLITE_INTEGRATION=1 pytest tests/integration/test_e2e_full.py -v -s
+	BOXLITE_INTEGRATION=1 $(PY) -m pytest tests/integration/test_e2e_full.py -v -s
 
 itest-all:             ## run BOTH integration suites (~90s)
-	BOXLITE_INTEGRATION=1 pytest tests/integration -v
+	BOXLITE_INTEGRATION=1 $(PY) -m pytest tests/integration -v
 
 migrate:               ## build local pg schema by running all TypeORM migrations from scratch
 	cd ../api && set -a && . ../.env && set +a && \
 	  npx ts-node -P ./tsconfig.json -r tsconfig-paths/register \
 	    ../node_modules/typeorm/cli.js migration:run -d ./src/migrations/data-source.ts
 
-seed-init-data:        ## ensure dashboard-required base data (admin org, default region, wait snapshot)
+seed-init-data:        ## ensure dashboard-required base data (admin org, default region, wait runner)
 	./scripts/seed-init-data.sh
 
 # ── L2 stack wrappers (L1 + native API/Runner/Proxy/Dashboard) ───────────────

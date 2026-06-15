@@ -312,7 +312,7 @@ started + supervised by the `stack-*` Makefile targets under
 | Service | Process | Host port |
 |---|---|---|
 | Dashboard (React + Vite) | `corepack yarn nx serve dashboard` | `3000` |
-| API (NestJS) | `corepack yarn nx serve api --buildTargetOptions.generatePackageJson=false --buildTargetOptions.skipTypeChecking=true` (CWD: `apps/`; flags explained in `scripts/stack-up.sh`) | `3001` |
+| API (NestJS) | `corepack yarn nx serve api` (CWD: `apps/`) | `3001` |
 | Proxy (Go) | `/tmp/boxlite-proxy` | `4000` |
 | Runner (Go) | `/tmp/boxlite-runner` (native arm64; spawns box microVMs in `~/.boxlite-runner/`) | `3003` (API_PORT) |
 

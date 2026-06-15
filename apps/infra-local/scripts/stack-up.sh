@@ -2,7 +2,7 @@
 # Bring up the full L1+L2 local stack.
 #
 # Behaves like an "ensure-running" — components already alive are skipped.
-# All native processes go in background; logs to apps/infra-local/.logs/<comp>.log.
+# All native processes go in background; logs to <repo>/.apps-local/logs/<comp>.log.
 #
 # Order:
 #   1. L1 boxes (10) via `python -m boxlite_local up` (skipped if already up)
@@ -58,9 +58,9 @@ if [ "${L1_RECREATED}" = "true" ]; then
 fi
 
 # ---------- Binaries present? ----------
-# stack-up auto-builds missing binaries (e.g. /tmp cleared after a reboot).
-# It does NOT rebuild a binary that already exists — to pick up source
-# changes use `make stack-restart COMPONENTS=runner` (which rebuilds).
+# stack-up auto-builds missing binaries (fresh checkout, or .apps-local/bin
+# wiped). It does NOT rebuild a binary that already exists — to pick up
+# source changes use `make stack-restart COMPONENTS=runner` (which rebuilds).
 for bin in "${RUNNER_BIN}" "${PROXY_BIN}"; do
   if [ ! -x "${bin}" ]; then
     log "missing ${bin} — running stack-build.sh"
@@ -81,8 +81,6 @@ fi
 # ---------- Symlinks NestJS needs ----------
 # apps/.env → apps/api/.env (NestJS reads .env from cwd=apps/)
 [ -L "${APPS_DIR}/.env" ] || ln -sf api/.env "${APPS_DIR}/.env"
-# apps/apps → . (webpack.config.js path resolution quirk)
-[ -L "${APPS_DIR}/apps" ] || ln -sf . "${APPS_DIR}/apps"
 
 # ---------- Component starters ----------
 start_api() {
@@ -112,24 +110,14 @@ start_api() {
   #   - RUNNER_DISK_PENALTY_THRESHOLD=95        (prod default 75)
   # Set BEFORE sourcing apps/.env so anything explicitly set there still
   # wins (set -a + . ./.env exports .env values).
-  #
-  # The two buildTargetOptions keep apps/api/webpack.config.js unmodified:
-  #   - generatePackageJson=false: @nx/webpack's GeneratePackageJsonPlugin
-  #     crashes in this workspace (yarn4 + gitignored lockfile leaves npm
-  #     deps out of the project graph: "Cannot read properties of undefined
-  #     (reading 'data')").
-  #   - skipTypeChecking=true: ForkTsCheckerWebpackPlugin fails on a
-  #     pre-existing type-only @opentelemetry/otlp-exporter-base version
-  #     skew (the exporters work at runtime).
-  # Local serve invocation only — CI/prod builds keep both plugins.
+  # (generatePackageJson=false / skipTypeChecking=true now live in
+  # apps/api/project.json — no serve-time overrides needed.)
   ( cd "${APPS_DIR}" && \
     export RUNNER_AVAILABILITY_SCORE_THRESHOLD=5 \
            RUNNER_MEMORY_PENALTY_THRESHOLD=95 \
            RUNNER_DISK_PENALTY_THRESHOLD=95 && \
     set -a && . ./.env && set +a && \
     nohup corepack yarn nx serve api \
-      --buildTargetOptions.generatePackageJson=false \
-      --buildTargetOptions.skipTypeChecking=true \
       > "$(log_file api)" 2>&1 & \
     echo $! > "$(pid_file api)" )
   if wait_http "http://localhost:${PORT_API}/api/health" 180; then
@@ -240,13 +228,13 @@ done
 
 echo
 # If api + runner just started, ensure init data is in place + wait for
-# default snapshot. This is the chain dashboard needs to actually let a
-# user click "Create Box" successfully. Without it, the page works
-# but the first box-create call 400s ("Snapshot ubuntu:22.04 not
-# found"). Idempotent — skips work that's done.
+# the runner to register. This is the chain the dashboard needs to
+# schedule a box at all — without a registered runner the first
+# box-create 400s ("No available runners"). Idempotent — skips work
+# that's done.
 case " ${COMPONENTS[*]} " in
   *" api "*|*" runner "*)
-    log "ensuring init data + default snapshot..."
+    log "ensuring init data + registered runner..."
     # --no-bounce: api is already alive and we just woke it up;
     # restarting again would be wasteful.
     "${SCRIPT_DIR}/seed-init-data.sh" --no-bounce || warn "init-data seed reported issues — see output above"

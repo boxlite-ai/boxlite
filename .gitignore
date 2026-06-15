@@ -209,7 +209,10 @@ sdks/go/libboxlite.dylib
 sdks/go/boxlite-c-v*/
 
 l2-*.png
-apps/infra-local/.logs/
+
+# Local dev stack (apps/infra-local) — ALL generated state: data volumes,
+# SDK + runner homes, native binaries, logs
+/.apps-local/
 
 # Session test screenshots (Playwright runs)
 regions-*.png

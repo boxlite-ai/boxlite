@@ -252,12 +252,7 @@ SPEC_PGADMIN = ServiceSpec(
     image="dpage/pgadmin4:9.2.0",
     cpus=1,
     memory_mib=512,
-    # The pgadmin4 image EXPOSEs 80 AND 443. The SDK auto-binds every
-    # EXPOSE'd guest port to the same host port unless we map it explicitly;
-    # auto-binding 443 on the host fails (privileged) and the whole port
-    # forwarding setup silently breaks. Explicitly mapping 443 → an unused
-    # high port short-circuits the auto-bind and restores the 80 → host forward.
-    ports=[(25051, 80), (25053, 443)],     # 25053 is a placeholder for the 443 EXPOSE
+    ports=[(25051, 80)],
     env=lambda cfg: {
         "PGADMIN_DEFAULT_EMAIL": cfg.pgadmin_email,
         "PGADMIN_DEFAULT_PASSWORD": cfg.pgadmin_password,
@@ -281,11 +276,7 @@ SPEC_REGISTRY_UI = ServiceSpec(
     image="joxit/docker-registry-ui:main",
     cpus=1,
     memory_mib=256,            # 128 OOMs during nginx-alpine entrypoint init
-    # nginx-alpine image EXPOSEs 80 AND 443. Same SDK auto-bind trap as
-    # pgadmin — map both explicitly so 25052 -> 80 shim actually gets bound.
-    # (Earlier in 3b this appeared to work but the shim was leaked from a
-    # prior session; clean state reveals the bug.)
-    ports=[(25052, 80), (25054, 443)],
+    ports=[(25052, 80)],
     env=lambda cfg: {
         "REGISTRY_TITLE": "BoxLite local registry",
         "NGINX_PROXY_PASS_URL": f"http://{cfg.host_hub}:{cfg.registry_host_port}",
@@ -456,13 +447,10 @@ SPEC_CADDY = ServiceSpec(
     image="caddy:2-alpine",
     cpus=1,
     memory_mib=256,
-    # caddy:2-alpine EXPOSEs 80, 443, 2019. Map all three explicitly per the
-    # SDK auto-bind workaround (see SPEC_PGADMIN comment). 80/443 -> our
-    # non-priv host ports; 2019 (Caddy admin API) -> 12019.
     ports=[
         (28080, 80),
-        (28443, 443),
-        (12019, 2019),
+        (28443, 443),    # reserved for future `tls internal` (see README §TLS)
+        (12019, 2019),   # Caddy admin API — used by the healthcheck below
     ],
     entrypoint=["sh"],
     cmd=lambda cfg: ["-c", _CADDY_ENTRYPOINT_TEMPLATE.format(caddyfile=_caddyfile(cfg))],

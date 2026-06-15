@@ -153,3 +153,18 @@ def test_build_box_options_resolves_callable_cmd():
     opts = build_box_options(spec, cfg)
     # The cmd attribute on BoxOptions is a list[str] — assert resolution happened.
     assert opts.cmd == ["sh", "-c", "echo hub=custom.host"]
+
+
+# ─── ensure_home_env ─────────────────────────────────────────────────────
+
+def test_ensure_home_env_exports_config_home(monkeypatch, tmp_path):
+    """The SDK's default-runtime singleton captures BOXLITE_HOME at first
+    construction — ensure_home_env must export the config value verbatim."""
+    import os
+
+    from boxlite_local.orchestrator import ensure_home_env
+
+    monkeypatch.delenv("BOXLITE_HOME", raising=False)
+    cfg = InfraConfig(boxlite_home=tmp_path / "bx-home")
+    ensure_home_env(cfg)
+    assert os.environ["BOXLITE_HOME"] == str(tmp_path / "bx-home")

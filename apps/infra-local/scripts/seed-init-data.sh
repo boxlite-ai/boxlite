@@ -9,15 +9,14 @@
 #                                      + organization_user + admin API key
 #   3. initialize{Internal,Backup,Transient}Registry
 #   4. initializeDefaultRunner       → 'local-m5' DB row (async)
-#   5. initializeDefaultSnapshot     → 'ubuntu:22.04' snapshot (depends
-#                                      on adminPersonalOrg existing)
+#   5. default runner registration   → runner row via heartbeat
 #
 # Each step has "skip if exists" guards. As long as the related tables
 # were truncated (`stack-reset` does this), the API re-seeds from scratch.
 #
 # This script's only job: ensure the API is running, restart it if a
 # stale state could have left auto-seed incomplete, and wait for the
-# default snapshot to reach 'active' (the long pole).
+# default runner to register (boxes can't schedule without one).
 #
 # Idempotent: re-running is safe.
 
@@ -46,14 +45,16 @@ verify_api_seeded() {
     return 1
   fi
   local has_admin_org
+  # The `personal` org column was dropped in the pre-launch schema squash
+  # (#736); the API now seeds a "Default Organization" owned by the admin.
   has_admin_org=$("${PSQL[@]}" -c "
     SELECT count(*) FROM organization
-    WHERE \"createdBy\" = 'boxlite-admin' AND personal = true;
+    WHERE \"createdBy\" = 'boxlite-admin';
   " || echo "0")
   if [ "$has_admin_org" -gt 0 ]; then
-    ok "admin personal org present"
+    ok "admin org present"
   else
-    warn "admin personal org missing — API initializeAdminUser may have failed"
+    warn "admin org missing — API initializeAdminUser may have failed"
     return 1
   fi
   local has_region
@@ -81,39 +82,22 @@ bounce_api_if_running() {
   fi
 }
 
-# Wait for the default snapshot's lifecycle to reach 'active'. The state
-# machine is pulling → ready → active and takes ~30-60s on a cold pull.
-wait_for_default_snapshot() {
-  local timeout=420   # Cold pull of ubuntu:22.04 from local registry can take 2-5min on M5
+# Verify the default runner registered (the API seeds it; boxes can't be
+# scheduled without one). Snapshots/templates no longer exist post-squash
+# (#736): boxes are created directly from images, so there is no pre-pull
+# phase to wait for anymore.
+wait_for_default_runner() {
+  local timeout=60
   local elapsed=0
-  log "waiting for default snapshot (ubuntu:22.04) to become active..."
+  log "waiting for the default runner to register..."
   while true; do
-    local state
-    state=$("${PSQL[@]}" -c "SELECT COALESCE(state::text, 'missing') FROM snapshot WHERE name='ubuntu:22.04';" 2>/dev/null || echo "missing")
-    [ -z "$state" ] && state="missing"
-    case "$state" in
-      active) ok "ubuntu:22.04 snapshot active"; return 0 ;;
-      missing)
-        if [ "$elapsed" -ge "$timeout" ]; then
-          warn "snapshot row never appeared after ${timeout}s — is the API running and authenticated?"
-          return 1
-        fi
-        ;;
-      pulling|pending|ready|building)
-        echo "  T+${elapsed}s: $state"
-        ;;
-      error|failed|inactive|deactivated)
-        err "snapshot reached terminal failure state: $state"
-        return 1
-        ;;
-      *)
-        echo "  T+${elapsed}s: $state (unknown)"
-        ;;
-    esac
-    sleep 5
-    elapsed=$((elapsed + 5))
+    local count
+    count=$("${PSQL[@]}" -c "SELECT count(*) FROM runner;" 2>/dev/null || echo "0")
+    [ "${count:-0}" -gt 0 ] && { ok "runner registered"; return 0; }
+    sleep 2
+    elapsed=$((elapsed + 2))
     if [ "$elapsed" -ge "$timeout" ]; then
-      warn "snapshot still '$state' after ${timeout}s — check runner logs"
+      warn "no runner row after ${timeout}s — check runner logs"
       return 1
     fi
   done
@@ -142,9 +126,9 @@ while ! verify_api_seeded 2>/dev/null; do
 done
 
 if [ "${1:-}" = "--no-wait" ] || [ "${2:-}" = "--no-wait" ]; then
-  log "skipping snapshot wait (--no-wait)"
+  log "skipping runner wait (--no-wait)"
 else
-  wait_for_default_snapshot || warn "default snapshot not ready — dashboard create-box will 400 until it is"
+  wait_for_default_runner || warn "runner not registered — box create will fail until it is"
 fi
 
 ok "init data ready"

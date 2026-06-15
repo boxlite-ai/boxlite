@@ -69,7 +69,9 @@ def test_defaults():
     assert cfg.pg_user == "boxlite"
     assert cfg.pg_password == "boxlite"
     assert cfg.pg_db == "boxlite"
-    assert cfg.data_dir == Path.home() / ".boxlite-local" / "data"
+    # All generated state lives under the repo-scoped .apps-local/ root.
+    assert cfg.data_dir == cfg.repo_root / ".apps-local" / "data"
+    assert cfg.boxlite_home == cfg.repo_root / ".apps-local" / "boxlite"
 
 
 def test_pg_url_uses_host_hub_and_port():
@@ -84,6 +86,7 @@ def test_load_picks_up_env_overrides(monkeypatch, tmp_path):
     monkeypatch.setenv("BOXLITE_PG_PASSWORD", "s3cret")
     monkeypatch.setenv("BOXLITE_PG_DB", "appdb")
     monkeypatch.setenv("BOXLITE_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("BOXLITE_HOME", str(tmp_path / "bx-home"))
 
     cfg = InfraConfig.load()
 
@@ -93,18 +96,22 @@ def test_load_picks_up_env_overrides(monkeypatch, tmp_path):
     assert cfg.pg_password == "s3cret"
     assert cfg.pg_db == "appdb"
     assert cfg.data_dir == tmp_path
+    assert cfg.boxlite_home == tmp_path / "bx-home"
 
 
 def test_load_expands_tilde_in_data_dir_env(monkeypatch):
-    # Docs tell users they can set BOXLITE_DATA_DIR=~/.boxlite-local/data.
+    # Users may set BOXLITE_DATA_DIR / BOXLITE_HOME with a leading ~.
     # Path("~/...") does NOT expand ~ on its own, so .load() must expanduser()
     # — otherwise a literal "~" dir gets created under the cwd.
-    monkeypatch.setenv("BOXLITE_DATA_DIR", "~/.boxlite-local/data")
+    monkeypatch.setenv("BOXLITE_DATA_DIR", "~/my-data")
+    monkeypatch.setenv("BOXLITE_HOME", "~/my-boxlite-home")
 
     cfg = InfraConfig.load()
 
     assert "~" not in str(cfg.data_dir)
-    assert cfg.data_dir == Path.home() / ".boxlite-local" / "data"
+    assert cfg.data_dir == Path.home() / "my-data"
+    assert "~" not in str(cfg.boxlite_home)
+    assert cfg.boxlite_home == Path.home() / "my-boxlite-home"
 
 
 def test_load_raises_clear_error_on_malformed_int_env(monkeypatch):
@@ -117,6 +124,7 @@ def test_load_falls_back_to_defaults_when_env_unset(monkeypatch):
     for var in (
         "BOXLITE_HOST_HUB", "BOXLITE_PG_HOST_PORT", "BOXLITE_PG_USER",
         "BOXLITE_PG_PASSWORD", "BOXLITE_PG_DB", "BOXLITE_DATA_DIR",
+        "BOXLITE_HOME",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -124,7 +132,8 @@ def test_load_falls_back_to_defaults_when_env_unset(monkeypatch):
 
     assert cfg.host_hub == "host.boxlite.internal"
     assert cfg.pg_host_port == 25432
-    assert cfg.data_dir == Path.home() / ".boxlite-local" / "data"
+    assert cfg.data_dir == cfg.repo_root / ".apps-local" / "data"
+    assert cfg.boxlite_home == cfg.repo_root / ".apps-local" / "boxlite"
 
 
 def test_new_3a_defaults():
@@ -160,6 +169,22 @@ def test_repo_root_points_at_repo_with_pyproject_in_apps_infra_local():
     cfg = InfraConfig()
     assert (cfg.repo_root / "apps" / "infra-local" / "pyproject.toml").exists(), \
         f"_detect_repo_root returned wrong dir: {cfg.repo_root}"
+
+
+def test_repo_root_walk_is_not_fooled_by_apps_apps_symlink(tmp_path):
+    # Reproducer for the stray apps/.apps-local bug: stack-up creates an
+    # `apps/apps -> .` symlink (webpack quirk), which makes `apps/` itself
+    # contain a path matching apps/infra-local/pyproject.toml. The walk must
+    # skip symlinked `apps` components and return the real repo root.
+    from boxlite_local.config import find_repo_root_from
+
+    repo = tmp_path / "repo"
+    pkg = repo / "apps" / "infra-local" / "boxlite_local"
+    pkg.mkdir(parents=True)
+    (repo / "apps" / "infra-local" / "pyproject.toml").write_text("")
+    (repo / "apps" / "apps").symlink_to(".")
+
+    assert find_repo_root_from(pkg) == repo
 
 
 def test_load_raises_clear_error_on_malformed_redis_port_env(monkeypatch):

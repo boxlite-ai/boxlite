@@ -15,10 +15,22 @@ single Apple Silicon Mac. It owns two layers:
   [`scripts/`](scripts/).
 
 User boxes (L3) are spawned by the L2 Runner as libkrun microVMs
-under `~/.boxlite-runner/`.
+under `<repo>/.apps-local/boxlite-runner/`.
+
+ALL generated state lives under one gitignored repo-root dir:
+
+```
+<repo>/.apps-local/
+├── bin/             native runner + proxy binaries (stack-build.sh)
+├── logs/            L2 process logs + pid files
+├── data/            L1 service volumes (pg / redis / minio / registry)
+├── boxlite/         SDK home for the L1 boxes (BOXLITE_HOME)
+└── boxlite-runner/  runner home for L3 user boxes (BOXLITE_HOME_DIR)
+```
 
 Cold-start to
-working box + browser terminal in ~80 s. Daily dev workflow
+working box + browser terminal in ~80 s (box boot / image resolution is
+mid-rewrite upstream and unverified here — see limitation #4). Daily dev workflow
 documented in the [Usage guide](#usage-guide) below.
 Known limitations: see [§Known limitations](#known-limitations).
 
@@ -56,6 +68,24 @@ make stack-down ARGS=--all
 > rebuild after pulling new code), but you don't have to — stack-up
 > runs them automatically when they're needed.
 
+### Migrating from the pre-`.apps-local` layout
+
+Older checkouts kept state in `~/.boxlite` (L1 boxes),
+`~/.boxlite-local/data` (volumes), `~/.boxlite-runner/` (runner home),
+`/tmp/boxlite-{runner,proxy}` (binaries) and `apps/infra-local/.logs/`.
+One-time cleanup:
+
+```bash
+cd apps/infra-local
+BOXLITE_HOME=$HOME/.boxlite make down        # stop L2 + remove OLD L1 boxes
+rm -rf ~/.boxlite-local ~/.boxlite-runner    # old volumes + runner home
+rm -f /tmp/boxlite-runner /tmp/boxlite-proxy # old binaries
+# optional — only if nothing else on this machine uses BoxLite:
+# rm -rf ~/.boxlite
+
+make stack-up                                # cold start under <repo>/.apps-local/
+```
+
 ### Make targets
 
 L1-only (just the BoxLite boxes):
@@ -68,7 +98,7 @@ L1-only (just the BoxLite boxes):
   ps                 list running boxlite-local-* boxes
   doctor             run preflight checks (SDK + runtime + port conflicts)
   migrate            build local pg schema by running all TypeORM migrations from scratch
-  seed-init-data     ensure dashboard-required base data (admin org, default region, wait snapshot)
+  seed-init-data     ensure dashboard-required base data (admin org, default region, wait runner)
 ```
 
 L2 stack wrappers (L1 + native API/Runner/Proxy/Dashboard):
@@ -130,7 +160,7 @@ After `make stack-up` you have 10 L1 daemon boxes + 1 one-shot bootstrap
 | Dashboard (Vite) | `http://127.0.0.1:3000/`   | React + OIDC login flow                  |
 | API (NestJS)     | `http://127.0.0.1:3001/api`| Reads `apps/.env` (→ `apps/api/.env`, seeded on first `stack-up` from `configs/api.env`); auto-seeds admin org + default region |
 | Proxy (Go)       | `http://127.0.0.1:4000`    | Box port-preview `<port>-<token>.localhost:28080` reverse-proxy target |
-| Runner (Go)      | `http://127.0.0.1:3003`    | Native arm64; spawns L3 microVMs in `~/.boxlite-runner/` |
+| Runner (Go)      | `http://127.0.0.1:3003`    | Native arm64; spawns L3 microVMs in `.apps-local/boxlite-runner/` |
 
 See [`CONNECTIONS.md`](CONNECTIONS.md) for full credentials, env vars,
 and per-service env override surface.
@@ -175,7 +205,17 @@ BOXLITE_OTEL_HTTP_PORT=24318
 BOXLITE_OTEL_HEALTH_PORT=23133
 BOXLITE_CADDY_HTTP_PORT=28080
 BOXLITE_CADDY_HTTPS_PORT=28443   # currently mapped but TLS not enabled
-BOXLITE_DATA_DIR=~/.boxlite-local/data   # persistent volume mounts root
+BOXLITE_DATA_DIR=<repo>/.apps-local/data      # persistent volume mounts root
+BOXLITE_HOME=<repo>/.apps-local/boxlite       # SDK home for the L1 boxes
+```
+
+`BOXLITE_HOME` is exported by the Makefile and `scripts/_stack-common.sh`,
+so every `make` target and stack script sees the same L1 boxes. To inspect
+them from a plain shell (`boxlite ls`, `boxlite logs ...`), export it
+yourself first:
+
+```bash
+export BOXLITE_HOME=<repo>/.apps-local/boxlite
 ```
 
 Hostname inside boxes for reaching the host machine:
@@ -250,7 +290,7 @@ trace debugging; swap in the custom build above for exporter parity.
 
 ### 3. SDK gotchas worked around (file these as feedback)
 
-This codebase contains workarounds for ~9 distinct SDK behaviours that
+This codebase contains workarounds for several SDK behaviours that
 are worth filing back to the BoxLite team. They're all noted in the
 relevant source files. Summary:
 
@@ -258,15 +298,39 @@ relevant source files. Summary:
 |---|---|---|
 | 1 | `host.boxlite.internal` failed on first run | Env (Docker Desktop) — not SDK |
 | 2 | brew postgres collided on default ports | Use non-default host ports (§3.8) |
-| 3 | `r-x` dir layers (RHEL UBI base) break rootfs merge | `_ensure_image_cache_writable` chmod |
-| 4 | First pull's freshly-extracted layers also need chmod | `_start_with_perm_retry` |
-| 5 | SDK rejects file volume mounts (must be dirs) | inline scripts via `cmd=sh -c '...'` |
-| 6 | `ServiceSpec` lacked `entrypoint` field; SDK has it | `entrypoint=["sh"]` for image-overriding |
-| 7 | `list_info().state.status` stays "running" after init exits | exec-probe in `_wait_one_shot_exit` |
-| 8 | `runtime.remove()` rejects "running" VM after init exits | `runtime.remove(name, force=True)` |
-| 9 | `runtime.get(name)` returns None (not raises) for missing | `if box is None: return False` |
-| 10 | EXPOSE 443 (or other privileged) silently breaks ALL port forwards for that box | Map every EXPOSE'd port explicitly |
-| 11 | `box.exec` race during box startup (`InitReady vs IntermediateReady`) | `_wait_healthy_exec` retries on any exception |
+| 3 | SDK rejects file volume mounts (must be dirs) | inline scripts via `cmd=sh -c '...'` |
+| 4 | `list_info().state.status` stays "running" after one-shot init exits | exec-probe in `_wait_one_shot_exit` |
+| 5 | `runtime.remove()` rejects "running" VM after init exits | `runtime.remove(name, force=True)` |
+| 6 | `box.exec` race during box startup (`InitReady vs IntermediateReady`) | `_wait_healthy_exec` retries on any exception |
+| 7 | microVM↔host transport can wedge a PG connection mid-query | server-side `statement_timeout` + `tcp_keepalives_*` (SPEC_PG) — root fix belongs in the transport |
+| 8 | SDK has no typed "already running" error | message-substring sniff in `_is_already_running_error` |
+
+Fixed upstream and removed from this codebase:
+- `r-x` dir-layer rootfs-merge chmod workarounds (SDK #607/#697).
+- EXPOSE'd-privileged-port auto-bind trap — the SDK no longer auto-binds
+  image-EXPOSE'd ports, so placeholder mappings are gone (verified by
+  rebuilding boxes without them).
+- `runtime.get()` returning `Option` is the documented API contract now,
+  not a gotcha.
+
+### 4. Box boot / image resolution is mid-rewrite upstream (unverified here)
+
+The migration squash removed the box-template/snapshot subsystem, then
+`#755`/`#758` reintroduced an **image-keyed** boot path (the box-start
+`UNKNOWN` handler now calls `runnerAdapter.createBox` —
+`apps/api/src/box/managers/box-actions/box-start.action.ts`) and restricted
+creation to supported pinned images. What's still *not* rebuilt is image
+**resolution** — see the `TODO(image-rewrite)` markers in
+`apps/api/src/box/services/box.service.ts:136,:155` (and ~20 more across
+`apps/api`/`apps/dashboard` for the removed template webhooks, metrics, and
+the dashboard image/template picker — e.g. `CreateBoxSheet.tsx:138,:228`).
+
+Net: a box with no image fails fast (`'Box has no image to create from'`),
+and the dashboard's image picker is gone, so end-to-end "Create Box" from
+the UI is incomplete. We have **not** verified a successful box boot on this
+stack since the rebase (it also needs a rebuilt `libboxlite.a` for the
+runner). Everything else — L1 services, API, runner registration, auth,
+dashboard — works.
 
 ---
 
@@ -290,7 +354,7 @@ apps/infra-local/
 │   └── services.py                   # SPEC_* + SERVICES registry
 ├── scripts/                          # L2 stack wrappers (called by `make stack-*`)
 │   ├── _stack-common.sh
-│   ├── seed-init-data.sh             # wait for API self-seed + default snapshot
+│   ├── seed-init-data.sh             # wait for API self-seed + registered runner
 │   ├── stack-build.sh                # build runner + proxy binaries
 │   ├── stack-up.sh / stack-down.sh / stack-restart.sh
 │   ├── stack-status.sh / stack-logs.sh
@@ -324,10 +388,9 @@ apps/infra-local/
 
 **Add a new L1 service:** define a `ServiceSpec` in `services.py`, add an
 entry to the `SERVICES` dict, add the host port default to `InfraConfig`,
-add `BOXLITE_<NAME>_HOST_PORT` to `.load()`, run `make up`. Don't forget
-to map ALL of the image's `EXPOSE`'d ports explicitly (the SDK auto-bind
-silently breaks ALL forwards for that box if any EXPOSE'd port can't be
-bound — see SDK gotcha #10 above).
+add `BOXLITE_<NAME>_HOST_PORT` to `.load()`, run `make up`. Map only the
+ports you actually use — the SDK no longer auto-binds image-`EXPOSE`'d
+ports.
 
 **Restart one L2 component** (90 % of daily iteration):
 `make stack-restart COMPONENTS=runner` (or `api`, `proxy`, `dashboard`;
@@ -335,18 +398,19 @@ multiple as `COMPONENTS="api proxy"`). `runner` includes an automatic
 rebuild.
 
 **Rebuild one L1 box** (when a stateful service goes weird — typical
-symptoms: dex returns stale tokens, registry pull hangs):
+symptoms: dex issues already-expired tokens after the Mac slept (clock
+drift — see [§Common issues](#7-common-issues)), registry pull hangs):
 `make stack-rebuild-l1-box BOX=dex` (or `registry`, `pgadmin`, ...).
 
 **Debug a stuck service:** `make stack-status` first → identify the red
 component → use the lightest possible cleanup. `python -m boxlite_local ps`
 shows L1 box state; `boxlite logs boxlite-local-<name>` shows guest
 logs; `make stack-logs COMPONENT=<name>` tails L2 logs from
-`apps/infra-local/.logs/`.
+`.apps-local/logs/`.
 
 **Reset DB to clean state** (most-common scenario): `make stack-reset &&
 make stack-up` — truncates PG user data and clears
-`~/.boxlite-runner/`, preserves schema + L1 boxes + image cache. Use
+`.apps-local/boxlite-runner/`, preserves schema + L1 boxes + image cache. Use
 `stack-reset-hard` to also drop + rebuild the schema via migrations. Use
 `stack-nuke` only when you want a full cold rebuild (~3-5 min).
 
@@ -424,7 +488,7 @@ make stack-status   # one-screen health
 ```
 
 Cold-start time: ~5-7 minutes on first run (most of it is pulling the
-`ubuntu:22.04` default snapshot into the local registry). Subsequent
+10 L1 service images). Subsequent
 `stack-up` runs reuse the image cache and complete in ~30 s to 1 min.
 
 ✅ `stack-up.sh` is **self-healing** — a single `make stack-up` works
@@ -432,11 +496,11 @@ from a fresh checkout, after a reboot, or after `make stack-down`,
 because it automatically:
 1. Installed the orchestrator package (`make install`) if `boxlite_local` wasn't importable yet
 2. Brought up L1 boxes (`make up`) if they weren't running; the API then runs all TypeORM migrations on boot against the pg box (a no-op when the schema is already present, e.g. the PG data volume survived a reboot)
-3. Built the native binaries (`stack-build.sh`) if `/tmp/boxlite-runner` / `/tmp/boxlite-proxy` were missing (e.g. `/tmp` cleared on reboot)
-4. Created the two symlinks NestJS needs (`apps/.env`, `apps/apps`)
+3. Built the native binaries (`stack-build.sh`) if `.apps-local/bin/boxlite-runner` / `boxlite-proxy` were missing (fresh checkout or wiped state dir)
+4. Created the `apps/.env` symlink NestJS needs
 5. Started api → runner → proxy → dashboard in dependency order, waiting for each to be healthy before the next
 6. Detected ports already in use and freed them first (prevents EADDRINUSE)
-7. Written PIDs to `apps/infra-local/.logs/<comp>.pid` and logs to `<comp>.log`
+7. Written PIDs to `.apps-local/logs/<comp>.pid` and logs to `<comp>.log`
 
 > You can still run `make install` / `make stack-build` explicitly — e.g.
 > to force a binary rebuild after changing runner/proxy source — but
@@ -453,6 +517,11 @@ preseeded accounts (see [`apps/infra-local/CONNECTIONS.md` §4](CONNECTIONS.md))
 
 Then click **Create Box** → pick region `us` → **Create** → open
 the **Terminal** tab → **Connect** → you should see `root@boxlite:~#`.
+
+> ⚠️ Box creation is mid-rewrite upstream and unverified on this stack: image
+> **resolution** isn't rebuilt yet and the dashboard's image picker was
+> removed, so "Create Box" from the UI is incomplete. See
+> [Known limitations](#known-limitations) #4. The rest of the stack works.
 
 ### 2. Day-to-day dashboard development loop
 
@@ -480,7 +549,7 @@ the **Terminal** tab → **Connect** → you should see `root@boxlite:~#`.
 | Change | How to handle it |
 |---|---|
 | Edit `*.entity.ts` (DB schema) | Write a migration at `apps/api/src/migrations/<ts>-name-migration.ts`; the restart runs it automatically |
-| Edit `.env` | Ctrl-C + re-run via `make stack-restart COMPONENTS=api` (or copy the full `nx serve api --buildTargetOptions.*` invocation from `scripts/stack-up.sh`) |
+| Edit `.env` | Ctrl-C + re-run via `make stack-restart COMPONENTS=api` (or copy the `nx serve api` invocation from `scripts/stack-up.sh`) |
 | Edit OpenAPI (controller `@Api*` decorators) | `yarn nx run api:openapi` regenerates `dist/apps/api/openapi.json` → SDK client regenerates → restart dashboard |
 
 ### 4. Runner development loop
@@ -488,7 +557,7 @@ the **Terminal** tab → **Connect** → you should see `root@boxlite:~#`.
 ```bash
 # Runner is a native Go binary with no watch mode
 pkill -9 -f boxlite-runner
-cd apps/runner && go build -o /tmp/boxlite-runner ./cmd/runner && cd -
+cd apps/runner && go build -o ../../.apps-local/bin/boxlite-runner ./cmd/runner && cd -
 # Re-run it (use the cheatsheet in the status doc)
 ```
 
@@ -505,19 +574,19 @@ cd -
 
 # Or just truncate user data, preserving schema / migrations state
 PGPASSWORD=boxlite psql -h 127.0.0.1 -p 25432 -U boxlite -d boxlite -c "
-  TRUNCATE TABLE box, snapshot, snapshot_runner, runner, region, 
-                 organization, organization_user, organization_role, 
+  TRUNCATE TABLE box, job, volume, runner, region,
+                 organization, organization_user, organization_role,
                  api_key, audit_log CASCADE;
 "
 
 # Then restart the API so it re-seeds default region + default runner
 ```
 
-`~/.boxlite-runner/` must also be cleared, otherwise the runner still thinks the old boxes exist:
+`.apps-local/boxlite-runner/` must also be cleared, otherwise the runner still thinks the old boxes exist:
 
 ```bash
 pkill -9 -f boxlite-runner
-rm -rf ~/.boxlite-runner/{db,boxes,images,rootfs}/
+rm -rf .apps-local/boxlite-runner/{db,boxes,images,rootfs}/
 # Restart runner
 ```
 
@@ -545,9 +614,9 @@ make stack-nuke && make stack-up
 What it does:
 - Stops the 4 L2 native processes
 - Deletes all 10 L1 boxes (microVM kernels + rootfs)
-- Clears data volumes + `.logs/`
+- Clears data volumes + `.apps-local/logs/`
 - Re-pulls the 10 images + reloads the prod schema
-- Starts L2; the API self-seeds (region / admin / snapshot pulled to active)
+- Starts L2; the API self-seeds (admin org / default region); the runner re-registers
 
 **When to use it:** new-hire onboarding / schema upgrade / "I did a bunch of weird stuff and want to go back to a clean state".
 
@@ -558,7 +627,7 @@ cd apps/infra-local
 make stack-reset && make stack-up
 ```
 
-Differences from ⑤ — this one **preserves**: L1 boxes, PG schema, image cache, historical logs. It only clears PG **user data** + `~/.boxlite-runner/` runtime state.
+Differences from ⑤ — this one **preserves**: L1 boxes, PG schema, image cache, historical logs. It only clears PG **user data** + `.apps-local/boxlite-runner/` runtime state.
 
 **When to use it:** mid-iteration the data got dirty and you want to clear box/org/user; testing "fresh DB" behavior.
 
@@ -624,7 +693,7 @@ pytest tests/
 
 ```bash
 # Inspect box state
-sqlite3 ~/.boxlite-runner/db/boxlite.db -header -column \
+sqlite3 .apps-local/boxlite-runner/db/boxlite.db -header -column \
   "SELECT id, image, status FROM boxes WHERE status='running';"
 
 # Inspect the API primary DB
@@ -643,11 +712,12 @@ PGPASSWORD=boxlite psql -h 127.0.0.1 -p 25432 -U boxlite -d boxlite -c "
 # Proxy stdout: same
 
 # Box-internal logs (the 10 infra-local boxes)
+# (plain shells need: export BOXLITE_HOME=<repo>/.apps-local/boxlite)
 boxlite logs boxlite-local-postgres
 boxlite logs boxlite-local-caddy
 
 # Box microVM-internal logs (managed by the runner)
-ls -lt ~/.boxlite-runner/boxes/<id>/logs/
+ls -lt .apps-local/boxlite-runner/boxes/<id>/logs/
 ```
 
 ### 7. Common issues
@@ -655,13 +725,13 @@ ls -lt ~/.boxlite-runner/boxes/<id>/logs/
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | All API calls return 401 | `SSH_GATEWAY_API_KEY` or `PROXY_API_KEY` not set | Check `apps/api/.env` — both must be non-empty |
-| Box stuck in PENDING | snapshot has not finished PULLING | Wait 30-60 s; if still stuck, check runner log for image-pull errors |
+| "Create Box" from the dashboard is incomplete / box doesn't boot | Expected: image resolution is mid-rewrite upstream and the dashboard image picker was removed (`TODO(image-rewrite)`) | See [Known limitations](#known-limitations) #4 — the rest of the stack is unaffected |
 | Box reaches STARTED but the terminal is blank + `Connection closed` | image is amd64 but runner runs an arm64 microVM | Already fixed (`runner/registry.go` uses `runtime.GOARCH`) — clear the old image cache and re-pull |
 | "Create Box" missing in the dashboard | Expected: PostHog isn't configured locally, so flag-gated UI stays hidden (no local flag bootstrap) | Use `POST /api/box` directly, or set `POSTHOG_API_KEY`/`POSTHOG_HOST` in `apps/api/.env` with the flags enabled in PostHog |
 | `POST /api/regions` → 404 "Cannot POST" | Expected: same — flag-gated admin routes stay hidden without a configured PostHog | Same as above; the seed path (`seed-init-data.sh`) doesn't need these routes |
-| Boxlite-runner hits `Another BoxliteRuntime is already using directory` | Another runner process is holding `~/.boxlite-runner/.lock` | `lsof ~/.boxlite-runner/.lock` to find the PID; decide whether to kill it or that you've used the wrong home dir |
+| Boxlite-runner hits `Another BoxliteRuntime is already using directory` | Another runner process is holding `.apps-local/boxlite-runner/.lock` | `lsof .apps-local/boxlite-runner/.lock` to find the PID; decide whether to kill it or that you've used the wrong home dir |
 | Terminal `Connection closed` and won't reconnect | signed-url expired (default 300 s) | Click Connect again; the dashboard re-fetches a fresh URL |
-| Dashboard loads `Unauthorized` / `401` even just after OIDC login | **Dex SQLite session db cached an old grant** and the new login reuses a stale token (common after a box SIGKILL or long idle). Diagnostic: decode the token; `accessTokenIat` is days old | `make stack-rebuild-l1-box BOX=dex` + `sessionStorage.clear()` in the browser + log in again |
+| Dashboard loads `Unauthorized` / `401` even just after OIDC login | **The dex box's clock has drifted behind the host.** Long-running L1 microVMs freeze their clock while the Mac sleeps (observed ~37h behind after a few days), so dex stamps every token's `iat`/`exp` from its own past clock — the token is *born expired* by the host's time and the API rejects it on `exp`. (Passport-jwt logs nothing for an expired token, so the API log looks like the token never arrived.) Diagnostic: `boxlite exec boxlite-local-dex -- date -u` vs host `date -u`; or decode the token — `iat`/`exp` are hours/days old. NOT a stale session-db grant and NOT a browser-storage problem. | `make stack-rebuild-l1-box BOX=dex` (fresh clock at boot) + clear browser storage / re-login (the cached token is genuinely expired) |
 | Box `pulling` is stuck for several minutes | **Registry box TCP still listens but the internal registry process is hung** (SIGKILL side-effect). Confirm: `curl http://127.0.0.1:25000/v2/_catalog` times out after 5 s | `make stack-rebuild-l1-box BOX=registry`; the stuck pull recovers automatically |
 | Any L1 box (pgadmin / jaeger / minio / ...) behaves weirdly | Same as above — the box's stateful internal process is broken | `make stack-rebuild-l1-box BOX=<name>` blows it away and rebuilds in one shot |
 
@@ -695,6 +765,7 @@ pkill -9 -f "boxlite-runner"
 pkill -9 -f "boxlite-proxy"
 
 # Stop the 10 infra boxes (preserve data)
+export BOXLITE_HOME="$(git rev-parse --show-toplevel)/.apps-local/boxlite"
 for b in caddy registry-ui pgadmin otel jaeger dex registry minio redis postgres; do
   boxlite stop boxlite-local-$b
 done
@@ -705,4 +776,4 @@ cd apps/infra-local && make down
 
 ### One-liner
 
-**Editing `.tsx` + Vite HMR is the default development rhythm.** API / Runner / Proxy are stable infrastructure that run in the background and you don't touch day-to-day. To wipe state: `make stack-reset-hard` + clear `~/.boxlite-runner/`. To demo: freeze a commit and run §1 once.
+**Editing `.tsx` + Vite HMR is the default development rhythm.** API / Runner / Proxy are stable infrastructure that run in the background and you don't touch day-to-day. To wipe state: `make stack-reset-hard` + clear `.apps-local/boxlite-runner/`. To demo: freeze a commit and run §1 once.

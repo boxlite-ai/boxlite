@@ -12,7 +12,7 @@ import sys
 
 from .config import InfraConfig
 from .doctor import doctor, format_report
-from .orchestrator import down, ps, up
+from .orchestrator import down, ensure_home_env, ps, up
 from .services import SERVICES
 from .types import DoctorError
 
@@ -70,6 +70,9 @@ async def _cmd_ps(config: InfraConfig) -> int:
 async def _async_main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     config = InfraConfig.load()
+    # Pin BOXLITE_HOME before any subcommand touches Boxlite.default() —
+    # the standalone `doctor` builds it via check_runtime_reachable.
+    ensure_home_env(config)
     if args.cmd == "doctor":
         return await _cmd_doctor(config)
     if args.cmd == "up":

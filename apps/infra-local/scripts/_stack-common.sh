@@ -10,13 +10,27 @@ INFRA_LOCAL_DIR="$( cd "${SCRIPT_DIR}/.." && pwd )"
 APPS_DIR="$( cd "${INFRA_LOCAL_DIR}/.." && pwd )"
 REPO_ROOT="$( cd "${APPS_DIR}/.." && pwd )"
 
-LOGS_DIR="${INFRA_LOCAL_DIR}/.logs"
-mkdir -p "${LOGS_DIR}"
+# Repo-scoped state root — ALL generated local-stack artifacts live here
+# (gitignored):
+#   bin/             native runner + proxy binaries
+#   logs/            L2 process logs + pid files
+#   data/            L1 service volumes (pg / redis / minio / registry)
+#   boxlite/         SDK home for the L1 boxes (BOXLITE_HOME)
+#   boxlite-runner/  runner home for L3 user boxes (BOXLITE_HOME_DIR)
+APPS_LOCAL_DIR="${REPO_ROOT}/.apps-local"
 
-# Native binary locations (built by stack-build.sh, kept under /tmp because
-# they are large and platform-specific — not committed).
-RUNNER_BIN="${RUNNER_BIN:-/tmp/boxlite-runner}"
-PROXY_BIN="${PROXY_BIN:-/tmp/boxlite-proxy}"
+# Exported so the `boxlite` CLI (these scripts grep `boxlite ls` to inspect
+# L1 boxes) and the python orchestrator resolve the SAME home. The runner is
+# unaffected: stack-up.sh hands it its own sibling home via BOXLITE_HOME_DIR.
+export BOXLITE_HOME="${BOXLITE_HOME:-${APPS_LOCAL_DIR}/boxlite}"
+
+LOGS_DIR="${APPS_LOCAL_DIR}/logs"
+mkdir -p "${LOGS_DIR}" "${APPS_LOCAL_DIR}/bin"
+
+# Native binary locations (built by stack-build.sh; large and
+# platform-specific, kept out of git via the .apps-local ignore).
+RUNNER_BIN="${RUNNER_BIN:-${APPS_LOCAL_DIR}/bin/boxlite-runner}"
+PROXY_BIN="${PROXY_BIN:-${APPS_LOCAL_DIR}/bin/boxlite-proxy}"
 
 # Ports
 PORT_API=3001
@@ -103,7 +117,10 @@ wait_http() {
 }
 
 # Resolve the runner home directory (where its SQLite + boxes live).
-RUNNER_HOME="${BOXLITE_HOME_DIR:-${HOME}/.boxlite-runner}"
+# Defaults into the repo-scoped state root; BOXLITE_HOME_DIR still wins
+# so a user-pinned runner home stays respected (stack-up.sh forwards
+# this exact value to the runner process).
+RUNNER_HOME="${BOXLITE_HOME_DIR:-${APPS_LOCAL_DIR}/boxlite-runner}"
 
 # Library path the runner needs at startup (libboxlite.dylib for CGO).
 RUNNER_DYLIB_DIR="${REPO_ROOT}/sdks/go"

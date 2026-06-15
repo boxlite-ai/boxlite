@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Wipe L2 runtime state. Keeps L1 boxes alive (db schema preserved by default).
 #
-# Usage: stack-reset.sh             # clear boxes/snapshots, KEEP users+orgs
+# Usage: stack-reset.sh             # clear boxes/jobs/volumes, KEEP users+orgs
 #                                     → browser stays logged in, no re-login
 #        stack-reset.sh --hard      # wipe PG schema entirely (rebuilds it by
 #                                     re-running migrations) → identity gone, re-login needed
@@ -29,27 +29,27 @@ if [ "$MODE" = "soft" ]; then
     log "truncating runtime data (identity + infra rows preserved)..."
     # PRESERVE identity + infra so an already-logged-in browser session
     # stays valid across a reset (no forced re-login):
-    #   user, organization, organization_user, organization_role,
-    #   region, runner, api_key
+    #   user, organization + its FK children (organization_user, roles,
+    #   assignments, invitations), region, runner, api_key,
+    #   warm_pool (pool config, not runtime state)
     # CLEAR only runtime/user-created state:
-    #   box, snapshot, snapshot_runner, audit_log (+ CASCADE children
-    #   like ssh_access). The API re-seeds the default snapshot on next
-    #   boot (initializeDefaultSnapshot finds the preserved admin org),
-    #   and the runner re-registers via heartbeat (matched by apiKey).
+    #   box (+ CASCADE children box_last_activity, ssh_access), job,
+    #   volume, audit_log. The runner re-registers via heartbeat
+    #   (matched by apiKey).
     #
     # Why preserve user+org TOGETHER: a half-state (user kept, org dropped)
     # strands initializeAdminUser's early-exit guard. Keeping both keeps
     # the seed cycle consistent AND keeps OIDC sessions alive. For a true
     # from-scratch identity wipe use --hard.
     PGPASSWORD=boxlite psql -h 127.0.0.1 -p 25432 -U boxlite -d boxlite -v ON_ERROR_STOP=1 -c "
-      TRUNCATE TABLE box, snapshot, snapshot_runner, audit_log
+      TRUNCATE TABLE box, job, volume, audit_log
                      RESTART IDENTITY CASCADE;
     " 2>&1 | tail -2 || warn "truncate had errors (some tables may not exist on fresh schema)"
   else
     warn "PG not running — skipping data truncate"
   fi
   ok "soft reset complete (identity + L1 boxes + schema preserved — no browser re-login needed)"
-  log "next: \`make stack-up\` — API re-seeds default snapshot; runner re-registers"
+  log "next: \`make stack-up\` — runner re-registers via heartbeat"
 elif [ "$MODE" = "hard" ]; then
   if boxlite ls 2>/dev/null | grep -q boxlite-local-postgres; then
     log "wiping schema + rebuilding via migrations..."
@@ -64,7 +64,7 @@ elif [ "$MODE" = "hard" ]; then
   fi
   ok "hard reset complete (L1 boxes alive, schema rebuilt — identity wiped)"
   warn "browser must re-login: clear sessionStorage + localStorage, then sign in via dex"
-  log "next: \`make stack-up\` — API will auto-seed all base data + wait for default snapshot"
+  log "next: \`make stack-up\` — API will auto-seed all base data on boot"
 else
   log "nuking everything (L1 boxes + data + logs)..."
   ( cd "${INFRA_LOCAL_DIR}" && make wipe )
