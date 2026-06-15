@@ -11,10 +11,9 @@ import asyncio
 import sys
 
 from .config import InfraConfig
-from .doctor import doctor, format_report
+from .doctor import DoctorError, doctor
 from .orchestrator import down, ensure_home_env, ps, up
 from .services import SERVICES
-from .types import DoctorError
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -40,9 +39,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 async def _cmd_doctor(config: InfraConfig) -> int:
-    report = await doctor(config, SERVICES, strict=False)
-    print(format_report(report))
-    return 1 if report.any_fail() else 0
+    failures = await doctor(config, SERVICES, strict=False)
+    for f in failures:
+        print(f"  ✗ {f}")
+    if failures:
+        return 1
+    print("  ✓ all preflight checks passed")
+    return 0
 
 
 async def _cmd_up(config: InfraConfig, names: list[str], skip_doctor: bool) -> int:
@@ -50,8 +53,7 @@ async def _cmd_up(config: InfraConfig, names: list[str], skip_doctor: bool) -> i
     try:
         await up(config, SERVICES, only=only, skip_doctor=skip_doctor)
     except DoctorError as e:
-        print("doctor preflight failed:", file=sys.stderr)
-        print(format_report(e.report), file=sys.stderr)
+        print(f"doctor preflight failed: {e}", file=sys.stderr)
         return 1
     return 0
 
@@ -71,7 +73,7 @@ async def _async_main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     config = InfraConfig.load()
     # Pin BOXLITE_HOME before any subcommand touches Boxlite.default() —
-    # the standalone `doctor` builds it via check_runtime_reachable.
+    # the standalone `doctor` builds it via check_runtime.
     ensure_home_env(config)
     if args.cmd == "doctor":
         return await _cmd_doctor(config)

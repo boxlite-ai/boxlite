@@ -83,17 +83,40 @@ fi
 [ -L "${APPS_DIR}/.env" ] || ln -sf api/.env "${APPS_DIR}/.env"
 
 # ---------- Component starters ----------
-start_api() {
-  if pid=$(component_pid api); [ -n "$pid" ]; then
-    ok "api already running (PID $pid)"
-    return
+# Returns 0 if <comp> should be (re)started, 1 if it's already running. Frees a
+# stale listener left by a crashed prior session (defense against EADDRINUSE).
+prestart() {
+  local comp="$1" port="$2" pid
+  if pid=$(component_pid "$comp"); [ -n "$pid" ]; then
+    ok "$comp already running (PID $pid)"
+    return 1
   fi
-  # Defense against stale listeners from a crashed prior session.
-  if port_listening "${PORT_API}"; then
-    warn "port ${PORT_API} already in use — killing prior listener"
-    lsof -ti :${PORT_API} -sTCP:LISTEN | xargs -r kill -9 2>/dev/null || true
+  if port_listening "$port"; then
+    warn "port ${port} already in use — killing prior listener"
+    lsof -ti :"$port" -sTCP:LISTEN | xargs -r kill -9 2>/dev/null || true
     sleep 1
   fi
+  return 0
+}
+
+# Wait for <comp> to be healthy: kind=http probes <target> URL, kind=port waits
+# for <port> to listen. Reports up/failed.
+await_up() {
+  local comp="$1" port="$2" kind="$3" target="$4" timeout="$5" healthy=1
+  case "$kind" in
+    http) wait_http "$target" "$timeout" && healthy=0 ;;
+    port) wait_port "$port" "$timeout" && healthy=0 ;;
+  esac
+  if [ "$healthy" -eq 0 ]; then
+    ok "$comp up on :${port}"
+  else
+    err "$comp failed to become healthy in ${timeout}s — see $(log_file "$comp")"
+    return 1
+  fi
+}
+
+start_api() {
+  prestart api "${PORT_API}" || return 0
   log "starting api..."
   # M5-native dev override: the Go runner reports system-wide CPU / memory /
   # disk usage (the whole Mac), not just what the runner + its boxes
@@ -120,24 +143,11 @@ start_api() {
     nohup corepack yarn nx serve api \
       > "$(log_file api)" 2>&1 & \
     echo $! > "$(pid_file api)" )
-  if wait_http "http://localhost:${PORT_API}/api/health" 180; then
-    ok "api up on :${PORT_API}"
-  else
-    err "api failed to become healthy in 180s — see $(log_file api)"
-    return 1
-  fi
+  await_up api "${PORT_API}" http "http://localhost:${PORT_API}/api/health" 180
 }
 
 start_runner() {
-  if pid=$(component_pid runner); [ -n "$pid" ]; then
-    ok "runner already running (PID $pid)"
-    return
-  fi
-  if port_listening "${PORT_RUNNER}"; then
-    warn "port ${PORT_RUNNER} already in use — killing prior listener"
-    lsof -ti :${PORT_RUNNER} -sTCP:LISTEN | xargs -r kill -9 2>/dev/null || true
-    sleep 1
-  fi
+  prestart runner "${PORT_RUNNER}" || return 0
   log "starting runner..."
   BOXLITE_API_URL=http://localhost:${PORT_API}/api \
   BOXLITE_RUNNER_TOKEN=local-shared-runner-token-aaaa1111 \
@@ -148,24 +158,11 @@ start_runner() {
   AWS_REGION=us-east-1 \
   nohup "${RUNNER_BIN}" > "$(log_file runner)" 2>&1 &
   echo $! > "$(pid_file runner)"
-  if wait_port "${PORT_RUNNER}" 60; then
-    ok "runner up on :${PORT_RUNNER}"
-  else
-    err "runner failed to listen in 60s — see $(log_file runner)"
-    return 1
-  fi
+  await_up runner "${PORT_RUNNER}" port "" 60
 }
 
 start_proxy() {
-  if pid=$(component_pid proxy); [ -n "$pid" ]; then
-    ok "proxy already running (PID $pid)"
-    return
-  fi
-  if port_listening "${PORT_PROXY}"; then
-    warn "port ${PORT_PROXY} already in use — killing prior listener"
-    lsof -ti :${PORT_PROXY} -sTCP:LISTEN | xargs -r kill -9 2>/dev/null || true
-    sleep 1
-  fi
+  prestart proxy "${PORT_PROXY}" || return 0
   log "starting proxy..."
   PROXY_PORT=${PORT_PROXY} \
   PROXY_PROTOCOL=http \
@@ -178,24 +175,11 @@ start_proxy() {
   SHUTDOWN_TIMEOUT_SEC=10 \
   nohup "${PROXY_BIN}" > "$(log_file proxy)" 2>&1 &
   echo $! > "$(pid_file proxy)"
-  if wait_port "${PORT_PROXY}" 30; then
-    ok "proxy up on :${PORT_PROXY}"
-  else
-    err "proxy failed to listen in 30s — see $(log_file proxy)"
-    return 1
-  fi
+  await_up proxy "${PORT_PROXY}" port "" 30
 }
 
 start_dashboard() {
-  if pid=$(component_pid dashboard); [ -n "$pid" ]; then
-    ok "dashboard already running (PID $pid)"
-    return
-  fi
-  if port_listening "${PORT_DASHBOARD}"; then
-    warn "port ${PORT_DASHBOARD} already in use — killing prior listener"
-    lsof -ti :${PORT_DASHBOARD} -sTCP:LISTEN | xargs -r kill -9 2>/dev/null || true
-    sleep 1
-  fi
+  prestart dashboard "${PORT_DASHBOARD}" || return 0
   log "starting dashboard (Vite dev)..."
   # VITE_API_URL=/api tells dashboard API calls to use the Vite dev
   # proxy (configured in vite.config.mts to forward /api → localhost:3001)
@@ -206,12 +190,7 @@ start_dashboard() {
     VITE_API_URL=/api nohup corepack yarn nx serve dashboard \
       > "$(log_file dashboard)" 2>&1 & \
     echo $! > "$(pid_file dashboard)" )
-  if wait_http "http://localhost:${PORT_DASHBOARD}" 120; then
-    ok "dashboard up on :${PORT_DASHBOARD}"
-  else
-    err "dashboard failed to become healthy in 120s — see $(log_file dashboard)"
-    return 1
-  fi
+  await_up dashboard "${PORT_DASHBOARD}" http "http://localhost:${PORT_DASHBOARD}" 120
 }
 
 # ---------- Dispatch ----------

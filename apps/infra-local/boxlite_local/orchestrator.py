@@ -16,10 +16,37 @@ import urllib.request
 from graphlib import TopologicalSorter
 from pathlib import Path
 
+from ._sdk import import_sdk
 from .config import InfraConfig, resolve_runtime_dir
 from .doctor import doctor
-from .execwrap import exec_collect
-from .types import HealthCheck, ServiceSpec
+from .services import HealthCheck, ServiceSpec
+
+
+async def exec_collect(
+    box,
+    command: str,
+    args: list[str] | None = None,
+    env: list[tuple[str, str]] | None = None,
+) -> tuple[int, str, str]:
+    """Run `command args` inside `box`, drain stdout+stderr, return (rc, out, err).
+
+    The SDK exposes `Execution.stdout()`/`stderr()` as async iterators; drain
+    both concurrently (avoids pipe-buffer deadlock), then `wait()` for the code.
+    """
+    execution = await box.exec(command, args or [], env=env)
+    out_parts: list[str] = []
+    err_parts: list[str] = []
+
+    async def drain(stream, sink: list[str]) -> None:
+        async for chunk in stream:
+            sink.append(chunk)
+
+    await asyncio.gather(
+        drain(execution.stdout(), out_parts),
+        drain(execution.stderr(), err_parts),
+    )
+    result = await execution.wait()
+    return result.exit_code, "".join(out_parts), "".join(err_parts)
 
 
 def topo_sort(services: dict[str, ServiceSpec]) -> list[list[str]]:
@@ -54,10 +81,7 @@ def build_box_options(spec: ServiceSpec, config: InfraConfig):
 
 def _build_box_options_with_volumes(spec: ServiceSpec, config: InfraConfig, volumes):
     """Same as build_box_options but accepts pre-computed volumes to avoid double-evaluation."""
-    try:
-        from boxlite import BoxOptions
-    except ImportError:
-        from boxlite.boxlite import BoxOptions  # type: ignore
+    _, BoxOptions = import_sdk()
 
     cmd = spec.cmd(config) if callable(spec.cmd) else spec.cmd
     return BoxOptions(
@@ -101,10 +125,7 @@ def ensure_home_env(config: InfraConfig) -> None:
 
 def get_runtime():
     ensure_runtime_env()
-    try:
-        from boxlite import Boxlite
-    except ImportError:
-        from boxlite.boxlite import Boxlite  # type: ignore
+    Boxlite, _ = import_sdk()
     return Boxlite.default()
 
 
@@ -148,7 +169,7 @@ async def start_service(runtime, spec: ServiceSpec, config: InfraConfig) -> None
     for host_path, _ in volumes:
         p = Path(host_path)
         # Heuristic: only auto-create directory mounts. Paths with a suffix
-        # (e.g. init.sh) are likely files — caller is responsible for them.
+        # (e.g. a `.sh`/`.json` file) are likely files — caller owns them.
         if not p.suffix:
             p.mkdir(parents=True, exist_ok=True)
 
@@ -222,8 +243,6 @@ async def wait_healthy(box, hc: HealthCheck, *, label: str, config: InfraConfig)
         await _wait_healthy_exec(box, hc, label=label, config=config)
     elif hc.http_url is not None:
         await _wait_healthy_http(hc, label=label)
-    elif hc.tcp_port is not None:
-        raise NotImplementedError(f"{label}: HealthCheck.tcp_port not implemented in 3a")
     else:
         raise ValueError(f"{label}: HealthCheck has no probe configured")
 

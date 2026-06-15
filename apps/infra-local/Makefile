@@ -17,15 +17,15 @@ export BOXLITE_HOME ?= $(REPO_ROOT)/.apps-local/boxlite
 # Matches the resolver in scripts/_stack-common.sh.
 BOXLITE_CLI := $(firstword $(wildcard $(REPO_ROOT)/target/release/boxlite $(REPO_ROOT)/target/debug/boxlite) boxlite)
 
-.PHONY: help up down ps doctor logs wipe itest test install migrate e2e itest-all \
+.PHONY: help up down ps doctor logs wipe install migrate \
         stack-build stack-up stack-down stack-restart stack-status stack-logs stack-reset stack-reset-hard stack-nuke \
         seed-init-data stack-rebuild-l1-box
 
 help:                  ## show this help
 	@awk -F':.*## ' '/^[a-zA-Z][a-zA-Z0-9_-]*:.*## / { printf "  %-16s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
-install:               ## install the package + test extras
-	$(PY) -m pip install -e ".[test]"
+install:               ## install the orchestrator package
+	$(PY) -m pip install -e .
 
 up:                    ## bring all services up (runs doctor preflight first)
 	$(PY) -m boxlite_local up
@@ -43,18 +43,6 @@ ps:                    ## list running boxlite-local-* boxes
 
 doctor:                ## run preflight checks (SDK + runtime + port conflicts)
 	$(PY) -m boxlite_local doctor
-
-test:                  ## run unit tests (no BoxLite required)
-	$(PY) -m pytest tests/unit -q
-
-itest:                 ## run integration smoke test (requires BoxLite runtime, ~30s)
-	BOXLITE_INTEGRATION=1 $(PY) -m pytest tests/integration/test_multi_service.py -v -s
-
-e2e:                   ## run comprehensive E2E suite (~60s, ~90s with smoke)
-	BOXLITE_INTEGRATION=1 $(PY) -m pytest tests/integration/test_e2e_full.py -v -s
-
-itest-all:             ## run BOTH integration suites (~90s)
-	BOXLITE_INTEGRATION=1 $(PY) -m pytest tests/integration -v
 
 migrate:               ## build local pg schema by running all TypeORM migrations from scratch
 	cd ../api && set -a && . ../.env && set +a && \

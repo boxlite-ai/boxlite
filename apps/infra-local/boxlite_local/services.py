@@ -11,7 +11,41 @@ unified reverse proxy; see `_caddyfile()`.
 
 from __future__ import annotations
 
-from .types import HealthCheck, ServiceSpec
+from dataclasses import dataclass, field
+from typing import Callable, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .config import InfraConfig
+
+
+@dataclass
+class HealthCheck:
+    """Box health probe. One of `exec` or `http_url` should be set."""
+    exec: Optional[list[str] | Callable[["InfraConfig"], list[str]]] = None
+    http_url: Optional[str] = None
+    interval_s: float = 2.0
+    timeout_s: float = 5.0
+    retries: int = 30
+    start_period_s: float = 0.0
+
+
+@dataclass
+class ServiceSpec:
+    """Declarative definition of one BoxLite-backed service."""
+    name: str
+    image: str
+    cpus: int = 1
+    memory_mib: int = 256
+    ports: list[tuple[int, int]] = field(default_factory=list)
+    env: Callable[["InfraConfig"], dict[str, str]] = field(default=lambda cfg: {})
+    volumes: Callable[["InfraConfig"], list[tuple[str, str]]] = field(default=lambda cfg: [])
+    cmd: Optional[list[str] | Callable[["InfraConfig"], list[str]]] = None
+    entrypoint: Optional[list[str]] = None   # overrides image entrypoint (e.g. ["sh"]); None keeps image default
+    working_dir: Optional[str] = None
+    depends_on: list[str] = field(default_factory=list)
+    healthcheck: Optional[HealthCheck] = None
+    one_shot: bool = False
+    auto_remove: bool = False
 
 
 SPEC_PG = ServiceSpec(

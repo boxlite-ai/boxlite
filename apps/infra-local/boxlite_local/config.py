@@ -69,14 +69,6 @@ def resolve_runtime_dir() -> Path | None:
     return pick_runtime_dir(_platform_runtime_cache_dir(), version)
 
 
-def _parse_int_env(name: str, default: str) -> int:
-    raw = os.environ.get(name, default)
-    try:
-        return int(raw)
-    except ValueError as e:
-        raise ValueError(f"{name} must be an integer, got: {raw!r}") from e
-
-
 def find_repo_root_from(here: Path) -> Path:
     """Walk up from `here` to the first dir containing apps/infra-local/.
 
@@ -114,43 +106,32 @@ def _default_state_root() -> Path:
 class InfraConfig:
     host_hub: str = "host.boxlite.internal"
 
-    # postgres
-    pg_host_port: int = 25432
+    # Credentials (env-overridable; each is genuinely consumed — postgres &
+    # minio entrypoints, pgadmin login).
     pg_user: str = "boxlite"
     pg_password: str = field(default="boxlite", repr=False)
     pg_db: str = "boxlite"
-
-    # redis (3a)
-    redis_host_port: int = 26379
-
-    # minio (3a)
-    minio_host_port: int = 29000
     minio_user: str = "minioadmin"
     minio_password: str = field(default="minioadmin", repr=False)
-
-    # registry (3a)
-    registry_host_port: int = 25000
-
-    # dex (3b)
-    dex_host_port: int = 25556
-
-    # jaeger (3b)
-    jaeger_host_port: int = 26686
-
-    # pgadmin (3b)
-    pgadmin_host_port: int = 25051
     pgadmin_email: str = "admin@boxlite.dev"
     pgadmin_password: str = field(default="boxlite", repr=False)
 
-    # registry-ui (3b)
+    # ── Fixed host ports for the local stack (NOT env-overridable) ──────────
+    # Each value is also the literal host port in the matching
+    # ServiceSpec.ports in services.py — that literal is what the box actually
+    # binds. These named fields exist only so generated configs (the Caddyfile,
+    # the minio-init URL, dex_issuer) and the integration tests can reference
+    # the same number by name. Changing one of these alone will NOT move the
+    # bound port; update the services.py literal too. Ports with no such
+    # consumer (postgres, redis, caddy-https, otel-grpc) are left as bare
+    # literals in services.py and intentionally have no field here.
+    minio_host_port: int = 29000
+    registry_host_port: int = 25000
+    dex_host_port: int = 25556
+    jaeger_host_port: int = 26686
+    pgadmin_host_port: int = 25051
     registry_ui_host_port: int = 25052
-
-    # caddy (3c)
     caddy_http_port: int = 28080
-    caddy_https_port: int = 28443
-
-    # otel-collector (3c)
-    otel_grpc_port: int = 24317
     otel_http_port: int = 24318
     otel_health_port: int = 23133
 
@@ -164,28 +145,17 @@ class InfraConfig:
 
     @classmethod
     def load(cls) -> "InfraConfig":
+        # Only identity/credential/path fields are env-overridable; host ports
+        # are fixed (see the field comment above) and stay at their defaults.
         return cls(
             host_hub=os.environ.get("BOXLITE_HOST_HUB", "host.boxlite.internal"),
-            pg_host_port=_parse_int_env("BOXLITE_PG_HOST_PORT", "25432"),
             pg_user=os.environ.get("BOXLITE_PG_USER", "boxlite"),
             pg_password=os.environ.get("BOXLITE_PG_PASSWORD", "boxlite"),
             pg_db=os.environ.get("BOXLITE_PG_DB", "boxlite"),
-            redis_host_port=_parse_int_env("BOXLITE_REDIS_HOST_PORT", "26379"),
-            minio_host_port=_parse_int_env("BOXLITE_MINIO_HOST_PORT", "29000"),
             minio_user=os.environ.get("BOXLITE_MINIO_USER", "minioadmin"),
             minio_password=os.environ.get("BOXLITE_MINIO_PASSWORD", "minioadmin"),
-            registry_host_port=_parse_int_env("BOXLITE_REGISTRY_HOST_PORT", "25000"),
-            dex_host_port=_parse_int_env("BOXLITE_DEX_HOST_PORT", "25556"),
-            jaeger_host_port=_parse_int_env("BOXLITE_JAEGER_HOST_PORT", "26686"),
-            pgadmin_host_port=_parse_int_env("BOXLITE_PGADMIN_HOST_PORT", "25051"),
             pgadmin_email=os.environ.get("BOXLITE_PGADMIN_EMAIL", "admin@boxlite.dev"),
             pgadmin_password=os.environ.get("BOXLITE_PGADMIN_PASSWORD", "boxlite"),
-            registry_ui_host_port=_parse_int_env("BOXLITE_REGISTRY_UI_HOST_PORT", "25052"),
-            caddy_http_port=_parse_int_env("BOXLITE_CADDY_HTTP_PORT", "28080"),
-            caddy_https_port=_parse_int_env("BOXLITE_CADDY_HTTPS_PORT", "28443"),
-            otel_grpc_port=_parse_int_env("BOXLITE_OTEL_GRPC_PORT", "24317"),
-            otel_http_port=_parse_int_env("BOXLITE_OTEL_HTTP_PORT", "24318"),
-            otel_health_port=_parse_int_env("BOXLITE_OTEL_HEALTH_PORT", "23133"),
             # .expanduser() so a documented value like
             # BOXLITE_DATA_DIR=~/my-data expands the leading ~ instead of
             # creating a literal "~" dir under the cwd.
@@ -200,10 +170,6 @@ class InfraConfig:
                 or str(_default_state_root() / "boxlite")
             ).expanduser(),
         )
-
-    @property
-    def pg_url(self) -> str:
-        return f"postgresql://{self.pg_user}@{self.host_hub}:{self.pg_host_port}/{self.pg_db}"
 
     @property
     def dex_issuer(self) -> str:

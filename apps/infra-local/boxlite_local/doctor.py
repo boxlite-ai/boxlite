@@ -1,160 +1,83 @@
 """Preflight checks — run before any runtime mutation.
 
-Checks (walking skeleton, postgres-only):
-  1. BoxLite SDK importable
-  2. BoxLite runtime reachable (list_info succeeds)
-  3. For each (host_port, _) in services[*].ports: lsof shows no non-boxlite listener
+Each check returns a human-readable failure string (or None / []); `doctor()`
+aggregates them into a flat list and, when strict, raises `DoctorError`. No
+result-type ceremony — the messages are the API.
 
-Each check returns a DoctorCheck. doctor() aggregates them into a DoctorReport.
-If strict=True and any check is Severity.FAIL, raises DoctorError.
-
-macOS-only: relies on `lsof` and BSD-style flags. Cross-platform support is
-out of scope for the walking skeleton.
+macOS-only: the port check relies on `lsof`.
 """
 
 from __future__ import annotations
 
 import shutil
 import subprocess
-from dataclasses import dataclass
 
+from ._sdk import import_sdk
 from .config import InfraConfig
-from .types import DoctorCheck, DoctorError, DoctorReport, ServiceSpec, Severity
+from .services import ServiceSpec
 
 
-@dataclass(frozen=True)
-class _LsofRow:
-    pid: int
-    cmd: str
-    user: str
-    name: str
+class DoctorError(RuntimeError):
+    """Raised when doctor(strict=True) finds any failing check."""
 
 
-def _parse_lsof_F(output: str) -> list[_LsofRow]:
-    """Parse `lsof -F pcLn` machine-readable output into rows.
+def _lsof_owner(port: int) -> str | None:
+    """Command name holding a TCP LISTEN on `port`, or None if free.
 
-    Format: one field per line, prefix byte indicates field type.
-      p<pid>   c<command>   L<login>   n<name>
-    Process records are introduced by `p`. Subsequent fields belong to
-    that process until the next `p`.
+    `lsof` exits 1 when nothing is listening — the happy path. Raises
+    DoctorError if lsof itself errors (so we never silently report "free").
     """
-    rows: list[_LsofRow] = []
-    pid: int | None = None
-    cmd = user = name = ""
-    for line in output.splitlines():
-        if not line:
-            continue
-        prefix, value = line[0], line[1:]
-        if prefix == "p":
-            if pid is not None:
-                rows.append(_LsofRow(pid=pid, cmd=cmd, user=user, name=name))
-            pid = int(value)
-            cmd = user = name = ""
-        elif prefix == "c":
-            cmd = value
-        elif prefix == "L":
-            user = value
-        elif prefix == "n":
-            name = value
-    if pid is not None:
-        rows.append(_LsofRow(pid=pid, cmd=cmd, user=user, name=name))
-    return rows
-
-
-def _is_boxlite_owner(cmd: str) -> bool:
-    """True iff the lsof command name is one of ours (boxlite-serve, boxlited, boxlite-s truncation, ...)."""
-    return cmd.startswith("boxlite")
-
-
-def check_sdk_importable() -> DoctorCheck:
-    try:
-        try:
-            from boxlite import Boxlite  # noqa: F401
-        except ImportError:
-            from boxlite.boxlite import Boxlite  # noqa: F401
-        return DoctorCheck(
-            name="sdk-importable",
-            severity=Severity.OK,
-            msg="BoxLite SDK importable",
-        )
-    except ImportError as e:
-        return DoctorCheck(
-            name="sdk-importable",
-            severity=Severity.FAIL,
-            msg=f"BoxLite Python SDK not importable: {e}",
-            hint="Run `pip install -e sdks/python` from the boxlite repo, and confirm `which python` points at the right interpreter.",
-        )
-
-
-async def check_runtime_reachable() -> DoctorCheck:
-    try:
-        try:
-            from boxlite import Boxlite
-        except ImportError:
-            from boxlite.boxlite import Boxlite
-        runtime = Boxlite.default()
-        await runtime.list_info()
-        return DoctorCheck(
-            name="runtime-reachable",
-            severity=Severity.OK,
-            msg="BoxLite runtime reachable",
-        )
-    except Exception as e:
-        return DoctorCheck(
-            name="runtime-reachable",
-            severity=Severity.FAIL,
-            msg=f"BoxLite runtime not responding: {type(e).__name__}: {e}",
-            hint="Check `boxlite serve` / lockfile state.",
-        )
-
-
-def check_port_free(port: int) -> DoctorCheck:
-    """Pass if no listener on `port`, OR the listener's command starts with `boxlite`."""
-    name = f"port-{port}-free"
     if not shutil.which("lsof"):
-        return DoctorCheck(
-            name=name,
-            severity=Severity.FAIL,
-            msg="lsof not found; cannot verify port availability",
-            hint="Install lsof (it's preinstalled on macOS — check your $PATH).",
-        )
+        raise DoctorError("lsof not found; cannot verify port availability")
     proc = subprocess.run(
-        ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-F", "pcLn"],
+        ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-F", "c"],
         capture_output=True,
         text=True,
         check=False,
     )
-    # lsof exits 1 when nothing is listening. That's the happy path.
-    # If stderr is non-empty on a non-zero exit, lsof actually errored — fail
-    # the check rather than silently report "free".
-    if proc.returncode != 0 and not proc.stdout.strip():
-        if proc.stderr.strip():
-            return DoctorCheck(
-                name=name,
-                severity=Severity.FAIL,
-                msg=f"lsof exited {proc.returncode}: {proc.stderr.strip()[:120]}",
-                hint="Check lsof permissions / availability; cannot verify port conflict otherwise.",
-            )
-        return DoctorCheck(
-            name=name,
-            severity=Severity.OK,
-            msg=f"port {port} is free",
+    # -F c output is one field per line; the command is the `c`-prefixed line.
+    for line in proc.stdout.splitlines():
+        if line.startswith("c"):
+            return line[1:]
+    if proc.returncode != 0 and proc.stderr.strip():
+        raise DoctorError(f"lsof exited {proc.returncode}: {proc.stderr.strip()[:120]}")
+    return None
+
+
+def check_ports_free(ports: list[int]) -> list[str]:
+    """One failure string per port held by a non-boxlite listener."""
+    failures: list[str] = []
+    for port in ports:
+        try:
+            owner = _lsof_owner(port)
+        except DoctorError as e:
+            failures.append(str(e))
+            continue
+        # A boxlite-owned listener (boxlite-serve / boxlited / boxlite-shim) is
+        # one of ours, not a conflict.
+        if owner and not owner.startswith("boxlite"):
+            failures.append(f"port {port} held by `{owner}` — stop it or change the port")
+    return failures
+
+
+def check_sdk() -> str | None:
+    try:
+        import_sdk()
+        return None
+    except ImportError as e:
+        return (
+            f"BoxLite SDK not importable: {e} — run "
+            "`pip install -e sdks/python` and confirm `which python`"
         )
-    rows = _parse_lsof_F(proc.stdout)
-    foreign = [r for r in rows if not _is_boxlite_owner(r.cmd)]
-    if foreign:
-        r = foreign[0]
-        return DoctorCheck(
-            name=name,
-            severity=Severity.FAIL,
-            msg=f"port {port} held by `{r.cmd}` (PID {r.pid}, user {r.user})",
-            hint="Change the host port in InfraConfig or stop the local service.",
-        )
-    return DoctorCheck(
-        name=name,
-        severity=Severity.OK,
-        msg=f"port {port} free (or held only by boxlite)",
-    )
+
+
+async def check_runtime() -> str | None:
+    try:
+        Boxlite, _ = import_sdk()
+        await Boxlite.default().list_info()
+        return None
+    except Exception as e:
+        return f"BoxLite runtime not responding ({type(e).__name__}: {e}) — check `boxlite serve` / lockfile"
 
 
 async def doctor(
@@ -162,28 +85,21 @@ async def doctor(
     services: dict[str, ServiceSpec],
     *,
     strict: bool = True,
-) -> DoctorReport:
-    """Run preflight checks. Raises DoctorError if strict and any FAIL."""
-    checks: list[DoctorCheck] = []
-    checks.append(check_sdk_importable())
-    if checks[-1].severity != Severity.FAIL:
-        checks.append(await check_runtime_reachable())
-    for spec in services.values():
-        for host_port, _ in spec.ports:
-            checks.append(check_port_free(host_port))
+) -> list[str]:
+    """Run preflight checks; return failure strings (empty == healthy).
 
-    report = DoctorReport(checks=checks)
-    if strict and report.any_fail():
-        raise DoctorError(report)
-    return report
-
-
-def format_report(report: DoctorReport) -> str:
-    """Pretty-print a DoctorReport for the CLI doctor subcommand."""
-    marker = {Severity.OK: "✓", Severity.FAIL: "✗", Severity.WARN: "⚠"}
-    lines: list[str] = []
-    for c in report.checks:
-        lines.append(f"  {marker[c.severity]} {c.name:<24} {c.msg}")
-        if c.severity != Severity.OK and c.hint:
-            lines.append(f"        → {c.hint}")
-    return "\n".join(lines)
+    Raises DoctorError if `strict` and any check fails.
+    """
+    failures: list[str] = []
+    sdk_err = check_sdk()
+    if sdk_err:
+        failures.append(sdk_err)
+    else:
+        runtime_err = await check_runtime()
+        if runtime_err:
+            failures.append(runtime_err)
+    ports = [host_port for spec in services.values() for host_port, _ in spec.ports]
+    failures += check_ports_free(ports)
+    if strict and failures:
+        raise DoctorError("; ".join(failures))
+    return failures
