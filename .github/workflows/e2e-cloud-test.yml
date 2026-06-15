@@ -50,41 +50,8 @@ env:
   ADMIN_ORG_ID: 4a1eef70-8734-4814-b7a5-0ca3522a8760
 
 jobs:
-  # ──────────────────────────────────────────────────────────────────────
-  # SDK artifact prerequisites. Each lane builds the canonical artifact
-  # via its own reusable workflow (same workflow that fires on a release
-  # publish) so the entry-point e2e cases consume exactly the same
-  # binaries the published SDK ships with, instead of a one-off cargo
-  # build inlined here. target_filter narrows each matrix to the single
-  # linux-x64 entry the gate needs.
-  # ──────────────────────────────────────────────────────────────────────
-  build_c:
-    name: Build C SDK (linux-x64-gnu)
-    uses: ./.github/workflows/build-c.yml
-    permissions:
-      contents: read
-    with:
-      target_filter: linux-x64-gnu
-
-  build_node:
-    name: Build Node SDK (linux-x64-gnu)
-    uses: ./.github/workflows/build-node.yml
-    permissions:
-      contents: read
-    with:
-      target_filter: linux-x64-gnu
-
-  build_cli:
-    name: Build CLI (linux-x64-gnu)
-    uses: ./.github/workflows/build-runtime.yml
-    permissions:
-      contents: read
-    with:
-      target_filter: linux-x64-gnu
-
   e2e:
     name: E2E suite (Tokyo)
-    needs: [build_c, build_node, build_cli]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -306,67 +273,45 @@ jobs:
           pip install --break-system-packages --force-reinstall ../../target/wheels/boxlite-*.whl
           pip install --break-system-packages --quiet pytest pytest-asyncio pytest-timeout
 
-      # ──────────────────────────────────────────────────────────────
-      # Pull the SDK artifacts the build_* prereq jobs uploaded, then
-      # land them at the paths the e2e fixtures look at:
-      #   test_c_entry    target/release/libboxlite.{so,a} + sdks/c/include/boxlite.h
-      #   test_go_entry   target/release/libboxlite.a (CGO static link)
-      #   test_cli_entry  /usr/local/bin/boxlite + test_cli_detach_recovery same
-      #   test_node_entry sdks/node/{native,npm}/*.node
-      # No inline cargo build — the canonical build pipelines own the
-      # artifact shape, and this workflow now consumes them the same
-      # way an external user would consume the release tarballs.
-      # ──────────────────────────────────────────────────────────────
-      - name: Download C SDK artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: c-sdk-linux-x64-gnu
-          path: /tmp/c-sdk
-      - name: Install C SDK (libboxlite.{so,a} + boxlite.h)
+      - name: Build C / Go / CLI / Node SDK entry-point artifacts from this checkout
+        # The Python SDK alone is not enough to drive the C / Go / Node /
+        # CLI entry-point e2e cases. Each one needs a build artifact:
+        #
+        #   test_c_entry           target/release/libboxlite.{so,a}
+        #                          (cdylib + staticlib from sdks/c)
+        #   test_go_entry          target/release/libboxlite.a (CGO static link)
+        #   test_cli_entry         `boxlite` binary on PATH (src/cli)
+        #   test_cli_detach_recovery same
+        #   test_node_entry        sdks/node/{native,dist,npm}/*.node (napi-rs)
+        #
+        # Build them from THIS checkout, not from a tagged release —
+        # the published v0.9.5 is pre-#715 (Sandbox→Box rename) and
+        # cannot talk to the current Tokyo Api. Reuses the cargo cache
+        # from the maturin Python build above so the incremental cost
+        # for boxlite-c + boxlite-cli is small (≈ 2-3 min on a cold
+        # GHA runner).
+        env:
+          BOXLITE_DEPS_STUB: "1"
         run: |
           set -euo pipefail
-          # build-c.yml uploads a single .tar.gz inside the artifact dir.
-          ARCHIVE=$(ls /tmp/c-sdk/boxlite-c-v*-linux-x64-gnu.tar.gz)
-          tar -xzf "$ARCHIVE" -C /tmp/c-sdk
-          DIR=$(ls -d /tmp/c-sdk/boxlite-c-v*-linux-x64-gnu)
-          mkdir -p target/release sdks/c/include
-          cp "$DIR/lib/libboxlite.a"  target/release/
-          cp "$DIR/lib/libboxlite.so" target/release/
-          cp "$DIR/include/boxlite.h" sdks/c/include/
-          ls -lh target/release/libboxlite.* sdks/c/include/boxlite.h
+          # Rust: build the C SDK cdylib/staticlib + the CLI binary.
+          # Both live in the workspace already configured for maturin.
+          cargo build --release -p boxlite-c -p boxlite-cli
+          # Install the CLI on PATH so test_cli_entry/test_cli_detach_recovery
+          # find it via shutil.which("boxlite").
+          sudo install -m 0755 target/release/boxlite /usr/local/bin/boxlite
+          boxlite --version || true
+          # Confirm the cdylib + staticlib landed where test_c_entry /
+          # test_go_entry look.
+          ls -lh target/release/libboxlite.so target/release/libboxlite.a
 
-      - name: Download CLI artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: cli-linux-x64-gnu
-          path: /tmp/cli
-      - name: Install CLI on PATH
-        # build-runtime.yml packages with rust_target in the filename
-        # (boxlite-cli-v<ver>-x86_64-unknown-linux-gnu.tar.gz) but uploads
-        # under the friendly target name (cli-linux-x64-gnu). The glob
-        # below picks the inner tarball regardless of the version string.
-        run: |
-          set -euo pipefail
-          ARCHIVE=$(ls /tmp/cli/boxlite-cli-v*-x86_64-unknown-linux-gnu.tar.gz)
-          tar -xzf "$ARCHIVE" -C /tmp/cli
-          sudo install -m 0755 /tmp/cli/boxlite /usr/local/bin/boxlite
-          boxlite --version
-
-      - name: Download Node SDK artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: artifacts-linux-x64-gnu
-          path: /tmp/node-sdk
-      - name: Install Node SDK (native/*.node + npm/*)
-        run: |
-          set -euo pipefail
-          # build-node.yml uploads a single tar (artifacts-<target>.tar)
-          # containing native/boxlite.js + npm/<platform>/*.node.
-          ARCHIVE=$(ls /tmp/node-sdk/artifacts-linux-x64-gnu.tar)
-          tar -xf "$ARCHIVE" -C sdks/node
-          ls -lh sdks/node/native/*.node sdks/node/npm/ 2>/dev/null || {
-            echo "::error::Node SDK artifact missing expected files"; exit 1;
-          }
+          # Node SDK: napi build → sdks/node/native/*.node. Uses the
+          # cargo build the previous step already started so this is
+          # mostly the napi-rs glue + tsc.
+          cd sdks/node
+          npm ci --no-audit --no-fund --silent
+          npm run build:native
+          ls -lh native/*.node || { echo "::error::node native build produced no .node files"; exit 1; }
 
       # ──────────────────────────────────────────────────────────────────
       # Pytest configuration: write the profile pointing at Tokyo API LB,
