@@ -20,7 +20,7 @@
 #   GitHub: GitHub App → short-lived installation token (no PAT)
 #
 # Setup: ./scripts/ci/setup-ci-runner.sh
-name: E2E Tests
+name: E2E local
 
 on:
   push:
@@ -33,7 +33,7 @@ on:
       - 'sdks/**'
       - '**/Cargo.toml'
       - 'Cargo.lock'
-      - '.github/workflows/e2e-test.yml'
+      - '.github/workflows/e2e-local.yml'
   pull_request:
     types: [labeled, synchronize]
     branches: [main]
@@ -71,7 +71,7 @@ env:
 
 jobs:
   # =========================================================================
-  # Gate: PRs require 'e2e-test' label (only maintainers can add it)
+  # Gate: PRs require 'e2e-local' label (only maintainers can add it)
   # =========================================================================
   should-run:
     runs-on: ubuntu-latest
@@ -83,7 +83,7 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             LABELS='${{ toJson(github.event.pull_request.labels.*.name) }}'
-            if echo "$LABELS" | jq -e 'index("e2e-test")' > /dev/null 2>&1; then
+            if echo "$LABELS" | jq -e 'index("e2e-local")' > /dev/null 2>&1; then
               echo "run=true" >> "$GITHUB_OUTPUT"
             else
               echo "run=false" >> "$GITHUB_OUTPUT"
@@ -340,7 +340,7 @@ jobs:
       - name: Upload rescued prior-run logs
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-test-logs-rescued-${{ github.run_id }}-${{ github.run_attempt }}
+          name: e2e-local-logs-rescued-${{ github.run_id }}-${{ github.run_attempt }}
           path: /tmp/boxlite-rescue/
           retention-days: 7
           if-no-files-found: ignore
@@ -455,7 +455,7 @@ jobs:
         if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-test-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          name: e2e-local-logs-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             target/nextest/
             /tmp/boxlite-*/

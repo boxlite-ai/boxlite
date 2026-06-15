@@ -1,7 +1,7 @@
 #!/bin/bash
 # Set up AWS infrastructure for E2E integration test runner.
 #
-# This provisions everything needed to run the e2e-test.yml workflow:
+# This provisions everything needed to run the e2e-local.yml workflow:
 #   AWS: OIDC provider, IAM roles, instance profile, security group
 #   GitHub: Repository variables and secrets
 #
@@ -475,7 +475,7 @@ step_configure_github() {
     # hook_attributes.url is required by the API even if unused
     local manifest
     # default_permissions:
-    #   administration:     write — mint runner registration tokens (used by e2e-test.yml)
+    #   administration:     write — mint runner registration tokens (used by e2e-local.yml)
     #   actions_variables:  write — persist EC2_E2E_INSTANCE_ID across runs
     manifest=$(jq -n \
         --arg name "boxlite-e2e-runner" \
@@ -713,7 +713,7 @@ main() {
     print_info "Instance Profile: $INSTANCE_PROFILE_NAME"
     print_info "Security Group: $SG_ID"
     echo ""
-    print_success "Run: gh workflow run e2e-test.yml"
+    print_success "Run: gh workflow run e2e-local.yml"
 }
 
 main "$@"

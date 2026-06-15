@@ -159,7 +159,7 @@ is enabled. The workflow is dormant until repository variable
 4. Trigger a new push, pull request update, or manual dispatch and verify CodeQL analysis uploads successfully.
 5. Roll back by setting `CODEQL_ADVANCED_SETUP_ENABLED=false` and re-enabling default setup.
 
-### `e2e-test.yml`
+### `e2e-local.yml`
 
 Runs VM-based E2E integration tests on an ephemeral AWS EC2 self-hosted runner.
 
@@ -172,7 +172,7 @@ Runs VM-based E2E integration tests on an ephemeral AWS EC2 self-hosted runner.
 
 **Triggers:**
 - Push to `main` (path-filtered to `src/`, `sdks/`, `Cargo.*`)
-- Pull request with `e2e` label (cost-gated)
+- Pull request with `e2e-local` label (cost-gated)
 - Manual dispatch (`workflow_dispatch`)
 
 **Cost:** ~$0.34/hr (c8i.2xlarge). Typical run: 15-25 min → ~$0.09-0.14 per run.
