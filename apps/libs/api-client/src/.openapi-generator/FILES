@@ -127,6 +127,7 @@ docs/SignedPortPreviewUrl.md
 docs/SshAccessDto.md
 docs/SshAccessValidationDto.md
 docs/StorageAccessDto.md
+docs/SupportedBoxImage.md
 docs/SystemRole.md
 docs/ToolboxProxyUrl.md
 docs/TraceSpan.md
@@ -246,6 +247,7 @@ models/signed-port-preview-url.ts
 models/ssh-access-dto.ts
 models/ssh-access-validation-dto.ts
 models/storage-access-dto.ts
+models/supported-box-image.ts
 models/system-role.ts
 models/toolbox-proxy-url.ts
 models/trace-span.ts

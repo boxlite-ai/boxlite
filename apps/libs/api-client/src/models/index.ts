@@ -91,6 +91,7 @@ export * from './signed-port-preview-url';
 export * from './ssh-access-dto';
 export * from './ssh-access-validation-dto';
 export * from './storage-access-dto';
+export * from './supported-box-image';
 export * from './system-role';
 export * from './toolbox-proxy-url';
 export * from './trace-span';

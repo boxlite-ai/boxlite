@@ -91,6 +91,7 @@ export const queryKeys = {
   },
   box: {
     all: ['box'] as const,
+    supportedImages: (organizationId: string) => [...queryKeys.box.all, organizationId, 'supported-images'] as const,
   },
   analytics: {
     all: ['analytics'] as const,

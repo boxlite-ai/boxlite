@@ -5,7 +5,7 @@
  */
 
 import { BadRequestError } from '../../exceptions/bad-request.exception'
-import { assertSupportedImage, supportedImages } from './curated-images.constant'
+import { assertSupportedImage, supportedImageOptions, supportedImages } from './curated-images.constant'
 
 describe('supported image allowlist', () => {
   const ENV_KEYS = ['BOXLITE_SYSTEM_BASE_IMAGE', 'BOXLITE_SYSTEM_PYTHON_IMAGE', 'BOXLITE_SYSTEM_NODE_IMAGE']
@@ -32,6 +32,30 @@ describe('supported image allowlist', () => {
     expect(supported[0]).toContain('ghcr.io/boxlite-ai/boxlite-agent-base@sha256:')
     expect(supported[1]).toContain('ghcr.io/boxlite-ai/boxlite-agent-python@sha256:')
     expect(supported[2]).toContain('ghcr.io/boxlite-ai/boxlite-agent-node@sha256:')
+  })
+
+  it('exposes display metadata for the create-box picker', () => {
+    const options = supportedImageOptions()
+    expect(options).toEqual([
+      expect.objectContaining({
+        id: 'base',
+        name: 'Base',
+        isDefault: true,
+        ref: expect.stringContaining('ghcr.io/boxlite-ai/boxlite-agent-base@sha256:'),
+      }),
+      expect.objectContaining({
+        id: 'python',
+        name: 'Python',
+        isDefault: false,
+        ref: expect.stringContaining('ghcr.io/boxlite-ai/boxlite-agent-python@sha256:'),
+      }),
+      expect.objectContaining({
+        id: 'node',
+        name: 'Node.js',
+        isDefault: false,
+        ref: expect.stringContaining('ghcr.io/boxlite-ai/boxlite-agent-node@sha256:'),
+      }),
+    ])
   })
 
   it('accepts each supported ref verbatim', () => {

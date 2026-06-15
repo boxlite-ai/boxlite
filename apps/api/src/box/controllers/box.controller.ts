@@ -70,6 +70,7 @@ import { BOX_EVENT_CHANNEL } from '../../common/constants/constants'
 import { RequireFlagsEnabled } from '@openfeature/nestjs-sdk'
 import { FeatureFlags } from '../../common/constants/feature-flags'
 import { RegionBoxAccessGuard } from '../guards/region-box-access.guard'
+import { SupportedBoxImageDto } from '../dto/supported-box-image.dto'
 
 @ApiTags('box')
 @Controller('box')
@@ -254,6 +255,20 @@ export class BoxController {
     const boxes = await this.boxService.findByRunnerId(runnerContext.runnerId, stateArray, skip)
 
     return this.boxService.toBoxDtos(boxes)
+  }
+
+  @Get('supported-images')
+  @ApiOperation({
+    summary: 'List supported box images',
+    operationId: 'listSupportedBoxImages',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'List of images accepted by box creation',
+    type: [SupportedBoxImageDto],
+  })
+  listSupportedBoxImages(): SupportedBoxImageDto[] {
+    return this.boxService.listSupportedImages()
   }
 
   @Get(':boxIdOrName')

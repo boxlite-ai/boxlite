@@ -44,6 +44,8 @@ import type { SshAccessDto } from '../models';
 // @ts-ignore
 import type { SshAccessValidationDto } from '../models';
 // @ts-ignore
+import type { SupportedBoxImage } from '../models';
+// @ts-ignore
 import type { ToolboxProxyUrl } from '../models';
 // @ts-ignore
 import type { TraceSpan } from '../models';
@@ -858,6 +860,46 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
         },
         /**
          * 
+         * @summary List supported box images
+         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        listSupportedBoxImages: async (xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/box/supported-images`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            if (xBoxLiteOrganizationID != null) {
+                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
+            }
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
          * @summary Recover box from error state
          * @param {string} boxIdOrName ID or name of the box
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -1563,6 +1605,19 @@ export const BoxApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
+         * @summary List supported box images
+         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async listSupportedBoxImages(xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<SupportedBoxImage>>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.listSupportedBoxImages(xBoxLiteOrganizationID, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['BoxApi.listSupportedBoxImages']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
          * @summary Recover box from error state
          * @param {string} boxIdOrName ID or name of the box
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -1903,6 +1958,16 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
         },
         /**
          * 
+         * @summary List supported box images
+         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        listSupportedBoxImages(xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<SupportedBoxImage>> {
+            return localVarFp.listSupportedBoxImages(xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
          * @summary Recover box from error state
          * @param {string} boxIdOrName ID or name of the box
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -2220,6 +2285,17 @@ export class BoxApi extends BaseAPI {
      */
     public listBoxesPaginated(xBoxLiteOrganizationID?: string, page?: number, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<ListBoxesPaginatedStatesEnum>, regions?: Array<string>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, lastEventAfter?: Date, lastEventBefore?: Date, sort?: ListBoxesPaginatedSortEnum, order?: ListBoxesPaginatedOrderEnum, options?: RawAxiosRequestConfig) {
         return BoxApiFp(this.configuration).listBoxesPaginated(xBoxLiteOrganizationID, page, limit, id, name, labels, includeErroredDeleted, states, regions, minCpu, maxCpu, minMemoryGiB, maxMemoryGiB, minDiskGiB, maxDiskGiB, lastEventAfter, lastEventBefore, sort, order, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary List supported box images
+     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public listSupportedBoxImages(xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return BoxApiFp(this.configuration).listSupportedBoxImages(xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

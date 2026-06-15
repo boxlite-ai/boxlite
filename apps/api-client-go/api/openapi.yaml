@@ -1876,6 +1876,36 @@ paths:
       summary: Get boxes for the authenticated runner
       tags:
       - box
+  /box/supported-images:
+    get:
+      operationId: listSupportedBoxImages
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/SupportedBoxImage"
+                type: array
+          description: List of images accepted by box creation
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: List supported box images
+      tags:
+      - box
   /box/{boxIdOrName}:
     get:
       operationId: getBox
@@ -6633,6 +6663,35 @@ components:
       - page
       - total
       - totalPages
+      type: object
+    SupportedBoxImage:
+      example:
+        id: python
+        name: Python
+        ref: ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6
+        isDefault: false
+      properties:
+        id:
+          description: Stable image option ID shown by the dashboard
+          example: python
+          type: string
+        name:
+          description: Display name for the supported image
+          example: Python
+          type: string
+        ref:
+          description: Pinned OCI image reference accepted by box creation
+          example: ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6
+          type: string
+        isDefault:
+          description: Whether this image is used when create omits an image
+          example: false
+          type: boolean
+      required:
+      - id
+      - isDefault
+      - name
+      - ref
       type: object
     ResizeBox:
       example:

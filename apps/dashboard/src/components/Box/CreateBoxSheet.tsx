@@ -8,6 +8,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/
 import { Field, FieldError, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   Sheet,
   SheetContent,
@@ -20,13 +21,14 @@ import {
 import { Spinner } from '@/components/ui/spinner'
 import { RoutePath } from '@/enums/RoutePath'
 import { useCreateBoxMutation } from '@/hooks/mutations/useCreateBoxMutation'
+import { useSupportedBoxImagesQuery } from '@/hooks/queries/useSupportedBoxImagesQuery'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
 import { getBoxRouteId } from '@/lib/box-identity'
 import { cn } from '@/lib/utils'
 import type { Box } from '@boxlite-ai/api-client'
 import { useForm } from '@tanstack/react-form'
-import { Cpu, HardDrive, MemoryStick, Plus, type LucideIcon } from 'lucide-react'
+import { Cpu, HardDrive, MemoryStick, Package, Plus, type LucideIcon } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { NumericFormat } from 'react-number-format'
 import { createSearchParams, generatePath, useNavigate } from 'react-router-dom'
@@ -55,6 +57,7 @@ const formSchema = z.object({
     .string()
     .optional()
     .refine((val) => !val || NAME_REGEX.test(val), 'Only letters, digits, dots, underscores and dashes are allowed'),
+  image: z.string().optional(),
   cpu: z.string().optional().refine(isOptionalPositiveInteger, 'Enter a whole number, 1 or greater'),
   memory: z.string().optional().refine(isOptionalPositiveInteger, 'Enter a whole number, 1 or greater'),
   disk: z.string().optional().refine(isOptionalPositiveInteger, 'Enter a whole number, 1 or greater'),
@@ -64,12 +67,19 @@ type FormValues = z.input<typeof formSchema>
 
 const defaultValues: FormValues = {
   name: '',
+  image: '',
   cpu: '',
   memory: '',
   disk: '',
 }
 
 type ResourceFieldName = 'cpu' | 'memory' | 'disk'
+
+const shortImageRef = (ref: string) => {
+  const [repository, digest] = ref.split('@sha256:')
+  if (!digest) return ref
+  return `${repository}@${digest.slice(0, 12)}`
+}
 
 const RESOURCE_FIELDS: Array<{
   name: ResourceFieldName
@@ -104,7 +114,18 @@ export const CreateBoxSheet = ({
 
   const { selectedOrganization } = useSelectedOrganization()
   const { reset: resetCreateBoxMutation, ...createBoxMutation } = useCreateBoxMutation()
+  const {
+    data: supportedImages = [],
+    isLoading: loadingSupportedImages,
+    isError: supportedImagesFailed,
+  } = useSupportedBoxImagesQuery()
   const formRef = useRef<HTMLFormElement>(null)
+  const defaultImage = supportedImages.find((image) => image.isDefault) ?? supportedImages[0]
+  const imageStatusText = loadingSupportedImages
+    ? 'Loading images'
+    : supportedImagesFailed
+      ? 'Images unavailable'
+      : `${supportedImages.length} supported image${supportedImages.length === 1 ? '' : 's'}`
 
   const form = useForm({
     defaultValues,
@@ -135,11 +156,9 @@ export const CreateBoxSheet = ({
         }
         const hasResourceOverrides = Object.values(resources).some((resource) => resource !== undefined)
 
-        // TODO(image-rewrite): the image/template picker was removed with the image/template
-        // subsystem; box creation no longer selects an image. Rebuild image selection here once
-        // the new model lands.
         const box = await createBoxMutation.mutateAsync({
           name: value.name?.trim() || undefined,
+          image: value.image || undefined,
           network: { mode: 'enabled' },
           ...(hasResourceOverrides ? { resources } : {}),
         })
@@ -225,7 +244,54 @@ export const CreateBoxSheet = ({
               }}
             </form.Field>
 
-            {/* TODO(image-rewrite): image/template picker removed with the image/template subsystem; rebuild here. */}
+            <form.Field name="image">
+              {(field) => {
+                const selectedImageRef = field.state.value || defaultImage?.ref || ''
+                return (
+                  <Field>
+                    <div className="flex min-w-0 items-center justify-between gap-3">
+                      <FieldLabel htmlFor={field.name} className="flex items-center gap-1.5 text-sm font-semibold">
+                        <Package className="size-3.5" />
+                        Image
+                      </FieldLabel>
+                      <span
+                        className={cn(
+                          'shrink-0 text-xs text-muted-foreground',
+                          supportedImagesFailed && 'text-destructive',
+                        )}
+                      >
+                        {imageStatusText}
+                      </span>
+                    </div>
+                    <Select
+                      value={selectedImageRef}
+                      onValueChange={(value) => field.handleChange(value)}
+                      disabled={loadingSupportedImages || supportedImages.length === 0}
+                    >
+                      <SelectTrigger
+                        id={field.name}
+                        name={field.name}
+                        loading={loadingSupportedImages}
+                        disabled={loadingSupportedImages || supportedImages.length === 0}
+                      >
+                        <SelectValue placeholder={loadingSupportedImages ? 'Loading images' : 'Select image'} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {supportedImages.map((image) => (
+                          <SelectItem key={image.id} value={image.ref}>
+                            {image.name}
+                            {image.isDefault ? ' (default)' : ''}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {selectedImageRef && (
+                      <p className="break-all text-xs text-muted-foreground">{shortImageRef(selectedImageRef)}</p>
+                    )}
+                  </Field>
+                )
+              }}
+            </form.Field>
 
             <Accordion
               type="single"
@@ -296,7 +362,6 @@ export const CreateBoxSheet = ({
                         ))}
                       </div>
                     </div>
-
                   </div>
                 </AccordionContent>
               </AccordionItem>
@@ -311,7 +376,9 @@ export const CreateBoxSheet = ({
                 type="submit"
                 form="create-box-form"
                 variant="default"
-                disabled={isSubmitting || !selectedOrganization?.id}
+                disabled={
+                  isSubmitting || loadingSupportedImages || supportedImages.length === 0 || !selectedOrganization?.id
+                }
                 className="w-full sm:w-auto"
               >
                 {isSubmitting && <Spinner />}

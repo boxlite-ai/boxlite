@@ -18,7 +18,11 @@ import { BoxError } from '../../exceptions/box-error.exception'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
-import { assertSupportedImage } from '../constants/curated-images.constant'
+import {
+  assertSupportedImage,
+  supportedImageOptions,
+  type SupportedImageOption,
+} from '../constants/curated-images.constant'
 import { BoxWarmPoolService } from './box-warm-pool.service'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
 import { WarmPoolEvents } from '../constants/warmpool-events.constants'
@@ -115,6 +119,10 @@ export class BoxService {
     if (box.state === BoxState.ERROR) {
       throw new BoxError('Box is in an errored state')
     }
+  }
+
+  listSupportedImages(): SupportedImageOption[] {
+    return supportedImageOptions()
   }
 
   async createForWarmPool(warmPoolItem: WarmPool): Promise<Box> {

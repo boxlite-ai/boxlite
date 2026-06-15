@@ -319,18 +319,17 @@ The migration squash removed the box-template/snapshot subsystem, then
 `#755`/`#758` reintroduced an **image-keyed** boot path (the box-start
 `UNKNOWN` handler now calls `runnerAdapter.createBox` —
 `apps/api/src/box/managers/box-actions/box-start.action.ts`) and restricted
-creation to supported pinned images. What's still *not* rebuilt is image
+creation to supported pinned images. The dashboard now reads that supported
+image list directly from the API. What's still *not* rebuilt is broader image
 **resolution** — see the `TODO(image-rewrite)` markers in
-`apps/api/src/box/services/box.service.ts:136,:155` (and ~20 more across
-`apps/api`/`apps/dashboard` for the removed template webhooks, metrics, and
-the dashboard image/template picker — e.g. `CreateBoxSheet.tsx:138,:228`).
+`apps/api/src/box/services/box.service.ts:136,:155` (and remaining markers
+across `apps/api`/`apps/dashboard` for the removed template webhooks and
+metrics).
 
-Net: a box with no image fails fast (`'Box has no image to create from'`),
-and the dashboard's image picker is gone, so end-to-end "Create Box" from
-the UI is incomplete. We have **not** verified a successful box boot on this
-stack since the rebase (it also needs a rebuilt `libboxlite.a` for the
-runner). Everything else — L1 services, API, runner registration, auth,
-dashboard — works.
+Net: the dashboard can create with the supported pinned images, but we have
+**not** verified a successful box boot on this stack since the rebase (it also
+needs a rebuilt `libboxlite.a` for the runner). Everything else — L1 services,
+API, runner registration, auth, dashboard — works.
 
 ---
 
@@ -518,10 +517,10 @@ preseeded accounts (see [`apps/infra-local/CONNECTIONS.md` §4](CONNECTIONS.md))
 Then click **Create Box** → pick region `us` → **Create** → open
 the **Terminal** tab → **Connect** → you should see `root@boxlite:~#`.
 
-> ⚠️ Box creation is mid-rewrite upstream and unverified on this stack: image
-> **resolution** isn't rebuilt yet and the dashboard's image picker was
-> removed, so "Create Box" from the UI is incomplete. See
-> [Known limitations](#known-limitations) #4. The rest of the stack works.
+> ⚠️ Box creation is mid-rewrite upstream and unverified on this stack: broader
+> image **resolution** isn't rebuilt yet, though the dashboard does expose the
+> supported pinned-image picker. See [Known limitations](#known-limitations)
+> #4. The rest of the stack works.
 
 ### 2. Day-to-day dashboard development loop
 
@@ -725,7 +724,7 @@ ls -lt .apps-local/boxlite-runner/boxes/<id>/logs/
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | All API calls return 401 | `SSH_GATEWAY_API_KEY` or `PROXY_API_KEY` not set | Check `apps/api/.env` — both must be non-empty |
-| "Create Box" from the dashboard is incomplete / box doesn't boot | Expected: image resolution is mid-rewrite upstream and the dashboard image picker was removed (`TODO(image-rewrite)`) | See [Known limitations](#known-limitations) #4 — the rest of the stack is unaffected |
+| "Create Box" from the dashboard doesn't boot | Expected: broader image resolution is mid-rewrite upstream; the dashboard only exposes the current supported pinned-image list | See [Known limitations](#known-limitations) #4 — the rest of the stack is unaffected |
 | Box reaches STARTED but the terminal is blank + `Connection closed` | image is amd64 but runner runs an arm64 microVM | Already fixed (`runner/registry.go` uses `runtime.GOARCH`) — clear the old image cache and re-pull |
 | "Create Box" missing in the dashboard | Expected: PostHog isn't configured locally, so flag-gated UI stays hidden (no local flag bootstrap) | Use `POST /api/box` directly, or set `POSTHOG_API_KEY`/`POSTHOG_HOST` in `apps/api/.env` with the flags enabled in PostHog |
 | `POST /api/regions` → 404 "Cannot POST" | Expected: same — flag-gated admin routes stay hidden without a configured PostHog | Same as above; the seed path (`seed-init-data.sh`) doesn't need these routes |
