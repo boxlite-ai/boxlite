@@ -62,7 +62,8 @@ jobs:
     name: Build C SDK (linux-x64-gnu)
     uses: ./.github/workflows/build-c.yml
     permissions:
-      contents: read
+      id-token: write
+      contents: write
     with:
       target_filter: linux-x64-gnu
 
@@ -70,7 +71,8 @@ jobs:
     name: Build Node SDK (linux-x64-gnu)
     uses: ./.github/workflows/build-node.yml
     permissions:
-      contents: read
+      id-token: write
+      contents: write
     with:
       target_filter: linux-x64-gnu
 
@@ -78,7 +80,15 @@ jobs:
     name: Build CLI (linux-x64-gnu)
     uses: ./.github/workflows/build-runtime.yml
     permissions:
-      contents: read
+      id-token: write
+      contents: write
+    # build-runtime.yml's publish_crates job references
+    # secrets.CARGO_REGISTRY_TOKEN (gated on the release event so it
+    # never fires on workflow_call). The secrets: declaration on
+    # build-runtime.yml's workflow_call boundary marks it optional, but
+    # `secrets: inherit` here keeps the calling-side spelling identical
+    # to other workflows that hand secrets through to reusable jobs.
+    secrets: inherit
     with:
       target_filter: linux-x64-gnu
 
