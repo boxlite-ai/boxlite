@@ -15,6 +15,9 @@
 #   scripts/deploy/runner-update-binary.sh 0.9.5            # explicit version
 #   AWS_REGION=us-west-2 scripts/deploy/runner-update-binary.sh
 #   STAGE=production scripts/deploy/runner-update-binary.sh
+#
+# For unreleased main builds, use `make dist:runner` first to create a local
+# artifact. This script intentionally downloads published GitHub release assets.
 
 set -euo pipefail
 

@@ -67,6 +67,9 @@ jobs:
           curl -fsSL "${URL}" | tar xz -C /tmp/
           cp "/tmp/boxlite-c-v${VERSION}-linux-x64-gnu/lib/libboxlite.a" sdks/go/libboxlite.a
 
+      - name: Smoke-test libboxlite ABI for Go SDK
+        run: bash scripts/build/check-libboxlite-abi.sh sdks/go/libboxlite.a
+
       - name: Rewrite go.work for minimal modules
         run: |
           printf 'go 1.25.4\n\nuse (\n\t./runner\n\t./daemon\n\t./common-go\n\t./api-client-go\n\t./libs/computer-use\n\t../sdks/go\n)\n' > apps/go.work

@@ -75,6 +75,7 @@ help:
 	@echo "    make dist:c         - Build C SDK release and stage to sdks/c/dist/"
 	@echo "    make dist:node      - Build npm package with napi-rs"
 	@echo "    make dist:go        - Build Go SDK release"
+	@echo "    make dist:runner    - Build local runner release artifact without deploying"
 	@echo ""
 	@echo "Platform: $$(uname) ($$(uname -m))"
 	@echo ""

@@ -38,4 +38,11 @@ dist\:go:
 	@echo "📦 Building Go SDK (release)..."
 	@cargo build --release -p boxlite-c
 	@bash $(SCRIPT_DIR)/build/fix-go-symbols.sh target/release/libboxlite.a
+	@bash $(SCRIPT_DIR)/build/check-libboxlite-abi.sh target/release/libboxlite.a
+	@cp target/release/libboxlite.a sdks/go/libboxlite.a
+	@go clean -cache
+	@echo "✅ Go SDK static library staged at sdks/go/libboxlite.a"
 	@echo "✅ Go SDK release built"
+
+dist\:runner:
+	@bash $(SCRIPT_DIR)/build/build-runner-binary.sh
