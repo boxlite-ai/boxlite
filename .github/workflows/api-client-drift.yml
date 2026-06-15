@@ -13,6 +13,7 @@ on:
   pull_request:
     paths:
       - 'apps/**'
+      - 'openapi/box.openapi.yaml'
       - '.github/workflows/api-client-drift.yml'
 
 permissions:
