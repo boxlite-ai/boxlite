@@ -55,25 +55,44 @@ async function waitForApi() {
 }
 
 async function register({ name, apiKey }) {
-  const res = await fetch(`${base}/api/admin/runners`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${ADMIN_API_KEY}`,
-    },
-    body: JSON.stringify({ name, apiKey, apiVersion: '2', regionId: REGION_ID }),
-  })
+  // 201 = created, 409 = already exists (idempotent). A 5xx or a network error is
+  // transient — the API passed /api/health but a single request can still blip — so
+  // retry with backoff before failing the deploy. A 4xx (bad payload / auth) is a real
+  // client error and fails immediately; no retry would help.
+  const maxAttempts = 4
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let res
+    try {
+      res = await fetch(`${base}/api/admin/runners`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${ADMIN_API_KEY}`,
+        },
+        body: JSON.stringify({ name, apiKey, apiVersion: '2', regionId: REGION_ID }),
+      })
+    } catch (err) {
+      if (attempt === maxAttempts) throw new Error(`register-runners: ${name} failed (network): ${err}`)
+      await sleep(attempt * 2000)
+      continue
+    }
 
-  if (res.status === 201) {
-    console.log(`register-runners: ${name} registered`)
-    return
+    if (res.status === 201) {
+      console.log(`register-runners: ${name} registered`)
+      return
+    }
+    if (res.status === 409) {
+      console.log(`register-runners: ${name} already registered`)
+      return
+    }
+    const body = await res.text().catch(() => '')
+    if (res.status >= 500 && attempt < maxAttempts) {
+      console.warn(`register-runners: ${name} attempt ${attempt} got ${res.status}; retrying`)
+      await sleep(attempt * 2000)
+      continue
+    }
+    throw new Error(`register-runners: ${name} failed (${res.status}): ${body}`)
   }
-  if (res.status === 409) {
-    console.log(`register-runners: ${name} already registered`)
-    return
-  }
-  const body = await res.text().catch(() => '')
-  throw new Error(`register-runners: ${name} failed (${res.status}): ${body}`)
 }
 
 await waitForApi()

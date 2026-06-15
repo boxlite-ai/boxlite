@@ -188,7 +188,7 @@ For Auth0 specifically:
 | **Jaeger**          | Trace viewer (no auth)               | internal ALB (set `JAEGER_PUBLIC=true` to expose) |
 | **OtelCollector**   | OTLP ingest + health                 | internal ALB (in-VPC emitters only)          |
 | **PgAdmin**         | Postgres admin UI                    | internal ALB (set `PGADMIN_PUBLIC=true` to expose) |
-| **MailDev**         | Mock SMTP + web UI (no auth)         | internal ALB (set `MAILDEV_PUBLIC=true` to expose) |
+| **MailDev**         | Mock SMTP + web UI (no auth)         | internal ALB only — no public option (`MAILDEV_PUBLIC=true` is rejected) |
 | **ClickHouse Cloud** | Managed OTel storage                 | external service; configured by env         |
 | **ClickStack**      | Logs/traces/metrics explorer         | external ClickHouse Cloud UI                |
 
@@ -231,9 +231,12 @@ scripts/deploy/runner-update-binary.sh           # latest from Cargo.toml
 scripts/deploy/runner-update-binary.sh 0.9.5     # explicit
 ```
 
-The script uses AWS SSM Run Command to stop the systemd unit, download the
-release tarball from GitHub Releases, swap `/usr/local/bin/boxlite-runner`,
-and restart. Box state under `/var/lib/boxlite` is untouched.
+The script uses AWS SSM Run Command to download the release tarball from
+GitHub Releases and verify its SHA-256 *before* stopping the systemd unit — so
+a failed or corrupt fetch never takes the runner down — then backs up the live
+binary, swaps `/usr/local/bin/boxlite-runner`, and restarts. If the new binary
+fails to come up, it performs a rollback to the backup. Box state under
+`/var/lib/boxlite` is untouched.
 
 ### Deliberate decommission (three-step ceremony)
 
