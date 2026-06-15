@@ -201,7 +201,7 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange, pr
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5">
+            <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-4 sm:px-5">
               <div className="grid min-w-0 gap-4">
                 <div className="grid gap-3 rounded-md border bg-muted/15 p-3">
                   <div className="flex items-center gap-2 text-sm font-semibold">
@@ -288,7 +288,7 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange, pr
                   </div>
                 </div>
 
-                <div className="grid gap-3">
+                <div className="grid min-w-0 gap-3">
                   <Tabs
                     value={language}
                     onValueChange={(value) => setLanguage(value as OnboardingLanguage)}
@@ -308,20 +308,20 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange, pr
                     </TabsList>
                   </Tabs>
 
-                  <div>
+                  <div className="min-w-0">
                     <div className="mb-2 text-sm font-medium">Install SDK</div>
                     <CodeBlock code={activeExample.install} language="bash" showCopy />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <div className="mb-2 text-sm font-medium">Example</div>
                     <CodeBlock
                       code={renderedExample}
                       language={activeExample.codeLanguage}
                       showCopy
-                      codeAreaClassName="max-h-[420px] text-xs"
+                      codeAreaClassName="overflow-x-hidden whitespace-pre-wrap break-words text-xs"
                     />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <div className="mb-2 text-sm font-medium">Run</div>
                     <CodeBlock code={activeExample.run} language="bash" showCopy />
                   </div>

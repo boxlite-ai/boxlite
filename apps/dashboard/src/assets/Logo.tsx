@@ -6,8 +6,8 @@
 
 import boxliteIconBlack from './boxlite-icon-black.png'
 import boxliteIconLight from './boxlite-icon-light.png'
-import boxliteWebsiteLogoDark from './boxlite-website-logo-dark.png'
-import boxliteWebsiteLogoLight from './boxlite-website-logo-light.png'
+import boxliteLogoBlack from './boxlite-black.png'
+import boxliteLogoLight from './boxlite-light.png'
 
 type LogoProps = {
   className?: string
@@ -34,8 +34,8 @@ export function LogoText({ className = 'h-9 w-auto' }: LogoTextProps = {}) {
 
   return (
     <span className="inline-flex items-center text-foreground">
-      <img src={boxliteWebsiteLogoLight} alt="BoxLite" className={`block dark:hidden ${imageClassName}`} />
-      <img src={boxliteWebsiteLogoDark} alt="BoxLite" className={`hidden dark:block ${imageClassName}`} />
+      <img src={boxliteLogoBlack} alt="BoxLite" className={`block dark:hidden ${imageClassName}`} />
+      <img src={boxliteLogoLight} alt="BoxLite" className={`hidden dark:block ${imageClassName}`} />
     </span>
   )
 }

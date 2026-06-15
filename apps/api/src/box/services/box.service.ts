@@ -79,13 +79,7 @@ import {
 import { BoxLookupCacheInvalidationService } from './box-lookup-cache-invalidation.service'
 import { Region } from '../../region/entities/region.entity'
 import { BoxActivityService } from './box-activity.service'
-
-// TODO(image-rewrite): resource defaults previously came from the removed image subsystem;
-// these mirror the Box entity column defaults until image resolution is rebuilt.
-const DEFAULT_BOX_CPU = 1
-const DEFAULT_BOX_MEM = 1
-const DEFAULT_BOX_DISK = 10
-const DEFAULT_BOX_GPU = 0
+import { BOX_CREATE_DEFAULTS } from '../constants/box-create-defaults.constant'
 
 @Injectable()
 export class BoxService {
@@ -163,10 +157,10 @@ export class BoxService {
       // TODO(image-rewrite): image resolution removed; boxes can no
       // longer resolve an image at create time. Resource sizing falls back to request values
       // (or Box entity defaults). Rebuild image resolution here.
-      const cpu = createBoxDto.cpu ?? DEFAULT_BOX_CPU
-      const mem = createBoxDto.memory ?? DEFAULT_BOX_MEM
-      const disk = createBoxDto.disk ?? DEFAULT_BOX_DISK
-      const gpu = createBoxDto.gpu ?? DEFAULT_BOX_GPU
+      const cpu = createBoxDto.cpu ?? BOX_CREATE_DEFAULTS.cpu
+      const mem = createBoxDto.memory ?? BOX_CREATE_DEFAULTS.memory
+      const disk = createBoxDto.disk ?? BOX_CREATE_DEFAULTS.disk
+      const gpu = createBoxDto.gpu ?? BOX_CREATE_DEFAULTS.gpu
       // Restrict box creation to the supported pinned images; reject anything else
       // at the request boundary (defaults undefined -> base image).
       const image = assertSupportedImage(createBoxDto.image)

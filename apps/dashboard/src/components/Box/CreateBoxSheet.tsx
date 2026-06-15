@@ -22,6 +22,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { RoutePath } from '@/enums/RoutePath'
 import { useCreateBoxMutation } from '@/hooks/mutations/useCreateBoxMutation'
 import { useSupportedBoxImagesQuery } from '@/hooks/queries/useSupportedBoxImagesQuery'
+import { useConfig } from '@/hooks/useConfig'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
 import { getBoxRouteId } from '@/lib/box-identity'
@@ -75,12 +76,6 @@ const defaultValues: FormValues = {
 
 type ResourceFieldName = 'cpu' | 'memory' | 'disk'
 
-const shortImageRef = (ref: string) => {
-  const [repository, digest] = ref.split('@sha256:')
-  if (!digest) return ref
-  return `${repository}@${digest.slice(0, 12)}`
-}
-
 const RESOURCE_FIELDS: Array<{
   name: ResourceFieldName
   label: string
@@ -112,20 +107,12 @@ export const CreateBoxSheet = ({
   const open = controlledOpen ?? internalOpen
   const setOpen = onOpenChange ?? setInternalOpen
 
+  const config = useConfig()
   const { selectedOrganization } = useSelectedOrganization()
   const { reset: resetCreateBoxMutation, ...createBoxMutation } = useCreateBoxMutation()
-  const {
-    data: supportedImages = [],
-    isLoading: loadingSupportedImages,
-    isError: supportedImagesFailed,
-  } = useSupportedBoxImagesQuery()
+  const { data: supportedImages = [], isLoading: loadingSupportedImages } = useSupportedBoxImagesQuery()
   const formRef = useRef<HTMLFormElement>(null)
   const defaultImage = supportedImages.find((image) => image.isDefault) ?? supportedImages[0]
-  const imageStatusText = loadingSupportedImages
-    ? 'Loading images'
-    : supportedImagesFailed
-      ? 'Images unavailable'
-      : `${supportedImages.length} supported image${supportedImages.length === 1 ? '' : 's'}`
 
   const form = useForm({
     defaultValues,
@@ -249,20 +236,10 @@ export const CreateBoxSheet = ({
                 const selectedImageRef = field.state.value || defaultImage?.ref || ''
                 return (
                   <Field>
-                    <div className="flex min-w-0 items-center justify-between gap-3">
-                      <FieldLabel htmlFor={field.name} className="flex items-center gap-1.5 text-sm font-semibold">
-                        <Package className="size-3.5" />
-                        Image
-                      </FieldLabel>
-                      <span
-                        className={cn(
-                          'shrink-0 text-xs text-muted-foreground',
-                          supportedImagesFailed && 'text-destructive',
-                        )}
-                      >
-                        {imageStatusText}
-                      </span>
-                    </div>
+                    <FieldLabel htmlFor={field.name} className="flex items-center gap-1.5 text-sm font-semibold">
+                      <Package className="size-3.5" />
+                      Image
+                    </FieldLabel>
                     <Select
                       value={selectedImageRef}
                       onValueChange={(value) => field.handleChange(value)}
@@ -280,14 +257,10 @@ export const CreateBoxSheet = ({
                         {supportedImages.map((image) => (
                           <SelectItem key={image.id} value={image.ref}>
                             {image.name}
-                            {image.isDefault ? ' (default)' : ''}
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
-                    {selectedImageRef && (
-                      <p className="break-all text-xs text-muted-foreground">{shortImageRef(selectedImageRef)}</p>
-                    )}
                   </Field>
                 )
               }}
@@ -316,25 +289,25 @@ export const CreateBoxSheet = ({
                           <form.Field key={name} name={name}>
                             {(field) => {
                               const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid
+                              const defaultValue = config.boxCreateDefaults[name]?.toString() ?? 'Default'
                               return (
-                                <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_11rem] sm:items-center">
+                                <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_9.5rem] sm:items-center sm:gap-4">
                                   <div className="min-w-0">
                                     <Label
                                       htmlFor={field.name}
-                                      className="flex items-center gap-1 text-xs font-medium text-muted-foreground"
+                                      className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground"
                                     >
-                                      <Icon className="size-3.5" />
+                                      <Icon className="size-4" />
                                       {label}
                                     </Label>
-                                    <p className="mt-0.5 text-xs text-muted-foreground">Optional.</p>
                                   </div>
                                   <div className="relative min-w-0">
                                     <NumericFormat
                                       customInput={Input}
                                       aria-invalid={isInvalid}
                                       id={field.name}
-                                      className="h-8 w-full pr-11 text-right font-medium tabular-nums placeholder:font-normal placeholder:text-muted-foreground/45"
-                                      placeholder={focusedAdvancedField === field.name ? '' : 'Default'}
+                                      className="h-8 w-full pr-11 text-right font-medium tabular-nums placeholder:font-normal placeholder:text-muted-foreground/55"
+                                      placeholder={focusedAdvancedField === field.name ? '' : defaultValue}
                                       decimalScale={0}
                                       allowNegative={false}
                                       isAllowed={(values) => values.floatValue === undefined || values.floatValue >= 1}
