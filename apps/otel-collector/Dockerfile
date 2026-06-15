@@ -10,7 +10,7 @@ ENV PATH="/usr/local/go/bin:${PATH}"
 
 RUN apk add --no-cache git
 
-WORKDIR /boxlite
+WORKDIR /boxlite/apps
 
 # Yarn caching layer
 COPY apps/package.json apps/yarn.lock apps/.yarnrc.yml ./
