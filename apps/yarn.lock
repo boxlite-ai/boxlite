@@ -8534,7 +8534,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@opentelemetry/resources@npm:2.7.1, @opentelemetry/resources@npm:^2.2.0":
+"@opentelemetry/resources@npm:2.7.1, @opentelemetry/resources@npm:^2.2.0, @opentelemetry/resources@npm:^2.7.1":
   version: 2.7.1
   resolution: "@opentelemetry/resources@npm:2.7.1"
   dependencies:
@@ -15844,7 +15844,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"aws4@npm:^1.11.0, aws4@npm:^1.8.0":
+"aws4@npm:^1.11.0, aws4@npm:^1.13.2, aws4@npm:^1.8.0":
   version: 1.13.2
   resolution: "aws4@npm:1.13.2"
   checksum: 10c0/c993d0d186d699f685d73113733695d648ec7d4b301aba2e2a559d0cd9c1c902308cc52f4095e1396b23fddbc35113644e7f0a6a32753636306e41e3ed6f1e79
@@ -16567,6 +16567,7 @@ __metadata:
     "@opentelemetry/instrumentation-pg": "npm:^0.60.0"
     "@opentelemetry/instrumentation-pino": "npm:^0.54.0"
     "@opentelemetry/instrumentation-runtime-node": "npm:^0.21.0"
+    "@opentelemetry/resources": "npm:^2.7.1"
     "@opentelemetry/sdk-logs": "npm:^0.218.0"
     "@opentelemetry/sdk-metrics": "npm:^2.7.1"
     "@opentelemetry/sdk-node": "npm:^0.218.0"
@@ -16631,6 +16632,7 @@ __metadata:
     astro: "npm:6.1.10"
     astro-expressive-code: "npm:^0.41.2"
     autoprefixer: "npm:10.4.13"
+    aws4: "npm:^1.13.2"
     axios: "npm:^1.13.5"
     axios-debug-log: "npm:^1.0.0"
     axios-retry: "npm:^4.5.0"
@@ -16682,6 +16684,7 @@ __metadata:
     markdownlint-cli2: "npm:^0.17.2"
     motion: "npm:^12.23.0"
     msw: "npm:^2.12.2"
+    nanoid: "npm:5.1.5"
     nestjs-opensearch: "npm:^1.4.1"
     nestjs-pino: "npm:^4.4.1"
     node-cache: "npm:^5.1.2"
@@ -16725,6 +16728,7 @@ __metadata:
     semver: "npm:^7.7.2"
     sharp: "npm:^0.34.2"
     shell-quote: "npm:^1.8.4"
+    socket.io: "npm:4.8.3"
     socket.io-client: "npm:^4.8.1"
     sonner: "npm:^1.7.4"
     sqlite3: "npm:^5.1.7"
