@@ -1,17 +1,22 @@
-# E2E test against the Tokyo cloud stack. Runs pytest only — does
-# NOT deploy anything. The Tokyo stack must already have the desired
-# Api image / runner binary / supporting services running before this
-# fires; results reflect *whatever is currently deployed*, not the
-# code on the dispatching branch.
+# E2E test against the Tokyo cloud stack — LEAF workflow.
+#
+# Runs pytest only. Build artifacts (C SDK / Node SDK / CLI) are
+# provided by the caller via run-id inputs; this workflow does NOT
+# contain any build chain of its own (`e2e-cloud.yml` is the
+# orchestrator that builds them as sibling top-level jobs and passes
+# their parent run id here via `${{ github.run_id }}`).
 #
 # Two callers:
-#   1. `e2e-cloud.yml` (workflow_call) — chained after the deploy
-#      jobs in that pipeline. The classic "deploy + test" path.
-#   2. `workflow_dispatch` — standalone manual run. Useful when you
-#      want to re-run the suite without redeploying (faster, no
-#      ECR/ECS churn) or to validate the stack after an out-of-band
-#      deploy. The dispatcher is responsible for ensuring the stack
-#      is at the version they actually want to test.
+#   1. `e2e-cloud.yml` (workflow_call) — chained after the build +
+#      deploy phases. Always passes `${{ github.run_id }}` as all 3
+#      run_id inputs, so the download steps pull artifacts that the
+#      sibling build_c / build_node / build_cli jobs uploaded within
+#      the same run.
+#   2. `workflow_dispatch` — standalone manual run. Used to re-test
+#      against the currently-deployed Tokyo stack without redeploying.
+#      The dispatcher must supply 3 explicit run IDs (typically the
+#      databaseId of a recent successful e2e-cloud run); pytest then
+#      runs against whatever Tokyo currently has plus those artifacts.
 #
 # Concurrency: shares `e2e-cloud-shared` with `e2e-cloud.yml` — both
 # block on the same Tokyo singleton. A deploy in progress will queue
@@ -21,18 +26,34 @@
 name: E2E test (Tokyo)
 
 on:
-  workflow_call: {}
-  workflow_dispatch: {}
-  # PRE-MERGE ONLY — drop before landing on main. workflow_dispatch
-  # rejects this file until GH has seen it run at least once. While
-  # it lives on this feature branch with no caller in main, we need a
-  # push trigger so the first push registers it as a known workflow
-  # (and validates the SQL escape fix in the same shot). Same trick
-  # build-runner-binary.yml documents in its header.
-  push:
-    branches: [chore/e2e-required-merge-gate]
-    paths:
-      - '.github/workflows/e2e-cloud-test.yml'
+  workflow_call:
+    inputs:
+      c_sdk_run_id:
+        description: 'GHA run ID that uploaded c-sdk-linux-x64-gnu artifact'
+        type: string
+        required: true
+      node_sdk_run_id:
+        description: 'GHA run ID that uploaded artifacts-linux-x64-gnu (napi-rs Node SDK)'
+        type: string
+        required: true
+      cli_run_id:
+        description: 'GHA run ID that uploaded cli-linux-x64-gnu artifact'
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      c_sdk_run_id:
+        description: 'GHA run ID that uploaded c-sdk-linux-x64-gnu artifact'
+        type: string
+        required: true
+      node_sdk_run_id:
+        description: 'GHA run ID that uploaded artifacts-linux-x64-gnu (napi-rs Node SDK)'
+        type: string
+        required: true
+      cli_run_id:
+        description: 'GHA run ID that uploaded cli-linux-x64-gnu artifact'
+        type: string
+        required: true
 
 permissions:
   contents: read
@@ -50,59 +71,8 @@ env:
   ADMIN_ORG_ID: 4a1eef70-8734-4814-b7a5-0ca3522a8760
 
 jobs:
-  # ──────────────────────────────────────────────────────────────────────
-  # SDK artifact prerequisites. Each lane builds its canonical artifact
-  # via the same reusable workflow that fires on a release publish, so
-  # the entry-point e2e cases consume exactly the same binaries the
-  # published SDK ships with. target_filter narrows each matrix to the
-  # single linux-x64 entry the Tokyo gate needs.
-  #
-  # Permissions cheat sheet:
-  #   build-c.yml's `upload-to-release` job (gated on release event)
-  #     declares `contents: write`.
-  #   build-runtime.yml's `upload_to_release` job (gated on release)
-  #     declares `contents: write, id-token: write, attestations: write`,
-  #     and its `publish_crates` job references `secrets.CARGO_REGISTRY_TOKEN`.
-  #   build-node.yml's release-only jobs declare similar.
-  # GH's static workflow_call resolver requires the caller to grant
-  # everything any downstream job declares, even if `if:` skips it for
-  # non-release events — missing one returns conclusion=startup_failure
-  # with no log archive and empty jobs[]. Hence the wide grants below.
-  # ──────────────────────────────────────────────────────────────────────
-  build_c:
-    name: Build C SDK (linux-x64-gnu)
-    uses: ./.github/workflows/build-c.yml
-    permissions:
-      id-token: write
-      contents: write
-      attestations: write
-    with:
-      target_filter: linux-x64-gnu
-
-  build_node:
-    name: Build Node SDK (linux-x64-gnu)
-    uses: ./.github/workflows/build-node.yml
-    permissions:
-      id-token: write
-      contents: write
-      attestations: write
-    with:
-      target_filter: linux-x64-gnu
-
-  build_cli:
-    name: Build CLI (linux-x64-gnu)
-    uses: ./.github/workflows/build-runtime.yml
-    permissions:
-      id-token: write
-      contents: write
-      attestations: write
-    secrets: inherit
-    with:
-      target_filter: linux-x64-gnu
-
   e2e:
     name: E2E suite (Tokyo)
-    needs: [build_c, build_node, build_cli]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -325,23 +295,26 @@ jobs:
           pip install --break-system-packages --quiet pytest pytest-asyncio pytest-timeout
 
       # ──────────────────────────────────────────────────────────────
-      # Pull the C / Node / CLI artifacts that the build_c / build_node /
-      # build_cli prereq jobs uploaded earlier in this workflow run,
-      # then drop them where the entry-point fixtures look for them:
+      # Pull the C / Node / CLI artifacts uploaded by the caller's
+      # build_c / build_node / build_cli jobs (or by a prior e2e-cloud
+      # run, for standalone workflow_dispatch). The run IDs are
+      # required workflow_call / workflow_dispatch inputs; the caller
+      # (e2e-cloud.yml) passes ${{ github.run_id }} so the downloads
+      # resolve against the same run where build-*.yml uploaded.
       #
+      # Drop them where the entry-point fixtures look for them:
       #   target/release/libboxlite.{a,so}         test_c_entry / test_go_entry
       #   sdks/c/include/boxlite.h                 test_c_entry header
       #   /usr/local/bin/boxlite                   test_cli_entry / test_cli_detach_recovery
       #   sdks/node/{native,npm}/*.node            test_node_entry
-      #
-      # All three artifacts always exist because the prereq jobs are
-      # `needs:` of this job — if any failed, this job doesn't run.
       # ──────────────────────────────────────────────────────────────
       - name: Download C SDK artifact
         uses: actions/download-artifact@v4
         with:
           name: c-sdk-linux-x64-gnu
           path: /tmp/c-sdk
+          run-id: ${{ inputs.c_sdk_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install C SDK (libboxlite.{a,so} + boxlite.h)
         run: |
           set -euo pipefail
@@ -359,6 +332,8 @@ jobs:
         with:
           name: cli-linux-x64-gnu
           path: /tmp/cli
+          run-id: ${{ inputs.cli_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install CLI on PATH
         run: |
           set -euo pipefail
@@ -375,6 +350,8 @@ jobs:
         with:
           name: artifacts-linux-x64-gnu
           path: /tmp/node-sdk
+          run-id: ${{ inputs.node_sdk_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install Node SDK (native/boxlite.js + npm/<platform>/*.node)
         run: |
           set -euo pipefail
@@ -444,13 +421,17 @@ jobs:
         env:
           BOXLITE_E2E_SKIP_PATH_VERIFY: '1'
           BOXLITE_E2E_PROFILE: p1
-          # build_c / build_node / build_cli prereqs are now hard
-          # dependencies of this job, so the C / Go / CLI / Node entry-
-          # point fixtures always have their artifacts on disk. Flip
-          # skip→fail so a future regression in the build chain (or a
-          # missing download step) surfaces as a clear pytest failure
-          # instead of a silent SKIP that drains the gate.
+          # C / Node / CLI artifacts always exist (downloads above
+          # would have failed otherwise). Flip skip→fail so a future
+          # regression in the build chain (or a missing download step)
+          # surfaces as a clear pytest failure instead of a silent SKIP.
           BOXLITE_E2E_REQUIRE_SDK_BUILDS: '1'
+          # Tokyo Api (post-#758) supportedImages = the 3 ghcr-pinned
+          # boxlite-agent-* digests only. The conftest default `alpine:3.23`
+          # is the short form and is no longer in the allowlist. Send the
+          # curated-images.constant.ts fallback for the base image; runner
+          # pulls it once GHCR_USERNAME/GHCR_TOKEN are wired on the Tokyo EC2.
+          BOXLITE_E2E_IMAGE: 'ghcr.io/boxlite-ai/boxlite-agent-base@sha256:834dcb65465985fc2f648451d76c81d166bc7672391c9064a0a115ce6306c85f'
         run: |
           # pytest-timeout caps individual test wall time so a hung VM /
           # wedged exec doesn't burn the full 45-minute job timeout (which
