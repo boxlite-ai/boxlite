@@ -50,8 +50,32 @@ async function bootstrap() {
   })
   app.useLogger(app.get(PinoLogger))
   app.flushLogs()
+  // Pin CORS to known first-party origins rather than reflecting any origin.
+  // With `credentials: true`, `origin: true` would let any site make
+  // credentialed cross-origin calls to the API. The dashboard SPA (served at
+  // DASHBOARD_URL) is the only legitimate cross-origin caller; CORS_ALLOWED_ORIGINS
+  // (comma-separated) adds extras (e.g. local dev). If nothing is configured we
+  // fall back to reflecting the origin and warn — so an unconfigured deployment
+  // is never silently broken, while configured stacks (SST sets DASHBOARD_URL)
+  // are locked down.
+  // Gather configured origins, trim them, drop unset/empty entries (the
+  // `is string` guard also narrows the array to string[]), then dedupe.
+  const allowedOrigins = [
+    process.env.DASHBOARD_URL,
+    process.env.APP_URL,
+    ...(process.env.CORS_ALLOWED_ORIGINS?.split(',') ?? []),
+  ]
+    .map((origin) => origin?.trim())
+    .filter((origin): origin is string => !!origin)
+  const uniqueAllowedOrigins = [...new Set(allowedOrigins)]
+  if (uniqueAllowedOrigins.length === 0) {
+    Logger.warn(
+      'CORS: no DASHBOARD_URL / APP_URL / CORS_ALLOWED_ORIGINS set; reflecting request origin. Set one to restrict cross-origin access.',
+      'Bootstrap',
+    )
+  }
   app.enableCors({
-    origin: true,
+    origin: uniqueAllowedOrigins.length > 0 ? uniqueAllowedOrigins : true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
   })

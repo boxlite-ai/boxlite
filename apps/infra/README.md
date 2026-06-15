@@ -10,8 +10,8 @@ One-command deploy of the BoxLite control plane: ECS Fargate services, an
 EC2 runner with nested KVM, RDS Postgres, ElastiCache Redis, S3, CloudFront.
 
 - **Region:** `ap-southeast-1`
-- **IaC:** SST v3 (Pulumi under the hood)
-- **Cost at rest:** ~$500/month always-on (tear down with one command)
+- **IaC:** SST v4 (Pulumi under the hood)
+- **Cost at rest:** ~$570/month always-on — Runner + load balancers dominate (tear down with one command)
 
 ## Prerequisites
 
@@ -179,20 +179,18 @@ For Auth0 specifically:
 
 ## Service URLs
 
-| Service             | Purpose                              | Public hostname                              |
+| Service             | Purpose                              | Exposure                                     |
 |---------------------|--------------------------------------|----------------------------------------------|
-| **Dashboard SPA**   | Browser UI (static assets via CDN)   | `https://<STACK_DOMAIN>`                     |
-| **Api**             | REST API + WebSocket `/attach`       | `https://api.<STACK_DOMAIN>` (direct ALB)    |
-| **Proxy**           | `<port>-<id>.proxy.<domain>` previews | `https://*.proxy.<STACK_DOMAIN>` (direct ALB) |
-| **SshGateway**      | `ssh <token>@ssh.<domain>:2222`      | `ssh.<STACK_DOMAIN>:2222` (NLB, raw TCP)     |
-| **ArtifactRegistry** | S3-backed docker registry            | internal only                                |
-| **Jaeger**          | Trace viewer                         | public ALB                                   |
-| **OtelCollector**   | OTLP ingest                          | internal + public health                     |
+| **Dashboard SPA**   | Browser UI (static assets via CDN)   | `https://<STACK_DOMAIN>` (CloudFront)        |
+| **Api**             | REST API + WebSocket `/attach`       | `https://api.<STACK_DOMAIN>` (public ALB)    |
+| **Proxy**           | `<port>-<id>.proxy.<domain>` previews | `https://*.proxy.<STACK_DOMAIN>` (public ALB) |
+| **SshGateway**      | `ssh <token>@ssh.<domain>:2222`      | `ssh.<STACK_DOMAIN>:2222` (public NLB, raw TCP) |
+| **Jaeger**          | Trace viewer (no auth)               | internal ALB (set `JAEGER_PUBLIC=true` to expose) |
+| **OtelCollector**   | OTLP ingest + health                 | internal ALB (in-VPC emitters only)          |
+| **PgAdmin**         | Postgres admin UI                    | internal ALB (set `PGADMIN_PUBLIC=true` to expose) |
+| **MailDev**         | Mock SMTP + web UI (no auth)         | internal ALB (set `MAILDEV_PUBLIC=true` to expose) |
 | **ClickHouse Cloud** | Managed OTel storage                 | external service; configured by env         |
 | **ClickStack**      | Logs/traces/metrics explorer         | external ClickHouse Cloud UI                |
-| **PgAdmin**         | Postgres admin UI                    | internal ALB (set `PGADMIN_PUBLIC=true` to expose) |
-| **RegistryUI**      | Browse snapshot images               | public ALB                                   |
-| **MailDev**         | Mock SMTP + web UI                   | public ALB                                   |
 
 Run `npx sst deploy --stage dev` without changes to reprint all URLs. See
 [Public hostnames](#public-hostnames) below for the rationale behind the
@@ -288,17 +286,16 @@ follows that. Not yet implemented.
   ssh client ▶ SshGateway NLB ──▶ ssh-gateway ──▶ runner ──▶ box
                 ssh.<STACK_DOMAIN>:2222  (raw TCP, no TLS termination)
 
-                          ┌───────┬────────┬────────┬──────────┐
-                          │  RDS  │ Redis  │   S3   │ Snapshot │ ← Api links
-                          │  PG   │        │ bucket │ Manager  │
-                          └───────┴────────┴────────┴──────────┘
-                                                       ▲
-                                                       │ docker push
-  private VPC                                          │
-                          ┌───────────────────────────────┐
-                          │  EC2 c8i.2xlarge Runner       │
-                          │  (nested KVM, privileged)     │
-                          └───────────────────────────────┘
+                          ┌───────┬────────┬────────┐
+                          │  RDS  │ Redis  │   S3   │  Api → DB/Redis (linked);
+                          │  PG   │        │ bucket │  S3 via vended STS creds
+                          └───────┴────────┴────────┘
+  private VPC
+                          ┌────────────────────────────────┐
+                          │  EC2 c8i.2xlarge Runner        │
+                          │  (nested KVM; pulls box images  │
+                          │   from ghcr.io)                │
+                          └────────────────────────────────┘
 
 Auth: OIDC provider (Auth0/Okta/Keycloak/Dex/…) ← Api validates JWT via JWKS;
       /api/auth/end-session provides RP-initiated-logout fallback for IdPs
@@ -363,16 +360,18 @@ initial setup: `aws ecs update-service --force-new-deployment --service Proxy`.
 
 ## Cost (ap-southeast-1, always-on)
 
-| Resource                           | Monthly |
-|------------------------------------|---------|
-| EC2 c8i.2xlarge (Runner)           | ~$245   |
-| NAT EC2 instance                   | ~$5     |
-| 9x Fargate 0.25 vCPU / 0.5 GB     | ~$70    |
-| RDS `t4g.micro` Postgres           | ~$15    |
-| ElastiCache Redis                  | ~$15    |
-| ALBs (10x)                         | ~$160   |
-| CloudFront + S3 + CloudWatch Logs  | ~$20    |
-| **Total**                          | **~$530** |
+| Resource                              | Monthly |
+|---------------------------------------|---------|
+| EC2 c8i.2xlarge (Runner)              | ~$325   |
+| Load balancers (6 ALB + 1 NLB)        | ~$115   |
+| 7x Fargate 0.25 vCPU / 0.5 GB         | ~$65    |
+| 2x NAT EC2 (`t4g.nano`) + public IPv4 | ~$16    |
+| RDS `t4g.micro` Postgres              | ~$15    |
+| ElastiCache Redis                     | ~$15    |
+| CloudFront + S3 + CloudWatch Logs     | ~$20    |
+| **Total**                             | **~$570** |
 
-`npx sst remove --stage dev` tears it all down; S3 buckets and RDS snapshots
-are retained in production stage (`--stage production`) per SST's default.
+Figures are approximate (ap-southeast-1 on-demand). The **Runner and the load
+balancers dominate** — the NAT is ~$16, not a headline cost. `npx sst remove
+--stage dev` tears it all down; S3 buckets and RDS snapshots are retained in
+production stage (`--stage production`) per SST's default.

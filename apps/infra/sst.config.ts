@@ -14,7 +14,7 @@
 //   1. secrets (auto-generated)     6. API
 //   2. platform (VPC/DB/Redis/S3)   7. edge services (Proxy, SshGateway)
 //   3. IAM                          8. admin UIs (PgAdmin/MailDev)
-//   4. auth (Dex)                   9. CDN (CloudFront)
+//   4. auth (external OIDC)         9. CDN (CloudFront)
 //   5. observability               10. runner (EC2 + nested KVM)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -25,7 +25,6 @@ const PORTS = {
   API: 3000,
   PROXY: 4000,
   SSH_GATEWAY: 2222,
-  DEX: 5556,
   RUNNER: 3003,
   JAEGER_UI: 16686,
   OTLP_HTTP: 4318,
@@ -38,7 +37,7 @@ const PORTS = {
 const IMAGES = {
   jaeger: 'jaegertracing/all-in-one:1.67.0',
   pgadmin: 'dpage/pgadmin4:9.2.0',
-  maildev: 'maildev/maildev:latest',
+  maildev: 'maildev/maildev:2.2.1',
 } as const
 
 // Runner EC2 sizing
@@ -94,8 +93,8 @@ export default $config({
         aws: { region: REGION, ...(process.env.AWS_PROFILE ? { profile: process.env.AWS_PROFILE } : {}) },
         cloudflare: '6.15.0',
         random: '4.16.6',
-        // MERGE-REVIEW: command provider grafted from main for multi-runner
-        // post-deploy registration (see RegisterExtraRunners in run()).
+        // command provider: multi-runner post-deploy registration
+        // (see RegisterExtraRunners in run()).
         command: '1.0.1',
       },
     }
@@ -152,11 +151,57 @@ export default $config({
     const pgAdminPassword = randomKey('PgAdminPassword', 24)
 
     // ─── 2. PLATFORM ─────────────────────────────────────────────────────────
-    const vpc = new sst.aws.Vpc('Vpc', { nat: 'ec2' })
+    // Network model + rationale (subnets / NAT / egress-only public IP, AWS citations): ./NETWORKING.md
+    // NAT instance (fck-nat, ~10× cheaper than a managed NAT Gateway). The Fargate
+    // services run in private subnets (see Cluster below) with no public IP, so they
+    // reach ECR, Docker Hub, the OIDC issuer, external ClickHouse, and AWS APIs
+    // through this NAT. EC2 runners stay in public subnets and egress via the
+    // Internet Gateway, not this NAT.
+    const vpc = new sst.aws.Vpc('Vpc', {
+      nat: 'ec2',
+      // Name the VPC-created NAT resources (SST defaults: generic "Vpc NAT
+      // Instance", unnamed EIP + SG). Name tags only — SST's own tags
+      // (e.g. sst:is-nat) and the SG ingress/egress are left untouched.
+      transform: {
+        // resourceName is SST's logical id ("VpcNatInstance1"/"…2"); its trailing
+        // digit is the per-AZ index. Resolve the instance's real AZ from its
+        // subnet so the tag reads e.g. boxlite-dev-nat-1-ap-southeast-1a.
+        natInstance: (args, _opts, resourceName) => {
+          const idx = resourceName.match(/\d+$/)?.[0] ?? ''
+          const az = aws.ec2.getSubnetOutput({ id: args.subnetId }).availabilityZone
+          args.tags = { ...args.tags, Name: $interpolate`${$app.name}-${$app.stage}-nat-${idx}-${az}` }
+        },
+        // EIP i pairs with NAT instance i; it has no subnet of its own, so the
+        // index alone is enough to keep the names aligned (…-nat-eip-1/2).
+        elasticIp: (args, _opts, resourceName) => {
+          const idx = resourceName.match(/\d+$/)?.[0] ?? ''
+          args.tags = { ...args.tags, Name: `${$app.name}-${$app.stage}-nat-eip-${idx}` }
+        },
+        // One security group is shared by both NAT instances → a single name.
+        natSecurityGroup: (args) => {
+          args.tags = { ...args.tags, Name: `${$app.name}-${$app.stage}-nat-sg` }
+        },
+      },
+    })
     const db = new sst.aws.Postgres('Database', { vpc, instance: 't4g.micro', storage: '20 GB' })
     const redis = new sst.aws.Redis('Cache', { vpc, cluster: false }) // NestJS uses SELECT (multi-DB)
     const storage = new sst.aws.Bucket('Storage')
-    const cluster = new sst.aws.Cluster('Cluster', { vpc, forceUpgrade: 'v2' })
+    // Services run in PRIVATE subnets. SST's Vpc component otherwise defaults Fargate
+    // tasks to public subnets with public IPs; passing the cluster a plain vpc object
+    // (SST's documented escape hatch) overrides that: containerSubnets = private (no
+    // public IP, egress via the NAT above), loadBalancerSubnets = public (ALBs stay
+    // internet-facing, fronted by Cloudflare).
+    const cluster = new sst.aws.Cluster('Cluster', {
+      forceUpgrade: 'v2',
+      vpc: {
+        id: vpc.id,
+        securityGroups: vpc.securityGroups,
+        containerSubnets: vpc.privateSubnets,
+        loadBalancerSubnets: vpc.publicSubnets,
+        cloudmapNamespaceId: vpc.nodes.cloudmapNamespace.id,
+        cloudmapNamespaceName: vpc.nodes.cloudmapNamespace.name,
+      },
+    })
 
     // ─── 3. IAM ──────────────────────────────────────────────────────────────
     // Box-storage credential vending. The Api's ECS task role assumes the
@@ -204,10 +249,15 @@ export default $config({
     // Created before Api so API, runner, host, and box can all emit OTLP to the
     // same Collector. ClickHouse is external/managed only; no in-cluster
     // ClickHouseSpike fallback is part of the target architecture.
+    // Internal ALB by default: the trace UI exposes every span (URLs, headers,
+    // IDs, SQL, error bodies) with no auth, and nothing outside the VPC needs
+    // to read it. Reach it via VPN / bastion / `aws ssm start-session`.
+    // JAEGER_PUBLIC=true opts into an internet-facing ALB.
+    const jaegerPublic = envOr('JAEGER_PUBLIC', 'false') === 'true'
     new sst.aws.Service('Jaeger', {
       cluster,
       image: IMAGES.jaeger,
-      loadBalancer: { rules: [{ listen: '80/http', forward: `${PORTS.JAEGER_UI}/http` }] },
+      loadBalancer: { public: jaegerPublic, rules: [{ listen: '80/http', forward: `${PORTS.JAEGER_UI}/http` }] },
       environment: { COLLECTOR_OTLP_ENABLED: 'true' },
     })
 
@@ -225,6 +275,12 @@ export default $config({
         `service::pipelines::logs::exporters=${collectorExporters}`,
       ],
       loadBalancer: {
+        // Internal only: every OTLP emitter (API, runner, boxes) is in-VPC. A
+        // public ingest endpoint would accept unauthenticated telemetry from
+        // anywhere (injection / DoS / cost) and forward it to ClickHouse + the
+        // API — there is no legitimate cross-internet producer. `.url` still
+        // resolves (internal ALB DNS), so the OTLP endpoint wiring is unchanged.
+        public: false,
         rules: [
           { listen: `${PORTS.OTLP_HTTP}/http`, forward: `${PORTS.OTLP_HTTP}/http` },
           { listen: '80/http', forward: `${PORTS.OTEL_HEALTH}/http` },
@@ -486,8 +542,8 @@ export default $config({
         // uploads bypass CloudFront (CF imposes a 10-min hard WS cap and a
         // 60s origin-read timeout that breaks streaming). Static SPA assets
         // (index.html + /assets/*) still serve through the CF Router at the
-        // root domain. CORS on the API is already `origin: true` so the
-        // cross-origin dashboard→API path works without further changes.
+        // root domain. The API pins CORS to DASHBOARD_URL (apps/api main.ts),
+        // so this cross-origin dashboard→API path is explicitly allowed.
         DASHBOARD_URL: envOr('DASHBOARD_URL', `https://${stackDomain}`),
         APP_URL: envOr('APP_URL', ''),
         DASHBOARD_BASE_API_URL: envOr('DASHBOARD_BASE_API_URL', `https://api.${stackDomain}`),
@@ -605,7 +661,7 @@ export default $config({
     )
 
     // ─── 8. ADMIN UIs ────────────────────────────────────────────────────────
-    // MERGE-REVIEW: pgAdmin security gate grafted from main. pgAdmin is a
+    // pgAdmin security gate. pgAdmin is a
     // Postgres admin console one hop from RDS. Knobs are overridable via env;
     // unset falls back to the secure default below (internal ALB + login
     // enabled). The two values are coupled, not independent: exposing it
@@ -643,10 +699,15 @@ export default $config({
       },
     })
 
+    // Internal ALB by default: MailDev is an unauthenticated mail catcher.
+    // Anything it captures (password resets, magic links, invites) would be
+    // world-readable on a public ALB. Reach it via VPN / bastion / SSM.
+    // MAILDEV_PUBLIC=true opts into an internet-facing ALB.
+    const maildevPublic = envOr('MAILDEV_PUBLIC', 'false') === 'true'
     new sst.aws.Service('MailDev', {
       cluster,
       image: IMAGES.maildev,
-      loadBalancer: { rules: [{ listen: '80/http', forward: `${PORTS.MAILDEV_UI}/http` }] },
+      loadBalancer: { public: maildevPublic, rules: [{ listen: '80/http', forward: `${PORTS.MAILDEV_UI}/http` }] },
     })
 
     // ─── 9. CDN ROUTES ───────────────────────────────────────────────────────
@@ -654,7 +715,8 @@ export default $config({
     router.route('/', api.url)
 
     // ─── 10. RUNNER (EC2 with nested KVM) ────────────────────────────────────
-    // Pulls runner image from ECR, runs privileged with /dev/kvm mounted.
+    // Boots an Ubuntu EC2 that runs the prebuilt runner binary (downloaded from
+    // GitHub Releases) under systemd, with nested KVM enabled for box VMs.
     const ubuntuAmi = aws.ec2.getAmi({
       mostRecent: true,
       owners: [RUNNER.ubuntuOwnerId],
@@ -696,6 +758,39 @@ export default $config({
       }),
     })
     const runnerInstanceProfile = new aws.iam.InstanceProfile('RunnerProfile', { role: runnerRole.name })
+
+    // Dedicated runner security group (least-privilege, explicit in IaC).
+    // Without it the runner falls back to the VPC's shared default SG, which
+    // allows ALL ports from the whole VPC CIDR. The runner multiplexes its
+    // control-plane API, box proxy, and (when enabled) ssh-gateway onto a single
+    // port (API_PORT = PORTS.RUNNER); box ports are served INSIDE the runner and
+    // never bound on the host NIC. So one inbound port — reachable only from
+    // inside the VPC — is the complete surface. Combined with the public-subnet
+    // placement (the runner egresses via the Internet Gateway, not the NAT that
+    // serves the private services), this yields an egress-only public IP:
+    // nothing on the internet can reach the runner.
+    const runnerSecurityGroup = new aws.ec2.SecurityGroup('RunnerSecurityGroup', {
+      vpcId: vpc.nodes.vpc.id,
+      description: 'BoxLite runner — inbound only on the runner API port from within the VPC',
+      ingress: [
+        {
+          protocol: 'tcp',
+          fromPort: PORTS.RUNNER,
+          toPort: PORTS.RUNNER,
+          cidrBlocks: [vpc.nodes.vpc.cidrBlock],
+          description: 'control-plane API + box proxy + ssh-gateway (multiplexed on the runner API port)',
+        },
+      ],
+      egress: [
+        {
+          protocol: '-1',
+          fromPort: 0,
+          toPort: 0,
+          cidrBlocks: ['0.0.0.0/0'],
+          description: 'image pulls (ghcr/github/aws), S3, Secrets Manager, OTLP, control-plane callbacks',
+        },
+      ],
+    })
 
     // ── Runner ghcr pull credential (private image access) ────────────────────
     // Runners pull box images straight from private ghcr.io (the self-hosted
@@ -755,10 +850,21 @@ export default $config({
       {
         ami: ubuntuAmi.then((a) => a.id),
         instanceType: RUNNER.instanceType,
+        // Public subnet + public IP is the runner's egress path: it leaves via
+        // the Internet Gateway (not the NAT, which serves the private services)
+        // for image pulls (ghcr/github), S3, Secrets Manager, and control-plane
+        // callbacks. RunnerSecurityGroup makes this an EGRESS-ONLY public IP:
+        // inbound is limited to the runner port from inside the VPC, so the
+        // internet can't reach it.
         subnetId: vpc.publicSubnets[0],
+        associatePublicIpAddress: true,
+        vpcSecurityGroupIds: [runnerSecurityGroup.id],
         iamInstanceProfile: runnerInstanceProfile.name,
         cpuOptions: { nestedVirtualization: 'enabled' },
-        associatePublicIpAddress: true,
+        // Enforce IMDSv2 + a 1-hop limit so a container escape or SSRF on this
+        // untrusted-code host can't read the instance-role creds (S3
+        // boxlite-volume-*, the ghcr token in Secrets Manager, SSM).
+        metadataOptions: { httpEndpoint: 'enabled', httpTokens: 'required', httpPutResponseHopLimit: 1 },
         userDataBase64: runnerUserData,
         rootBlockDevice: { volumeSize: RUNNER.rootDiskGB },
         tags: { Name: 'boxlite-runner' },
@@ -769,10 +875,8 @@ export default $config({
       },
     )
 
-    // MERGE-REVIEW: multi-runner provisioning grafted from main. Translated to
-    // our buildRunnerUserData({ apiUrl, token, otelEndpoint }) signature —
-    // main's registry.url arg was dropped with the self-hosted registry, so
-    // extra runners share the same OTel endpoint as the default runner.
+    // Multi-runner provisioning. Extra runners share the same OTel endpoint as
+    // the default runner.
     //
     // ── Extra runners (RUNNERS > 1) ──────────────────────────────────────────
     // The default runner above is auto-seeded by the API at boot via
@@ -792,10 +896,14 @@ export default $config({
         {
           ami: ubuntuAmi.then((a) => a.id),
           instanceType: RUNNER.instanceType,
+          // Egress-only public IP, same rationale as the default runner above:
+          // public subnet for IGW egress (no NAT), inbound locked by the SG.
           subnetId: vpc.publicSubnets[0],
+          associatePublicIpAddress: true,
+          vpcSecurityGroupIds: [runnerSecurityGroup.id],
           iamInstanceProfile: runnerInstanceProfile.name,
           cpuOptions: { nestedVirtualization: 'enabled' },
-          associatePublicIpAddress: true,
+          metadataOptions: { httpEndpoint: 'enabled', httpTokens: 'required', httpPutResponseHopLimit: 1 },
           userDataBase64: $resolve([api.url, apiKey.result, otelCollectorOtlpHttpUrl, ghcrSecret ? ghcrSecret.arn : '']).apply(
             ([apiUrl, token, otelEndpoint, ghcrSecretArn]) =>
               buildRunnerUserData({ apiUrl, token, otelEndpoint, ghcrSecretArn: ghcrSecretArn || undefined, ghcrUsername }),
@@ -897,6 +1005,9 @@ chmod +x /usr/local/bin/boxlite-runner-start.sh
 
   const script = `#!/bin/bash
 exec > /var/log/runner-setup.log 2>&1
+# Fail fast + loud: a half-finished bootstrap must not leave a runner that looks
+# up but silently skipped the binary download or its checksum verification.
+set -euo pipefail
 
 # Wait for dpkg locks
 while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 5; done
@@ -911,8 +1022,23 @@ curl -fsSL "https://s3.amazonaws.com/mountpoint-s3-release/\${MOUNT_S3_VERSION}/
 apt-get install -y /tmp/mount-s3.deb
 rm -f /tmp/mount-s3.deb
 
-# Download prebuilt runner binary from GitHub Releases
-curl -fsSL "https://github.com/boxlite-ai/boxlite/releases/download/v${RUNNER_VERSION}/boxlite-runner-v${RUNNER_VERSION}-linux-amd64.tar.gz" | tar xz -C /usr/local/bin/
+# Download the prebuilt runner binary, then verify its SHA-256 against the
+# checksum published next to the release asset before installing (it runs as
+# root). Best-effort for backward compatibility: a release with no .sha256 asset
+# warns and proceeds; a present-but-mismatched checksum is fatal (fail-closed).
+RUNNER_BASE="https://github.com/boxlite-ai/boxlite/releases/download/v${RUNNER_VERSION}"
+RUNNER_TARBALL="boxlite-runner-v${RUNNER_VERSION}-linux-amd64.tar.gz"
+curl -fsSL "\${RUNNER_BASE}/\${RUNNER_TARBALL}" -o "/tmp/\${RUNNER_TARBALL}"
+if curl -fsSL "\${RUNNER_BASE}/\${RUNNER_TARBALL}.sha256" -o /tmp/runner.sha256; then
+  EXPECTED=\$(awk '{print \$1}' /tmp/runner.sha256)
+  ACTUAL=\$(sha256sum "/tmp/\${RUNNER_TARBALL}" | awk '{print \$1}')
+  [ "\$EXPECTED" = "\$ACTUAL" ] || { echo "FATAL: runner checksum mismatch (want \$EXPECTED got \$ACTUAL)" >&2; exit 1; }
+  echo "runner tarball checksum verified (\$ACTUAL)"
+else
+  echo "WARNING: no .sha256 published for v${RUNNER_VERSION}; installing without integrity verification" >&2
+fi
+tar -xzf "/tmp/\${RUNNER_TARBALL}" -C /usr/local/bin/
+rm -f "/tmp/\${RUNNER_TARBALL}" /tmp/runner.sha256
 chmod +x /usr/local/bin/boxlite-runner
 
 # Get host IP via IMDSv2
