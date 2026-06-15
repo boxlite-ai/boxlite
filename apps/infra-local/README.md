@@ -1,13 +1,14 @@
 # `apps/infra-local/` — BoxLite-Based Local Dev Stack
 
 Brings up the full cloud-MVP control plane on one Apple Silicon Mac, dogfooding
-BoxLite. Two layers:
+BoxLite. One Python orchestrator (`compose`) drives both layers:
 
 - **L1 — 11 BoxLite microVM boxes**: postgres, redis, minio (+ a one-shot bucket
-  init), registry, dex, jaeger, pgadmin, registry-ui, otel-collector, caddy.
-  Driven by the `boxlite_local` Python orchestrator.
+  init), registry, dex, jaeger, pgadmin, registry-ui, otel-collector, caddy —
+  via the BoxLite SDK (`orchestrator.py` / `services.py`).
 - **L2 — 4 native macOS processes**: API (NestJS, `:3001`), Runner (Go, `:3003`),
-  Proxy (Go, `:4000`), Dashboard (Vite, `:3000`). Driven by `make stack-*`.
+  Proxy (Go, `:4000`), Dashboard (Vite, `:3000`) — via `subprocess` supervision
+  (`native.py`).
 
 All generated state lives under one gitignored dir, `<repo>/.apps-local/`
 (`data/` volumes, `boxlite/` L1 SDK home, `boxlite-runner/` L3 home, `bin/`
@@ -16,31 +17,32 @@ binaries, `logs/`).
 ## Quick start
 
 Prereqs: macOS Apple Silicon; the BoxLite Python SDK (`pip install -e
-../../sdks/python`) + `boxlite` CLI on `$PATH`; Go 1.25+; Node + yarn (corepack);
-Python 3.10+.
+../../sdks/python`); Go 1.25+; Node + yarn (corepack); Python 3.10+.
 
 ```bash
 cd apps/infra-local
-make stack-up        # idempotent + self-healing: installs deps, builds binaries, brings up L1+L2
-make stack-status    # one-screen health across L1 + L2
-make stack-down      # stop L2 (add ARGS=--all to also stop L1)
+make up        # idempotent + self-healing: installs deps, builds binaries, brings up L1+L2
+make status    # one-screen health across L1 + L2
+make down      # stop L2 (add ARGS=--all to also stop L1)
 ```
 
 First run pulls 11 images (~5–7 min); later runs reuse the cache (~30–60 s). Log
 in at <http://localhost:3000> through Dex (`admin@boxlite.dev` / `password`).
 
-## Make targets
+## Commands
 
-| Target | What |
+`make <verb>` is a thin alias for `python -m compose <verb>` (the CLI is the
+source of truth — `python -m compose --help`):
+
+| Command | What |
 |---|---|
-| `stack-up` | ensure L1 up + start all L2 (idempotent, self-healing) |
-| `stack-status` | health check across L1 + L2 |
-| `stack-down [ARGS=--all]` | stop L2 (and L1 with `--all`) |
-| `stack-restart COMPONENTS="api proxy"` | restart L2 components (runner also rebuilds) |
-| `stack-logs COMPONENT=api` | tail a component log (`all` for everything) |
-| `stack-reset` / `stack-reset-hard` / `stack-nuke` | tiered cleanup: light → schema rebuild → full cold start |
-| `stack-rebuild-l1-box BOX=dex` | destroy + recreate one stuck L1 box |
-| `up` / `down` / `ps` / `doctor` | L1-only (`python -m boxlite_local …`) |
+| `make up [COMPONENTS="api runner"]` | ensure L1 boxes + start L2 (self-healing: installs deps, builds missing binaries, seeds) |
+| `make status` | one-screen L1 + L2 health |
+| `make down [ARGS=--all]` | stop L2 processes (`--all` also stops/removes L1 boxes; data kept) |
+| `make restart COMPONENTS="runner dex"` | restart L2 proc(s) (runner/proxy rebuild) **and/or** recreate L1 box(es) |
+| `make logs COMPONENT=api` | tail a component log (`all` for everything) |
+| `make reset [ARGS=--hard]` | wipe L2 runtime state (`--hard` also drops + rebuilds the schema) |
+| `make nuke` | tear down **everything** — destroy L1 boxes + wipe data + logs (cold start) |
 
 ## Endpoints
 
@@ -59,16 +61,16 @@ in at <http://localhost:3000> through Dex (`admin@boxlite.dev` / `password`).
 | Dashboard / API | `http://localhost:3000` / `:3001/api` | login via Dex |
 
 Inside a box, reach the host via `host.boxlite.internal:<port>` (gvproxy DNS —
-only resolvable in a box). `InfraConfig` in `boxlite_local/config.py` is the
-source of truth; `BOXLITE_*` env vars override credentials/paths only — **host
-ports are fixed** as the `ServiceSpec.ports` literals in `services.py`.
+only resolvable in a box). `InfraConfig` in `compose/config.py` is the source of
+truth; `BOXLITE_*` env vars override credentials/paths only — **host ports are
+fixed** as the `ServiceSpec.ports` literals in `services.py`.
 
 ## Validating it works
 
 There is no infra-local test suite — the stack is its own smoke test:
 
 ```bash
-make stack-up && make stack-status   # every L1 + L2 row green
+make up && make status   # every L1 + L2 row green
 ```
 
 The app's browser E2E (`npm run e2e:local` from `apps/`) covers the SDK → API →
@@ -80,11 +82,11 @@ relies on — read-write host volumes + host port mapping — is pinned by
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Dashboard `Unauthorized` / `401` right after login | dex box clock drifted behind the host after the Mac slept → tokens are born expired | `make stack-rebuild-l1-box BOX=dex` + clear browser storage |
-| Box `pulling` stuck for minutes | registry box's process hung (TCP still listens) | `make stack-rebuild-l1-box BOX=registry` |
+| Dashboard `Unauthorized` / `401` right after login | dex box clock drifted behind the host after the Mac slept → tokens are born expired | `make restart COMPONENTS=dex` + clear browser storage |
+| Box `pulling` stuck for minutes | registry box's process hung (TCP still listens) | `make restart COMPONENTS=registry` |
 | All API calls `401` | `SSH_GATEWAY_API_KEY` / `PROXY_API_KEY` empty in `apps/api/.env` | set them non-empty |
 | Runner: `Another BoxliteRuntime is already using directory` | a stale runner holds `.apps-local/boxlite-runner/.lock` | `lsof` the lock, kill the stale PID |
-| Any L1 box misbehaving | its stateful in-box process is wedged | `make stack-rebuild-l1-box BOX=<name>` |
+| Any L1 box misbehaving | its stateful in-box process is wedged | `make restart COMPONENTS=<box>` |
 | "Create Box" from the UI is incomplete | image resolution is mid-rewrite upstream + the picker is PostHog flag-gated | known limitation; use `POST /api/box` directly |
 
 > **Box boot is unverified on this stack** — image resolution is mid-rewrite
@@ -92,12 +94,25 @@ relies on — read-write host volumes + host port mapping — is pinned by
 > and the dashboard image picker was removed. L1 services, API, runner, auth, and
 > the dashboard all work.
 
-## Architecture
+## Layout
 
-- **`boxlite_local/`** — flat async package: `services.py` (the `ServiceSpec`
-  registry + `SERVICES`), `orchestrator.py` (topo-ordered `up`/`down`/`ps` +
-  healthchecks), `doctor.py` (preflight), `config.py` (`InfraConfig`), `cli.py`.
-- **`scripts/`** — the `make stack-*` wrappers that supervise the L2 native
-  processes; `configs/api.env` seeds `apps/api/.env` on first `stack-up`.
-- **Add a service**: one `ServiceSpec` + a `SERVICES` entry; its host port is the
-  literal in `ServiceSpec.ports`.
+Everything is the `compose` package + four root files (no `scripts/`, no `configs/`):
+
+```
+apps/infra-local/
+├── Makefile          # thin aliases → python -m compose <cmd>
+├── README.md
+├── pyproject.toml
+├── api.env           # API .env template (copied to apps/api/.env on first `up`)
+└── compose/
+    ├── __main__.py   # the `python -m compose` CLI (up/down/status/logs/restart/reset/nuke)
+    ├── config.py     # InfraConfig (single source of truth)
+    ├── services.py   # the L1 ServiceSpec registry + SERVICES
+    ├── orchestrator.py  # L1 box lifecycle (BoxLite SDK)
+    ├── native.py     # L2 native-process supervision (subprocess/pidfiles/signals)
+    ├── doctor.py     # preflight checks
+    └── _sdk.py       # BoxLite SDK import shim
+```
+
+**Add an L1 service**: one `ServiceSpec` + a `SERVICES` entry in `services.py`;
+its host port is the literal in `ServiceSpec.ports`.

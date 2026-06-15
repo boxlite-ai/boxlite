@@ -395,20 +395,3 @@ async def down(
     if wipe and config.data_dir.exists():
         shutil.rmtree(config.data_dir, ignore_errors=True)
         print(f"  data dir wiped: {config.data_dir}")
-
-
-async def ps(config: InfraConfig) -> list[tuple[str, str, str]]:
-    """Return list of (name, status, image) for boxlite-local-* boxes. Also prints."""
-    ensure_home_env(config)
-    runtime = get_runtime()
-    infos = await runtime.list_info()
-    rows: list[tuple[str, str, str]] = []
-    for info in infos:
-        if info.name and info.name.startswith("boxlite-local-"):
-            rows.append((info.name, info.state.status, info.image))
-    if not rows:
-        print("(no boxlite-local-* boxes)")
-    else:
-        for name, status, image in rows:
-            print(f"  {name:<30} {status:<10} {image}")
-    return rows

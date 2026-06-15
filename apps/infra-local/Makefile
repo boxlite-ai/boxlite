@@ -1,87 +1,34 @@
-# BoxLite-based infra-local orchestrator
-#
-# All targets are thin wrappers around `python -m boxlite_local`. The Python
-# CLI is the source of truth — see `python -m boxlite_local --help` for the
-# full surface area. This Makefile exists for muscle memory + tab completion.
+# infra-local — thin aliases over `python -m compose <cmd>`.
+# The Python CLI is the source of truth: `python -m compose --help`.
+# This Makefile exists for muscle memory + tab completion.
 
 PY ?= python
 
-# All recipes must agree with scripts/_stack-common.sh (and the python
-# orchestrator's own default) on where the L1 SDK home lives, so the
-# `boxlite` CLI here (stack-rebuild-l1-box) sees the same boxes.
-REPO_ROOT := $(abspath $(CURDIR)/../..)
-export BOXLITE_HOME ?= $(REPO_ROOT)/.apps-local/boxlite
+.PHONY: help install up down status logs restart reset nuke
 
-# Prefer a boxlite CLI built from THIS checkout over a stale global install
-# (an older PATH `boxlite` can fail to read this version's box-config rows).
-# Matches the resolver in scripts/_stack-common.sh.
-BOXLITE_CLI := $(firstword $(wildcard $(REPO_ROOT)/target/release/boxlite $(REPO_ROOT)/target/debug/boxlite) boxlite)
+help:      ## show this help
+	@awk -F':.*## ' '/^[a-zA-Z][a-zA-Z0-9_-]*:.*## / { printf "  %-9s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
-.PHONY: help up down ps doctor logs wipe install migrate \
-        stack-build stack-up stack-down stack-restart stack-status stack-logs stack-reset stack-reset-hard stack-nuke \
-        seed-init-data stack-rebuild-l1-box
-
-help:                  ## show this help
-	@awk -F':.*## ' '/^[a-zA-Z][a-zA-Z0-9_-]*:.*## / { printf "  %-16s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
-
-install:               ## install the orchestrator package
+install:   ## install the package (editable; pulls the boxlite SDK)
 	$(PY) -m pip install -e .
 
-up:                    ## bring all services up (runs doctor preflight first)
-	$(PY) -m boxlite_local up
+up:        ## ensure L1 boxes + start L2 (COMPONENTS="api runner")
+	$(PY) -m compose up $(COMPONENTS)
 
-down:                  ## stop L2 native procs + remove L1 services
-	-./scripts/stack-down.sh
-	$(PY) -m boxlite_local down
+down:      ## stop L2 procs (ARGS=--all also stops L1 boxes)
+	$(PY) -m compose down $(ARGS) $(COMPONENTS)
 
-wipe:                  ## stop L2 + remove L1 + wipe data dir
-	-./scripts/stack-down.sh
-	$(PY) -m boxlite_local down --wipe
+status:    ## one-screen L1 + L2 health
+	$(PY) -m compose status
 
-ps:                    ## list running boxlite-local-* boxes
-	$(PY) -m boxlite_local ps
+logs:      ## tail a component log (COMPONENT=api|all)
+	$(PY) -m compose logs $(COMPONENT)
 
-doctor:                ## run preflight checks (SDK + runtime + port conflicts)
-	$(PY) -m boxlite_local doctor
+restart:   ## restart L2 proc(s) / recreate L1 box(es) (COMPONENTS="runner dex")
+	$(PY) -m compose restart $(COMPONENTS)
 
-migrate:               ## build local pg schema by running all TypeORM migrations from scratch
-	cd ../api && set -a && . ../.env && set +a && \
-	  npx ts-node -P ./tsconfig.json -r tsconfig-paths/register \
-	    ../node_modules/typeorm/cli.js migration:run -d ./src/migrations/data-source.ts
+reset:     ## wipe L2 runtime state (ARGS=--hard also rebuilds the schema)
+	$(PY) -m compose reset $(ARGS)
 
-seed-init-data:        ## ensure dashboard-required base data (admin org, default region, wait runner)
-	./scripts/seed-init-data.sh
-
-# ── L2 stack wrappers (L1 + native API/Runner/Proxy/Dashboard) ───────────────
-
-stack-build:           ## build native runner + proxy binaries
-	./scripts/stack-build.sh
-
-stack-up:              ## ensure L1 up + start all L2 native processes (idempotent)
-	./scripts/stack-up.sh $(COMPONENTS)
-
-stack-down:            ## stop all L2 native processes (L1 stays up; add ARGS=--all to stop L1 too)
-	./scripts/stack-down.sh $(ARGS) $(COMPONENTS)
-
-stack-restart:         ## restart one or more L2 components (runner = also rebuild)
-	./scripts/stack-restart.sh $(COMPONENTS)
-
-stack-status:          ## one-screen health check across L1 + L2
-	./scripts/stack-status.sh
-
-stack-logs:            ## tail logs (COMPONENT=api|runner|proxy|dashboard|all)
-	./scripts/stack-logs.sh $(COMPONENT)
-
-stack-reset:           ## wipe L2 runtime state (PG user data + runner home; L1 + schema preserved)
-	./scripts/stack-reset.sh
-
-stack-reset-hard:      ## like stack-reset, but also re-applies prod schema baseline
-	./scripts/stack-reset.sh --hard
-
-stack-nuke:            ## ABSOLUTE NUKE: L1 boxes destroyed + data wiped + logs cleared
-	./scripts/stack-reset.sh --nuke
-
-stack-rebuild-l1-box:  ## destroy + recreate one L1 box (BOX=dex|registry|...) — for stuck stateful services
-	@if [ -z "$(BOX)" ]; then echo "usage: make stack-rebuild-l1-box BOX=<name>"; echo "e.g. BOX=dex   when login returns stale tokens"; echo "e.g. BOX=registry  when image pulls hang"; exit 1; fi
-	$(BOXLITE_CLI) rm boxlite-local-$(BOX) --force
-	python -m boxlite_local up $(BOX)
+nuke:      ## tear down EVERYTHING (L1 boxes + data + logs)
+	$(PY) -m compose nuke

@@ -72,7 +72,7 @@ def resolve_runtime_dir() -> Path | None:
 def find_repo_root_from(here: Path) -> Path:
     """Walk up from `here` to the first dir containing apps/infra-local/.
 
-    `apps` must be a REAL directory: older stack-up versions created an
+    `apps` must be a REAL directory: an older version of this tool created an
     `apps/apps -> .` symlink (webpack path quirk), which would otherwise make
     `apps/` itself satisfy the predicate and mis-root all generated state at
     `apps/.apps-local/`. The guard keeps the walk safe on checkouts where
