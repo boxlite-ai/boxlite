@@ -310,9 +310,16 @@ jobs:
     # skipped. Override via !failure() && !cancelled() — runs as long
     # as nothing in the upstream chain actively failed (skipped is OK,
     # which is exactly what happens on pure API / test PRs).
-    if: |
-      !failure() && !cancelled()
-      && (needs.changes.outputs.any == 'true' || github.event_name == 'workflow_dispatch')
+    #
+    # No `needs.changes.outputs.any` gate here: that output is computed
+    # from `${{ X == 'true' || Y == 'true' || ... }}` which yields a
+    # boolean, but the resulting output's string coercion has been
+    # observed to compare unequal to the literal 'true' on push events
+    # (silent false → e2e skipped even when paths-filter saw real
+    # changes). The orchestrator's top-level `on: push: paths:` already
+    # gates entry; once we're inside, run e2e whenever the upstream
+    # build + deploy chain hasn't actively failed.
+    if: ${{ !failure() && !cancelled() }}
     # Test suite lives in its own workflow so it can be dispatched
     # standalone (re-run pytest against the currently-deployed Tokyo
     # stack without rebuilding/redeploying). Same `e2e-cloud-shared`
