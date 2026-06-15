@@ -135,19 +135,22 @@ jobs:
           fi
           echo "redeploy_current=false"     >> "$GITHUB_OUTPUT"
 
+          # NEVER fall through to a no-build branch — a force-push rebase
+          # produces an empty diff vs. github.event.before even when the
+          # actually-deployed Api image is stale, and the previous "workflow
+          # only — skip" decision then left Tokyo on the older image while
+          # the head commit advertised the fix. Always build + deploy on
+          # any push (or non-push event). The redeploy_current short-circuit
+          # above still applies when explicitly requested.
           if [ "${{ github.event_name }}" != 'push' ]; then
               echo "Non-push event (${{ github.event_name }}) — build + deploy."
-              echo "should_build=true"   >> "$GITHUB_OUTPUT"
-              echo "should_deploy=true"  >> "$GITHUB_OUTPUT"
           elif [ "${PUSH_CHANGED:-false}" = 'true' ]; then
               echo "Push touched api_source paths — build + deploy."
-              echo "should_build=true"   >> "$GITHUB_OUTPUT"
-              echo "should_deploy=true"  >> "$GITHUB_OUTPUT"
           else
-              echo "Push only touched workflow files — SKIP build + deploy."
-              echo "should_build=false"  >> "$GITHUB_OUTPUT"
-              echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+              echo "Push didn't touch api_source paths — build + deploy anyway (avoid stale Tokyo on rebase)."
           fi
+          echo "should_build=true"   >> "$GITHUB_OUTPUT"
+          echo "should_deploy=true"  >> "$GITHUB_OUTPUT"
 
   # ── Deploy: ECR push (optional) + ECS register-TD + UpdateService ─
   deploy:

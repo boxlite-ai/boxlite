@@ -177,21 +177,24 @@ jobs:
           fi
 
           # Push branch: gate each stage on the narrowest change-set
-          # that affects its inputs.
+          # that affects its inputs. NEVER fall through to a no-build
+          # branch — force-push rebases produce an empty diff vs.
+          # github.event.before even when the actually-deployed binary
+          # is now stale, and a "workflow only — skip" decision then
+          # leaves Tokyo on the older runner while the head commit
+          # advertises the fix. Always build + deploy on push; only
+          # the libboxlite_changed signal stays narrowed (it controls
+          # whether build_c_sdk rebuilds .a from source vs. fetches
+          # the tagged-release tarball).
           if [ "${LIBBOXLITE_CHANGED:-false}" = 'true' ]; then
               echo "Push touched libboxlite_chain — rebuild .a + runner + deploy."
               echo "should_build=true"        >> "$GITHUB_OUTPUT"
               echo "should_deploy=true"       >> "$GITHUB_OUTPUT"
               echo "libboxlite_changed=true"  >> "$GITHUB_OUTPUT"
-          elif [ "${GO_RUNNER_CHANGED:-false}" = 'true' ]; then
-              echo "Push touched go_runner_chain only — reuse release libboxlite.a, rebuild runner + deploy."
+          else
+              echo "Push didn't touch libboxlite_chain — reuse release libboxlite.a, rebuild runner + deploy."
               echo "should_build=true"        >> "$GITHUB_OUTPUT"
               echo "should_deploy=true"       >> "$GITHUB_OUTPUT"
-              echo "libboxlite_changed=false" >> "$GITHUB_OUTPUT"
-          else
-              echo "Push only touched workflow files — SKIP build + deploy."
-              echo "should_build=false"       >> "$GITHUB_OUTPUT"
-              echo "should_deploy=false"      >> "$GITHUB_OUTPUT"
               echo "libboxlite_changed=false" >> "$GITHUB_OUTPUT"
           fi
 
