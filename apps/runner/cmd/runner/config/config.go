@@ -37,6 +37,7 @@ type Config struct {
 	AWSSecretAccessKey                 string        `envconfig:"AWS_SECRET_ACCESS_KEY"`
 	AWSDefaultBucket                   string        `envconfig:"AWS_DEFAULT_BUCKET"`
 	ResourceLimitsDisabled             bool          `envconfig:"RESOURCE_LIMITS_DISABLED"`
+	DaemonStartTimeoutSec              int           `envconfig:"DAEMON_START_TIMEOUT_SEC"`
 	BoxStartTimeoutSec                 int           `envconfig:"BOX_START_TIMEOUT_SEC"`
 	UseSnapshotEntrypoint              bool          `envconfig:"USE_SNAPSHOT_ENTRYPOINT"`
 	Domain                             string        `envconfig:"RUNNER_DOMAIN" validate:"omitempty,hostname|ip"`
