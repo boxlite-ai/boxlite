@@ -33,7 +33,6 @@ interface UseBoxTableProps {
   handleStart: (id: string) => void
   handleStop: (id: string) => void
   handleDelete: (id: string) => void
-  handleVnc: (id: string) => void
   getWebTerminalUrl: (id: string) => Promise<string | null>
   handleCreateSshAccess: (id: string) => void
   handleRevokeSshAccess: (id: string) => void
@@ -60,7 +59,6 @@ export function useBoxTable({
   handleStart,
   handleStop,
   handleDelete,
-  handleVnc,
   getWebTerminalUrl,
   handleCreateSshAccess,
   handleRevokeSshAccess,
@@ -102,7 +100,6 @@ export function useBoxTable({
         handleStart,
         handleStop,
         handleDelete,
-        handleVnc,
         getWebTerminalUrl,
         boxIsLoading,
         writePermitted,
@@ -117,7 +114,6 @@ export function useBoxTable({
       handleStart,
       handleStop,
       handleDelete,
-      handleVnc,
       getWebTerminalUrl,
       boxIsLoading,
       writePermitted,

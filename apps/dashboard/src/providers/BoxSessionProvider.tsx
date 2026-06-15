@@ -6,7 +6,7 @@
 import { IBoxSessionContext, BoxSessionContext } from '@/contexts/BoxSessionContext'
 import { ReactNode, useCallback, useRef } from 'react'
 
-type SessionFlags = { terminal: boolean; vnc: boolean }
+type SessionFlags = { terminal: boolean }
 
 export function BoxSessionProvider({ children }: { children: ReactNode }) {
   const flagsRef = useRef<Map<string, SessionFlags>>(new Map())
@@ -14,7 +14,7 @@ export function BoxSessionProvider({ children }: { children: ReactNode }) {
   const getFlags = useCallback((boxId: string): SessionFlags => {
     let flags = flagsRef.current.get(boxId)
     if (!flags) {
-      flags = { terminal: false, vnc: false }
+      flags = { terminal: false }
       flagsRef.current.set(boxId, flags)
     }
     return flags
@@ -24,10 +24,6 @@ export function BoxSessionProvider({ children }: { children: ReactNode }) {
     isTerminalActivated: (boxId) => getFlags(boxId).terminal,
     activateTerminal: (boxId) => {
       getFlags(boxId).terminal = true
-    },
-    isVncActivated: (boxId) => getFlags(boxId).vnc,
-    activateVnc: (boxId) => {
-      getFlags(boxId).vnc = true
     },
   }
 

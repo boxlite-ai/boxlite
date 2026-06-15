@@ -52,7 +52,6 @@ export function BoxTable({
   handleBulkDelete,
   handleBulkStart,
   handleBulkStop,
-  handleVnc,
   getWebTerminalUrl,
   handleCreateSshAccess,
   handleRevokeSshAccess,
@@ -85,7 +84,6 @@ export function BoxTable({
     handleStart,
     handleStop,
     handleDelete,
-    handleVnc,
     getWebTerminalUrl,
     handleCreateSshAccess,
     handleRevokeSshAccess,
@@ -262,7 +260,6 @@ export function BoxTable({
                           onStart={handleStart}
                           onStop={handleStop}
                           onDelete={handleDelete}
-                          onVnc={handleVnc}
                           onOpenWebTerminal={handleOpenWebTerminal}
                           onCreateSshAccess={handleCreateSshAccess}
                           onRevokeSshAccess={handleRevokeSshAccess}

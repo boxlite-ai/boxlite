@@ -15,28 +15,19 @@ import { BoxMetricsTab } from './BoxMetricsTab'
 import { BoxSpendingTab } from './BoxSpendingTab'
 import { BoxTerminalTab } from './BoxTerminalTab'
 import { BoxTracesTab } from './BoxTracesTab'
-import { BoxVncTab } from './BoxVncTab'
 import { TabValue } from './SearchParams'
 
 interface BoxContentTabsProps {
   box: Box | undefined
   isLoading: boolean
   experimentsEnabled: boolean | undefined
-  vncEnabled: boolean
   tab: TabValue
   onTabChange: (tab: TabValue) => void
 }
 
-export function BoxContentTabs({
-  box,
-  isLoading,
-  experimentsEnabled,
-  vncEnabled,
-  tab,
-  onTabChange,
-}: BoxContentTabsProps) {
+export function BoxContentTabs({ box, isLoading, experimentsEnabled, tab, onTabChange }: BoxContentTabsProps) {
   const { getRegionName } = useRegions()
-  const availableTabs = getBoxContentTabs({ experimentsEnabled, vncEnabled })
+  const availableTabs = getBoxContentTabs({ experimentsEnabled })
 
   if (isLoading) {
     return (
@@ -76,7 +67,6 @@ export function BoxContentTabs({
             </>
           )}
         <TabsTrigger value="terminal">Terminal</TabsTrigger>
-        {availableTabs.includes('vnc') && <TabsTrigger value="vnc">VNC</TabsTrigger>}
       </TabsList>
 
       <TabsContent value="overview" className="flex-1 min-h-0 m-0 overflow-y-auto scrollbar-sm lg:hidden">
@@ -104,11 +94,6 @@ export function BoxContentTabs({
       <TabsContent value="terminal" className="flex-1 min-h-0 m-0 data-[state=active]:flex flex-col overflow-hidden">
         <BoxTerminalTab box={box} />
       </TabsContent>
-      {availableTabs.includes('vnc') && (
-        <TabsContent value="vnc" className="flex-1 min-h-0 m-0 data-[state=active]:flex flex-col overflow-hidden">
-          <BoxVncTab box={box} />
-        </TabsContent>
-      )}
     </Tabs>
   )
 }

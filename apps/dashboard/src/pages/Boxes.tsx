@@ -652,10 +652,6 @@ const Boxes: React.FC = () => {
     [boxApi, selectedOrganization],
   )
 
-  const handleVnc = async (id: string) => {
-    navigate(generatePath(RoutePath.BOX_VNC, { boxId: id }))
-  }
-
   const getWebTerminalUrl = useCallback(
     async (boxId: string): Promise<string | null> => {
       try {
@@ -825,7 +821,6 @@ const Boxes: React.FC = () => {
           handleBulkDelete={handleBulkDelete}
           handleBulkStart={handleBulkStart}
           handleBulkStop={handleBulkStop}
-          handleVnc={handleVnc}
           getWebTerminalUrl={getWebTerminalUrl}
           handleCreateSshAccess={openCreateSshDialog}
           handleRevokeSshAccess={openRevokeSshDialog}

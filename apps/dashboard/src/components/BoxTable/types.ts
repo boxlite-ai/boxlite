@@ -27,7 +27,6 @@ export interface BoxTableProps {
   handleBulkDelete: (ids: string[]) => void
   handleBulkStart: (ids: string[]) => void
   handleBulkStop: (ids: string[]) => void
-  handleVnc: (id: string) => void
   getWebTerminalUrl: (id: string) => Promise<string | null>
   handleCreateSshAccess: (id: string) => void
   handleRevokeSshAccess: (id: string) => void
@@ -59,7 +58,6 @@ export interface BoxTableActionsProps {
   onStart: (id: string) => void
   onStop: (id: string) => void
   onDelete: (id: string) => void
-  onVnc: (id: string) => void
   onOpenWebTerminal: (id: string) => void
   onCreateSshAccess: (id: string) => void
   onRevokeSshAccess: (id: string) => void

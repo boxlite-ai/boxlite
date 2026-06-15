@@ -45,7 +45,6 @@ interface GetColumnsProps {
   handleStart: (id: string) => void
   handleStop: (id: string) => void
   handleDelete: (id: string) => void
-  handleVnc: (id: string) => void
   getWebTerminalUrl: (id: string) => Promise<string | null>
   boxIsLoading: Record<string, boolean>
   writePermitted: boolean
@@ -61,7 +60,6 @@ export function getColumns({
   handleStart,
   handleStop,
   handleDelete,
-  handleVnc,
   getWebTerminalUrl,
   boxIsLoading,
   writePermitted,
@@ -273,7 +271,6 @@ export function getColumns({
             onStart={handleStart}
             onStop={handleStop}
             onDelete={handleDelete}
-            onVnc={handleVnc}
             onOpenWebTerminal={handleOpenWebTerminal}
             onCreateSshAccess={handleCreateSshAccess}
             onRevokeSshAccess={handleRevokeSshAccess}
