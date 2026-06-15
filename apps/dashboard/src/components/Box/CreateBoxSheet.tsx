@@ -160,17 +160,16 @@ export const CreateBoxSheet = ({
       let boxId: string | undefined = undefined
       try {
         const resources = {
-          cpu: parseOptionalInteger(value.cpu),
-          memory: parseOptionalInteger(value.memory),
-          disk: parseOptionalInteger(value.disk),
+          cpu: parseOptionalInteger(value.cpu) ?? Number(BOX_CREATE_DEFAULTS.cpu),
+          memory: parseOptionalInteger(value.memory) ?? Number(BOX_CREATE_DEFAULTS.memory),
+          disk: parseOptionalInteger(value.disk) ?? Number(BOX_CREATE_DEFAULTS.disk),
         }
-        const hasResourceOverrides = Object.values(resources).some((resource) => resource !== undefined)
 
         const box = await createBoxMutation.mutateAsync({
           name: value.name?.trim() || undefined,
-          image: value.image || undefined,
+          image: value.image || defaultImage.ref,
           network: { mode: 'enabled' },
-          ...(hasResourceOverrides ? { resources } : {}),
+          resources,
         })
         boxId = getBoxRouteId(box)
         onCreated?.(box)

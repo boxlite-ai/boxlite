@@ -77,7 +77,7 @@ import { Region } from '../../region/entities/region.entity'
 import { BoxActivityService } from './box-activity.service'
 
 // TODO(image-rewrite): resource defaults previously came from the removed image subsystem;
-// these mirror the create flow fallback until image resolution is rebuilt.
+// these mirror the Box entity column defaults until image resolution is rebuilt.
 const DEFAULT_BOX_CPU = 1
 const DEFAULT_BOX_MEM = 1
 const DEFAULT_BOX_DISK = 10
