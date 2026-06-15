@@ -17,56 +17,32 @@ import { BadRequestError } from '../../exceptions/bad-request.exception'
  * Env overrides (set on the Api service in apps/infra/sst.config.ts) allow digest
  * rotation without a code deploy; the fallbacks cover local/dev runs.
  */
-export type SupportedImageOption = {
-  id: string
-  name: string
-  ref: string
-  isDefault: boolean
-}
-
 type SupportedImageSource = {
-  id: string
-  name: string
   envVar: string
   fallbackRef: string
 }
 
 const SUPPORTED_IMAGE_SOURCES: SupportedImageSource[] = [
   {
-    id: 'base',
-    name: 'Base',
     envVar: 'BOXLITE_SYSTEM_BASE_IMAGE',
     fallbackRef:
       'ghcr.io/boxlite-ai/boxlite-agent-base@sha256:834dcb65465985fc2f648451d76c81d166bc7672391c9064a0a115ce6306c85f',
   },
   {
-    id: 'python',
-    name: 'Python',
     envVar: 'BOXLITE_SYSTEM_PYTHON_IMAGE',
     fallbackRef:
       'ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6',
   },
   {
-    id: 'node',
-    name: 'Node.js',
     envVar: 'BOXLITE_SYSTEM_NODE_IMAGE',
     fallbackRef:
       'ghcr.io/boxlite-ai/boxlite-agent-node@sha256:fcb8b840ab68567975853666c82fb6c59a3c1d14a0cdc31d7cbf3a01e6c6d247',
   },
 ]
 
-export function supportedImageOptions(): SupportedImageOption[] {
-  return SUPPORTED_IMAGE_SOURCES.map(({ id, name, envVar, fallbackRef }, index) => ({
-    id,
-    name,
-    ref: process.env[envVar] || fallbackRef,
-    isDefault: index === 0,
-  }))
-}
-
 /** Pinned OCI refs a box may boot from. The first entry is the default image. */
 export function supportedImages(): string[] {
-  return supportedImageOptions().map(({ ref }) => ref)
+  return SUPPORTED_IMAGE_SOURCES.map(({ envVar, fallbackRef }) => process.env[envVar] || fallbackRef)
 }
 
 /**

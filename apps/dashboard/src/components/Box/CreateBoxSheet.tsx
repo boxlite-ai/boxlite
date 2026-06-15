@@ -21,8 +21,6 @@ import {
 import { Spinner } from '@/components/ui/spinner'
 import { RoutePath } from '@/enums/RoutePath'
 import { useCreateBoxMutation } from '@/hooks/mutations/useCreateBoxMutation'
-import { useSupportedBoxImagesQuery } from '@/hooks/queries/useSupportedBoxImagesQuery'
-import { useConfig } from '@/hooks/useConfig'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
 import { getBoxRouteId } from '@/lib/box-identity'
@@ -76,6 +74,33 @@ const defaultValues: FormValues = {
 
 type ResourceFieldName = 'cpu' | 'memory' | 'disk'
 
+const BOX_CREATE_DEFAULTS: Record<ResourceFieldName, string> = {
+  cpu: '1',
+  memory: '1',
+  disk: '10',
+}
+
+const SUPPORTED_BOX_IMAGES = [
+  {
+    id: 'base',
+    name: 'Base',
+    ref: 'ghcr.io/boxlite-ai/boxlite-agent-base@sha256:834dcb65465985fc2f648451d76c81d166bc7672391c9064a0a115ce6306c85f',
+    isDefault: true,
+  },
+  {
+    id: 'python',
+    name: 'Python',
+    ref: 'ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6',
+    isDefault: false,
+  },
+  {
+    id: 'node',
+    name: 'Node.js',
+    ref: 'ghcr.io/boxlite-ai/boxlite-agent-node@sha256:fcb8b840ab68567975853666c82fb6c59a3c1d14a0cdc31d7cbf3a01e6c6d247',
+    isDefault: false,
+  },
+] as const
+
 const RESOURCE_FIELDS: Array<{
   name: ResourceFieldName
   label: string
@@ -107,12 +132,10 @@ export const CreateBoxSheet = ({
   const open = controlledOpen ?? internalOpen
   const setOpen = onOpenChange ?? setInternalOpen
 
-  const config = useConfig()
   const { selectedOrganization } = useSelectedOrganization()
   const { reset: resetCreateBoxMutation, ...createBoxMutation } = useCreateBoxMutation()
-  const { data: supportedImages = [], isLoading: loadingSupportedImages } = useSupportedBoxImagesQuery()
   const formRef = useRef<HTMLFormElement>(null)
-  const defaultImage = supportedImages.find((image) => image.isDefault) ?? supportedImages[0]
+  const defaultImage = SUPPORTED_BOX_IMAGES.find((image) => image.isDefault) ?? SUPPORTED_BOX_IMAGES[0]
 
   const form = useForm({
     defaultValues,
@@ -240,21 +263,12 @@ export const CreateBoxSheet = ({
                       <Package className="size-3.5" />
                       Image
                     </FieldLabel>
-                    <Select
-                      value={selectedImageRef}
-                      onValueChange={(value) => field.handleChange(value)}
-                      disabled={loadingSupportedImages || supportedImages.length === 0}
-                    >
-                      <SelectTrigger
-                        id={field.name}
-                        name={field.name}
-                        loading={loadingSupportedImages}
-                        disabled={loadingSupportedImages || supportedImages.length === 0}
-                      >
-                        <SelectValue placeholder={loadingSupportedImages ? 'Loading images' : 'Select image'} />
+                    <Select value={selectedImageRef} onValueChange={(value) => field.handleChange(value)}>
+                      <SelectTrigger id={field.name} name={field.name}>
+                        <SelectValue placeholder="Select image" />
                       </SelectTrigger>
                       <SelectContent>
-                        {supportedImages.map((image) => (
+                        {SUPPORTED_BOX_IMAGES.map((image) => (
                           <SelectItem key={image.id} value={image.ref}>
                             {image.name}
                           </SelectItem>
@@ -289,7 +303,7 @@ export const CreateBoxSheet = ({
                           <form.Field key={name} name={name}>
                             {(field) => {
                               const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid
-                              const defaultValue = config.boxCreateDefaults[name]?.toString() ?? 'Default'
+                              const defaultValue = BOX_CREATE_DEFAULTS[name]
                               return (
                                 <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_9.5rem] sm:items-center sm:gap-4">
                                   <div className="min-w-0">
@@ -349,9 +363,7 @@ export const CreateBoxSheet = ({
                 type="submit"
                 form="create-box-form"
                 variant="default"
-                disabled={
-                  isSubmitting || loadingSupportedImages || supportedImages.length === 0 || !selectedOrganization?.id
-                }
+                disabled={isSubmitting || !selectedOrganization?.id}
                 className="w-full sm:w-auto"
               >
                 {isSubmitting && <Spinner />}

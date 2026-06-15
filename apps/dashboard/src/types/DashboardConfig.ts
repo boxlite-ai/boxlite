@@ -6,13 +6,6 @@
 
 import { BoxliteConfiguration } from '@boxlite-ai/api-client'
 
-export type BoxCreateDefaults = {
-  cpu: number
-  memory: number
-  disk: number
-}
-
 export type DashboardConfig = BoxliteConfiguration & {
   apiUrl: string
-  boxCreateDefaults: BoxCreateDefaults
 }

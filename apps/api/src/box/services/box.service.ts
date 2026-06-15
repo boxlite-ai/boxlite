@@ -18,11 +18,7 @@ import { BoxError } from '../../exceptions/box-error.exception'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
-import {
-  assertSupportedImage,
-  supportedImageOptions,
-  type SupportedImageOption,
-} from '../constants/curated-images.constant'
+import { assertSupportedImage } from '../constants/curated-images.constant'
 import { BoxWarmPoolService } from './box-warm-pool.service'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
 import { WarmPoolEvents } from '../constants/warmpool-events.constants'
@@ -79,7 +75,13 @@ import {
 import { BoxLookupCacheInvalidationService } from './box-lookup-cache-invalidation.service'
 import { Region } from '../../region/entities/region.entity'
 import { BoxActivityService } from './box-activity.service'
-import { BOX_CREATE_DEFAULTS } from '../constants/box-create-defaults.constant'
+
+// TODO(image-rewrite): resource defaults previously came from the removed image subsystem;
+// these mirror the create flow fallback until image resolution is rebuilt.
+const DEFAULT_BOX_CPU = 1
+const DEFAULT_BOX_MEM = 1
+const DEFAULT_BOX_DISK = 10
+const DEFAULT_BOX_GPU = 0
 
 @Injectable()
 export class BoxService {
@@ -113,10 +115,6 @@ export class BoxService {
     if (box.state === BoxState.ERROR) {
       throw new BoxError('Box is in an errored state')
     }
-  }
-
-  listSupportedImages(): SupportedImageOption[] {
-    return supportedImageOptions()
   }
 
   async createForWarmPool(warmPoolItem: WarmPool): Promise<Box> {
@@ -157,10 +155,10 @@ export class BoxService {
       // TODO(image-rewrite): image resolution removed; boxes can no
       // longer resolve an image at create time. Resource sizing falls back to request values
       // (or Box entity defaults). Rebuild image resolution here.
-      const cpu = createBoxDto.cpu ?? BOX_CREATE_DEFAULTS.cpu
-      const mem = createBoxDto.memory ?? BOX_CREATE_DEFAULTS.memory
-      const disk = createBoxDto.disk ?? BOX_CREATE_DEFAULTS.disk
-      const gpu = createBoxDto.gpu ?? BOX_CREATE_DEFAULTS.gpu
+      const cpu = createBoxDto.cpu ?? DEFAULT_BOX_CPU
+      const mem = createBoxDto.memory ?? DEFAULT_BOX_MEM
+      const disk = createBoxDto.disk ?? DEFAULT_BOX_DISK
+      const gpu = createBoxDto.gpu ?? DEFAULT_BOX_GPU
       // Restrict box creation to the supported pinned images; reject anything else
       // at the request boundary (defaults undefined -> base image).
       const image = assertSupportedImage(createBoxDto.image)

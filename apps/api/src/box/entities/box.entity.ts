@@ -13,7 +13,6 @@ import { BoxVolume } from '../dto/box.dto'
 import { nanoid } from 'nanoid'
 import { BoxLastActivity } from './box-last-activity.entity'
 import { BOX_ID_LENGTH, BOX_ID_REGEX, generateBoxId } from '../utils/box-id.util'
-import { BOX_CREATE_DEFAULTS } from '../constants/box-create-defaults.constant'
 
 @Entity('box')
 @Unique(['organizationId', 'name'])
@@ -122,17 +121,17 @@ export class Box {
   @Column('jsonb', { nullable: true })
   labels: { [key: string]: string }
 
-  @Column({ type: 'int', default: BOX_CREATE_DEFAULTS.cpu })
-  cpu = BOX_CREATE_DEFAULTS.cpu
+  @Column({ type: 'int', default: 2 })
+  cpu = 2
 
-  @Column({ type: 'int', default: BOX_CREATE_DEFAULTS.gpu })
-  gpu = BOX_CREATE_DEFAULTS.gpu
+  @Column({ type: 'int', default: 0 })
+  gpu = 0
 
-  @Column({ type: 'int', default: BOX_CREATE_DEFAULTS.memory })
-  mem = BOX_CREATE_DEFAULTS.memory
+  @Column({ type: 'int', default: 4 })
+  mem = 4
 
-  @Column({ type: 'int', default: BOX_CREATE_DEFAULTS.disk })
-  disk = BOX_CREATE_DEFAULTS.disk
+  @Column({ type: 'int', default: 10 })
+  disk = 10
 
   @Column({
     type: 'jsonb',

@@ -17,7 +17,6 @@ All URIs are relative to *http://localhost:3000*
 |[**getToolboxProxyUrl**](#gettoolboxproxyurl) | **GET** /box/{boxId}/toolbox-proxy-url | Get toolbox proxy URL for a box|
 |[**listBoxes**](#listboxes) | **GET** /box | List all boxes|
 |[**listBoxesPaginated**](#listboxespaginated) | **GET** /box/paginated | List all boxes paginated|
-|[**listSupportedBoxImages**](#listsupportedboximages) | **GET** /box/supported-images | List supported box images|
 |[**recoverBox**](#recoverbox) | **POST** /box/{boxIdOrName}/recover | Recover box from error state|
 |[**replaceLabels**](#replacelabels) | **PUT** /box/{boxIdOrName}/labels | Replace box labels|
 |[**resizeBox**](#resizebox) | **POST** /box/{boxIdOrName}/resize | Resize box resources|
@@ -842,56 +841,6 @@ const { status, data } = await apiInstance.listBoxesPaginated(
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**200** | Paginated list of all boxes |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
-# **listSupportedBoxImages**
-> Array<SupportedBoxImage> listSupportedBoxImages()
-
-
-### Example
-
-```typescript
-import {
-    BoxApi,
-    Configuration
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new BoxApi(configuration);
-
-let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
-
-const { status, data } = await apiInstance.listSupportedBoxImages(
-    xBoxLiteOrganizationID
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
-
-
-### Return type
-
-**Array<SupportedBoxImage>**
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | List of images accepted by box creation |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

@@ -21,7 +21,6 @@ Name | Type | Description | Notes
 **sshGatewayCommand** | **string** | SSH Gateway command | [optional] [default to undefined]
 **sshGatewayPublicKey** | **string** | Base64 encoded SSH Gateway public key | [optional] [default to undefined]
 **rateLimit** | [**RateLimitConfig**](RateLimitConfig.md) | Rate limit configuration | [optional] [default to undefined]
-**boxCreateDefaults** | [**BoxCreateDefaults**](BoxCreateDefaults.md) | Default resources used when creating a box without explicit overrides | [default to undefined]
 
 ## Example
 
@@ -45,7 +44,6 @@ const instance: BoxliteConfiguration = {
     sshGatewayCommand,
     sshGatewayPublicKey,
     rateLimit,
-    boxCreateDefaults,
 };
 ```
 

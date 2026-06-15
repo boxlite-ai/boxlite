@@ -8,7 +8,6 @@ import { ApiExtraModels, ApiProperty, ApiPropertyOptional, ApiSchema, getSchemaP
 import { IsBoolean, IsNumber, IsOptional, IsString } from 'class-validator'
 import { TypedConfigService } from '../typed-config.service'
 import { EndSessionState, isValidHttpUrl } from '../oidc-metadata.service'
-import { BOX_CREATE_DEFAULTS } from '../../box/constants/box-create-defaults.constant'
 
 @ApiSchema({ name: 'Announcement' })
 export class Announcement {
@@ -95,30 +94,6 @@ export class RateLimitConfig {
   boxLifecycle?: RateLimitEntry
 }
 
-@ApiSchema({ name: 'BoxCreateDefaults' })
-export class BoxCreateDefaults {
-  @ApiProperty({
-    description: 'Default CPU cores used when create omits cpu',
-    example: 1,
-  })
-  @IsNumber()
-  cpu: number
-
-  @ApiProperty({
-    description: 'Default memory in GiB used when create omits memory',
-    example: 2,
-  })
-  @IsNumber()
-  memory: number
-
-  @ApiProperty({
-    description: 'Default disk in GiB used when create omits disk',
-    example: 10,
-  })
-  @IsNumber()
-  disk: number
-}
-
 @ApiSchema({ name: 'OidcConfig' })
 export class OidcConfig {
   @ApiProperty({
@@ -152,7 +127,7 @@ export class OidcConfig {
   endSessionEndpoint?: string
 }
 
-@ApiExtraModels(Announcement, BoxCreateDefaults)
+@ApiExtraModels(Announcement)
 @ApiSchema({ name: 'BoxliteConfiguration' })
 export class ConfigurationDto {
   @ApiProperty({
@@ -271,12 +246,6 @@ export class ConfigurationDto {
   @IsOptional()
   rateLimit?: RateLimitConfig
 
-  @ApiProperty({
-    description: 'Default resources used when creating a box without explicit overrides',
-    type: BoxCreateDefaults,
-  })
-  boxCreateDefaults: BoxCreateDefaults
-
   constructor(configService: TypedConfigService, options: { endSessionState: EndSessionState }) {
     this.version = configService.getOrThrow('version')
 
@@ -301,11 +270,6 @@ export class ConfigurationDto {
     this.dashboardUrl = configService.getOrThrow('dashboardUrl')
     this.maintananceMode = configService.getOrThrow('maintananceMode')
     this.environment = configService.getOrThrow('environment')
-    this.boxCreateDefaults = {
-      cpu: BOX_CREATE_DEFAULTS.cpu,
-      memory: BOX_CREATE_DEFAULTS.memory,
-      disk: BOX_CREATE_DEFAULTS.disk,
-    }
 
     this.sshGatewayCommand = configService.get('sshGateway.command')
     this.sshGatewayPublicKey = configService.get('sshGateway.publicKey')

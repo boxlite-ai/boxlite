@@ -61,7 +61,6 @@ docs/AuthApi.md
 docs/Box.md
 docs/BoxApi.md
 docs/BoxClass.md
-docs/BoxCreateDefaults.md
 docs/BoxDesiredState.md
 docs/BoxLabels.md
 docs/BoxState.md
@@ -128,7 +127,6 @@ docs/SignedPortPreviewUrl.md
 docs/SshAccessDto.md
 docs/SshAccessValidationDto.md
 docs/StorageAccessDto.md
-docs/SupportedBoxImage.md
 docs/SystemRole.md
 docs/ToolboxProxyUrl.md
 docs/TraceSpan.md
@@ -188,7 +186,6 @@ models/api-key-list.ts
 models/api-key-response.ts
 models/audit-log.ts
 models/box-class.ts
-models/box-create-defaults.ts
 models/box-desired-state.ts
 models/box-labels.ts
 models/box-state.ts
@@ -249,7 +246,6 @@ models/signed-port-preview-url.ts
 models/ssh-access-dto.ts
 models/ssh-access-validation-dto.ts
 models/storage-access-dto.ts
-models/supported-box-image.ts
 models/system-role.ts
 models/toolbox-proxy-url.ts
 models/trace-span.ts
