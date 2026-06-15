@@ -18,7 +18,6 @@ production exec path.
 """
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -36,17 +35,10 @@ from conftest import drain
 #   (2) reads the local boxlite-runner systemd journal via journalctl —
 #       on the Tokyo cloud profile p1 the runner journal lives on an
 #       EC2 instance the test client can't reach.
-# Skip the whole module when the test session is configured against
-# anything other than the default (= local) profile so these don't
-# spam the cloud failure tally with environment-mismatch noise.
-pytestmark = pytest.mark.skipif(
-    os.environ.get("BOXLITE_E2E_PROFILE", "default") != "default",
-    reason=(
-        "LOCAL-only meta-test (checks credentials.toml url=:3000 and "
-        "reads host's boxlite-runner journalctl). Cannot run against a "
-        "remote profile."
-    ),
-)
+# Module-level skipif has been replaced by a conftest.collect_ignore
+# entry guarded on BOXLITE_E2E_PROFILE != 'default'. That stops pytest
+# from collecting this file at all on the cloud gate (no SKIP markers
+# in the report) rather than collecting + skipping.
 
 
 @pytest.mark.asyncio

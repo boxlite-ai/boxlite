@@ -9,7 +9,7 @@ reliably observe stream closure when the workload terminates via
 SIGKILL — drain() blocks indefinitely on cloud while the underlying
 exec has long since exited. The exit-code / elapsed assertions don't
 depend on stream content, so a best-effort drain (3s ceiling) is
-enough to drain whatever the pump did emit without holding the test
+enough to flush whatever the pump did emit without holding the test
 hostage on the missing close signal. Tracked separately under the
 REST stream-pump teardown audit; the local FFI path is unaffected.
 """
