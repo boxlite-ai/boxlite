@@ -298,10 +298,7 @@ jobs:
       || github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/deploy-app-services.yml
     with:
-      services: >-
-        ${{ needs.changes.outputs.app_services_list != ''
-            && needs.changes.outputs.app_services_list
-            || 'Proxy,OtelCollector,SshGateway' }}
+      services: ${{ needs.changes.outputs.app_services_list != '' && needs.changes.outputs.app_services_list || 'Proxy,OtelCollector,SshGateway' }}
     permissions:
       id-token: write
       contents: read

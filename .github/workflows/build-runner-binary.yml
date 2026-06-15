@@ -22,7 +22,7 @@ on:
   workflow_call:
     inputs:
       c_sdk_run_id:
-        description: 'GHA run ID that uploaded the c-sdk-linux-x64-gnu artifact (contains libboxlite.{a,so} + boxlite.h). Caller (e2e-cloud.yml) typically passes ${{ github.run_id }} so the same run''s build_c artifact is consumed.'
+        description: 'GHA run ID that uploaded the c-sdk-linux-x64-gnu artifact (contains libboxlite.{a,so} + boxlite.h). Caller (e2e-cloud.yml) typically passes its own github.run_id so the same run''s build_c artifact is consumed.'
         type: string
         required: true
   workflow_dispatch:
