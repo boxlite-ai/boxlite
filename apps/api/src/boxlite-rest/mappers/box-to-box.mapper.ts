@@ -35,9 +35,9 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
   createDto.disk = dto.disk_size_gb
   createDto.target = target
   if (dto.network) {
+    const allowNet = dto.network.allow_net?.map((entry) => entry.trim()).filter(Boolean)
     createDto.networkBlockAll = dto.network.mode === 'disabled'
-    createDto.networkAllowList =
-      dto.network.mode === 'enabled' && dto.network.allow_net?.length ? dto.network.allow_net.join(',') : undefined
+    createDto.networkAllowList = dto.network.mode === 'enabled' && allowNet?.length ? allowNet.join(',') : undefined
   }
   return createDto
 }

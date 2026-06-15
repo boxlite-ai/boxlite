@@ -39,3 +39,57 @@ describe('CreateBoxDto resource minimums', () => {
     expect(errors).toHaveLength(0)
   })
 })
+
+describe('CreateBoxDto network validation', () => {
+  it('accepts supported allow_net entry types', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        network: {
+          mode: 'enabled',
+          allow_net: ['api.openai.com', '*.anthropic.com', '192.168.1.1', '10.0.0.0/8'],
+        },
+      }),
+    )
+
+    expect(errors).toHaveLength(0)
+  })
+
+  it.each(['', 'https://api.openai.com', '*example.com', 'api..openai.com', '10.0.0.0/33', '999.0.0.1'])(
+    'rejects invalid allow_net entry %s',
+    async (entry) => {
+      const errors = await validate(
+        plainToInstance(CreateBoxDto, {
+          network: {
+            mode: 'enabled',
+            allow_net: [entry],
+          },
+        }),
+      )
+
+      expect(JSON.stringify(errors)).toContain('isNetworkAllowEntry')
+    },
+  )
+
+  it('rejects more than ten allow_net entries', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        network: {
+          mode: 'enabled',
+          allow_net: Array.from({ length: 11 }, (_, index) => `api-${index}.example.com`),
+        },
+      }),
+    )
+
+    expect(JSON.stringify(errors)).toContain('arrayMaxSize')
+  })
+
+  it('rejects unsupported network modes', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        network: { mode: 'public' },
+      }),
+    )
+
+    expect(JSON.stringify(errors)).toContain('isIn')
+  })
+})

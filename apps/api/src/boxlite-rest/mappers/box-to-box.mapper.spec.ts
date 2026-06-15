@@ -57,7 +57,7 @@ describe('box-to-box mapper', () => {
 
   it('maps enabled network allowlist onto the internal create dto', () => {
     const dto = createBoxToCreateBox({
-      network: { mode: 'enabled', allow_net: ['api.openai.com', 'github.com'] },
+      network: { mode: 'enabled', allow_net: [' api.openai.com ', 'github.com'] },
     })
 
     expect(dto.networkBlockAll).toBe(false)

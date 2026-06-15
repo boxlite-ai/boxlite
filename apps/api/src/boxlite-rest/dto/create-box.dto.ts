@@ -6,6 +6,7 @@
 
 import { Type } from 'class-transformer'
 import {
+  ArrayMaxSize,
   IsOptional,
   IsString,
   IsNumber,
@@ -14,8 +15,23 @@ import {
   IsArray,
   Min,
   IsIn,
+  Validate,
   ValidateNested,
+  ValidatorConstraint,
+  ValidatorConstraintInterface,
 } from 'class-validator'
+import { isValidNetworkAllowEntry, MAX_NETWORK_ALLOW_LIST_ENTRIES } from '../../box/utils/network-validation.util'
+
+@ValidatorConstraint({ name: 'isNetworkAllowEntry', async: false })
+class IsNetworkAllowEntryConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown): boolean {
+    return typeof value === 'string' && isValidNetworkAllowEntry(value)
+  }
+
+  defaultMessage(): string {
+    return 'each allow_net entry must be an IPv4 address, IPv4 CIDR, hostname, or wildcard hostname'
+  }
+}
 
 export class NetworkSpecDto {
   @IsIn(['enabled', 'disabled'])
@@ -23,7 +39,9 @@ export class NetworkSpecDto {
 
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(MAX_NETWORK_ALLOW_LIST_ENTRIES)
   @IsString({ each: true })
+  @Validate(IsNetworkAllowEntryConstraint, { each: true })
   allow_net?: string[]
 }
 
