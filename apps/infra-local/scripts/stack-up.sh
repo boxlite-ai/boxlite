@@ -36,7 +36,7 @@ fi
 
 # ---------- L1 boxes ----------
 L1_RECREATED=false
-if ! boxlite ls 2>/dev/null | grep -q boxlite-local-postgres; then
+if ! "${BOXLITE_CLI}" ls 2>/dev/null | grep -q boxlite-local-postgres; then
   log "L1 boxes not running — starting..."
   ( cd "${INFRA_LOCAL_DIR}" && make up )
   L1_RECREATED=true
@@ -146,7 +146,6 @@ start_runner() {
   BOXLITE_HOME_DIR="${RUNNER_HOME}" \
   INSECURE_REGISTRIES=127.0.0.1:25000 \
   AWS_REGION=us-east-1 \
-  DYLD_LIBRARY_PATH="${RUNNER_DYLIB_DIR}" \
   nohup "${RUNNER_BIN}" > "$(log_file runner)" 2>&1 &
   echo $! > "$(pid_file runner)"
   if wait_port "${PORT_RUNNER}" 60; then

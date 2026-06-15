@@ -12,6 +12,11 @@ PY ?= python
 REPO_ROOT := $(abspath $(CURDIR)/../..)
 export BOXLITE_HOME ?= $(REPO_ROOT)/.apps-local/boxlite
 
+# Prefer a boxlite CLI built from THIS checkout over a stale global install
+# (an older PATH `boxlite` can fail to read this version's box-config rows).
+# Matches the resolver in scripts/_stack-common.sh.
+BOXLITE_CLI := $(firstword $(wildcard $(REPO_ROOT)/target/release/boxlite $(REPO_ROOT)/target/debug/boxlite) boxlite)
+
 .PHONY: help up down ps doctor logs wipe itest test install migrate e2e itest-all \
         stack-build stack-up stack-down stack-restart stack-status stack-logs stack-reset stack-reset-hard stack-nuke \
         seed-init-data stack-rebuild-l1-box
@@ -90,5 +95,5 @@ stack-nuke:            ## ABSOLUTE NUKE: L1 boxes destroyed + data wiped + logs 
 
 stack-rebuild-l1-box:  ## destroy + recreate one L1 box (BOX=dex|registry|...) — for stuck stateful services
 	@if [ -z "$(BOX)" ]; then echo "usage: make stack-rebuild-l1-box BOX=<name>"; echo "e.g. BOX=dex   when login returns stale tokens"; echo "e.g. BOX=registry  when image pulls hang"; exit 1; fi
-	boxlite rm boxlite-local-$(BOX) --force
+	$(BOXLITE_CLI) rm boxlite-local-$(BOX) --force
 	python -m boxlite_local up $(BOX)

@@ -25,7 +25,7 @@ log "wiping runner home: ${RUNNER_HOME}"
 rm -rf "${RUNNER_HOME}"/{db,boxes,images,rootfs,logs} 2>/dev/null || true
 
 if [ "$MODE" = "soft" ]; then
-  if boxlite ls 2>/dev/null | grep -q boxlite-local-postgres; then
+  if "${BOXLITE_CLI}" ls 2>/dev/null | grep -q boxlite-local-postgres; then
     log "truncating runtime data (identity + infra rows preserved)..."
     # PRESERVE identity + infra so an already-logged-in browser session
     # stays valid across a reset (no forced re-login):
@@ -51,7 +51,7 @@ if [ "$MODE" = "soft" ]; then
   ok "soft reset complete (identity + L1 boxes + schema preserved — no browser re-login needed)"
   log "next: \`make stack-up\` — runner re-registers via heartbeat"
 elif [ "$MODE" = "hard" ]; then
-  if boxlite ls 2>/dev/null | grep -q boxlite-local-postgres; then
+  if "${BOXLITE_CLI}" ls 2>/dev/null | grep -q boxlite-local-postgres; then
     log "wiping schema + rebuilding via migrations..."
     PGPASSWORD=boxlite psql -h 127.0.0.1 -p 25432 -U boxlite -d boxlite -c "
       DROP SCHEMA public CASCADE;

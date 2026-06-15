@@ -8,10 +8,10 @@ set -euo pipefail
 EXIT_CODE=0
 
 echo "${C_BOLD}L1 — infra-local boxes${C_RESET}"
-if boxlite ls 2>/dev/null | grep -q boxlite-local-postgres; then
+if "${BOXLITE_CLI}" ls 2>/dev/null | grep -q boxlite-local-postgres; then
   # boxlite ls outputs a unicode-bordered table; pluck name + status by
   # filtering for our box-name pattern then awking by the │ delimiter.
-  boxlite ls 2>/dev/null \
+  "${BOXLITE_CLI}" ls 2>/dev/null \
     | grep boxlite-local- \
     | awk -F'│' '{
         # Trim leading/trailing whitespace on each field then print name + status

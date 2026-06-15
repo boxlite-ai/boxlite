@@ -122,5 +122,21 @@ wait_http() {
 # this exact value to the runner process).
 RUNNER_HOME="${BOXLITE_HOME_DIR:-${APPS_LOCAL_DIR}/boxlite-runner}"
 
-# Library path the runner needs at startup (libboxlite.dylib for CGO).
-RUNNER_DYLIB_DIR="${REPO_ROOT}/sdks/go"
+# Resolve the `boxlite` CLI these scripts use to inspect/manage L1 boxes.
+# Prefer a binary built from THIS checkout (release, then debug) over a
+# global PATH install: a stale global CLI can be an older version that
+# fails to read this version's box-config DB rows, which makes `boxlite ls`
+# silently report no L1 boxes (so stack-up wrongly "recreates" a live L1).
+# Falls back to PATH with a one-line heads-up; build a matched one via `make cli`.
+if [ -x "${REPO_ROOT}/target/release/boxlite" ]; then
+  BOXLITE_CLI="${REPO_ROOT}/target/release/boxlite"
+elif [ -x "${REPO_ROOT}/target/debug/boxlite" ]; then
+  BOXLITE_CLI="${REPO_ROOT}/target/debug/boxlite"
+else
+  BOXLITE_CLI="boxlite"
+  if command -v boxlite >/dev/null 2>&1; then
+    printf '%s⚠%s using PATH boxlite (%s); no repo build found — if make stack-* mis-detects L1 boxes, build a version-matched CLI with `make -C %s/../.. cli`\n' \
+      "${C_YELLOW:-}" "${C_RESET:-}" "$(command -v boxlite)" "${INFRA_LOCAL_DIR}" >&2
+  fi
+fi
+export BOXLITE_CLI
