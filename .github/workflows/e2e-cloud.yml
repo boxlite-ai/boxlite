@@ -41,15 +41,17 @@ name: E2E cloud
 # matching here decides whether to fire at all; once fired, the
 # `changes` job further narrows which deploy + e2e jobs run.
 #
-# Branches: `main` for post-merge runs; `chore/e2e-required-merge-gate`
-# + `validate/runner-toolbox-via-chore` so PR #724 / #765 stack pushes
-# exercise the full pipeline pre-merge. Drop the chore/validate entries
-# once those PRs land.
+# Branches: `main` for post-merge runs; `validate/runner-toolbox-via-chore`
+# so PR #765 stack pushes exercise the full pipeline pre-merge. The
+# `chore/e2e-required-merge-gate` (#724) branch was intentionally
+# dropped from this list — every chore push gets rebased into validate
+# immediately, so a chore-only run would test infrastructure changes
+# without the #765 source fixes and always fail. Drop validate too once
+# #765 lands.
 on:
   push:
     branches:
       - main
-      - chore/e2e-required-merge-gate
       - validate/runner-toolbox-via-chore
     paths:
       - 'apps/**'
