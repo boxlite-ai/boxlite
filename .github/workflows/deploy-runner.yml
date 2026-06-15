@@ -176,27 +176,27 @@ jobs:
               exit 0
           fi
 
-          # Push branch: gate each stage on the narrowest change-set
-          # that affects its inputs. NEVER fall through to a no-build
-          # branch — force-push rebases produce an empty diff vs.
-          # github.event.before even when the actually-deployed binary
-          # is now stale, and a "workflow only — skip" decision then
-          # leaves Tokyo on the older runner while the head commit
-          # advertises the fix. Always build + deploy on push; only
-          # the libboxlite_changed signal stays narrowed (it controls
-          # whether build_c_sdk rebuilds .a from source vs. fetches
-          # the tagged-release tarball).
-          if [ "${LIBBOXLITE_CHANGED:-false}" = 'true' ]; then
-              echo "Push touched libboxlite_chain — rebuild .a + runner + deploy."
-              echo "should_build=true"        >> "$GITHUB_OUTPUT"
-              echo "should_deploy=true"       >> "$GITHUB_OUTPUT"
-              echo "libboxlite_changed=true"  >> "$GITHUB_OUTPUT"
-          else
-              echo "Push didn't touch libboxlite_chain — reuse release libboxlite.a, rebuild runner + deploy."
-              echo "should_build=true"        >> "$GITHUB_OUTPUT"
-              echo "should_deploy=true"       >> "$GITHUB_OUTPUT"
-              echo "libboxlite_changed=false" >> "$GITHUB_OUTPUT"
-          fi
+          # Push branch: always build + deploy. The libboxlite_changed
+          # signal is forced to true so the runner links against a .a
+          # built from THIS checkout, never the tagged-release tarball:
+          #
+          #   1. Force-push rebases produce an empty diff vs.
+          #      github.event.before, so paths-filter would silently
+          #      decide libboxlite_chain didn't change even when the
+          #      branch stack adds new symbols (false negative).
+          #   2. main HEAD's boxlite-c crate is already past v0.9.5
+          #      (e.g. boxlite_rest_options_set_path_prefix from #581
+          #      is on main but the v0.9.5 release .a doesn't export
+          #      it). Until Cargo.toml bumps and a v0.9.6 release ships,
+          #      release-mode is a stale-symbol trap that surfaces as
+          #      `undefined reference` at Go link time.
+          #
+          # When release-mode is safe to re-enable (post-version-bump),
+          # restore the LIBBOXLITE_CHANGED gate here.
+          echo "Push event — force libboxlite rebuild from source + runner build + deploy."
+          echo "should_build=true"        >> "$GITHUB_OUTPUT"
+          echo "should_deploy=true"       >> "$GITHUB_OUTPUT"
+          echo "libboxlite_changed=true"  >> "$GITHUB_OUTPUT"
 
   # ── Build libboxlite.a from THIS checkout's Rust source ────────────
   # Skipped when libboxlite_chain didn't change (Go-only PR); the
