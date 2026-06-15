@@ -50,8 +50,59 @@ env:
   ADMIN_ORG_ID: 4a1eef70-8734-4814-b7a5-0ca3522a8760
 
 jobs:
+  # ──────────────────────────────────────────────────────────────────────
+  # SDK artifact prerequisites. Each lane builds its canonical artifact
+  # via the same reusable workflow that fires on a release publish, so
+  # the entry-point e2e cases consume exactly the same binaries the
+  # published SDK ships with. target_filter narrows each matrix to the
+  # single linux-x64 entry the Tokyo gate needs.
+  #
+  # Permissions cheat sheet:
+  #   build-c.yml's `upload-to-release` job (gated on release event)
+  #     declares `contents: write`.
+  #   build-runtime.yml's `upload_to_release` job (gated on release)
+  #     declares `contents: write, id-token: write, attestations: write`,
+  #     and its `publish_crates` job references `secrets.CARGO_REGISTRY_TOKEN`.
+  #   build-node.yml's release-only jobs declare similar.
+  # GH's static workflow_call resolver requires the caller to grant
+  # everything any downstream job declares, even if `if:` skips it for
+  # non-release events — missing one returns conclusion=startup_failure
+  # with no log archive and empty jobs[]. Hence the wide grants below.
+  # ──────────────────────────────────────────────────────────────────────
+  build_c:
+    name: Build C SDK (linux-x64-gnu)
+    uses: ./.github/workflows/build-c.yml
+    permissions:
+      id-token: write
+      contents: write
+      attestations: write
+    with:
+      target_filter: linux-x64-gnu
+
+  build_node:
+    name: Build Node SDK (linux-x64-gnu)
+    uses: ./.github/workflows/build-node.yml
+    permissions:
+      id-token: write
+      contents: write
+      attestations: write
+    with:
+      target_filter: linux-x64-gnu
+
+  build_cli:
+    name: Build CLI (linux-x64-gnu)
+    uses: ./.github/workflows/build-runtime.yml
+    permissions:
+      id-token: write
+      contents: write
+      attestations: write
+    secrets: inherit
+    with:
+      target_filter: linux-x64-gnu
+
   e2e:
     name: E2E suite (Tokyo)
+    needs: [build_c, build_node, build_cli]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -274,33 +325,26 @@ jobs:
           pip install --break-system-packages --quiet pytest pytest-asyncio pytest-timeout
 
       # ──────────────────────────────────────────────────────────────
-      # Pull the C SDK artifact that deploy-runner.yml's build_c_sdk
-      # job uploaded earlier in this workflow run, then drop it where
-      # test_c_entry / test_go_entry look for it. The artifact only
-      # exists when this workflow is reached via the e2e-cloud.yml
-      # orchestrator (which chains deploy_runner → e2e); on a bare
-      # workflow_dispatch standalone there's no upstream build and the
-      # download step's continue-on-error keeps the run going. In that
-      # case test_c_entry / test_go_entry skip themselves through the
-      # existing libboxlite.{a,so}-missing predicate. CLI + Node SDK
-      # provisioning is a separate follow-up (deploy-runner doesn't
-      # build those today), so test_cli_entry / test_cli_detach_recovery
-      # / test_node_entry stay skipped here.
+      # Pull the C / Node / CLI artifacts that the build_c / build_node /
+      # build_cli prereq jobs uploaded earlier in this workflow run,
+      # then drop them where the entry-point fixtures look for them:
+      #
+      #   target/release/libboxlite.{a,so}         test_c_entry / test_go_entry
+      #   sdks/c/include/boxlite.h                 test_c_entry header
+      #   /usr/local/bin/boxlite                   test_cli_entry / test_cli_detach_recovery
+      #   sdks/node/{native,npm}/*.node            test_node_entry
+      #
+      # All three artifacts always exist because the prereq jobs are
+      # `needs:` of this job — if any failed, this job doesn't run.
       # ──────────────────────────────────────────────────────────────
-      - name: Download c-sdk artifact from deploy_runner (if present)
-        id: download_c_sdk
+      - name: Download C SDK artifact
         uses: actions/download-artifact@v4
-        continue-on-error: true
         with:
           name: c-sdk-linux-x64-gnu
           path: /tmp/c-sdk
-      - name: Install C SDK from deploy_runner artifact
-        if: steps.download_c_sdk.outcome == 'success'
+      - name: Install C SDK (libboxlite.{a,so} + boxlite.h)
         run: |
           set -euo pipefail
-          # build-c.yml uploads `boxlite-c-v<ver>-linux-x64-gnu.tar.gz`
-          # inside the artifact dir. Extract → drop lib/* into
-          # target/release/ and include/boxlite.h into sdks/c/include/.
           ARCHIVE=$(ls /tmp/c-sdk/boxlite-c-v*-linux-x64-gnu.tar.gz)
           tar -xzf "$ARCHIVE" -C /tmp/c-sdk
           DIR=$(ls -d /tmp/c-sdk/boxlite-c-v*-linux-x64-gnu)
@@ -309,6 +353,36 @@ jobs:
           cp "$DIR/lib/libboxlite.so" target/release/
           cp "$DIR/include/boxlite.h" sdks/c/include/
           ls -lh target/release/libboxlite.* sdks/c/include/boxlite.h
+
+      - name: Download CLI artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cli-linux-x64-gnu
+          path: /tmp/cli
+      - name: Install CLI on PATH
+        run: |
+          set -euo pipefail
+          # build-runtime.yml packages the cli tarball with rust_target
+          # in the filename (boxlite-cli-v<ver>-x86_64-unknown-linux-gnu.tar.gz)
+          # but uploads it under the friendly target name (cli-linux-x64-gnu).
+          ARCHIVE=$(ls /tmp/cli/boxlite-cli-v*-x86_64-unknown-linux-gnu.tar.gz)
+          tar -xzf "$ARCHIVE" -C /tmp/cli
+          sudo install -m 0755 /tmp/cli/boxlite /usr/local/bin/boxlite
+          boxlite --version
+
+      - name: Download Node SDK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: artifacts-linux-x64-gnu
+          path: /tmp/node-sdk
+      - name: Install Node SDK (native/*.node + npm/*)
+        run: |
+          set -euo pipefail
+          ARCHIVE=$(ls /tmp/node-sdk/artifacts-linux-x64-gnu.tar)
+          tar -xf "$ARCHIVE" -C sdks/node
+          ls -lh sdks/node/native/*.node sdks/node/npm/ 2>/dev/null || {
+            echo "::error::Node SDK artifact missing expected files"; exit 1;
+          }
 
       # ──────────────────────────────────────────────────────────────────
       # Pytest configuration: write the profile pointing at Tokyo API LB,
@@ -361,12 +435,13 @@ jobs:
         env:
           BOXLITE_E2E_SKIP_PATH_VERIFY: '1'
           BOXLITE_E2E_PROFILE: p1
-          # CLI + Node SDK provisioning is not in place yet (deploy-runner
-          # only produces the C SDK artifact). Keep the default skip
-          # behaviour for test_cli_entry / test_cli_detach_recovery /
-          # test_node_entry so the gate stays green. Flip to '1' once
-          # the orchestrator gains a CLI + Node SDK build step.
-          BOXLITE_E2E_REQUIRE_SDK_BUILDS: '0'
+          # build_c / build_node / build_cli prereqs are now hard
+          # dependencies of this job, so the C / Go / CLI / Node entry-
+          # point fixtures always have their artifacts on disk. Flip
+          # skip→fail so a future regression in the build chain (or a
+          # missing download step) surfaces as a clear pytest failure
+          # instead of a silent SKIP that drains the gate.
+          BOXLITE_E2E_REQUIRE_SDK_BUILDS: '1'
         run: |
           # pytest-timeout caps individual test wall time so a hung VM /
           # wedged exec doesn't burn the full 45-minute job timeout (which
