@@ -210,22 +210,39 @@ jobs:
     with:
       target_filter: linux-x64-gnu
 
-  # Build + deploy runner binary as a single reusable workflow.
-  # Internally chains build-c.yml → build-runner-binary.yml → S3 push +
-  # EC2 self-update poll. See .github/workflows/deploy-runner.yml.
-  #
-  # Fires only when runner_chain changed. Pure API/SDK/test PRs skip
-  # the ~11 min build chain + the EC2 self-update step entirely.
-  deploy_runner:
-    name: Deploy runner binary (build + push to Tokyo)
-    needs: changes
+  # Build the Go runner binary, linking the libboxlite.a from build_c.
+  # Pulled out of deploy-runner.yml so the .a is consumed exactly once
+  # (build_c's artifact, identified by ${{ github.run_id }}).
+  build_runner_binary:
+    name: Build runner binary (linux-amd64)
+    needs: [changes, build_c]
     if: |
-      needs.changes.outputs.runner_chain == 'true'
-      || github.event_name == 'workflow_dispatch'
+      !failure() && !cancelled()
+      && (needs.changes.outputs.runner_chain == 'true'
+          || github.event_name == 'workflow_dispatch')
+    uses: ./.github/workflows/build-runner-binary.yml
+    with:
+      c_sdk_run_id: ${{ github.run_id }}
+    permissions:
+      contents: read
+
+  # Deploy the just-built runner binary to the Tokyo EC2 over SSH+SCP.
+  # Pure leaf — no build chain here, just the SCP swap. The artifact
+  # is the runner-linux-amd64 upload from build_runner_binary above,
+  # found by passing ${{ github.run_id }}.
+  deploy_runner:
+    name: Deploy runner binary (SSH+SCP to Tokyo)
+    needs: [changes, build_runner_binary]
+    if: |
+      !failure() && !cancelled()
+      && (needs.changes.outputs.runner_chain == 'true'
+          || github.event_name == 'workflow_dispatch')
     uses: ./.github/workflows/deploy-runner.yml
+    with:
+      runner_artifact_run_id: ${{ github.run_id }}
     permissions:
       id-token: write
-      contents: write
+      contents: read
 
   # Build + deploy Api container as a reusable workflow. Internal logic
   # in deploy-api.yml handles: ECR build/push, register-TD (with S3 env

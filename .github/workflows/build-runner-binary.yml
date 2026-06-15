@@ -19,17 +19,18 @@
 name: Build Runner Binary
 
 on:
-  workflow_run:
-    workflows: ["Build C SDK"]
-    types: [completed]
-  workflow_dispatch:
   workflow_call:
     inputs:
-      libboxlite_source:
-        description: 'How to obtain libboxlite.a — "release" (download v${VERSION} tarball, default) or "build" (compile from this checkout)'
+      c_sdk_run_id:
+        description: 'GHA run ID that uploaded the c-sdk-linux-x64-gnu artifact (contains libboxlite.{a,so} + boxlite.h). Caller (e2e-cloud.yml) typically passes ${{ github.run_id }} so the same run''s build_c artifact is consumed.'
         type: string
-        default: 'release'
-        required: false
+        required: true
+  workflow_dispatch:
+    inputs:
+      c_sdk_run_id:
+        description: 'GHA run ID that uploaded the c-sdk-linux-x64-gnu artifact (e.g. a previous e2e-cloud or build-c run)'
+        type: string
+        required: true
 
 permissions:
   contents: read
@@ -44,9 +45,6 @@ jobs:
   build:
     name: Build Runner (linux-amd64)
     needs: config
-    if: >-
-      github.event_name != 'workflow_run' ||
-      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -68,49 +66,26 @@ jobs:
           VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      # ── libboxlite.a — TWO PATHS based on caller's libboxlite_source input ──
-      # (a) "release" (default): download the prebuilt tarball that the
-      #     v${VERSION} GitHub release shipped. Fast, used by main build
-      #     after a "Build C SDK" workflow_run completes.
-      # (b) "build": compile from THIS checkout's Rust source. Used by
-      #     e2e-cloud so the runner binary picks up symbols that are
-      #     ahead of the tagged release (e.g. boxlite_rest_options_set_path_prefix
-      #     introduced after v0.9.5). BOXLITE_DEPS_STUB=2 skips the
-      #     vendor -sys crates (bubblewrap/libkrun/e2fsprogs) and pulls
-      #     their runtime tarball at startup — saves ~10 min vs full
-      #     source build, still produces a fully-functional .a because
-      #     vendor symbols aren't in the .a's exported table anyway.
-      - name: Download prebuilt libboxlite.a (release mode)
-        if: inputs.libboxlite_source != 'build'
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          ARCHIVE="boxlite-c-v${VERSION}-linux-x64-gnu.tar.gz"
-          URL="https://github.com/${GH_REPO}/releases/download/v${VERSION}/${ARCHIVE}"
-          echo "Downloading $URL"
-          curl -fsSL "${URL}" | tar xz -C /tmp/
-          cp "/tmp/boxlite-c-v${VERSION}-linux-x64-gnu/lib/libboxlite.a" sdks/go/libboxlite.a
-
-      - name: Download libboxlite.a from sibling build-c.yml job (build mode)
-        if: inputs.libboxlite_source == 'build'
-        # In "build" mode the caller workflow (e2e-cloud.yml) runs
-        # .github/workflows/build-c.yml as a sibling job FIRST, which
-        # uploads the c-sdk-linux-x64-gnu artifact containing
-        # boxlite-c-v${VERSION}-linux-x64-gnu/lib/libboxlite.a built
-        # from THIS checkout's Rust source (with proper manylinux
-        # container, libseccomp.a cross-build, fix-go-symbols.sh).
-        # Reusing that artifact avoids duplicating the libboxlite
-        # build chain here (which would otherwise need musl-tools,
-        # gperf, llvm, protobuf-compiler, libssl-dev, etc., AND
-        # diverge from how release builds the .a).
+      # ── libboxlite.a — download c-sdk artifact from caller's run ──
+      # The c_sdk_run_id input identifies the GHA run whose build-c.yml
+      # uploaded the c-sdk-linux-x64-gnu artifact. e2e-cloud.yml passes
+      # ${{ github.run_id }} so the sibling build_c job's artifact (built
+      # from THIS checkout's Rust source with proper manylinux container,
+      # libseccomp.a cross-build, fix-go-symbols.sh) is consumed.
+      #
+      # Reusing that artifact avoids duplicating the libboxlite build chain
+      # here (which would otherwise need musl-tools, gperf, llvm,
+      # protobuf-compiler, libssl-dev, etc., AND diverge from how release
+      # builds the .a).
+      - name: Download c-sdk artifact
         uses: actions/download-artifact@v4
         with:
           name: c-sdk-linux-x64-gnu
           path: /tmp/c-sdk/
+          run-id: ${{ inputs.c_sdk_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Stage libboxlite.a into sdks/go/ (build mode)
-        if: inputs.libboxlite_source == 'build'
+      - name: Stage libboxlite.a into sdks/go/
         run: |
           set -euo pipefail
           # The build-c.yml archive is `boxlite-c-v${VERSION}-linux-x64-gnu.tar.gz`
@@ -178,36 +153,3 @@ jobs:
             boxlite-runner-v*-linux-amd64.tar.gz.sha256
           if-no-files-found: error
           retention-days: ${{ needs.config.outputs.artifact-retention-days }}
-
-  upload-to-release:
-    name: Upload to GitHub Release
-    needs: [config, build]
-    if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'release'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Determine version
-        id: version
-        run: |
-          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-          pattern: runner-*
-          merge-multiple: true
-
-      - name: Upload to release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ steps.version.outputs.version }}
-          files: |
-            dist/boxlite-runner-v*.tar.gz
-            dist/boxlite-runner-v*.tar.gz.sha256
-          fail_on_unmatched_files: true
