@@ -375,13 +375,22 @@ jobs:
         with:
           name: artifacts-linux-x64-gnu
           path: /tmp/node-sdk
-      - name: Install Node SDK (native/*.node + npm/*)
+      - name: Install Node SDK (native/boxlite.js + npm/<platform>/*.node)
         run: |
           set -euo pipefail
+          # build-node.yml's tarball layout (see its 'Create artifact
+          # tarball' step):
+          #   native/boxlite.js          ← JS loader, no .node binary
+          #   npm/<platform>/*.node       ← actual napi binary
+          # test_node_entry.py's _has_node_napi_build does rglob('*.node')
+          # over native/ + npm/, so a .node binary anywhere under
+          # sdks/node/npm/ is enough.
           ARCHIVE=$(ls /tmp/node-sdk/artifacts-linux-x64-gnu.tar)
           tar -xf "$ARCHIVE" -C sdks/node
-          ls -lh sdks/node/native/*.node sdks/node/npm/ 2>/dev/null || {
-            echo "::error::Node SDK artifact missing expected files"; exit 1;
+          ls -lh sdks/node/native/boxlite.js
+          find sdks/node/npm -name '*.node' -print | head -5
+          test -n "$(find sdks/node/npm -name '*.node' -print -quit)" || {
+            echo "::error::Node SDK artifact has no *.node binary under sdks/node/npm/"; exit 1;
           }
 
       # ──────────────────────────────────────────────────────────────────
