@@ -902,7 +902,7 @@ exec > /var/log/runner-setup.log 2>&1
 while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 5; done
 
 apt-get update
-apt-get install -y curl
+apt-get install -y curl bubblewrap
 
 # Install Mountpoint for Amazon S3, used by volume mounts
 MOUNT_S3_VERSION=1.20.0
@@ -910,6 +910,57 @@ MOUNT_S3_ARCH=x86_64
 curl -fsSL "https://s3.amazonaws.com/mountpoint-s3-release/\${MOUNT_S3_VERSION}/\${MOUNT_S3_ARCH}/mount-s3-\${MOUNT_S3_VERSION}-\${MOUNT_S3_ARCH}.deb" -o /tmp/mount-s3.deb
 apt-get install -y /tmp/mount-s3.deb
 rm -f /tmp/mount-s3.deb
+
+# Ubuntu 24.04 ships kernel.apparmor_restrict_unprivileged_userns=1 but does NOT
+# ship the bwrap-userns-restrict AppArmor profile that Ubuntu 25.04+ includes.
+# Without this profile the system bwrap (used by BoxLite's jailer for sandbox
+# isolation) is DENIED the userns capability and every box fails with
+# "Timeout waiting for guest ready / VM subprocess exited before guest became
+# ready". Install the same profile Ubuntu 25.04+ ships, scoped to /usr/bin/bwrap
+# so the kernel restriction stays in place for everything else on the host.
+# See docs/faq.md "Ubuntu 24.04: Timeout waiting for guest ready" §Fix A.
+cat > /etc/apparmor.d/bwrap-userns-restrict << 'PROFILE'
+abi <abi/4.0>,
+
+include <tunables/global>
+
+profile bwrap /usr/bin/bwrap flags=(attach_disconnected,mediate_deleted) {
+  allow capability,
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow ptrace,
+  allow signal,
+  allow mqueue,
+  allow io_uring,
+  allow userns,
+  allow mount,
+  allow umount,
+  allow pivot_root,
+  allow dbus,
+  allow pix /** -> &bwrap//&unpriv_bwrap,
+  include if exists <local/bwrap-userns-restrict>
+}
+
+profile unpriv_bwrap flags=(attach_disconnected,mediate_deleted) {
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow ptrace,
+  allow signal,
+  allow mqueue,
+  allow io_uring,
+  allow userns,
+  allow mount,
+  allow umount,
+  allow pivot_root,
+  allow dbus,
+  allow pix /** -> &unpriv_bwrap,
+  audit deny capability,
+  include if exists <local/unpriv_bwrap>
+}
+PROFILE
+apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
 
 # Download prebuilt runner binary from GitHub Releases
 curl -fsSL "https://github.com/boxlite-ai/boxlite/releases/download/v${RUNNER_VERSION}/boxlite-runner-v${RUNNER_VERSION}-linux-amd64.tar.gz" | tar xz -C /usr/local/bin/
