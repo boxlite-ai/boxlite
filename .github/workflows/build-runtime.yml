@@ -44,6 +44,13 @@ on:
         type: string
         default: ''
         required: false
+    secrets:
+      # publish_crates references this — gated on `github.event_name ==
+      # release` so it never runs on a workflow_call path. Declared
+      # required: false so GH's static workflow_call resolver doesn't
+      # reject every caller that doesn't pass it (e.g. e2e-cloud-test).
+      CARGO_REGISTRY_TOKEN:
+        required: false
 
 env:
   CARGO_TERM_COLOR: always
