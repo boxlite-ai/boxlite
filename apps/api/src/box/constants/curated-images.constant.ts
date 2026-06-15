@@ -7,14 +7,14 @@
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 
 /**
- * Temporary curated-image gate: boxes may only boot from this fixed set of pinned OCI
+ * Temporary curated-image gate: boxes may only boot from this fixed set of curated OCI
  * refs, because the runner pulls with its own private-registry token and must never be
  * handed an arbitrary user-supplied image. The gate is deliberately thin and sits only
  * at the request boundary (BoxService create / warm-pool); everything downstream treats
  * `image` as an opaque OCI ref. When per-org custom images land, delete this file and
  * its call sites — no other layer knows the curated set exists.
  *
- * Env overrides (set on the Api service in apps/infra/sst.config.ts) allow digest
+ * Env overrides (set on the Api service in apps/infra/sst.config.ts) allow ref
  * rotation without a code deploy; the fallbacks cover local/dev runs.
  */
 type SupportedImageSource = {
@@ -25,22 +25,19 @@ type SupportedImageSource = {
 const SUPPORTED_IMAGE_SOURCES: SupportedImageSource[] = [
   {
     envVar: 'BOXLITE_SYSTEM_BASE_IMAGE',
-    fallbackRef:
-      'ghcr.io/boxlite-ai/boxlite-agent-base@sha256:834dcb65465985fc2f648451d76c81d166bc7672391c9064a0a115ce6306c85f',
+    fallbackRef: 'ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3',
   },
   {
     envVar: 'BOXLITE_SYSTEM_PYTHON_IMAGE',
-    fallbackRef:
-      'ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6',
+    fallbackRef: 'ghcr.io/boxlite-ai/boxlite-agent-python:20260605-p0-r3',
   },
   {
     envVar: 'BOXLITE_SYSTEM_NODE_IMAGE',
-    fallbackRef:
-      'ghcr.io/boxlite-ai/boxlite-agent-node@sha256:fcb8b840ab68567975853666c82fb6c59a3c1d14a0cdc31d7cbf3a01e6c6d247',
+    fallbackRef: 'ghcr.io/boxlite-ai/boxlite-agent-node:20260605-p0-r3',
   },
 ]
 
-/** Pinned OCI refs a box may boot from. The first entry is the default image. */
+/** Curated OCI refs a box may boot from. The first entry is the default image. */
 export function supportedImages(): string[] {
   return SUPPORTED_IMAGE_SOURCES.map(({ envVar, fallbackRef }) => process.env[envVar] || fallbackRef)
 }

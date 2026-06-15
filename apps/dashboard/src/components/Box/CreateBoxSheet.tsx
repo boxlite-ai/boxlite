@@ -84,19 +84,19 @@ const SUPPORTED_BOX_IMAGES = [
   {
     id: 'base',
     name: 'Base',
-    ref: 'ghcr.io/boxlite-ai/boxlite-agent-base@sha256:834dcb65465985fc2f648451d76c81d166bc7672391c9064a0a115ce6306c85f',
+    ref: 'ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3',
     isDefault: true,
   },
   {
     id: 'python',
     name: 'Python',
-    ref: 'ghcr.io/boxlite-ai/boxlite-agent-python@sha256:80d562a57f4bc12def4e54dbdb9e7d26d3268fe0767a2955ab5ad718041145d6',
+    ref: 'ghcr.io/boxlite-ai/boxlite-agent-python:20260605-p0-r3',
     isDefault: false,
   },
   {
     id: 'node',
     name: 'Node.js',
-    ref: 'ghcr.io/boxlite-ai/boxlite-agent-node@sha256:fcb8b840ab68567975853666c82fb6c59a3c1d14a0cdc31d7cbf3a01e6c6d247',
+    ref: 'ghcr.io/boxlite-ai/boxlite-agent-node:20260605-p0-r3',
     isDefault: false,
   },
 ] as const
