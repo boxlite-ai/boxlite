@@ -1,51 +1,39 @@
 # Build + deploy the supporting ECS services for the Tokyo e2e-ci stack:
-# Proxy, OtelCollector, SshGateway. Each has its own Dockerfile in apps/
-# and an ECS service of the same name in the e2e-ci cluster.
+# Proxy, OtelCollector, SshGateway. LEAF workflow — no nested
+# `uses:` (the per-service deploy logic is inlined as a matrix here;
+# the orchestrator e2e-cloud.yml decides which subset to deploy and
+# passes the list as input).
 #
-# Mirrors deploy-api.yml's pattern:
-#   - paths-filter per service so a commit only redeploys the touched ones
-#   - clone live TD, swap image, strip readonly fields, register, update
-#     service, wait services-stable, assert PRIMARY == new TD
-#   - reuses the boxlite-e2e-cloud-github-actions OIDC role; perms already
-#     in its inline policy (ecr:* on sst-asset, ecs:Describe*/List*/
-#     RegisterTaskDefinition/UpdateService on boxlite-e2e-ci-*, iam:PassRole
-#     on boxlite-e2e-ci-* with PassedToService=ecs-tasks).
+# Mirrors deploy-api.yml's pattern (minus S3 env patches that are Api-
+# specific):
+#   - clone live TD, swap image, strip readonly fields, register
+#   - UpdateService --force-new-deployment + wait services-stable
+#   - assert PRIMARY taskDefinition == NEW_TD_ARN
 #
-# Coverage gap motivation: prior to this workflow, only Api + Runner had
-# automated deploy. Changes to apps/{proxy,otel-collector,ssh-gateway}/**
-# went live only when an admin ran `sst deploy --stage e2e-ci`. Those
-# three services have similar Docker build + ECS rolling deploy shape,
-# so they fit one matrix.
+# Reuses the boxlite-e2e-cloud-github-actions OIDC role; perms already
+# in its inline policy (ecr:* on sst-asset, ecs:Describe*/List*/
+# RegisterTaskDefinition/UpdateService on boxlite-e2e-ci-*, iam:PassRole
+# on boxlite-e2e-ci-* with PassedToService=ecs-tasks).
 name: Deploy App Services
 
 on:
   workflow_call:
     inputs:
       services:
-        description: 'Comma-separated subset of {Proxy,OtelCollector,SshGateway} to redeploy. Empty = all 3 (default for workflow_call).'
+        description: 'Comma-separated subset of {Proxy,OtelCollector,SshGateway} to redeploy. Caller is responsible for change detection.'
         type: string
-        required: false
-        default: ''
+        required: true
   workflow_dispatch:
     inputs:
       services:
-        description: 'Comma-separated subset of {Proxy,OtelCollector,SshGateway} to redeploy. Default = all detected via paths.'
+        description: 'Comma-separated subset of {Proxy,OtelCollector,SshGateway} to redeploy. Default deploys all 3.'
         type: string
-        required: false
-        default: ''
-  push:
-    paths:
-      - 'apps/proxy/**'
-      - 'apps/otel-collector/**'
-      - 'apps/ssh-gateway/**'
-      - '.github/workflows/deploy-app-services.yml'
+        required: true
+        default: 'Proxy,OtelCollector,SshGateway'
 
-# Serialize against the shared Tokyo ECS services. Concurrent
-# Proxy/OtelCollector/SshGateway deploys race for task-definition
-# revisions — observed live: two parallel runs both registered TDs,
-# one's UpdateService rolled the other back with "ECS rolled back.
-# PRIMARY=...:7 expected ...:6". cancel-in-progress: false because a
-# half-applied rolling update is worse than waiting.
+# Outer-workflow serialization. Inner per-service concurrency further
+# down ensures different services can deploy in parallel even when this
+# workflow's outer lock is held.
 concurrency:
   group: deploy-app-services-shared
   cancel-in-progress: false
@@ -53,127 +41,201 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  AWS_REGION: ${{ vars.AWS_E2E_CLOUD_REGION }}
-  AWS_ROLE_ARN: ${{ vars.AWS_E2E_CLOUD_ROLE_ARN }}
-  STACK_PREFIX: boxlite-e2e-ci
-  ECS_CLUSTER_PATTERN: boxlite-e2e-ci-ClusterCluster-
-  ECR_REPO: sst-asset
-
 jobs:
-  # ── Detect which app services to redeploy ─────────────────────────
-  changes:
-    name: Detect app-service source changes
+  # ── Parse the comma-separated services input into a matrix ─────────
+  # Validates each service name + maps it to its Dockerfile. Empty input
+  # is allowed (just produces an empty matrix → deploy job's `if` skips
+  # cleanly). Unknown service names hard-error so silent typos in the
+  # caller's input don't masquerade as "nothing to deploy".
+  prepare:
+    name: Build deploy matrix
     runs-on: ubuntu-latest
     outputs:
-      proxy:           ${{ steps.decide.outputs.proxy }}
-      otel_collector:  ${{ steps.decide.outputs.otel_collector }}
-      ssh_gateway:     ${{ steps.decide.outputs.ssh_gateway }}
+      matrix: ${{ steps.gen.outputs.matrix }}
+      any:    ${{ steps.gen.outputs.any }}
+    steps:
+      - id: gen
+        env:
+          SERVICES: ${{ inputs.services }}
+        run: |
+          set -euo pipefail
+          declare -A DOCKERFILE=(
+              [Proxy]=apps/proxy/Dockerfile
+              [OtelCollector]=apps/otel-collector/Dockerfile
+              [SshGateway]=apps/ssh-gateway/Dockerfile
+          )
+          ENTRIES=()
+          IFS=',' read -ra REQ <<<"${SERVICES:-}"
+          for raw in "${REQ[@]}"; do
+              s=$(echo "$raw" | xargs)  # trim leading/trailing whitespace
+              [ -z "$s" ] && continue
+              DF="${DOCKERFILE[$s]:-}"
+              [ -n "$DF" ] || { echo "::error::Unknown service '$s' (expected Proxy / OtelCollector / SshGateway)"; exit 1; }
+              ENTRIES+=("{\"service\":\"$s\",\"dockerfile\":\"$DF\"}")
+          done
+          if [ "${#ENTRIES[@]}" -eq 0 ]; then
+              MATRIX='[]'
+              ANY=false
+              echo "No services to deploy (services input empty)"
+          else
+              MATRIX="[$(IFS=, ; echo "${ENTRIES[*]}")]"
+              ANY=true
+              echo "Will deploy: $MATRIX"
+          fi
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "any=$ANY"       >> "$GITHUB_OUTPUT"
+
+  # ── Per-service deploy job, expanded from the matrix above ─────────
+  # Inlined from the former `_deploy-single-service.yml`. Per-service
+  # concurrency keeps two pushes that touch the same service serial
+  # while different services parallelize.
+  deploy:
+    name: Deploy ${{ matrix.service }}
+    needs: prepare
+    if: needs.prepare.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    concurrency:
+      group: deploy-app-service-${{ matrix.service }}
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AWS_REGION: ${{ vars.AWS_E2E_CLOUD_REGION }}
+      AWS_ROLE_ARN: ${{ vars.AWS_E2E_CLOUD_ROLE_ARN }}
+      STACK_PREFIX: boxlite-e2e-ci
+      ECS_CLUSTER_PATTERN: boxlite-e2e-ci-ClusterCluster-
+      ECR_REPO: sst-asset
     steps:
       - uses: actions/checkout@v5
-      - id: filter
-        if: github.event_name == 'push'
-        uses: dorny/paths-filter@v3
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          base: ${{ github.event.before }}
-          filters: |
-            proxy:
-              - 'apps/proxy/**'
-            otel_collector:
-              - 'apps/otel-collector/**'
-            ssh_gateway:
-              - 'apps/ssh-gateway/**'
-      - id: decide
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: deploy-${{ matrix.service }}-${{ github.run_id }}
+
+      - name: Resolve cluster
+        id: resources
+        run: |
+          set -euo pipefail
+          CLUSTER_COUNT=$(aws ecs list-clusters \
+            --query "length(clusterArns[?contains(@, '${ECS_CLUSTER_PATTERN}')])" --output text)
+          [ "$CLUSTER_COUNT" -eq 1 ] || { echo "::error::Expected 1 cluster, found $CLUSTER_COUNT"; exit 1; }
+          CLUSTER=$(aws ecs list-clusters \
+            --query "clusterArns[?contains(@, '${ECS_CLUSTER_PATTERN}')]|[0]" \
+            --output text | awk -F/ '{print $NF}')
+          echo "cluster=$CLUSTER" >> "$GITHUB_OUTPUT"
+          echo "::notice::cluster=$CLUSTER service=${{ matrix.service }}"
+
+      - name: ECR login
+        id: ecr_login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push image (${{ matrix.dockerfile }})
+        id: build
+        run: |
+          set -euo pipefail
+          REGISTRY="${{ steps.ecr_login.outputs.registry }}"
+          # Lowercase service for the ECR tag (deterministic + matches
+          # the convention "${service-lowercase}-${sha}").
+          TAG_NAME=$(echo "${{ matrix.service }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE="${REGISTRY}/${ECR_REPO}:${TAG_NAME}-${{ github.sha }}"
+          docker buildx build --platform linux/amd64 --load \
+            -f "${{ matrix.dockerfile }}" -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "::notice::Built and pushed $IMAGE"
+
+      - name: Resolve Api role ARNs (borrow source for missing per-service roles)
+        id: api_roles
+        run: |
+          set -euo pipefail
+          # The e2e-ci stack's per-service Task/Execution roles
+          # (Proxy/Otel/SshGw{Task,Execution}Role-*) were deleted from
+          # IAM out-of-band, but the live ECS TDs still reference the
+          # dead ARNs → AssumeRole NoSuchEntity → new tasks can't start.
+          # As a temporary unblock (until admin runs `sst deploy
+          # --stage e2e-ci` to recreate properly), borrow the Api
+          # service's roles which were recreated earlier in this PR's
+          # session. Both Api roles trust ecs-tasks.amazonaws.com (no
+          # principal restriction), so any service can assume them. The
+          # cost is least-privilege: borrowed task role grants S3 +
+          # CloudWatch perms the borrower may not need. Acceptable for
+          # e2e-ci which has no production traffic.
+          API_TD=$(aws ecs describe-services --cluster "${{ steps.resources.outputs.cluster }}" \
+            --services Api --query 'services[0].taskDefinition' --output text)
+          read -r TASK_ROLE EXEC_ROLE <<<"$(aws ecs describe-task-definition \
+            --task-definition "$API_TD" \
+            --query 'taskDefinition.[taskRoleArn,executionRoleArn]' --output text)"
+          [ -n "$TASK_ROLE" ] && [ "$TASK_ROLE" != "None" ] \
+            || { echo "::error::Could not resolve Api taskRoleArn"; exit 1; }
+          [ -n "$EXEC_ROLE" ] && [ "$EXEC_ROLE" != "None" ] \
+            || { echo "::error::Could not resolve Api executionRoleArn"; exit 1; }
+          echo "task_role_arn=$TASK_ROLE" >> "$GITHUB_OUTPUT"
+          echo "exec_role_arn=$EXEC_ROLE" >> "$GITHUB_OUTPUT"
+          echo "::notice::Will borrow Api roles for ${{ matrix.service }}: $(basename "$TASK_ROLE"), $(basename "$EXEC_ROLE")"
+
+      - name: Register new TD + UpdateService + wait stable
         env:
-          PUSH_PROXY:  ${{ steps.filter.outputs.proxy }}
-          PUSH_OTEL:   ${{ steps.filter.outputs.otel_collector }}
-          PUSH_SSHGW:  ${{ steps.filter.outputs.ssh_gateway }}
-          INPUT_SVCS:  ${{ inputs.services }}
+          CLUSTER:   ${{ steps.resources.outputs.cluster }}
+          IMAGE:     ${{ steps.build.outputs.image }}
+          SERVICE:   ${{ matrix.service }}
+          TASK_ROLE: ${{ steps.api_roles.outputs.task_role_arn }}
+          EXEC_ROLE: ${{ steps.api_roles.outputs.exec_role_arn }}
         run: |
           set -euo pipefail
 
-          # Helper: emit per-service output. Precedence:
-          #   1. workflow_dispatch `services` input (comma-separated)
-          #   2. push paths-filter
-          #   3. non-push event (workflow_call) → redeploy ALL by default
-          declare -A SHOULD_DEPLOY=( [Proxy]=false [OtelCollector]=false [SshGateway]=false )
+          OLD_TD_ARN=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+            --query 'services[0].taskDefinition' --output text)
+          echo "Old TD: $OLD_TD_ARN"
 
-          if [ -n "${INPUT_SVCS:-}" ]; then
-              # Explicit subset
-              IFS=',' read -ra REQ <<<"$INPUT_SVCS"
-              for s in "${REQ[@]}"; do
-                  case "$s" in
-                      Proxy)         SHOULD_DEPLOY[Proxy]=true ;;
-                      OtelCollector) SHOULD_DEPLOY[OtelCollector]=true ;;
-                      SshGateway)    SHOULD_DEPLOY[SshGateway]=true ;;
-                      *) echo "::warning::Unknown service in input: $s (ignored)" ;;
-                  esac
-              done
-              echo "Using workflow_dispatch services=$INPUT_SVCS"
-          elif [ "${{ github.event_name }}" = 'push' ]; then
-              [ "${PUSH_PROXY:-false}" = 'true' ]  && SHOULD_DEPLOY[Proxy]=true
-              [ "${PUSH_OTEL:-false}"  = 'true' ]  && SHOULD_DEPLOY[OtelCollector]=true
-              [ "${PUSH_SSHGW:-false}" = 'true' ]  && SHOULD_DEPLOY[SshGateway]=true
-              echo "Push paths-filter: proxy=${PUSH_PROXY:-false} otel=${PUSH_OTEL:-false} sshgw=${PUSH_SSHGW:-false}"
-          else
-              # workflow_call without explicit input — assume caller wants all
-              SHOULD_DEPLOY[Proxy]=true
-              SHOULD_DEPLOY[OtelCollector]=true
-              SHOULD_DEPLOY[SshGateway]=true
-              echo "Non-push event (${{ github.event_name }}) — deploy all 3"
+          # Clone old TD, swap container image, OVERRIDE task & execution
+          # roles to point at Api's (the per-service roles are gone from
+          # IAM — see api_roles step above), strip readonly fields.
+          # Plaintext env (e.g. credentials) lives in TD — do NOT cat the file.
+          aws ecs describe-task-definition --task-definition "$OLD_TD_ARN" \
+            --query 'taskDefinition' --output json \
+            | jq --arg img "$IMAGE" --arg trole "$TASK_ROLE" --arg erole "$EXEC_ROLE" '
+                .containerDefinitions[0].image = $img
+                | .taskRoleArn = $trole
+                | .executionRoleArn = $erole
+                | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                      .compatibilities, .registeredAt, .registeredBy)' \
+            > /tmp/new-td.json
+
+          NEW_TD_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file:///tmp/new-td.json \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "::notice::New TD: $NEW_TD_ARN"
+
+          aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" \
+            --task-definition "$NEW_TD_ARN" --force-new-deployment >/dev/null
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
+          echo "Service stable — verifying PRIMARY..."
+
+          PRIMARY_TD=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+            --query 'services[0].deployments[?status==`PRIMARY`]|[0].taskDefinition' \
+            --output text)
+          if [ "$PRIMARY_TD" != "$NEW_TD_ARN" ]; then
+              echo "::error::ECS rolled back. PRIMARY=$PRIMARY_TD expected $NEW_TD_ARN"
+              aws ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" \
+                  --desired-status STOPPED --max-results 5 \
+                  --query 'taskArns' --output json \
+                | python3 -c "import json,sys; [print(t) for t in json.load(sys.stdin)]" \
+                | while read TASK; do
+                    [ -n "$TASK" ] || continue
+                    echo "--- stopped task $(basename "$TASK") ---"
+                    aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK" \
+                        --query 'tasks[0].[stoppedReason,containers[0].exitCode,containers[0].reason]' \
+                        --output text || true
+                  done
+              exit 1
           fi
-
-          echo "proxy=${SHOULD_DEPLOY[Proxy]}"                 >> "$GITHUB_OUTPUT"
-          echo "otel_collector=${SHOULD_DEPLOY[OtelCollector]}" >> "$GITHUB_OUTPUT"
-          echo "ssh_gateway=${SHOULD_DEPLOY[SshGateway]}"      >> "$GITHUB_OUTPUT"
-          echo "Decision: proxy=${SHOULD_DEPLOY[Proxy]} otel=${SHOULD_DEPLOY[OtelCollector]} sshgw=${SHOULD_DEPLOY[SshGateway]}"
-
-  # ── One job per service, matrix-style via `if` gating ──────────────
-  # Note: GitHub Actions matrix doesn't combine cleanly with per-entry
-  # `if:` skipping (the matrix expands first, then if filters). Three
-  # explicit jobs reading from the same outputs is cleaner and keeps the
-  # logs grouped per service.
-  deploy_proxy:
-    name: Deploy Proxy
-    needs: changes
-    if: |
-      !failure() && !cancelled()
-      && needs.changes.outputs.proxy == 'true'
-    permissions:
-      id-token: write
-      contents: read
-    uses: ./.github/workflows/_deploy-single-service.yml
-    with:
-      service_name: Proxy
-      dockerfile: apps/proxy/Dockerfile
-    secrets: inherit
-
-  deploy_otel_collector:
-    name: Deploy OtelCollector
-    needs: changes
-    if: |
-      !failure() && !cancelled()
-      && needs.changes.outputs.otel_collector == 'true'
-    permissions:
-      id-token: write
-      contents: read
-    uses: ./.github/workflows/_deploy-single-service.yml
-    with:
-      service_name: OtelCollector
-      dockerfile: apps/otel-collector/Dockerfile
-    secrets: inherit
-
-  deploy_ssh_gateway:
-    name: Deploy SshGateway
-    needs: changes
-    if: |
-      !failure() && !cancelled()
-      && needs.changes.outputs.ssh_gateway == 'true'
-    permissions:
-      id-token: write
-      contents: read
-    uses: ./.github/workflows/_deploy-single-service.yml
-    with:
-      service_name: SshGateway
-      dockerfile: apps/ssh-gateway/Dockerfile
-    secrets: inherit
+          echo "::notice::PRIMARY deployment confirmed for ${SERVICE} on $NEW_TD_ARN"

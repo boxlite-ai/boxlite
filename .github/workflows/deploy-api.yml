@@ -56,13 +56,9 @@ on:
         type: boolean
         required: false
         default: false
-  push:
-    paths:
-      - 'apps/api/**'
-      - 'apps/libs/**'
-      - 'apps/common-go/**'
-      - 'apps/api-client-go/**'
-      - '.github/workflows/deploy-api.yml'
+# Push triggers are intentionally absent. This leaf is called by
+# e2e-cloud.yml (the single push-triggered orchestrator), or by
+# workflow_dispatch for ad-hoc redeploy.
 
 # Serialize against the shared Tokyo ECS service. Concurrent Api
 # deploys race for task-definition revision numbers and one's
