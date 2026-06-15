@@ -219,3 +219,5 @@ regions-*.png
 runners-*.png
 term-*.png
 test-*.png
+
+.claude/.pr-reviewed.json
