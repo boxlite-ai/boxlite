@@ -58,9 +58,14 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: e2e-cloud-shared
-  cancel-in-progress: false
+# No concurrency group here. When called from e2e-cloud.yml the parent
+# already holds `e2e-cloud-shared`; declaring the same group on this
+# leaf makes the workflow_call refuse to start (silent skip — observed
+# on run 27543898446 where all upstream jobs succeeded but the e2e
+# suite never appeared in the jobs list). For standalone
+# workflow_dispatch the lack of a group is acceptable — only one Tokyo
+# stack exists, and the dispatcher takes responsibility for not racing
+# with an in-flight deploy.
 
 env:
   AWS_REGION: ${{ vars.AWS_E2E_CLOUD_REGION }}
