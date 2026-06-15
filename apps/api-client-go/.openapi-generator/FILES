@@ -55,6 +55,7 @@ model_api_key_response.go
 model_audit_log.go
 model_box.go
 model_box_class.go
+model_box_create_defaults.go
 model_box_desired_state.go
 model_box_labels.go
 model_box_state.go

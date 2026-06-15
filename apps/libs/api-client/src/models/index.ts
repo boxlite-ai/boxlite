@@ -33,6 +33,7 @@ export * from './api-key-response';
 export * from './audit-log';
 export * from './box';
 export * from './box-class';
+export * from './box-create-defaults';
 export * from './box-desired-state';
 export * from './box-labels';
 export * from './box-state';

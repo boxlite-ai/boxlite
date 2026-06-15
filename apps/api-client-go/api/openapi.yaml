@@ -5105,6 +5105,25 @@ components:
       required:
       - text
       type: object
+    BoxCreateDefaults:
+      properties:
+        cpu:
+          description: Default CPU cores used when create omits cpu
+          example: 1
+          type: number
+        memory:
+          description: Default memory in GiB used when create omits memory
+          example: 1
+          type: number
+        disk:
+          description: Default disk in GiB used when create omits disk
+          example: 10
+          type: number
+      required:
+      - cpu
+      - disk
+      - memory
+      type: object
     PosthogConfig:
       properties:
         apiKey:
@@ -5194,6 +5213,7 @@ components:
         sshGatewayCommand: "ssh -p 2222 {{TOKEN}}@localhost"
         sshGatewayPublicKey: ssh-gateway-public-key
         rateLimit: ""
+        boxCreateDefaults: ""
       properties:
         version:
           description: BoxLite version
@@ -5264,8 +5284,14 @@ components:
           allOf:
           - $ref: "#/components/schemas/RateLimitConfig"
           description: Rate limit configuration
+        boxCreateDefaults:
+          allOf:
+          - $ref: "#/components/schemas/BoxCreateDefaults"
+          description: Default resources used when creating a box without explicit
+            overrides
       required:
       - announcements
+      - boxCreateDefaults
       - dashboardUrl
       - environment
       - linkedAccountsEnabled

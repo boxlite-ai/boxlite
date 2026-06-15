@@ -61,6 +61,7 @@ docs/AuthApi.md
 docs/Box.md
 docs/BoxApi.md
 docs/BoxClass.md
+docs/BoxCreateDefaults.md
 docs/BoxDesiredState.md
 docs/BoxLabels.md
 docs/BoxState.md
@@ -187,6 +188,7 @@ models/api-key-list.ts
 models/api-key-response.ts
 models/audit-log.ts
 models/box-class.ts
+models/box-create-defaults.ts
 models/box-desired-state.ts
 models/box-labels.ts
 models/box-state.ts

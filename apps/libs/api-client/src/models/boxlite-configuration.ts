@@ -18,6 +18,9 @@
 import type { Announcement } from './announcement';
 // May contain unused imports in some cases
 // @ts-ignore
+import type { BoxCreateDefaults } from './box-create-defaults';
+// May contain unused imports in some cases
+// @ts-ignore
 import type { OidcConfig } from './oidc-config';
 // May contain unused imports in some cases
 // @ts-ignore
@@ -91,5 +94,9 @@ export interface BoxliteConfiguration {
      * Rate limit configuration
      */
     'rateLimit'?: RateLimitConfig;
+    /**
+     * Default resources used when creating a box without explicit overrides
+     */
+    'boxCreateDefaults': BoxCreateDefaults;
 }
 

@@ -53,6 +53,8 @@ type BoxliteConfiguration struct {
 	SshGatewayPublicKey *string `json:"sshGatewayPublicKey,omitempty"`
 	// Rate limit configuration
 	RateLimit *RateLimitConfig `json:"rateLimit,omitempty"`
+	// Default resources used when creating a box without explicit overrides
+	BoxCreateDefaults BoxCreateDefaults `json:"boxCreateDefaults"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -62,7 +64,7 @@ type _BoxliteConfiguration BoxliteConfiguration
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewBoxliteConfiguration(version string, oidc OidcConfig, linkedAccountsEnabled bool, announcements map[string]Announcement, proxyTemplateUrl string, proxyToolboxUrl string, dashboardUrl string, maintananceMode bool, environment string) *BoxliteConfiguration {
+func NewBoxliteConfiguration(version string, oidc OidcConfig, linkedAccountsEnabled bool, announcements map[string]Announcement, proxyTemplateUrl string, proxyToolboxUrl string, dashboardUrl string, maintananceMode bool, environment string, boxCreateDefaults BoxCreateDefaults) *BoxliteConfiguration {
 	this := BoxliteConfiguration{}
 	this.Version = version
 	this.Oidc = oidc
@@ -73,6 +75,7 @@ func NewBoxliteConfiguration(version string, oidc OidcConfig, linkedAccountsEnab
 	this.DashboardUrl = dashboardUrl
 	this.MaintananceMode = maintananceMode
 	this.Environment = environment
+	this.BoxCreateDefaults = boxCreateDefaults
 	return &this
 }
 
@@ -524,6 +527,30 @@ func (o *BoxliteConfiguration) SetRateLimit(v RateLimitConfig) {
 	o.RateLimit = &v
 }
 
+// GetBoxCreateDefaults returns the BoxCreateDefaults field value
+func (o *BoxliteConfiguration) GetBoxCreateDefaults() BoxCreateDefaults {
+	if o == nil {
+		var ret BoxCreateDefaults
+		return ret
+	}
+
+	return o.BoxCreateDefaults
+}
+
+// GetBoxCreateDefaultsOk returns a tuple with the BoxCreateDefaults field value
+// and a boolean to check if the value has been set.
+func (o *BoxliteConfiguration) GetBoxCreateDefaultsOk() (*BoxCreateDefaults, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.BoxCreateDefaults, true
+}
+
+// SetBoxCreateDefaults sets field value
+func (o *BoxliteConfiguration) SetBoxCreateDefaults(v BoxCreateDefaults) {
+	o.BoxCreateDefaults = v
+}
+
 func (o BoxliteConfiguration) MarshalJSON() ([]byte, error) {
 	toSerialize,err := o.ToMap()
 	if err != nil {
@@ -564,6 +591,7 @@ func (o BoxliteConfiguration) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.RateLimit) {
 		toSerialize["rateLimit"] = o.RateLimit
 	}
+	toSerialize["boxCreateDefaults"] = o.BoxCreateDefaults
 
 	for key, value := range o.AdditionalProperties {
 		toSerialize[key] = value
@@ -586,6 +614,7 @@ func (o *BoxliteConfiguration) UnmarshalJSON(data []byte) (err error) {
 		"dashboardUrl",
 		"maintananceMode",
 		"environment",
+		"boxCreateDefaults",
 	}
 
 	allProperties := make(map[string]interface{})
@@ -631,6 +660,7 @@ func (o *BoxliteConfiguration) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "sshGatewayCommand")
 		delete(additionalProperties, "sshGatewayPublicKey")
 		delete(additionalProperties, "rateLimit")
+		delete(additionalProperties, "boxCreateDefaults")
 		o.AdditionalProperties = additionalProperties
 	}
 
