@@ -43,6 +43,8 @@ type Box struct {
 	NetworkAllowList *string `json:"networkAllowList,omitempty"`
 	// The target environment for the box
 	Target string `json:"target"`
+	// The image used for the box
+	Image *string `json:"image,omitempty"`
 	// The CPU quota for the box
 	Cpu float32 `json:"cpu"`
 	// The GPU quota for the box
@@ -385,6 +387,38 @@ func (o *Box) GetTargetOk() (*string, bool) {
 // SetTarget sets field value
 func (o *Box) SetTarget(v string) {
 	o.Target = v
+}
+
+// GetImage returns the Image field value if set, zero value otherwise.
+func (o *Box) GetImage() string {
+	if o == nil || IsNil(o.Image) {
+		var ret string
+		return ret
+	}
+	return *o.Image
+}
+
+// GetImageOk returns a tuple with the Image field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *Box) GetImageOk() (*string, bool) {
+	if o == nil || IsNil(o.Image) {
+		return nil, false
+	}
+	return o.Image, true
+}
+
+// HasImage returns a boolean if a field has been set.
+func (o *Box) HasImage() bool {
+	if o != nil && !IsNil(o.Image) {
+		return true
+	}
+
+	return false
+}
+
+// SetImage gets a reference to the given string and assigns it to the Image field.
+func (o *Box) SetImage(v string) {
+	o.Image = &v
 }
 
 // GetCpu returns the Cpu field value
@@ -917,6 +951,9 @@ func (o Box) ToMap() (map[string]interface{}, error) {
 		toSerialize["networkAllowList"] = o.NetworkAllowList
 	}
 	toSerialize["target"] = o.Target
+	if !IsNil(o.Image) {
+		toSerialize["image"] = o.Image
+	}
 	toSerialize["cpu"] = o.Cpu
 	toSerialize["gpu"] = o.Gpu
 	toSerialize["memory"] = o.Memory
@@ -1026,6 +1063,7 @@ func (o *Box) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "networkBlockAll")
 		delete(additionalProperties, "networkAllowList")
 		delete(additionalProperties, "target")
+		delete(additionalProperties, "image")
 		delete(additionalProperties, "cpu")
 		delete(additionalProperties, "gpu")
 		delete(additionalProperties, "memory")

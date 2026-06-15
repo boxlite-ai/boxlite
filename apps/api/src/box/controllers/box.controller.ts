@@ -17,11 +17,9 @@ import {
   HttpCode,
   UseInterceptors,
   Put,
-  ParseBoolPipe,
 } from '@nestjs/common'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { BoxService } from '../services/box.service'
-import { CreateBoxDto } from '../dto/create-box.dto'
 import {
   ApiOAuth2,
   ApiResponse,
@@ -53,7 +51,7 @@ import { OrganizationResourceActionGuard } from '../../organization/guards/organ
 import { PortPreviewUrlDto, SignedPortPreviewUrlDto } from '../dto/port-preview-url.dto'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { BoxStateUpdatedEvent } from '../events/box-state-updated.event'
-import { Audit, MASKED_AUDIT_VALUE, TypedRequest } from '../../audit/decorators/audit.decorator'
+import { Audit, TypedRequest } from '../../audit/decorators/audit.decorator'
 import { AuditAction } from '../../audit/enums/audit-action.enum'
 import { AuditTarget } from '../../audit/enums/audit-target.enum'
 // import { UpdateBoxNetworkSettingsDto } from '../dto/update-box-network-settings.dto'
@@ -215,65 +213,6 @@ export class BoxController {
     }
   }
 
-  @Post()
-  @HttpCode(200) //  for BoxLite Api compatibility
-  @UseInterceptors(ContentTypeInterceptor)
-  @SkipThrottle({ authenticated: true })
-  @ThrottlerScope('box-create')
-  @ApiOperation({
-    summary: 'Create a new box',
-    operationId: 'createBox',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'The box has been successfully created.',
-    type: BoxDto,
-  })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
-  @Audit({
-    action: AuditAction.CREATE,
-    targetType: AuditTarget.BOX,
-    targetIdFromResult: (result: BoxDto) => result?.id,
-    requestMetadata: {
-      body: (req: TypedRequest<CreateBoxDto>) => ({
-        name: req.body?.name,
-        user: req.body?.user,
-        env: req.body?.env
-          ? Object.fromEntries(Object.keys(req.body?.env).map((key) => [key, MASKED_AUDIT_VALUE]))
-          : undefined,
-        labels: req.body?.labels,
-        public: req.body?.public,
-        class: req.body?.class,
-        target: req.body?.target,
-        cpu: req.body?.cpu,
-        gpu: req.body?.gpu,
-        memory: req.body?.memory,
-        disk: req.body?.disk,
-        autoStopInterval: req.body?.autoStopInterval,
-        autoDeleteInterval: req.body?.autoDeleteInterval,
-        volumes: req.body?.volumes,
-        networkBlockAll: req.body?.networkBlockAll,
-        networkAllowList: req.body?.networkAllowList,
-      }),
-    },
-  })
-  async createBox(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Body() createBoxDto: CreateBoxDto,
-  ): Promise<BoxDto> {
-    const organization = authContext.organization
-    let box: BoxDto
-
-    box = await this.boxService.create(createBoxDto, organization)
-    if (box.state === BoxState.STARTED) {
-      return box
-    }
-
-    await this.waitForBoxStarted(box, 30)
-
-    return box
-  }
-
   @Get('for-runner')
   @UseGuards(RunnerAuthGuard)
   @ApiOperation({
@@ -350,39 +289,6 @@ export class BoxController {
     return this.boxService.toBoxDto(box)
   }
 
-  @Delete(':boxIdOrName')
-  @SkipThrottle({ authenticated: true })
-  @ThrottlerScope('box-lifecycle')
-  @ApiOperation({
-    summary: 'Delete box',
-    operationId: 'deleteBox',
-  })
-  @ApiParam({
-    name: 'boxIdOrName',
-    description: 'ID or name of the box',
-    type: 'string',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Box has been deleted',
-    type: BoxDto,
-  })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.DELETE_BOXES])
-  @UseGuards(BoxAccessGuard)
-  @Audit({
-    action: AuditAction.DELETE,
-    targetType: AuditTarget.BOX,
-    targetIdFromRequest: (req) => req.params.boxIdOrName,
-    targetIdFromResult: (result: BoxDto) => result?.id,
-  })
-  async deleteBox(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('boxIdOrName') boxIdOrName: string,
-  ): Promise<BoxDto> {
-    const box = await this.boxService.destroy(boxIdOrName, authContext.organizationId)
-    return this.boxService.toBoxDto(box)
-  }
-
   @Post(':boxIdOrName/recover')
   @HttpCode(200)
   @SkipThrottle({ authenticated: true })
@@ -421,92 +327,6 @@ export class BoxController {
     }
 
     return boxDto
-  }
-
-  @Post(':boxIdOrName/start')
-  @HttpCode(200)
-  @SkipThrottle({ authenticated: true })
-  @ThrottlerScope('box-lifecycle')
-  @ApiOperation({
-    summary: 'Start box',
-    operationId: 'startBox',
-  })
-  @ApiParam({
-    name: 'boxIdOrName',
-    description: 'ID or name of the box',
-    type: 'string',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Box has been started',
-    type: BoxDto,
-  })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
-  @UseGuards(BoxAccessGuard)
-  @Audit({
-    action: AuditAction.START,
-    targetType: AuditTarget.BOX,
-    targetIdFromRequest: (req) => req.params.boxIdOrName,
-    targetIdFromResult: (result: BoxDto) => result?.id,
-  })
-  async startBox(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('boxIdOrName') boxIdOrName: string,
-  ): Promise<BoxDto> {
-    const sbx = await this.boxService.start(boxIdOrName, authContext.organization)
-    let box = await this.boxService.toBoxDto(sbx)
-
-    if (![BoxState.RESTORING, BoxState.STARTED].includes(box.state)) {
-      box = await this.waitForBoxStarted(box, 30)
-    }
-
-    return box
-  }
-
-  @Post(':boxIdOrName/stop')
-  @HttpCode(200) //  for BoxLite Api compatibility
-  @SkipThrottle({ authenticated: true })
-  @ThrottlerScope('box-lifecycle')
-  @ApiOperation({
-    summary: 'Stop box',
-    operationId: 'stopBox',
-  })
-  @ApiParam({
-    name: 'boxIdOrName',
-    description: 'ID or name of the box',
-    type: 'string',
-  })
-  @ApiQuery({
-    name: 'force',
-    required: false,
-    type: 'boolean',
-    description: 'Force stop the box using SIGKILL instead of SIGTERM',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Box has been stopped',
-    type: BoxDto,
-  })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
-  @UseGuards(BoxAccessGuard)
-  @Audit({
-    action: AuditAction.STOP,
-    targetType: AuditTarget.BOX,
-    targetIdFromRequest: (req) => req.params.boxIdOrName,
-    targetIdFromResult: (result: BoxDto) => result?.id,
-    requestMetadata: {
-      query: (req) => ({
-        force: req.query?.force === 'true',
-      }),
-    },
-  })
-  async stopBox(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('boxIdOrName') boxIdOrName: string,
-    @Query('force', new ParseBoolPipe({ optional: true })) force?: boolean,
-  ): Promise<BoxDto> {
-    const box = await this.boxService.stop(boxIdOrName, authContext.organizationId, force)
-    return this.boxService.toBoxDto(box)
   }
 
   @Post(':boxIdOrName/resize')

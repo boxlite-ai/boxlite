@@ -179,7 +179,7 @@ export class BoxliteProxyController {
       throw new NotFoundException(`Box ${boxId} not found`)
     }
 
-    // Mirror legacy toolbox.deprecated.service.ts:111 — any SDK-initiated proxy
+    // Any SDK-initiated proxy
     // call counts as user activity, so the autostop cron does not reap an
     // actively used box. Best-effort: never block the proxy on this.
     this.boxService

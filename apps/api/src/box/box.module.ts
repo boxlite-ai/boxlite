@@ -14,9 +14,7 @@ import { UserModule } from '../user/user.module'
 import { RunnerService } from './services/runner.service'
 import { Runner } from './entities/runner.entity'
 import { RunnerController } from './controllers/runner.controller'
-import { ToolboxService } from './services/toolbox.deprecated.service'
 import { BoxManager } from './managers/box.manager'
-import { ToolboxController } from './controllers/toolbox.deprecated.controller'
 import { RedisLockProvider } from './common/redis-lock.provider'
 import { OrganizationModule } from '../organization/organization.module'
 import { BoxWarmPoolService } from './services/box-warm-pool.service'
@@ -28,7 +26,6 @@ import { VolumeManager } from './managers/volume.manager'
 import { Volume } from './entities/volume.entity'
 import { VolumeSubscriber } from './subscribers/volume.subscriber'
 import { RunnerSubscriber } from './subscribers/runner.subscriber'
-import { WorkspaceController } from './controllers/workspace.deprecated.controller'
 import { RunnerAdapterFactory } from './runner-adapter/runnerAdapter'
 import { BoxStartAction } from './managers/box-actions/box-start.action'
 import { BoxStopAction } from './managers/box-actions/box-stop.action'
@@ -60,21 +57,12 @@ import { BoxStateWaiterService } from './services/box-state-waiter.service'
     RegionModule,
     TypeOrmModule.forFeature([Box, Runner, WarmPool, Volume, SshAccess, Region, Job, BoxLastActivity]),
   ],
-  controllers: [
-    BoxController,
-    RunnerController,
-    ToolboxController,
-    WorkspaceController,
-    PreviewController,
-    VolumeController,
-    JobController,
-  ],
+  controllers: [BoxController, RunnerController, PreviewController, VolumeController, JobController],
   providers: [
     BoxService,
     BoxManager,
     BoxWarmPoolService,
     RunnerService,
-    ToolboxService,
     BoxLookupCacheInvalidationService,
     RedisLockProvider,
     VolumeService,

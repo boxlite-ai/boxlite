@@ -15,8 +15,6 @@ import {
 import { Observable } from 'rxjs'
 import { tap } from 'rxjs/operators'
 import { PostHog } from 'posthog-node'
-import { BoxDto } from '../box/dto/box.dto'
-import { CreateBoxDto } from '../box/dto/create-box.dto'
 import { Request } from 'express'
 import { CreateOrganizationDto } from '../organization/dto/create-organization.dto'
 import { OrganizationDto } from '../organization/dto/organization.dto'
@@ -28,8 +26,8 @@ import { UpdateOrganizationInvitationDto } from '../organization/dto/update-orga
 import { CustomHeaders } from '../common/constants/header.constants'
 import { CreateVolumeDto } from '../box/dto/create-volume.dto'
 import { VolumeDto } from '../box/dto/volume.dto'
-import { CreateWorkspaceDto } from '../box/dto/create-workspace.deprecated.dto'
-import { WorkspaceDto } from '../box/dto/workspace.deprecated.dto'
+import { CreateBoxDto as RestCreateBoxDto } from '../boxlite-rest/dto/create-box.dto'
+import { BoxResponseDto } from '../boxlite-rest/dto/box-response.dto'
 import { TypedConfigService } from '../config/typed-config.service'
 import { UpdateOrganizationDefaultRegionDto } from '../organization/dto/update-organization-default-region.dto'
 
@@ -119,7 +117,7 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
       userAgent,
       error,
       source: Array.isArray(source) ? source[0] : source,
-      isDeprecated: request.route.path.includes('/workspace') || request.route.path.includes('/images'),
+      isDeprecated: request.route.path.includes('/images'),
       sdkVersion,
       environment: this.configService.get('posthog.environment'),
     }
@@ -131,28 +129,19 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
             this.captureCreateApiKey(props)
             break
           // TODO(image-rewrite): /api/templates metrics removed with box_template.
-          case '/api/box':
+          case '/api/v1/boxes':
+          case '/api/v1/:prefix/boxes':
             this.captureCreateBox(props, request.body, response)
             break
-          case '/api/workspace':
-            this.captureCreateWorkspace_deprecated(props, request.body, response)
-            break
-          case '/api/box/:boxIdOrName/start':
-          case '/api/workspace/:workspaceId/start':
           case '/api/v1/boxes/:boxId/start':
           case '/api/v1/:prefix/boxes/:boxId/start':
-            this.captureStartBox(
-              props,
-              request.params.boxIdOrName || request.params.workspaceId || request.params.boxId,
-            )
+            this.captureStartBox(props, request.params.boxIdOrName || request.params.boxId)
             break
-          case '/api/box/:boxIdOrName/stop':
-          case '/api/workspace/:workspaceId/stop':
           case '/api/v1/boxes/:boxId/stop':
           case '/api/v1/:prefix/boxes/:boxId/stop':
             this.captureStopBox(
               props,
-              request.params.boxIdOrName || request.params.workspaceId || request.params.boxId,
+              request.params.boxIdOrName || request.params.boxId,
               request.query?.force === 'true',
             )
             break
@@ -160,20 +149,10 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
             this.captureResizeBox(props, request.params.boxIdOrName, request.body)
             break
           case '/api/box/:boxIdOrName/public/:isPublic':
-          case '/api/workspace/:workspaceId/public/:isPublic':
-            this.captureUpdatePublicStatus(
-              props,
-              request.params.boxIdOrName || request.params.workspaceId,
-              request.params.isPublic === 'true',
-            )
+            this.captureUpdatePublicStatus(props, request.params.boxIdOrName, request.params.isPublic === 'true')
             break
           case '/api/box/:boxIdOrName/autostop/:interval':
-          case '/api/workspace/:workspaceId/autostop/:interval':
-            this.captureSetAutostopInterval(
-              props,
-              request.params.boxIdOrName || request.params.workspaceId,
-              parseInt(request.params.interval),
-            )
+            this.captureSetAutostopInterval(props, request.params.boxIdOrName, parseInt(request.params.interval))
             break
           case '/api/box/:boxIdOrName/autodelete/:interval':
             this.captureSetAutoDeleteInterval(props, request.params.boxIdOrName, parseInt(request.params.interval))
@@ -214,14 +193,9 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
         break
       case 'DELETE':
         switch (request.route.path) {
-          case '/api/box/:boxIdOrName':
-          case '/api/workspace/:workspaceId':
           case '/api/v1/boxes/:boxId':
           case '/api/v1/:prefix/boxes/:boxId':
-            this.captureDeleteBox(
-              props,
-              request.params.boxIdOrName || request.params.workspaceId || request.params.boxId,
-            )
+            this.captureDeleteBox(props, request.params.boxIdOrName || request.params.boxId)
             break
           // TODO(image-rewrite): /api/templates delete metrics removed with box_template.
           case '/api/organizations/:organizationId':
@@ -241,8 +215,7 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
       case 'PUT':
         switch (request.route.path) {
           case '/api/box/:boxIdOrName/labels':
-          case '/api/workspace/:workspaceId/labels':
-            this.captureUpdateBoxLabels(props, request.params.boxIdOrName || request.params.workspaceId)
+            this.captureUpdateBoxLabels(props, request.params.boxIdOrName)
             break
           case '/api/organizations/:organizationId/roles/:roleId':
             this.captureUpdateOrganizationRole(
@@ -442,75 +415,21 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
 
   // TODO(image-rewrite): template create/activate/deactivate/delete metrics removed with box_template.
 
-  private captureCreateBox(props: CommonCaptureProps, request: CreateBoxDto, response: BoxDto) {
+  private captureCreateBox(props: CommonCaptureProps, request: RestCreateBoxDto, response: BoxResponseDto) {
     const envVarsLength = request.env ? Object.keys(request.env).length : 0
 
     const records = {
-      box_id: response.id,
+      box_id: response.box_id,
       box_name_request: request.name,
       box_name: response.name,
       box_user_request: request.user,
-      box_user: response.user,
-      box_cpu_request: request.cpu,
-      box_cpu: response.cpu,
-      box_gpu_request: request.gpu,
-      box_gpu: response.gpu,
-      box_memory_mb_request: request.memory * 1024,
-      box_memory_mb: response.memory * 1024,
-      box_disk_gb_request: request.disk,
-      box_disk_gb: response.disk,
-      box_target_request: request.target,
-      box_target: response.target,
-      box_auto_stop_interval_min_request: request.autoStopInterval,
-      box_auto_stop_interval_min: response.autoStopInterval,
-      box_auto_delete_interval_min_request: request.autoDeleteInterval,
-      box_auto_delete_interval_min: response.autoDeleteInterval,
+      box_cpu_request: request.cpus,
+      box_cpu: response.cpus,
+      box_memory_mb_request: request.memory_mib,
+      box_memory_mb: response.memory_mib,
+      box_disk_gb_request: request.disk_size_gb,
       box_public_request: request.public,
-      box_public: response.public,
-      box_labels_request: request.labels,
-      box_labels: response.labels,
       box_env_vars_length_request: envVarsLength,
-      box_volumes_length_request: request.volumes?.length,
-      box_daemon_version: response.daemonVersion,
-      box_network_block_all_request: request.networkBlockAll,
-      box_network_block_all: response.networkBlockAll,
-      box_network_allow_list_set_request: !!request.networkAllowList,
-      box_network_allow_list_set: !!response.networkAllowList,
-    }
-
-    this.capture('api_box_created', props, 'api_box_creation_failed', records)
-  }
-
-  private captureCreateWorkspace_deprecated(
-    props: CommonCaptureProps,
-    request: CreateWorkspaceDto,
-    response: WorkspaceDto,
-  ) {
-    const envVarsLength = request.env ? Object.keys(request.env).length : 0
-
-    const records = {
-      box_id: response.id,
-      box_user_request: request.user,
-      box_user: response.user,
-      box_cpu_request: request.cpu,
-      box_cpu: response.cpu,
-      box_gpu_request: request.gpu,
-      box_gpu: response.gpu,
-      box_memory_mb_request: request.memory * 1024,
-      box_memory_mb: response.memory * 1024,
-      box_disk_gb_request: request.disk,
-      box_disk_gb: response.disk,
-      box_target_request: request.target,
-      box_target: response.target,
-      box_auto_stop_interval_min_request: request.autoStopInterval,
-      box_auto_stop_interval_min: response.autoStopInterval,
-      box_public_request: request.public,
-      box_public: response.public,
-      box_labels_request: request.labels,
-      box_labels: response.labels,
-      box_env_vars_length_request: envVarsLength,
-      box_volumes_length_request: request.volumes?.length,
-      box_daemon_version: response.daemonVersion,
     }
 
     this.capture('api_box_created', props, 'api_box_creation_failed', records)

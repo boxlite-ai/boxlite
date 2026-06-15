@@ -16,6 +16,7 @@ Name | Type | Description | Notes
 **networkBlockAll** | **boolean** | Whether to block all network access for the box | [default to undefined]
 **networkAllowList** | **string** | Comma-separated list of allowed CIDR network addresses for the box | [optional] [default to undefined]
 **target** | **string** | The target environment for the box | [default to undefined]
+**image** | **string** | The image used for the box | [optional] [default to undefined]
 **cpu** | **number** | The CPU quota for the box | [default to undefined]
 **gpu** | **number** | The GPU quota for the box | [default to undefined]
 **memory** | **number** | The memory quota for the box | [default to undefined]
@@ -51,6 +52,7 @@ const instance: Box = {
     networkBlockAll,
     networkAllowList,
     target,
+    image,
     cpu,
     gpu,
     memory,
