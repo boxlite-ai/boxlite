@@ -44,7 +44,9 @@
     "check-version-env": {},
     "docker": {
       "options": {
-        "target": "proxy"
+        "target": "proxy",
+        "context": "..",
+        "file": "apps/proxy/Dockerfile"
       }
     },
     "push-manifest": {}

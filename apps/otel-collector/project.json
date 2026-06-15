@@ -9,7 +9,7 @@
       "executor": "nx:run-commands",
       "options": {
         "commands": [
-          "go run -mod=mod go.opentelemetry.io/collector/cmd/builder@v0.144.0 --config {projectRoot}/builder-config.dev.yaml"
+          "go run -mod=mod go.opentelemetry.io/collector/cmd/builder@v0.144.0 --config {projectRoot}/builder-config.yaml"
         ],
         "env": {
           "GOWORK": "off"
@@ -56,7 +56,9 @@
     "check-version-env": {},
     "docker": {
       "options": {
-        "target": "otel-collector"
+        "target": "otel-collector",
+        "context": "..",
+        "file": "apps/otel-collector/Dockerfile"
       }
     },
     "push-manifest": {}

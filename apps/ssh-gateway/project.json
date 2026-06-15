@@ -42,7 +42,9 @@
     "check-version-env": {},
     "docker": {
       "options": {
-        "target": "ssh-gateway"
+        "target": "ssh-gateway",
+        "context": "..",
+        "file": "apps/ssh-gateway/Dockerfile"
       }
     },
     "push-manifest": {}
