@@ -13,6 +13,11 @@ this shape — e.g. the postgres box binds ``25432:5432`` over a writable
 ``.apps-local/data/pg`` volume. Its bespoke pytest suite was removed, so this
 SDK-layer test preserves the coverage in the correct place.
 
+The in-box server is the box's own long-lived ``cmd`` (a foreground
+``python3 -m http.server`` over the mounted volume) — mirroring how infra-local
+runs each service as the box's main process, rather than backgrounding a daemon
+via ``exec`` (whose lifetime is the exec session, not the box).
+
 Requirements:
   - make dev:python (build Python SDK)
   - VM runtime for integration tests (libkrun + Hypervisor.framework)
@@ -34,6 +39,9 @@ import boxlite
 GUEST_MOUNT = "/data"
 GUEST_PORT = 8000
 MARKER = "persisted-vol-port"  # no trailing newline → exact byte compare
+# python:3-alpine ships python3 + sh; `python3 -m http.server` is a rock-solid
+# static server (alpine's base busybox omits the httpd applet).
+IMAGE = "python:3-alpine"
 
 
 @pytest.fixture
@@ -51,14 +59,15 @@ def _free_host_port() -> int:
         s.close()
 
 
-def _sh(sandbox, command: str) -> tuple[int, str]:
-    """Run a shell command in the guest; return (exit_code, merged stdout)."""
-    execution = sandbox.exec("sh", ["-c", command])
-    stdout = "".join(list(execution.stdout()))
-    return execution.wait().exit_code, stdout
+def _serve_cmd(*, write_marker: bool) -> list[str]:
+    """sh -c script: (optionally) write the marker into the RW volume, then
+    `exec` a foreground HTTP server over it as the box's main process."""
+    pre = f"printf '%s' '{MARKER}' > {GUEST_MOUNT}/marker.txt; " if write_marker else ""
+    serve = f"exec python3 -m http.server {GUEST_PORT} --bind 0.0.0.0 --directory {GUEST_MOUNT}"
+    return ["-c", pre + serve]
 
 
-def _get_when_ready(host_port: int, path: str, *, timeout_s: float = 20.0) -> str:
+def _get_when_ready(host_port: int, path: str, *, timeout_s: float = 30.0) -> str:
     """Poll the host-mapped port until the in-box server answers; return body."""
     deadline = time.monotonic() + timeout_s
     last_err: Exception | None = None
@@ -87,42 +96,40 @@ class TestVolumePortPersistence:
         host_dir = tempfile.mkdtemp(prefix="bl_vol_port_")
         host_port = _free_host_port()
 
-        def _box(ports):
+        def _box(*, write_marker: bool):
             return runtime.create(
                 boxlite.BoxOptions(
-                    image="alpine:latest",
+                    image=IMAGE,
                     volumes=[(host_dir, GUEST_MOUNT)],  # 2-tuple → read-write
-                    ports=ports,
+                    ports=[(host_port, GUEST_PORT)],
                     memory_mib=512,
                     cpus=1,
                     auto_remove=False,
+                    entrypoint=["sh"],
+                    cmd=_serve_cmd(write_marker=write_marker),
                 )
             )
 
-        # ── Box 1: write through the RW volume + serve it on a mapped port ──
-        sandbox = _box([(host_port, GUEST_PORT)])
+        # ── Box 1: write through the RW volume, then serve it on a mapped port ──
+        box = _box(write_marker=True)
         try:
-            rc, _ = _sh(sandbox, f"printf '%s' '{MARKER}' > {GUEST_MOUNT}/marker.txt")
-            assert rc == 0, "guest write to read-write volume failed"
-
-            # (a) write-through: the host directory sees the byte the box wrote.
+            box.start()
+            # (a) host port mapping: the in-box server is reached from the host,
+            # and (b) it serves the byte the box wrote into the RW volume.
+            assert _get_when_ready(host_port, "/marker.txt") == MARKER
+            # write-through is visible on the host directory too.
             with open(os.path.join(host_dir, "marker.txt")) as f:
                 assert f.read() == MARKER, "RW volume did not write through to host"
-
-            # (b) host port mapping: busybox httpd in the box, reached from host.
-            rc, _ = _sh(sandbox, f"httpd -p {GUEST_PORT} -h {GUEST_MOUNT}")
-            assert rc == 0, "failed to start in-box httpd"
-            assert _get_when_ready(host_port, "/marker.txt") == MARKER
         finally:
-            sandbox.stop()
+            box.stop()
 
-        # ── Box 2: a fresh box on the same host volume sees the persisted data ──
-        sandbox2 = _box([])
+        # ── Box 2: a fresh box on the same host volume serves the persisted data ──
+        box2 = _box(write_marker=False)
         try:
-            rc, out = _sh(sandbox2, f"cat {GUEST_MOUNT}/marker.txt")
-            assert rc == 0 and out == MARKER, (
-                f"volume data did not persist across restart: rc={rc} out={out!r}"
+            box2.start()
+            assert _get_when_ready(host_port, "/marker.txt") == MARKER, (
+                "volume data did not persist across a box restart"
             )
         finally:
-            sandbox2.stop()
+            box2.stop()
             shutil.rmtree(host_dir, ignore_errors=True)
