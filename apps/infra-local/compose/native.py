@@ -182,6 +182,10 @@ def _parse_dotenv(path: Path) -> dict[str, str]:
             continue
         key, value = line.split("=", 1)
         key = key.strip()
+        # `. ./.env` (what the bash did) honors a leading `export` keyword;
+        # drop it so `export KEY=val` binds KEY, not the literal "export KEY".
+        if key.startswith("export ") or key.startswith("export\t"):
+            key = key[len("export"):].strip()
         if key:
             env[key] = value.strip().strip('"').strip("'")
     return env
