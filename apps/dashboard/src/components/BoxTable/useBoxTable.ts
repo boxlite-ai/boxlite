@@ -76,7 +76,10 @@ export function useBoxTable({
     const saved = getLocalStorageItem(LocalStorageKey.BoxTableColumnVisibility)
     if (saved) {
       try {
-        return { ...JSON.parse(saved), id: true, labels: false }
+        const parsed = JSON.parse(saved)
+        // Drop the legacy `region` key left in persisted state after the Region column was removed.
+        delete parsed.region
+        return { ...parsed, id: true, labels: false }
       } catch {
         return { id: true, labels: false }
       }
