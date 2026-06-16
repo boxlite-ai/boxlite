@@ -270,7 +270,7 @@ ensure_security_group() {
   aws ec2 authorize-security-group-ingress \
     --region "$REGION" \
     --group-id "$sg_id" \
-    --ip-permissions "[{\"IpProtocol\":\"tcp\",\"FromPort\":8123,\"ToPort\":8123,\"IpRanges\":[{\"CidrIp\":\"$VPC_CIDR\",\"Description\":\"BoxLite dev VPC\"}]}]" 2>/dev/null || true
+    --ip-permissions "[{\"IpProtocol\":\"tcp\",\"FromPort\":8123,\"ToPort\":8123,\"IpRanges\":[{\"CidrIp\":\"$VPC_CIDR\",\"Description\":\"BoxLite dev VPC\"}]}]" >/dev/null 2>&1 || true
   echo "$sg_id"
 }
 
