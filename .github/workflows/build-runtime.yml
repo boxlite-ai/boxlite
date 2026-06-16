@@ -57,6 +57,12 @@ env:
   CARGO_INCREMENTAL: '0'
   SKIP_INSTALL_NODEJS: '1'
 
+# Default to read-only; release-time `upload_to_release` declares its own
+# write permissions and replaces this default. `publish_crates` uses
+# CARGO_REGISTRY_TOKEN (external) rather than GITHUB_TOKEN, so read suffices.
+permissions:
+  contents: read
+
 jobs:
   config:
     uses: ./.github/workflows/config.yml

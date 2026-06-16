@@ -29,6 +29,11 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: '0'
 
+# Default to read-only; release-time jobs (`publish`, `upload-to-release`)
+# already declare their own permissions block and replace this default.
+permissions:
+  contents: read
+
 jobs:
   config:
     uses: ./.github/workflows/config.yml
