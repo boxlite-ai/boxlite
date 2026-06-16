@@ -132,7 +132,7 @@ def _kill_port_listeners(port: int) -> None:
         try:
             os.kill(int(token), signal.SIGKILL)
         except (ValueError, OSError):
-            pass
+            continue  # PID already gone or unparseable — skip it, keep killing the rest
 
 
 def _component_pid(p: _Paths, name: str) -> int | None:
@@ -295,6 +295,7 @@ def start_component(p: _Paths, comp: _Component) -> bool:
         ok(f"{comp.name} up on :{comp.port}")
         return True
     err(f"{comp.name} failed to become healthy in {comp.timeout_s}s — see {_log_file(p, comp.name)}")
+    stop_component(p, comp.name)  # don't leave a stale daemon + pidfile that a retry would skip
     return False
 
 
@@ -307,7 +308,7 @@ def _terminate_group(pid: int) -> None:
     try:
         os.killpg(pgid, signal.SIGTERM)
     except OSError:
-        pass
+        pass  # best-effort: the group may already be gone (race) — fall through to the wait
     for _ in range(5):
         time.sleep(1)
         try:
@@ -317,7 +318,7 @@ def _terminate_group(pid: int) -> None:
     try:
         os.killpg(pgid, signal.SIGKILL)
     except OSError:
-        pass
+        pass  # best-effort final kill: nothing to do if it already exited
 
 
 def stop_component(p: _Paths, name: str) -> None:
@@ -431,7 +432,7 @@ def _ensure_installed(p: _Paths) -> None:
         import boxlite  # noqa: F401
         return
     except ImportError:
-        pass
+        pass  # not installed yet — fall through to the install + re-exec below
     if os.environ.get("_COMPOSE_REINSTALLED"):
         err("boxlite SDK still not importable after install — check your Python env")
         raise SystemExit(1)
@@ -452,7 +453,7 @@ def _seed_api_env(p: _Paths) -> None:
         try:
             apps_env.symlink_to("api/.env")
         except FileExistsError:
-            pass
+            pass  # a non-symlink apps/.env already exists — leave the dev's file alone
 
 
 def up(cfg: InfraConfig, components: list[str] | None = None) -> int:
@@ -490,7 +491,8 @@ def up(cfg: InfraConfig, components: list[str] | None = None) -> int:
     # 6. ensure init data + a registered runner (the dashboard needs both)
     if any(c in comps for c in ("api", "runner")):
         log("ensuring init data + registered runner...")
-        seed(cfg, no_bounce=True)
+        if seed(cfg, no_bounce=True) != 0:
+            healthy = False  # a hard seed failure (pg down / never seeded) → up exits non-zero
 
     print()
     ok("stack up — see status with: make status")
@@ -568,7 +570,12 @@ def logs(cfg: InfraConfig, comp: str | None = None) -> int:
     if comp != "all" and not _log_file(p, comp).exists():
         err(f"no log at {_log_file(p, comp)} (component never started?)")
         return 1
-    os.execvp("tail", ["tail", "-F", *files])  # replaces this process with tail
+    try:
+        os.execvp("tail", ["tail", "-F", *files])  # replaces this process with tail on success
+    except OSError as e:
+        err(f"could not exec tail: {e}")
+        return 1
+    return 0  # unreachable on success (execvp replaced us); satisfies the -> int contract
 
 
 def restart(cfg: InfraConfig, names: list[str]) -> int:
@@ -588,11 +595,12 @@ def restart(cfg: InfraConfig, names: list[str]) -> int:
         err(f"unknown component/box: {' '.join(unknown)}")
         return 2
 
+    healthy = True
     for name in l2:
         stop_component(p, name)
         if name in ("runner", "proxy"):  # native Go binaries — no watch mode, rebuild
             _go_build(p, name)
-        start_component(p, table[name])
+        healthy &= start_component(p, table[name])
 
     if l1:  # recreate L1 boxes inside ONE event loop (the SDK runtime is loop-bound)
         async def go() -> None:
@@ -604,7 +612,7 @@ def restart(cfg: InfraConfig, names: list[str]) -> int:
         asyncio.run(go())
         for box in l1:
             ok(f"{box} recreated")
-    return 0
+    return 0 if healthy else 1
 
 
 def _stop_l2_and_wipe_runner(p: _Paths) -> None:
@@ -625,9 +633,14 @@ def reset(cfg: InfraConfig, *, hard: bool = False) -> int:
         return 0
     if hard:
         log("wiping schema + rebuilding via migrations...")
-        _psql(cfg, "DROP SCHEMA public CASCADE; CREATE SCHEMA public; "
-                   f"GRANT ALL ON SCHEMA public TO {cfg.pg_user};")
-        _migrate(cfg)
+        r = _psql(cfg, "DROP SCHEMA public CASCADE; CREATE SCHEMA public; "
+                       f"GRANT ALL ON SCHEMA public TO {cfg.pg_user};")
+        if r.returncode != 0:
+            err(f"schema drop/recreate failed — aborting hard reset:\n{r.stderr.strip()}")
+            return 1
+        if _migrate(cfg) != 0:
+            err("migrations failed after schema reset — the schema may be incomplete")
+            return 1
         ok("hard reset complete (schema rebuilt — identity wiped)")
         warn("browser must re-login: clear sessionStorage + localStorage, then sign in via dex")
     else:
@@ -652,15 +665,16 @@ def nuke(cfg: InfraConfig) -> int:
     return 0
 
 
-def _migrate(cfg: InfraConfig) -> None:
-    """Run all TypeORM migrations from apps/api (mirrors the old `make migrate`)."""
+def _migrate(cfg: InfraConfig) -> int:
+    """Run all TypeORM migrations from apps/api (mirrors the old `make migrate`).
+    Returns the migration process's exit code (0 == success)."""
     p = _paths(cfg)
     cmd = (
         "set -a && . ../.env && set +a && "
         "npx ts-node -P ./tsconfig.json -r tsconfig-paths/register "
         "../node_modules/typeorm/cli.js migration:run -d ./src/migrations/data-source.ts"
     )
-    subprocess.run(["bash", "-c", cmd], cwd=str(p.apps / "api"), check=False)
+    return subprocess.run(["bash", "-c", cmd], cwd=str(p.apps / "api"), check=False).returncode
 
 
 def seed(cfg: InfraConfig, *, no_bounce: bool = False, no_wait: bool = False) -> int:

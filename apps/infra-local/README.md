@@ -98,7 +98,7 @@ relies on — read-write host volumes + host port mapping — is pinned by
 
 Everything is the `compose` package + four root files (no `scripts/`, no `configs/`):
 
-```
+```text
 apps/infra-local/
 ├── Makefile          # thin aliases → python -m compose <cmd>
 ├── README.md

@@ -94,26 +94,43 @@ class TestVolumePortPersistence:
 
     def test_rw_volume_persists_and_port_is_reachable(self, runtime):
         host_dir = tempfile.mkdtemp(prefix="bl_vol_port_")
-        host_port = _free_host_port()
 
-        def _box(*, write_marker: bool):
-            return runtime.create(
-                boxlite.BoxOptions(
-                    image=IMAGE,
-                    volumes=[(host_dir, GUEST_MOUNT)],  # 2-tuple → read-write
-                    ports=[(host_port, GUEST_PORT)],
-                    memory_mib=512,
-                    cpus=1,
-                    auto_remove=False,
-                    entrypoint=["sh"],
-                    cmd=_serve_cmd(write_marker=write_marker),
+        def _serve_on_free_port(*, write_marker: bool, attempts: int = 4):
+            """Create + start a server box on a freshly-picked host port, retrying on
+            failure. `_free_host_port()` releases the port before the box binds it, so
+            another process can win that TOCTOU window — recover by trying a new port."""
+            last_err: Exception | None = None
+            for _ in range(attempts):
+                port = _free_host_port()
+                box = runtime.create(
+                    boxlite.BoxOptions(
+                        image=IMAGE,
+                        volumes=[(host_dir, GUEST_MOUNT)],  # 2-tuple → read-write
+                        ports=[(port, GUEST_PORT)],
+                        memory_mib=512,
+                        cpus=1,
+                        auto_remove=False,
+                        entrypoint=["sh"],
+                        cmd=_serve_cmd(write_marker=write_marker),
+                    )
                 )
+                try:
+                    box.start()
+                    return box, port
+                except Exception as e:
+                    # most likely the host port was taken between pick + bind
+                    last_err = e
+                    try:
+                        box.stop()
+                    except Exception:
+                        pass
+            raise AssertionError(
+                f"could not start a server box on a free host port: {last_err!r}"
             )
 
         # ── Box 1: write through the RW volume, then serve it on a mapped port ──
-        box = _box(write_marker=True)
+        box, host_port = _serve_on_free_port(write_marker=True)
         try:
-            box.start()
             # (a) host port mapping: the in-box server is reached from the host,
             # and (b) it serves the byte the box wrote into the RW volume.
             assert _get_when_ready(host_port, "/marker.txt") == MARKER
@@ -124,10 +141,9 @@ class TestVolumePortPersistence:
             box.stop()
 
         # ── Box 2: a fresh box on the same host volume serves the persisted data ──
-        box2 = _box(write_marker=False)
+        box2, host_port2 = _serve_on_free_port(write_marker=False)
         try:
-            box2.start()
-            assert _get_when_ready(host_port, "/marker.txt") == MARKER, (
+            assert _get_when_ready(host_port2, "/marker.txt") == MARKER, (
                 "volume data did not persist across a box restart"
             )
         finally:
