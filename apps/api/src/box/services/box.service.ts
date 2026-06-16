@@ -73,6 +73,7 @@ import {
 import { BoxLookupCacheInvalidationService } from './box-lookup-cache-invalidation.service'
 import { Region } from '../../region/entities/region.entity'
 import { BoxActivityService } from './box-activity.service'
+import { assertWithinPerBoxLimits } from './per-box-limits'
 
 // TODO(image-rewrite): resource defaults previously came from the removed image subsystem;
 // these mirror the Box entity column defaults until image resolution is rebuilt.
@@ -157,6 +158,9 @@ export class BoxService {
       const mem = createBoxDto.memory ?? DEFAULT_BOX_MEM
       const disk = createBoxDto.disk ?? DEFAULT_BOX_DISK
       const gpu = createBoxDto.gpu ?? DEFAULT_BOX_GPU
+      // Reject over-limit requests at the boundary (the "security option"
+      // per-box ceilings) rather than persisting out-of-range values.
+      assertWithinPerBoxLimits(cpu, mem, disk, organization)
       // Restrict box creation to the supported pinned images; reject anything else
       // at the request boundary (defaults undefined -> base image).
       const image = assertSupportedImage(createBoxDto.image)
