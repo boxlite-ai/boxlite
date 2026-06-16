@@ -4,7 +4,7 @@
 
 **Goal:** Publish BoxLite agent runtime Docker images from source-controlled Dockerfiles using new GHCR package names and version tags.
 
-**Architecture:** Restore the historical `images/agent-runtime` Dockerfiles and startup script. Add a reusable local build script and a GitHub Actions workflow that derives `vX.Y.Z` from root `Cargo.toml`, then pushes `linux/amd64` and `linux/arm64` images to new `*-v2` GHCR packages. Update the API allowlist, infra fallbacks, and dashboard picker to use the new package names and version tag.
+**Architecture:** Restore the historical `images/agent-runtime` Dockerfiles and startup script, with one multi-arch correction: Dockerfiles copy `boxlite-daemon-${TARGETARCH}` so each platform gets the matching daemon binary. Add a reusable local build script and a GitHub Actions workflow that derives `vX.Y.Z` from root `Cargo.toml`, then pushes `linux/amd64` and `linux/arm64` images to new `*-v2` GHCR packages. Update the API allowlist, infra fallbacks, and dashboard picker to use the new package names and version tag.
 
 **Tech Stack:** Docker Buildx, GitHub Actions, GHCR, Go daemon build, TypeScript/Jest API tests, React/Vitest dashboard tests, Makefile verification.
 
@@ -25,7 +25,7 @@ Use commit `fc88aa0b` as the source for the three Dockerfiles and `start-agent-r
 
 **Step 2: Fix Docker build context**
 
-Modify `.dockerignore` so `apps/dist/apps/daemon-runtime/boxlite-daemon` can be copied into the Docker build context while unrelated app build output remains ignored.
+Modify `.dockerignore` so `apps/dist/apps/daemon-runtime/boxlite-daemon-amd64` and `apps/dist/apps/daemon-runtime/boxlite-daemon-arm64` can be copied into the Docker build context while unrelated app build output remains ignored.
 
 **Step 3: Verify Dockerfile sources exist**
 
@@ -62,7 +62,7 @@ Create a script that:
 - Accepts `PLATFORMS=linux/amd64,linux/arm64` by default.
 - Accepts `PUSH=0` for local dry-run and `PUSH=1` for registry publishing.
 - Fails on unsupported platforms.
-- Builds the Linux daemon binary before each single-platform local build.
+- Builds `boxlite-daemon-amd64` and/or `boxlite-daemon-arm64` before Docker builds.
 - Uses Buildx `--platform "$PLATFORMS"` for pushes.
 
 **Step 2: Run script help or dry validation**

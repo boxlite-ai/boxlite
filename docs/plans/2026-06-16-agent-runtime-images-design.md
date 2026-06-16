@@ -15,7 +15,7 @@ The historical Dockerfiles were introduced in commit `fc88aa0b` and also appear 
 
 The historical build script was `scripts/images/build-agent-runtime.sh`. It built a Linux daemon binary into `apps/dist/apps/daemon-runtime/boxlite-daemon`, then used the repository root as the Docker build context.
 
-Current `origin/main` still has references to those paths in `apps/scripts/local-dex-env.mjs`, but the Dockerfiles and build script are absent. Current `.dockerignore` excludes `apps/dist`, which would break the Dockerfile `COPY apps/dist/apps/daemon-runtime/boxlite-daemon ...` step unless fixed.
+Current `origin/main` still has references to those paths in `apps/scripts/local-dex-env.mjs`, but the Dockerfiles and build script are absent. Current `.dockerignore` excludes `apps/dist`, which would break Dockerfile copies from `apps/dist/apps/daemon-runtime/` unless fixed.
 
 ## Naming And Versioning
 
@@ -35,10 +35,12 @@ Restore the historical Dockerfiles in `images/agent-runtime/` so local developme
 
 The workflow reads the version from root `Cargo.toml` by default and supports a manual override through `workflow_dispatch`. A shell build script remains available for local dry runs and for CI reuse where useful.
 
+Because these images embed `boxlite-daemon`, multi-architecture publishing must not copy one shared daemon binary into both platforms. The script builds `apps/dist/apps/daemon-runtime/boxlite-daemon-amd64` and `apps/dist/apps/daemon-runtime/boxlite-daemon-arm64`. The Dockerfiles use BuildKit's `TARGETARCH` argument to copy `boxlite-daemon-${TARGETARCH}` into `/boxlite/bin/boxlite-daemon`.
+
 ## Data Flow
 
 1. Developer updates an agent runtime Dockerfile or daemon code.
-2. GitHub Actions builds `boxlite-daemon` for Linux.
+2. GitHub Actions builds `boxlite-daemon-amd64` and `boxlite-daemon-arm64` for Linux.
 3. Buildx builds each runtime image for `linux/amd64` and `linux/arm64`.
 4. GHCR receives three new package names with the same version tag.
 5. API allowlist, infra fallback env, and dashboard image picker point at the new refs.
@@ -66,7 +68,7 @@ The build script should fail fast when:
 - `TAG` is empty or malformed.
 - `PLATFORMS` contains anything outside `linux/amd64` and `linux/arm64`.
 - A required Dockerfile is missing.
-- The daemon binary cannot be built.
+- A required architecture-specific daemon binary cannot be built.
 
 The workflow should not overwrite old package names. It should only push the `*-v2` packages.
 
