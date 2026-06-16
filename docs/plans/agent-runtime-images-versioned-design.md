@@ -2,7 +2,7 @@
 
 ## Goal
 
-Publish the three BoxLite agent runtime images from source-controlled Dockerfiles through GitHub Actions, using new GHCR package names and version tags. Keep the existing `boxlite-agent-base`, `boxlite-agent-python`, and `boxlite-agent-node` packages untouched.
+Publish the three BoxLite agent runtime images from source-controlled Dockerfiles through GitHub Actions, using the existing GHCR package names with version tags starting at `v0.1.0`.
 
 ## Context
 
@@ -19,21 +19,21 @@ Current `origin/main` still has references to those paths in `apps/scripts/local
 
 ## Naming And Versioning
 
-Use new package names:
+Use the existing package names:
 
-- `ghcr.io/boxlite-ai/boxlite-agent-base-v2`
-- `ghcr.io/boxlite-ai/boxlite-agent-python-v2`
-- `ghcr.io/boxlite-ai/boxlite-agent-node-v2`
+- `ghcr.io/boxlite-ai/boxlite-agent-base`
+- `ghcr.io/boxlite-ai/boxlite-agent-python`
+- `ghcr.io/boxlite-ai/boxlite-agent-node`
 
-Use version tags derived from the root `Cargo.toml` version. With the current version, the generated tag is `v0.9.5`.
+Use version tags derived from `images/agent-runtime/VERSION`. The initial version is `0.1.0`, published as `v0.1.0`. Each future agent-runtime image release increments that file and publishes the matching `vX.Y.Z` tag.
 
-Do not delete, retag, or overwrite the existing `boxlite-agent-base`, `boxlite-agent-python`, or `boxlite-agent-node` packages.
+Do not delete or retag older package versions.
 
 ## Architecture
 
 Restore the historical Dockerfiles in `images/agent-runtime/` so local development and CI share one source of truth. Add a publish workflow that builds and pushes the three images as multi-architecture GHCR images for `linux/amd64` and `linux/arm64`.
 
-The workflow reads the version from root `Cargo.toml` by default and supports a manual override through `workflow_dispatch`. A shell build script remains available for local dry runs and for CI reuse where useful.
+The workflow reads the version from `images/agent-runtime/VERSION` by default and supports a manual override through `workflow_dispatch`. A shell build script remains available for local dry runs and for CI reuse where useful.
 
 Because these images embed `boxlite-daemon`, multi-architecture publishing must not copy one shared daemon binary into both platforms. The script builds `apps/dist/apps/daemon-runtime/boxlite-daemon-amd64` and `apps/dist/apps/daemon-runtime/boxlite-daemon-arm64`. The Dockerfiles use BuildKit's `TARGETARCH` argument to copy `boxlite-daemon-${TARGETARCH}` into `/boxlite/bin/boxlite-daemon`.
 
@@ -42,7 +42,7 @@ Because these images embed `boxlite-daemon`, multi-architecture publishing must 
 1. Developer updates an agent runtime Dockerfile or daemon code.
 2. GitHub Actions builds `boxlite-daemon-amd64` and `boxlite-daemon-arm64` for Linux.
 3. Buildx builds each runtime image for `linux/amd64` and `linux/arm64`.
-4. GHCR receives three new package names with the same version tag.
+4. GHCR receives the three existing package names with the same version tag.
 5. API allowlist, infra fallback env, and dashboard image picker point at the new refs.
 6. Dashboard creates boxes using the new refs, and API rejects refs outside the curated set.
 
@@ -70,14 +70,14 @@ The build script should fail fast when:
 - A required Dockerfile is missing.
 - A required architecture-specific daemon binary cannot be built.
 
-The workflow should not overwrite old package names. It should only push the `*-v2` packages.
+The workflow should not delete or retag existing image versions. It should push the requested version tag to the existing packages.
 
 ## Testing
 
 Use test-first changes for user-visible behavior:
 
-- API allowlist test should expect the three `*-v2:v0.9.5` refs and fail before implementation.
-- Dashboard image picker test should expect the three `*-v2:v0.9.5` refs and fail before implementation.
+- API allowlist test should expect the three `*:v0.1.0` refs and fail before implementation.
+- Dashboard image picker test should expect the three `*:v0.1.0` refs and fail before implementation.
 
 Then verify:
 

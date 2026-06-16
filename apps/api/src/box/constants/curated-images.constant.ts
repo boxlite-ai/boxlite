@@ -25,15 +25,15 @@ type SupportedImageSource = {
 const SUPPORTED_IMAGE_SOURCES: SupportedImageSource[] = [
   {
     envVar: 'BOXLITE_SYSTEM_BASE_IMAGE',
-    fallbackRef: 'ghcr.io/boxlite-ai/boxlite-agent-base-v2:v0.9.5',
+    fallbackRef: 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0',
   },
   {
     envVar: 'BOXLITE_SYSTEM_PYTHON_IMAGE',
-    fallbackRef: 'ghcr.io/boxlite-ai/boxlite-agent-python-v2:v0.9.5',
+    fallbackRef: 'ghcr.io/boxlite-ai/boxlite-agent-python:v0.1.0',
   },
   {
     envVar: 'BOXLITE_SYSTEM_NODE_IMAGE',
-    fallbackRef: 'ghcr.io/boxlite-ai/boxlite-agent-node-v2:v0.9.5',
+    fallbackRef: 'ghcr.io/boxlite-ai/boxlite-agent-node:v0.1.0',
   },
 ]
 

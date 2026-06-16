@@ -26,7 +26,7 @@ const defaultConfig = {
   registryContainer: 'boxlite-local-registry',
   registryHost: process.env.BOXLITE_E2E_REGISTRY_HOST || 'localhost:5001',
   runtimeImagePlatform: process.env.BOXLITE_E2E_RUNTIME_IMAGE_PLATFORM || defaultRuntimeImagePlatform(),
-  runtimeImageTag: process.env.BOXLITE_E2E_RUNTIME_IMAGE_TAG || 'v0.9.5-local',
+  runtimeImageTag: process.env.BOXLITE_E2E_RUNTIME_IMAGE_TAG || 'v0.1.0-local',
   runnerHomeDir: process.env.BOXLITE_E2E_RUNNER_HOME_DIR || '/tmp/blrt',
   dockerConfigDir: process.env.BOXLITE_E2E_DOCKER_CONFIG || path.join(os.tmpdir(), 'boxlite-local-docker-config'),
 }

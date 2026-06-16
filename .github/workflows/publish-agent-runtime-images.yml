@@ -5,18 +5,18 @@ on:
     branches: [main]
     paths:
       - '.dockerignore'
-      - 'Cargo.toml'
       - 'apps/common-go/**'
       - 'apps/daemon/**'
       - 'apps/go.work'
       - 'apps/go.work.sum'
+      - 'images/agent-runtime/VERSION'
       - 'images/agent-runtime/**'
       - 'scripts/images/build-agent-runtime.sh'
       - '.github/workflows/publish-agent-runtime-images.yml'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag to publish, with or without leading v. Defaults to Cargo.toml version.'
+        description: 'Version tag to publish, with or without leading v. Defaults to images/agent-runtime/VERSION.'
         required: false
         type: string
 
@@ -67,7 +67,7 @@ jobs:
           if [ -n "${INPUT_VERSION:-}" ]; then
             version="${INPUT_VERSION#v}"
           else
-            version="$(sed -n 's/^version = "\([^"]*\)".*/\1/p' Cargo.toml | head -1)"
+            version="$(tr -d '[:space:]' < images/agent-runtime/VERSION)"
           fi
 
           if ! echo "$version" | grep -Eq '^[0-9]+[.][0-9]+[.][0-9]+([-+][0-9A-Za-z.-]+)?$'; then

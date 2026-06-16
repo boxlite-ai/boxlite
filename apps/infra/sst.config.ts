@@ -445,18 +445,18 @@ export default $config({
         // and the runner pulls them straight from ghcr.io with its GHCR_TOKEN. IMAGE_TAG and
         // the SOURCE_REGISTRY_* block are inert Daytona-port residue (no consumer — see
         // apps/api configuration.ts), kept only as reserved names for a future registry path.
-        BOXLITE_SYSTEM_IMAGE_TAG: envOr('BOXLITE_SYSTEM_IMAGE_TAG', 'v0.9.5'),
+        BOXLITE_SYSTEM_IMAGE_TAG: envOr('BOXLITE_SYSTEM_IMAGE_TAG', 'v0.1.0'),
         BOXLITE_SYSTEM_BASE_IMAGE: envOr(
           'BOXLITE_SYSTEM_BASE_IMAGE',
-          'ghcr.io/boxlite-ai/boxlite-agent-base-v2:v0.9.5',
+          'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0',
         ),
         BOXLITE_SYSTEM_PYTHON_IMAGE: envOr(
           'BOXLITE_SYSTEM_PYTHON_IMAGE',
-          'ghcr.io/boxlite-ai/boxlite-agent-python-v2:v0.9.5',
+          'ghcr.io/boxlite-ai/boxlite-agent-python:v0.1.0',
         ),
         BOXLITE_SYSTEM_NODE_IMAGE: envOr(
           'BOXLITE_SYSTEM_NODE_IMAGE',
-          'ghcr.io/boxlite-ai/boxlite-agent-node-v2:v0.9.5',
+          'ghcr.io/boxlite-ai/boxlite-agent-node:v0.1.0',
         ),
         ...(process.env.BOXLITE_SYSTEM_SOURCE_REGISTRY_URL && {
           BOXLITE_SYSTEM_SOURCE_REGISTRY_NAME: envOr(

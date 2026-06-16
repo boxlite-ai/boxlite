@@ -4,13 +4,18 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 APPS_DIR="$ROOT_DIR/apps"
 DAEMON_OUT_DIR="$APPS_DIR/dist/apps/daemon-runtime"
+VERSION_FILE="$ROOT_DIR/images/agent-runtime/VERSION"
 
 REGISTRY="${REGISTRY:-ghcr.io/boxlite-ai}"
 PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
 PUSH="${PUSH:-0}"
 
-read_cargo_version() {
-  sed -n 's/^version = "\([^"]*\)".*/\1/p' "$ROOT_DIR/Cargo.toml" | head -1
+read_runtime_image_version() {
+  if [[ ! -f "$VERSION_FILE" ]]; then
+    echo "Missing runtime image version file: $VERSION_FILE" >&2
+    exit 1
+  fi
+  tr -d '[:space:]' < "$VERSION_FILE"
 }
 
 normalize_tag() {
@@ -19,9 +24,9 @@ normalize_tag() {
   if [[ -n "${TAG:-}" ]]; then
     tag="$TAG"
   else
-    version="${VERSION:-$(read_cargo_version)}"
+    version="${VERSION:-$(read_runtime_image_version)}"
     if [[ -z "$version" ]]; then
-      echo "Unable to derive version from Cargo.toml; set TAG or VERSION" >&2
+      echo "Unable to derive version from $VERSION_FILE; set TAG or VERSION" >&2
       exit 1
     fi
     tag="v${version#v}"
@@ -85,7 +90,7 @@ build_image() {
   local image="$1"
   local tag="$2"
   local dockerfile="$ROOT_DIR/images/agent-runtime/${image}.Dockerfile"
-  local target="$REGISTRY/boxlite-agent-${image}-v2:$tag"
+  local target="$REGISTRY/boxlite-agent-${image}:$tag"
   local -a build_args=(buildx build --platform "$PLATFORMS" -f "$dockerfile" -t "$target")
 
   if [[ ! -f "$dockerfile" ]]; then
