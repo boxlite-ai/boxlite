@@ -100,6 +100,9 @@ def _discover_supported_image() -> str:
                     if images:
                         return images[0]
     except Exception:
+        # Best-effort probe: any failure here should fall back to a
+        # conservative default image so e2e startup remains resilient.
+        # Downstream tests will still fail loudly if the image is invalid.
         pass
     return "alpine:3.23"
 

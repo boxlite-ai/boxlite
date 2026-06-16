@@ -30,6 +30,8 @@ async def _best_effort_drain(ex, timeout: float = 3.0) -> None:
     try:
         await asyncio.wait_for(drain(ex), timeout=timeout)
     except asyncio.TimeoutError:
+        # Best-effort only: if stream pumps don't close cleanly, continue
+        # without failing this timeout behavior test.
         pass
 
 
