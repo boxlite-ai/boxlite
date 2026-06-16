@@ -279,7 +279,10 @@ export function BoxTable({
         )
       ) : (
         <div className="overflow-x-auto rounded-sm border border-border bg-card">
-          <Table className="min-w-[1360px] border-separate border-spacing-0" style={{ tableLayout: 'fixed' }}>
+          <Table
+            className="min-w-[1120px] border-separate border-spacing-0 [&_tbody_td]:py-1"
+            style={{ tableLayout: 'fixed' }}
+          >
             <TableHeader>
               {table.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id}>
