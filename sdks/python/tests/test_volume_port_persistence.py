@@ -123,6 +123,8 @@ class TestVolumePortPersistence:
                     try:
                         box.stop()
                     except Exception:
+                        # Best-effort cleanup: if start() failed, stop() may also fail;
+                        # ignore and continue retrying with a new port.
                         pass
             raise AssertionError(
                 f"could not start a server box on a free host port: {last_err!r}"
