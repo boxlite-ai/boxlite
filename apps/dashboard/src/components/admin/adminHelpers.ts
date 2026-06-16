@@ -219,9 +219,9 @@ export function selectErroringOwners(groups: OwnerGroup[]): ErroringOwner[] {
 }
 
 export function findBoxById(groups: OwnerGroup[], boxId: string): { box: AdminBox; group: OwnerGroup } | undefined {
-  const targetBoxId = boxId.trim().toLowerCase()
+  const targetBoxId = boxId.trim()
   for (const group of groups) {
-    const box = group.boxes.find((b) => b.id.toLowerCase() === targetBoxId)
+    const box = group.boxes.find((b) => b.id === targetBoxId)
     if (box) return { box, group }
   }
   return undefined

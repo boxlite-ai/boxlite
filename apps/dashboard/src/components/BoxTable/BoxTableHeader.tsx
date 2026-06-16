@@ -71,7 +71,7 @@ export function BoxTableHeader({ table, onRefresh, isRefreshing = false, headerA
                 getColumnLabel={(id: string) => {
                   switch (id) {
                     case 'id':
-                      return 'Internal UUID'
+                      return 'Box ID'
                     default:
                       return id
                   }

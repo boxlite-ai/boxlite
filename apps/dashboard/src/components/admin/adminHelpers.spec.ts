@@ -204,16 +204,17 @@ describe('selectErroringOwners', () => {
 })
 
 describe('findBoxById', () => {
-  it('finds exact box ids case-insensitively so pasted UUIDs can open telemetry', () => {
+  it('finds exact box ids so pasted Box IDs can open telemetry', () => {
     const groups = groupBoxesByOwner([
       box({
-        id: '2479F61E-04D9-49F3-B7D9-CFAFBEE74D68',
+        id: 'aB3cD4eF5gH6',
         organizationId: 'org-a',
         state: 'error',
         owner: { name: 'Brian Luo', email: 'brian@x.io', orgName: 'Brian', personal: true },
       }),
     ])
 
-    expect(findBoxById(groups, '2479f61e-04d9-49f3-b7d9-cfafbee74d68')?.box.state).toBe('error')
+    expect(findBoxById(groups, ' aB3cD4eF5gH6 ')?.box.state).toBe('error')
+    expect(findBoxById(groups, 'ab3cd4ef5gh6')).toBeUndefined()
   })
 })
