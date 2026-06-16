@@ -191,7 +191,7 @@ impl<'a> StreamManager<'a> {
                                 h.abort();
                             }
                             if io_done {
-                                break exit_status.unwrap().exit_code;
+                                break exit_status.as_ref().unwrap().exit_code;
                             }
                         }
                         Err(e) => {
@@ -231,6 +231,15 @@ impl<'a> StreamManager<'a> {
                 }
             }
         };
+
+        // The exec carried a diagnostic (its output stream failed and the exit
+        // code was recovered out-of-band, or the container init died): surface
+        // it as an error instead of returning a silent, possibly-misleading
+        // exit code. Without this the CLI reports success while stdout/stderr
+        // were never delivered.
+        if let Some(message) = exit_status.as_ref().and_then(|s| s.error_message.clone()) {
+            anyhow::bail!("exec did not complete normally: {message}");
+        }
 
         Ok(exit_code)
     }
@@ -458,6 +467,48 @@ mod tests {
              (host process should return immediately on shell exit, \
              not after a stray ENTER).",
             elapsed,
+        );
+    }
+
+    /// A result that carries an `error_message` (the exec output stream failed
+    /// and the exit code was recovered out-of-band, so stdout/stderr were never
+    /// delivered) must surface as an `Err`, not a silent exit code. Guards the
+    /// regression where the CLI reported a clean `exit 0` for a cloud exec whose
+    /// WS attach was rejected 401 and produced no output.
+    #[test]
+    fn stream_manager_surfaces_exec_error_message_as_error() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("build runtime");
+
+        let (mut exec, stdout_tx, stderr_tx, _stdin_rx, result_tx) =
+            boxlite::Execution::stub("stream-mgr-error-message");
+
+        let result = rt.block_on(async {
+            tokio::spawn(async move {
+                let _ = result_tx.send(boxlite::ExecResult {
+                    exit_code: 0,
+                    error_message: Some(
+                        "WS connect failed: WS auth rejected (401 Unauthorized)".to_string(),
+                    ),
+                });
+                drop(stdout_tx);
+                drop(stderr_tx);
+            });
+            StreamManager::new(&mut exec, /*interactive*/ false, /*tty*/ false)
+                .start()
+                .await
+        });
+
+        let err = result.expect_err(
+            "a result carrying error_message must surface as Err, not a silent exit code",
+        );
+        let rendered = format!("{err:#}");
+        assert!(
+            rendered.contains("401 Unauthorized"),
+            "surfaced error must include the stream-failure cause, got: {rendered}"
         );
     }
 }
