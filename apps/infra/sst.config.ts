@@ -5,6 +5,8 @@
 
 /// <reference path="./.sst/platform/config.d.ts" />
 
+import { resolveClickHouseExporter } from './clickhouse-exporter'
+
 // ─────────────────────────────────────────────────────────────────────────────
 // BoxLite control plane on AWS (ap-southeast-1).
 //
@@ -133,9 +135,6 @@ export default $config({
     // (api.url = "https://api.dev.boxlite.ai/" → apiBase = "https://api.dev.boxlite.ai").
     const stripTrailingSlash = (url: $util.Output<string>) => url.apply((u) => (u.endsWith('/') ? u.slice(0, -1) : u))
 
-    const explicitClickHouseWriterEndpoint =
-      process.env.CLICKHOUSE_WRITER_ENDPOINT || process.env.CLICKHOUSE_ENDPOINT || process.env.CLICKHOUSE_OTEL_ENDPOINT
-    const explicitClickHouseWriterPassword = process.env.CLICKHOUSE_WRITER_PASSWORD || process.env.CLICKHOUSE_PASSWORD
     const explicitClickHouseReaderUrl = process.env.CLICKHOUSE_READER_URL || process.env.CLICKHOUSE_URL
     const clickHouseReaderHost = process.env.CLICKHOUSE_READER_HOST || process.env.CLICKHOUSE_HOST
     const devClickHouseEnabled = envOr('DEV_CLICKHOUSE_ENABLED', 'false') === 'true'
@@ -144,18 +143,10 @@ export default $config({
         'DEV_CLICKHOUSE_ENABLED=true is dev-only; use ClickHouse Cloud or another managed endpoint in production',
       )
     }
-    const clickHouseExporterEnabled = devClickHouseEnabled || process.env.CLICKHOUSE_EXPORTER_ENABLED === 'true'
-    if (clickHouseExporterEnabled && !devClickHouseEnabled && !explicitClickHouseWriterEndpoint) {
-      throw new Error(
-        'CLICKHOUSE_WRITER_ENDPOINT or CLICKHOUSE_ENDPOINT is required when CLICKHOUSE_EXPORTER_ENABLED=true',
-      )
-    }
-    if (clickHouseExporterEnabled && !devClickHouseEnabled && !explicitClickHouseWriterPassword) {
-      throw new Error(
-        'CLICKHOUSE_WRITER_PASSWORD or CLICKHOUSE_PASSWORD is required when CLICKHOUSE_EXPORTER_ENABLED=true',
-      )
-    }
-    const collectorExporters = clickHouseExporterEnabled ? '[boxlite_exporter,clickhouse]' : '[boxlite_exporter]'
+    const clickHouseExporter = resolveClickHouseExporter(process.env, { devClickHouseEnabled })
+    const explicitClickHouseWriterEndpoint = clickHouseExporter.writerEndpoint
+    const explicitClickHouseWriterPassword = clickHouseExporter.writerPassword
+    const collectorExporters = clickHouseExporter.exporters
 
     // HTTPS everywhere: the Router CloudFront Function deletes customOriginConfig
     // for http origins and CF then falls back to match-viewer (→ tries HTTPS on a
