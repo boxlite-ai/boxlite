@@ -5,6 +5,8 @@
 
 /// <reference path="./.sst/platform/config.d.ts" />
 
+import { resolveClickHouseExporter } from './clickhouse-exporter'
+
 // ─────────────────────────────────────────────────────────────────────────────
 // BoxLite control plane on AWS (ap-southeast-1).
 //
@@ -121,14 +123,8 @@ export default $config({
     const clickHouseWriterPassword = process.env.CLICKHOUSE_WRITER_PASSWORD || process.env.CLICKHOUSE_PASSWORD
     const clickHouseReaderUrl = process.env.CLICKHOUSE_READER_URL || process.env.CLICKHOUSE_URL
     const clickHouseReaderHost = process.env.CLICKHOUSE_READER_HOST || process.env.CLICKHOUSE_HOST
-    const clickHouseExporterEnabled = process.env.CLICKHOUSE_EXPORTER_ENABLED === 'true'
-    if (clickHouseExporterEnabled && !clickHouseWriterEndpoint) {
-      throw new Error('CLICKHOUSE_WRITER_ENDPOINT or CLICKHOUSE_ENDPOINT is required when CLICKHOUSE_EXPORTER_ENABLED=true')
-    }
-    if (clickHouseExporterEnabled && !clickHouseWriterPassword) {
-      throw new Error('CLICKHOUSE_WRITER_PASSWORD or CLICKHOUSE_PASSWORD is required when CLICKHOUSE_EXPORTER_ENABLED=true')
-    }
-    const collectorExporters = clickHouseExporterEnabled ? '[boxlite_exporter,clickhouse]' : '[boxlite_exporter]'
+    const clickHouseExporter = resolveClickHouseExporter(process.env)
+    const collectorExporters = clickHouseExporter.exporters
 
     // HTTPS everywhere: the Router CloudFront Function deletes customOriginConfig
     // for http origins and CF then falls back to match-viewer (→ tries HTTPS on a
