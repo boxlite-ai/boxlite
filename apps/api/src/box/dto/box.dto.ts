@@ -36,16 +36,10 @@ export class BoxVolume {
 @ApiSchema({ name: 'Box' })
 export class BoxDto {
   @ApiProperty({
-    description: 'The internal UUID of the box',
-    example: 'fd955d93-e74a-48e7-9f2d-fcbe6dd9e920',
-  })
-  id: string
-
-  @ApiProperty({
-    description: 'The public Box ID shown to users and SDK clients',
+    description: 'The public 12-character Box ID',
     example: 'aB3cD4eF5gH6',
   })
-  boxId: string
+  id: string
 
   @ApiProperty({
     description: 'The organization ID of the box',
@@ -252,7 +246,6 @@ export class BoxDto {
   static fromBox(box: Box, toolboxProxyUrl: string): BoxDto {
     return {
       id: box.id,
-      boxId: box.boxId,
       organizationId: box.organizationId,
       name: box.name,
       target: box.region,

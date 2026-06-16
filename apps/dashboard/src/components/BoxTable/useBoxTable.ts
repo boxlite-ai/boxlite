@@ -78,12 +78,12 @@ export function useBoxTable({
     const saved = getLocalStorageItem(LocalStorageKey.BoxTableColumnVisibility)
     if (saved) {
       try {
-        return { ...JSON.parse(saved), boxId: true, id: false, region: true, labels: false }
+        return { ...JSON.parse(saved), id: true, region: true, labels: false }
       } catch {
-        return { boxId: true, id: false, region: true, labels: false }
+        return { id: true, region: true, labels: false }
       }
     }
-    return { boxId: true, id: false, region: true, labels: false }
+    return { id: true, region: true, labels: false }
   })
 
   useEffect(() => {

@@ -24,21 +24,21 @@ import (
 // Client wraps the BoxLite Go SDK to provide the same interface as the Docker client.
 // It manages VMs instead of containers, providing hardware-level isolation.
 type Client struct {
-	runtime             *boxlite.Runtime
-	logger              *slog.Logger
-	homeDir             string
-	mu                  sync.RWMutex
-	boxes               map[string]*boxlite.Box
-	awsRegion           string
-	awsEndpointUrl      string
-	awsAccessKeyId      string
-	awsSecretAccessKey  string
-	volumeMutexes       map[string]*sync.Mutex
-	volumeMutexesMutex  sync.Mutex
-	volumeCleanupMutex  sync.Mutex
-	toolboxPortMutex    sync.Mutex
-	lastVolumeCleanup   time.Time
-	volumeCleanup       volumeCleanupConfig
+	runtime            *boxlite.Runtime
+	logger             *slog.Logger
+	homeDir            string
+	mu                 sync.RWMutex
+	boxes              map[string]*boxlite.Box
+	awsRegion          string
+	awsEndpointUrl     string
+	awsAccessKeyId     string
+	awsSecretAccessKey string
+	volumeMutexes      map[string]*sync.Mutex
+	volumeMutexesMutex sync.Mutex
+	volumeCleanupMutex sync.Mutex
+	toolboxPortMutex   sync.Mutex
+	lastVolumeCleanup  time.Time
+	volumeCleanup      volumeCleanupConfig
 }
 
 // ClientConfig holds configuration for the BoxLite client.
@@ -155,15 +155,15 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	}
 
 	return &Client{
-		runtime:             rt,
-		logger:              logger,
-		homeDir:             config.HomeDir,
-		boxes:               make(map[string]*boxlite.Box),
-		awsRegion:           config.AWSRegion,
-		awsEndpointUrl:      config.AWSEndpointUrl,
-		awsAccessKeyId:      config.AWSAccessKeyId,
-		awsSecretAccessKey:  config.AWSSecretAccessKey,
-		volumeMutexes:       make(map[string]*sync.Mutex),
+		runtime:            rt,
+		logger:             logger,
+		homeDir:            config.HomeDir,
+		boxes:              make(map[string]*boxlite.Box),
+		awsRegion:          config.AWSRegion,
+		awsEndpointUrl:     config.AWSEndpointUrl,
+		awsAccessKeyId:     config.AWSAccessKeyId,
+		awsSecretAccessKey: config.AWSSecretAccessKey,
+		volumeMutexes:      make(map[string]*sync.Mutex),
 		volumeCleanup: volumeCleanupConfig{
 			interval:        config.VolumeCleanupInterval,
 			dryRun:          config.VolumeCleanupDryRun,
@@ -203,11 +203,6 @@ func (c *Client) Close() error {
 // Create creates a new box (VM) from the given image and configuration.
 // Returns the box ID and daemon version.
 func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error) {
-	publicBoxId := boxDto.BoxId
-	if publicBoxId == "" {
-		publicBoxId = boxDto.Id
-	}
-
 	// API sends cores / GB / GB as small integers (see apps/api Box entity).
 	cpus := int(boxDto.CpuQuota)
 	if cpus < 1 {
@@ -284,8 +279,6 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		bx.ID(),
 		"boxId",
 		boxDto.Id,
-		"boxId",
-		publicBoxId,
 		"name",
 		bx.Name(),
 		"image",

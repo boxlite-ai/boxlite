@@ -152,7 +152,6 @@ export function BoxTableActions({
     deletePermitted,
     box.state,
     box.id,
-    box.boxId,
     isLoading,
     box.recoverable,
     onStart,

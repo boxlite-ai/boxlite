@@ -39,7 +39,7 @@ export function createBoxDiagnoseTarget(box: AdminBox): AdminDiagnoseTarget {
   return {
     kind: 'box',
     title: 'Diagnose box',
-    subtitle: box.boxId ? `${box.boxId} · ${box.id}` : box.id,
+    subtitle: box.id,
     state: box.state,
     box,
     params: {

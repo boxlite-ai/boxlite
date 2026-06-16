@@ -87,9 +87,6 @@ export const convertTableSortingToApiSorting = (sorting: SortingState): BoxSorti
   let field: ListBoxesPaginatedSortEnum
 
   switch (sort.id) {
-    case 'boxId':
-      field = ListBoxesPaginatedSortEnum.BOX_ID
-      break
     case 'id':
       field = ListBoxesPaginatedSortEnum.ID
       break
@@ -208,9 +205,6 @@ export const convertApiSortingToTableSorting = (sorting: BoxSorting): SortingSta
 
   let id: string
   switch (sorting.field) {
-    case ListBoxesPaginatedSortEnum.BOX_ID:
-      id = 'boxId'
-      break
     case ListBoxesPaginatedSortEnum.ID:
       id = 'id'
       break

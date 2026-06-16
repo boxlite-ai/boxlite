@@ -135,35 +135,18 @@ export function getColumns({
       },
     },
     {
-      id: 'boxId',
+      id: 'id',
       size: 140,
       enableSorting: true,
       enableHiding: false,
       header: ({ column }) => {
         return <SortableHeader column={column} label="Box ID" />
       },
-      accessorKey: 'boxId',
-      cell: ({ row }) => {
-        return (
-          <div className="w-full truncate">
-            <span className="truncate block font-mono text-xs">{getBoxPublicIdLabel(row.original)}</span>
-          </div>
-        )
-      },
-    },
-    {
-      id: 'id',
-      size: 320,
-      enableSorting: true,
-      enableHiding: true,
-      header: ({ column }) => {
-        return <SortableHeader column={column} label="Internal UUID" />
-      },
       accessorKey: 'id',
       cell: ({ row }) => {
         return (
           <div className="w-full truncate">
-            <span className="truncate block">{row.original.id}</span>
+            <span className="truncate block font-mono text-xs">{getBoxPublicIdLabel(row.original)}</span>
           </div>
         )
       },
