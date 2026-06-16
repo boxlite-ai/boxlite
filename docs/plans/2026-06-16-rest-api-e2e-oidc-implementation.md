@@ -300,11 +300,97 @@ git add scripts/test/e2e
 git commit -m "test: add REST E2E auth matrix"
 ```
 
-## Task 5: REST Make Targets and Report
+## Task 5: CLI Command Matrix E2E
+
+**Files:**
+- Create: `scripts/test/rest/run_cli_matrix.sh`
+- Create: `scripts/test/rest/cli-matrix.md`
+- Modify: `make/test.mk`
+- Output: `target/rest-test-report/cli-matrix-<auth>-<scope>.log`
+
+**Goal:** Make CLI coverage explicit instead of relying on a small `whoami`/`ls` smoke. The runner should be reusable against dev and local REST stacks, and should run under both API-key and OIDC credentials where practical.
+
+**Command matrix:**
+
+| Group | Commands | Smoke | Full | Notes |
+| --- | --- | --- | --- | --- |
+| Auth | `auth status`, `auth whoami` | yes | yes | `auth login/logout` are setup/teardown-sensitive; cover in auth integration tests and optional matrix setup. |
+| Discovery | `ls` / `list` / `ps`, `inspect`, `info` | `ls`, `info` | all | Proves list/get/config paths. |
+| Create/run | `create`, `run` | one of `create` or `run` | both | Use a small smoke image and unique box names. |
+| Execution | `exec` | yes | yes | Must assert stdout and exit status; this is the WebSocket attach regression path. |
+| Lifecycle | `start`, `stop`, `restart`, `rm` / `remove` | cleanup only | all | Always cleanup created boxes, even on failure. |
+| Files | `cp` host-to-box, `cp` box-to-host | roundtrip optional | yes | Use temp files and unique paths. |
+| Images | `pull`, `images` | optional | yes if dev supports it | Skip with reason if not exposed on dev REST. |
+| Observability | `stats`, `logs` | optional | yes if REST-backed runtime supports it | `logs` may be local-runtime-specific; skip with reason if unavailable against dev REST. |
+| Local-only | `serve`, `completion` | no | no | Keep in local parse/unit tests unless they map to deployed REST behavior. |
+
+**Step 1: Write runner design doc**
+
+Create `scripts/test/rest/cli-matrix.md` documenting:
+
+- Required env: `AUTH=api-key|oidc`, `SCOPE=smoke|full`, `BOXLITE_REST_URL`, optional `BOXLITE_REST_SMOKE_IMAGE`.
+- How credentials are sourced.
+- Which commands create resources.
+- Cleanup guarantees.
+- Skip policy.
+
+**Step 2: Implement matrix runner**
+
+`run_cli_matrix.sh` should:
+
+- Write logs under `target/rest-test-report/`.
+- Print each command before running it, with secrets masked.
+- Use unique box names like `rest-cli-${AUTH}-${timestamp}`.
+- For `SCOPE=smoke`, run the minimum chain:
+
+```bash
+boxlite auth whoami
+boxlite ls
+boxlite info --format json
+boxlite create "${BOXLITE_REST_SMOKE_IMAGE:-alpine:3.23}" --name "$BOX_NAME"
+boxlite start "$BOX_NAME"
+boxlite exec "$BOX_NAME" -- sh -lc 'echo hi-from-cli'
+boxlite stop "$BOX_NAME"
+boxlite rm "$BOX_NAME" --force
+```
+
+- For `SCOPE=full`, additionally run aliases (`list`, `ps`), `inspect`, `restart`, `cp` upload/download, `run`, `pull`, `images`, `stats --format json`, and `logs --tail` when available.
+- Always attempt cleanup in a trap.
+
+Adjust exact command flags after checking current CLI syntax in `src/cli/src/cli.rs` and command modules.
+
+**Step 3: Verify API-key smoke locally or on dev machine**
+
+Run on the dev machine if the local Mac would trigger heavy runtime builds:
+
+```bash
+make test:rest:cli AUTH=api-key SCOPE=smoke
+```
+
+Expected: PASS without changing OIDC behavior.
+
+**Step 4: Verify OIDC full matrix on dev machine**
+
+Run after OIDC fixes are ready:
+
+```bash
+make test:rest:cli AUTH=oidc SCOPE=full
+```
+
+Expected: PASS, with explicit skip records for commands not supported by dev REST.
+
+**Step 5: Commit**
+
+```bash
+git add make/test.mk scripts/test/rest/run_cli_matrix.sh scripts/test/rest/cli-matrix.md
+git commit -m "test: add REST CLI command matrix"
+```
+
+## Task 6: REST Make Targets and Report
 
 **Files:**
 - Modify: `make/test.mk`
-- Create: `scripts/test/rest/run_cli_smoke.sh`
+- Create or modify: `scripts/test/rest/run_cli_matrix.sh`
 - Create: `scripts/test/rest/report.py`
 
 **Step 1: Add targets**
@@ -319,7 +405,7 @@ test\:rest\:e2e:
 	@BOXLITE_E2E_AUTH=$${AUTH:-api-key} cd scripts/test/e2e && python3 -m pytest cases/ -v $(PYTEST_FILTER)
 
 test\:rest\:cli:
-	@scripts/test/rest/run_cli_smoke.sh "$${AUTH:-oidc}"
+	@scripts/test/rest/run_cli_matrix.sh "$${AUTH:-oidc}" "$${SCOPE:-smoke}"
 
 test\:rest\:report:
 	@python3 scripts/test/rest/report.py
@@ -332,17 +418,16 @@ test\:rest\:e2e:
 	@cd scripts/test/e2e && BOXLITE_E2E_AUTH=$${AUTH:-api-key} python3 -m pytest cases/ -v $(PYTEST_FILTER)
 ```
 
-**Step 2: Implement CLI smoke**
+**Step 2: Wire CLI matrix**
 
-`run_cli_smoke.sh` should run:
+`run_cli_matrix.sh` owns the actual CLI command sequence. Keep this Make target thin so dev, CI, and local runs use the same path:
 
 ```bash
-boxlite auth whoami
-boxlite ls
-boxlite run --image "${BOXLITE_REST_SMOKE_IMAGE:-alpine:3.23}" -- sh -lc 'echo hi-from-cli'
+make test:rest:cli AUTH=api-key SCOPE=smoke
+make test:rest:cli AUTH=oidc SCOPE=full
 ```
 
-Adjust exact CLI command after confirming current CLI syntax.
+Adjust exact CLI command flags after confirming current CLI syntax.
 
 **Step 3: Implement report**
 
@@ -350,7 +435,8 @@ Aggregate:
 
 - `target/rest-test-report/rest-inventory.md`
 - pytest output path if present
-- CLI smoke output path if present
+- CLI matrix output path if present
+- skipped command reasons
 
 **Step 4: Commit**
 
@@ -359,7 +445,7 @@ git add make/test.mk scripts/test/rest
 git commit -m "test: add REST test command surface"
 ```
 
-## Task 6: Runbook Documentation
+## Task 7: Runbook Documentation
 
 **Files:**
 - Create: `docs/testing/rest-api-e2e.md`
@@ -372,6 +458,8 @@ Include:
 - What exists vs what is new.
 - How to run API-key path.
 - How to run OIDC path.
+- How to run `test:rest:cli AUTH=api-key|oidc SCOPE=smoke|full`.
+- CLI command matrix, including required commands, pull/image behavior, stats/logs behavior, cleanup rules, and skip policy.
 - How to run on dev machine.
 - When API restart is allowed.
 - How to collect logs.
@@ -384,7 +472,7 @@ git add docs/testing/rest-api-e2e.md docs/plans/2026-06-16-rest-api-e2e-oidc-des
 git commit -m "docs: add REST E2E runbook"
 ```
 
-## Task 7: Dev Validation
+## Task 8: Dev Validation
 
 **Files:**
 - Output only: `target/rest-test-report/dev-validation-YYYYMMDD.md`
@@ -406,7 +494,8 @@ Run:
 ```bash
 make test:rest:inventory
 make test:rest:e2e AUTH=api-key
-make test:rest:cli AUTH=oidc
+make test:rest:cli AUTH=api-key SCOPE=smoke
+make test:rest:cli AUTH=oidc SCOPE=full
 make test:rest:e2e AUTH=oidc FILTER=oidc_exec_stdout
 make test:rest:report
 ```

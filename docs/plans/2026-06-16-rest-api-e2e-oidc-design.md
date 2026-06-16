@@ -11,6 +11,7 @@ Build a reusable REST API test system for BoxLite that covers:
 - The public Box REST API contract in `openapi/box.openapi.yaml`.
 - Existing REST E2E path: SDK/CLI -> API -> Runner -> VM.
 - Both auth modes: API key and OIDC.
+- The CLI command surface that maps onto REST behavior, including auth, list, create, run, exec, lifecycle, inspect, copy, pull/images, stats/logs, and info commands.
 - The local CLI/OIDC failures observed on dev, especially stale `path_prefix` and WebSocket attach auth.
 - A dev-machine execution path, so heavy builds and VM E2E do not run on the local Mac.
 
@@ -40,7 +41,7 @@ flowchart TD
   C --> D["Good existing coverage"]
 
   E["Missing"] --> F["OIDC auth matrix"]
-  E --> G["CLI real dev smoke"]
+  E --> G["CLI command matrix"]
   E --> H["WebSocket /attach OIDC auth"]
   E --> I["OpenAPI coverage inventory"]
   E --> J["Reusable REST report"]
@@ -59,7 +60,7 @@ Industry-standard API test systems usually split coverage by layer instead of re
 flowchart LR
   A["Layer 1<br/>OpenAPI inventory"] --> B["Layer 2<br/>Contract/property tests"]
   B --> C["Layer 3<br/>Stateful REST E2E"]
-  C --> D["Layer 4<br/>Consumer smoke: CLI/SDK"]
+  C --> D["Layer 4<br/>Consumer matrix: CLI/SDK"]
   D --> E["Layer 5<br/>Auth matrix: API key/OIDC"]
   E --> F["Layer 6<br/>Dev-machine runbook and artifacts"]
 ```
@@ -71,9 +72,27 @@ BoxLite mapping:
 | Inventory | Script compares `openapi/box.openapi.yaml` paths/operations against existing tests and produces a coverage table. |
 | Contract | Schemathesis-style OpenAPI tests for request validation, response shape, and 4xx/5xx boundaries. |
 | Stateful E2E | Extend `scripts/test/e2e` to support `AUTH=api-key` and `AUTH=oidc`. |
-| CLI smoke | Real `boxlite auth whoami`, `boxlite ls`, `boxlite exec echo hi` against dev. |
+| CLI command matrix | Real CLI commands against dev/local E2E stack, from auth and list through create/run/exec/lifecycle/cp cleanup. |
 | Auth matrix | Every critical route runs through both API key and OIDC where practical. |
 | Dev runbook | One documented remote workflow for build, deploy/restart, test, log collection, and report. |
+
+## CLI Command Matrix
+
+The CLI suite must not be a single `whoami`/`ls` smoke. It should be a reusable command matrix that proves each user-facing CLI command still works when the runtime is REST-backed and when auth changes from API key to OIDC.
+
+| Command group | Commands | Required mode | REST/API behavior proven |
+| --- | --- | --- | --- |
+| Auth | `auth status`, `auth whoami`, `auth login`, `auth logout` | API key + OIDC where practical | Credential source, `/v1/me`, profile persistence, stale `path_prefix` repair. |
+| Discovery | `ls` / `list` / `ps`, `inspect`, `info` | API key + OIDC | List/get box, server health/config, auth context. |
+| Create and run | `create`, `run` | API key + OIDC | Create box, image/options serialization, command startup. |
+| Execution | `exec` | API key + OIDC | HTTP exec creation plus WebSocket/SSE attach and exit status/stdout. |
+| Lifecycle | `start`, `stop`, `restart`, `rm` / `remove` | API key + OIDC | Box state transitions and cleanup. |
+| Files | `cp` host-to-box and box-to-host | API key + OIDC | REST file upload/download path and tar handling. |
+| Images | `pull`, `images` | API key + OIDC if supported by dev REST | Image pull/list behavior. |
+| Observability | `stats`, `logs` | API key + OIDC if supported by REST-backed runtime | Metrics and console-log access. |
+| Local-only | `serve`, `completion` | Separate local/parse tests | Not part of dev REST command matrix unless they map to deployed REST behavior. |
+
+Minimum dev smoke remains small: `auth whoami`, `ls`, `create`/`run`, `exec echo hi`, `cp` roundtrip, and cleanup. The full reusable matrix should include all rows above and record skips with explicit reasons.
 
 ## Proposed Commands
 
@@ -84,7 +103,8 @@ make test:rest:inventory
 make test:rest:contract
 make test:rest:e2e AUTH=api-key
 make test:rest:e2e AUTH=oidc
-make test:rest:cli AUTH=oidc
+make test:rest:cli AUTH=api-key SCOPE=smoke
+make test:rest:cli AUTH=oidc SCOPE=full
 make test:rest:report
 ```
 
@@ -96,7 +116,8 @@ Command responsibilities:
 | `test:rest:contract` | Contract/property tests | New Schemathesis-style runner or equivalent. |
 | `test:rest:e2e AUTH=api-key` | Existing full REST chain | Wrapper around `make test:e2e`. |
 | `test:rest:e2e AUTH=oidc` | New OIDC full REST chain | Extend `scripts/test/e2e/cases/conftest.py` and fixtures. |
-| `test:rest:cli AUTH=oidc` | Real CLI consumer smoke | New CLI smoke script against dev/local E2E stack. |
+| `test:rest:cli AUTH=api-key SCOPE=smoke` | API-key CLI command smoke | New CLI matrix runner against dev/local E2E stack. |
+| `test:rest:cli AUTH=oidc SCOPE=full` | OIDC CLI command matrix | Same command runner, but using OIDC credentials and full command coverage. |
 | `test:rest:report` | Aggregated evidence | New report writer, includes skipped endpoints and logs. |
 
 ## Dev Execution Strategy
@@ -154,13 +175,16 @@ sequenceDiagram
 - Add inventory/report scripts.
 - Add contract test runner.
 - Add auth matrix support to E2E fixtures.
+- Add the reusable CLI command matrix runner with `SCOPE=smoke|full`.
+- Cover `auth`, `ls/list/ps`, `create`, `run`, `exec`, `start`, `stop`, `restart`, `rm/remove`, `inspect`, `cp`, `pull`, `images`, `stats`, `logs`, and `info` where the command maps to deployed REST behavior.
 
 ### Phase 3: Dev validation
 
 - Build latest CLI/API on the dev machine.
 - Restart dev API only after the API patch is ready.
 - Run API-key REST E2E.
-- Run OIDC CLI smoke.
+- Run API-key CLI smoke.
+- Run OIDC CLI command matrix.
 - Run OIDC REST E2E subset/full suite depending on stability.
 - Save logs and report.
 
@@ -190,6 +214,7 @@ sequenceDiagram
 - OIDC `boxlite auth whoami` refreshes stale `path_prefix` when the server returns a different one.
 - OIDC `boxlite ls` works against dev.
 - OIDC `boxlite exec ... echo hi` returns stdout, proving HTTP exec and WebSocket attach both work.
+- The CLI command matrix covers auth, discovery, create/run, exec, lifecycle, inspect, copy, pull/images, stats/logs, and info commands, or records an explicit skip reason.
 - API-key attach behavior remains green.
 - Dev validation produces logs and a reusable report.
 - Documentation lets another engineer reproduce the run without reading this chat.
