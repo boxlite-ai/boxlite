@@ -19,7 +19,7 @@
 #                      build vs deploy decisions per paths.
 #
 # Deploy mechanism (unchanged from main):
-#   1. ECR login + buildx build of apps/api/Dockerfile.source.
+#   1. ECR login + buildx build of apps/api/Dockerfile.
 #   2. Push image tagged with GITHUB_SHA.
 #   3. ecs:RegisterTaskDefinition — clone the live Api TD, swap the
 #      container image, strip readonly fields. Triggers an IAM
@@ -223,7 +223,7 @@ jobs:
         id: ecr_login
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build & push API image (apps/api/Dockerfile.source)
+      - name: Build & push API image (apps/api/Dockerfile)
         id: build_api
         if: needs.changes.outputs.should_build == 'true'
         run: |
@@ -231,7 +231,7 @@ jobs:
           REGISTRY="${{ steps.ecr_login.outputs.registry }}"
           IMAGE="${REGISTRY}/${ECR_REPO}:api-${{ github.sha }}"
           docker buildx build --platform linux/amd64 --load \
-            -f apps/api/Dockerfile.source -t "$IMAGE" .
+            -f apps/api/Dockerfile -t "$IMAGE" .
           docker push "$IMAGE"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
