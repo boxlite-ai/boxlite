@@ -24,17 +24,62 @@ EC2 runner with nested KVM, RDS Postgres, ElastiCache Redis, S3, CloudFront.
 
 ```bash
 cd apps/infra
-cp .env.example .env
-# Fill in STACK_DOMAIN, CLOUDFLARE_*, OIDC_* (see .env.example comments)
 npm install
-npx sst deploy --stage dev
+cp .env.example .env        # non-secret config: STACK_DOMAIN, OIDC_ISSUER_BASE_URL, OIDC_AUDIENCE
+
+# Cloudflare provider credentials live in SSM (per stage) — see "Secrets & credentials":
+aws ssm put-parameter --region ap-southeast-1 --type SecureString \
+  --name /boxlite/dev/cloudflare-api-token  --value "<token>"
+aws ssm put-parameter --region ap-southeast-1 --type SecureString \
+  --name /boxlite/dev/cloudflare-account-id --value "<account-id>"
+
+npm run deploy -- --stage dev   # the wrapper loads the Cloudflare creds, then runs sst deploy
 ```
+
+App secrets (SSH keys, Auth0 Management API, Svix, PostHog) are optional and set
+per-stage in the SST secret store — see [Secrets & credentials](#secrets--credentials).
 
 First deploy: 10–15 minutes. Output prints service URLs + CloudFront domain.
 
 If the build fails with a transient `auth.docker.io` EOF or Debian mirror
-`502 Bad Gateway`, just rerun `npx sst deploy --stage dev` — SST resumes
+`502 Bad Gateway`, just rerun `npm run deploy -- --stage dev` — SST resumes
 from the failed step.
+
+## Secrets & credentials
+
+Three homes, one access gate — **AWS IAM**. Nothing secret lives in git or a
+single laptop's `.env`:
+
+| What | Where | Set with |
+|---|---|---|
+| **App secrets** — SSH host/private keys, Auth0 Management API id + secret, `SVIX_AUTH_TOKEN`, `POSTHOG_API_KEY`, `OIDC_CLIENT_ID` | SST secret store (encrypted in SST state, per stage) | `sst secret set <NAME> "<value>" --stage <stage>` |
+| **Cloudflare provider creds** — `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_DEFAULT_ACCOUNT_ID` | AWS SSM (`SecureString`, per stage) | `aws ssm put-parameter --type SecureString --name /boxlite/<stage>/cloudflare-…` |
+| **Non-secret config** — `STACK_DOMAIN`, `OIDC_ISSUER_BASE_URL`, `OIDC_AUDIENCE`, toggles | local `.env` (gitignored) | edit `.env` |
+
+The Cloudflare creds can't be `sst.Secret`: the provider initializes in `app()`
+before `run()` (where secrets exist), so it reads them from the environment.
+`scripts/sst-with-cloudflare.mjs` — wired into `npm run dev`/`deploy`/`remove`
+and `npm run sst` — fetches them from SSM and exports them before invoking sst.
+**Run sst through these npm scripts**, not bare `npx sst`, so the creds load.
+
+### App secrets
+
+```bash
+sst secret set SVIX_AUTH_TOKEN "<value>" --stage dev   # set one
+sst secret load .env --stage dev                       # bulk-load a dotenv (names match 1:1)
+npm run secrets -- --stage dev                          # list what's set
+```
+
+Secret names match the env keys the services expect. Unset optional secrets
+resolve to empty (feature off); `OIDC_CLIENT_ID` defaults to `boxlite`. A changed
+value takes effect on the next `npm run deploy`.
+
+### Onboarding / offboarding
+
+Access is **AWS IAM only**: anyone who can deploy (read SST state + SSM, run
+`sst deploy`) can read every secret. Onboard by granting that AWS access;
+offboard by revoking it. There's no secret file or vault to hand over. Secret
+values and the SSM params are **per-stage** — seed each stage you run.
 
 ## After first deploy
 
@@ -50,7 +95,7 @@ count and redeploy:
 
 ```bash
 echo "RUNNERS=3" >> .env     # default runner (#1) + runner-2 + runner-3
-npx sst deploy --stage dev
+npm run deploy -- --stage dev
 ```
 
 Each extra runner gets its own EC2 + minted token. Because the API only
@@ -192,19 +237,22 @@ For Auth0 specifically:
 | **ClickHouse Cloud** | Managed OTel storage                 | external service; configured by env         |
 | **ClickStack**      | Logs/traces/metrics explorer         | external ClickHouse Cloud UI                |
 
-Run `npx sst deploy --stage dev` without changes to reprint all URLs. See
+Run `npm run deploy -- --stage dev` without changes to reprint all URLs. See
 [Public hostnames](#public-hostnames) below for the rationale behind the
 dashboard-vs-API split.
 
 ## Common commands
 
 ```bash
-npx sst deploy --stage dev       # deploy / update
-npx sst diff   --stage dev       # preview changes
-npx sst unlock --stage dev       # recover from "concurrent update detected"
-npx sst shell  --stage dev       # open shell with SST-linked env vars
-npx sst remove --stage dev       # destroy everything
+npm run deploy -- --stage dev       # deploy / update
+npm run sst -- diff --stage dev     # preview changes
+npm run sst -- unlock --stage dev   # recover from "concurrent update detected"
+npm run sst -- shell --stage dev    # open shell with SST-linked env vars
+npm run remove -- --stage dev       # destroy everything
 ```
+
+> These route through `scripts/sst-with-cloudflare.mjs` so the Cloudflare provider
+> creds load from SSM. Bare `npx sst …` skips that and can't reach Cloudflare.
 
 ## Runner lifecycle
 
@@ -247,7 +295,7 @@ operation by design:
 1. Verify no `running` boxes are pinned to this Runner (DB query against
    `box.runnerId`).
 2. Edit `sst.config.ts`: change `protect: true` to `protect: false` on the
-   Runner resource. Run `npx sst deploy --stage <stage>`. This only updates
+   Runner resource. Run `npm run deploy -- --stage <stage>`. This only updates
    the resource metadata; the EC2 is not yet touched.
 3. Destroy the EC2:
 
@@ -256,7 +304,7 @@ operation by design:
    ```
 
 4. Edit `sst.config.ts`: change `protect: false` back to `protect: true`. Run
-   `npx sst deploy` again — a new Runner is created with fresh state.
+   `npm run deploy` again — a new Runner is created with fresh state.
 
 This is deliberate by construction: three code edits across two deploys. If
 you find yourself doing this often, look at the future drain API (tracked
@@ -307,7 +355,7 @@ Auth: OIDC provider (Auth0/Okta/Keycloak/Dex/…) ← Api validates JWT via JWKS
 
 ## Troubleshooting
 
-**"concurrent update detected"** — run `npx sst unlock --stage dev` and retry.
+**"concurrent update detected"** — run `npm run sst -- unlock --stage dev` and retry.
 
 **Service stuck at `rolloutState: FAILED` with 1 running task** — stale event
 from an earlier failed deploy. If `runningCount == desiredCount` the service
@@ -375,6 +423,5 @@ initial setup: `aws ecs update-service --force-new-deployment --service Proxy`.
 | **Total**                             | **~$570** |
 
 Figures are approximate (ap-southeast-1 on-demand). The **Runner and the load
-balancers dominate** — the NAT is ~$16, not a headline cost. `npx sst remove
---stage dev` tears it all down; S3 buckets and RDS snapshots are retained in
+balancers dominate** — the NAT is ~$16, not a headline cost. `npm run remove -- --stage dev` tears it all down; S3 buckets and RDS snapshots are retained in
 production stage (`--stage production`) per SST's default.

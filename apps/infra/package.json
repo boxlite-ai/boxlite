@@ -4,9 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "sst dev",
-    "deploy": "sst deploy",
-    "remove": "sst remove"
+    "dev": "node scripts/sst-with-cloudflare.mjs dev",
+    "deploy": "node scripts/sst-with-cloudflare.mjs deploy",
+    "remove": "node scripts/sst-with-cloudflare.mjs remove",
+    "sst": "node scripts/sst-with-cloudflare.mjs",
+    "secrets": "sst secret list"
   },
   "devDependencies": {
     "@pulumi/aws": "^7.24.0",

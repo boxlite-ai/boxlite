@@ -157,6 +157,22 @@ export default $config({
     const defaultRunnerApiKey = randomKey('DefaultRunnerApiKey')
     const pgAdminPassword = randomKey('PgAdminPassword', 24)
 
+    // App secrets — set via `sst secret set <NAME> --stage <stage>` (or bulk
+    // `sst secret load <dotenv>`); stored encrypted in SST state and shared
+    // per-stage by anyone with deploy access. Names match the env keys so a
+    // dotenv `sst secret load` maps 1:1. Optional ones carry an empty-string
+    // placeholder, so "unset" reads as '' — the same "empty = off" contract the
+    // SSH keys already relied on. NB: the Cloudflare provider creds can't live
+    // here (the provider initializes in app() before run() exists); they're
+    // injected from SSM by scripts/sst-with-cloudflare.mjs.
+    const oidcClientId = new sst.Secret('OIDC_CLIENT_ID', 'boxlite')
+    const oidcMgmtClientId = new sst.Secret('OIDC_MANAGEMENT_API_CLIENT_ID')
+    const oidcMgmtClientSecret = new sst.Secret('OIDC_MANAGEMENT_API_CLIENT_SECRET')
+    const posthogApiKey = new sst.Secret('POSTHOG_API_KEY', '')
+    const svixAuthToken = new sst.Secret('SVIX_AUTH_TOKEN', '')
+    const sshPrivateKey = new sst.Secret('SSH_PRIVATE_KEY_B64', '')
+    const sshHostKey = new sst.Secret('SSH_HOST_KEY_B64', '')
+
     // ─── 2. PLATFORM ─────────────────────────────────────────────────────────
     // Network model + rationale (subnets / NAT / egress-only public IP, AWS citations): ./NETWORKING.md
     // NAT instance (fck-nat, ~10× cheaper than a managed NAT Gateway). The Fargate
@@ -487,7 +503,7 @@ export default $config({
         ENCRYPTION_SALT: envOr('ENCRYPTION_SALT', encryptionSalt.result),
 
         // OIDC — external provider (Auth0/Okta/etc.)
-        OIDC_CLIENT_ID: envOr('OIDC_CLIENT_ID', 'boxlite'),
+        OIDC_CLIENT_ID: oidcClientId.value,
         OIDC_AUDIENCE: envOr('OIDC_AUDIENCE', 'boxlite'),
         OIDC_ISSUER_BASE_URL: requireOidcIssuer(),
         ...(process.env.PUBLIC_OIDC_DOMAIN && {
@@ -496,8 +512,12 @@ export default $config({
         // Optional: Auth0 Management API (enables account linking etc.)
         ...(process.env.OIDC_MANAGEMENT_API_ENABLED === 'true' && {
           OIDC_MANAGEMENT_API_ENABLED: 'true',
-          OIDC_MANAGEMENT_API_CLIENT_ID: requireEnv('OIDC_MANAGEMENT_API_CLIENT_ID', 'when OIDC_MANAGEMENT_API_ENABLED=true'),
-          OIDC_MANAGEMENT_API_CLIENT_SECRET: requireEnv('OIDC_MANAGEMENT_API_CLIENT_SECRET', 'when OIDC_MANAGEMENT_API_ENABLED=true'),
+          // Client id/secret come from the SST secret store now. If the feature
+          // is enabled but a secret is unset, the value resolves to '' and the
+          // Api errors at runtime — instead of the old deploy-time requireEnv
+          // throw (Output values can't be guarded at config-build time).
+          OIDC_MANAGEMENT_API_CLIENT_ID: oidcMgmtClientId.value,
+          OIDC_MANAGEMENT_API_CLIENT_SECRET: oidcMgmtClientSecret.value,
           OIDC_MANAGEMENT_API_AUDIENCE: requireEnv('OIDC_MANAGEMENT_API_AUDIENCE', 'when OIDC_MANAGEMENT_API_ENABLED=true'),
         }),
         // RP-initiated logout fallback. Safe to set unconditionally: the API
@@ -608,17 +628,14 @@ export default $config({
         DEFAULT_RUNNER_API_URL: runnerEndpoint('DEFAULT_RUNNER_API_URL', PORTS.RUNNER, 'http://'),
         DEFAULT_RUNNER_PROXY_URL: runnerEndpoint('DEFAULT_RUNNER_PROXY_URL', PORTS.PROXY, 'http://'),
 
-        // PostHog (enables the dashboard's "Create Box" feature flag)
-        ...(process.env.POSTHOG_API_KEY && {
-          POSTHOG_API_KEY: process.env.POSTHOG_API_KEY,
-          POSTHOG_HOST: envOr('POSTHOG_HOST', 'https://us.posthog.com'),
-        }),
+        // PostHog (enables the dashboard's "Create Box" feature flag). Token is a
+        // secret (empty = off); host stays plain config.
+        POSTHOG_API_KEY: posthogApiKey.value,
+        POSTHOG_HOST: envOr('POSTHOG_HOST', 'https://us.posthog.com'),
 
-        // Svix (webhook delivery; without this dashboard logs cosmetic errors)
-        ...(process.env.SVIX_AUTH_TOKEN && {
-          SVIX_AUTH_TOKEN: process.env.SVIX_AUTH_TOKEN,
-          ...(process.env.SVIX_SERVER_URL && { SVIX_SERVER_URL: process.env.SVIX_SERVER_URL }),
-        }),
+        // Svix (webhook delivery; empty token = off → dashboard logs cosmetic errors)
+        SVIX_AUTH_TOKEN: svixAuthToken.value,
+        ...(process.env.SVIX_SERVER_URL && { SVIX_SERVER_URL: process.env.SVIX_SERVER_URL }),
       },
     })
 
@@ -678,7 +695,7 @@ export default $config({
         PROXY_API_KEY: envOr('PROXY_API_KEY', proxyApiKey.result),
         // api-client-go appends paths like "/config" directly → include /api suffix
         BOXLITE_API_URL: $interpolate`${stripTrailingSlash(api.url)}/api`,
-        OIDC_CLIENT_ID: envOr('OIDC_CLIENT_ID', 'boxlite'),
+        OIDC_CLIENT_ID: oidcClientId.value,
         OIDC_AUDIENCE: envOr('OIDC_AUDIENCE', 'boxlite'),
         OIDC_DOMAIN: requireOidcIssuer(),
       },
@@ -698,8 +715,8 @@ export default $config({
         // must use the API base path rather than the raw ALB root.
         API_URL: $interpolate`${stripTrailingSlash(api.url)}/api`,
         API_KEY: envOr('SSH_GATEWAY_API_KEY', sshGatewayApiKey.result), // NB: not SSH_GATEWAY_API_KEY
-        SSH_PRIVATE_KEY: envOr('SSH_PRIVATE_KEY_B64', ''),
-        SSH_HOST_KEY: envOr('SSH_HOST_KEY_B64', ''),
+        SSH_PRIVATE_KEY: sshPrivateKey.value,
+        SSH_HOST_KEY: sshHostKey.value,
       },
     })
 
@@ -830,7 +847,7 @@ export default $config({
     // nothing on the internet can reach the runner.
     const runnerSecurityGroup = new aws.ec2.SecurityGroup('RunnerSecurityGroup', {
       vpcId: vpc.nodes.vpc.id,
-      description: 'BoxLite runner — inbound only on the runner API port from within the VPC',
+      description: 'BoxLite runner - inbound only on the runner API port from within the VPC',
       ingress: [
         {
           protocol: 'tcp',
