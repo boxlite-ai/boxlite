@@ -24,7 +24,7 @@ const rt = JsBoxlite.rest(new BoxliteRestOptions({
   credential: new ApiKeyCredential(apiKey),
 }))
 
-const box = await rt.create({ image: 'boxlite/base' }, 'sdk-quickstart')
+const box = await rt.create({ image: 'ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3' }, 'sdk-quickstart')
 await box.start()
 
 const exec = await box.exec('echo', ['Hello from BoxLite SDK'])
@@ -54,7 +54,7 @@ async def main():
         credential=ApiKeyCredential(os.environ["BOXLITE_API_KEY"]),
     ))
 
-    box = await rt.create(BoxOptions(image="boxlite/base"), name="sdk-quickstart")
+    box = await rt.create(BoxOptions(image="ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3"), name="sdk-quickstart")
     await box.start()
 
     execution = await box.exec("echo", args=["Hello from BoxLite SDK"])
@@ -105,7 +105,7 @@ func main() {
     }
     defer rt.Close()
 
-    box, err := rt.Create(ctx, "boxlite/base", boxlite.WithName("sdk-quickstart"))
+    box, err := rt.Create(ctx, "ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3", boxlite.WithName("sdk-quickstart"))
     if err != nil {
         log.Fatal(err)
     }
@@ -143,7 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     let options = BoxOptions {
-        rootfs: RootfsSpec::Image("boxlite/base".into()),
+        rootfs: RootfsSpec::Image("ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3".into()),
         ..Default::default()
     };
     let box_handle = rt.create(options, Some("sdk-quickstart".into())).await?;

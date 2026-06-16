@@ -52,7 +52,6 @@ interface GetColumnsProps {
   handleCreateSshAccess: (id: string) => void
   handleRevokeSshAccess: (id: string) => void
   handleRecover: (id: string) => void
-  getRegionName: (regionId: string) => string | undefined
   handleScreenRecordings: (id: string) => void
 }
 
@@ -67,7 +66,6 @@ export function getColumns({
   handleCreateSshAccess,
   handleRevokeSshAccess,
   handleRecover,
-  getRegionName,
   handleScreenRecordings,
 }: GetColumnsProps): ColumnDef<Box>[] {
   const handleOpenWebTerminal = async (boxId: string) => {
@@ -169,23 +167,6 @@ export function getColumns({
         </div>
       ),
       accessorKey: 'state',
-    },
-    {
-      id: 'region',
-      size: 80,
-      enableSorting: true,
-      enableHiding: false,
-      header: ({ column }) => {
-        return <SortableHeader column={column} label="Region" dataState="sortable" />
-      },
-      cell: ({ row }) => {
-        return (
-          <div className="w-full truncate">
-            <span className="truncate block">{getRegionName(row.original.target) ?? row.original.target}</span>
-          </div>
-        )
-      },
-      accessorKey: 'target',
     },
     {
       id: 'resources',

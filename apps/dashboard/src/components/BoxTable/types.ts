@@ -20,7 +20,6 @@ export interface BoxTableProps {
   boxIsLoading: Record<string, boolean>
   boxStateIsTransitioning: Record<string, boolean>
   loading: boolean
-  getRegionName: (regionId: string) => string | undefined
   handleStart: (id: string) => void
   handleStop: (id: string) => void
   handleDelete: (id: string) => void
