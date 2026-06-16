@@ -2,17 +2,17 @@ name: Publish Agent Runtime Images
 
 on:
   push:
-    branches: [main]
+    branches: [main] # Publish only after the PR lands on main.
     paths:
-      - '.dockerignore'
-      - 'apps/common-go/**'
-      - 'apps/daemon/**'
-      - 'apps/go.work'
-      - 'apps/go.work.sum'
-      - 'images/agent-runtime/VERSION'
-      - 'images/agent-runtime/**'
-      - 'scripts/images/build-agent-runtime.sh'
-      - '.github/workflows/publish-agent-runtime-images.yml'
+      - '.dockerignore' # Docker context changes can change the published image contents.
+      - 'apps/common-go/**' # Daemon imports common-go packages, so these changes require republishing.
+      - 'apps/daemon/**' # Daemon binary is embedded into every runtime image.
+      - 'apps/go.work' # Go workspace membership affects daemon builds.
+      - 'apps/go.work.sum' # Go workspace checksums affect reproducible daemon builds.
+      - 'images/agent-runtime/VERSION' # Version bumps are the normal way to publish a new tag.
+      - 'images/agent-runtime/**' # Dockerfiles and startup script directly define image contents.
+      - 'scripts/images/build-agent-runtime.sh' # Build script changes affect all published images.
+      - '.github/workflows/publish-agent-runtime-images.yml' # Workflow changes should validate themselves on main.
   workflow_dispatch:
     inputs:
       version:
@@ -21,12 +21,12 @@ on:
         type: string
 
 permissions:
-  contents: read
-  packages: write
+  contents: read # Checkout only needs repository read access.
+  packages: write # GHCR push requires package write access.
 
 concurrency:
-  group: publish-agent-runtime-images-${{ github.ref }}
-  cancel-in-progress: false
+  group: publish-agent-runtime-images-${{ github.ref }} # Serialize publishes per branch/ref.
+  cancel-in-progress: false # Do not cancel an in-flight release publish.
 
 jobs:
   publish:
@@ -35,32 +35,32 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # Pin checkout for supply-chain stability.
         with:
-          persist-credentials: false
+          persist-credentials: false # Later steps do not need git credentials.
 
       - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # Pin Go setup action for supply-chain stability.
         with:
-          go-version-file: apps/go.work
+          go-version-file: apps/go.work # Use the repo's Go workspace version.
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # Enable cross-arch build emulation.
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # Buildx is required for multi-arch images.
 
       - name: Log in to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # Authenticate Docker so buildx can push to GHCR.
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io # Target registry for BoxLite runtime images.
+          username: ${{ github.actor }} # GitHub actor is accepted for GITHUB_TOKEN auth.
+          password: ${{ secrets.GITHUB_TOKEN }} # Built-in token has packages:write from workflow permissions.
 
       - name: Determine image version
         id: version
         env:
-          INPUT_VERSION: ${{ github.event.inputs.version }}
+          INPUT_VERSION: ${{ github.event.inputs.version }} # Optional manual override from workflow_dispatch.
         run: |
           set -euo pipefail
 
@@ -75,11 +75,11 @@ jobs:
             exit 1
           fi
 
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT" # Share normalized Docker tag with the publish step.
 
       - name: Publish images
         env:
-          TAG: ${{ steps.version.outputs.tag }}
-          PUSH: '1'
-          PLATFORMS: linux/amd64,linux/arm64
+          TAG: ${{ steps.version.outputs.tag }} # Use the version resolved above.
+          PUSH: '1' # CI path must push to GHCR instead of local Docker.
+          PLATFORMS: linux/amd64,linux/arm64 # Publish both supported CPU architectures.
         run: bash scripts/images/build-agent-runtime.sh

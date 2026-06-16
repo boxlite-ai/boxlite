@@ -25,15 +25,15 @@ type SupportedImageSource = {
 const SUPPORTED_IMAGE_SOURCES: SupportedImageSource[] = [
   {
     envVar: 'BOXLITE_SYSTEM_BASE_IMAGE',
-    fallbackRef: 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0',
+    fallbackRef: 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0', // Default minimal image for generic boxes.
   },
   {
     envVar: 'BOXLITE_SYSTEM_PYTHON_IMAGE',
-    fallbackRef: 'ghcr.io/boxlite-ai/boxlite-agent-python:v0.1.0',
+    fallbackRef: 'ghcr.io/boxlite-ai/boxlite-agent-python:v0.1.0', // Python-ready image exposed as a curated option.
   },
   {
     envVar: 'BOXLITE_SYSTEM_NODE_IMAGE',
-    fallbackRef: 'ghcr.io/boxlite-ai/boxlite-agent-node:v0.1.0',
+    fallbackRef: 'ghcr.io/boxlite-ai/boxlite-agent-node:v0.1.0', // Node-ready image exposed as a curated option.
   },
 ]
 

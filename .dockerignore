@@ -14,6 +14,7 @@ apps/.nx
 target
 dist
 apps/dist/*
+# Re-include only the daemon runtime binaries needed by agent-runtime Dockerfiles.
 !apps/dist/apps/
 apps/dist/apps/*
 !apps/dist/apps/daemon-runtime/

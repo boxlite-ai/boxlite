@@ -25,8 +25,8 @@ const defaultConfig = {
   dexContainer: 'boxlite-local-dex',
   registryContainer: 'boxlite-local-registry',
   registryHost: process.env.BOXLITE_E2E_REGISTRY_HOST || 'localhost:5001',
-  runtimeImagePlatform: process.env.BOXLITE_E2E_RUNTIME_IMAGE_PLATFORM || defaultRuntimeImagePlatform(),
-  runtimeImageTag: process.env.BOXLITE_E2E_RUNTIME_IMAGE_TAG || 'v0.1.0-local',
+  runtimeImagePlatform: process.env.BOXLITE_E2E_RUNTIME_IMAGE_PLATFORM || defaultRuntimeImagePlatform(), // Build the local runtime image for the host CPU by default.
+  runtimeImageTag: process.env.BOXLITE_E2E_RUNTIME_IMAGE_TAG || 'v0.1.0-local', // Local-only tag so dev images do not collide with GHCR release tags.
   runnerHomeDir: process.env.BOXLITE_E2E_RUNNER_HOME_DIR || '/tmp/blrt',
   dockerConfigDir: process.env.BOXLITE_E2E_DOCKER_CONFIG || path.join(os.tmpdir(), 'boxlite-local-docker-config'),
 }
@@ -179,9 +179,9 @@ function ensureRegistry(config) {
 
 function ensureRuntimeImages(config) {
   const images = [
-    ['base', runtimeImageRef(config, 'base'), path.join(repoRoot, 'images', 'agent-runtime', 'base.Dockerfile')],
-    ['python', runtimeImageRef(config, 'python'), path.join(repoRoot, 'images', 'agent-runtime', 'python.Dockerfile')],
-    ['node', runtimeImageRef(config, 'node'), path.join(repoRoot, 'images', 'agent-runtime', 'node.Dockerfile')],
+    ['base', runtimeImageRef(config, 'base'), path.join(repoRoot, 'images', 'agent-runtime', 'base.Dockerfile')], // Generic runtime image used as the default local box image.
+    ['python', runtimeImageRef(config, 'python'), path.join(repoRoot, 'images', 'agent-runtime', 'python.Dockerfile')], // Python runtime image for local create-box coverage.
+    ['node', runtimeImageRef(config, 'node'), path.join(repoRoot, 'images', 'agent-runtime', 'node.Dockerfile')], // Node runtime image for local create-box coverage.
   ]
 
   for (const [name, imageRef, dockerfile] of images) {
@@ -195,10 +195,11 @@ function ensureRuntimeImages(config) {
 
     console.log(`[local-dex] building runtime image ${imageRef}`)
     docker(['build', '--platform', config.runtimeImagePlatform, '-f', dockerfile, '-t', imageRef, repoRoot], {
+      // Build the same Dockerfile local Dex and CI publish use.
       stdio: 'inherit',
     })
     console.log(`[local-dex] pushing runtime image ${imageRef}`)
-    docker(['push', imageRef], { stdio: 'inherit', env: localDockerEnv(config) })
+    docker(['push', imageRef], { stdio: 'inherit', env: localDockerEnv(config) }) // Push to the local registry so the local runner can pull by ref.
   }
 }
 
@@ -208,20 +209,21 @@ function runtimeImageRef(config, name) {
 
 function ensureDaemonRuntimeBinary(config) {
   const outputDir = path.join(appsRoot, 'dist', 'apps', 'daemon-runtime')
-  const targetArch = runtimeImageGoarch(config)
-  const outputPath = path.join(outputDir, `boxlite-daemon-${targetArch}`)
+  const targetArch = runtimeImageGoarch(config) // Dockerfile TARGETARCH must match this suffix.
+  const outputPath = path.join(outputDir, `boxlite-daemon-${targetArch}`) // Dockerfiles copy boxlite-daemon-amd64 or boxlite-daemon-arm64.
   fs.mkdirSync(outputDir, { recursive: true })
 
   console.log(`[local-dex] building Linux daemon runtime binary for ${config.runtimeImagePlatform}`)
   const result = spawnSync('go', ['build', '-o', outputPath, './daemon/cmd/daemon/main.go'], {
+    // Build the daemon embedded into the local runtime image.
     cwd: appsRoot,
     encoding: 'utf8',
     stdio: 'inherit',
     env: {
       ...process.env,
-      GOOS: 'linux',
-      GOARCH: targetArch,
-      CGO_ENABLED: '0',
+      GOOS: 'linux', // Runtime images are Linux containers even on macOS dev machines.
+      GOARCH: targetArch, // Match the local Docker platform architecture.
+      CGO_ENABLED: '0', // Avoid host C toolchain dependencies for local daemon builds.
     },
   })
 

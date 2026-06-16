@@ -448,15 +448,15 @@ export default $config({
         BOXLITE_SYSTEM_IMAGE_TAG: envOr('BOXLITE_SYSTEM_IMAGE_TAG', 'v0.1.0'),
         BOXLITE_SYSTEM_BASE_IMAGE: envOr(
           'BOXLITE_SYSTEM_BASE_IMAGE',
-          'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0',
+          'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0', // Production fallback for the default generic box image.
         ),
         BOXLITE_SYSTEM_PYTHON_IMAGE: envOr(
           'BOXLITE_SYSTEM_PYTHON_IMAGE',
-          'ghcr.io/boxlite-ai/boxlite-agent-python:v0.1.0',
+          'ghcr.io/boxlite-ai/boxlite-agent-python:v0.1.0', // Production fallback for Python boxes.
         ),
         BOXLITE_SYSTEM_NODE_IMAGE: envOr(
           'BOXLITE_SYSTEM_NODE_IMAGE',
-          'ghcr.io/boxlite-ai/boxlite-agent-node:v0.1.0',
+          'ghcr.io/boxlite-ai/boxlite-agent-node:v0.1.0', // Production fallback for Node boxes.
         ),
         ...(process.env.BOXLITE_SYSTEM_SOURCE_REGISTRY_URL && {
           BOXLITE_SYSTEM_SOURCE_REGISTRY_NAME: envOr(
