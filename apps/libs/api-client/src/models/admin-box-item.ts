@@ -26,10 +26,6 @@ export interface AdminBoxItem {
      */
     'id': string;
     /**
-     * Public box ID shown to users
-     */
-    'boxId'?: string;
-    /**
      * Organization ID
      */
     'organizationId': string;

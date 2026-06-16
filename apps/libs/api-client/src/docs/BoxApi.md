@@ -758,7 +758,7 @@ const apiInstance = new BoxApi(configuration);
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 let page: number; //Page number of the results (optional) (default to 1)
 let limit: number; //Number of results per page (optional) (default to 100)
-let id: string; //Filter by partial Box ID, internal UUID, or name match (optional) (default to undefined)
+let id: string; //Filter by partial Box ID or name match (optional) (default to undefined)
 let name: string; //Filter by partial name match (optional) (default to undefined)
 let labels: string; //JSON encoded labels to filter by (optional) (default to undefined)
 let includeErroredDeleted: boolean; //Include results with errored state and deleted desired state (optional) (default to false)
@@ -772,7 +772,7 @@ let minDiskGiB: number; //Minimum disk space in GiB (optional) (default to undef
 let maxDiskGiB: number; //Maximum disk space in GiB (optional) (default to undefined)
 let lastEventAfter: Date; //Include items with last event after this timestamp (optional) (default to undefined)
 let lastEventBefore: Date; //Include items with last event before this timestamp (optional) (default to undefined)
-let sort: 'id' | 'boxId' | 'name' | 'state' | 'region' | 'updatedAt' | 'createdAt'; //Field to sort by (optional) (default to 'createdAt')
+let sort: 'id' | 'name' | 'state' | 'region' | 'updatedAt' | 'createdAt'; //Field to sort by (optional) (default to 'createdAt')
 let order: 'asc' | 'desc'; //Direction to sort by (optional) (default to 'desc')
 
 const { status, data } = await apiInstance.listBoxesPaginated(
@@ -805,7 +805,7 @@ const { status, data } = await apiInstance.listBoxesPaginated(
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 | **page** | [**number**] | Page number of the results | (optional) defaults to 1|
 | **limit** | [**number**] | Number of results per page | (optional) defaults to 100|
-| **id** | [**string**] | Filter by partial Box ID, internal UUID, or name match | (optional) defaults to undefined|
+| **id** | [**string**] | Filter by partial Box ID or name match | (optional) defaults to undefined|
 | **name** | [**string**] | Filter by partial name match | (optional) defaults to undefined|
 | **labels** | [**string**] | JSON encoded labels to filter by | (optional) defaults to undefined|
 | **includeErroredDeleted** | [**boolean**] | Include results with errored state and deleted desired state | (optional) defaults to false|
@@ -819,7 +819,7 @@ const { status, data } = await apiInstance.listBoxesPaginated(
 | **maxDiskGiB** | [**number**] | Maximum disk space in GiB | (optional) defaults to undefined|
 | **lastEventAfter** | [**Date**] | Include items with last event after this timestamp | (optional) defaults to undefined|
 | **lastEventBefore** | [**Date**] | Include items with last event before this timestamp | (optional) defaults to undefined|
-| **sort** | [**&#39;id&#39; | &#39;boxId&#39; | &#39;name&#39; | &#39;state&#39; | &#39;region&#39; | &#39;updatedAt&#39; | &#39;createdAt&#39;**]**Array<&#39;id&#39; &#124; &#39;boxId&#39; &#124; &#39;name&#39; &#124; &#39;state&#39; &#124; &#39;region&#39; &#124; &#39;updatedAt&#39; &#124; &#39;createdAt&#39; &#124; &#39;11184809&#39;>** | Field to sort by | (optional) defaults to 'createdAt'|
+| **sort** | [**&#39;id&#39; | &#39;name&#39; | &#39;state&#39; | &#39;region&#39; | &#39;updatedAt&#39; | &#39;createdAt&#39;**]**Array<&#39;id&#39; &#124; &#39;name&#39; &#124; &#39;state&#39; &#124; &#39;region&#39; &#124; &#39;updatedAt&#39; &#124; &#39;createdAt&#39; &#124; &#39;11184809&#39;>** | Field to sort by | (optional) defaults to 'createdAt'|
 | **order** | [**&#39;asc&#39; | &#39;desc&#39;**]**Array<&#39;asc&#39; &#124; &#39;desc&#39; &#124; &#39;11184809&#39;>** | Direction to sort by | (optional) defaults to 'desc'|
 
 

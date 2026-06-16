@@ -1968,7 +1968,7 @@ func (r BoxAPIListBoxesPaginatedRequest) Limit(limit float32) BoxAPIListBoxesPag
 	return r
 }
 
-// Filter by partial Box ID, internal UUID, or name match
+// Filter by partial Box ID or name match
 func (r BoxAPIListBoxesPaginatedRequest) Id(id string) BoxAPIListBoxesPaginatedRequest {
 	r.id = &id
 	return r

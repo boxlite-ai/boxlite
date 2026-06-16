@@ -728,7 +728,7 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {number} [page] Page number of the results
          * @param {number} [limit] Number of results per page
-         * @param {string} [id] Filter by partial Box ID, internal UUID, or name match
+         * @param {string} [id] Filter by partial Box ID or name match
          * @param {string} [name] Filter by partial name match
          * @param {string} [labels] JSON encoded labels to filter by
          * @param {boolean} [includeErroredDeleted] Include results with errored state and deleted desired state
@@ -1536,7 +1536,7 @@ export const BoxApiFp = function(configuration?: Configuration) {
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {number} [page] Page number of the results
          * @param {number} [limit] Number of results per page
-         * @param {string} [id] Filter by partial Box ID, internal UUID, or name match
+         * @param {string} [id] Filter by partial Box ID or name match
          * @param {string} [name] Filter by partial name match
          * @param {string} [labels] JSON encoded labels to filter by
          * @param {boolean} [includeErroredDeleted] Include results with errored state and deleted desired state
@@ -1879,7 +1879,7 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {number} [page] Page number of the results
          * @param {number} [limit] Number of results per page
-         * @param {string} [id] Filter by partial Box ID, internal UUID, or name match
+         * @param {string} [id] Filter by partial Box ID or name match
          * @param {string} [name] Filter by partial name match
          * @param {string} [labels] JSON encoded labels to filter by
          * @param {boolean} [includeErroredDeleted] Include results with errored state and deleted desired state
@@ -2199,7 +2199,7 @@ export class BoxApi extends BaseAPI {
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {number} [page] Page number of the results
      * @param {number} [limit] Number of results per page
-     * @param {string} [id] Filter by partial Box ID, internal UUID, or name match
+     * @param {string} [id] Filter by partial Box ID or name match
      * @param {string} [name] Filter by partial name match
      * @param {string} [labels] JSON encoded labels to filter by
      * @param {boolean} [includeErroredDeleted] Include results with errored state and deleted desired state
@@ -2368,7 +2368,6 @@ export const ListBoxesPaginatedStatesEnum = {
 export type ListBoxesPaginatedStatesEnum = typeof ListBoxesPaginatedStatesEnum[keyof typeof ListBoxesPaginatedStatesEnum];
 export const ListBoxesPaginatedSortEnum = {
     ID: 'id',
-    BOX_ID: 'boxId',
     NAME: 'name',
     STATE: 'state',
     REGION: 'region',

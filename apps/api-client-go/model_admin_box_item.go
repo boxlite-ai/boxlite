@@ -23,8 +23,6 @@ var _ MappedNullable = &AdminBoxItem{}
 type AdminBoxItem struct {
 	// Box ID
 	Id string `json:"id"`
-	// Public box ID shown to users
-	BoxId *string `json:"boxId,omitempty"`
 	// Organization ID
 	OrganizationId string `json:"organizationId"`
 	State BoxState `json:"state"`
@@ -87,38 +85,6 @@ func (o *AdminBoxItem) GetIdOk() (*string, bool) {
 // SetId sets field value
 func (o *AdminBoxItem) SetId(v string) {
 	o.Id = v
-}
-
-// GetBoxId returns the BoxId field value if set, zero value otherwise.
-func (o *AdminBoxItem) GetBoxId() string {
-	if o == nil || IsNil(o.BoxId) {
-		var ret string
-		return ret
-	}
-	return *o.BoxId
-}
-
-// GetBoxIdOk returns a tuple with the BoxId field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *AdminBoxItem) GetBoxIdOk() (*string, bool) {
-	if o == nil || IsNil(o.BoxId) {
-		return nil, false
-	}
-	return o.BoxId, true
-}
-
-// HasBoxId returns a boolean if a field has been set.
-func (o *AdminBoxItem) HasBoxId() bool {
-	if o != nil && !IsNil(o.BoxId) {
-		return true
-	}
-
-	return false
-}
-
-// SetBoxId gets a reference to the given string and assigns it to the BoxId field.
-func (o *AdminBoxItem) SetBoxId(v string) {
-	o.BoxId = &v
 }
 
 // GetOrganizationId returns the OrganizationId field value
@@ -316,9 +282,6 @@ func (o AdminBoxItem) MarshalJSON() ([]byte, error) {
 func (o AdminBoxItem) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["id"] = o.Id
-	if !IsNil(o.BoxId) {
-		toSerialize["boxId"] = o.BoxId
-	}
 	toSerialize["organizationId"] = o.OrganizationId
 	toSerialize["state"] = o.State
 	if !IsNil(o.RunnerId) {
@@ -379,7 +342,6 @@ func (o *AdminBoxItem) UnmarshalJSON(data []byte) (err error) {
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "id")
-		delete(additionalProperties, "boxId")
 		delete(additionalProperties, "organizationId")
 		delete(additionalProperties, "state")
 		delete(additionalProperties, "runnerId")
