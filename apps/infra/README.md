@@ -256,7 +256,7 @@ npm run remove -- --stage dev       # destroy everything
 
 ## Runner lifecycle
 
-The Runner EC2 instance (`tag:Name=boxlite-runner`) holds load-bearing state:
+The Runner EC2 instance (`tag:Name=boxlite-runner-default`) holds load-bearing state:
 `/var/lib/boxlite` on its root disk, plus the in-memory libkrun VMs that back
 running boxes. **It must not be replaced by routine deploys.** Two Pulumi
 resource options on `sst.config.ts`'s Runner enforce that:

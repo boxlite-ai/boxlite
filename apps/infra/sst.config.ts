@@ -949,7 +949,9 @@ export default $config({
       )
 
     // Default runner — auto-seeded by the API at boot via DEFAULT_RUNNER_*.
-    makeRunner('Runner', 'boxlite-runner', runnerUserData)
+    // Pulumi resource id stays 'Runner' (renaming it would replace a protect:true
+    // instance); only the AWS Name tag carries the explicit `-default` suffix.
+    makeRunner('Runner', 'boxlite-runner-default', runnerUserData)
 
     // Multi-runner provisioning. Extra runners share the same OTel endpoint as
     // the default runner.
@@ -965,11 +967,14 @@ export default $config({
     // replace a state-holding runner.
     const totalRunners = Math.max(1, parseInt(envOr('RUNNERS', '1'), 10) || 1)
     const extraRunners = Array.from({ length: totalRunners - 1 }, (_, i) => {
-      const name = `runner-${i + 2}` // default is runner #1
+      const index = i + 2 // default runner is #1, so extras start at #2
+      const name = `runner-${index}` // control-plane registration name
       const apiKey = randomKey(`RunnerApiKey-${name}`)
+      // Resource id stays `Runner-runner-N` (stable — these are protect:true);
+      // only the AWS Name tag takes the cleaner `boxlite-runner-N` form.
       const instance = makeRunner(
         `Runner-${name}`,
-        `boxlite-runner-${name}`,
+        `boxlite-runner-${index}`,
         $resolve([api.url, apiKey.result, otelCollectorOtlpHttpUrl, ghcrSecret ? ghcrSecret.arn : '']).apply(
           ([apiUrl, token, otelEndpoint, ghcrSecretArn]) =>
             buildRunnerUserData({ apiUrl, token, otelEndpoint, ghcrSecretArn: ghcrSecretArn || undefined, ghcrUsername }),
