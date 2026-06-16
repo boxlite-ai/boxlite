@@ -83,8 +83,15 @@ mod tests {
         fs::write(&config_path, config_content).unwrap();
 
         let config = load_config(&config_path).unwrap();
-        // home_dir gets a default value, image_registries is empty
-        assert!(config.image_registries.is_empty());
+        // A missing `image_registries` field falls back to the built-in
+        // default (ghcr.io + docker.io), not an empty list.
+        assert_eq!(
+            config.image_registries,
+            vec![
+                ImageRegistry::https("ghcr.io").with_search(true),
+                ImageRegistry::https("docker.io").with_search(true),
+            ]
+        );
     }
 
     #[test]

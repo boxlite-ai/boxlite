@@ -25,8 +25,10 @@ pub struct BoxliteOptions {
     /// Use this to configure registry transport, TLS verification, auth, and
     /// whether the registry participates in unqualified image resolution.
     ///
-    /// - Empty list (default): Uses docker.io as the implicit default for
-    ///   unqualified references
+    /// - Default: `ghcr.io` and `docker.io`, both with `search = true`, so
+    ///   unqualified references resolve against them in that order
+    /// - Empty list: Uses docker.io as the implicit default for unqualified
+    ///   references
     /// - `search = true`: Includes the registry when resolving unqualified
     ///   image references
     /// - Fully qualified refs (e.g., `"quay.io/foo"`) use the matching
@@ -44,7 +46,7 @@ pub struct BoxliteOptions {
     /// }
     /// // "alpine" tries ghcr.io/myorg/alpine, then docker.io/alpine
     /// ```
-    #[serde(default)]
+    #[serde(default = "default_image_registries")]
     pub image_registries: Vec<ImageRegistry>,
 }
 
@@ -166,11 +168,21 @@ fn default_home_dir() -> PathBuf {
         })
 }
 
+/// Built-in registries used when none are configured: pull from `ghcr.io`
+/// (BoxLite's curated images) first, then `docker.io`. Both participate in
+/// unqualified reference resolution so users can drop the registry host.
+fn default_image_registries() -> Vec<ImageRegistry> {
+    vec![
+        ImageRegistry::https("ghcr.io").with_search(true),
+        ImageRegistry::https("docker.io").with_search(true),
+    ]
+}
+
 impl Default for BoxliteOptions {
     fn default() -> Self {
         Self {
             home_dir: default_home_dir(),
-            image_registries: Vec::new(),
+            image_registries: default_image_registries(),
         }
     }
 }
