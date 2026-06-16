@@ -1,10 +1,10 @@
-# REST API E2E 测试报告与运行手册
+# REST API E2E Test Report and Runbook
 
-这份文档描述 BoxLite REST API 的可复用测试流程。覆盖范围包括公开
-REST contract、现有 SDK -> API -> Runner -> VM 的 E2E 套件、CLI 命令矩阵，
-以及 API key / OIDC 两种认证方式。
+This document defines the reusable BoxLite REST API test flow. It covers the
+public REST contract, the existing SDK -> API -> Runner -> VM E2E suite, the
+CLI command matrix, and both API-key and OIDC authentication modes.
 
-## 测试栈
+## Test Stack
 
 ```mermaid
 flowchart LR
@@ -20,31 +20,33 @@ flowchart LR
   Runner --> VM["libkrun VM"]
 ```
 
-## 现有基础
+## Existing Base
 
-`scripts/test/e2e` 里的套件本来就是 REST-backed。它会构造 Python SDK
-REST client，并验证请求确实到达 API 和 Runner。它不是 local FFI 测试。
+The suite under `scripts/test/e2e` is already REST-backed. It builds a Python
+SDK REST client and verifies that requests reach the API and Runner. It is not
+a local FFI test path.
 
-这次补齐的缺口是：
+This PR fills the following gaps:
 
-- 基于 `openapi/box.openapi.yaml` 做静态覆盖盘点；
-- REST E2E 明确支持 `AUTH=api-key` 和 `AUTH=oidc`；
-- 增加面向 REST API 的 CLI 命令矩阵；
-- 对当前还不是 REST-backed 的命令或 SDK 入口做显式 skip；
-- 统一把产物写到 `target/rest-test-report`。
+- static coverage inventory based on `openapi/box.openapi.yaml`;
+- explicit `AUTH=api-key` and `AUTH=oidc` modes for REST E2E;
+- a CLI command matrix for REST API behavior;
+- explicit skips for commands or SDK entry points that are not REST-backed yet;
+- shared output artifacts under `target/rest-test-report`.
 
-## 运行位置
+## Where To Run
 
-重测试放开发机或 CI runner。不要在本机跑完整 REST E2E、CLI integration，
-也不要跑 `make test:apps`，除非你明确想触发本机重构建。
+Run heavy verification on the dev machine or in CI. Do not run full REST E2E,
+CLI integration, or `make test:apps` on the local Mac unless local rebuilds are
+intentional.
 
-本机或 Remote 上推荐的窄测命令：
+Recommended narrow check, locally or on Remote:
 
 ```bash
 cd apps && yarn nx test api --testNamePattern BoxliteWsProxyService --runInBand
 ```
 
-完整验证放开发机：
+Full validation belongs on the dev machine:
 
 ```bash
 make test:rest:e2e AUTH=api-key
@@ -53,11 +55,11 @@ make test:rest:cli AUTH=api-key SCOPE=smoke
 make test:rest:cli AUTH=oidc SCOPE=full
 ```
 
-## 认证输入
+## Authentication Inputs
 
-### API key
+### API Key
 
-REST E2E：
+REST E2E:
 
 ```bash
 export BOXLITE_E2E_AUTH=api-key
@@ -66,7 +68,7 @@ export BOXLITE_E2E_API_URL=http://localhost:3000/api
 make test:rest:e2e AUTH=api-key
 ```
 
-CLI 矩阵：
+CLI matrix:
 
 ```bash
 export BOXLITE_REST_URL=https://<api-host>/api
@@ -76,7 +78,7 @@ make test:rest:cli AUTH=api-key SCOPE=smoke
 
 ### OIDC
 
-REST E2E：
+REST E2E:
 
 ```bash
 export BOXLITE_E2E_AUTH=oidc
@@ -85,11 +87,13 @@ export BOXLITE_E2E_API_URL=http://localhost:3000/api
 make test:rest:e2e AUTH=oidc
 ```
 
-如果没有设置 `BOXLITE_E2E_OIDC_TOKEN`，E2E helper 会读取本地 OIDC profile，
-并先执行 `boxlite auth whoami`，这样 token refresh 行为和真实 CLI 命令保持一致。
+If `BOXLITE_E2E_OIDC_TOKEN` is not set, the E2E helper reads the local OIDC
+profile and runs `boxlite auth whoami` first. That keeps token refresh behavior
+aligned with real CLI commands.
 
-CLI 矩阵需要先登录 OIDC，或指向已经登录过的 profile。跑 OIDC 时必须保持
-`BOXLITE_API_KEY` 未设置，因为它优先级高于 profile credentials。
+The CLI matrix needs an existing OIDC login, or a profile that already contains
+a valid OIDC session. Keep `BOXLITE_API_KEY` unset when running OIDC because it
+takes precedence over profile credentials.
 
 ```bash
 unset BOXLITE_API_KEY
@@ -97,10 +101,10 @@ boxlite --profile dev-oidc --url https://<api-host>/api auth login --method brow
 BOXLITE_PROFILE=dev-oidc make test:rest:cli AUTH=oidc SCOPE=full
 ```
 
-两种 REST E2E 认证模式默认都会通过 `/v1/me` 发现 `path_prefix`。只有需要
-刻意覆盖服务端发现结果时，才设置 `BOXLITE_E2E_PREFIX`。
+Both REST E2E auth modes discover `path_prefix` through `/v1/me` by default.
+Only set `BOXLITE_E2E_PREFIX` when intentionally overriding server discovery.
 
-## 请求链路
+## Request Flow
 
 ```mermaid
 sequenceDiagram
@@ -121,83 +125,88 @@ sequenceDiagram
   API-->>CLI: HTTP/WebSocket response
 ```
 
-## 检查清单
+## Checklist
 
-1. 静态覆盖盘点：
+1. Static coverage inventory:
 
    ```bash
    make test:rest:inventory
    ```
 
-2. 在开发机准备本地 E2E stack：
+2. Prepare the local E2E stack on the dev machine:
 
    ```bash
    make test:e2e:setup
    ```
 
-3. 跑 API-key REST E2E：
+3. Run API-key REST E2E:
 
    ```bash
    make test:rest:e2e AUTH=api-key
    ```
 
-4. 准备 OIDC 凭证：
+4. Prepare OIDC credentials:
 
    ```bash
    export BOXLITE_E2E_OIDC_TOKEN=<access-token>
    ```
 
-5. 跑 OIDC REST E2E，或只跑 attach 窄测：
+5. Run OIDC REST E2E, or only the attach narrow check:
 
    ```bash
    make test:rest:e2e AUTH=oidc FILTER=attach
    ```
 
-6. 在 dev 上跑 CLI 矩阵：
+6. Run the CLI matrix on dev:
 
    ```bash
    make test:rest:cli AUTH=api-key SCOPE=smoke
    make test:rest:cli AUTH=oidc SCOPE=full
    ```
 
-7. 生成聚合报告：
+7. Generate the aggregate report:
 
    ```bash
    make test:rest:report
    ```
 
-## Skip 规则
+## Skip Rules
 
-Skip 必须显式写入产物。当前有意 skip 的范围：
+Skips must be explicit in artifacts. Current intentional skips:
 
-- `boxlite info`：报告本地 runtime/options，不是 REST-backed 行为。
-- `boxlite logs`：读取本地 runtime console logs，不是 REST-backed stdout。
-- `boxlite pull` 和 `boxlite images`：REST runtime 目前不支持 image ops。
-- `boxlite remove`：不存在这个命令，正确命令是 `boxlite rm`。
-- `AUTH=oidc` 下的 C/Go/Node E2E 入口测试：这些 SDK smoke driver 目前只暴露
-  API-key credential 类型。
+- `boxlite info`: reports local runtime/options, not REST-backed behavior.
+- `boxlite logs`: reads local runtime console logs, not REST-backed stdout.
+- `boxlite pull` and `boxlite images`: REST runtime does not support image
+  operations yet.
+- `boxlite remove`: no such command exists; `boxlite rm` is the supported
+  command.
+- C/Go/Node E2E entry-point tests under `AUTH=oidc`: these SDK smoke drivers
+  currently expose only API-key credential inputs.
 
-## 产物
+## Artifacts
 
-所有可复用产物都写到：
+All reusable artifacts are written to:
 
 ```text
 target/rest-test-report/
 ```
 
-关键文件：
+Key files:
 
-- `rest-inventory.md` 和 `rest-inventory.json`;
+- `rest-inventory.md` and `rest-inventory.json`;
 - `cli-matrix-<auth>-<scope>.log`;
 - `cli-matrix-<auth>-<scope>.skips`;
 - `cli-matrix-<auth>-<scope>.md`;
 - `rest-report.md`.
 
-## 操作原则
+## Operating Principles
 
-- 先跑 smoke，再跑 full matrix。
-- 认证模式必须隔离；OIDC CLI 测试时不要设置 `BOXLITE_API_KEY`。
-- 测 credentials 时使用隔离的 `BOXLITE_HOME` / `BOXLITE_PROFILE`。
-- 不要随便重启 dev API；只有验证 API-side 改动且窄测通过后再重启。
-- API 代码改动后，只部署或重启需要验证的 API surface，然后重跑
-  `AUTH=oidc` 的 attach/exec 覆盖。
+- Run smoke first, then the full matrix.
+- Keep authentication modes isolated; do not set `BOXLITE_API_KEY` for OIDC CLI
+  tests.
+- Use isolated `BOXLITE_HOME` / `BOXLITE_PROFILE` values when testing
+  credentials.
+- Do not restart the dev API casually; restart only after narrow checks pass
+  and API-side behavior needs verification.
+- After API code changes, deploy or restart only the API surface under test,
+  then rerun the `AUTH=oidc` attach/exec coverage.

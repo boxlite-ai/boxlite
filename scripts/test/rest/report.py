@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""把 REST 测试产物聚合成一份 Markdown 中文报告。"""
+"""Aggregate REST test artifacts into one Markdown report."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -22,7 +22,7 @@ def rel(path: Path) -> str:
 def inventory_summary() -> list[str]:
     path = REPORT_DIR / "rest-inventory.json"
     if not path.exists():
-        return ["- 静态覆盖盘点：缺失，请先运行 `make test:rest:inventory`"]
+        return ["- Static coverage inventory: missing; run `make test:rest:inventory` first"]
 
     rows = json.loads(path.read_text())
     total = len(rows)
@@ -31,10 +31,10 @@ def inventory_summary() -> list[str]:
     missing = sum(1 for row in rows if row.get("status") == "missing")
     active = total - unsupported
     lines = [
-        f"- 静态覆盖盘点：spec 共 {total} 个 operation；当前 active REST surface 为 {active} 个",
-        f"- 候选覆盖：{candidate}/{active} 个 active operation 有候选覆盖，{missing} 个 active operation 缺失",
-        f"- 非当前 cloud REST surface：{unsupported} 个 operation 标为 unsupported / stale spec",
-        f"- 覆盖盘点 Markdown：`{rel(REPORT_DIR / 'rest-inventory.md')}`",
+        f"- Static coverage inventory: {total} spec operations; {active} active REST operations",
+        f"- Candidate coverage: {candidate}/{active} active operations have candidate coverage; {missing} active operations are missing candidates",
+        f"- Non-current cloud REST surface: {unsupported} operations marked unsupported / stale spec",
+        f"- Coverage inventory Markdown: `{rel(REPORT_DIR / 'rest-inventory.md')}`",
     ]
     if missing:
         missing_ops = [
@@ -42,7 +42,7 @@ def inventory_summary() -> list[str]:
             for row in rows
             if row.get("status") == "missing"
         ][:10]
-        lines.append("- 缺失候选覆盖的 active operation：")
+        lines.append("- Active operations missing candidate coverage:")
         lines.extend(f"  - {op}" for op in missing_ops)
     return lines
 
@@ -50,7 +50,7 @@ def inventory_summary() -> list[str]:
 def cli_matrix_summary() -> list[str]:
     summaries = sorted(REPORT_DIR.glob("cli-matrix-*.md"))
     if not summaries:
-        return ["- CLI 矩阵：缺失，请运行 `make test:rest:cli AUTH=<api-key|oidc>`"]
+        return ["- CLI matrix: missing; run `make test:rest:cli AUTH=<api-key|oidc>`"]
 
     lines = []
     for summary in summaries:
@@ -64,19 +64,19 @@ def cli_matrix_summary() -> list[str]:
                 auth = line.split("`", 2)[1]
             elif line.startswith("- scope:"):
                 scope = line.split("`", 2)[1]
-        lines.append(f"- CLI 矩阵 `{auth}`/`{scope}`：{status}（`{rel(summary)}`）")
+        lines.append(f"- CLI matrix `{auth}`/`{scope}`: {status} (`{rel(summary)}`)")
     return lines
 
 
 def artifact_summary() -> list[str]:
     if not REPORT_DIR.exists():
-        return ["- 还没有产物目录"]
+        return ["- Artifact directory does not exist yet"]
     files = sorted(
         path for path in REPORT_DIR.iterdir()
         if path.is_file() and path.name != OUT.name
     )
     if not files:
-        return ["- 还没有产物"]
+        return ["- No artifacts yet"]
     return [f"- `{rel(path)}`" for path in files]
 
 
@@ -84,25 +84,25 @@ def main() -> None:
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     lines = [
-        "# REST API 测试报告",
+        "# REST API Test Report",
         "",
-        f"生成时间：`{generated}`",
+        f"Generated at: `{generated}`",
         "",
-        "## 摘要",
+        "## Summary",
         "",
         *inventory_summary(),
         "",
-        "## CLI 矩阵",
+        "## CLI Matrix",
         "",
         *cli_matrix_summary(),
         "",
-        "## REST E2E 认证矩阵",
+        "## REST E2E Auth Matrix",
         "",
-        "- API-key E2E：`make test:rest:e2e AUTH=api-key`",
-        "- OIDC E2E：`make test:rest:e2e AUTH=oidc`",
-        "- OIDC 需要 `BOXLITE_E2E_OIDC_TOKEN`，或一个包含 access token 的 OIDC profile。",
+        "- API-key E2E: `make test:rest:e2e AUTH=api-key`",
+        "- OIDC E2E: `make test:rest:e2e AUTH=oidc`",
+        "- OIDC requires `BOXLITE_E2E_OIDC_TOKEN` or an OIDC profile with an access token.",
         "",
-        "## 产物",
+        "## Artifacts",
         "",
         *artifact_summary(),
         "",

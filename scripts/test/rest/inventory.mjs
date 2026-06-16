@@ -197,10 +197,10 @@ function escapeRegExp(value) {
 function renderMarkdown(rows) {
   const summary = summarize(rows)
   const lines = [
-    '# REST API 覆盖盘点',
+    '# REST API Coverage Inventory',
     '',
-    '本报告基于 `openapi/box.openapi.yaml` 和候选测试文件生成。',
-    '`candidate` 表示找到了测试痕迹，不等于已完整断言；`unsupported` 表示当前 cloud REST controller 未暴露该 operation。',
+    'This report is generated from `openapi/box.openapi.yaml` and candidate test files.',
+    '`candidate` means test evidence exists, not that the operation is fully asserted; `unsupported` means the current cloud REST controller does not expose the operation.',
     '',
     `- Spec operations: ${summary.total}`,
     `- Active operations: ${summary.active}`,
