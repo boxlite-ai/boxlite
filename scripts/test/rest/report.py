@@ -27,9 +27,13 @@ def inventory_summary() -> list[str]:
     rows = json.loads(path.read_text())
     total = len(rows)
     candidate = sum(1 for row in rows if row.get("status") == "candidate")
-    missing = total - candidate
+    unsupported = sum(1 for row in rows if row.get("status") == "unsupported")
+    missing = sum(1 for row in rows if row.get("status") == "missing")
+    active = total - unsupported
     lines = [
-        f"- 静态覆盖盘点：{candidate}/{total} 个 operation 有候选覆盖，{missing} 个缺失",
+        f"- 静态覆盖盘点：spec 共 {total} 个 operation；当前 active REST surface 为 {active} 个",
+        f"- 候选覆盖：{candidate}/{active} 个 active operation 有候选覆盖，{missing} 个 active operation 缺失",
+        f"- 非当前 cloud REST surface：{unsupported} 个 operation 标为 unsupported / stale spec",
         f"- 覆盖盘点 Markdown：`{rel(REPORT_DIR / 'rest-inventory.md')}`",
     ]
     if missing:
@@ -38,7 +42,7 @@ def inventory_summary() -> list[str]:
             for row in rows
             if row.get("status") == "missing"
         ][:10]
-        lines.append("- 前 10 个缺失候选覆盖的 operation：")
+        lines.append("- 缺失候选覆盖的 active operation：")
         lines.extend(f"  - {op}" for op in missing_ops)
     return lines
 

@@ -28,9 +28,26 @@ const httpMethods = new Set(['get', 'put', 'post', 'patch', 'delete', 'options',
 
 const scanRoots = [
   'scripts/test/e2e/cases',
+  'scripts/test/rest',
   'src/cli/tests',
   'apps/api/src/boxlite-rest',
 ]
+
+const unsupportedOperations = {
+  cloneBox: 'cloud REST controller does not expose clone; capability is false in /v1/config',
+  createSnapshot: 'cloud REST controller does not expose snapshots; capability is false in /v1/config',
+  listSnapshots: 'cloud REST controller does not expose snapshots; capability is false in /v1/config',
+  getSnapshot: 'cloud REST controller does not expose snapshots; capability is false in /v1/config',
+  removeSnapshot: 'cloud REST controller does not expose snapshots; capability is false in /v1/config',
+  restoreSnapshot: 'cloud REST controller does not expose snapshots; capability is false in /v1/config',
+  exportBox: 'cloud REST controller does not expose export; capability is false in /v1/config',
+  importBox: 'cloud REST controller does not expose import; capability is false in /v1/config',
+  pullImage: 'cloud REST controller does not expose image operations',
+  listImages: 'cloud REST controller does not expose image operations',
+  getImage: 'cloud REST controller does not expose image operations',
+  imageExists: 'cloud REST controller does not expose image operations',
+  getRuntimeMetrics: 'cloud REST controller exposes per-box metrics only, not runtime-wide metrics',
+}
 
 const operationSignals = {
   listBoxes: [/test_cli_ls_returns_table/, /test_list_info/, /findalldeprecated/, /toboxdtos/],
@@ -48,14 +65,14 @@ const operationSignals = {
   exportBox: [/exportbox/, /\.export\(/, /\/export\b/],
   downloadFiles: [/downloadfiles/, /test_copy_out/, /copy_out/],
   uploadFiles: [/uploadfiles/, /test_copy_in/, /copy_in/],
-  getBoxMetrics: [/getboxmetrics/, /box metrics/, /\/metrics\b/],
+  getBoxMetrics: [/getboxmetrics/, /box metrics/, /\/metrics\b/, /proxymetrics/, /stats --format/, /stats box/],
   listSnapshots: [/listsnapshots/, /snapshots\(\)\.list/, /\/snapshots\b/],
   createSnapshot: [/createsnapshot/, /snapshots\(\)\.create/, /snapshot\.create/],
   removeSnapshot: [/removesnapshot/, /snapshots\(\)\.remove/, /snapshot\.remove/],
   getSnapshot: [/getsnapshot/, /snapshots\(\)\.get/, /snapshot\.get/],
   restoreSnapshot: [/restoresnapshot/, /snapshots\(\)\.restore/, /restore_snapshot/],
-  startBox: [/startbox/, /\.start\(/, /test_.*start/],
-  stopBox: [/stopbox/, /\.stop\(/, /test_.*stop/],
+  startBox: [/startbox/, /\.start\(/, /test_.*start/, /start box/],
+  stopBox: [/stopbox/, /\.stop\(/, /test_.*stop/, /stop box/],
   importBox: [/importbox/, /\.import\(/, /\/import\b/],
   listImages: [/listimages/, /images\(\)\.list/, /\/images\b/],
   getImage: [/getimage/, /images\(\)\.get/, /\/images\/\{/],
@@ -78,7 +95,10 @@ function main() {
 
   const summary = summarize(rows)
   console.log(outMarkdown)
-  console.log(`REST operations: ${summary.total}; candidates: ${summary.candidate}; missing: ${summary.missing}`)
+  console.log(
+    `REST spec operations: ${summary.total}; active: ${summary.active}; ` +
+      `candidates: ${summary.candidate}; missing: ${summary.missing}; unsupported: ${summary.unsupported}`,
+  )
 }
 
 function collectOperations(spec) {
@@ -104,9 +124,11 @@ function collectTestFiles() {
   for (const root of scanRoots) {
     const absRoot = path.join(repo, root)
     if (!fs.existsSync(absRoot)) continue
+    const isRestTestUtility = root === 'scripts/test/rest'
     for (const file of walk(absRoot)) {
-      if (!/\.(py|rs|ts)$/.test(file)) continue
-      if (!/(^|[./_-])(test|spec|auth|e2e)/.test(path.basename(file))) continue
+      if (!/\.(py|rs|ts|sh|md)$/.test(file)) continue
+      if (isRestTestUtility && path.basename(file) !== 'run_cli_matrix.sh') continue
+      if (!isRestTestUtility && !/(^|[./_-])(test|spec|auth|e2e)/.test(path.basename(file))) continue
       const rel = path.relative(repo, file).split(path.sep).join('/')
       files.push({
         path: rel,
@@ -129,6 +151,16 @@ function* walk(dir) {
 }
 
 function classifyOperation(operation, testFiles) {
+  if (unsupportedOperations[operation.operationId]) {
+    return {
+      ...operation,
+      signals: [],
+      status: 'unsupported',
+      unsupportedReason: unsupportedOperations[operation.operationId],
+      candidateTests: [],
+    }
+  }
+
   const signals = operationSignals[operation.operationId] || fallbackSignals(operation)
   const candidateTests = []
   for (const file of testFiles) {
@@ -165,24 +197,28 @@ function escapeRegExp(value) {
 function renderMarkdown(rows) {
   const summary = summarize(rows)
   const lines = [
-    '# REST API Test Inventory',
+    '# REST API 覆盖盘点',
     '',
-    'This report is generated from `openapi/box.openapi.yaml` and candidate test files.',
-    'Status is heuristic: `candidate` means matching test text exists, not that the operation is fully asserted.',
+    '本报告基于 `openapi/box.openapi.yaml` 和候选测试文件生成。',
+    '`candidate` 表示找到了测试痕迹，不等于已完整断言；`unsupported` 表示当前 cloud REST controller 未暴露该 operation。',
     '',
-    `- Total operations: ${summary.total}`,
+    `- Spec operations: ${summary.total}`,
+    `- Active operations: ${summary.active}`,
     `- Candidate coverage: ${summary.candidate}`,
-    `- Missing candidates: ${summary.missing}`,
+    `- Missing active candidates: ${summary.missing}`,
+    `- Unsupported / stale spec operations: ${summary.unsupported}`,
     '',
-    '| Method | Path | operationId | Status | Candidate tests |',
+    '| Method | Path | operationId | Status | Evidence / reason |',
     '| --- | --- | --- | --- | --- |',
   ]
   for (const row of rows) {
-    const candidates = row.candidateTests
-      .map((candidate) => `${candidate.file} (${candidate.hits.join(', ')})`)
-      .join('<br>')
+    const evidence = row.status === 'unsupported'
+      ? row.unsupportedReason
+      : row.candidateTests
+        .map((candidate) => `${candidate.file} (${candidate.hits.join(', ')})`)
+        .join('<br>')
     lines.push(
-      `| ${row.method} | \`${row.path}\` | \`${row.operationId || ''}\` | ${row.status} | ${candidates} |`,
+      `| ${row.method} | \`${row.path}\` | \`${row.operationId || ''}\` | ${row.status} | ${evidence} |`,
     )
   }
   return `${lines.join('\n')}\n`
@@ -191,10 +227,14 @@ function renderMarkdown(rows) {
 function summarize(rows) {
   const total = rows.length
   const candidate = rows.filter((row) => row.status === 'candidate').length
+  const unsupported = rows.filter((row) => row.status === 'unsupported').length
+  const missing = rows.filter((row) => row.status === 'missing').length
   return {
     total,
+    active: total - unsupported,
     candidate,
-    missing: total - candidate,
+    missing,
+    unsupported,
   }
 }
 
