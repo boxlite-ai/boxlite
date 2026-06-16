@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
+from e2e_auth import auth_context
 from path_verification import runner_journal_seek, runner_hits_for_box
 
 BOXLITE_BIN = os.environ.get("BOXLITE_E2E_CLI", shutil.which("boxlite"))
@@ -37,6 +38,8 @@ UUID_RE = re.compile(
 
 @pytest.fixture(scope="module")
 def cli():
+    if auth_context().auth != "api-key":
+        pytest.skip("CLI subprocess E2E uses API-key fixture credentials; use test:rest:cli for OIDC CLI coverage")
     if not BOXLITE_BIN or not Path(BOXLITE_BIN).exists():
         pytest.skip(f"boxlite CLI not found at {BOXLITE_BIN!r}")
     return BOXLITE_BIN

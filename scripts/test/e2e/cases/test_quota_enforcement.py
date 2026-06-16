@@ -29,13 +29,11 @@ ALL cases in this file currently XFAIL — see module-level pytestmark.
 from __future__ import annotations
 
 import json
-import tomllib
-import urllib.error
-import urllib.request
-from pathlib import Path
 from typing import Any
 
 import pytest
+
+from e2e_auth import auth_context, request_json
 
 pytestmark = pytest.mark.xfail(
     strict=True,
@@ -47,45 +45,13 @@ pytestmark = pytest.mark.xfail(
 )
 
 
-def _profile() -> dict:
-    return tomllib.loads((Path.home() / ".boxlite/credentials.toml").read_text())[
-        "profiles"
-    ]["p1"]
-
-
 def _post_box(spec: dict) -> tuple[int, dict[str, Any] | None]:
-    p = _profile()
-    url = f"{p['url']}/v1/{p['path_prefix']}/boxes"
-    req = urllib.request.Request(
-        url,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {p['api_key']}",
-            "Content-Type": "application/json",
-        },
-        data=json.dumps(spec).encode(),
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            raw = r.read()
-            return r.status, json.loads(raw) if raw else None
-    except urllib.error.HTTPError as e:
-        raw = e.read()
-        try:
-            return e.code, json.loads(raw) if raw else None
-        except json.JSONDecodeError:
-            return e.code, {"_raw": raw.decode("utf-8", "replace")}
+    return request_json("POST", auth_context().v1("boxes"), spec)
 
 
 def _delete_box(box_id: str) -> None:
-    p = _profile()
     try:
-        req = urllib.request.Request(
-            f"{p['url']}/v1/{p['path_prefix']}/boxes/{box_id}",
-            method="DELETE",
-            headers={"Authorization": f"Bearer {p['api_key']}"},
-        )
-        urllib.request.urlopen(req, timeout=30).read()
+        request_json("DELETE", auth_context().v1(f"boxes/{box_id}"))
     except Exception:
         pass
 

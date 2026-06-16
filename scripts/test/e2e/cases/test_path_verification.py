@@ -35,10 +35,9 @@ async def test_sdk_runtime_is_rest_against_local_api(rt):
     (`:3000`), not local FFI and not directly at the runner."""
     # Boxlite.rest() always wires REST; check the URL the SDK is actually
     # going to use by inspecting the credentials we built it from.
-    import tomllib
-    cred = tomllib.loads((Path.home() / ".boxlite/credentials.toml").read_text())
-    p = cred["profiles"]["p1"]
-    url = p["url"]
+    from e2e_auth import auth_context
+
+    url = auth_context().url
     assert ":3000" in url, (
         f"profile p1.url={url!r} does not target the local API on :3000. "
         f"E2E tests would talk to the wrong thing."

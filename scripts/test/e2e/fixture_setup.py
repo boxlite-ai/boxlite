@@ -45,7 +45,11 @@ ADMIN_KEY = (
 )
 SNAPSHOTS_TO_REGISTER = ["alpine:3.23", "ubuntu:22.04", "ubuntu:24.04"]
 SNAPSHOT_WAIT_SECONDS = 180
-CRED_PATH = Path.home() / ".boxlite" / "credentials.toml"
+CRED_PATH = (
+    Path(os.environ["BOXLITE_HOME"]) / "credentials.toml"
+    if os.environ.get("BOXLITE_HOME")
+    else Path.home() / ".boxlite" / "credentials.toml"
+)
 
 
 def http(method: str, path: str, body=None):

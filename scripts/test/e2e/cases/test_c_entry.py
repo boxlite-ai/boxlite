@@ -13,12 +13,12 @@ import re
 import shutil
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
+from e2e_auth import auth_context
 from path_verification import runner_journal_seek, runner_hits_for_box
 
 REPO = Path(__file__).resolve().parents[4]
@@ -29,15 +29,10 @@ UUID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 )
 
-
-def _profile():
-    return tomllib.loads(
-        (Path.home() / ".boxlite/credentials.toml").read_text()
-    )["profiles"]["p1"]
-
-
 @pytest.fixture(scope="module")
 def c_binary():
+    if auth_context().auth != "api-key":
+        pytest.skip("C SDK REST E2E only supports API-key credentials today")
     if not shutil.which("gcc"):
         pytest.skip("gcc not installed")
     if not SRC.exists():
@@ -65,14 +60,12 @@ def c_binary():
 
 
 def test_c_sdk_create_remove(c_binary):
-    p = _profile()
+    ctx = auth_context()
     journal_since = runner_journal_seek()
 
     env = {
         **os.environ,
-        "BOXLITE_E2E_URL": p["url"],
-        "BOXLITE_E2E_API_KEY": p["api_key"],
-        "BOXLITE_E2E_PREFIX": p.get("path_prefix") or "",
+        **ctx.api_key_sdk_env(),
         "BOXLITE_E2E_IMAGE": "alpine:3.23",
         "LD_LIBRARY_PATH": str(LIB_DIR),
     }

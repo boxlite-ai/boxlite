@@ -11,21 +11,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-import tomllib
 import urllib.error
 import urllib.request
-from pathlib import Path
 
 import boxlite
 import pytest
 
 from conftest import drain
-
-
-def _profile() -> dict:
-    return tomllib.loads((Path.home() / ".boxlite/credentials.toml").read_text())[
-        "profiles"
-    ]["p1"]
+from e2e_auth import auth_context
 
 
 # ─── 1. Two execs on same box, concurrently ────────────────────────────────
@@ -111,14 +104,11 @@ async def test_exec_after_box_removed_is_typed_error(rt, image):
     box_id = box.id
     await rt.remove(box_id, force=True)
 
-    p = _profile()
+    ctx = auth_context()
     req = urllib.request.Request(
-        f"{p['url']}/v1/{p['path_prefix']}/boxes/{box_id}/exec",
+        ctx.url_for(ctx.v1(f"boxes/{box_id}/exec")),
         method="POST",
-        headers={
-            "Authorization": f"Bearer {p['api_key']}",
-            "Content-Type": "application/json",
-        },
+        headers=ctx.auth_headers(content_type=True),
         data=json.dumps({"command": "true", "args": []}).encode(),
     )
     try:
@@ -152,11 +142,11 @@ async def test_box_delete_during_running_exec(rt, image):
     await asyncio.sleep(1.0)
 
     # Try the racy delete via raw HTTP so we can inspect the status.
-    p = _profile()
+    ctx = auth_context()
     del_req = urllib.request.Request(
-        f"{p['url']}/v1/{p['path_prefix']}/boxes/{box.id}?force=true",
+        ctx.url_for(ctx.v1(f"boxes/{box.id}?force=true")),
         method="DELETE",
-        headers={"Authorization": f"Bearer {p['api_key']}"},
+        headers=ctx.auth_headers(),
     )
     try:
         with urllib.request.urlopen(del_req, timeout=15) as r:
@@ -229,16 +219,13 @@ async def test_double_stop_is_idempotent_or_typed_409(rt, image):
     Stopped→500 mapping bug for the related exec-on-stopped path.)"""
     box = await rt.create(boxlite.BoxOptions(image=image, auto_remove=False))
     try:
-        p = _profile()
+        ctx = auth_context()
 
         def _stop():
             req = urllib.request.Request(
-                f"{p['url']}/v1/{p['path_prefix']}/boxes/{box.id}/stop",
+                ctx.url_for(ctx.v1(f"boxes/{box.id}/stop")),
                 method="POST",
-                headers={
-                    "Authorization": f"Bearer {p['api_key']}",
-                    "Content-Type": "application/json",
-                },
+                headers=ctx.auth_headers(content_type=True),
                 data=b"{}",
             )
             try:
