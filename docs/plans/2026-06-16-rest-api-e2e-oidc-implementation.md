@@ -22,124 +22,23 @@
 ## Task 1: REST Inventory Report Script
 
 **Files:**
-- Create: `scripts/test/rest/inventory.py`
+- Create: `scripts/test/rest/inventory.mjs`
 - Create: `scripts/test/rest/README.md`
 - Modify: `make/test.mk`
 - Output: `target/rest-test-report/rest-inventory.md`
 
 **Step 1: Create the script skeleton**
 
-Implement `scripts/test/rest/inventory.py` with:
+Implement `scripts/test/rest/inventory.mjs` with the apps workspace `yaml` parser. Run it through `cd apps && yarn node ../scripts/test/rest/inventory.mjs` so it uses the existing `apps/package.json` dependency instead of adding a Python YAML dependency.
 
-```python
-#!/usr/bin/env python3
-from __future__ import annotations
-
-import argparse
-import json
-import re
-from pathlib import Path
-
-
-REPO = Path(__file__).resolve().parents[3]
-SPEC = REPO / "openapi" / "box.openapi.yaml"
-E2E_CASES = REPO / "scripts" / "test" / "e2e" / "cases"
-OUT_DIR = REPO / "target" / "rest-test-report"
-
-
-def load_operations(spec_text: str) -> list[dict[str, str]]:
-    operations: list[dict[str, str]] = []
-    current_path: str | None = None
-    current_method: str | None = None
-    for raw in spec_text.splitlines():
-        line = raw.rstrip()
-        path_match = re.match(r"^  (/[^:]+):$", line)
-        if path_match:
-            current_path = path_match.group(1)
-            current_method = None
-            continue
-        method_match = re.match(r"^    (get|post|put|patch|delete|head):$", line)
-        if method_match and current_path:
-            current_method = method_match.group(1).upper()
-            operations.append({"method": current_method, "path": current_path, "operationId": ""})
-            continue
-        op_match = re.match(r"^      operationId: (.+)$", line)
-        if op_match and operations and current_method:
-            operations[-1]["operationId"] = op_match.group(1).strip()
-    return operations
-
-
-def scan_tests() -> dict[str, list[str]]:
-    haystack: dict[str, list[str]] = {}
-    for path in sorted(E2E_CASES.glob("test_*.py")):
-        text = path.read_text(encoding="utf-8")
-        rel = path.relative_to(REPO).as_posix()
-        for token in set(re.findall(r"/v1/[A-Za-z0-9_./{}:-]+|boxes|exec|attach|files|metrics|snapshots|images", text)):
-            haystack.setdefault(token, []).append(rel)
-    return haystack
-
-
-def classify(op: dict[str, str], tests: dict[str, list[str]]) -> tuple[str, list[str]]:
-    path = op["path"]
-    operation_id = op["operationId"]
-    keywords = [part.strip("{}") for part in path.split("/") if part and not part.startswith("{")]
-    candidates: set[str] = set()
-    for keyword in keywords + ([operation_id] if operation_id else []):
-        if not keyword:
-            continue
-        for token, files in tests.items():
-            if keyword.lower() in token.lower() or keyword.lower() in " ".join(files).lower():
-                candidates.update(files)
-    if candidates:
-        return "candidate", sorted(candidates)
-    return "missing", []
-
-
-def write_markdown(rows: list[dict[str, object]]) -> Path:
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    out = OUT_DIR / "rest-inventory.md"
-    lines = [
-        "# REST API Test Inventory",
-        "",
-        "| Method | Path | operationId | Status | Candidate tests |",
-        "| --- | --- | --- | --- | --- |",
-    ]
-    for row in rows:
-        files = "<br>".join(row["files"]) if row["files"] else ""
-        lines.append(f"| {row['method']} | `{row['path']}` | `{row['operationId']}` | {row['status']} | {files} |")
-    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return out
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--json", action="store_true", help="also write JSON")
-    args = parser.parse_args()
-
-    operations = load_operations(SPEC.read_text(encoding="utf-8"))
-    tests = scan_tests()
-    rows = []
-    for op in operations:
-        status, files = classify(op, tests)
-        rows.append({**op, "status": status, "files": files})
-    out = write_markdown(rows)
-    if args.json:
-        json_out = OUT_DIR / "rest-inventory.json"
-        json_out.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
-    print(out)
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
-```
+The implementation should parse the OpenAPI document structurally, collect operations from `paths`, scan candidate test files, and emit both Markdown and JSON reports under `target/rest-test-report/`.
 
 **Step 2: Run inventory**
 
 Run:
 
 ```bash
-python3 scripts/test/rest/inventory.py --json
+cd apps && yarn node ../scripts/test/rest/inventory.mjs
 ```
 
 Expected:
@@ -152,8 +51,8 @@ Expected:
 Modify `make/test.mk`:
 
 ```make
-test\:rest\:inventory:
-	@python3 scripts/test/rest/inventory.py --json
+test\:rest\:inventory: _ensure-apps-deps
+	@cd apps && yarn node ../scripts/test/rest/inventory.mjs
 ```
 
 **Step 4: Verify**

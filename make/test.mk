@@ -315,6 +315,9 @@ test\:apps: _ensure-apps-deps dev\:go
 	@echo "🧪 Running apps workspace test matrix..."
 	@cd apps && GOFLAGS=-tags=boxlite_dev yarn nx run-many --target=test --all --parallel=$$(getconf _NPROCESSORS_ONLN) $(if $(FILTER),-- --testNamePattern '$(FILTER)',)
 
+test\:rest\:inventory: _ensure-apps-deps
+	@cd apps && yarn node ../scripts/test/rest/inventory.mjs
+
 # Installer-script smoke test: structural assertions on the rendered
 # install.sh (atomic replace, integrity envelope, pinned-install trust
 # tiers). Runs in a couple of seconds, no toolchain required beyond sh.
