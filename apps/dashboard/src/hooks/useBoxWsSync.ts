@@ -81,7 +81,7 @@ export function useBoxWsSync({ boxId, refetchOnCreate = false }: UseBoxWsSyncOpt
 
       // warm pool boxes — treat as created
       if (data.oldState === data.newState && data.newState === BoxState.STARTED) {
-        handleCreated(data.box)
+        handleCreated()
         return
       }
 
