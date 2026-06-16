@@ -7,7 +7,11 @@ import { Injectable, Logger } from '@nestjs/common'
 import type { IncomingMessage } from 'http'
 import type { Socket } from 'net'
 import { createProxyMiddleware, type RequestHandler } from 'http-proxy-middleware'
+import type { JWTPayload } from 'jose'
 import { ApiKeyService } from '../api-key/api-key.service'
+import { JWT_REGEX } from '../auth/constants/jwt-regex.constant'
+import { JwtStrategy } from '../auth/jwt.strategy'
+import { CustomHeaders } from '../common/constants/header.constants'
 import { OrganizationUserService } from '../organization/services/organization-user.service'
 import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
@@ -18,10 +22,9 @@ type RunnerUpgradeRequest = IncomingMessage & {
   __boxliteRunnerBoxId?: string
 }
 
-// Matches /api/v1/boxes/<id>/executions/<id>/attach and the legacy
+// Matches /api/v1/boxes/<id>/executions/<id>/attach and the prefixed
 // /api/v1/<tenant>/boxes/<id>/executions/<id>/attach shape with optional query string.
-// Capture group 1 is the box/box id.
-const ATTACH_PATH = /^\/api\/v1\/(?:[^/]+\/)?boxes\/([^/]+)\/executions\/[^/]+\/attach(?:\?.*)?$/
+const ATTACH_PATH = /^\/api\/v1\/(?:([^/]+)\/)?boxes\/([^/]+)\/executions\/[^/]+\/attach(?:\?.*)?$/
 
 /**
  * Singleton WebSocket proxy for `/attach` upgrades.
@@ -30,9 +33,9 @@ const ATTACH_PATH = /^\/api\/v1\/(?:[^/]+\/)?boxes\/([^/]+)\/executions\/[^/]+\/
  * NestJS controller `@Get(':boxId/executions/:execId/attach')` route never
  * fires for actual WS upgrade requests — it's HTTP-only and gets bypassed.
  * Main.ts registers `server.on('upgrade', wsProxy.upgrade)` and routes
- * matching paths through this service, which mirrors the API-key half of
- * CombinedAuthGuard inline, resolves the runner, and hands off to a
- * shared `createProxyMiddleware({ ws: true, ... })` instance.
+ * matching paths through this service, which mirrors the relevant
+ * CombinedAuthGuard behavior inline, resolves the runner, and hands off
+ * to a shared `createProxyMiddleware({ ws: true, ... })` instance.
  */
 @Injectable()
 export class BoxliteWsProxyService {
@@ -44,6 +47,7 @@ export class BoxliteWsProxyService {
     private readonly organizationUserService: OrganizationUserService,
     private readonly boxService: BoxService,
     private readonly runnerService: RunnerService,
+    private readonly jwtStrategy?: JwtStrategy,
   ) {
     this.proxy = createProxyMiddleware({
       ws: true,
@@ -77,11 +81,11 @@ export class BoxliteWsProxyService {
   }
 
   /** True when the request's URL is an `/attach` WS upgrade we should handle. */
-  matchAttachPath(url: string | undefined): { boxId: string } | null {
+  matchAttachPath(url: string | undefined): { boxId: string; prefix?: string } | null {
     if (!url) return null
     const m = url.match(ATTACH_PATH)
     if (!m) return null
-    return { boxId: m[1] }
+    return { boxId: m[2], ...(m[1] ? { prefix: m[1] } : {}) }
   }
 
   /**
@@ -132,19 +136,9 @@ export class BoxliteWsProxyService {
   }
 
   /**
-   * Inline API-key authentication for WS upgrades. Mirrors what the HTTP path
-   * gets from CombinedAuthGuard + OrganizationResourceActionGuard: the bearer
-   * must be a non-expired API key whose user is still a member of the key's
-   * organization. The membership check is critical — removing a user from an
-   * org deletes the OrganizationUser row but does not cascade to ApiKey rows,
-   * so without it a removed member's surviving key can still attach to
-   * boxes in that org.
-   *
-   * JWT (the second strategy in CombinedAuthGuard) is unused here because
-   * clients send an opaque, long-lived API key directly as the Bearer
-   * token — there is no token-exchange step. If a JWT issuer is ever
-   * enabled in the auth pipeline, extend this method to fall through to
-   * `jwtVerify` after the API-key check fails.
+   * Inline auth for WS upgrades. Express/Nest guards do not run for Node's
+   * `upgrade` event, so this mirrors the two relevant halves of the HTTP
+   * REST path: opaque API keys and OIDC/JWT bearer tokens.
    *
    * Unlike the HTTP path, this does not consult the Redis cache used by
    * ApiKeyStrategy / OrganizationAccessGuard. Upgrade frequency is low; if
@@ -157,6 +151,14 @@ export class BoxliteWsProxyService {
     const token = headerValue.replace(/^bearer\s+/i, '').trim()
     if (!token) return null
 
+    if (JWT_REGEX.test(token)) {
+      return this.authenticateJwt(req, token)
+    }
+
+    return this.authenticateApiKey(token)
+  }
+
+  private async authenticateApiKey(token: string): Promise<{ organizationId: string } | null> {
     try {
       const apiKey = await this.apiKeyService.getApiKeyByValue(token)
       if (apiKey.expiresAt && apiKey.expiresAt < new Date()) return null
@@ -168,6 +170,42 @@ export class BoxliteWsProxyService {
     } catch {
       return null
     }
+  }
+
+  private async authenticateJwt(req: IncomingMessage, token: string): Promise<{ organizationId: string } | null> {
+    if (!this.jwtStrategy) return null
+
+    try {
+      const payload = await this.jwtStrategy.verifyToken(token)
+      const userId = this.userIdFromJwtPayload(payload)
+      const organizationId = this.jwtOrganizationId(req)
+      if (!userId || !organizationId) return null
+
+      const membership = await this.organizationUserService.findOne(organizationId, userId)
+      if (!membership) return null
+
+      return { organizationId }
+    } catch {
+      return null
+    }
+  }
+
+  private userIdFromJwtPayload(payload: JWTPayload): string | null {
+    const sub = typeof payload.sub === 'string' ? payload.sub : null
+    const uid = typeof payload.uid === 'string' ? payload.uid : null
+    return payload.cid && uid ? uid : sub
+  }
+
+  private jwtOrganizationId(req: IncomingMessage): string | null {
+    const prefix = this.matchAttachPath(req.url)?.prefix
+    if (prefix && prefix !== 'default') {
+      return prefix
+    }
+
+    const header =
+      req.headers[CustomHeaders.ORGANIZATION_ID.name.toLowerCase()] ?? req.headers[CustomHeaders.ORGANIZATION_ID.name]
+    const headerValue = Array.isArray(header) ? header[0] : header
+    return headerValue || null
   }
 
   private respondAndClose(socket: Socket, status: number, reason: string): void {
