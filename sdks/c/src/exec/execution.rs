@@ -767,6 +767,12 @@ async fn stderr_pump<S>(
     let _ = done_tx.send(());
 }
 
+/// Upper bound on how long `exit_pump` waits for stdout/stderr pumps to
+/// flush before pushing Exit. The exit code is already known by then; this
+/// only guards against a pump that never EOFs (signal-killed process) from
+/// stranding the Exit event.
+const STREAM_DRAIN_BOUND: std::time::Duration = std::time::Duration::from_secs(2);
+
 async fn exit_pump(
     exec_arc: Arc<Mutex<Option<Execution>>>,
     cb: CBoxExitFn,
@@ -781,9 +787,21 @@ async fn exit_pump(
     // event for this execution; the Go SDK relies on this to safely delete
     // the shared cgo.Handle in its exit handler. Aborted pumps drop their
     // tx → rx.await returns Err → harmless.
-    for rx in stream_dones {
-        let _ = rx.await;
-    }
+    //
+    // Bound the drain. A process killed by signal — e.g. an exec timeout's
+    // SIGTERM→SIGKILL — can leave the guest stdout/stderr pipes without an
+    // EOF, so a stream pump never finishes and never signals done. An
+    // unbounded wait here would strand the Exit event forever, hanging
+    // Execution::wait() and, over REST, the runner's handle.Wait() (so its
+    // `Done` never fires and the client's wait() times out). A stuck pump is
+    // parked on `stream.next().await` with no further output to emit, so
+    // pushing Exit after the bound still keeps Exit the last event.
+    let drain = async {
+        for rx in stream_dones {
+            let _ = rx.await;
+        }
+    };
+    let _ = tokio::time::timeout(STREAM_DRAIN_BOUND, drain).await;
     process_completed.store(true, Ordering::Release);
     // Claim the Exit dispatch slot. If `execution_free` already won the
     // race (force-close before natural exit propagated), we silently
@@ -874,6 +892,46 @@ mod tests {
             process_completed: Arc::new(AtomicBool::new(false)),
             exit_dispatched: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    #[test]
+    fn exit_pump_does_not_block_on_a_stream_that_never_eofs() {
+        // A process killed by signal (e.g. an exec timeout's SIGKILL) can
+        // leave the guest stdout/stderr pipes without an EOF, so a stream
+        // pump never signals done. exit_pump must still push Exit within a
+        // bound — otherwise Execution::wait() and, over REST, the runner's
+        // handle.Wait() hang forever (the e2e exec-timeout cases time out).
+        extern "C" fn noop_exit(_code: c_int, _ud: *mut c_void) {}
+
+        let handle = empty_handle();
+        let rt = handle.tokio_rt.clone();
+        // Hold the sender for the whole test so the receiver never resolves
+        // (neither Ok nor Err) — exactly the stuck-pump condition.
+        let (_held_tx, never_rx) = oneshot::channel::<()>();
+
+        let fut = exit_pump(
+            handle.execution.clone(),
+            noop_exit,
+            0,
+            handle.queue.clone(),
+            handle.process_completed.clone(),
+            handle.exit_dispatched.clone(),
+            vec![never_rx],
+        );
+        let res = rt.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(5), fut).await
+        });
+
+        assert!(
+            res.is_ok(),
+            "exit_pump hung waiting for a stream that never EOFs; Exit would \
+             never be dispatched and wait() would hang"
+        );
+        assert!(
+            handle.exit_dispatched.load(Ordering::Acquire),
+            "exit_pump returned without dispatching Exit"
+        );
+        drop(_held_tx);
     }
 
     #[test]
