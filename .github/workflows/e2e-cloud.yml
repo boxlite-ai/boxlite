@@ -129,7 +129,7 @@ jobs:
         id: filter
         with:
           filters: |
-            # API container — apps/api Dockerfile.source bakes from these.
+            # API container — apps/api/Dockerfile bakes from these.
             api:
               - 'apps/api/**'
               - 'apps/dashboard/**'
