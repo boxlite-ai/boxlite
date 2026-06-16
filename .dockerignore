@@ -14,9 +14,9 @@ apps/.nx
 target
 dist
 apps/dist/*
-!apps/dist/apps
+!apps/dist/apps/
 apps/dist/apps/*
-!apps/dist/apps/daemon-runtime
+!apps/dist/apps/daemon-runtime/
 apps/dist/apps/daemon-runtime/*
 !apps/dist/apps/daemon-runtime/boxlite-daemon-amd64
 !apps/dist/apps/daemon-runtime/boxlite-daemon-arm64

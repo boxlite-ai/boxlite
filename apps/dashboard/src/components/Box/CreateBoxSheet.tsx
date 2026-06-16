@@ -34,6 +34,7 @@ import { createSearchParams, generatePath, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { z } from 'zod'
 import { ScrollArea } from '../ui/scroll-area'
+import { SUPPORTED_BOX_IMAGES } from './supportedBoxImages'
 
 const NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
 
@@ -79,27 +80,6 @@ const BOX_CREATE_DEFAULTS: Record<ResourceFieldName, string> = {
   memory: '1',
   disk: '10',
 }
-
-const SUPPORTED_BOX_IMAGES = [
-  {
-    id: 'base',
-    name: 'Base',
-    ref: 'ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3',
-    isDefault: true,
-  },
-  {
-    id: 'python',
-    name: 'Python',
-    ref: 'ghcr.io/boxlite-ai/boxlite-agent-python:20260605-p0-r3',
-    isDefault: false,
-  },
-  {
-    id: 'node',
-    name: 'Node.js',
-    ref: 'ghcr.io/boxlite-ai/boxlite-agent-node:20260605-p0-r3',
-    isDefault: false,
-  },
-] as const
 
 const RESOURCE_FIELDS: Array<{
   name: ResourceFieldName

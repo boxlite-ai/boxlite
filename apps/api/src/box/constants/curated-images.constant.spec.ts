@@ -29,9 +29,9 @@ describe('supported image allowlist', () => {
   it('exposes the three curated ghcr refs, base first (the default)', () => {
     const supported = supportedImages()
     expect(supported).toEqual([
-      'ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3',
-      'ghcr.io/boxlite-ai/boxlite-agent-python:20260605-p0-r3',
-      'ghcr.io/boxlite-ai/boxlite-agent-node:20260605-p0-r3',
+      'ghcr.io/boxlite-ai/boxlite-agent-base-v2:v0.9.5',
+      'ghcr.io/boxlite-ai/boxlite-agent-python-v2:v0.9.5',
+      'ghcr.io/boxlite-ai/boxlite-agent-node-v2:v0.9.5',
     ])
   })
 
