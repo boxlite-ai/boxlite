@@ -17,12 +17,13 @@ const API_KEY_ENV: &str = "BOXLITE_API_KEY";
 const URL_ENV: &str = "BOXLITE_REST_URL";
 
 pub async fn run(profile_name: &str) -> Result<()> {
-    let Some(opts) = resolve_options(profile_name).await? else {
+    let Some(resolved) = resolve_options(profile_name).await? else {
         println!("Not logged in (profile `{}`).", profile_name);
         return Ok(());
     };
-    let url = opts.url.clone();
-    let runtime = BoxliteRuntime::rest(opts)
+    let url = resolved.opts.url.clone();
+    let stored_profile = resolved.stored_profile;
+    let runtime = BoxliteRuntime::rest(resolved.opts)
         .map_err(|e| anyhow!("failed to construct REST runtime: {}", e))?;
     let auth = runtime
         .auth()
@@ -30,6 +31,9 @@ pub async fn run(profile_name: &str) -> Result<()> {
 
     match auth.whoami().await {
         Ok(p) => {
+            if let Some(profile) = stored_profile {
+                refresh_stored_path_prefix(profile_name, profile, p.path_prefix.clone())?;
+            }
             let who = p.email.as_deref().unwrap_or(p.sub.as_str());
             println!("Logged in as:    {}", who);
             if let Some(name) = p.display_name.as_deref() {
@@ -65,6 +69,11 @@ pub async fn run(profile_name: &str) -> Result<()> {
     }
 }
 
+struct ResolvedOptions {
+    opts: BoxliteRestOptions,
+    stored_profile: Option<Profile>,
+}
+
 /// Active credential, ready to attach to a REST runtime.
 ///
 /// `$BOXLITE_API_KEY` (+ `$BOXLITE_REST_URL`) wins over the stored profile,
@@ -73,7 +82,7 @@ pub async fn run(profile_name: &str) -> Result<()> {
 /// fresh `BoxliteRestOptions` directly; the file path goes through
 /// [`credentials::load_active`], which is also where OIDC tokens get
 /// refreshed when they are about to expire.
-async fn resolve_options(profile_name: &str) -> Result<Option<BoxliteRestOptions>> {
+async fn resolve_options(profile_name: &str) -> Result<Option<ResolvedOptions>> {
     if let Ok(api_key) = std::env::var(API_KEY_ENV)
         && !api_key.is_empty()
     {
@@ -83,10 +92,34 @@ async fn resolve_options(profile_name: &str) -> Result<Option<BoxliteRestOptions
             api_key: Some(SecretString::from(api_key)),
             ..Profile::default()
         };
-        return Ok(Some(credentials::into_rest_options(profile)));
+        return Ok(Some(ResolvedOptions {
+            opts: credentials::into_rest_options(profile),
+            stored_profile: None,
+        }));
     }
     let http = discovery::http_client()?;
-    credentials::load_active(profile_name, &http)
+    let Some(opts) = credentials::load_active(profile_name, &http)
         .await
-        .context("loading stored credentials")
+        .context("loading stored credentials")?
+    else {
+        return Ok(None);
+    };
+    let stored_profile =
+        credentials::load_named(profile_name).context("loading refreshed stored credentials")?;
+    Ok(Some(ResolvedOptions {
+        opts,
+        stored_profile,
+    }))
+}
+
+fn refresh_stored_path_prefix(
+    profile_name: &str,
+    mut profile: Profile,
+    server_path_prefix: Option<String>,
+) -> Result<()> {
+    if profile.path_prefix == server_path_prefix {
+        return Ok(());
+    }
+    profile.path_prefix = server_path_prefix;
+    credentials::save_named(profile_name, &profile).context("saving refreshed path prefix")
 }
