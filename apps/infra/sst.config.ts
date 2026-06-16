@@ -5,8 +5,6 @@
 
 /// <reference path="./.sst/platform/config.d.ts" />
 
-import { resolveClickHouseExporter } from './clickhouse-exporter'
-
 // ─────────────────────────────────────────────────────────────────────────────
 // BoxLite control plane on AWS (ap-southeast-1).
 //
@@ -129,6 +127,7 @@ export default $config({
   async run() {
     // Load .env overrides (anything unset falls back to auto-generated values)
     const { config } = await import('dotenv')
+    const { resolveClickHouseExporter } = await import('./clickhouse-exporter')
     config()
 
     // Strip trailing slash from service.url so path concat produces clean URLs
