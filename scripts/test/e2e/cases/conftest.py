@@ -40,6 +40,19 @@ if DEFAULT_PROFILE != "default":
     collect_ignore = ["test_path_verification.py"]
 
 
+def path_verify_skipped() -> bool:
+    """Single truthy reading of BOXLITE_E2E_SKIP_PATH_VERIFY for the SDK
+    entry smokes (CLI / C / Go / Node). They each spawn a subprocess
+    that creates a box and then assert `runner_hits_for_box >= 1`,
+    which can't be satisfied on a cloud run where journalctl lives on
+    a remote EC2. When this returns True the entry tests skip the
+    journal-hits assertion; the box-id + driver-output assertions
+    still run."""
+    return os.environ.get("BOXLITE_E2E_SKIP_PATH_VERIFY", "").lower() in (
+        "1", "true", "yes", "on"
+    )
+
+
 def skip_or_fail_unless_sdk_build_required(reason: str) -> None:
     """SDK entry-point fixtures (test_c_entry, test_go_entry,
     test_node_entry, test_cli_entry, test_cli_detach_recovery) skip

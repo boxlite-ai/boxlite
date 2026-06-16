@@ -48,9 +48,11 @@ pytestmark = pytest.mark.xfail(
 
 
 def _profile() -> dict:
+    import os
+    name = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
     return tomllib.loads((Path.home() / ".boxlite/credentials.toml").read_text())[
         "profiles"
-    ]["p1"]
+    ][name]
 
 
 def _post_box(spec: dict) -> tuple[int, dict[str, Any] | None]:
