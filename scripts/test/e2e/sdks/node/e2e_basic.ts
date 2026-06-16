@@ -8,9 +8,13 @@
 // the napi-rs binding's URL/credential/options marshalling end to end.
 // Exec stdout streaming is covered by the Python / Go / CLI smokes.
 
+// Import the TS source directly (run under `npx tsx`): the package `main`
+// points at dist/index.js, which the CI install step does not build (it only
+// stages the napi binary). lib/index.ts loads the binding via
+// lib/native.ts → ../native/boxlite.js.
 import {
   JsBoxlite, BoxliteRestOptions, ApiKeyCredential,
-} from '../../../../../sdks/node';
+} from '../../../../../sdks/node/lib/index.ts';
 
 function env(k: string, def: string): string {
   const v = process.env[k];
