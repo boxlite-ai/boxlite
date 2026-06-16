@@ -138,24 +138,6 @@ def path_verify_skipped() -> bool:
 def skip_or_fail_unless_sdk_build_required(reason: str) -> None:
     """SDK entry-point fixtures (test_c_entry, test_go_entry,
     test_node_entry, test_cli_entry, test_cli_detach_recovery) skip
-    when their build artifact is missing — convenient for the local
-    dev path where someone hasn't built every SDK yet. On the cloud
-    gate the workflow produces every artifact up front; set
-    BOXLITE_E2E_REQUIRE_SDK_BUILDS=1 there so a regression in the
-    build step surfaces as a test failure, not a silent skip."""
-    require = os.environ.get("BOXLITE_E2E_REQUIRE_SDK_BUILDS", "")
-    if require.lower() in ("1", "true", "yes", "on"):
-        pytest.fail(
-            f"BOXLITE_E2E_REQUIRE_SDK_BUILDS=1 forbids skipping this case "
-            f"but the prerequisite is missing: {reason}"
-        )
-    pytest.skip(reason)
-
-
-
-def skip_or_fail_unless_sdk_build_required(reason: str) -> None:
-    """SDK entry-point fixtures (test_c_entry, test_go_entry,
-    test_node_entry, test_cli_entry, test_cli_detach_recovery) skip
     when their build artifact is missing — convenient for local dev
     where someone hasn't built every SDK. On the cloud gate the
     e2e-cloud-test workflow produces every artifact up front via
