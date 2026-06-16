@@ -141,7 +141,10 @@ const rawTarget = api || selected.proxyTarget
 const proxyTarget = rawTarget ? rawTarget.replace(/\/api\/?$/, '').replace(/\/$/, '') : undefined
 
 // PROD guard: real user data, and prod Auth0 would have to allow http://localhost:3000.
-if (selected.prod && !api) {
+// Runs for ANY prod-target invocation — including `--api=<prod-url>`, which would
+// otherwise bypass the confirmation. Only the "unconfigured" check depends on the
+// built-in mapping (an explicit --api always supplies a target).
+if (selected.prod) {
   if (!proxyTarget) {
     console.error('The "prod" API environment is not configured yet (no prod stage).')
     console.error('Set API_TARGETS.prod in apps/scripts/start-dashboard.mjs once prod exists.')
@@ -162,6 +165,10 @@ const env = {
 
 if (proxyTarget) {
   env.DASHBOARD_API_PROXY_TARGET = proxyTarget
+  // Force a same-origin `/api` path: clear any inherited/exported VITE_BASE_API_URL
+  // so ConfigProvider can't build a cross-origin apiUrl and bypass the proxy (which
+  // would re-introduce the very CORS failure this proxy exists to avoid).
+  env.VITE_BASE_API_URL = ''
 }
 
 env.PATH = [appsBinPath, process.env.PATH].filter(Boolean).join(path.delimiter)
