@@ -35,9 +35,11 @@ import pytest
 
 
 def _profile() -> dict:
+    import os
+    name = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
     return tomllib.loads((Path.home() / ".boxlite/credentials.toml").read_text())[
         "profiles"
-    ]["p1"]
+    ][name]
 
 
 def _api_call(

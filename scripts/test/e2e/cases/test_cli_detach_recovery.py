@@ -30,6 +30,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import skip_or_fail_unless_sdk_build_required, path_verify_skipped
+
 sys.path.insert(
     0,
     str(Path(__file__).resolve().parents[4] / "scripts" / "test" / "e2e" / "lib"),
@@ -38,15 +40,22 @@ from path_verification import runner_journal_seek, runner_hits_for_box
 
 BOXLITE_BIN = os.environ.get("BOXLITE_E2E_CLI", shutil.which("boxlite"))
 IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "alpine:3.23")
-UUID_RE = re.compile(
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+# Box ids are server-issued and opaque: the local runtime mints 12-char
+# Base62, but a REST server may return a ULID or UUID (see BoxID docs,
+# src/boxlite/src/runtime/id.rs).
+BOX_ID_RE = re.compile(
+    r"\b("
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"  # UUID
+    r"|[0-9A-HJKMNP-TV-Z]{26}"                                       # ULID
+    r"|[0-9A-Za-z]{12}"                                              # 12-char Base62
+    r")\b"
 )
 
 
 @pytest.fixture(scope="module")
 def cli():
     if not BOXLITE_BIN or not Path(BOXLITE_BIN).exists():
-        pytest.skip(f"boxlite CLI not found at {BOXLITE_BIN!r}")
+        skip_or_fail_unless_sdk_build_required(f"boxlite CLI not found at {BOXLITE_BIN!r}")
     return BOXLITE_BIN
 
 
@@ -80,7 +89,7 @@ def test_detached_box_survives_cli_exit_and_is_reusable(cli):
 
     # 1) detach run in one CLI process
     r_run = run(cli, "run", "-d", IMAGE, "--", "sleep", "300", timeout=120)
-    m = UUID_RE.search(r_run.stdout)
+    m = BOX_ID_RE.search(r_run.stdout)
     assert m, f"`boxlite run -d` did not print a uuid: {r_run.stdout!r}"
     box_id = m.group(0)
 
@@ -113,11 +122,12 @@ def test_detached_box_survives_cli_exit_and_is_reusable(cli):
         )
 
         # 5) runner journal saw the box id (path-bypass guard)
-        hits = runner_hits_for_box(journal_since, box_id)
-        assert hits >= 1, (
-            f"runner journal did not see detached box {box_id}; "
-            f"`boxlite run -d` may have bypassed the API"
-        )
+        if not path_verify_skipped():
+            hits = runner_hits_for_box(journal_since, box_id)
+            assert hits >= 1, (
+                f"runner journal did not see detached box {box_id}; "
+                f"`boxlite run -d` may have bypassed the API"
+            )
     finally:
         run(cli, "rm", "-f", box_id, check=False)
 
@@ -127,7 +137,7 @@ def test_detached_box_exec_propagates_exit_code_on_fresh_cli(cli):
     still propagate when the exec is launched from a fresh CLI process
     (i.e. no in-memory SDK state to lean on)."""
     r_run = run(cli, "run", "-d", IMAGE, "--", "sleep", "300", timeout=120)
-    m = UUID_RE.search(r_run.stdout)
+    m = BOX_ID_RE.search(r_run.stdout)
     assert m
     box_id = m.group(0)
 

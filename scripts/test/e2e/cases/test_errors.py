@@ -19,9 +19,11 @@ import pytest
 
 
 def _profile():
+    import os
+    name = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
     return tomllib.loads(
         (Path.home() / ".boxlite/credentials.toml").read_text()
-    )["profiles"]["p1"]
+    )["profiles"][name]
 
 
 @pytest.mark.asyncio

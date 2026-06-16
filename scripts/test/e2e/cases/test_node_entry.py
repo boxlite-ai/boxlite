@@ -17,21 +17,31 @@ from pathlib import Path
 
 import pytest
 
+from conftest import skip_or_fail_unless_sdk_build_required, path_verify_skipped
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from path_verification import runner_journal_seek, runner_hits_for_box
 
 REPO = Path(__file__).resolve().parents[4]
 SRC = REPO / "scripts/test/e2e/sdks/node/e2e_basic.ts"
 NODE_SDK = REPO / "sdks/node"
-UUID_RE = re.compile(
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+# Box ids are server-issued and opaque: the local runtime mints 12-char
+# Base62, but a REST server may return a ULID or UUID (see BoxID docs,
+# src/boxlite/src/runtime/id.rs).
+BOX_ID_RE = re.compile(
+    r"\b("
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"  # UUID
+    r"|[0-9A-HJKMNP-TV-Z]{26}"                                       # ULID
+    r"|[0-9A-Za-z]{12}"                                              # 12-char Base62
+    r")\b"
 )
 
 
 def _profile():
+    name = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
     return tomllib.loads(
         (Path.home() / ".boxlite/credentials.toml").read_text()
-    )["profiles"]["p1"]
+    )["profiles"][name]
 
 
 def _has_node_napi_build() -> bool:
@@ -46,13 +56,13 @@ def _has_node_napi_build() -> bool:
 @pytest.fixture(scope="module")
 def node_runner():
     if not shutil.which("node"):
-        pytest.skip("node not installed")
+        skip_or_fail_unless_sdk_build_required("node not installed")
     if not shutil.which("npx"):
-        pytest.skip("npx not installed")
+        skip_or_fail_unless_sdk_build_required("npx not installed")
     if not SRC.exists():
-        pytest.skip(f"{SRC} missing")
+        skip_or_fail_unless_sdk_build_required(f"{SRC} missing")
     if not _has_node_napi_build():
-        pytest.skip(
+        skip_or_fail_unless_sdk_build_required(
             "Node SDK napi binding not built — run "
             "`cd sdks/node && yarn install && yarn build:native` first"
         )
@@ -68,7 +78,7 @@ def test_node_sdk_create_exec_remove(node_runner):
         "BOXLITE_E2E_URL": p["url"],
         "BOXLITE_E2E_API_KEY": p["api_key"],
         "BOXLITE_E2E_PREFIX": p.get("path_prefix") or "",
-        "BOXLITE_E2E_IMAGE": "alpine:3.23",
+        "BOXLITE_E2E_IMAGE": os.environ.get("BOXLITE_E2E_IMAGE", "alpine:3.23"),
     }
     # Use npx tsx to run the .ts directly without a separate compile step.
     # tsx is bundled with the apps workspace.
@@ -81,13 +91,14 @@ def test_node_sdk_create_exec_remove(node_runner):
         f"node driver exit={r.returncode}\nstdout:\n{r.stdout}\nstderr:\n{r.stderr}"
     )
 
-    m = UUID_RE.search(r.stdout)
+    m = BOX_ID_RE.search(r.stdout)
     assert m, f"node driver did not print BOX_ID: {r.stdout!r}"
     box_id = m.group(0)
 
     assert "OK" in r.stdout
 
-    hits = runner_hits_for_box(journal_since, box_id)
-    assert hits >= 1, (
-        f"runner journal did not see box {box_id} created by Node SDK"
-    )
+    if not path_verify_skipped():
+        hits = runner_hits_for_box(journal_since, box_id)
+        assert hits >= 1, (
+            f"runner journal did not see box {box_id} created by Node SDK"
+        )
