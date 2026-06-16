@@ -12,10 +12,14 @@ that fixture fails the test with a path-bypass error.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import re
 import sys
 import time
 import tomllib
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -27,8 +31,83 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from path_verification import runner_journal_seek, runner_hits_for_box
 
 DEFAULT_PROFILE = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
-DEFAULT_IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "alpine:3.23")
 CRED_PATH = Path.home() / ".boxlite" / "credentials.toml"
+
+
+def _discover_supported_image() -> str:
+    """Resolve the box image at session start.
+
+    Precedence:
+      1. `BOXLITE_E2E_IMAGE` env — explicit override (CI sets this, local
+         devs can pin a known-good ref). Returned as-is, no validation.
+      2. Probe — POST /boxes with an obviously-out-of-allowlist image
+         against the active credential profile's API, parse the 400
+         body's `"Supported images: a, b, c"` list, return the first.
+         The first entry is the server's default (curated-images.constant
+         `assertSupportedImage(undefined)` returns `supported[0]`),
+         which is the safest pick across reboots / image-allowlist
+         rotations.
+      3. Fallback `alpine:3.23` — if probe fails (network down, auth
+         broken, body shape changed). Tests downstream will still 400
+         loudly so the regression is visible.
+
+    The discovered value is also written back to `os.environ
+    ['BOXLITE_E2E_IMAGE']` so the C / Go / Node SDK entry drivers'
+    subprocess env inherits it without each test re-implementing the
+    probe.
+    """
+    explicit = os.environ.get("BOXLITE_E2E_IMAGE", "").strip()
+    if explicit:
+        return explicit
+    if not CRED_PATH.exists():
+        return "alpine:3.23"
+    try:
+        data = tomllib.loads(CRED_PATH.read_text())
+        p = data.get("profiles", {}).get(DEFAULT_PROFILE)
+        if not p:
+            return "alpine:3.23"
+        url = f"{p['url'].rstrip('/')}/v1/{p.get('path_prefix') or ''}/boxes".replace("//boxes", "/boxes")
+        req = urllib.request.Request(
+            url,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {p['api_key']}",
+                "Content-Type": "application/json",
+            },
+            # Send a deliberately-unsupported image so the API answers
+            # with its full supportedImages list. cpus/memory are
+            # required by the DTO but never reached — image validation
+            # rejects first.
+            data=json.dumps({
+                "image": "__e2e_probe_not_in_allowlist__",
+                "cpus": 1,
+                "memory_mib": 256,
+            }).encode(),
+        )
+        try:
+            urllib.request.urlopen(req, timeout=10).read()
+        except urllib.error.HTTPError as e:
+            if e.code == 400:
+                body = json.loads(e.read())
+                # Message shape:
+                #   "Unsupported image 'X'. Supported images: a, b, c"
+                m = re.search(
+                    r"Supported images:\s*(.+?)\s*$",
+                    body.get("message", ""),
+                )
+                if m:
+                    images = [s.strip() for s in m.group(1).split(",") if s.strip()]
+                    if images:
+                        return images[0]
+    except Exception:
+        pass
+    return "alpine:3.23"
+
+
+DEFAULT_IMAGE = _discover_supported_image()
+# Pin the discovered value into the env so the C / Go / Node entry
+# drivers' subprocess inherit it without re-running the probe.
+os.environ["BOXLITE_E2E_IMAGE"] = DEFAULT_IMAGE
 
 # test_path_verification.py is a LOCAL-only meta-test: case 1 asserts the
 # credentials.toml URL contains ":3000" (the local API port), and case 2
