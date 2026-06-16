@@ -21,12 +21,7 @@ export interface PerBoxLimits {
  * persisted them, which then poisoned every list_info round-trip for the
  * whole org. Memory and disk are compared in GB (the CreateBoxDto unit).
  */
-export function assertWithinPerBoxLimits(
-  cpu: number,
-  memoryGb: number,
-  diskGb: number,
-  limits: PerBoxLimits,
-): void {
+export function assertWithinPerBoxLimits(cpu: number, memoryGb: number, diskGb: number, limits: PerBoxLimits): void {
   const violations: string[] = []
   if (limits.maxCpuPerBox > 0 && cpu > limits.maxCpuPerBox) {
     violations.push(`cpu ${cpu} exceeds the per-box limit of ${limits.maxCpuPerBox}`)
