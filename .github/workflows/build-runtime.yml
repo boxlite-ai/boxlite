@@ -37,6 +37,20 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      target_filter:
+        description: 'Optional. Build only the given target (e.g. "linux-x64-gnu"). Empty = build all matrix platforms.'
+        type: string
+        default: ''
+        required: false
+    secrets:
+      # publish_crates references this — gated on `github.event_name ==
+      # release` so it never runs on a workflow_call path. Declared
+      # required:false so GH's static workflow_call resolver doesn't
+      # reject callers that don't pass it (e.g. e2e-cloud-test).
+      CARGO_REGISTRY_TOKEN:
+        required: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -47,9 +61,34 @@ jobs:
   config:
     uses: ./.github/workflows/config.yml
 
+  # Same target_filter pattern as build-c.yml — lets e2e-cloud-test pull
+  # only the linux-x64 entry instead of running the full release matrix.
+  setup_matrix:
+    name: Setup matrix
+    needs: config
+    runs-on: ubuntu-latest
+    outputs:
+      platforms: ${{ steps.filter.outputs.platforms }}
+    steps:
+      - id: filter
+        env:
+          ALL_PLATFORMS: ${{ needs.config.outputs.platforms }}
+          TARGET_FILTER: ${{ inputs.target_filter }}
+        run: |
+          if [ -n "${TARGET_FILTER:-}" ]; then
+            FILTERED=$(printf '%s' "$ALL_PLATFORMS" | jq -c --arg t "$TARGET_FILTER" '[.[] | select(.target == $t)]')
+            COUNT=$(printf '%s' "$FILTERED" | jq 'length')
+            [ "$COUNT" -ge 1 ] || { echo "::error::No matrix entry matches target_filter=$TARGET_FILTER"; exit 1; }
+            echo "Filtered to $COUNT entry(ies): $FILTERED"
+          else
+            FILTERED="$ALL_PLATFORMS"
+            echo "No filter — full matrix"
+          fi
+          echo "platforms=$FILTERED" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build Runtime (${{ matrix.target }})
-    needs: config
+    needs: [config, setup_matrix]
     if: >-
       github.event_name != 'workflow_run' ||
       github.event.workflow_run.conclusion == 'success'
@@ -57,7 +96,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(needs.config.outputs.platforms) }}
+        include: ${{ fromJson(needs.setup_matrix.outputs.platforms) }}
 
     steps:
       - uses: actions/checkout@v4
