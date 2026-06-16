@@ -40,6 +40,9 @@ from path_verification import runner_journal_seek, runner_hits_for_box
 
 BOXLITE_BIN = os.environ.get("BOXLITE_E2E_CLI", shutil.which("boxlite"))
 IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "alpine:3.23")
+# CLI reads BOXLITE_PROFILE; cloud writes only [profiles.p1] (no default), so
+# pin it or every CLI call falls back to `default` and is "not logged in".
+PROFILE = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
 # Box ids are server-issued and opaque: the local runtime mints 12-char
 # Base62, but a REST server may return a ULID or UUID (see BoxID docs,
 # src/boxlite/src/runtime/id.rs).
@@ -62,20 +65,10 @@ def cli():
 def run(cli, *args, timeout: int = 60, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(
         [cli, *args], timeout=timeout, text=True, capture_output=True, check=check,
+        env={**os.environ, "BOXLITE_PROFILE": PROFILE},
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Step 3 (`boxlite exec <id> -- sh -c 'echo still-alive'`) returns "
-        "empty stdout — same stdout-drop race that #563 fixes (the CLI's "
-        "exec command goes through libboxlite's drain path). Steps 1 + 2 "
-        "(detach run + ls verify) work today. When #563 lands the assertion "
-        "`'still-alive' in r_exec.stdout` starts holding and this xfail "
-        "flips xpass-strict — drop the marker then."
-    ),
-)
 def test_detached_box_survives_cli_exit_and_is_reusable(cli):
     """The cycle: detach → CLI exits → fresh CLI invocations still
     see / exec the same box id.

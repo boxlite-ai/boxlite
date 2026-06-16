@@ -44,13 +44,21 @@ def _profile():
     )["profiles"][name]
 
 
+def _napi_binding():
+    """Absolute path to the built napi `.node`, or None. The CI install stages
+    it under sdks/node/npm/<triple>/, where the generated native/boxlite.js
+    loader won't find it (it tries ./boxlite.<triple>.node then the npm package
+    name). NAPI_RS_NATIVE_LIBRARY_PATH points the loader straight at it."""
+    for p in [NODE_SDK / "native", NODE_SDK / "npm", NODE_SDK / "dist"]:
+        if p.exists():
+            hit = next(iter(sorted(p.rglob("*.node"))), None)
+            if hit:
+                return hit
+    return None
+
+
 def _has_node_napi_build() -> bool:
-    """The napi binding produces sdks/node/native/*.node OR
-    sdks/node/dist/*.node — either is fine."""
-    for p in [NODE_SDK / "native", NODE_SDK / "dist", NODE_SDK / "npm"]:
-        if p.exists() and any(p.rglob("*.node")):
-            return True
-    return False
+    return _napi_binding() is not None
 
 
 @pytest.fixture(scope="module")
@@ -80,6 +88,12 @@ def test_node_sdk_create_exec_remove(node_runner):
         "BOXLITE_E2E_PREFIX": p.get("path_prefix") or "",
         "BOXLITE_E2E_IMAGE": os.environ.get("BOXLITE_E2E_IMAGE", "alpine:3.23"),
     }
+    # Point the napi loader straight at the staged binary; boxlite.js honors
+    # NAPI_RS_NATIVE_LIBRARY_PATH before its ./<triple>.node / npm-package
+    # resolution, which don't match the install layout.
+    binding = _napi_binding()
+    if binding:
+        env["NAPI_RS_NATIVE_LIBRARY_PATH"] = str(binding)
     # Use npx tsx to run the .ts directly without a separate compile step.
     # tsx is bundled with the apps workspace.
     r = subprocess.run(

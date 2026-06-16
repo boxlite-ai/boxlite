@@ -32,6 +32,10 @@ from path_verification import runner_journal_seek, runner_hits_for_box
 
 BOXLITE_BIN = os.environ.get("BOXLITE_E2E_CLI", shutil.which("boxlite"))
 IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "alpine:3.23")
+# The CLI reads BOXLITE_PROFILE (GlobalFlags::profile); the cloud credential
+# setup writes only [profiles.p1], not [profiles.default], so without pinning
+# this every CLI call falls back to `default` and reports "not logged in".
+PROFILE = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
 # Box ids are server-issued and opaque: the local runtime mints 12-char
 # Base62, but a REST server may return a ULID or UUID (see BoxID docs,
 # src/boxlite/src/runtime/id.rs).
@@ -53,7 +57,11 @@ def cli():
 
 def run(cli, *args, timeout: int = 60, stdin: str | None = None,
         check: bool = True) -> subprocess.CompletedProcess:
-    """Wrap subprocess.run with consistent settings + always capture."""
+    """Wrap subprocess.run with consistent settings + always capture.
+
+    Pins BOXLITE_PROFILE so every CLI call reads the same credential profile
+    the Python SDK uses, regardless of whether a `default` profile exists.
+    """
     return subprocess.run(
         [cli, *args],
         timeout=timeout,
@@ -61,6 +69,7 @@ def run(cli, *args, timeout: int = 60, stdin: str | None = None,
         text=True,
         capture_output=True,
         check=check,
+        env={**os.environ, "BOXLITE_PROFILE": PROFILE},
     )
 
 
