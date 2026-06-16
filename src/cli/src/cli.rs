@@ -2,9 +2,10 @@
 //! This module contains all CLI-related code including the main CLI structure,
 //! subcommands, and flag definitions.
 
-use boxlite::runtime::options::{PortProtocol, PortSpec, VolumeSpec};
+use boxlite::runtime::options::{NetworkConfig, NetworkMode, PortProtocol, PortSpec, VolumeSpec};
 use boxlite::{
     BoxCommand, BoxOptions, BoxliteOptions, BoxliteRestOptions, BoxliteRuntime, ImageRegistry,
+    NetworkSpec,
 };
 use clap::{Args, Command, Parser, Subcommand, ValueEnum};
 use clap_complete::shells::{Bash, Fish, Zsh};
@@ -325,6 +326,12 @@ pub struct ProcessFlags {
     /// User to run the command as (format: <name|uid>[:<group|gid>])
     #[arg(short = 'u', long = "user")]
     pub user: Option<String>,
+
+    /// Override the image entrypoint with a single executable, mirroring
+    /// `docker run --entrypoint`. Sets the container's configured entrypoint;
+    /// any trailing command is still exec'd as the foreground process.
+    #[arg(long = "entrypoint", value_name = "EXEC")]
+    pub entrypoint: Option<String>,
 }
 
 impl ProcessFlags {
@@ -340,6 +347,9 @@ impl ProcessFlags {
     {
         opts.working_dir = self.workdir.clone();
         apply_env_vars_with_lookup(&self.env, opts, lookup);
+        if let Some(ref exec) = self.entrypoint {
+            opts.entrypoint = Some(vec![exec.clone()]);
+        }
         Ok(())
     }
 
@@ -392,6 +402,16 @@ pub struct ResourceFlags {
     /// Memory limit (in MiB)
     #[arg(long)]
     pub memory: Option<u32>,
+
+    /// Container rootfs disk size (in GB). The COW overlay is sparse —
+    /// actual on-disk usage grows as the workload writes. The virtual
+    /// size is `max(this, base image size)`; smaller values are ignored.
+    /// Default (unset) sizes the overlay to exactly the base image,
+    /// leaving no headroom — set this for workloads that write
+    /// significant data (in-box `docker pull`, `apt install`, `npm
+    /// install`, build caches, etc.).
+    #[arg(long = "disk-size", value_name = "GB")]
+    pub disk_size_gb: Option<u64>,
 }
 
 impl ResourceFlags {
@@ -405,6 +425,47 @@ impl ResourceFlags {
         if let Some(mem) = self.memory {
             opts.memory_mib = Some(mem);
         }
+        if let Some(gb) = self.disk_size_gb {
+            opts.disk_size_gb = Some(gb);
+        }
+    }
+}
+
+// ============================================================================
+// NETWORK FLAGS
+// ============================================================================
+
+#[derive(Args, Debug, Clone)]
+pub struct NetworkFlags {
+    /// Network mode: "enabled" (default — full or allow-listed egress) or
+    /// "disabled" (no interface at all; gvproxy is not started and the guest
+    /// has no eth0).
+    #[arg(long = "network", value_name = "MODE")]
+    pub network: Option<String>,
+
+    /// Restrict egress to the listed hosts/IPs (repeatable); everything else
+    /// is DNS-sinkholed. Implies network=enabled. Patterns: exact host,
+    /// "*.example.com", IP, or CIDR. Incompatible with `--network disabled`.
+    #[arg(long = "allow-net", value_name = "HOST")]
+    pub allow_net: Vec<String>,
+}
+
+impl NetworkFlags {
+    pub fn apply_to(&self, opts: &mut BoxOptions) -> anyhow::Result<()> {
+        // Leave BoxOptions::default() (Enabled, full access) untouched when
+        // neither flag is given, so a bare `run` behaves as before.
+        if self.network.is_none() && self.allow_net.is_empty() {
+            return Ok(());
+        }
+        let mode = match self.network.as_deref() {
+            Some(value) => value.parse::<NetworkMode>()?,
+            None => NetworkMode::Enabled,
+        };
+        opts.network = NetworkSpec::try_from(NetworkConfig {
+            mode,
+            allow_net: self.allow_net.clone(),
+        })?;
+        Ok(())
     }
 }
 
@@ -868,12 +929,159 @@ mod tests {
         let flags = ResourceFlags {
             cpus: Some(1000),
             memory: None,
+            disk_size_gb: None,
         };
 
         let mut opts = BoxOptions::default();
         flags.apply_to(&mut opts);
 
         assert_eq!(opts.cpus, Some(255));
+    }
+
+    #[test]
+    fn test_resource_flags_disk_size_plumbed() {
+        // --disk-size <GB> must reach BoxOptions.disk_size_gb verbatim so the
+        // COW overlay in container_rootfs::create_cow_disk picks up
+        // max(user_size, base_image_size). A regression that drops this
+        // flag would leave agent-workflow tests at base-image size and
+        // they'd silently ENOSPC mid-`docker pull`.
+        let flags = ResourceFlags {
+            cpus: None,
+            memory: None,
+            disk_size_gb: Some(10),
+        };
+
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts);
+
+        assert_eq!(opts.disk_size_gb, Some(10));
+    }
+
+    #[test]
+    fn test_resource_flags_disk_size_default_unset() {
+        // No --disk-size on the command line means BoxOptions.disk_size_gb
+        // stays None — container_rootfs::create_cow_disk's `if let Some`
+        // branch is skipped and the COW disk is exactly the base image
+        // size. This is the documented default; the test pins it so a
+        // refactor that injects a fallback (`unwrap_or(N)`) would fail.
+        let flags = ResourceFlags {
+            cpus: None,
+            memory: None,
+            disk_size_gb: None,
+        };
+
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts);
+
+        assert_eq!(opts.disk_size_gb, None);
+    }
+
+    fn network_flags(network: Option<&str>, allow_net: &[&str]) -> NetworkFlags {
+        NetworkFlags {
+            network: network.map(str::to_string),
+            allow_net: allow_net.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn test_network_flags_default_left_untouched() {
+        // Neither flag set => BoxOptions::default() network is preserved
+        // (Enabled, empty allow_net), so a bare `run` keeps full access.
+        let mut opts = BoxOptions::default();
+        network_flags(None, &[])
+            .apply_to(&mut opts)
+            .expect("no-op apply");
+
+        assert!(
+            matches!(opts.network, NetworkSpec::Enabled { ref allow_net } if allow_net.is_empty())
+        );
+    }
+
+    #[test]
+    fn test_network_flags_disabled() {
+        // --network disabled => NetworkSpec::Disabled (no eth0, gvproxy off).
+        let mut opts = BoxOptions::default();
+        network_flags(Some("disabled"), &[])
+            .apply_to(&mut opts)
+            .expect("disabled is valid");
+
+        assert!(matches!(opts.network, NetworkSpec::Disabled));
+    }
+
+    #[test]
+    fn test_network_flags_allow_net_implies_enabled() {
+        // --allow-net without --network => Enabled with the egress allowlist,
+        // matching the REST NetworkConfig{mode, allow_net} mapping.
+        let mut opts = BoxOptions::default();
+        network_flags(None, &["api.openai.com", "10.0.0.0/8"])
+            .apply_to(&mut opts)
+            .expect("allow-net implies enabled");
+
+        match opts.network {
+            NetworkSpec::Enabled { allow_net } => {
+                assert_eq!(allow_net, vec!["api.openai.com", "10.0.0.0/8"]);
+            }
+            other => panic!("expected Enabled with allowlist, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_network_flags_disabled_with_allow_net_is_rejected() {
+        // --network disabled + --allow-net is contradictory; the error comes
+        // from NetworkSpec::try_from (single source of truth), not the CLI.
+        let mut opts = BoxOptions::default();
+        let err = network_flags(Some("disabled"), &["api.openai.com"])
+            .apply_to(&mut opts)
+            .expect_err("disabled + allow-net must error");
+
+        assert!(err.to_string().contains("allow_net"));
+    }
+
+    #[test]
+    fn test_network_flags_invalid_mode_is_rejected() {
+        // Unknown mode strings surface NetworkMode::from_str's error rather
+        // than silently defaulting to enabled.
+        let mut opts = BoxOptions::default();
+        let err = network_flags(Some("bridge"), &[])
+            .apply_to(&mut opts)
+            .expect_err("unknown mode must error");
+
+        assert!(err.to_string().contains("network.mode"));
+    }
+
+    fn process_flags_with_entrypoint(entrypoint: Option<&str>) -> ProcessFlags {
+        ProcessFlags {
+            interactive: false,
+            tty: false,
+            env: Vec::new(),
+            workdir: None,
+            user: None,
+            entrypoint: entrypoint.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn test_process_flags_entrypoint_override() {
+        // --entrypoint <EXEC> reaches BoxOptions.entrypoint as a single-token
+        // argv, which container_rootfs applies as config.entrypoint.
+        let mut opts = BoxOptions::default();
+        process_flags_with_entrypoint(Some("/bin/bash"))
+            .apply_to(&mut opts)
+            .expect("entrypoint apply");
+
+        assert_eq!(opts.entrypoint, Some(vec!["/bin/bash".to_string()]));
+    }
+
+    #[test]
+    fn test_process_flags_entrypoint_default_none() {
+        // No --entrypoint leaves BoxOptions.entrypoint None so the image's
+        // own entrypoint is used unchanged.
+        let mut opts = BoxOptions::default();
+        process_flags_with_entrypoint(None)
+            .apply_to(&mut opts)
+            .expect("no-op apply");
+
+        assert_eq!(opts.entrypoint, None);
     }
 
     #[test]

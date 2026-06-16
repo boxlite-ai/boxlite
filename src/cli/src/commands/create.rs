@@ -1,4 +1,4 @@
-use crate::cli::{GlobalFlags, PublishFlags, ResourceFlags, VolumeFlags};
+use crate::cli::{GlobalFlags, NetworkFlags, PublishFlags, ResourceFlags, VolumeFlags};
 use boxlite::{BoxOptions, RootfsSpec};
 use clap::Args;
 
@@ -20,6 +20,11 @@ pub struct CreateArgs {
     #[arg(short = 'w', long = "workdir")]
     pub workdir: Option<String>,
 
+    /// Override the image entrypoint with a single executable, mirroring
+    /// `docker create --entrypoint`.
+    #[arg(long = "entrypoint", value_name = "EXEC")]
+    pub entrypoint: Option<String>,
+
     #[command(flatten)]
     pub resource: ResourceFlags,
 
@@ -28,6 +33,9 @@ pub struct CreateArgs {
 
     #[command(flatten)]
     pub volume: VolumeFlags,
+
+    #[command(flatten)]
+    pub network: NetworkFlags,
 }
 
 pub async fn execute(args: CreateArgs, global: &GlobalFlags) -> anyhow::Result<()> {
@@ -47,7 +55,11 @@ impl CreateArgs {
         self.management.apply_to(&mut options);
         self.publish.apply_to(&mut options)?;
         self.volume.apply_to(&mut options, global.home.as_deref())?;
+        self.network.apply_to(&mut options)?;
         options.working_dir = self.workdir.clone();
+        if let Some(ref exec) = self.entrypoint {
+            options.entrypoint = Some(vec![exec.clone()]);
+        }
         crate::cli::apply_env_vars(&self.env, &mut options);
         options.rootfs = RootfsSpec::Image(self.image.clone());
         Ok(options)

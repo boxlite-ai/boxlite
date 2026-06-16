@@ -26,12 +26,13 @@ describe('supported image allowlist', () => {
     }
   })
 
-  it('exposes the three pinned ghcr refs, base first (the default)', () => {
+  it('exposes the three curated ghcr refs, base first (the default)', () => {
     const supported = supportedImages()
-    expect(supported).toHaveLength(3)
-    expect(supported[0]).toContain('ghcr.io/boxlite-ai/boxlite-agent-base@sha256:')
-    expect(supported[1]).toContain('ghcr.io/boxlite-ai/boxlite-agent-python@sha256:')
-    expect(supported[2]).toContain('ghcr.io/boxlite-ai/boxlite-agent-node@sha256:')
+    expect(supported).toEqual([
+      'ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3',
+      'ghcr.io/boxlite-ai/boxlite-agent-python:20260605-p0-r3',
+      'ghcr.io/boxlite-ai/boxlite-agent-node:20260605-p0-r3',
+    ])
   })
 
   it('accepts each supported ref verbatim', () => {
@@ -44,7 +45,7 @@ describe('supported image allowlist', () => {
     expect(assertSupportedImage(undefined)).toBe(supportedImages()[0])
   })
 
-  it('prefers the env-configured ref over the pinned fallback', () => {
+  it('prefers the env-configured ref over the curated fallback', () => {
     process.env.BOXLITE_SYSTEM_PYTHON_IMAGE = 'ghcr.io/boxlite-ai/override@sha256:deadbeef'
     expect(assertSupportedImage('ghcr.io/boxlite-ai/override@sha256:deadbeef')).toBe(
       'ghcr.io/boxlite-ai/override@sha256:deadbeef',

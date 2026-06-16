@@ -8,6 +8,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/
 import { Field, FieldError, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   Sheet,
   SheetContent,
@@ -26,7 +27,7 @@ import { getBoxRouteId } from '@/lib/box-identity'
 import { cn } from '@/lib/utils'
 import type { Box } from '@boxlite-ai/api-client'
 import { useForm } from '@tanstack/react-form'
-import { Cpu, HardDrive, MemoryStick, Plus, type LucideIcon } from 'lucide-react'
+import { Cpu, HardDrive, MemoryStick, Package, Plus, type LucideIcon } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { NumericFormat } from 'react-number-format'
 import { createSearchParams, generatePath, useNavigate } from 'react-router-dom'
@@ -55,6 +56,7 @@ const formSchema = z.object({
     .string()
     .optional()
     .refine((val) => !val || NAME_REGEX.test(val), 'Only letters, digits, dots, underscores and dashes are allowed'),
+  image: z.string().optional(),
   cpu: z.string().optional().refine(isOptionalPositiveInteger, 'Enter a whole number, 1 or greater'),
   memory: z.string().optional().refine(isOptionalPositiveInteger, 'Enter a whole number, 1 or greater'),
   disk: z.string().optional().refine(isOptionalPositiveInteger, 'Enter a whole number, 1 or greater'),
@@ -64,12 +66,40 @@ type FormValues = z.input<typeof formSchema>
 
 const defaultValues: FormValues = {
   name: '',
+  image: '',
   cpu: '',
   memory: '',
   disk: '',
 }
 
 type ResourceFieldName = 'cpu' | 'memory' | 'disk'
+
+const BOX_CREATE_DEFAULTS: Record<ResourceFieldName, string> = {
+  cpu: '1',
+  memory: '1',
+  disk: '10',
+}
+
+const SUPPORTED_BOX_IMAGES = [
+  {
+    id: 'base',
+    name: 'Base',
+    ref: 'ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3',
+    isDefault: true,
+  },
+  {
+    id: 'python',
+    name: 'Python',
+    ref: 'ghcr.io/boxlite-ai/boxlite-agent-python:20260605-p0-r3',
+    isDefault: false,
+  },
+  {
+    id: 'node',
+    name: 'Node.js',
+    ref: 'ghcr.io/boxlite-ai/boxlite-agent-node:20260605-p0-r3',
+    isDefault: false,
+  },
+] as const
 
 const RESOURCE_FIELDS: Array<{
   name: ResourceFieldName
@@ -105,6 +135,7 @@ export const CreateBoxSheet = ({
   const { selectedOrganization } = useSelectedOrganization()
   const { reset: resetCreateBoxMutation, ...createBoxMutation } = useCreateBoxMutation()
   const formRef = useRef<HTMLFormElement>(null)
+  const defaultImage = SUPPORTED_BOX_IMAGES.find((image) => image.isDefault) ?? SUPPORTED_BOX_IMAGES[0]
 
   const form = useForm({
     defaultValues,
@@ -129,19 +160,16 @@ export const CreateBoxSheet = ({
       let boxId: string | undefined = undefined
       try {
         const resources = {
-          cpu: parseOptionalInteger(value.cpu),
-          memory: parseOptionalInteger(value.memory),
-          disk: parseOptionalInteger(value.disk),
+          cpu: parseOptionalInteger(value.cpu) ?? Number(BOX_CREATE_DEFAULTS.cpu),
+          memory: parseOptionalInteger(value.memory) ?? Number(BOX_CREATE_DEFAULTS.memory),
+          disk: parseOptionalInteger(value.disk) ?? Number(BOX_CREATE_DEFAULTS.disk),
         }
-        const hasResourceOverrides = Object.values(resources).some((resource) => resource !== undefined)
 
-        // TODO(image-rewrite): the image/template picker was removed with the image/template
-        // subsystem; box creation no longer selects an image. Rebuild image selection here once
-        // the new model lands.
         const box = await createBoxMutation.mutateAsync({
           name: value.name?.trim() || undefined,
+          image: value.image || defaultImage.ref,
           network: { mode: 'enabled' },
-          ...(hasResourceOverrides ? { resources } : {}),
+          resources,
         })
         boxId = getBoxRouteId(box)
         onCreated?.(box)
@@ -225,7 +253,31 @@ export const CreateBoxSheet = ({
               }}
             </form.Field>
 
-            {/* TODO(image-rewrite): image/template picker removed with the image/template subsystem; rebuild here. */}
+            <form.Field name="image">
+              {(field) => {
+                const selectedImageRef = field.state.value || defaultImage?.ref || ''
+                return (
+                  <Field>
+                    <FieldLabel htmlFor={field.name} className="flex items-center gap-1.5 text-sm font-semibold">
+                      <Package className="size-3.5" />
+                      Image
+                    </FieldLabel>
+                    <Select value={selectedImageRef} onValueChange={(value) => field.handleChange(value)}>
+                      <SelectTrigger id={field.name} name={field.name}>
+                        <SelectValue placeholder="Select image" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {SUPPORTED_BOX_IMAGES.map((image) => (
+                          <SelectItem key={image.id} value={image.ref}>
+                            {image.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                )
+              }}
+            </form.Field>
 
             <Accordion
               type="single"
@@ -250,25 +302,25 @@ export const CreateBoxSheet = ({
                           <form.Field key={name} name={name}>
                             {(field) => {
                               const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid
+                              const defaultValue = BOX_CREATE_DEFAULTS[name]
                               return (
-                                <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_11rem] sm:items-center">
+                                <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_9.5rem] sm:items-center sm:gap-4">
                                   <div className="min-w-0">
                                     <Label
                                       htmlFor={field.name}
-                                      className="flex items-center gap-1 text-xs font-medium text-muted-foreground"
+                                      className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground"
                                     >
-                                      <Icon className="size-3.5" />
+                                      <Icon className="size-4" />
                                       {label}
                                     </Label>
-                                    <p className="mt-0.5 text-xs text-muted-foreground">Optional.</p>
                                   </div>
                                   <div className="relative min-w-0">
                                     <NumericFormat
                                       customInput={Input}
                                       aria-invalid={isInvalid}
                                       id={field.name}
-                                      className="h-8 w-full pr-11 text-right font-medium tabular-nums placeholder:font-normal placeholder:text-muted-foreground/45"
-                                      placeholder={focusedAdvancedField === field.name ? '' : 'Default'}
+                                      className="h-8 w-full pr-11 text-right font-medium tabular-nums placeholder:font-normal placeholder:text-muted-foreground/55"
+                                      placeholder={focusedAdvancedField === field.name ? '' : defaultValue}
                                       decimalScale={0}
                                       allowNegative={false}
                                       isAllowed={(values) => values.floatValue === undefined || values.floatValue >= 1}
@@ -296,7 +348,6 @@ export const CreateBoxSheet = ({
                         ))}
                       </div>
                     </div>
-
                   </div>
                 </AccordionContent>
               </AccordionItem>

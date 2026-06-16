@@ -44,30 +44,67 @@ if [[ -z "$INSTANCE_ID" || "$INSTANCE_ID" == "None" ]]; then
 fi
 echo "    instance: $INSTANCE_ID"
 
-ASSET_URL="https://github.com/boxlite-ai/boxlite/releases/download/v${VERSION}/boxlite-runner-v${VERSION}-linux-amd64.tar.gz"
+ASSET_BASE="https://github.com/boxlite-ai/boxlite/releases/download/v${VERSION}"
+ASSET_TARBALL="boxlite-runner-v${VERSION}-linux-amd64.tar.gz"
 
+# Remote upgrade script. Mirrors the boot user-data's integrity policy and adds a
+# rollback: download + checksum-verify BEFORE stopping the unit (so a failed or
+# corrupt fetch never takes the runner down), back up the live binary, swap it in,
+# and restore the backup if the new binary fails to come up.
 read -r -d '' SCRIPT <<EOF || true
 set -euo pipefail
 echo "current version:"
 /usr/local/bin/boxlite-runner --version || true
 
-systemctl stop boxlite-runner
-curl -fsSL "${ASSET_URL}" | tar xz -C /usr/local/bin/
-chmod +x /usr/local/bin/boxlite-runner
-systemctl start boxlite-runner
+WORK=\$(mktemp -d)
+trap 'rm -rf "\$WORK"' EXIT
+curl -fsSL "${ASSET_BASE}/${ASSET_TARBALL}" -o "\$WORK/runner.tar.gz"
+if curl -fsSL "${ASSET_BASE}/${ASSET_TARBALL}.sha256" -o "\$WORK/runner.sha256"; then
+  EXPECTED=\$(awk '{print \$1}' "\$WORK/runner.sha256")
+  ACTUAL=\$(sha256sum "\$WORK/runner.tar.gz" | awk '{print \$1}')
+  [ "\$EXPECTED" = "\$ACTUAL" ] || { echo "FATAL: checksum mismatch (want \$EXPECTED got \$ACTUAL)" >&2; exit 1; }
+  echo "checksum verified (\$ACTUAL)"
+else
+  echo "WARNING: no .sha256 published for v${VERSION}; installing without integrity verification" >&2
+fi
+tar -xzf "\$WORK/runner.tar.gz" -C "\$WORK"
+test -x "\$WORK/boxlite-runner" || { echo "FATAL: tarball has no boxlite-runner binary" >&2; exit 1; }
 
-sleep 2
-echo "new version:"
-/usr/local/bin/boxlite-runner --version
-
-systemctl is-active --quiet boxlite-runner && echo "systemd unit: active" || (echo "systemd unit FAILED"; journalctl -u boxlite-runner --no-pager -n 50; exit 1)
+# Back up the live binary (if any) so a failed swap or start can roll back.
+HAD_PREVIOUS=false
+if [ -x /usr/local/bin/boxlite-runner ]; then
+  cp -a /usr/local/bin/boxlite-runner /usr/local/bin/boxlite-runner.bak
+  HAD_PREVIOUS=true
+fi
+systemctl stop boxlite-runner || true
+# Swap + start + health as one guarded condition: a failing step here (install error,
+# start failure, or an unhealthy unit) routes to the rollback branch instead of aborting
+# the script under set -e — commands in an if-condition are exempt from set -e.
+if install -m 0755 "\$WORK/boxlite-runner" /usr/local/bin/boxlite-runner && systemctl start boxlite-runner && sleep 2 && systemctl is-active --quiet boxlite-runner; then
+  [ "\$HAD_PREVIOUS" = true ] && rm -f /usr/local/bin/boxlite-runner.bak
+  echo "systemd unit: active"
+  echo "new version:"
+  /usr/local/bin/boxlite-runner --version
+else
+  echo "upgrade failed; rolling back" >&2
+  if [ "\$HAD_PREVIOUS" = true ]; then
+    mv -f /usr/local/bin/boxlite-runner.bak /usr/local/bin/boxlite-runner
+    systemctl restart boxlite-runner || true
+  fi
+  journalctl -u boxlite-runner --no-pager -n 50 || true
+  exit 1
+fi
 EOF
 
+# Hand the script to SSM base64-encoded rather than quote-escaped: the payload
+# becomes a single token with no shell metacharacters, sidestepping the brittle
+# sed-escaping of a multi-line script inside the commands=[...] shorthand.
+SCRIPT_B64=$(printf '%s' "$SCRIPT" | base64 | tr -d '\n')
 CMD_ID=$(aws ssm send-command --region "$AWS_REGION" \
   --document-name "AWS-RunShellScript" \
   --instance-ids "$INSTANCE_ID" \
   --comment "boxlite-runner upgrade to v$VERSION" \
-  --parameters "commands=[\"$(printf '%s' "$SCRIPT" | sed 's/"/\\"/g')\"]" \
+  --parameters "commands=[\"echo $SCRIPT_B64 | base64 -d | bash\"]" \
   --query 'Command.CommandId' --output text)
 
 echo "    command:  $CMD_ID"

@@ -108,12 +108,17 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           tar czf "boxlite-runner-v${VERSION}-linux-amd64.tar.gz" -C /tmp boxlite-runner
+          # Integrity manifest the runner's user-data verifies before installing
+          # the binary (apps/infra/sst.config.ts buildRunnerUserData).
+          sha256sum "boxlite-runner-v${VERSION}-linux-amd64.tar.gz" > "boxlite-runner-v${VERSION}-linux-amd64.tar.gz.sha256"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: runner-linux-amd64
-          path: boxlite-runner-v*-linux-amd64.tar.gz
+          path: |
+            boxlite-runner-v*-linux-amd64.tar.gz
+            boxlite-runner-v*-linux-amd64.tar.gz.sha256
           if-no-files-found: error
           retention-days: ${{ needs.config.outputs.artifact-retention-days }}
 
@@ -145,5 +150,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}
-          files: dist/boxlite-runner-v*.tar.gz
+          files: |
+            dist/boxlite-runner-v*.tar.gz
+            dist/boxlite-runner-v*.tar.gz.sha256
           fail_on_unmatched_files: true

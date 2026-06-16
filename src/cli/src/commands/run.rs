@@ -1,5 +1,6 @@
 use crate::cli::{
-    GlobalFlags, ManagementFlags, ProcessFlags, PublishFlags, ResourceFlags, VolumeFlags,
+    GlobalFlags, ManagementFlags, NetworkFlags, ProcessFlags, PublishFlags, ResourceFlags,
+    VolumeFlags,
 };
 use crate::terminal::StreamManager;
 use crate::util::to_shell_exit_code;
@@ -21,6 +22,9 @@ pub struct RunArgs {
 
     #[command(flatten)]
     pub volume: VolumeFlags,
+
+    #[command(flatten)]
+    pub network: NetworkFlags,
 
     #[command(flatten)]
     pub management: ManagementFlags,
@@ -108,6 +112,7 @@ impl BoxRunner {
         self.args
             .volume
             .apply_to(&mut options, self.home.as_deref())?;
+        self.args.network.apply_to(&mut options)?;
         self.args.process.apply_to(&mut options)?;
 
         // Runtime requires detached boxes to have manual lifecycle control (auto_remove=false)
