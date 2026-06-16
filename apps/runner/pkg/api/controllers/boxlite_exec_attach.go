@@ -285,14 +285,22 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 		case <-time.After(2 * time.Second):
 		}
 
+		// The exit code is authoritative the moment Done fires. Send the
+		// exit frame regardless of whether the pumps drained: a process
+		// killed by its exec timeout (SIGTERM→SIGKILL in the guest) can
+		// leave the guest's stdout/stderr pipes without a natural EOF, so
+		// the pumps may never finish. Gating the exit frame on drain (the
+		// old behaviour) then dropped the frame entirely on the drain
+		// timeout, hanging the client's wait() forever. Best-effort drain
+		// first so buffered output is flushed when it can be.
+		_ = writeJSONFrame(conn, &writeMu, map[string]any{
+			"type":      "exit",
+			"exit_code": exec.ExitCodeValue(),
+		})
 		if drained {
-			_ = writeJSONFrame(conn, &writeMu, map[string]any{
-				"type":      "exit",
-				"exit_code": exec.ExitCodeValue(),
-			})
 			closeWS(websocket.CloseNormalClosure, "")
 		} else {
-			closeWS(websocket.CloseInternalServerErr, "pump drain timed out")
+			closeWS(websocket.CloseNormalClosure, "exit sent; output pumps did not drain")
 		}
 	}
 
