@@ -15,7 +15,7 @@
 //   2. platform (VPC/DB/Redis/S3)   7. edge services (Proxy, SshGateway)
 //   3. IAM                          8. admin UIs (PgAdmin/MailDev)
 //   4. auth (external OIDC)         9. CDN (CloudFront)
-//   5. observability               10. runner (EC2 + nested KVM)
+//   5. observability + dev CH      10. runner (EC2 + nested KVM)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const REGION = 'ap-southeast-1'
@@ -29,15 +29,23 @@ const PORTS = {
   JAEGER_UI: 16686,
   OTLP_HTTP: 4318,
   OTEL_HEALTH: 13133,
+  CLICKHOUSE_HTTP: 8123,
   MAILDEV_UI: 1080,
   PGADMIN: 80,
 } as const
 
 // Pinned third-party images
 const IMAGES = {
+  clickhouse: 'clickhouse/clickhouse-server:25.5',
   jaeger: 'jaegertracing/all-in-one:1.67.0',
   pgadmin: 'dpage/pgadmin4:9.2.0',
   maildev: 'maildev/maildev:2.2.1',
+} as const
+
+const DEV_CLICKHOUSE = {
+  volumeName: 'clickhouse-data',
+  dataPath: '/var/lib/clickhouse',
+  defaultVolumeSizeGb: 50,
 } as const
 
 // Runner EC2 sizing
@@ -60,6 +68,16 @@ const HEALTH_DEFAULTS = {
 
 // Env var with fallback. Empty string also falls through.
 const envOr = <T>(key: string, fallback: T) => process.env[key] || fallback
+
+const positiveIntEnvOr = (key: string, fallback: number) => {
+  const raw = process.env[key]
+  if (!raw) return fallback
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed.toString() !== raw) {
+    throw new Error(`${key} must be a positive integer`)
+  }
+  return parsed
+}
 
 // HTTP health check with defaults + optional overrides.
 const httpHealth = (path: string, overrides: Partial<{ successCodes: string }> = {}) => ({
@@ -86,8 +104,7 @@ const requireEnv = (key: string, why: string) => {
 
 // Runner endpoint default — localhost. v2 runners self-report their address via
 // healthcheck, so the DEFAULT_RUNNER_* override is rarely needed.
-const runnerEndpoint = (override: string, port: number, scheme: string) =>
-  envOr(override, `${scheme}localhost:${port}`)
+const runnerEndpoint = (override: string, port: number, scheme: string) => envOr(override, `${scheme}localhost:${port}`)
 
 // ── app config ───────────────────────────────────────────────────────────────
 export default $config({
@@ -116,17 +133,27 @@ export default $config({
     // (api.url = "https://api.dev.boxlite.ai/" → apiBase = "https://api.dev.boxlite.ai").
     const stripTrailingSlash = (url: $util.Output<string>) => url.apply((u) => (u.endsWith('/') ? u.slice(0, -1) : u))
 
-    const clickHouseWriterEndpoint =
+    const explicitClickHouseWriterEndpoint =
       process.env.CLICKHOUSE_WRITER_ENDPOINT || process.env.CLICKHOUSE_ENDPOINT || process.env.CLICKHOUSE_OTEL_ENDPOINT
-    const clickHouseWriterPassword = process.env.CLICKHOUSE_WRITER_PASSWORD || process.env.CLICKHOUSE_PASSWORD
-    const clickHouseReaderUrl = process.env.CLICKHOUSE_READER_URL || process.env.CLICKHOUSE_URL
+    const explicitClickHouseWriterPassword = process.env.CLICKHOUSE_WRITER_PASSWORD || process.env.CLICKHOUSE_PASSWORD
+    const explicitClickHouseReaderUrl = process.env.CLICKHOUSE_READER_URL || process.env.CLICKHOUSE_URL
     const clickHouseReaderHost = process.env.CLICKHOUSE_READER_HOST || process.env.CLICKHOUSE_HOST
-    const clickHouseExporterEnabled = process.env.CLICKHOUSE_EXPORTER_ENABLED === 'true'
-    if (clickHouseExporterEnabled && !clickHouseWriterEndpoint) {
-      throw new Error('CLICKHOUSE_WRITER_ENDPOINT or CLICKHOUSE_ENDPOINT is required when CLICKHOUSE_EXPORTER_ENABLED=true')
+    const devClickHouseEnabled = envOr('DEV_CLICKHOUSE_ENABLED', 'false') === 'true'
+    if (devClickHouseEnabled && $app.stage === 'production') {
+      throw new Error(
+        'DEV_CLICKHOUSE_ENABLED=true is dev-only; use ClickHouse Cloud or another managed endpoint in production',
+      )
     }
-    if (clickHouseExporterEnabled && !clickHouseWriterPassword) {
-      throw new Error('CLICKHOUSE_WRITER_PASSWORD or CLICKHOUSE_PASSWORD is required when CLICKHOUSE_EXPORTER_ENABLED=true')
+    const clickHouseExporterEnabled = devClickHouseEnabled || process.env.CLICKHOUSE_EXPORTER_ENABLED === 'true'
+    if (clickHouseExporterEnabled && !devClickHouseEnabled && !explicitClickHouseWriterEndpoint) {
+      throw new Error(
+        'CLICKHOUSE_WRITER_ENDPOINT or CLICKHOUSE_ENDPOINT is required when CLICKHOUSE_EXPORTER_ENABLED=true',
+      )
+    }
+    if (clickHouseExporterEnabled && !devClickHouseEnabled && !explicitClickHouseWriterPassword) {
+      throw new Error(
+        'CLICKHOUSE_WRITER_PASSWORD or CLICKHOUSE_PASSWORD is required when CLICKHOUSE_EXPORTER_ENABLED=true',
+      )
     }
     const collectorExporters = clickHouseExporterEnabled ? '[boxlite_exporter,clickhouse]' : '[boxlite_exporter]'
 
@@ -156,6 +183,17 @@ export default $config({
     const adminApiKey = randomKey('AdminApiKey')
     const defaultRunnerApiKey = randomKey('DefaultRunnerApiKey')
     const pgAdminPassword = randomKey('PgAdminPassword', 24)
+    const devClickHousePassword = devClickHouseEnabled ? randomKey('DevClickHousePassword', 24) : undefined
+    const devClickHousePasswordValue =
+      process.env.DEV_CLICKHOUSE_PASSWORD || explicitClickHouseWriterPassword || devClickHousePassword?.result
+    const devClickHouseDatabase = envOr(
+      'DEV_CLICKHOUSE_DATABASE',
+      envOr('CLICKHOUSE_WRITER_DATABASE', envOr('CLICKHOUSE_DATABASE', 'otel')),
+    )
+    const devClickHouseUsername = envOr(
+      'DEV_CLICKHOUSE_USERNAME',
+      envOr('CLICKHOUSE_WRITER_USERNAME', envOr('CLICKHOUSE_USERNAME', 'boxlite_otel_writer')),
+    )
 
     // ─── 2. PLATFORM ─────────────────────────────────────────────────────────
     // Network model + rationale (subnets / NAT / egress-only public IP, AWS citations): ./NETWORKING.md
@@ -291,8 +329,8 @@ export default $config({
 
     // ─── 5. OBSERVABILITY INGEST ─────────────────────────────────────────────
     // Created before Api so API, runner, host, and box can all emit OTLP to the
-    // same Collector. ClickHouse is external/managed only; no in-cluster
-    // ClickHouseSpike fallback is part of the target architecture.
+    // same Collector. ClickHouse is normally external/managed. DEV_CLICKHOUSE_ENABLED=true
+    // adds an internal, disposable dev-only fallback for ClickHouse Cloud outages.
     // Internal ALB by default: the trace UI exposes every span (URLs, headers,
     // IDs, SQL, error bodies) with no auth, and nothing outside the VPC needs
     // to read it. Reach it via VPN / bastion / `aws ssm start-session`.
@@ -304,6 +342,114 @@ export default $config({
       loadBalancer: { public: jaegerPublic, rules: [{ listen: '80/http', forward: `${PORTS.JAEGER_UI}/http` }] },
       environment: { COLLECTOR_OTLP_ENABLED: 'true' },
     })
+
+    const devClickHouseEbsRole = devClickHouseEnabled
+      ? new aws.iam.Role('DevClickHouseEbsInfrastructureRole', {
+          assumeRolePolicy: JSON.stringify({
+            Version: '2012-10-17',
+            Statement: [{ Effect: 'Allow', Principal: { Service: 'ecs.amazonaws.com' }, Action: 'sts:AssumeRole' }],
+          }),
+          managedPolicyArns: ['arn:aws:iam::aws:policy/service-role/AmazonECSInfrastructureRolePolicyForVolumes'],
+        })
+      : undefined
+
+    // Dev-only ClickHouse fallback. This mirrors MailDev's internal-service model:
+    // it is VPC-only and reachable through a stable internal ALB URL, not a task
+    // private IP. The EBS volume is service-managed and intentionally disposable.
+    const devClickHouse = devClickHouseEnabled
+      ? new sst.aws.Service('DevClickHouse', {
+          cluster,
+          architecture: 'arm64',
+          cpu: '0.5 vCPU',
+          memory: '1 GB',
+          image: IMAGES.clickhouse,
+          loadBalancer: {
+            public: false,
+            rules: [{ listen: '80/http', forward: `${PORTS.CLICKHOUSE_HTTP}/http` }],
+            health: { [`${PORTS.CLICKHOUSE_HTTP}/http`]: httpHealth('/ping') },
+          },
+          environment: {
+            CLICKHOUSE_DB: devClickHouseDatabase,
+            CLICKHOUSE_USER: devClickHouseUsername,
+            CLICKHOUSE_PASSWORD: devClickHousePasswordValue || 'unused',
+          },
+          transform: {
+            taskDefinition: (args) => {
+              args.volumes = [{ name: DEV_CLICKHOUSE.volumeName, configureAtLaunch: true }]
+              args.containerDefinitions = $util.output(args.containerDefinitions).apply((definitions) => {
+                const containers = JSON.parse(definitions)
+                const container = containers.find((item: any) => item.name === 'DevClickHouse') ?? containers[0]
+                if (!container) throw new Error('DevClickHouse container definition not found')
+                container.mountPoints = [
+                  ...(container.mountPoints ?? []),
+                  {
+                    sourceVolume: DEV_CLICKHOUSE.volumeName,
+                    containerPath: DEV_CLICKHOUSE.dataPath,
+                    readOnly: false,
+                  },
+                ]
+                container.healthCheck = {
+                  command: [
+                    'CMD-SHELL',
+                    `clickhouse-client --user '${devClickHouseUsername}' --password "$CLICKHOUSE_PASSWORD" --query 'SELECT 1' >/dev/null`,
+                  ],
+                  interval: 30,
+                  timeout: 10,
+                  retries: 3,
+                  startPeriod: 60,
+                }
+                return JSON.stringify(containers)
+              })
+            },
+            service: (args) => {
+              const ebsRoleArn = devClickHouseEbsRole?.arn
+              if (!ebsRoleArn) throw new Error('DevClickHouse EBS infrastructure role was not created')
+              args.propagateTags = 'SERVICE'
+              args.volumeConfiguration = {
+                name: DEV_CLICKHOUSE.volumeName,
+                managedEbsVolume: {
+                  roleArn: ebsRoleArn,
+                  encrypted: true,
+                  volumeType: 'gp3',
+                  sizeInGb: positiveIntEnvOr('DEV_CLICKHOUSE_EBS_GB', DEV_CLICKHOUSE.defaultVolumeSizeGb),
+                  fileSystemType: 'xfs',
+                  tagSpecifications: [
+                    {
+                      resourceType: 'volume',
+                      propagateTags: 'SERVICE',
+                      tags: {
+                        Name: `${$app.name}-${$app.stage}-clickhouse-data`,
+                        'boxlite:component': 'clickhouse',
+                      },
+                    },
+                  ],
+                },
+              }
+            },
+          },
+        })
+      : undefined
+    const devClickHouseEndpoint = devClickHouse ? stripTrailingSlash(devClickHouse.url) : undefined
+    const clickHouseWriterEndpoint = devClickHouseEndpoint || explicitClickHouseWriterEndpoint
+    const clickHouseWriterPassword = devClickHouseEnabled
+      ? devClickHousePasswordValue
+      : explicitClickHouseWriterPassword
+    const clickHouseWriterUsername = devClickHouseEnabled
+      ? devClickHouseUsername
+      : envOr('CLICKHOUSE_WRITER_USERNAME', envOr('CLICKHOUSE_USERNAME', 'default'))
+    const clickHouseWriterDatabase = devClickHouseEnabled
+      ? devClickHouseDatabase
+      : envOr('CLICKHOUSE_WRITER_DATABASE', envOr('CLICKHOUSE_DATABASE', 'otel'))
+    const clickHouseReaderUrl = devClickHouseEndpoint || explicitClickHouseReaderUrl
+    const clickHouseReaderUsername = devClickHouseEnabled
+      ? devClickHouseUsername
+      : envOr('CLICKHOUSE_READER_USERNAME', envOr('CLICKHOUSE_USERNAME', 'default'))
+    const clickHouseReaderPassword = devClickHouseEnabled
+      ? devClickHousePasswordValue
+      : envOr('CLICKHOUSE_READER_PASSWORD', envOr('CLICKHOUSE_PASSWORD', ''))
+    const clickHouseReaderDatabase = devClickHouseEnabled
+      ? devClickHouseDatabase
+      : envOr('CLICKHOUSE_READER_DATABASE', envOr('CLICKHOUSE_DATABASE', 'otel'))
 
     const otelCollector = new sst.aws.Service('OtelCollector', {
       cluster,
@@ -338,10 +484,10 @@ export default $config({
       },
       environment: {
         CLICKHOUSE_ENDPOINT: clickHouseWriterEndpoint || 'https://clickhouse-disabled.invalid:443',
-        CLICKHOUSE_DATABASE: envOr('CLICKHOUSE_WRITER_DATABASE', envOr('CLICKHOUSE_DATABASE', 'otel')),
-        CLICKHOUSE_USERNAME: envOr('CLICKHOUSE_WRITER_USERNAME', envOr('CLICKHOUSE_USERNAME', 'default')),
+        CLICKHOUSE_DATABASE: clickHouseWriterDatabase,
+        CLICKHOUSE_USERNAME: clickHouseWriterUsername,
         CLICKHOUSE_PASSWORD: clickHouseWriterPassword || 'unused',
-        CLICKHOUSE_CREATE_SCHEMA: envOr('CLICKHOUSE_CREATE_SCHEMA', 'false'),
+        CLICKHOUSE_CREATE_SCHEMA: envOr('CLICKHOUSE_CREATE_SCHEMA', devClickHouseEnabled ? 'true' : 'false'),
         CLICKHOUSE_COMPRESS: envOr('CLICKHOUSE_COMPRESS', 'none'),
         BOXLITE_API_URL: envOr('BOXLITE_API_URL', `https://api.${stackDomain}/api`),
         BOXLITE_API_KEY: envOr(
@@ -390,9 +536,7 @@ export default $config({
           // observability reader defaults to this region
           // (ADMIN_OBSERVABILITY_CLOUDWATCH_REGION).
           actions: ['logs:DescribeLogGroups'],
-          resources: [
-            $interpolate`arn:aws:logs:${REGION}:${aws.getCallerIdentityOutput().accountId}:log-group:*`,
-          ],
+          resources: [$interpolate`arn:aws:logs:${REGION}:${aws.getCallerIdentityOutput().accountId}:log-group:*`],
         },
         {
           // Admin observability S3 reader + VolumeManager boot probe are
@@ -496,9 +640,18 @@ export default $config({
         // Optional: Auth0 Management API (enables account linking etc.)
         ...(process.env.OIDC_MANAGEMENT_API_ENABLED === 'true' && {
           OIDC_MANAGEMENT_API_ENABLED: 'true',
-          OIDC_MANAGEMENT_API_CLIENT_ID: requireEnv('OIDC_MANAGEMENT_API_CLIENT_ID', 'when OIDC_MANAGEMENT_API_ENABLED=true'),
-          OIDC_MANAGEMENT_API_CLIENT_SECRET: requireEnv('OIDC_MANAGEMENT_API_CLIENT_SECRET', 'when OIDC_MANAGEMENT_API_ENABLED=true'),
-          OIDC_MANAGEMENT_API_AUDIENCE: requireEnv('OIDC_MANAGEMENT_API_AUDIENCE', 'when OIDC_MANAGEMENT_API_ENABLED=true'),
+          OIDC_MANAGEMENT_API_CLIENT_ID: requireEnv(
+            'OIDC_MANAGEMENT_API_CLIENT_ID',
+            'when OIDC_MANAGEMENT_API_ENABLED=true',
+          ),
+          OIDC_MANAGEMENT_API_CLIENT_SECRET: requireEnv(
+            'OIDC_MANAGEMENT_API_CLIENT_SECRET',
+            'when OIDC_MANAGEMENT_API_ENABLED=true',
+          ),
+          OIDC_MANAGEMENT_API_AUDIENCE: requireEnv(
+            'OIDC_MANAGEMENT_API_AUDIENCE',
+            'when OIDC_MANAGEMENT_API_ENABLED=true',
+          ),
         }),
         // RP-initiated logout fallback. Safe to set unconditionally: the API
         // probes the IdP's discovery doc at startup and only exposes this URL
@@ -545,17 +698,17 @@ export default $config({
         ...(clickHouseReaderUrl
           ? {
               CLICKHOUSE_URL: clickHouseReaderUrl,
-              CLICKHOUSE_DATABASE: envOr('CLICKHOUSE_READER_DATABASE', envOr('CLICKHOUSE_DATABASE', 'otel')),
-              CLICKHOUSE_USERNAME: envOr('CLICKHOUSE_READER_USERNAME', envOr('CLICKHOUSE_USERNAME', 'default')),
-              CLICKHOUSE_PASSWORD: envOr('CLICKHOUSE_READER_PASSWORD', envOr('CLICKHOUSE_PASSWORD', '')),
+              CLICKHOUSE_DATABASE: clickHouseReaderDatabase,
+              CLICKHOUSE_USERNAME: clickHouseReaderUsername,
+              CLICKHOUSE_PASSWORD: clickHouseReaderPassword || '',
             }
           : clickHouseReaderHost
             ? {
                 CLICKHOUSE_HOST: clickHouseReaderHost,
                 CLICKHOUSE_PORT: envOr('CLICKHOUSE_READER_PORT', envOr('CLICKHOUSE_PORT', '443')),
-                CLICKHOUSE_DATABASE: envOr('CLICKHOUSE_READER_DATABASE', envOr('CLICKHOUSE_DATABASE', 'otel')),
-                CLICKHOUSE_USERNAME: envOr('CLICKHOUSE_READER_USERNAME', envOr('CLICKHOUSE_USERNAME', 'default')),
-                CLICKHOUSE_PASSWORD: envOr('CLICKHOUSE_READER_PASSWORD', envOr('CLICKHOUSE_PASSWORD', '')),
+                CLICKHOUSE_DATABASE: clickHouseReaderDatabase,
+                CLICKHOUSE_USERNAME: clickHouseReaderUsername,
+                CLICKHOUSE_PASSWORD: clickHouseReaderPassword || '',
                 CLICKHOUSE_PROTOCOL: envOr('CLICKHOUSE_READER_PROTOCOL', envOr('CLICKHOUSE_PROTOCOL', 'https')),
               }
             : {}),
@@ -955,7 +1108,13 @@ export default $config({
         `boxlite-runner-${name}`,
         $resolve([api.url, apiKey.result, otelCollectorOtlpHttpUrl, ghcrSecret ? ghcrSecret.arn : '']).apply(
           ([apiUrl, token, otelEndpoint, ghcrSecretArn]) =>
-            buildRunnerUserData({ apiUrl, token, otelEndpoint, ghcrSecretArn: ghcrSecretArn || undefined, ghcrUsername }),
+            buildRunnerUserData({
+              apiUrl,
+              token,
+              otelEndpoint,
+              ghcrSecretArn: ghcrSecretArn || undefined,
+              ghcrUsername,
+            }),
         ),
       )
       return { name, apiKey, instance }
@@ -1114,10 +1273,14 @@ Environment=BOXLITE_HOME_DIR=/var/lib/boxlite
 Environment=AWS_REGION=${REGION}
 Environment=OTEL_LOGGING_ENABLED=true
 Environment=OTEL_TRACING_ENABLED=true
-Environment=OTEL_EXPORTER_OTLP_ENDPOINT=${input.otelEndpoint}${input.ghcrSecretArn ? `
+Environment=OTEL_EXPORTER_OTLP_ENDPOINT=${input.otelEndpoint}${
+    input.ghcrSecretArn
+      ? `
 # ghcr: username + secret ARN are non-secret; the start-wrapper fetches the TOKEN at runtime.
 Environment=GHCR_USERNAME=${input.ghcrUsername ?? ''}
-Environment=GHCR_SECRET_ARN=${input.ghcrSecretArn}` : ''}
+Environment=GHCR_SECRET_ARN=${input.ghcrSecretArn}`
+      : ''
+  }
 
 [Install]
 WantedBy=multi-user.target

@@ -1,152 +1,100 @@
-# Dev ClickHouse on Fargate + EBS
+# Dev ClickHouse Fallback
 
-This runbook describes the cheapest dev-only ClickHouse fallback for BoxLite when ClickHouse Cloud is unavailable.
+This runbook covers the SST-managed dev-only ClickHouse fallback used when ClickHouse Cloud is unavailable.
 
 ## Scope
 
-- Dev only.
+- Dev only. `DEV_CLICKHOUSE_ENABLED=true` is rejected in `production`.
 - Region: `ap-southeast-1`.
-- ECS cluster: `boxlite-dev-ClusterCluster-vmauahcx`.
-- Private VPC access only.
-- Not production-ready.
+- Runs as the `DevClickHouse` ECS Fargate service in the existing SST cluster.
+- Private-only internal ALB, same pattern as `MailDev`.
+- Uses one ECS service-managed EBS volume mounted at `/var/lib/clickhouse`.
 
 ## Cost
 
 Default config:
 
-- Fargate ARM: `0.5 vCPU / 1GB`.
-- EBS gp3: `50GB`.
+- Fargate ARM: `0.5 vCPU / 1 GB`.
+- EBS gp3: `50 GB`.
+- Internal ALB created by `sst.aws.Service`.
 
 Approximate monthly cost if left running 24/7:
 
-- Compute: about `$18/month`.
+- Fargate compute: about `$18/month`.
 - EBS: about `$5/month`.
-- Total: about `$23/month`, excluding CloudWatch logs and data transfer.
+- Internal ALB: region-dependent, often roughly `$18+/month` before LCU usage.
+- CloudWatch logs and data transfer are extra.
 
-## Durability Warning
+## Durability
 
-ECS service-managed EBS volumes are deleted when service-managed tasks terminate. This service is intentionally a dev telemetry fallback, not a durable ClickHouse database.
+The fallback is for dev telemetry continuity, not durable analytics storage. ECS service-managed EBS volumes are attached to service tasks and can be replaced when the service is replaced or removed.
 
-For durable dev storage, use EC2 + EBS instead.
+## Enable
 
-## Required Secrets
-
-Set these only on the remote worker shell or remote secret env file:
-
-```bash
-export CLICKHOUSE_WRITER_PASSWORD='<secret>'
-```
-
-Do not commit these values.
-
-The cheapest dev fallback uses the same ClickHouse user for writer and reader. This is intentionally dev-only.
-
-## Plan
-
-Run from `boxlite-dev`:
+Set this in `apps/infra/.env` for dev:
 
 ```bash
-cd /home/brian/work/boxlite/repos/boxlite
-scripts/deploy/dev-clickhouse-fargate-ebs.sh plan
+DEV_CLICKHOUSE_ENABLED=true
+DEV_CLICKHOUSE_EBS_GB=50
 ```
 
-Expected:
-
-- Prints config.
-- Prints AWS identity.
-- Security group dry-run returns `DryRunOperation`.
-
-## Create
-
-Stop for PR review before running this command.
+Optional overrides:
 
 ```bash
-cd /home/brian/work/boxlite/repos/boxlite
-export CLICKHOUSE_WRITER_PASSWORD='<secret>'
-scripts/deploy/dev-clickhouse-fargate-ebs.sh create
+DEV_CLICKHOUSE_USERNAME=boxlite_otel_writer
+DEV_CLICKHOUSE_DATABASE=otel
+DEV_CLICKHOUSE_PASSWORD=<secret>
 ```
 
-## Status
+If `DEV_CLICKHOUSE_PASSWORD` is unset, SST generates `DevClickHousePassword`.
 
-```bash
-scripts/deploy/dev-clickhouse-fargate-ebs.sh status
-```
+When enabled, SST automatically:
 
-Expected:
+- creates the private `DevClickHouse` service,
+- creates the ECS infrastructure role required for service-managed EBS,
+- configures `OtelCollector` to write to the internal ClickHouse URL,
+- configures `Api` to read from the same internal ClickHouse URL,
+- enables ClickHouse schema creation for the collector by default.
 
-- ECS service desired count is `1`.
-- ECS service running count becomes `1`.
-- A task private IP is printed.
+Existing `CLICKHOUSE_*` cloud endpoint env values do not win over `DEV_CLICKHOUSE_ENABLED=true`; the dev fallback becomes the active read/write backend.
 
-## Print BoxLite Env
+## Deploy
 
-```bash
-scripts/deploy/dev-clickhouse-fargate-ebs.sh print-env
-```
-
-Use the output to update the dev infra env. Keep password values in remote secret env only.
-
-## Deploy OtelCollector
-
-Stop before deploy and inspect diff:
+Preview first:
 
 ```bash
 cd apps/infra
-npx sst diff --stage dev --target OtelCollector
+npx sst diff --stage dev
 ```
 
-If scoped, deploy:
+Deploy after review:
 
 ```bash
-npx sst deploy --stage dev --target OtelCollector
+npx sst deploy --stage dev
 ```
 
-If target deploy shows Runner dependency errors or broad unrelated deletes/creates, stop and report before widening scope.
-
-## Deploy API
-
-Deploy API only if reader env changed:
-
-```bash
-cd apps/infra
-npx sst diff --stage dev --target Api
-npx sst deploy --stage dev --target Api
-```
+Avoid target-only deploys for the first enablement. `DevClickHouse`, `OtelCollector`, and `Api` need to roll together.
 
 ## Verify
 
-Check service:
-
-```bash
-scripts/deploy/dev-clickhouse-fargate-ebs.sh status
-```
-
-Check ClickHouse from inside the VPC with the printed private IP:
-
-```bash
-curl -sS http://<private-ip>:8123/ping
-```
-
-Expected:
-
-```text
-Ok.
-```
-
-Check `OtelCollector`:
+Check ECS services:
 
 ```bash
 aws ecs describe-services \
   --region ap-southeast-1 \
   --cluster boxlite-dev-ClusterCluster-vmauahcx \
-  --services OtelCollector \
-  --query 'services[0].{desired:desiredCount,running:runningCount,rollout:deployments[0].rolloutState}'
+  --services DevClickHouse OtelCollector Api \
+  --query 'services[].{service:serviceName,desired:desiredCount,running:runningCount,rollout:deployments[0].rolloutState}'
 ```
 
 Expected:
 
 ```json
-{"desired":1,"running":1,"rollout":"COMPLETED"}
+[
+  { "service": "DevClickHouse", "desired": 1, "running": 1, "rollout": "COMPLETED" },
+  { "service": "OtelCollector", "desired": 1, "running": 1, "rollout": "COMPLETED" },
+  { "service": "Api", "desired": 1, "running": 1, "rollout": "COMPLETED" }
+]
 ```
 
 Check API:
@@ -158,16 +106,30 @@ curl -fsS https://dev.boxlite.ai/api/health
 Expected:
 
 ```json
-{"status":"ok"}
+{ "status": "ok" }
 ```
+
+Check `OtelCollector` logs for current-task ClickHouse exporter errors. Ignore old stopped task streams from the pre-SST manual fallback.
+
+## Remove Old Manual Fallback
+
+After the SST-managed `DevClickHouse` service is deployed and verified, delete the old manual fallback resources:
+
+- ECS service: `boxlite-dev-clickhouse`
+- task family: `boxlite-dev-clickhouse`
+- security group: `boxlite-dev-clickhouse-fargate-sg`
+- IAM roles:
+  - `boxlite-dev-clickhouse-task-execution-role`
+  - `boxlite-dev-clickhouse-ebs-infra-role`
+- log group: `/boxlite/dev/clickhouse`
+
+Do not delete them before `Api` and `OtelCollector` are confirmed to use SST-managed `DevClickHouse`.
 
 ## Rollback
 
-1. Restore the previous remote `.env` backup.
-2. Redeploy `OtelCollector` if writer env changed.
-3. Redeploy `Api` if reader env changed.
-4. Delete the dev ClickHouse service only after telemetry is no longer pointing at it:
+To return dev to ClickHouse Cloud:
 
-```bash
-scripts/deploy/dev-clickhouse-fargate-ebs.sh delete
-```
+1. Set `DEV_CLICKHOUSE_ENABLED=false` or remove it.
+2. Restore the desired `CLICKHOUSE_WRITER_*` and `CLICKHOUSE_READER_*` env values.
+3. Run `npx sst diff --stage dev`.
+4. Run `npx sst deploy --stage dev`.

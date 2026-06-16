@@ -71,13 +71,13 @@ applied per runner.
 
 Five public DNS names, four different fronting layers:
 
-| Hostname                       | Fronted by             | Purpose                                                           |
-|--------------------------------|------------------------|-------------------------------------------------------------------|
-| `<STACK_DOMAIN>`               | CloudFront Router      | Dashboard SPA + static assets (cache-friendly, edge-served)       |
-| `api.<STACK_DOMAIN>`           | Api ALB (direct)       | REST API, WebSocket `/attach`, build-log streaming, file transfer |
-| `proxy.<STACK_DOMAIN>`         | Proxy ALB (direct)     | Port-preview wildcard `<port>-<boxId>.proxy.<domain>`         |
-| `*.proxy.<STACK_DOMAIN>`       | Proxy ALB (direct)     | Wildcard alias of the above (per-box preview hosts)           |
-| `ssh.<STACK_DOMAIN>`           | SshGateway NLB (TCP)   | `ssh -p 2222 <token>@ssh.<STACK_DOMAIN>` to a box             |
+| Hostname                 | Fronted by           | Purpose                                                           |
+| ------------------------ | -------------------- | ----------------------------------------------------------------- |
+| `<STACK_DOMAIN>`         | CloudFront Router    | Dashboard SPA + static assets (cache-friendly, edge-served)       |
+| `api.<STACK_DOMAIN>`     | Api ALB (direct)     | REST API, WebSocket `/attach`, build-log streaming, file transfer |
+| `proxy.<STACK_DOMAIN>`   | Proxy ALB (direct)   | Port-preview wildcard `<port>-<boxId>.proxy.<domain>`             |
+| `*.proxy.<STACK_DOMAIN>` | Proxy ALB (direct)   | Wildcard alias of the above (per-box preview hosts)               |
+| `ssh.<STACK_DOMAIN>`     | SshGateway NLB (TCP) | `ssh -p 2222 <token>@ssh.<STACK_DOMAIN>` to a box                 |
 
 **Why `/api/*` bypasses CloudFront.** CloudFront imposes a non-configurable
 10-minute idle cap on WebSocket connections — even with WS Ping frames and
@@ -150,6 +150,7 @@ For Auth0 specifically:
      `--callback-port` flag, add the matching URL here too.
 
    Set **Allowed Logout URLs** to `https://<STACK_DOMAIN>`.
+
 2. **Custom API** — identifier becomes `OIDC_AUDIENCE` (e.g. `https://dev.boxlite.ai/api`)
 3. **Post-Login Action** — Auth0 access_tokens don't include `email_verified` by default;
    without it BoxLite suspends the user's organization. Use
@@ -179,18 +180,19 @@ For Auth0 specifically:
 
 ## Service URLs
 
-| Service             | Purpose                              | Exposure                                     |
-|---------------------|--------------------------------------|----------------------------------------------|
-| **Dashboard SPA**   | Browser UI (static assets via CDN)   | `https://<STACK_DOMAIN>` (CloudFront)        |
-| **Api**             | REST API + WebSocket `/attach`       | `https://api.<STACK_DOMAIN>` (public ALB)    |
-| **Proxy**           | `<port>-<id>.proxy.<domain>` previews | `https://*.proxy.<STACK_DOMAIN>` (public ALB) |
-| **SshGateway**      | `ssh <token>@ssh.<domain>:2222`      | `ssh.<STACK_DOMAIN>:2222` (public NLB, raw TCP) |
-| **Jaeger**          | Trace viewer (no auth)               | internal ALB (set `JAEGER_PUBLIC=true` to expose) |
-| **OtelCollector**   | OTLP ingest + health                 | internal ALB (in-VPC emitters only)          |
-| **PgAdmin**         | Postgres admin UI                    | internal ALB (set `PGADMIN_PUBLIC=true` to expose) |
-| **MailDev**         | Mock SMTP + web UI (no auth)         | internal ALB only — no public option (`MAILDEV_PUBLIC=true` is rejected) |
-| **ClickHouse Cloud** | Managed OTel storage                 | external service; configured by env         |
-| **ClickStack**      | Logs/traces/metrics explorer         | external ClickHouse Cloud UI                |
+| Service              | Purpose                               | Exposure                                                                 |
+| -------------------- | ------------------------------------- | ------------------------------------------------------------------------ |
+| **Dashboard SPA**    | Browser UI (static assets via CDN)    | `https://<STACK_DOMAIN>` (CloudFront)                                    |
+| **Api**              | REST API + WebSocket `/attach`        | `https://api.<STACK_DOMAIN>` (public ALB)                                |
+| **Proxy**            | `<port>-<id>.proxy.<domain>` previews | `https://*.proxy.<STACK_DOMAIN>` (public ALB)                            |
+| **SshGateway**       | `ssh <token>@ssh.<domain>:2222`       | `ssh.<STACK_DOMAIN>:2222` (public NLB, raw TCP)                          |
+| **Jaeger**           | Trace viewer (no auth)                | internal ALB (set `JAEGER_PUBLIC=true` to expose)                        |
+| **OtelCollector**    | OTLP ingest + health                  | internal ALB (in-VPC emitters only)                                      |
+| **PgAdmin**          | Postgres admin UI                     | internal ALB (set `PGADMIN_PUBLIC=true` to expose)                       |
+| **MailDev**          | Mock SMTP + web UI (no auth)          | internal ALB only — no public option (`MAILDEV_PUBLIC=true` is rejected) |
+| **ClickHouse Cloud** | Managed OTel storage                  | external service; configured by env                                      |
+| **DevClickHouse**    | Dev-only OTel storage fallback        | internal ALB; enabled by `DEV_CLICKHOUSE_ENABLED=true`                   |
+| **ClickStack**       | Logs/traces/metrics explorer          | external ClickHouse Cloud UI                                             |
 
 Run `npx sst deploy --stage dev` without changes to reprint all URLs. See
 [Public hostnames](#public-hostnames) below for the rationale behind the
@@ -232,7 +234,7 @@ scripts/deploy/runner-update-binary.sh 0.9.5     # explicit
 ```
 
 The script uses AWS SSM Run Command to download the release tarball from
-GitHub Releases and verify its SHA-256 *before* stopping the systemd unit — so
+GitHub Releases and verify its SHA-256 _before_ stopping the systemd unit — so
 a failed or corrupt fetch never takes the runner down — then backs up the live
 binary, swaps `/usr/local/bin/boxlite-runner`, and restarts. If the new binary
 fails to come up, it performs a rollback to the backup. Box state under
@@ -316,7 +318,7 @@ is fine; ignore it.
 **Api crashes with `Failed to fetch OpenID configuration`** — the API can't
 reach `<OIDC_ISSUER_BASE_URL>/.well-known/openid-configuration`. Check network
 egress from the API container to the IdP, and confirm `OIDC_ISSUER_BASE_URL`
-points at a working host. apps/api strips a trailing slash *only* when composing
+points at a working host. apps/api strips a trailing slash _only_ when composing
 its own internal discovery URL; the value is exposed to clients via `/api/config`
 verbatim — see the next two entries.
 
@@ -325,7 +327,7 @@ verbatim — see the next two entries.
 under `issuer`. Auth0 always reports the issuer with a trailing slash; spec-
 compliant OIDC clients (including the Rust CLI's `openidconnect` crate)
 demand byte-for-byte match. Fix: set `OIDC_ISSUER_BASE_URL` to the form your
-IdP returns (Auth0: `https://dev-xxxxx.us.auth0.com/` *with* slash). See
+IdP returns (Auth0: `https://dev-xxxxx.us.auth0.com/` _with_ slash). See
 the OIDC setup section above. The Rust CLI tolerates this with a one-shot
 retry that toggles the trailing slash, so the user-visible failure here is
 typically the web dashboard, not the CLI — but treat any `unexpected issuer
@@ -363,15 +365,15 @@ initial setup: `aws ecs update-service --force-new-deployment --service Proxy`.
 
 ## Cost (ap-southeast-1, always-on)
 
-| Resource                              | Monthly |
-|---------------------------------------|---------|
-| EC2 c8i.2xlarge (Runner)              | ~$325   |
-| Load balancers (6 ALB + 1 NLB)        | ~$115   |
-| 7x Fargate 0.25 vCPU / 0.5 GB         | ~$65    |
-| 2x NAT EC2 (`t4g.nano`) + public IPv4 | ~$16    |
-| RDS `t4g.micro` Postgres              | ~$15    |
-| ElastiCache Redis                     | ~$15    |
-| CloudFront + S3 + CloudWatch Logs     | ~$20    |
+| Resource                              | Monthly   |
+| ------------------------------------- | --------- |
+| EC2 c8i.2xlarge (Runner)              | ~$325     |
+| Load balancers (6 ALB + 1 NLB)        | ~$115     |
+| 7x Fargate 0.25 vCPU / 0.5 GB         | ~$65      |
+| 2x NAT EC2 (`t4g.nano`) + public IPv4 | ~$16      |
+| RDS `t4g.micro` Postgres              | ~$15      |
+| ElastiCache Redis                     | ~$15      |
+| CloudFront + S3 + CloudWatch Logs     | ~$20      |
 | **Total**                             | **~$570** |
 
 Figures are approximate (ap-southeast-1 on-demand). The **Runner and the load
