@@ -1,0 +1,225 @@
+# Deploy the boxlite-runner binary to the Tokyo EC2 host — LEAF workflow.
+#
+# Pure deploy: downloads a runner-linux-amd64 artifact (by run_id input)
+# and swaps it in on the Tokyo EC2 over SSH + SCP. The artifact is
+# always produced by a sibling build-runner-binary.yml job inside the
+# caller's run (e2e-cloud.yml); this workflow does NOT contain any
+# build chain (`e2e-cloud.yml` is the orchestrator).
+#
+# Triggers:
+# - workflow_call:     called by e2e-cloud.yml after its build_runner_
+#                      binary job uploaded the artifact. Caller passes
+#                      runner_artifact_run_id = ${{ github.run_id }} so
+#                      the download resolves against the same run.
+# - workflow_dispatch: standalone manual deploy of a known-good binary
+#                      from a previous run. Dispatcher must supply
+#                      runner_artifact_run_id explicitly.
+#
+# Deploy mechanism: SSH+SCP via EC2 Instance Connect.
+# main's runner deploy uses SSM Run Command (see sst.config.ts:746 +
+# scripts/deploy/runner-update-binary.sh). The Tokyo e2e-ci EC2 has had
+# its IAM instance profile drift (the original RunnerProfile was deleted
+# from IAM, leaving the agent with no valid STS identity → ConnectionLost).
+# Until that stack is reconciled via `sst deploy --stage e2e-ci`, e2e-ci
+# uses SSH+SCP as a side-channel that bypasses the agent:
+#   1. ec2-instance-connect:SendSSHPublicKey pushes a 60s ephemeral key
+#      to the ubuntu account (no pre-shared keypair, no GHA secret).
+#   2. SG inbound 22 is temporarily opened from the job runner's egress
+#      IP (resolved at runtime), and unconditionally revoked at job end.
+#   3. scp the tarball, ssh to stop / extract / start boxlite-runner.
+# OIDC perms needed: ec2:DescribeInstances, ec2:AuthorizeSecurityGroup-
+# Ingress, ec2:RevokeSecurityGroupIngress, ec2-instance-connect:Send-
+# SSHPublicKey. No IAM mutation.
+name: Deploy Runner Binary
+
+on:
+  workflow_call:
+    inputs:
+      runner_artifact_run_id:
+        description: 'GHA run ID that uploaded the runner-linux-amd64 artifact'
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      runner_artifact_run_id:
+        description: 'GHA run ID that uploaded the runner-linux-amd64 artifact (e.g. a previous e2e-cloud or build-runner-binary run)'
+        type: string
+        required: true
+
+# Serialize against the shared Tokyo runner binary in EC2. Concurrent
+# deploys race on the same systemd swap. cancel-in-progress: false
+# because killing a deploy mid-rollout leaves the EC2 on an unknown
+# binary.
+concurrency:
+  group: deploy-runner-shared
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Deploy: SSH+SCP via EC2 Instance Connect ──────────────────────
+  #
+  # Mechanism (see header comment): push 60s ephemeral SSH pubkey via
+  # ec2-instance-connect, temporarily open the runner SG inbound 22 from
+  # this job runner's egress IP, scp the binary, ssh to swap it, and
+  # unconditionally revoke the SG rule on exit (success or failure).
+  deploy:
+    name: Deploy runner to Tokyo EC2 (SSH+SCP)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AWS_REGION: ${{ vars.AWS_E2E_CLOUD_REGION }}
+      AWS_ROLE_ARN: ${{ vars.AWS_E2E_CLOUD_ROLE_ARN }}
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: deploy-runner-${{ github.run_id }}
+
+      - name: Resolve Tokyo runner instance / IP / SG
+        id: ec2
+        run: |
+          set -euo pipefail
+          read -r ID IP SG <<<"$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=boxlite-runner" \
+                      "Name=instance-state-name,Values=running" \
+            --query 'Reservations[0].Instances[0].[InstanceId,PublicIpAddress,SecurityGroups[0].GroupId]' \
+            --output text)"
+          [ -n "$ID"  ] && [ "$ID"  != "None" ] || { echo "::error::No running boxlite-runner instance"; exit 1; }
+          [ -n "$IP"  ] && [ "$IP"  != "None" ] || { echo "::error::Runner has no public IP — SSH path requires it"; exit 1; }
+          [ -n "$SG"  ] && [ "$SG"  != "None" ] || { echo "::error::Could not resolve runner SG"; exit 1; }
+          echo "runner_id=$ID"  >> "$GITHUB_OUTPUT"
+          echo "runner_ip=$IP"  >> "$GITHUB_OUTPUT"
+          echo "runner_sg=$SG"  >> "$GITHUB_OUTPUT"
+          echo "::notice::Runner $ID @ $IP  (SG $SG)"
+
+      - name: Download runner binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: runner-linux-amd64
+          path: /tmp/runner-artifact/
+          run-id: ${{ inputs.runner_artifact_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate ephemeral SSH keypair + push via Instance Connect
+        id: keypush
+        env:
+          INSTANCE_ID: ${{ steps.ec2.outputs.runner_id }}
+        run: |
+          set -euo pipefail
+          KEY=/tmp/deploy-runner-ed25519
+          ssh-keygen -t ed25519 -N '' -f "$KEY" -C "gha-deploy-runner-${GITHUB_RUN_ID}" >/dev/null
+          # 60s validity — must scp + ssh within that window.
+          aws ec2-instance-connect send-ssh-public-key \
+              --instance-id "$INSTANCE_ID" \
+              --instance-os-user ubuntu \
+              --ssh-public-key "file://${KEY}.pub" \
+              --query 'Success' --output text
+          echo "key_path=$KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Open SG 22 inbound from this runner IP (temporary)
+        id: sgopen
+        env:
+          SG: ${{ steps.ec2.outputs.runner_sg }}
+        run: |
+          set -euo pipefail
+          MY_IP=$(curl -fsSL --max-time 10 https://api.ipify.org)
+          [ -n "$MY_IP" ] || { echo "::error::Could not resolve own egress IP"; exit 1; }
+          echo "Runner egress IP: $MY_IP"
+          RULE_ID=$(aws ec2 authorize-security-group-ingress \
+              --group-id "$SG" \
+              --ip-permissions "IpProtocol=tcp,FromPort=22,ToPort=22,IpRanges=[{CidrIp=${MY_IP}/32,Description=gha-deploy-runner-${GITHUB_RUN_ID}}]" \
+              --query 'SecurityGroupRules[0].SecurityGroupRuleId' --output text)
+          [ -n "$RULE_ID" ] && [ "$RULE_ID" != "None" ] || { echo "::error::Failed to add SG rule"; exit 1; }
+          echo "rule_id=$RULE_ID" >> "$GITHUB_OUTPUT"
+          echo "::notice::SG rule $RULE_ID added (22/tcp from $MY_IP/32)"
+
+      - name: SCP artifact + SSH-driven binary swap (verify PID + SHA256 changed)
+        env:
+          IP: ${{ steps.ec2.outputs.runner_ip }}
+          KEY: ${{ steps.keypush.outputs.key_path }}
+        run: |
+          set -euo pipefail
+          ARCHIVE=$(ls /tmp/runner-artifact/boxlite-runner-*-linux-amd64.tar.gz | head -1)
+          [ -n "$ARCHIVE" ] || { echo "::error::No runner artifact found"; exit 1; }
+
+          # Compute expected binary sha256 from the artifact tarball — the
+          # remote `sha256sum /usr/local/bin/boxlite-runner` after swap must
+          # match this, otherwise the file on disk isn't what we shipped.
+          EXPECTED_SHA=$(tar -xzOf "$ARCHIVE" boxlite-runner 2>/dev/null | sha256sum | awk '{print $1}') \
+            || EXPECTED_SHA=$(tar -tzf "$ARCHIVE" | grep -E 'boxlite-runner$' | head -1 \
+                              | xargs -I{} sh -c "tar -xzOf '$ARCHIVE' {} | sha256sum | awk '{print \$1}'")
+          [ -n "$EXPECTED_SHA" ] || { echo "::error::Could not compute expected sha256 from $ARCHIVE"; exit 1; }
+          echo "::notice::expected sha256: $EXPECTED_SHA"
+
+          SSH_OPTS="-i $KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15"
+
+          # SCP the tarball
+          scp $SSH_OPTS "$ARCHIVE" "ubuntu@${IP}:/tmp/boxlite-runner.tar.gz"
+
+          # In-place swap + restart + verification. The remote script
+          # captures MainPID + ActiveEnterTimestamp BEFORE the swap, then
+          # asserts after restart: (a) new MainPID != old MainPID
+          # (proves a real process replacement, not the old one still
+          # running), (b) ActiveEnterTimestampMonotonic strictly
+          # advanced (proves systemd marked it active after our start),
+          # and (c) /usr/local/bin/boxlite-runner sha256 matches
+          # EXPECTED_SHA passed from the GHA runner.
+          ssh $SSH_OPTS "ubuntu@${IP}" "EXPECTED_SHA='$EXPECTED_SHA' bash -s" <<'REMOTE'
+          set -euxo pipefail
+
+          BEFORE_PID=$(systemctl show -p MainPID --value boxlite-runner 2>/dev/null || echo 0)
+          BEFORE_TS=$(systemctl show -p ActiveEnterTimestampMonotonic --value boxlite-runner 2>/dev/null || echo 0)
+          echo "BEFORE: MainPID=$BEFORE_PID  ActiveEnterTimestampMonotonic=$BEFORE_TS"
+
+          sudo systemctl stop boxlite-runner
+          sudo tar xzf /tmp/boxlite-runner.tar.gz -C /usr/local/bin/
+          sudo chmod +x /usr/local/bin/boxlite-runner
+          sudo systemctl start boxlite-runner
+          sleep 5
+          sudo systemctl is-active --quiet boxlite-runner || { sudo journalctl -u boxlite-runner -n 50 --no-pager; exit 1; }
+
+          AFTER_PID=$(systemctl show -p MainPID --value boxlite-runner)
+          AFTER_TS=$(systemctl show -p ActiveEnterTimestampMonotonic --value boxlite-runner)
+          INSTALLED_SHA=$(sudo sha256sum /usr/local/bin/boxlite-runner | awk '{print $1}')
+          echo "AFTER:  MainPID=$AFTER_PID  ActiveEnterTimestampMonotonic=$AFTER_TS"
+          echo "AFTER:  sha256=$INSTALLED_SHA"
+          echo "EXPECT: sha256=$EXPECTED_SHA"
+
+          # (a) PID must have changed (proves real restart)
+          if [ "$AFTER_PID" = "$BEFORE_PID" ] && [ "$BEFORE_PID" != "0" ]; then
+              echo "::error::MainPID did not change ($AFTER_PID) — service did not actually restart"
+              exit 1
+          fi
+          # (b) systemd's monotonic timestamp for last active-enter must have advanced
+          if [ "$AFTER_TS" -le "$BEFORE_TS" ]; then
+              echo "::error::ActiveEnterTimestampMonotonic did not advance ($BEFORE_TS -> $AFTER_TS)"
+              exit 1
+          fi
+          # (c) installed binary sha256 must match the artifact we uploaded
+          if [ "$INSTALLED_SHA" != "$EXPECTED_SHA" ]; then
+              echo "::error::Installed binary sha256 mismatch — got $INSTALLED_SHA expected $EXPECTED_SHA"
+              exit 1
+          fi
+          echo "Verified: PID swap + monotonic ts advance + sha256 match"
+          /usr/local/bin/boxlite-runner --version 2>&1 || true
+          REMOTE
+          echo "::notice::Runner binary swap succeeded"
+
+      - name: Revoke SG 22 inbound rule (always)
+        if: always() && steps.sgopen.outputs.rule_id != ''
+        env:
+          SG: ${{ steps.ec2.outputs.runner_sg }}
+          RULE_ID: ${{ steps.sgopen.outputs.rule_id }}
+        run: |
+          aws ec2 revoke-security-group-ingress \
+              --group-id "$SG" \
+              --security-group-rule-ids "$RULE_ID" \
+              --query 'Return' --output text
+          echo "::notice::SG rule $RULE_ID revoked"

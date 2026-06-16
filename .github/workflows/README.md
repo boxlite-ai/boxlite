@@ -195,7 +195,7 @@ Runs VM-based E2E integration tests on an ephemeral AWS EC2 self-hosted runner.
 - `AWS_SUBNET_ID` - Subnet with auto-assign public IP
 - `AWS_SECURITY_GROUP_ID` - Security group allowing outbound HTTPS
 
-**Required AWS resources** (provisioned by `scripts/ci/setup-aws-oidc.sh`):
+**Required AWS resources** (provisioned by `scripts/ci/setup-ci-runner.sh`):
 - OIDC identity provider (`token.actions.githubusercontent.com`)
 - IAM role `boxlite-e2e-github-actions` with trust policy for this repo
 - IAM instance profile `boxlite-e2e-runner` with `ec2:TerminateInstances` on self
@@ -206,6 +206,75 @@ Runs VM-based E2E integration tests on an ephemeral AWS EC2 self-hosted runner.
 2. `start-runner` - Launch EC2 c8i.2xlarge, register runner, wait for online
 3. `e2e-tests` - Build runtime, run Rust/CLI/Python/Node/C integration tests
 4. `stop-runner` - Terminate instance, deregister runner
+
+### `e2e-cloud.yml`
+
+Runs the SDK → API → Runner → libkrun VM regression suite against the
+**always-on Tokyo stack** (`boxlite-e2e-ci-*`) instead of a per-run KVM
+runner. Built for fast iteration on REST-path bugs (`e2e-test.yml` is
+slower because it spins up a fresh EC2 every run).
+
+**Why:** The same regression goal as `e2e-test.yml`, but the cost
+profile is different — `e2e-cloud.yml` deploys-and-tests against an
+already-deployed cloud stack, so a typical run is 8-15 min and adds
+no per-run EC2 cost. `e2e-test.yml` and this workflow are
+complementary, not redundant — they exercise the same test code but
+the deployed-stack path also catches infra-only regressions (LB
+config, RDS schema, ECS task def drift) that the self-bootstrap
+path doesn't.
+
+**Architecture:** Three-job required-gate pattern:
+1. `changes` (ubuntu-latest) — paths-filter cheap detector
+2. `e2e` (ubuntu-latest, only if `changes` says relevant or `workflow_dispatch`) —
+   builds Api image + runner binary from this checkout, deploys to Tokyo,
+   builds the Python SDK from source, runs `pytest scripts/test/e2e/cases/`
+3. `e2e-gate` (always runs) — collapses outcome into one required check
+
+**Triggers:**
+- Push to `main`
+- Pull request to `main`
+- Manual dispatch (`workflow_dispatch`)
+
+  Path matching happens inside the `changes` job (so branch
+  protection can require the gate's status check on every PR).
+
+**Cost:** Build + deploy + test on GitHub-hosted ubuntu-latest (free for
+public repos / billable minutes for private). The Tokyo stack itself
+runs 24×7 — its baseline is the cost driver, not this workflow.
+
+**Authentication:** GitHub OIDC → AWS STS (no stored AWS credentials),
+**separate** IAM role from `e2e-test.yml`:
+
+| Workflow | Role | Region | Scope |
+|----------|------|--------|-------|
+| `e2e-test.yml` | `boxlite-e2e-github-actions` | us-east-1 | self-hosted runner provisioning (ec2:RunInstances, terminate, register/deregister GH runner) |
+| `e2e-cloud.yml` | `boxlite-e2e-cloud-github-actions` | ap-northeast-1 | Tokyo stack deploy + exec (ecr push, ecs update-service / execute-command, ssm send-command to runner, s3 builds/, ssm parameter read) |
+
+**Required variables** (Settings → Variables → Actions):
+- `AWS_ACCOUNT_ID` (shared)
+- `AWS_E2E_CLOUD_REGION` = `ap-northeast-1`
+- `AWS_E2E_CLOUD_ROLE_ARN` = `arn:aws:iam::<acct>:role/boxlite-e2e-cloud-github-actions`
+
+**Required AWS resources** (provisioned by `scripts/ci/setup-e2e-cloud-oidc.sh`):
+- OIDC identity provider (`token.actions.githubusercontent.com`) — shared
+  with `e2e-test.yml`
+- IAM role `boxlite-e2e-cloud-github-actions` with trust policy limited
+  to `repo:boxlite-ai/boxlite:{ref:refs/heads/main, pull_request, environment:e2e-cloud}`
+- SSM SecureString parameter `/boxlite/e2e-ci/admin-api-key` (sourced
+  by the workflow at runtime; never committed)
+- Tokyo `boxlite-e2e-ci-*` stack already deployed (SST `e2e-ci` stage)
+
+**Concurrency:** `e2e-cloud-shared` — singleton lock across every PR
+and every push. The Tokyo stack is a shared singleton, so per-ref
+grouping would let PRs race each other's ECS rolling updates.
+
+**Stack state after a run:** The Tokyo stack is left running THIS
+workflow run's Api image + runner binary. There's no auto-restore to
+`main` HEAD between runs (cost trade-off). Console / direct stack
+inspection therefore reflects "whatever the last e2e-cloud run
+deployed" — a `git log --grep e2e-cloud` on `main` and the ECS task
+definition's image tag (`api-<sha>`) together identify the running
+revision.
 
 ## Trigger Behavior
 

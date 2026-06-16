@@ -17,6 +17,13 @@ on:
   release:
     types: [ published ]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      target_filter:
+        description: 'Optional. Build only the given target (e.g. "linux-x64-gnu"). Empty = build all matrix platforms.'
+        type: string
+        default: ''
+        required: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -25,6 +32,32 @@ env:
 jobs:
   config:
     uses: ./.github/workflows/config.yml
+
+  # Same target_filter pattern as build-c.yml — lets e2e-cloud-test pull
+  # only the linux-x64 entry instead of running the full release-time
+  # platform matrix on every gate dispatch.
+  setup_matrix:
+    name: Setup matrix
+    needs: config
+    runs-on: ubuntu-latest
+    outputs:
+      platforms: ${{ steps.filter.outputs.platforms }}
+    steps:
+      - id: filter
+        env:
+          ALL_PLATFORMS: ${{ needs.config.outputs.platforms }}
+          TARGET_FILTER: ${{ inputs.target_filter }}
+        run: |
+          if [ -n "${TARGET_FILTER:-}" ]; then
+            FILTERED=$(printf '%s' "$ALL_PLATFORMS" | jq -c --arg t "$TARGET_FILTER" '[.[] | select(.target == $t)]')
+            COUNT=$(printf '%s' "$FILTERED" | jq 'length')
+            [ "$COUNT" -ge 1 ] || { echo "::error::No matrix entry matches target_filter=$TARGET_FILTER"; exit 1; }
+            echo "Filtered to $COUNT entry(ies): $FILTERED"
+          else
+            FILTERED="$ALL_PLATFORMS"
+            echo "No filter — full matrix"
+          fi
+          echo "platforms=$FILTERED" >> "$GITHUB_OUTPUT"
 
   # ============================================================================
   # BUILD
@@ -43,12 +76,12 @@ jobs:
   # ============================================================================
   build:
     name: Build (${{ matrix.target }})
-    needs: config
+    needs: [config, setup_matrix]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(needs.config.outputs.platforms) }}
+        include: ${{ fromJson(needs.setup_matrix.outputs.platforms) }}
 
     steps:
       - uses: actions/checkout@v4
@@ -189,12 +222,16 @@ jobs:
   # ============================================================================
   test:
     name: Test (${{ matrix.platform.target }} / Node ${{ matrix.node-version }})
-    needs: [ config, build ]
+    needs: [ config, setup_matrix, build ]
     runs-on: ${{ matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:
-        platform: ${{ fromJson(needs.config.outputs.platforms) }}
+        # Narrow to the same target_filter that build used (via setup_matrix);
+        # config.outputs.platforms is the full 9-entry matrix and would
+        # spawn test jobs for platforms whose artifacts the build job
+        # didn't upload — every such test fails at Download artifact.
+        platform: ${{ fromJson(needs.setup_matrix.outputs.platforms) }}
         node-version: ${{ fromJson(needs.config.outputs.node-versions) }}
 
     steps:
