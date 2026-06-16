@@ -26,7 +26,7 @@ const defaultConfig = {
   registryContainer: 'boxlite-local-registry',
   registryHost: process.env.BOXLITE_E2E_REGISTRY_HOST || 'localhost:5001',
   runtimeImagePlatform: process.env.BOXLITE_E2E_RUNTIME_IMAGE_PLATFORM || defaultRuntimeImagePlatform(),
-  runtimeImageTag: process.env.BOXLITE_E2E_RUNTIME_IMAGE_TAG || '20260605-p0-r5-local',
+  runtimeImageTag: process.env.BOXLITE_E2E_RUNTIME_IMAGE_TAG || 'v0.9.5-local',
   runnerHomeDir: process.env.BOXLITE_E2E_RUNNER_HOME_DIR || '/tmp/blrt',
   dockerConfigDir: process.env.BOXLITE_E2E_DOCKER_CONFIG || path.join(os.tmpdir(), 'boxlite-local-docker-config'),
 }
@@ -208,7 +208,8 @@ function runtimeImageRef(config, name) {
 
 function ensureDaemonRuntimeBinary(config) {
   const outputDir = path.join(appsRoot, 'dist', 'apps', 'daemon-runtime')
-  const outputPath = path.join(outputDir, 'boxlite-daemon')
+  const targetArch = runtimeImageGoarch(config)
+  const outputPath = path.join(outputDir, `boxlite-daemon-${targetArch}`)
   fs.mkdirSync(outputDir, { recursive: true })
 
   console.log(`[local-dex] building Linux daemon runtime binary for ${config.runtimeImagePlatform}`)
@@ -219,7 +220,7 @@ function ensureDaemonRuntimeBinary(config) {
     env: {
       ...process.env,
       GOOS: 'linux',
-      GOARCH: runtimeImageGoarch(config),
+      GOARCH: targetArch,
       CGO_ENABLED: '0',
     },
   })

@@ -10,9 +10,10 @@
 
 ---
 
-### Task 1: Restore Agent Runtime Sources
+## Task 1: Restore Agent Runtime Sources
 
 **Files:**
+
 - Create: `images/agent-runtime/base.Dockerfile`
 - Create: `images/agent-runtime/python.Dockerfile`
 - Create: `images/agent-runtime/node.Dockerfile`
@@ -47,9 +48,10 @@ git add .dockerignore images/agent-runtime
 git commit -m "build: restore agent runtime Dockerfiles"
 ```
 
-### Task 2: Add Versioned Build Script
+## Task 2: Add Versioned Build Script
 
 **Files:**
+
 - Create: `scripts/images/build-agent-runtime.sh`
 
 **Step 1: Write script behavior**
@@ -82,9 +84,10 @@ git add scripts/images/build-agent-runtime.sh
 git commit -m "build: add versioned agent runtime image script"
 ```
 
-### Task 3: Add Publish Workflow
+## Task 3: Add Publish Workflow
 
 **Files:**
+
 - Create: `.github/workflows/publish-agent-runtime-images.yml`
 
 **Step 1: Create workflow**
@@ -116,9 +119,10 @@ git add .github/workflows/publish-agent-runtime-images.yml
 git commit -m "ci: publish agent runtime images"
 ```
 
-### Task 4: Update API And Infra Refs Test-First
+## Task 4: Update API And Infra Refs Test-First
 
 **Files:**
+
 - Modify: `apps/api/src/box/constants/curated-images.constant.spec.ts`
 - Modify: `apps/api/src/box/constants/curated-images.constant.ts`
 - Modify: `apps/infra/sst.config.ts`
@@ -164,9 +168,10 @@ git add apps/api/src/box/constants/curated-images.constant.ts apps/api/src/box/c
 git commit -m "feat: switch curated API refs to agent runtime v2"
 ```
 
-### Task 5: Update Dashboard Picker Test-First
+## Task 5: Update Dashboard Picker Test-First
 
 **Files:**
+
 - Create: `apps/dashboard/src/components/Box/supportedBoxImages.ts`
 - Create: `apps/dashboard/src/components/Box/supportedBoxImages.test.ts`
 - Modify: `apps/dashboard/src/components/Box/CreateBoxSheet.tsx`
@@ -206,9 +211,10 @@ git add apps/dashboard/src/components/Box/CreateBoxSheet.tsx apps/dashboard/src/
 git commit -m "feat: switch dashboard image picker to agent runtime v2"
 ```
 
-### Task 6: Final Verification
+## Task 6: Final Verification
 
 **Files:**
+
 - All changed files.
 
 **Step 1: Run focused syntax checks**
