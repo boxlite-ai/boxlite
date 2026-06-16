@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Aggregate REST test artifacts into one Markdown report."""
+"""把 REST 测试产物聚合成一份 Markdown 中文报告。"""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -22,15 +22,15 @@ def rel(path: Path) -> str:
 def inventory_summary() -> list[str]:
     path = REPORT_DIR / "rest-inventory.json"
     if not path.exists():
-        return ["- inventory: missing, run `make test:rest:inventory`"]
+        return ["- 静态覆盖盘点：缺失，请先运行 `make test:rest:inventory`"]
 
     rows = json.loads(path.read_text())
     total = len(rows)
     candidate = sum(1 for row in rows if row.get("status") == "candidate")
     missing = total - candidate
     lines = [
-        f"- inventory: {candidate}/{total} candidate operations, {missing} missing",
-        f"- inventory markdown: `{rel(REPORT_DIR / 'rest-inventory.md')}`",
+        f"- 静态覆盖盘点：{candidate}/{total} 个 operation 有候选覆盖，{missing} 个缺失",
+        f"- 覆盖盘点 Markdown：`{rel(REPORT_DIR / 'rest-inventory.md')}`",
     ]
     if missing:
         missing_ops = [
@@ -38,7 +38,7 @@ def inventory_summary() -> list[str]:
             for row in rows
             if row.get("status") == "missing"
         ][:10]
-        lines.append("- first missing candidates:")
+        lines.append("- 前 10 个缺失候选覆盖的 operation：")
         lines.extend(f"  - {op}" for op in missing_ops)
     return lines
 
@@ -46,7 +46,7 @@ def inventory_summary() -> list[str]:
 def cli_matrix_summary() -> list[str]:
     summaries = sorted(REPORT_DIR.glob("cli-matrix-*.md"))
     if not summaries:
-        return ["- CLI matrix: missing, run `make test:rest:cli AUTH=<api-key|oidc>`"]
+        return ["- CLI 矩阵：缺失，请运行 `make test:rest:cli AUTH=<api-key|oidc>`"]
 
     lines = []
     for summary in summaries:
@@ -60,19 +60,19 @@ def cli_matrix_summary() -> list[str]:
                 auth = line.split("`", 2)[1]
             elif line.startswith("- scope:"):
                 scope = line.split("`", 2)[1]
-        lines.append(f"- CLI matrix `{auth}`/`{scope}`: {status} (`{rel(summary)}`)")
+        lines.append(f"- CLI 矩阵 `{auth}`/`{scope}`：{status}（`{rel(summary)}`）")
     return lines
 
 
 def artifact_summary() -> list[str]:
     if not REPORT_DIR.exists():
-        return ["- no artifacts directory yet"]
+        return ["- 还没有产物目录"]
     files = sorted(
         path for path in REPORT_DIR.iterdir()
         if path.is_file() and path.name != OUT.name
     )
     if not files:
-        return ["- no artifacts yet"]
+        return ["- 还没有产物"]
     return [f"- `{rel(path)}`" for path in files]
 
 
@@ -80,25 +80,25 @@ def main() -> None:
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     lines = [
-        "# REST API Test Report",
+        "# REST API 测试报告",
         "",
-        f"Generated: `{generated}`",
+        f"生成时间：`{generated}`",
         "",
-        "## Summary",
+        "## 摘要",
         "",
         *inventory_summary(),
         "",
-        "## CLI Matrix",
+        "## CLI 矩阵",
         "",
         *cli_matrix_summary(),
         "",
-        "## REST E2E Auth Matrix",
+        "## REST E2E 认证矩阵",
         "",
-        "- API-key E2E: `make test:rest:e2e AUTH=api-key`",
-        "- OIDC E2E: `make test:rest:e2e AUTH=oidc`",
-        "- OIDC requires `BOXLITE_E2E_OIDC_TOKEN` or an OIDC profile access token.",
+        "- API-key E2E：`make test:rest:e2e AUTH=api-key`",
+        "- OIDC E2E：`make test:rest:e2e AUTH=oidc`",
+        "- OIDC 需要 `BOXLITE_E2E_OIDC_TOKEN`，或一个包含 access token 的 OIDC profile。",
         "",
-        "## Artifacts",
+        "## 产物",
         "",
         *artifact_summary(),
         "",
