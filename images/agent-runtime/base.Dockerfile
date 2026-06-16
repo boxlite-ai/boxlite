@@ -45,19 +45,10 @@ RUN apt-get update \
   && chmod 0440 /etc/sudoers.d/boxlite \
   && rm -rf /var/lib/apt/lists/*
 
-# Buildx provides TARGETARCH so each image copies the matching daemon binary.
-ARG TARGETARCH
-# Embed the Linux daemon that exposes BoxLite toolbox/session APIs inside the box.
-COPY apps/dist/apps/daemon-runtime/boxlite-daemon-${TARGETARCH} /boxlite/bin/boxlite-daemon
-# Embed the startup wrapper that fills required env fallbacks before launching the daemon.
-COPY images/agent-runtime/start-agent-runtime.sh /boxlite/bin/start-agent-runtime
-# Make embedded binaries executable and create the default user workspace.
-RUN chmod 0755 /boxlite/bin/boxlite-daemon /boxlite/bin/start-agent-runtime \
-  && mkdir -p /workspace
+# Create the default workspace without embedding any BoxLite daemon process.
+RUN mkdir -p /workspace
 
 # Users and agent commands start in /workspace.
 WORKDIR /workspace
-# Always start through the wrapper so BOXLITE_BOX_ID fallback is applied.
-ENTRYPOINT ["/boxlite/bin/start-agent-runtime"]
-# Keep the container alive until the runner asks the daemon to execute work.
+# Keep the box alive when the runner does not override the image command.
 CMD ["sleep", "infinity"]

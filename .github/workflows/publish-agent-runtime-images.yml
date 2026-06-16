@@ -5,12 +5,8 @@ on:
     branches: [main] # Publish only after the PR lands on main.
     paths:
       - '.dockerignore' # Docker context changes can change the published image contents.
-      - 'apps/common-go/**' # Daemon imports common-go packages, so these changes require republishing.
-      - 'apps/daemon/**' # Daemon binary is embedded into every runtime image.
-      - 'apps/go.work' # Go workspace membership affects daemon builds.
-      - 'apps/go.work.sum' # Go workspace checksums affect reproducible daemon builds.
       - 'images/agent-runtime/VERSION' # Version bumps are the normal way to publish a new tag.
-      - 'images/agent-runtime/**' # Dockerfiles and startup script directly define image contents.
+      - 'images/agent-runtime/**' # Dockerfiles and version file directly define image contents.
       - 'scripts/images/build-agent-runtime.sh' # Build script changes affect all published images.
       - '.github/workflows/publish-agent-runtime-images.yml' # Workflow changes should validate themselves on main.
   workflow_dispatch:
@@ -38,11 +34,6 @@ jobs:
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # Pin checkout for supply-chain stability.
         with:
           persist-credentials: false # Later steps do not need git credentials.
-
-      - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # Pin Go setup action for supply-chain stability.
-        with:
-          go-version-file: apps/go.work # Use the repo's Go workspace version.
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # Enable cross-arch build emulation.

@@ -4,18 +4,17 @@
 
 Publish the three BoxLite agent runtime images from source-controlled Dockerfiles through GitHub Actions, using the existing GHCR package names with version tags starting at `v0.1.0`.
 
+These images are pure OCI images. They provide the filesystem and default tools that a Box can pull and run; they do not embed `boxlite-daemon`, `start-agent-runtime.sh`, or any BoxLite process supervisor.
+
 ## Context
 
-The historical Dockerfiles were introduced in commit `fc88aa0b` and also appear in `bdab4823`:
+The image source now lives in this repository so the GHCR packages can be rebuilt from reviewed code instead of unpublished local Dockerfiles:
 
 - `images/agent-runtime/base.Dockerfile`
 - `images/agent-runtime/python.Dockerfile`
 - `images/agent-runtime/node.Dockerfile`
-- `images/agent-runtime/start-agent-runtime.sh`
 
-The historical build script was `scripts/images/build-agent-runtime.sh`. It built a Linux daemon binary into `apps/dist/apps/daemon-runtime/boxlite-daemon`, then used the repository root as the Docker build context.
-
-Current `origin/main` still has references to those paths in `apps/scripts/local-dex-env.mjs`, but the Dockerfiles and build script are absent. Current `.dockerignore` excludes `apps/dist`, which would break Dockerfile copies from `apps/dist/apps/daemon-runtime/` unless fixed.
+The BoxLite runtime already pulls and loads image refs. The image should therefore stay limited to OS/runtime contents and a default keep-alive command. BoxLite control-plane or runner behavior belongs outside the image.
 
 ## Naming And Versioning
 
@@ -31,30 +30,29 @@ Do not delete or retag older package versions.
 
 ## Architecture
 
-Restore the historical Dockerfiles in `images/agent-runtime/` so local development and CI share one source of truth. Add a publish workflow that builds and pushes the three images as multi-architecture GHCR images for `linux/amd64` and `linux/arm64`.
+Add Dockerfiles in `images/agent-runtime/` so local development and CI share one source of truth. Add a publish workflow that builds and pushes the three images as multi-architecture GHCR images for `linux/amd64` and `linux/arm64`.
 
 The workflow reads the version from `images/agent-runtime/VERSION` by default and supports a manual override through `workflow_dispatch`. A shell build script remains available for local dry runs and for CI reuse where useful.
 
-Because these images embed `boxlite-daemon`, multi-architecture publishing must not copy one shared daemon binary into both platforms. The script builds `apps/dist/apps/daemon-runtime/boxlite-daemon-amd64` and `apps/dist/apps/daemon-runtime/boxlite-daemon-arm64`. The Dockerfiles use BuildKit's `TARGETARCH` argument to copy `boxlite-daemon-${TARGETARCH}` into `/boxlite/bin/boxlite-daemon`.
+Multi-architecture support is handled by Docker Buildx. The Dockerfiles contain only packages and shell setup, so no architecture-specific BoxLite binary is copied into the image.
 
 ## Data Flow
 
-1. Developer updates an agent runtime Dockerfile or daemon code.
-2. GitHub Actions builds `boxlite-daemon-amd64` and `boxlite-daemon-arm64` for Linux.
-3. Buildx builds each runtime image for `linux/amd64` and `linux/arm64`.
+1. Developer updates an agent runtime Dockerfile or bumps `images/agent-runtime/VERSION`.
+2. GitHub Actions validates the version and logs in to GHCR.
+3. Buildx builds each pure runtime image for `linux/amd64` and `linux/arm64`.
 4. GHCR receives the three existing package names with the same version tag.
 5. API allowlist, infra fallback env, and dashboard image picker point at the new refs.
 6. Dashboard creates boxes using the new refs, and API rejects refs outside the curated set.
 
 ## Files To Change
 
-- Restore `images/agent-runtime/base.Dockerfile`
-- Restore `images/agent-runtime/python.Dockerfile`
-- Restore `images/agent-runtime/node.Dockerfile`
-- Restore `images/agent-runtime/start-agent-runtime.sh`
-- Restore and upgrade `scripts/images/build-agent-runtime.sh`
+- Add `images/agent-runtime/base.Dockerfile`
+- Add `images/agent-runtime/python.Dockerfile`
+- Add `images/agent-runtime/node.Dockerfile`
+- Add `images/agent-runtime/VERSION`
+- Add `scripts/images/build-agent-runtime.sh`
 - Add `.github/workflows/publish-agent-runtime-images.yml`
-- Modify `.dockerignore`
 - Modify `apps/api/src/box/constants/curated-images.constant.ts`
 - Modify `apps/api/src/box/constants/curated-images.constant.spec.ts`
 - Modify `apps/infra/sst.config.ts`
@@ -68,7 +66,6 @@ The build script should fail fast when:
 - `TAG` is empty or malformed.
 - `PLATFORMS` contains anything outside `linux/amd64` and `linux/arm64`.
 - A required Dockerfile is missing.
-- A required architecture-specific daemon binary cannot be built.
 
 The workflow should not delete or retag existing image versions. It should push the requested version tag to the existing packages.
 
