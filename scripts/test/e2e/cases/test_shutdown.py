@@ -12,23 +12,18 @@ what shutdown means at the REST layer:
 """
 from __future__ import annotations
 
-import tomllib
-from pathlib import Path
-
 import boxlite
 import pytest
 
+from e2e_auth import auth_context
+
 
 def _build_runtime():
-    import os
-    name = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
-    p = tomllib.loads(
-        (Path.home() / ".boxlite/credentials.toml").read_text()
-    )["profiles"][name]
+    ctx = auth_context()
     return boxlite.Boxlite.rest(boxlite.BoxliteRestOptions(
-        url=p["url"],
-        credential=boxlite.ApiKeyCredential(p["api_key"]),
-        path_prefix=p.get("path_prefix") or "",
+        url=ctx.url,
+        credential=boxlite.ApiKeyCredential(ctx.token),
+        path_prefix=ctx.path_prefix,
     ))
 
 

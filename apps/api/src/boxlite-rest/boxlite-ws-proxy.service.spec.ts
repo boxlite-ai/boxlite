@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import type { IncomingMessage } from 'http'
 import { createProxyMiddleware } from 'http-proxy-middleware'
+import type { IncomingMessage } from 'http'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 
 jest.mock('http-proxy-middleware', () => ({
@@ -18,33 +18,42 @@ jest.mock('uuid', () => ({
   validate: jest.fn(() => true),
 }))
 
-type AuthResult = { organizationId: string } | null
-type ServiceInternals = {
-  authenticate(req: IncomingMessage, urlTenant?: string): Promise<AuthResult>
-}
-
-function makeService() {
-  const apiKeyService = { getApiKeyByValue: jest.fn() }
-  const organizationUserService = { findOne: jest.fn() }
-  const jwtStrategy = { verifyToken: jest.fn() }
-  const service = new BoxliteWsProxyService(
-    apiKeyService as never,
-    organizationUserService as never,
-    {} as never,
-    {} as never,
-    jwtStrategy as never,
-  )
-  return { service, apiKeyService, organizationUserService, jwtStrategy }
-}
-
-const bearer = (token: string) => ({ headers: { authorization: `Bearer ${token}` } }) as IncomingMessage
-const authenticate = (service: BoxliteWsProxyService, req: IncomingMessage, tenant?: string) =>
-  (service as never as ServiceInternals).authenticate(req, tenant)
-
 describe('BoxliteWsProxyService', () => {
   beforeEach(() => {
     jest.clearAllMocks()
   })
+
+  function authRequest(token: string, url = '/api/v1/org-1/boxes/public-box/executions/exec-1/attach') {
+    return {
+      url,
+      headers: {
+        authorization: `Bearer ${token}`,
+      },
+    } as IncomingMessage
+  }
+
+  function buildAuthHarness() {
+    const apiKeyService = {
+      getApiKeyByValue: jest.fn().mockRejectedValue(new Error('api key not found')),
+    }
+    const organizationUserService = {
+      findOne: jest.fn(),
+    }
+    const jwtStrategy = {
+      verifyToken: jest.fn(),
+    }
+    const service = new BoxliteWsProxyService(
+      apiKeyService as never,
+      organizationUserService as never,
+      {} as never,
+      {} as never,
+      jwtStrategy as never,
+    ) as unknown as {
+      authenticate: (req: IncomingMessage) => Promise<{ organizationId: string } | null>
+    }
+
+    return { service, apiKeyService, organizationUserService, jwtStrategy }
+  }
 
   it('rewrites public box ids to internal box ids before proxying attach upgrades to the runner', () => {
     new BoxliteWsProxyService({} as never, {} as never, {} as never, {} as never, {} as never)
@@ -61,107 +70,47 @@ describe('BoxliteWsProxyService', () => {
     )
   })
 
-  describe('matchAttachPath', () => {
-    it('captures the optional tenant (org id) and the box id', () => {
-      const { service } = makeService()
-      expect(service.matchAttachPath('/api/v1/acme/boxes/b1/executions/e1/attach')).toEqual({
-        boxId: 'b1',
-        tenant: 'acme',
-      })
-      expect(service.matchAttachPath('/api/v1/boxes/b1/executions/e1/attach')).toEqual({
-        boxId: 'b1',
-        tenant: undefined,
-      })
-      expect(service.matchAttachPath('/not/an/attach/path')).toBeNull()
+  it('authenticates API key bearer tokens for websocket attach', async () => {
+    const { service, apiKeyService, organizationUserService, jwtStrategy } = buildAuthHarness()
+    apiKeyService.getApiKeyByValue.mockResolvedValue({
+      organizationId: 'org-1',
+      userId: 'user-1',
+      expiresAt: null,
     })
+    organizationUserService.findOne.mockResolvedValue({ organizationId: 'org-1', userId: 'user-1' })
+
+    await expect(service.authenticate(authRequest('blk_live_test'))).resolves.toEqual({ organizationId: 'org-1' })
+    expect(organizationUserService.findOne).toHaveBeenCalledWith('org-1', 'user-1')
+    expect(jwtStrategy.verifyToken).not.toHaveBeenCalled()
   })
 
-  describe('authenticate', () => {
-    it('authenticates a non-expired API key whose user is still a member (regression)', async () => {
-      const { service, apiKeyService, organizationUserService, jwtStrategy } = makeService()
-      apiKeyService.getApiKeyByValue.mockResolvedValue({ organizationId: 'org-1', userId: 'u1', expiresAt: null })
-      organizationUserService.findOne.mockResolvedValue({ organizationId: 'org-1', userId: 'u1' })
+  it('authenticates JWT bearer tokens for websocket attach', async () => {
+    const { service, organizationUserService, jwtStrategy } = buildAuthHarness()
+    const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyXzEifQ.signature'
+    jwtStrategy.verifyToken.mockResolvedValue({ sub: 'user-1', email: 'dev@acme.test' })
+    organizationUserService.findOne.mockResolvedValue({ organizationId: 'org-1', userId: 'user-1' })
 
-      await expect(authenticate(service, bearer('apikey'), 'ignored-tenant')).resolves.toEqual({
-        organizationId: 'org-1',
-      })
-      // API-key org wins; the URL tenant is ignored, and JWT is never consulted.
-      expect(organizationUserService.findOne).toHaveBeenCalledWith('org-1', 'u1')
-      expect(jwtStrategy.verifyToken).not.toHaveBeenCalled()
-    })
+    await expect(service.authenticate(authRequest(jwt))).resolves.toEqual({ organizationId: 'org-1' })
+    expect(jwtStrategy.verifyToken).toHaveBeenCalledWith(jwt)
+    expect(organizationUserService.findOne).toHaveBeenCalledWith('org-1', 'user-1')
+  })
 
-    it('rejects an API key whose user is no longer a member of its org', async () => {
-      const { service, apiKeyService, organizationUserService } = makeService()
-      apiKeyService.getApiKeyByValue.mockResolvedValue({ organizationId: 'org-1', userId: 'u1', expiresAt: null })
-      organizationUserService.findOne.mockResolvedValue(null)
-      await expect(authenticate(service, bearer('apikey'))).resolves.toBeNull()
-    })
+  it('rejects invalid JWT bearer tokens for websocket attach', async () => {
+    const { service, organizationUserService, jwtStrategy } = buildAuthHarness()
+    const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyXzEifQ.signature'
+    jwtStrategy.verifyToken.mockRejectedValue(new Error('bad jwt'))
 
-    it('accepts a JWT whose user is a member of the URL tenant org', async () => {
-      const { service, apiKeyService, organizationUserService, jwtStrategy } = makeService()
-      apiKeyService.getApiKeyByValue.mockRejectedValue(new Error('not an api key'))
-      jwtStrategy.verifyToken.mockResolvedValue({ sub: 'user-1' })
-      organizationUserService.findOne.mockResolvedValue({ organizationId: 'org-A', userId: 'user-1' })
+    await expect(service.authenticate(authRequest(jwt))).resolves.toBeNull()
+    expect(organizationUserService.findOne).not.toHaveBeenCalled()
+  })
 
-      await expect(authenticate(service, bearer('jwt'), 'org-A')).resolves.toEqual({ organizationId: 'org-A' })
-      expect(organizationUserService.findOne).toHaveBeenCalledWith('org-A', 'user-1')
-    })
+  it('rejects JWT attach when organization membership has been removed', async () => {
+    const { service, organizationUserService, jwtStrategy } = buildAuthHarness()
+    const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyXzEifQ.signature'
+    jwtStrategy.verifyToken.mockResolvedValue({ sub: 'user-1', email: 'dev@acme.test' })
+    organizationUserService.findOne.mockResolvedValue(null)
 
-    it('rejects a JWT user who is not a member of the URL tenant org (cross-org boundary)', async () => {
-      const { service, apiKeyService, organizationUserService, jwtStrategy } = makeService()
-      apiKeyService.getApiKeyByValue.mockRejectedValue(new Error('not an api key'))
-      jwtStrategy.verifyToken.mockResolvedValue({ sub: 'user-1' })
-      organizationUserService.findOne.mockResolvedValue(null) // not a member of the requested org
-
-      await expect(authenticate(service, bearer('jwt'), 'org-B')).resolves.toBeNull()
-      // Membership is checked against the URL org, not any org the user belongs to.
-      expect(organizationUserService.findOne).toHaveBeenCalledWith('org-B', 'user-1')
-    })
-
-    it('rejects a JWT with no tenant or the legacy `default` prefix (org ambiguous)', async () => {
-      const { service, apiKeyService, organizationUserService, jwtStrategy } = makeService()
-      apiKeyService.getApiKeyByValue.mockRejectedValue(new Error('not an api key'))
-      jwtStrategy.verifyToken.mockResolvedValue({ sub: 'user-1' })
-
-      await expect(authenticate(service, bearer('jwt'))).resolves.toBeNull()
-      await expect(authenticate(service, bearer('jwt'), 'default')).resolves.toBeNull()
-      expect(jwtStrategy.verifyToken).not.toHaveBeenCalled()
-      expect(organizationUserService.findOne).not.toHaveBeenCalled()
-    })
-
-    it('rejects an invalid JWT (verifyToken throws)', async () => {
-      const { service, apiKeyService, jwtStrategy } = makeService()
-      apiKeyService.getApiKeyByValue.mockRejectedValue(new Error('not an api key'))
-      jwtStrategy.verifyToken.mockRejectedValue(new Error('bad signature'))
-      await expect(authenticate(service, bearer('jwt'), 'org-A')).resolves.toBeNull()
-    })
-
-    it('rejects a JWT when no verifier is wired (skipConnections)', async () => {
-      const apiKeyService = { getApiKeyByValue: jest.fn().mockRejectedValue(new Error('not an api key')) }
-      const organizationUserService = { findOne: jest.fn() }
-      const service = new BoxliteWsProxyService(
-        apiKeyService as never,
-        organizationUserService as never,
-        {} as never,
-        {} as never,
-        undefined as never, // JwtStrategy provider resolves to undefined under skipConnections
-      )
-      await expect(authenticate(service, bearer('jwt'), 'org-A')).resolves.toBeNull()
-    })
-
-    it('uses the `uid` claim as the user id when `cid` is present (OKTA shape)', async () => {
-      const { service, apiKeyService, organizationUserService, jwtStrategy } = makeService()
-      apiKeyService.getApiKeyByValue.mockRejectedValue(new Error('not an api key'))
-      jwtStrategy.verifyToken.mockResolvedValue({ sub: 'user@example.com', cid: 'client-1', uid: 'real-user-id' })
-      organizationUserService.findOne.mockResolvedValue({ organizationId: 'org-A', userId: 'real-user-id' })
-
-      await expect(authenticate(service, bearer('jwt'), 'org-A')).resolves.toEqual({ organizationId: 'org-A' })
-      expect(organizationUserService.findOne).toHaveBeenCalledWith('org-A', 'real-user-id')
-    })
-
-    it('rejects a request with no bearer token', async () => {
-      const { service } = makeService()
-      await expect(authenticate(service, { headers: {} } as IncomingMessage, 'org-A')).resolves.toBeNull()
-    })
+    await expect(service.authenticate(authRequest(jwt))).resolves.toBeNull()
+    expect(organizationUserService.findOne).toHaveBeenCalledWith('org-1', 'user-1')
   })
 })

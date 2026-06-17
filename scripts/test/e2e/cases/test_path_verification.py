@@ -28,18 +28,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from path_verification import runner_journal_seek, runner_hits_for_box
 from conftest import drain
 
-# Both cases in this file are LOCAL-only meta-tests:
-#   (1) inspects ~/.boxlite/credentials for url=':3000' — only true for
-#       the local-bootstrap profile, never for a cloud profile pointing at
-#       the ELB DNS.
-#   (2) reads the local boxlite-runner systemd journal via journalctl —
-#       on the Tokyo cloud profile p1 the runner journal lives on an
-#       EC2 instance the test client can't reach.
-# Module-level skipif has been replaced by a conftest.collect_ignore
-# entry guarded on BOXLITE_E2E_PROFILE != 'default'. That stops pytest
-# from collecting this file at all on the cloud gate (no SKIP markers
-# in the report) rather than collecting + skipping.
-
 
 @pytest.mark.asyncio
 async def test_sdk_runtime_is_rest_against_local_api(rt):
@@ -47,10 +35,9 @@ async def test_sdk_runtime_is_rest_against_local_api(rt):
     (`:3000`), not local FFI and not directly at the runner."""
     # Boxlite.rest() always wires REST; check the URL the SDK is actually
     # going to use by inspecting the credentials we built it from.
-    import tomllib
-    cred = tomllib.loads((Path.home() / ".boxlite/credentials.toml").read_text())
-    p = cred["profiles"]["p1"]
-    url = p["url"]
+    from e2e_auth import auth_context
+
+    url = auth_context().url
     assert ":3000" in url, (
         f"profile p1.url={url!r} does not target the local API on :3000. "
         f"E2E tests would talk to the wrong thing."

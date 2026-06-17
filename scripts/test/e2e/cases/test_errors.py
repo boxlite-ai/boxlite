@@ -9,21 +9,13 @@ This file keeps the error-type contract honest end-to-end:
 from __future__ import annotations
 
 import json
-import tomllib
 import urllib.error
 import urllib.request
-from pathlib import Path
 
 import boxlite
 import pytest
 
-
-def _profile():
-    import os
-    name = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
-    return tomllib.loads(
-        (Path.home() / ".boxlite/credentials.toml").read_text()
-    )["profiles"][name]
+from e2e_auth import auth_context
 
 
 @pytest.mark.asyncio
@@ -53,9 +45,9 @@ async def test_create_with_unknown_image_returns_typed_error(rt):
 @pytest.mark.asyncio
 async def test_invalid_token_returns_401_not_500():
     """A bad bearer token must return 401/403, not 500."""
-    p = _profile()
+    ctx = auth_context()
     req = urllib.request.Request(
-        f"{p['url']}/v1/me",
+        ctx.url_for("/v1/me"),
         method="GET",
         headers={"Authorization": "Bearer this-token-is-clearly-not-real"},
     )

@@ -85,6 +85,23 @@ pytest scripts/test/e2e/cases/test_p0_6_exec_stdout_race.py -v
 PR_REF=<branch>  scripts/test/e2e/two_sided.sh
 ```
 
+The reusable REST auth matrix entry is:
+
+```bash
+make test:rest:e2e AUTH=api-key
+make test:rest:e2e AUTH=oidc
+```
+
+`AUTH=api-key` reads `BOXLITE_E2E_API_KEY` or profile `api_key`.
+`AUTH=oidc` reads `BOXLITE_E2E_OIDC_TOKEN` or profile `access_token`.
+Both modes call `/v1/me` to refresh the route `path_prefix`; set
+`BOXLITE_E2E_PREFIX` only when you need to override that discovery.
+
+The C, Go, and Node SDK entry-point cases currently skip under `AUTH=oidc`
+because those SDK smoke drivers still expose only API-key credential types.
+The Python SDK REST path does run under both auth modes because its
+`ApiKeyCredential` is the generic bearer-token slot on the wire.
+
 ## Layout
 
 ```
