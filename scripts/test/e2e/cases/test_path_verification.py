@@ -2,15 +2,15 @@
 
 The check is two-part:
 
-  (1) The SDK's configured runtime URL is the API on :3000 (not the
-      runner's :8080, and not a default-FFI degenerate). Asserted by
-      inspecting the runtime's BoxliteRestOptions before any work runs.
+  (1) The SDK's configured runtime URL points at the API (has /api base
+      path, is NOT the runner's :8080). Works for both local (:3000) and
+      remote (dev.boxlite.ai) deployments.
 
   (2) After one round-trip exec, the runner journal contains the box id.
       Runner journal entries (`CREATE_BOX` / `created box id=…
-      name=<uuid>`) only ever appear when the API queued the job, which
-      only happens when the SDK POSTed to the API on :3000. So a single
+      name=<uuid>`) only ever appear when the API queued the job. A single
       runner-journal hit is sufficient evidence for the whole chain.
+      Skipped when BOXLITE_E2E_SKIP_PATH_VERIFY=1 (remote runs).
 
 If either check fails, downstream regression tests cannot be trusted —
 they may be passing because they're talking to something other than the
@@ -31,20 +31,20 @@ from conftest import drain
 
 @pytest.mark.asyncio
 async def test_sdk_runtime_is_rest_against_local_api(rt):
-    """The runtime must be REST-mode and pointing at the local API
-    (`:3000`), not local FFI and not directly at the runner."""
+    """The runtime must be REST-mode and pointing at the API
+    (not the runner on :8080, not local FFI)."""
     # Boxlite.rest() always wires REST; check the URL the SDK is actually
     # going to use by inspecting the credentials we built it from.
     from e2e_auth import auth_context
 
     url = auth_context().url
-    assert ":3000" in url, (
-        f"profile p1.url={url!r} does not target the local API on :3000. "
-        f"E2E tests would talk to the wrong thing."
-    )
     assert "/api" in url, (
         f"profile p1.url={url!r} missing /api base path; SDK would route to "
         f"runner endpoints (/v1/boxes...) and skip the NestJS proxy controller."
+    )
+    assert ":8080" not in url, (
+        f"profile p1.url={url!r} points at the runner (:8080) instead of "
+        f"the API. E2E tests must go through the API layer."
     )
 
 

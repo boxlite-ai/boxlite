@@ -209,20 +209,6 @@ async def test_execution_invalid_command_returns_422(rt, image):
         await rt.remove(box.id, force=True)
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "Production bug: no per-box quota enforcement at the API "
-        "create boundary. cpus=999 is silently clamped to the org default "
-        "(cpus=1) and HTTP 201 returned, instead of HTTP 429 ResourceExhausted "
-        "(or HTTP 400 InvalidArgument). The DTO has @Min(1) but no @Max(); "
-        "fixture_setup sets max_cpu_per_box=4 in the organization table "
-        "but nothing in apps/api/src/box/services/box.service.ts:"
-        "createFromSnapshot consults that limit. "
-        "strict=False: some envs reject cpus=999 at the DTO layer (400) "
-        "before quota is consulted, which makes this pass."
-    ),
-)
 @pytest.mark.asyncio
 async def test_resource_exhausted_over_cpu_quota_returns_429(rt):
     """POST /boxes with cpus far above the org quota should surface
