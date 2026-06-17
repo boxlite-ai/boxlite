@@ -90,7 +90,16 @@ async def verify_runner_saw_all_boxes(rt):
     journal — if not, the SDK silently bypassed the API → Runner
     chain (e.g. degraded to local FFI, or the runner-side journal
     write broke). Tests that don't create any boxes are unaffected.
+
+    Set ``BOXLITE_E2E_SKIP_PATH_VERIFY=1`` to bypass this check entirely.
+    Intended for cloud-CI runs where the runner journal lives on a
+    remote EC2 instance and isn't reachable from ``journalctl`` on the
+    pytest host.
     """
+    if os.environ.get("BOXLITE_E2E_SKIP_PATH_VERIFY", "").lower() in ("1", "true", "yes", "on"):
+        yield
+        return
+
     since = runner_journal_seek()
     object.__setattr__(rt, "_created", [])
 
