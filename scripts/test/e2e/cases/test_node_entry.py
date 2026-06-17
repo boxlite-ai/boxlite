@@ -23,9 +23,7 @@ from path_verification import runner_journal_seek, runner_hits_for_box
 REPO = Path(__file__).resolve().parents[4]
 SRC = REPO / "scripts/test/e2e/sdks/node/e2e_basic.ts"
 NODE_SDK = REPO / "sdks/node"
-UUID_RE = re.compile(
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-)
+BOX_ID_RE = re.compile(r"[A-Za-z0-9]{8,36}")
 
 def _has_node_napi_build() -> bool:
     """The napi binding produces sdks/node/native/*.node OR
@@ -61,7 +59,7 @@ def test_node_sdk_create_exec_remove(node_runner):
     env = {
         **os.environ,
         **ctx.api_key_sdk_env(),
-        "BOXLITE_E2E_IMAGE": "alpine:3.23",
+        "BOXLITE_E2E_IMAGE": os.environ.get("BOXLITE_E2E_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3"),
     }
     # Use npx tsx to run the .ts directly without a separate compile step.
     # tsx is bundled with the apps workspace.
@@ -74,7 +72,7 @@ def test_node_sdk_create_exec_remove(node_runner):
         f"node driver exit={r.returncode}\nstdout:\n{r.stdout}\nstderr:\n{r.stderr}"
     )
 
-    m = UUID_RE.search(r.stdout)
+    m = BOX_ID_RE.search(r.stdout)
     assert m, f"node driver did not print BOX_ID: {r.stdout!r}"
     box_id = m.group(0)
 

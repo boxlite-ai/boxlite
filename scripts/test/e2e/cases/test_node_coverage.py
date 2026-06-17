@@ -20,7 +20,7 @@ from e2e_auth import auth_context
 REPO = Path(__file__).resolve().parents[4]
 NODE_SDK = REPO / "sdks/node"
 DRIVERS = REPO / "scripts/test/e2e/sdks/node"
-IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "alpine:3.23")
+IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3")
 
 
 def _has_node_napi_build() -> bool:

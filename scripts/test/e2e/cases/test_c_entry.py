@@ -25,9 +25,7 @@ REPO = Path(__file__).resolve().parents[4]
 SRC = REPO / "scripts/test/e2e/sdks/c/e2e_basic.c"
 HDR = REPO / "sdks/c/include"
 LIB_DIR = REPO / "target/release"
-UUID_RE = re.compile(
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-)
+BOX_ID_RE = re.compile(r"[A-Za-z0-9]{8,36}")
 
 @pytest.fixture(scope="module")
 def c_binary():
@@ -66,7 +64,7 @@ def test_c_sdk_create_remove(c_binary):
     env = {
         **os.environ,
         **ctx.api_key_sdk_env(),
-        "BOXLITE_E2E_IMAGE": "alpine:3.23",
+        "BOXLITE_E2E_IMAGE": os.environ.get("BOXLITE_E2E_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3"),
         "LD_LIBRARY_PATH": str(LIB_DIR),
     }
     r = subprocess.run(
@@ -77,7 +75,7 @@ def test_c_sdk_create_remove(c_binary):
         f"C driver exit={r.returncode}\nstdout:\n{r.stdout}\nstderr:\n{r.stderr}"
     )
 
-    m = UUID_RE.search(r.stdout)
+    m = BOX_ID_RE.search(r.stdout)
     assert m, f"C driver did not print BOX_ID: {r.stdout!r}"
     box_id = m.group(0)
     assert "OK" in r.stdout

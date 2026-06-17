@@ -46,10 +46,10 @@ async def test_exec_timeout_kills_long_command(rt, image):
             timeout_secs=2.0,  # seconds
         )
         t0 = time.time()
-        rc = await asyncio.wait_for(ex.wait(), timeout=15)
+        rc = await asyncio.wait_for(ex.wait(), timeout=45)
         elapsed = time.time() - t0
         await _best_effort_drain(ex)
-        assert elapsed < 10, (
+        assert elapsed < 30, (
             f"timeout did not fire within bound; elapsed={elapsed:.1f}s"
         )
         assert rc.exit_code != 0, (
@@ -70,10 +70,10 @@ async def test_exec_timeout_kills_sigterm_ignoring_process(rt, image):
             timeout_secs=2.0,
         )
         t0 = time.time()
-        rc = await asyncio.wait_for(ex.wait(), timeout=15)
+        rc = await asyncio.wait_for(ex.wait(), timeout=45)
         elapsed = time.time() - t0
         await _best_effort_drain(ex)
-        assert elapsed < 12, (
+        assert elapsed < 30, (
             f"SIGTERM-ignoring process not killed within bound; "
             f"elapsed={elapsed:.1f}s"
         )

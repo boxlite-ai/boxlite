@@ -12,19 +12,7 @@ Plus the bootstrap's `ADMIN_TOTAL_*_QUOTA` envelope (32 CPU, 64 GiB mem,
 Quota violations must surface as 429 ResourceExhausted (or 400 if the API
 treats it as a validation error). 500 means the runner accepted a doomed
 job and crashed it later; that's the bug class this case covers.
-
-ALL cases in this file currently XFAIL — see module-level pytestmark.
 """
-
-# Production bug pinned by every case in this file: API silently clamps
-# out-of-range / over-quota resource values to org defaults instead of
-# rejecting at the boundary. Root cause at
-# apps/api/src/boxlite-rest/dto/create-box.dto.ts:24 (@Min present, no @Max,
-# no quota lookup) + apps/api/src/box/services/box.service.ts
-# (createFromSnapshot doesn't consult max_*_per_box columns even though
-# fixture_setup.py:107-126 sets them).
-#
-# Two-sided requires API-side fix; tests pin the bug, NOT the test code.
 
 from __future__ import annotations
 
@@ -35,15 +23,6 @@ import pytest
 
 from conftest import DEFAULT_IMAGE
 from e2e_auth import auth_context, request_json
-
-pytestmark = pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Production bug: API silently clamps out-of-range / over-quota "
-        "resource values to org defaults instead of returning 400/429. See "
-        "module docstring for full root cause."
-    ),
-)
 
 
 def _post_box(spec: dict) -> tuple[int, dict[str, Any] | None]:
