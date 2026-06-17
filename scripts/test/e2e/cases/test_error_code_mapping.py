@@ -33,11 +33,15 @@ from typing import Any
 import boxlite
 import pytest
 
+from conftest import DEFAULT_IMAGE
+
 
 def _profile() -> dict:
+    import os
+    name = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
     return tomllib.loads((Path.home() / ".boxlite/credentials.toml").read_text())[
         "profiles"
-    ]["p1"]
+    ][name]
 
 
 def _api_call(
@@ -113,7 +117,7 @@ async def test_invalid_argument_zero_cpu_returns_400(rt):
     status, body = _api_call(
         "POST",
         f"/v1/{p['path_prefix']}/boxes",
-        {"image": "alpine:3.23", "cpus": 0, "memory_mib": 256, "disk_size_gb": 4},
+        {"image": DEFAULT_IMAGE, "cpus": 0, "memory_mib": 256, "disk_size_gb": 4},
     )
     _assert_http_code(
         status,
@@ -141,7 +145,7 @@ async def test_invalid_argument_negative_memory_returns_400(rt):
     status, body = _api_call(
         "POST",
         f"/v1/{p['path_prefix']}/boxes",
-        {"image": "alpine:3.23", "cpus": 1, "memory_mib": -1, "disk_size_gb": 4},
+        {"image": DEFAULT_IMAGE, "cpus": 1, "memory_mib": -1, "disk_size_gb": 4},
     )
     _assert_http_code(
         status,
@@ -234,18 +238,6 @@ async def test_execution_invalid_command_returns_422(rt, image):
         await rt.remove(box.id, force=True)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Production bug: no per-box quota enforcement at the API "
-        "create boundary. cpus=999 is silently clamped to the org default "
-        "(cpus=1) and HTTP 201 returned, instead of HTTP 429 ResourceExhausted "
-        "(or HTTP 400 InvalidArgument). The DTO has @Min(1) but no @Max(); "
-        "fixture_setup sets max_cpu_per_box=4 in the organization table "
-        "but nothing in apps/api/src/box/services/box.service.ts:"
-        "createFromSnapshot consults that limit."
-    ),
-)
 @pytest.mark.asyncio
 async def test_resource_exhausted_over_cpu_quota_returns_429(rt):
     """POST /boxes with cpus far above the org quota should surface
@@ -254,7 +246,7 @@ async def test_resource_exhausted_over_cpu_quota_returns_429(rt):
     status, body = _api_call(
         "POST",
         f"/v1/{p['path_prefix']}/boxes",
-        {"image": "alpine:3.23", "cpus": 999, "memory_mib": 256, "disk_size_gb": 4},
+        {"image": DEFAULT_IMAGE, "cpus": 999, "memory_mib": 256, "disk_size_gb": 4},
     )
     # The mapping says 429 ResourceExhausted; some implementations may also
     # 400 InvalidArgument (treating it as a parse-time validation failure).
@@ -285,9 +277,19 @@ async def test_invalid_state_stop_already_stopped_returns_4xx(rt, image):
             f"double-stop leaked HTTP {status2} (5xx); body={body_str}"
         )
         if status2 not in (200, 204, 409):
-            assert "state change" in body_str.lower(), (
-                f"double-stop got HTTP {status2} but body doesn't explain the "
-                f"race-protection rejection: {body_str}"
+            # 400 'Box is not started' / 'already stopped' / 'state change in
+            # progress' are all valid race-protection rejections — the API
+            # has picked different wording across deploys for the same
+            # invariant (current state doesn't admit this transition).
+            body_lower = body_str.lower()
+            assert (
+                "state change" in body_lower
+                or "not started" in body_lower
+                or "already stopped" in body_lower
+                or "invalid state" in body_lower
+            ), (
+                f"double-stop got HTTP {status2} but body doesn't explain "
+                f"the race-protection rejection: {body_str}"
             )
     finally:
         # Tolerate the race here too — the runner may still be in

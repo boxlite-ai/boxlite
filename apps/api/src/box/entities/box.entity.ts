@@ -8,7 +8,6 @@ import { Column, CreateDateColumn, Entity, Index, PrimaryColumn, OneToOne, Uniqu
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
-import { randomUUID } from 'crypto'
 import { BoxVolume } from '../dto/box.dto'
 import { nanoid } from 'nanoid'
 import { BoxLastActivity } from './box-last-activity.entity'
@@ -16,13 +15,11 @@ import { BOX_ID_LENGTH, BOX_ID_REGEX, generateBoxId } from '../utils/box-id.util
 
 @Entity('box')
 @Unique(['organizationId', 'name'])
-@Index('box_boxid_unique_idx', ['boxId'], { unique: true })
 @Index('box_state_idx', ['state'])
 @Index('box_desiredstate_idx', ['desiredState'])
 @Index('box_runnerid_idx', ['runnerId'])
 @Index('box_runner_state_idx', ['runnerId', 'state'])
 @Index('box_organizationid_idx', ['organizationId'])
-@Index('box_organizationid_boxid_idx', ['organizationId', 'boxId'])
 @Index('box_region_idx', ['region'])
 @Index('box_resources_idx', ['cpu', 'mem', 'disk', 'gpu'])
 @Index('box_runner_state_desired_idx', ['runnerId', 'state', 'desiredState'], {
@@ -39,11 +36,8 @@ import { BOX_ID_LENGTH, BOX_ID_REGEX, generateBoxId } from '../utils/box-id.util
 @Index('box_labels_gin_full_idx', { synchronize: false })
 @Index('idx_box_volumes_gin', { synchronize: false })
 export class Box {
-  @PrimaryColumn({ default: () => 'uuid_generate_v4()' })
+  @PrimaryColumn({ type: 'character varying', length: BOX_ID_LENGTH })
   id: string
-
-  @Column({ type: 'character varying', length: BOX_ID_LENGTH })
-  boxId: string = generateBoxId()
 
   @Column({
     type: 'uuid',
@@ -173,7 +167,7 @@ export class Box {
   daemonVersion?: string
 
   constructor(region: string, name?: string) {
-    this.id = randomUUID()
+    this.id = generateBoxId()
     // Set name - use provided name or fallback to ID
     this.name = name || this.id
     this.region = region
@@ -199,8 +193,8 @@ export class Box {
   }
 
   private validateBoxId(): void {
-    if (!BOX_ID_REGEX.test(this.boxId)) {
-      throw new Error(`Box ${this.id} has invalid boxId ${this.boxId}`)
+    if (!BOX_ID_REGEX.test(this.id)) {
+      throw new Error(`Box has invalid id ${this.id}`)
     }
   }
 

@@ -26,8 +26,48 @@ import {
 import axios, { AxiosError } from 'axios'
 import { BoxliteError } from './errors'
 
+// A burst of in-flight requests can all 401 at once when the access token goes
+// invalid; this in-page guard ensures at most one re-login redirect per page
+// load. It is reset if onUnauthorized throws (a failed handler must not wedge
+// recovery) and is naturally cleared when signinRedirect reloads the page.
+let isHandlingUnauthorized = false
+
+// Survives the full-page reload signinRedirect triggers, so a first stale-token
+// 401 (recover silently) is distinguishable from one that persists *after* a
+// re-auth already happened this session (revoked user / wrong audience / backend
+// auth bug). Without a cross-reload marker a fresh-but-still-rejected token would
+// bounce to login forever. sessionStorage scopes it to this tab.
+const REAUTH_ATTEMPTED_KEY = 'boxlite.reauth-attempted'
+
+function reauthAlreadyAttempted(): boolean {
+  try {
+    return window.sessionStorage.getItem(REAUTH_ATTEMPTED_KEY) !== null
+  } catch {
+    // sessionStorage can be unavailable (privacy mode, sandboxed iframe). Treat
+    // as "not attempted" so we still try recovery once.
+    return false
+  }
+}
+
+function markReauthAttempted(): void {
+  try {
+    window.sessionStorage.setItem(REAUTH_ATTEMPTED_KEY, '1')
+  } catch {
+    // best-effort; see reauthAlreadyAttempted
+  }
+}
+
+function clearReauthAttempted(): void {
+  try {
+    window.sessionStorage.removeItem(REAUTH_ATTEMPTED_KEY)
+  } catch {
+    // best-effort; see reauthAlreadyAttempted
+  }
+}
+
 export class ApiClient {
   private config: Configuration
+  private onUnauthorized?: () => Promise<void> | void
   private _boxApi: BoxApi
   private _userApi: UsersApi
   private _apiKeyApi: ApiKeysApi
@@ -41,7 +81,8 @@ export class ApiClient {
   private _analyticsUsageApi: AnalyticsUsageApi | null
   private _analyticsTelemetryApi: AnalyticsTelemetryApi | null
 
-  constructor(config: DashboardConfig, accessToken: string) {
+  constructor(config: DashboardConfig, accessToken: string, onUnauthorized?: () => Promise<void> | void) {
+    this.onUnauthorized = onUnauthorized
     this.config = new Configuration({
       basePath: config.apiUrl,
       accessToken: accessToken,
@@ -57,9 +98,22 @@ export class ApiClient {
     })
     axiosInstance.interceptors.response.use(
       (response) => {
+        // A request succeeded → the token is good again; clear the cross-reload
+        // marker so a future stale token still gets its one silent recovery.
+        clearReauthAttempted()
         return response
       },
       (error) => {
+        // A 401 means the access token is no longer accepted — it expired, or
+        // (the common case in the local Dex stack) it was signed by a key that
+        // rotated when the Dex box was recreated. oidc-client-ts only tracks
+        // local expiry, so it still believes the user is signed in and keeps
+        // replaying the dead token on every reload. Drop the session and bounce
+        // to a fresh login instead of a dead-end "Unauthorized" screen.
+        if (error?.response?.status === 401 && this.onUnauthorized) {
+          return this.handleUnauthorized(error)
+        }
+
         let errorMessage: string
 
         if (error instanceof AxiosError && error.message.includes('timeout of')) {
@@ -100,6 +154,49 @@ export class ApiClient {
       this._analyticsUsageApi = null
       this._analyticsTelemetryApi = null
     }
+  }
+
+  // Recovery is bounded to ONE re-login attempt per session: the first 401
+  // drops the session and bounces to a fresh login (suppressing the error so
+  // the user sees a loading state, not a dead-end screen); a 401 that persists
+  // *after* that re-auth is surfaced as an error instead of bouncing forever.
+  private async handleUnauthorized(error: unknown): Promise<never> {
+    // De-dupe a concurrent 401 burst: only the first drives recovery, the rest
+    // suspend on the in-flight redirect. Checked BEFORE the cross-reload marker
+    // so a second concurrent 401 isn't misread as a failed post-reauth attempt.
+    if (isHandlingUnauthorized) {
+      return new Promise<never>(() => {})
+    }
+
+    if (reauthAlreadyAttempted()) {
+      // We already sent the user through a fresh login this session and the new
+      // token is still rejected (revoked user / wrong audience / backend bug).
+      // Bouncing again would loop forever, so surface the failure.
+      throw BoxliteError.fromString('Authentication failed after re-login. Please sign in again.', {
+        cause: error instanceof Error ? error : undefined,
+      })
+    }
+
+    isHandlingUnauthorized = true
+    markReauthAttempted()
+    try {
+      // onUnauthorized clears the OIDC user; ApiProvider's effect then runs
+      // signinRedirect, which navigates the page away. Awaited so a failed
+      // start (e.g. a rejecting removeUser) surfaces an error instead of
+      // hanging forever on the suspend below.
+      await this.onUnauthorized?.()
+    } catch (handlerError) {
+      isHandlingUnauthorized = false
+      clearReauthAttempted()
+      throw BoxliteError.fromString('Failed to start re-authentication.', {
+        cause: handlerError instanceof Error ? handlerError : undefined,
+      })
+    }
+
+    // Suspend the caller (never-settling promise) so it shows the loading
+    // state, not an error, while the redirect navigates the page away. Reached
+    // only on a successfully-started re-auth.
+    return new Promise<never>(() => {})
   }
 
   public setAccessToken(accessToken: string) {

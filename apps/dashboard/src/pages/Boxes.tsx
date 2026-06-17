@@ -29,7 +29,6 @@ import { useApi } from '@/hooks/useApi'
 import { deleteBoxViaBoxApi, startBoxViaBoxApi, stopBoxViaBoxApi } from '@/lib/cloudBox'
 import { useConfig } from '@/hooks/useConfig'
 import { useNotificationSocket } from '@/hooks/useNotificationSocket'
-import { useRegions } from '@/hooks/useRegions'
 import {
   DEFAULT_BOX_SORTING,
   getBoxesQueryKey,
@@ -294,8 +293,6 @@ const Boxes: React.FC = () => {
   const [copied, setCopied] = useState<string | null>(null)
 
   // TODO(image-rewrite): template/image listing removed with the image/template subsystem.
-
-  const { getRegionName } = useRegions()
 
   // Subscribe to Box Events
 
@@ -857,7 +854,6 @@ const Boxes: React.FC = () => {
           filters={filters}
           onFiltersChange={handleFiltersChange}
           handleRecover={handleRecover}
-          getRegionName={getRegionName}
           handleScreenRecordings={handleScreenRecordings}
           headerAction={
             authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES) ? (

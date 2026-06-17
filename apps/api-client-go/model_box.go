@@ -21,10 +21,8 @@ var _ MappedNullable = &Box{}
 
 // Box struct for Box
 type Box struct {
-	// The internal UUID of the box
+	// The public 12-character Box ID
 	Id string `json:"id"`
-	// The public Box ID shown to users and SDK clients
-	BoxId string `json:"boxId"`
 	// The organization ID of the box
 	OrganizationId string `json:"organizationId"`
 	// The name of the box
@@ -89,10 +87,9 @@ type _Box Box
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewBox(id string, boxId string, organizationId string, name string, user string, env map[string]string, labels map[string]string, public bool, networkBlockAll bool, target string, cpu float32, gpu float32, memory float32, disk float32, toolboxProxyUrl string) *Box {
+func NewBox(id string, organizationId string, name string, user string, env map[string]string, labels map[string]string, public bool, networkBlockAll bool, target string, cpu float32, gpu float32, memory float32, disk float32, toolboxProxyUrl string) *Box {
 	this := Box{}
 	this.Id = id
-	this.BoxId = boxId
 	this.OrganizationId = organizationId
 	this.Name = name
 	this.User = user
@@ -139,30 +136,6 @@ func (o *Box) GetIdOk() (*string, bool) {
 // SetId sets field value
 func (o *Box) SetId(v string) {
 	o.Id = v
-}
-
-// GetBoxId returns the BoxId field value
-func (o *Box) GetBoxId() string {
-	if o == nil {
-		var ret string
-		return ret
-	}
-
-	return o.BoxId
-}
-
-// GetBoxIdOk returns a tuple with the BoxId field value
-// and a boolean to check if the value has been set.
-func (o *Box) GetBoxIdOk() (*string, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.BoxId, true
-}
-
-// SetBoxId sets field value
-func (o *Box) SetBoxId(v string) {
-	o.BoxId = v
 }
 
 // GetOrganizationId returns the OrganizationId field value
@@ -939,7 +912,6 @@ func (o Box) MarshalJSON() ([]byte, error) {
 func (o Box) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["id"] = o.Id
-	toSerialize["boxId"] = o.BoxId
 	toSerialize["organizationId"] = o.OrganizationId
 	toSerialize["name"] = o.Name
 	toSerialize["user"] = o.User
@@ -1009,7 +981,6 @@ func (o *Box) UnmarshalJSON(data []byte) (err error) {
 	// that every required field exists as a key in the generic map.
 	requiredProperties := []string{
 		"id",
-		"boxId",
 		"organizationId",
 		"name",
 		"user",
@@ -1053,7 +1024,6 @@ func (o *Box) UnmarshalJSON(data []byte) (err error) {
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "id")
-		delete(additionalProperties, "boxId")
 		delete(additionalProperties, "organizationId")
 		delete(additionalProperties, "name")
 		delete(additionalProperties, "user")

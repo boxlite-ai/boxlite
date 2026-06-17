@@ -13,7 +13,7 @@ import { useLocation } from 'react-router-dom'
 import { useConfig } from '@/hooks/useConfig'
 
 export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user, isAuthenticated, isLoading, signinRedirect } = useAuth()
+  const { user, isAuthenticated, isLoading, signinRedirect, removeUser } = useAuth()
   const config = useConfig()
   const location = useLocation()
 
@@ -24,7 +24,14 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     if (user) {
       if (!apiRef.current) {
-        apiRef.current = new ApiClient(config, user.access_token)
+        // On a 401 the stored token is invalid (expired, or signed by a rotated
+        // Dex key). Clearing the user flips isAuthenticated false, which the
+        // effect below turns into a redirect to a fresh login (preserving
+        // returnTo). Return the removeUser promise (don't void it) so the 401
+        // handler can tell a started recovery (suspend) from a failed one
+        // (surface an error). The redirect stays owned by the effect below to
+        // avoid a double-redirect.
+        apiRef.current = new ApiClient(config, user.access_token, () => removeUser())
       } else {
         apiRef.current.setAccessToken(user.access_token)
       }
@@ -32,7 +39,7 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } else {
       setIsApiReady(false)
     }
-  }, [user, config])
+  }, [user, config, removeUser])
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {

@@ -56,7 +56,13 @@ pub(crate) fn map_http_error(status: StatusCode, body: &ErrorModel) -> BoxliteEr
 pub(crate) fn map_http_status(status: StatusCode, text: &str) -> BoxliteError {
     match status.as_u16() {
         404 => BoxliteError::NotFound(text.to_string()),
-        401 | 403 => BoxliteError::Config(format!("auth: {}", text)),
+        // Keep the `auth:` prefix (callers key on it) but state the actual
+        // failure: 401 = credentials rejected (expired, or wrong credential
+        // type for this endpoint — e.g. cloud exec's WS attach requires an API
+        // key, not a browser/OIDC token); 403 = authenticated but not allowed
+        // (often a stale org/path_prefix — `auth login` re-resolves it).
+        401 => BoxliteError::Config(format!("auth: unauthorized (HTTP 401): {}", text)),
+        403 => BoxliteError::Config(format!("auth: forbidden (HTTP 403): {}", text)),
         // Bare 5xx with no envelope ⇒ an intermediary spoke, not us.
         // The most common cause is a proxy / load balancer that
         // couldn't reach the destination (Clash returns 502 with

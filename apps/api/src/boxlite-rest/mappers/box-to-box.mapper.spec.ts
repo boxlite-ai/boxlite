@@ -8,10 +8,9 @@ import { BoxDto } from '../../box/dto/box.dto'
 import { boxToBoxResponse, createBoxToCreateBox } from './box-to-box.mapper'
 
 describe('box-to-box mapper', () => {
-  it('maps REST box_id from the public box boxId instead of the internal UUID', () => {
+  it('maps REST box_id from the canonical box id', () => {
     const response = boxToBoxResponse({
-      id: 'fd955d93-e74a-48e7-9f2d-fcbe6dd9e920',
-      boxId: 'aB3cD4eF5gH6',
+      id: 'aB3cD4eF5gH6',
       organizationId: '057963b2-60ca-4356-81fc-11503e15f249',
       name: 'data-loader',
       state: 'started',
@@ -31,7 +30,6 @@ describe('box-to-box mapper', () => {
     } as BoxDto)
 
     expect(response.box_id).toBe('aB3cD4eF5gH6')
-    expect(response.box_id).not.toBe('fd955d93-e74a-48e7-9f2d-fcbe6dd9e920')
   })
 
   it('maps SDK resource settings to box create overrides', () => {

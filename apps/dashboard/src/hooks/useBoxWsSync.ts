@@ -44,16 +44,13 @@ export function useBoxWsSync({ boxId, refetchOnCreate = false }: UseBoxWsSyncOpt
       })
     }
 
-    const matchesActiveBox = (box: Box) => !boxId || box.id === boxId || box.boxId === boxId
+    const matchesActiveBox = (box: Box) => !boxId || box.id === boxId
 
     const optimisticUpdate = (box: Box, state: BoxState) => {
       updateStateInListCache(box.id, state)
       if (boxId) {
         updateStateInDetailCache(boxId, state)
         updateStateInDetailCache(box.id, state)
-        if (box.boxId) {
-          updateStateInDetailCache(box.boxId, state)
-        }
       }
     }
 
@@ -70,7 +67,7 @@ export function useBoxWsSync({ boxId, refetchOnCreate = false }: UseBoxWsSyncOpt
       }
     }
 
-    const handleCreated = (_box: Box) => {
+    const handleCreated = () => {
       if (boxId) return
 
       queryClient.invalidateQueries({
@@ -84,7 +81,7 @@ export function useBoxWsSync({ boxId, refetchOnCreate = false }: UseBoxWsSyncOpt
 
       // warm pool boxes — treat as created
       if (data.oldState === data.newState && data.newState === BoxState.STARTED) {
-        handleCreated(data.box)
+        handleCreated()
         return
       }
 

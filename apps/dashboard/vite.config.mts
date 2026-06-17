@@ -18,7 +18,11 @@ export default defineConfig((mode) => ({
     host: '0.0.0.0',
     proxy: {
       '/api': {
-        target: 'http://localhost:3001',
+        // Defaults to the local API. Override with DASHBOARD_API_PROXY_TARGET to
+        // point the dashboard at a remote API (e.g. https://dev.boxlite.ai) through
+        // this same-origin proxy, so the browser never makes a cross-origin
+        // (CORS-gated) request — Vite talks to the API server-to-server.
+        target: process.env.DASHBOARD_API_PROXY_TARGET || 'http://localhost:3001',
         ws: true,
         changeOrigin: true,
         rewriteWsOrigin: true,

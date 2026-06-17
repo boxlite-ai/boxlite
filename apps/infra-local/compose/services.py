@@ -198,6 +198,10 @@ staticClients:
       - '${REDIRECT_URI}'
       - 'http://localhost:3000'
       - 'http://localhost:5173'
+      # `boxlite auth login` (browser/OIDC) loopback callback — RFC 8252 §8.3
+      # loopback IP literal on the CLI's fixed default port 5555. The CLI binds
+      # exactly this port or fails; `--callback-port N` needs its own entry.
+      - 'http://127.0.0.1:5555/callback'
     name: 'BoxLite'
     public: true
 enablePasswordDB: true

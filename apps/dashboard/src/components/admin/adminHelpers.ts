@@ -30,7 +30,6 @@ export interface AdminBoxOwner {
 
 export interface AdminBox {
   id: string
-  boxId?: string
   organizationId: string
   state: string
   runnerId: string | null
@@ -199,9 +198,7 @@ export function filterOwnerGroups(groups: OwnerGroup[], query: string): OwnerGro
       result.push(group)
       continue
     }
-    const matchingBoxes = group.boxes.filter(
-      (b) => b.id.toLowerCase().includes(q) || b.boxId?.toLowerCase().includes(q),
-    )
+    const matchingBoxes = group.boxes.filter((b) => b.id.toLowerCase().includes(q))
     if (matchingBoxes.length > 0) {
       result.push({ ...group, boxes: matchingBoxes, breakdown: getBoxBreakdown(matchingBoxes) })
     }
@@ -222,9 +219,9 @@ export function selectErroringOwners(groups: OwnerGroup[]): ErroringOwner[] {
 }
 
 export function findBoxById(groups: OwnerGroup[], boxId: string): { box: AdminBox; group: OwnerGroup } | undefined {
-  const targetBoxId = boxId.trim().toLowerCase()
+  const targetBoxId = boxId.trim()
   for (const group of groups) {
-    const box = group.boxes.find((b) => b.id.toLowerCase() === targetBoxId || b.boxId?.toLowerCase() === targetBoxId)
+    const box = group.boxes.find((b) => b.id === targetBoxId)
     if (box) return { box, group }
   }
   return undefined

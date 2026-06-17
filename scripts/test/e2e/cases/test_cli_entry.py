@@ -25,26 +25,43 @@ from pathlib import Path
 
 import pytest
 
+from conftest import skip_or_fail_unless_sdk_build_required, path_verify_skipped
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from path_verification import runner_journal_seek, runner_hits_for_box
 
 BOXLITE_BIN = os.environ.get("BOXLITE_E2E_CLI", shutil.which("boxlite"))
 IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "alpine:3.23")
-UUID_RE = re.compile(
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+# The CLI reads BOXLITE_PROFILE (GlobalFlags::profile); the cloud credential
+# setup writes only [profiles.p1], not [profiles.default], so without pinning
+# this every CLI call falls back to `default` and reports "not logged in".
+PROFILE = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
+# Box ids are server-issued and opaque: the local runtime mints 12-char
+# Base62, but a REST server may return a ULID or UUID (see BoxID docs,
+# src/boxlite/src/runtime/id.rs).
+BOX_ID_RE = re.compile(
+    r"\b("
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"  # UUID
+    r"|[0-9A-HJKMNP-TV-Z]{26}"                                       # ULID
+    r"|[0-9A-Za-z]{12}"                                              # 12-char Base62
+    r")\b"
 )
 
 
 @pytest.fixture(scope="module")
 def cli():
     if not BOXLITE_BIN or not Path(BOXLITE_BIN).exists():
-        pytest.skip(f"boxlite CLI not found at {BOXLITE_BIN!r}")
+        skip_or_fail_unless_sdk_build_required(f"boxlite CLI not found at {BOXLITE_BIN!r}")
     return BOXLITE_BIN
 
 
 def run(cli, *args, timeout: int = 60, stdin: str | None = None,
         check: bool = True) -> subprocess.CompletedProcess:
-    """Wrap subprocess.run with consistent settings + always capture."""
+    """Wrap subprocess.run with consistent settings + always capture.
+
+    Pins BOXLITE_PROFILE so every CLI call reads the same credential profile
+    the Python SDK uses, regardless of whether a `default` profile exists.
+    """
     return subprocess.run(
         [cli, *args],
         timeout=timeout,
@@ -52,17 +69,27 @@ def run(cli, *args, timeout: int = 60, stdin: str | None = None,
         text=True,
         capture_output=True,
         check=check,
+        env={**os.environ, "BOXLITE_PROFILE": PROFILE},
     )
 
 
 def test_cli_whoami_against_local_api(cli):
-    """`boxlite auth whoami` must return the same profile the Python
-    SDK uses. Proves CLI is talking to the same local API."""
+    """`boxlite auth whoami` must return a logged-in identity targeting
+    the same server URL as the active credential profile. Proves the
+    CLI sees the profile the Python SDK fixtures use."""
+    import tomllib
+    from pathlib import Path
+    name = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
+    p = tomllib.loads(
+        (Path.home() / ".boxlite/credentials.toml").read_text()
+    )["profiles"][name]
+    expected_url = p["url"]
+
     r = run(cli, "auth", "whoami")
     out = r.stdout
-    assert "boxlite-admin" in out, f"whoami: {out!r}"
-    assert "http://localhost:3000" in out or "path prefix" in out.lower(), (
-        f"whoami did not target local API: {out!r}"
+    assert "Not logged in" not in out, f"whoami reports not logged in: {out!r}"
+    assert expected_url in out, (
+        f"whoami did not target the active profile's URL ({expected_url}): {out!r}"
     )
 
 
@@ -86,7 +113,7 @@ def test_cli_run_exec_chain(cli):
 
     # 1. detach run prints the box id on stdout
     r_run = run(cli, "run", "-d", IMAGE, "--", "sleep", "300", timeout=120)
-    m = UUID_RE.search(r_run.stdout)
+    m = BOX_ID_RE.search(r_run.stdout)
     assert m, f"`boxlite run -d` did not print a uuid: {r_run.stdout!r}"
     box_id = m.group(0)
 
@@ -105,12 +132,13 @@ def test_cli_run_exec_chain(cli):
         )
 
         # 4. CLI-side path guarantee: runner journal must have the box id
-        hits = runner_hits_for_box(journal_since, box_id)
-        assert hits >= 1, (
-            f"runner journal did not see box {box_id} created by CLI — "
-            f"`boxlite run` may have degraded to local FFI or talked to "
-            f"the wrong endpoint"
-        )
+        if not path_verify_skipped():
+            hits = runner_hits_for_box(journal_since, box_id)
+            assert hits >= 1, (
+                f"runner journal did not see box {box_id} created by CLI — "
+                f"`boxlite run` may have degraded to local FFI or talked to "
+                f"the wrong endpoint"
+            )
     finally:
         run(cli, "rm", "-f", box_id, check=False)
 
@@ -126,7 +154,7 @@ def test_cli_exec_exit_code_propagates(cli):
     CLI's own exit code. This is the CLI behaviour layer, not just the
     SDK — argv parsing + exit-code mapping is CLI-specific."""
     r_run = run(cli, "run", "-d", IMAGE, "--", "sleep", "300", timeout=120)
-    m = UUID_RE.search(r_run.stdout)
+    m = BOX_ID_RE.search(r_run.stdout)
     assert m
     box_id = m.group(0)
 

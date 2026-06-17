@@ -14,7 +14,6 @@ import { PageLimit } from '../../common/decorators/page-limit.decorator'
 
 export enum BoxSortField {
   ID = 'id',
-  BOX_ID = 'boxId',
   NAME = 'name',
   STATE = 'state',
   REGION = 'region',
@@ -42,7 +41,7 @@ export class ListBoxesQueryDto {
 
   @ApiProperty({
     name: 'id',
-    description: 'Filter by partial Box ID, internal UUID, or name match',
+    description: 'Filter by partial Box ID or name match',
     required: false,
     type: String,
     example: 'abc123',

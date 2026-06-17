@@ -48,7 +48,6 @@ interface UseBoxTableProps {
   filters: BoxFilters
   onFiltersChange: (filters: BoxFilters) => void
   handleRecover: (id: string) => void
-  getRegionName: (regionId: string) => string | undefined
 }
 
 export function useBoxTable({
@@ -71,19 +70,21 @@ export function useBoxTable({
   filters,
   onFiltersChange,
   handleRecover,
-  getRegionName,
 }: UseBoxTableProps) {
   // Column visibility state management with persistence
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(() => {
     const saved = getLocalStorageItem(LocalStorageKey.BoxTableColumnVisibility)
     if (saved) {
       try {
-        return { ...JSON.parse(saved), boxId: true, id: false, region: true, labels: false }
+        const parsed = JSON.parse(saved)
+        // Drop the legacy `region` key left in persisted state after the Region column was removed.
+        delete parsed.region
+        return { ...parsed, id: true, labels: false }
       } catch {
-        return { boxId: true, id: false, region: true, labels: false }
+        return { id: true, labels: false }
       }
     }
-    return { boxId: true, id: false, region: true, labels: false }
+    return { id: true, labels: false }
   })
 
   useEffect(() => {
@@ -107,7 +108,6 @@ export function useBoxTable({
         handleCreateSshAccess,
         handleRevokeSshAccess,
         handleRecover,
-        getRegionName,
         handleScreenRecordings,
       }),
     [
@@ -121,7 +121,6 @@ export function useBoxTable({
       handleCreateSshAccess,
       handleRevokeSshAccess,
       handleRecover,
-      getRegionName,
       handleScreenRecordings,
     ],
   )

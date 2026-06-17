@@ -30,9 +30,15 @@ async def test_create_generates_unique_ids(rt, image):
     b = await rt.create(boxlite.BoxOptions(image=image, auto_remove=True))
     try:
         assert a.id != b.id
-        # uuid v4 format check
-        assert len(a.id.split("-")) == 5
-        assert len(b.id.split("-")) == 5
+        # Post-#735 box ids are 12-char alphanumeric (BOX_ID_REGEX in
+        # apps/api/src/box/utils/box-id.util.ts) — no longer the
+        # 5-segment uuid format the pre-collapse SDK was returning.
+        import re
+        for box_id in (a.id, b.id):
+            assert re.fullmatch(r"[0-9A-Za-z]{12}", box_id), (
+                f"box id {box_id!r} doesn't match the post-#735 "
+                f"12-char alphanumeric BOX_ID_REGEX"
+            )
     finally:
         await rt.remove(a.id, force=True)
         await rt.remove(b.id, force=True)

@@ -23,9 +23,11 @@ from conftest import drain
 
 
 def _profile() -> dict:
+    import os
+    name = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
     return tomllib.loads((Path.home() / ".boxlite/credentials.toml").read_text())[
         "profiles"
-    ]["p1"]
+    ][name]
 
 
 # ─── 1. Two execs on same box, concurrently ────────────────────────────────
@@ -90,19 +92,6 @@ async def test_parallel_box_creates(rt, image):
 # ─── 3. Exec while box is being removed ────────────────────────────────────
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Production bug: POST /v1/{prefix}/boxes/{id}/exec on a removed box "
-        "leaks HTTP 500 instead of 404. The API's box lookup ("
-        "apps/api/src/boxlite-rest/boxlite-proxy.controller.ts) succeeds against "
-        "the box table (the row is soft-deleted not purged), then the "
-        "request reaches the runner which tries to spawn against a freed "
-        "Boxlite handle and errors with 'spawn_failed: build failed'. Fix: "
-        "either reject at API by checking box.state == DESTROYED, or "
-        "ensure the runner translates spawn-after-destroy into ErrNotFound."
-    ),
-)
 @pytest.mark.asyncio
 async def test_exec_after_box_removed_is_typed_error(rt, image):
     """POST /boxes/{id}/exec after the box is gone must return 4xx

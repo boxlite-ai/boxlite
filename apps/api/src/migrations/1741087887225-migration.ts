@@ -70,7 +70,7 @@ export class Migration1741087887225 implements MigrationInterface {
       `CREATE TABLE "warm_pool" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "pool" integer NOT NULL, "image" character varying NOT NULL, "target" character varying NOT NULL, "cpu" integer NOT NULL, "mem" integer NOT NULL, "disk" integer NOT NULL, "gpu" integer NOT NULL, "gpuType" character varying NOT NULL, "class" "public"."warm_pool_class_enum" NOT NULL DEFAULT 'small', "osUser" character varying NOT NULL, "errorReason" character varying, "env" text NOT NULL DEFAULT '{}', "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "updatedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), CONSTRAINT "warm_pool_id_pk" PRIMARY KEY ("id"))`,
     )
     await queryRunner.query(
-      `CREATE TABLE "box" ("id" character varying NOT NULL DEFAULT uuid_generate_v4(), "boxId" character varying(12) NOT NULL, "organizationId" uuid NOT NULL, "name" character varying NOT NULL, "region" character varying NOT NULL, "image" character varying, "runnerId" uuid, "prevRunnerId" uuid, "class" "public"."box_class_enum" NOT NULL DEFAULT 'small', "state" "public"."box_state_enum" NOT NULL DEFAULT 'unknown', "desiredState" "public"."box_desiredstate_enum" NOT NULL DEFAULT 'started', "osUser" character varying NOT NULL, "errorReason" character varying, "recoverable" boolean NOT NULL DEFAULT false, "env" jsonb NOT NULL DEFAULT '{}', "public" boolean NOT NULL DEFAULT false, "networkBlockAll" boolean NOT NULL DEFAULT false, "networkAllowList" character varying, "labels" jsonb, "cpu" integer NOT NULL DEFAULT '2', "gpu" integer NOT NULL DEFAULT '0', "mem" integer NOT NULL DEFAULT '4', "disk" integer NOT NULL DEFAULT '10', "volumes" jsonb NOT NULL DEFAULT '[]', "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "updatedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "autoStopInterval" integer NOT NULL DEFAULT '15', "autoDeleteInterval" integer NOT NULL DEFAULT '-1', "pending" boolean NOT NULL DEFAULT false, "authToken" character varying NOT NULL, "daemonVersion" character varying, CONSTRAINT "box_organizationId_name_unique" UNIQUE ("organizationId", "name"), CONSTRAINT "box_id_pk" PRIMARY KEY ("id"))`,
+      `CREATE TABLE "box" ("id" character varying(12) NOT NULL, "organizationId" uuid NOT NULL, "name" character varying NOT NULL, "region" character varying NOT NULL, "image" character varying, "runnerId" uuid, "prevRunnerId" uuid, "class" "public"."box_class_enum" NOT NULL DEFAULT 'small', "state" "public"."box_state_enum" NOT NULL DEFAULT 'unknown', "desiredState" "public"."box_desiredstate_enum" NOT NULL DEFAULT 'started', "osUser" character varying NOT NULL, "errorReason" character varying, "recoverable" boolean NOT NULL DEFAULT false, "env" jsonb NOT NULL DEFAULT '{}', "public" boolean NOT NULL DEFAULT false, "networkBlockAll" boolean NOT NULL DEFAULT false, "networkAllowList" character varying, "labels" jsonb, "cpu" integer NOT NULL DEFAULT '2', "gpu" integer NOT NULL DEFAULT '0', "mem" integer NOT NULL DEFAULT '4', "disk" integer NOT NULL DEFAULT '10', "volumes" jsonb NOT NULL DEFAULT '[]', "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "updatedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "autoStopInterval" integer NOT NULL DEFAULT '15', "autoDeleteInterval" integer NOT NULL DEFAULT '-1', "pending" boolean NOT NULL DEFAULT false, "authToken" character varying NOT NULL, "daemonVersion" character varying, CONSTRAINT "box_organizationId_name_unique" UNIQUE ("organizationId", "name"), CONSTRAINT "box_id_pk" PRIMARY KEY ("id"))`,
     )
     await queryRunner.query(
       `CREATE TABLE "box_last_activity" ("boxId" character varying NOT NULL, "lastActivityAt" TIMESTAMP WITH TIME ZONE, CONSTRAINT "box_last_activity_boxId_pk" PRIMARY KEY ("boxId"), CONSTRAINT "box_last_activity_boxId_fk" FOREIGN KEY ("boxId") REFERENCES "box"("id") ON DELETE CASCADE ON UPDATE NO ACTION)`,
@@ -127,13 +127,11 @@ export class Migration1741087887225 implements MigrationInterface {
     )
     await queryRunner.query(`CREATE INDEX "box_resources_idx" ON "box" ("cpu", "mem", "disk", "gpu")`)
     await queryRunner.query(`CREATE INDEX "box_region_idx" ON "box" ("region")`)
-    await queryRunner.query(`CREATE INDEX "box_organizationid_boxid_idx" ON "box" ("organizationId", "boxId")`)
     await queryRunner.query(`CREATE INDEX "box_organizationid_idx" ON "box" ("organizationId")`)
     await queryRunner.query(`CREATE INDEX "box_runner_state_idx" ON "box" ("runnerId", "state")`)
     await queryRunner.query(`CREATE INDEX "box_runnerid_idx" ON "box" ("runnerId")`)
     await queryRunner.query(`CREATE INDEX "box_desiredstate_idx" ON "box" ("desiredState")`)
     await queryRunner.query(`CREATE INDEX "box_state_idx" ON "box" ("state")`)
-    await queryRunner.query(`CREATE UNIQUE INDEX "box_boxid_unique_idx" ON "box" ("boxId")`)
     await queryRunner.query(`CREATE INDEX "box_labels_gin_full_idx" ON "box" USING gin ("labels" jsonb_path_ops)`)
     await queryRunner.query(`CREATE INDEX "idx_box_volumes_gin" ON "box" USING gin ("volumes" jsonb_path_ops)`)
     await queryRunner.query(
@@ -192,13 +190,11 @@ export class Migration1741087887225 implements MigrationInterface {
     await queryRunner.query(`DROP TABLE "box_last_activity"`)
     await queryRunner.query(`DROP INDEX "public"."idx_box_volumes_gin"`)
     await queryRunner.query(`DROP INDEX "public"."box_labels_gin_full_idx"`)
-    await queryRunner.query(`DROP INDEX "public"."box_boxid_unique_idx"`)
     await queryRunner.query(`DROP INDEX "public"."box_state_idx"`)
     await queryRunner.query(`DROP INDEX "public"."box_desiredstate_idx"`)
     await queryRunner.query(`DROP INDEX "public"."box_runnerid_idx"`)
     await queryRunner.query(`DROP INDEX "public"."box_runner_state_idx"`)
     await queryRunner.query(`DROP INDEX "public"."box_organizationid_idx"`)
-    await queryRunner.query(`DROP INDEX "public"."box_organizationid_boxid_idx"`)
     await queryRunner.query(`DROP INDEX "public"."box_region_idx"`)
     await queryRunner.query(`DROP INDEX "public"."box_resources_idx"`)
     await queryRunner.query(`DROP INDEX "public"."box_runner_state_desired_idx"`)

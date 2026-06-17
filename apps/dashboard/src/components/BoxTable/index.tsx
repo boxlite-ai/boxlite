@@ -45,7 +45,6 @@ export function BoxTable({
   boxIsLoading,
   boxStateIsTransitioning,
   loading,
-  getRegionName,
   handleStart,
   handleStop,
   handleDelete,
@@ -96,7 +95,6 @@ export function BoxTable({
     filters,
     onFiltersChange,
     handleRecover,
-    getRegionName,
   })
 
   const [pendingBulkAction, setPendingBulkAction] = useState<BulkAction | null>(null)
@@ -233,7 +231,6 @@ export function BoxTable({
                       </div>
 
                       <div className="grid grid-cols-1 gap-x-5 gap-y-3 text-xs sm:grid-cols-2 xl:grid-cols-4">
-                        <CompactBoxMeta label="Region">{getRegionName(box.target) ?? box.target}</CompactBoxMeta>
                         <CompactBoxMeta label="Resources">
                           <div className="flex flex-wrap gap-1">
                             <ResourceChip resource="cpu" value={box.cpu} />
@@ -282,7 +279,10 @@ export function BoxTable({
         )
       ) : (
         <div className="overflow-x-auto rounded-sm border border-border bg-card">
-          <Table className="min-w-[1360px] border-separate border-spacing-0" style={{ tableLayout: 'fixed' }}>
+          <Table
+            className="min-w-[1120px] border-separate border-spacing-0 [&_tbody_td]:py-1"
+            style={{ tableLayout: 'fixed' }}
+          >
             <TableHeader>
               {table.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id}>

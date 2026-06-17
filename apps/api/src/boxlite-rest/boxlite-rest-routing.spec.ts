@@ -87,11 +87,15 @@ describe('BoxLite REST routing', () => {
   })
 
   it('matches websocket attach upgrades with or without a routing prefix', () => {
-    const service = new BoxliteWsProxyService({} as any, {} as any, {} as any, {} as any)
+    const service = new BoxliteWsProxyService({} as any, {} as any, {} as any, {} as any, {} as any)
 
-    expect(service.matchAttachPath('/api/v1/boxes/box-1/executions/exec-1/attach')).toEqual({ boxId: 'box-1' })
+    expect(service.matchAttachPath('/api/v1/boxes/box-1/executions/exec-1/attach')).toEqual({
+      boxId: 'box-1',
+      tenant: undefined,
+    })
     expect(service.matchAttachPath('/api/v1/default/boxes/box-1/executions/exec-1/attach')).toEqual({
       boxId: 'box-1',
+      tenant: 'default',
     })
   })
 })

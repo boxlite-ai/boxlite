@@ -5,11 +5,18 @@ package boxlite
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"go.opentelemetry.io/otel/trace"
 )
+
+func TestCreateBoxDTOHasSingleBoxIdentity(t *testing.T) {
+	if _, ok := reflect.TypeOf(dto.CreateBoxDTO{}).FieldByName("BoxId"); ok {
+		t.Fatalf("CreateBoxDTO must not carry a legacy BoxId field")
+	}
+}
 
 func TestDaemonBoxEnvIncludesRequiredBoxIdentity(t *testing.T) {
 	organizationID := "org-1"

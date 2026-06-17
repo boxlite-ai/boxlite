@@ -20,9 +20,11 @@ import pytest
 
 
 def _build_runtime():
+    import os
+    name = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
     p = tomllib.loads(
         (Path.home() / ".boxlite/credentials.toml").read_text()
-    )["profiles"]["p1"]
+    )["profiles"][name]
     return boxlite.Boxlite.rest(boxlite.BoxliteRestOptions(
         url=p["url"],
         credential=boxlite.ApiKeyCredential(p["api_key"]),

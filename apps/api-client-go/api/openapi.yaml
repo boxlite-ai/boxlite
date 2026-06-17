@@ -1642,7 +1642,7 @@ paths:
           minimum: 1
           type: number
         style: form
-      - description: "Filter by partial Box ID, internal UUID, or name match"
+      - description: Filter by partial Box ID or name match
         explode: true
         in: query
         name: id
@@ -1794,7 +1794,6 @@ paths:
           default: createdAt
           enum:
           - id
-          - boxId
           - name
           - state
           - region
@@ -6350,8 +6349,7 @@ components:
       type: object
     Box:
       example:
-        id: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
-        boxId: aB3cD4eF5gH6
+        id: aB3cD4eF5gH6
         organizationId: organization123
         name: MyBox
         user: boxlite
@@ -6389,11 +6387,7 @@ components:
         toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
       properties:
         id:
-          description: The internal UUID of the box
-          example: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
-          type: string
-        boxId:
-          description: The public Box ID shown to users and SDK clients
+          description: The public 12-character Box ID
           example: aB3cD4eF5gH6
           type: string
         organizationId:
@@ -6521,7 +6515,6 @@ components:
           example: https://proxy.app.boxlite.io/toolbox
           type: string
       required:
-      - boxId
       - cpu
       - disk
       - env
@@ -6540,8 +6533,7 @@ components:
     PaginatedBoxes:
       example:
         items:
-        - id: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
-          boxId: aB3cD4eF5gH6
+        - id: aB3cD4eF5gH6
           organizationId: organization123
           name: MyBox
           user: boxlite
@@ -6577,8 +6569,7 @@ components:
           daemonVersion: 1.0.0
           runnerId: runner123
           toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
-        - id: fd955d93-e74a-48e7-9f2d-fcbe6dd9e920
-          boxId: aB3cD4eF5gH6
+        - id: aB3cD4eF5gH6
           organizationId: organization123
           name: MyBox
           user: boxlite
@@ -8012,7 +8003,6 @@ components:
     AdminBoxItem:
       example:
         id: box_abc123
-        boxId: abc123XYZ
         organizationId: org_xyz
         state: started
         runnerId: runner-uuid
@@ -8029,10 +8019,6 @@ components:
         id:
           description: Box ID
           example: box_abc123
-          type: string
-        boxId:
-          description: Public box ID shown to users
-          example: abc123XYZ
           type: string
         organizationId:
           description: Organization ID
@@ -9356,7 +9342,6 @@ components:
               value: 0.8008281904610115
         boxes:
         - id: box_abc123
-          boxId: abc123XYZ
           organizationId: org_xyz
           state: started
           runnerId: runner-uuid
@@ -9370,7 +9355,6 @@ components:
             orgName: Alice Personal
             personal: true
         - id: box_abc123
-          boxId: abc123XYZ
           organizationId: org_xyz
           state: started
           runnerId: runner-uuid

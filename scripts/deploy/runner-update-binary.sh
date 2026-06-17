@@ -35,11 +35,11 @@ fi
 echo "==> Upgrading boxlite-runner to v$VERSION on stage=$STAGE region=$AWS_REGION"
 
 INSTANCE_ID=$(aws ec2 describe-instances --region "$AWS_REGION" \
-  --filters "Name=tag:Name,Values=boxlite-runner" "Name=instance-state-name,Values=running" \
+  --filters "Name=tag:Name,Values=boxlite-runner-default" "Name=instance-state-name,Values=running" \
   --query 'Reservations[].Instances[].InstanceId' --output text)
 
 if [[ -z "$INSTANCE_ID" || "$INSTANCE_ID" == "None" ]]; then
-  echo "error: no running boxlite-runner instance found in region $AWS_REGION" >&2
+  echo "error: no running boxlite-runner-default instance found in region $AWS_REGION" >&2
   exit 1
 fi
 echo "    instance: $INSTANCE_ID"

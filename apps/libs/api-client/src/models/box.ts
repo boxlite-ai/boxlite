@@ -25,13 +25,9 @@ import type { BoxVolume } from './box-volume';
 
 export interface Box {
     /**
-     * The internal UUID of the box
+     * The public 12-character Box ID
      */
     'id': string;
-    /**
-     * The public Box ID shown to users and SDK clients
-     */
-    'boxId': string;
     /**
      * The organization ID of the box
      */
