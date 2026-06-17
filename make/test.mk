@@ -332,3 +332,60 @@ test\:e2e:
 
 test\:e2e\:two-sided:
 	@PR_REF=$${PR_REF:?must set PR_REF=<branch>} bash scripts/test/e2e/two_sided.sh
+
+# ─── Stress: deployed REST API ─────────────────────────────────────────────
+test\:stress\:api-read:
+	@command -v k6 >/dev/null 2>&1 || { echo "k6 is required. Install with: brew install k6"; exit 2; }
+	@k6 run scripts/test/stress/api-read.k6.js
+
+test\:stress\:api-read-local:
+	@command -v k6 >/dev/null 2>&1 || { echo "k6 is required. Install with: brew install k6"; exit 2; }
+	@BOXLITE_STRESS_START_RATE=$${BOXLITE_STRESS_START_RATE:-1} \
+	BOXLITE_STRESS_RATE_1=$${BOXLITE_STRESS_RATE_1:-1} \
+	BOXLITE_STRESS_RATE_2=$${BOXLITE_STRESS_RATE_2:-3} \
+	BOXLITE_STRESS_RATE_3=$${BOXLITE_STRESS_RATE_3:-5} \
+	BOXLITE_STRESS_STAGE_1=$${BOXLITE_STRESS_STAGE_1:-20s} \
+	BOXLITE_STRESS_STAGE_2=$${BOXLITE_STRESS_STAGE_2:-20s} \
+	BOXLITE_STRESS_STAGE_3=$${BOXLITE_STRESS_STAGE_3:-20s} \
+	BOXLITE_STRESS_RAMP_DOWN=$${BOXLITE_STRESS_RAMP_DOWN:-5s} \
+	BOXLITE_STRESS_PREALLOCATED_VUS=$${BOXLITE_STRESS_PREALLOCATED_VUS:-10} \
+	BOXLITE_STRESS_MAX_VUS=$${BOXLITE_STRESS_MAX_VUS:-30} \
+	BOXLITE_STRESS_P95_MS=$${BOXLITE_STRESS_P95_MS:-2500} \
+	BOXLITE_STRESS_P99_MS=$${BOXLITE_STRESS_P99_MS:-4000} \
+	k6 run --summary-trend-stats 'avg,min,med,p(90),p(95),p(99),max' scripts/test/stress/api-read.k6.js
+
+test\:stress\:api-create-box:
+	@command -v k6 >/dev/null 2>&1 || { echo "k6 is required. Install with: brew install k6"; exit 2; }
+	@k6 run --summary-trend-stats 'avg,min,med,p(90),p(95),p(99),max' scripts/test/stress/api-create-box.k6.js
+
+test\:stress\:api-create-box-local:
+	@command -v k6 >/dev/null 2>&1 || { echo "k6 is required. Install with: brew install k6"; exit 2; }
+	@BOXLITE_STRESS_START_RATE=$${BOXLITE_STRESS_START_RATE:-0.02} \
+	BOXLITE_STRESS_RATE_1=$${BOXLITE_STRESS_RATE_1:-0.05} \
+	BOXLITE_STRESS_RATE_2=$${BOXLITE_STRESS_RATE_2:-0.1} \
+	BOXLITE_STRESS_RATE_3=$${BOXLITE_STRESS_RATE_3:-0.1} \
+	BOXLITE_STRESS_STAGE_1=$${BOXLITE_STRESS_STAGE_1:-30s} \
+	BOXLITE_STRESS_STAGE_2=$${BOXLITE_STRESS_STAGE_2:-1m} \
+	BOXLITE_STRESS_STAGE_3=$${BOXLITE_STRESS_STAGE_3:-1m} \
+	BOXLITE_STRESS_RAMP_DOWN=$${BOXLITE_STRESS_RAMP_DOWN:-20s} \
+	BOXLITE_STRESS_PREALLOCATED_VUS=$${BOXLITE_STRESS_PREALLOCATED_VUS:-2} \
+	BOXLITE_STRESS_MAX_VUS=$${BOXLITE_STRESS_MAX_VUS:-5} \
+	BOXLITE_STRESS_P95_MS=$${BOXLITE_STRESS_P95_MS:-45000} \
+	BOXLITE_STRESS_P99_MS=$${BOXLITE_STRESS_P99_MS:-60000} \
+	k6 run --summary-trend-stats 'avg,min,med,p(90),p(95),p(99),max' scripts/test/stress/api-create-box.k6.js
+
+test\:stress\:api-vm-lifecycle:
+	@command -v k6 >/dev/null 2>&1 || { echo "k6 is required. Install with: brew install k6"; exit 2; }
+	@k6 run --summary-trend-stats 'avg,min,med,p(90),p(95),p(99),max' scripts/test/stress/api-vm-lifecycle.k6.js
+
+test\:stress\:api-vm-lifecycle-local:
+	@command -v k6 >/dev/null 2>&1 || { echo "k6 is required. Install with: brew install k6"; exit 2; }
+	@BOXLITE_STRESS_RUNNER_CPUS=$${BOXLITE_STRESS_RUNNER_CPUS:-8} \
+	BOXLITE_STRESS_VM_LIMIT=$${BOXLITE_STRESS_VM_LIMIT:-2} \
+	BOXLITE_STRESS_VUS=$${BOXLITE_STRESS_VUS:-2} \
+	BOXLITE_STRESS_DURATION=$${BOXLITE_STRESS_DURATION:-1m} \
+	BOXLITE_STRESS_HOLD_SECONDS=$${BOXLITE_STRESS_HOLD_SECONDS:-20} \
+	BOXLITE_STRESS_GRACEFUL_STOP=$${BOXLITE_STRESS_GRACEFUL_STOP:-2m} \
+	BOXLITE_STRESS_P95_MS=$${BOXLITE_STRESS_P95_MS:-60000} \
+	BOXLITE_STRESS_P99_MS=$${BOXLITE_STRESS_P99_MS:-90000} \
+	k6 run --summary-trend-stats 'avg,min,med,p(90),p(95),p(99),max' scripts/test/stress/api-vm-lifecycle.k6.js
