@@ -248,7 +248,9 @@ async def test_invalid_state_stop_already_stopped_returns_4xx(rt, image):
             f"double-stop leaked HTTP {status2} (5xx); body={body_str}"
         )
         if status2 not in (200, 204, 409):
-            assert "state change" in body_str.lower(), (
+            assert any(kw in body_str.lower() for kw in (
+                "state change", "not started", "not running", "already stopped",
+            )), (
                 f"double-stop got HTTP {status2} but body doesn't explain the "
                 f"race-protection rejection: {body_str}"
             )

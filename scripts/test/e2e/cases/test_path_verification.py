@@ -53,7 +53,11 @@ async def test_exec_reaches_runner_journal(rt, image):
     """One round-trip exec must leave the runner journal with the box id.
     Runner only sees box ids the API queued for it, so a hit here =
     proof that SDK→API→Runner went through end-to-end."""
+    import os
     import boxlite
+
+    if os.environ.get("BOXLITE_E2E_SKIP_PATH_VERIFY", "").lower() in ("1", "true", "yes", "on"):
+        pytest.skip("BOXLITE_E2E_SKIP_PATH_VERIFY set — no local runner journal")
 
     runner_before = runner_journal_seek()
     box = await rt.create(boxlite.BoxOptions(image=image, auto_remove=True))
