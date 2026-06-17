@@ -13,7 +13,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use super::credential::{AccessToken, Credential};
 use super::error::{map_http_error, map_http_status};
 use super::options::BoxliteRestOptions;
-use super::types::{ErrorResponse, ServerConfig};
+use super::types::{ErrorResponse, FlatErrorResponse, ServerConfig};
 use crate::runtime::auth::Principal;
 
 /// Re-request a token once it is within this leeway of `expires_at`.
@@ -186,6 +186,8 @@ impl ApiClient {
         let text = resp.text().await.unwrap_or_default();
         if let Ok(err_resp) = serde_json::from_str::<ErrorResponse>(&text) {
             Err(map_http_error(status, &err_resp.error))
+        } else if let Ok(err_resp) = serde_json::from_str::<FlatErrorResponse>(&text) {
+            Err(map_http_error(status, &err_resp.into_error_model()))
         } else {
             Err(map_http_status(status, &text))
         }
@@ -566,6 +568,23 @@ mod tests {
         let opts = BoxliteRestOptions::new("http://localhost:1");
         let client = ApiClient::new(&opts).expect("client");
         assert_eq!(client.current_bearer().await.unwrap(), None);
+    }
+
+    #[test]
+    fn flat_nest_error_response_maps_by_code() {
+        let parsed: FlatErrorResponse = serde_json::from_str(
+            r#"{"statusCode":502,"error":"Bad Gateway","message":"Runner API returned a non-JSON error response","code":"runner_non_json_error"}"#,
+        )
+        .expect("flat error response");
+
+        let err = map_http_error(StatusCode::BAD_GATEWAY, &parsed.into_error_model());
+
+        match err {
+            BoxliteError::Network(message) => {
+                assert!(message.contains("Runner API returned a non-JSON error response"))
+            }
+            other => panic!("expected Network error for runner non-JSON response, got {other:?}"),
+        }
     }
 
     #[test]

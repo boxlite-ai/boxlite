@@ -27,6 +27,95 @@ const isDebugEnabled = process.env.DEBUG === 'true'
 
 // Network error codes that should trigger a retry
 const RETRYABLE_NETWORK_ERROR_CODES = ['ECONNRESET', 'ETIMEDOUT']
+const RUNNER_NON_JSON_ERROR_CODE = 'runner_non_json_error'
+const NON_JSON_SNIPPET_MAX_LENGTH = 180
+
+function statusCodeFrom(error: AxiosError): number | undefined {
+  return error.response?.status || (error as any).status
+}
+
+function codeFrom(error: AxiosError, data: unknown): string {
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    const responseCode = (data as Record<string, unknown>).code
+    if (typeof responseCode === 'string' && responseCode) {
+      return responseCode
+    }
+  }
+
+  return (error as any).code || (error as any).cause?.code || 'RUNNER_API_ERROR'
+}
+
+function messageFromJson(data: Record<string, unknown>, fallback: string): string {
+  const responseMessage = data.message
+  if (Array.isArray(responseMessage)) {
+    return responseMessage.join(', ')
+  }
+  if (typeof responseMessage === 'string' && responseMessage) {
+    return responseMessage
+  }
+  if (typeof data.error === 'string' && data.error) {
+    return data.error
+  }
+  return fallback
+}
+
+function visibleTextFromMarkup(input: string): string {
+  let output = ''
+  let index = 0
+  let skipping: 'script' | 'style' | null = null
+
+  while (index < input.length) {
+    const char = input[index]
+    if (char !== '<') {
+      if (!skipping) {
+        output += char
+      }
+      index += 1
+      continue
+    }
+
+    const closeIndex = input.indexOf('>', index + 1)
+    if (closeIndex === -1) {
+      if (!skipping) {
+        output += input.slice(index)
+      }
+      break
+    }
+
+    const tagBody = input
+      .slice(index + 1, closeIndex)
+      .trim()
+      .toLowerCase()
+    const tagName = tagBody.replace(/^\//, '').split(/\s+/)[0]
+    if (!tagBody.startsWith('/') && (tagName === 'script' || tagName === 'style')) {
+      skipping = tagName
+    } else if (skipping && tagBody.startsWith('/') && tagName === skipping) {
+      skipping = null
+    } else if (!skipping) {
+      output += ' '
+    }
+
+    index = closeIndex + 1
+  }
+
+  return output
+}
+
+export function sanitizedNonJsonRunnerMessage(data: unknown): string {
+  const raw = typeof data === 'string' ? data : Buffer.isBuffer(data) ? data.toString('utf8') : JSON.stringify(data)
+  const text = visibleTextFromMarkup(raw)
+    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1[redacted]')
+    .replace(/\b(access_token|id_token|api_key|token)=([^&\s]+)/gi, '$1=[redacted]')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (!text) {
+    return 'Runner API returned a non-JSON error response'
+  }
+
+  const suffix = text.length > NON_JSON_SNIPPET_MAX_LENGTH ? '...' : ''
+  return `Runner API returned a non-JSON error response: ${text.slice(0, NON_JSON_SNIPPET_MAX_LENGTH)}${suffix}`
+}
 
 @Injectable()
 export class RunnerAdapterV0 implements RunnerAdapter {
@@ -104,11 +193,27 @@ export class RunnerAdapterV0 implements RunnerAdapter {
         return response
       },
       (error) => {
-        const errorMessage = error.response?.data?.message || error.response?.data || error.message || String(error)
-        const statusCode = error.response?.data?.statusCode || error.response?.status || error.status
-        const code = error.response?.data?.code || (error as any).code || (error as any).cause?.code || ''
+        const data = error.response?.data
+        const statusCode =
+          data && typeof data === 'object' && !Array.isArray(data) && typeof data.statusCode === 'number'
+            ? data.statusCode
+            : statusCodeFrom(error)
 
-        throw new RunnerApiError(String(errorMessage), statusCode, code)
+        if (data && typeof data === 'object' && !Array.isArray(data) && !Buffer.isBuffer(data)) {
+          throw new RunnerApiError(
+            messageFromJson(data as Record<string, unknown>, error.message),
+            statusCode,
+            codeFrom(error, data),
+          )
+        }
+
+        if (data !== undefined && data !== null && data !== '') {
+          const sanitizedMessage = sanitizedNonJsonRunnerMessage(data)
+          this.logger.warn(`Runner API returned non-JSON error (${statusCode || 'no status'}): ${sanitizedMessage}`)
+          throw new RunnerApiError(sanitizedMessage, statusCode, RUNNER_NON_JSON_ERROR_CODE)
+        }
+
+        throw new RunnerApiError(error.message || 'Runner API request failed', statusCode, codeFrom(error, data))
       },
     )
 

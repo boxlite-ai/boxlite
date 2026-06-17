@@ -31,7 +31,7 @@ pub(crate) fn map_http_error(status: StatusCode, body: &ErrorModel) -> BoxliteEr
         "image_pull_failed" => BoxliteError::Image(msg),
         "execution_failed" => BoxliteError::Execution(msg),
         "resource_exhausted" => BoxliteError::ResourceExhausted(msg),
-        "network_unavailable" => BoxliteError::Network(msg),
+        "network_unavailable" | "runner_non_json_error" => BoxliteError::Network(msg),
         "upstream_unavailable" => BoxliteError::Portal(msg),
         "engine_unavailable" => BoxliteError::Engine(msg),
         "storage_error" => BoxliteError::Storage(msg),

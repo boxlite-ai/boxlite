@@ -20,6 +20,23 @@ pub(crate) struct ErrorResponse {
     pub error: ErrorModel,
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct FlatErrorResponse {
+    pub message: String,
+    pub code: Option<String>,
+}
+
+impl FlatErrorResponse {
+    pub(crate) fn into_error_model(self) -> ErrorModel {
+        ErrorModel {
+            message: self.message,
+            error_type: "HttpError".to_string(),
+            code: self.code.unwrap_or_else(|| "internal".to_string()),
+            request_id: None,
+        }
+    }
+}
+
 /// Wire shape received from the server.
 ///
 /// - `message` — human-readable error text.
