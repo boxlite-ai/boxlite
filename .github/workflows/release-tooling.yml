@@ -1,0 +1,38 @@
+# Release control-plane tooling tests (Task 21).
+#
+# Path-filtered to scripts/release/** so it only runs when that tooling changes
+# — zero impact on unrelated PRs. Pure Python, no AWS/secrets/KVM.
+name: Release Tooling
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/release/**'
+      - '.github/workflows/release-tooling.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/release/**'
+      - '.github/workflows/release-tooling.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: pytest (release tooling)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test deps
+        run: pip install --disable-pip-version-check pytest pyyaml
+      - name: Run release-tooling tests
+        working-directory: scripts/release
+        run: python -m pytest -q
+      - name: Validate example manifest
+        working-directory: scripts/release
+        run: python validate_manifest.py release.example.yaml
