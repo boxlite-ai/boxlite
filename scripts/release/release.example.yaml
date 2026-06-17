@@ -1,0 +1,19 @@
+# release.yaml — declares WHAT a release ships (PR-reviewed intent, no secrets).
+# Validate:  python3 scripts/release/validate_manifest.py scripts/release/release.example.yaml
+#
+# Trains (enable any subset):
+#   oss     -- lockstep SDKs (py/node/go/c) + CLI + core, one semver -> registries
+#   cloud   -- API/dashboard/proxy/... deployed (a git SHA) to a stage via SST
+#   runner  -- stateful runner binary rolled in-place via SSM
+
+oss:
+  release: true
+  version: 0.9.6        # one version for ALL OSS artifacts (FFI lockstep)
+
+cloud:
+  deploy: true
+  stage: dev            # dev | prod ; commit defaults to current HEAD
+
+runner:
+  rollout: false        # this release does not touch the stateful runner
+  stage: dev
