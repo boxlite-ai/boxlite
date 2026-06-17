@@ -13,10 +13,25 @@ outputs are wired separately (not in this PR — see "Not done" below).
 | `artifact_manifest.py` | the immutable build-once artifact record deploy trusts (digest-pinned) | #3 |
 | `preflight.py` | pre-apply gates: resource diff, **DB baseline**, **DNS collision** | #8 / DB+DNS pitfalls |
 | `ledger.py` | release ledger + `last_good_sha` for Cloud rollback | #11 / #16 |
-| `versions.py` | OSS single-version-source drift check | version drift |
+| `versions.py` | OSS single-version-source drift check **+ writeback** | #2 |
+| `release_plan.py` | dry-run: run all gates, emit can_apply / blocked_by report | #8 plan |
 
-`validate_manifest.py` is the CLI: `python3 scripts/release/validate_manifest.py <release.yaml>`
-(exit 0 valid / 1 invalid). `release.example.yaml` is a runnable example.
+CLIs (all read-only except `write-versions --write`):
+
+```bash
+# validate a manifest
+python3 scripts/release/validate_manifest.py <release.yaml>          # exit 0/1
+
+# dry-run all pre-apply gates (evidence via fixtures locally, sst diff/DB in CI)
+python3 scripts/release/release_plan.py --manifest release.yaml \
+    --sst-diff sst.diff --migrations migs.json --baseline base.json   # exit 0/1
+
+# check OR align the OSS version across sites (lockstep)
+python3 scripts/release/write_versions.py --check  --cargo Cargo.toml --json pkg.json
+python3 scripts/release/write_versions.py --write --version 0.9.6 --cargo Cargo.toml ...
+```
+
+`release.example.yaml` is a runnable example manifest.
 
 ## Why the gates exist (real incidents this guards)
 
@@ -32,13 +47,13 @@ outputs are wired separately (not in this PR — see "Not done" below).
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate && pip install pytest pyyaml
-cd scripts/release && python -m pytest -q          # 37 tests, ~0.05s
+cd scripts/release && python -m pytest -q          # 50 tests, ~0.05s
 ```
 
 ## Status
 
-**Done + verified here (pure logic, 37 tests, mutation-checked):** all five modules
-above + the validate CLI.
+**Done + verified here (pure logic, 50 tests, mutation-checked):** all modules
+above + three CLIs (validate / release-plan / write-versions).
 
 **Not done (needs CI / AWS — can't be verified solo, intentionally out of this PR):**
 - GitHub Actions that *call* these (`release-build.yml` / `release-plan.yml` /
@@ -46,4 +61,6 @@ above + the validate CLI.
 - The adapters that produce real inputs: run `sst diff` → feed `preflight.parse_sst_diff`;
   query the `migrations` table → `db_baseline_gate`; list Cloudflare records → `dns_preflight`.
 - A `make test:release-tooling` target + CI job to run this suite in PRs.
-- Version *writeback* (this only *checks* drift; rewriting the 7 sites is separate).
+- Actually *running* `write-versions --write` on the real tree (the tool is built +
+  tested on fixtures, but rewriting live Cargo/pyproject/package.json is left to a
+  human/orchestrator decision — it can affect nx tooling).

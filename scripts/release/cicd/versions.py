@@ -32,6 +32,27 @@ def json_version(text: str) -> str | None:
     return m.group(1) if m else None
 
 
+def set_first_version(text: str, version: str) -> str:
+    """Rewrite the first ``version = "..."`` line (Cargo / pyproject TOML).
+
+    Only the version VALUE changes; everything else (formatting, comments,
+    other ``version`` keys of dependencies) is left intact because we replace
+    a single occurrence. Raises if no version line is present.
+    """
+    new, n = _CARGO_VERSION.subn(lambda mo: mo.group(0).replace(mo.group(1), version, 1), text, count=1)
+    if n == 0:
+        raise ValueError('no `version = "..."` line found')
+    return new
+
+
+def set_json_version_text(text: str, version: str) -> str:
+    """Rewrite the first ``"version": "..."`` in JSON (package.json)."""
+    new, n = _JSON_VERSION.subn(lambda mo: mo.group(0).replace(mo.group(1), version, 1), text, count=1)
+    if n == 0:
+        raise ValueError('no "version": "..." field found')
+    return new
+
+
 def check_drift(sites: dict[str, str | None], source_of_truth: str = "Cargo.toml") -> list[str]:
     """Compare every site's version against the source-of-truth site.
 
