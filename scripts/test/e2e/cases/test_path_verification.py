@@ -23,7 +23,7 @@ import urllib.request
 
 import pytest
 
-from conftest import DEFAULT_IMAGE, drain
+from conftest import drain
 
 
 @pytest.mark.asyncio
@@ -97,4 +97,4 @@ async def test_exec_roundtrip_proves_api_to_runner_chain(rt, image):
             )
             urllib.request.urlopen(req, timeout=15)
         except Exception:
-            pass
+            pass  # best-effort cleanup; don't fail the test on delete error
