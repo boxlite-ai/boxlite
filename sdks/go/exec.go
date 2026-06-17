@@ -103,6 +103,15 @@ type executionStreamState struct {
 	// buffer. The fold happens at the SDK boundary; the C-side Wait
 	// task stays decoupled from streams.
 	drained chan struct{}
+
+	// progress is a monotonic count of Stdout/Stderr callbacks delivered.
+	// Wait's drain barrier watches it: a SIGKILLed guest can leave a pipe
+	// without EOF, so the C exit pump never fires on_exit and `drained`
+	// never closes — bounding the barrier by progress lets Wait return
+	// (the stream has stalled) instead of hanging forever. While output is
+	// still flowing progress keeps advancing, so a large tail is never cut
+	// off early.
+	progress atomic.Uint64
 }
 
 func newExecutionStreamState(opts ExecutionOptions) *executionStreamState {
@@ -129,6 +138,7 @@ func (s *executionStreamState) deliverStdout(data []byte) {
 	if stdout != nil {
 		_, _ = stdout.Write(data)
 	}
+	s.progress.Add(1)
 }
 
 func (s *executionStreamState) deliverStderr(data []byte) {
@@ -145,6 +155,7 @@ func (s *executionStreamState) deliverStderr(data []byte) {
 	if stderr != nil {
 		_, _ = stderr.Write(data)
 	}
+	s.progress.Add(1)
 }
 
 func (s *executionStreamState) deliverExit(_ int) {
@@ -341,19 +352,69 @@ func (e *Execution) Wait(ctx context.Context) (int, error) {
 		return 0, ErrRuntimeClosed
 	}
 
-	// Drain barrier: wait for stream pumps to flush before returning,
-	// so the caller's stdout/stderr Writers see every chunk the exec
-	// produced. Non-cancelable by ctx — only runtime shutdown breaks
-	// it. Preserves the exit code from the wait result; overwrites
-	// err only if the wait itself had none.
-	select {
-	case <-e.streamState.drained:
-	case <-e.closing:
-		if err == nil {
-			err = ErrRuntimeClosed
-		}
+	// Drain barrier: wait for stream pumps to flush before returning, so
+	// the caller's stdout/stderr Writers see every chunk the exec produced.
+	// Bounded by stream *progress*, not a fixed wall clock: normally
+	// `drained` closes once C's exit pump (which keeps Exit strictly last)
+	// fires on_exit. But a SIGKILLed guest can leave a pipe without EOF, so
+	// the exit pump never fires and `drained` never closes — keep waiting
+	// while output is still arriving (progress advances; a large tail is
+	// never cut off), and give up once the stream goes idle. Non-cancelable
+	// by ctx (os/exec parity); only runtime shutdown, an idle/stalled
+	// stream, or the hard cap breaks it. Preserves the exit code; overwrites
+	// err only if the wait had none.
+	if closed := waitForStreamDrain(
+		e.streamState.drained, e.closing, &e.streamState.progress,
+		streamDrainIdleBound, streamDrainHardCap,
+	); closed && err == nil {
+		err = ErrRuntimeClosed
 	}
 	return code, err
+}
+
+// streamDrainIdleBound is how long Wait's drain barrier tolerates no new
+// Stdout/Stderr callback before treating the stream as stalled and
+// returning. The drain runs only after the exit code is in hand, so any
+// remaining output is buffered and arrives back-to-back; a full window with
+// no progress means a guest pipe that will never EOF (a signal-killed
+// process). Large enough to absorb scheduler/transport jitter, small enough
+// that a timeout-killed exec's Wait returns promptly.
+const streamDrainIdleBound = 300 * time.Millisecond
+
+// streamDrainHardCap backstops a pipe that never EOFs yet keeps trickling a
+// chunk within every idle window forever. Generous so it never clips a
+// genuine high-throughput tail.
+const streamDrainHardCap = 30 * time.Second
+
+// waitForStreamDrain blocks until the stream callbacks have flushed
+// (`drained` closes), the runtime is closing, the stream goes idle (no
+// progress within idleBound — a stuck never-EOF pipe), or hardCap elapses.
+// Returns true only when it ended because the runtime is closing, so the
+// caller can surface ErrRuntimeClosed. Bounding by progress rather than a
+// fixed wall clock keeps a still-delivering tail from being cut off.
+func waitForStreamDrain(drained, closing <-chan struct{}, progress *atomic.Uint64, idleBound, hardCap time.Duration) bool {
+	idle := time.NewTicker(idleBound)
+	defer idle.Stop()
+	cap := time.NewTimer(hardCap)
+	defer cap.Stop()
+
+	last := progress.Load()
+	for {
+		select {
+		case <-drained:
+			return false
+		case <-closing:
+			return true
+		case <-cap.C:
+			return false
+		case <-idle.C:
+			now := progress.Load()
+			if now == last {
+				return false
+			}
+			last = now
+		}
+	}
 }
 
 // Kill terminates the running command.
