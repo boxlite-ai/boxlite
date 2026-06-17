@@ -11,10 +11,9 @@ export default {
   transform: {
     '^.+\\.[tj]s$': ['ts-jest', { tsconfig: '<rootDir>/tsconfig.spec.json' }],
   },
-  // uuid v14 ships ESM-only (`export` syntax). The nx preset ignores node_modules
-  // from transformation, so any spec that transitively imports an entity using
-  // `uuid` (e.g. via OrganizationService) crashes on the ESM. Let ts-jest down-level it.
-  transformIgnorePatterns: ['/node_modules/(?!(?:uuid)/)'],
+  // uuid v14 and nanoid v5 ship ESM-only. The nx preset ignores node_modules
+  // from transformation, so let ts-jest down-level them.
+  transformIgnorePatterns: ['/node_modules/(?!(?:uuid|nanoid)/)'],
   moduleFileExtensions: ['ts', 'js', 'html'],
   coverageDirectory: '../../coverage/apps/boxlite',
 }

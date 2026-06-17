@@ -92,7 +92,7 @@ describe('BoxLite REST routing', () => {
     expect(service.matchAttachPath('/api/v1/boxes/box-1/executions/exec-1/attach')).toEqual({ boxId: 'box-1' })
     expect(service.matchAttachPath('/api/v1/default/boxes/box-1/executions/exec-1/attach')).toEqual({
       boxId: 'box-1',
-      prefix: 'default',
+      tenant: 'default',
     })
   })
 })

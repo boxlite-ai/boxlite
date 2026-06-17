@@ -49,7 +49,7 @@ describe('BoxliteWsProxyService', () => {
       {} as never,
       jwtStrategy as never,
     ) as unknown as {
-      authenticate: (req: IncomingMessage) => Promise<{ organizationId: string } | null>
+      authenticate: (req: IncomingMessage, urlTenant?: string) => Promise<{ organizationId: string } | null>
     }
 
     return { service, apiKeyService, organizationUserService, jwtStrategy }
@@ -90,7 +90,7 @@ describe('BoxliteWsProxyService', () => {
     jwtStrategy.verifyToken.mockResolvedValue({ sub: 'user-1', email: 'dev@acme.test' })
     organizationUserService.findOne.mockResolvedValue({ organizationId: 'org-1', userId: 'user-1' })
 
-    await expect(service.authenticate(authRequest(jwt))).resolves.toEqual({ organizationId: 'org-1' })
+    await expect(service.authenticate(authRequest(jwt), 'org-1')).resolves.toEqual({ organizationId: 'org-1' })
     expect(jwtStrategy.verifyToken).toHaveBeenCalledWith(jwt)
     expect(organizationUserService.findOne).toHaveBeenCalledWith('org-1', 'user-1')
   })
@@ -100,7 +100,7 @@ describe('BoxliteWsProxyService', () => {
     const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyXzEifQ.signature'
     jwtStrategy.verifyToken.mockRejectedValue(new Error('bad jwt'))
 
-    await expect(service.authenticate(authRequest(jwt))).resolves.toBeNull()
+    await expect(service.authenticate(authRequest(jwt), 'org-1')).resolves.toBeNull()
     expect(organizationUserService.findOne).not.toHaveBeenCalled()
   })
 
@@ -110,7 +110,7 @@ describe('BoxliteWsProxyService', () => {
     jwtStrategy.verifyToken.mockResolvedValue({ sub: 'user-1', email: 'dev@acme.test' })
     organizationUserService.findOne.mockResolvedValue(null)
 
-    await expect(service.authenticate(authRequest(jwt))).resolves.toBeNull()
+    await expect(service.authenticate(authRequest(jwt), 'org-1')).resolves.toBeNull()
     expect(organizationUserService.findOne).toHaveBeenCalledWith('org-1', 'user-1')
   })
 })
