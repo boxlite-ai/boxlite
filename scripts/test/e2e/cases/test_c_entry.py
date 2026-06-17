@@ -25,7 +25,7 @@ REPO = Path(__file__).resolve().parents[4]
 SRC = REPO / "scripts/test/e2e/sdks/c/e2e_basic.c"
 HDR = REPO / "sdks/c/include"
 LIB_DIR = REPO / "target/release"
-BOX_ID_RE = re.compile(r"[A-Za-z0-9]{8,36}")
+BOX_ID_RE = re.compile(r"[A-Za-z0-9]{12}")
 
 @pytest.fixture(scope="module")
 def c_binary():

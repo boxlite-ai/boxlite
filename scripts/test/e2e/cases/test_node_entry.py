@@ -23,7 +23,7 @@ from path_verification import runner_journal_seek, runner_hits_for_box
 REPO = Path(__file__).resolve().parents[4]
 SRC = REPO / "scripts/test/e2e/sdks/node/e2e_basic.ts"
 NODE_SDK = REPO / "sdks/node"
-BOX_ID_RE = re.compile(r"[A-Za-z0-9]{8,36}")
+BOX_ID_RE = re.compile(r"[A-Za-z0-9]{12}")
 
 def _has_node_napi_build() -> bool:
     """The napi binding produces sdks/node/native/*.node OR

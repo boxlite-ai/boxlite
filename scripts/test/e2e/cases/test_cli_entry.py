@@ -30,7 +30,7 @@ from e2e_auth import auth_context
 
 BOXLITE_BIN = os.environ.get("BOXLITE_E2E_CLI", shutil.which("boxlite"))
 IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3")
-BOX_ID_RE = re.compile(r"[A-Za-z0-9]{8,36}")
+BOX_ID_RE = re.compile(r"[A-Za-z0-9]{12}")
 
 
 CLI_PROFILE = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
