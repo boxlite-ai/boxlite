@@ -1,0 +1,80 @@
+# One-click deploy button (MVP "lite+" — manual, reviewable, no static AWS keys).
+#
+# Pick a stage + diff|deploy. Auth = GitHub OIDC -> boxlite-github-deployer-<stage>.
+# Runs `npm run <sst|deploy>` in apps/infra; sst-with-cloudflare.mjs injects the
+# stage's Cloudflare creds + full env config from SSM (/boxlite/<stage>/{cloudflare-*,env/*}),
+# so CI has the same config a laptop's .env provides. No secrets in the repo.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# VALIDATED 2026-06-20 on-branch (temp push trigger, now removed):
+#   ✅ OIDC assume of bounded role boxlite-github-deployer-dev
+#   ✅ npm install + sst.config load + connect to AWS
+#   ✅ env parity: wrapper loaded 18 vars from SSM (`loaded 18 env var(s) from SSM`)
+#   ✅ `sst diff` runs clean; image builds (Api/Proxy/SshGateway/Otel) all succeed;
+#      `sst deploy` runs all the way to resource reconciliation.
+# ⚠️ A real dev `deploy` does NOT yet complete — two findings (NOT a button/CI issue):
+#   1. The deploy role needs `iam:PassRole` (PowerUserAccess lacks it; ECS service
+#      updates pass exec roles). Added as inline policy `DevDeployPassRole` (scoped to
+#      role/boxlite-dev-*) on 2026-06-20.
+#   2. dev's SST state has accumulated drift (NOT sst-dev mode — that earlier guess was
+#      wrong; dev is a normal manually-`sst deploy`'d stage). The deploy wants to replace
+#      every service LB; on the drifted state this hits ListenerNotFound (deleting
+#      already-gone listeners) + a target-group-without-LB. Reconciling it is a one-time
+#      SUPERVISED operation (sst refresh / targeted state fixes / runner re-import via
+#      RUNNER_IMPORT_ID), not an unattended run. dev stayed healthy through the attempts.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Stage to deploy
+        type: choice
+        options: [dev]
+        default: dev
+      mode:
+        description: diff (read-only preview) or deploy (apply)
+        type: choice
+        options: [diff, deploy]
+        default: diff
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.stage }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Assume AWS deploy role (GitHub OIDC, no static keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::064212132677:role/boxlite-github-deployer-${{ inputs.stage }}
+          aws-region: ap-southeast-1
+
+      # apps/infra is a standalone npm project; package-lock.json is gitignored,
+      # so use `npm install` (not `npm ci`) on a fresh checkout.
+      - name: Install infra deps
+        working-directory: apps/infra
+        run: npm install
+
+      - name: sst diff (read-only)
+        if: ${{ inputs.mode == 'diff' }}
+        working-directory: apps/infra
+        run: npm run sst -- diff --stage ${{ inputs.stage }}
+
+      - name: sst deploy
+        if: ${{ inputs.mode == 'deploy' }}
+        working-directory: apps/infra
+        run: npm run deploy -- --stage ${{ inputs.stage }}
