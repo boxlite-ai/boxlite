@@ -16670,7 +16670,7 @@ __metadata:
     form-data: "npm:^4.0.6"
     gt-react: "npm:^10.0.8"
     gtx-cli: "npm:^2.6.24"
-    http-proxy-middleware: "npm:^3.0.5"
+    http-proxy-middleware: "npm:^3.0.7"
     husky: "npm:^9.1.7"
     ioredis: "npm:^5.5.0"
     isomorphic-ws: "npm:^5.0.0"
@@ -16753,11 +16753,11 @@ __metadata:
     typedoc: "npm:~0.27.7"
     typedoc-plugin-markdown: "npm:~4.4.2"
     typedoc-plugin-merge-modules: "npm:~6.1.0"
-    typeorm: "npm:0.3.28"
+    typeorm: "npm:0.3.29"
     typescript: "npm:5.8.3"
     typescript-eslint: "npm:^8.19.0"
     usehooks-ts: "npm:^3.1.1"
-    uuid: "npm:^14.0.0"
+    uuid: "npm:^14.0.1"
     vaul: "npm:^1.1.2"
     verdaccio: "npm:6.0.5"
     vite: "npm:^8.0.16"
@@ -18884,7 +18884,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"dayjs@npm:^1.11.19":
+"dayjs@npm:^1.11.20":
   version: 1.11.21
   resolution: "dayjs@npm:1.11.21"
   checksum: 10c0/bd97dfdc4bfea3c66268635690313828b386faa040fbc1f829ff42a2bd748b72c9d9b3c8f9616ce9e61fcb78923f1461a462c969c54b1084458ae1b715898fb0
@@ -19001,7 +19001,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"dedent@npm:^1.6.0, dedent@npm:^1.7.0":
+"dedent@npm:^1.6.0, dedent@npm:^1.7.2":
   version: 1.7.2
   resolution: "dedent@npm:1.7.2"
   peerDependencies:
@@ -23520,6 +23520,20 @@ __metadata:
     is-plain-object: "npm:^5.0.0"
     micromatch: "npm:^4.0.8"
   checksum: 10c0/89ff3c8fe65b22b8042a6173ae1b8f77c5171f7eecf3c8b5d6dcffe3c9d688acae7bcf498cc08d1525f566dc0781efaec4e2ddc49224b1f16f020de7987a446b
+  languageName: node
+  linkType: hard
+
+"http-proxy-middleware@npm:^3.0.7":
+  version: 3.0.7
+  resolution: "http-proxy-middleware@npm:3.0.7"
+  dependencies:
+    "@types/http-proxy": "npm:^1.17.15"
+    debug: "npm:^4.3.6"
+    http-proxy: "npm:^1.18.1"
+    is-glob: "npm:^4.0.3"
+    is-plain-object: "npm:^5.0.0"
+    micromatch: "npm:^4.0.8"
+  checksum: 10c0/2308a09b1ae7682bb91bed45653d3b17379b87e2bb8cad4e7e71c68eeb2cedb8fd5506f80f6890178d8aa4132a3ce71eaf58979e7ef04cfefac923117da41817
   languageName: node
   linkType: hard
 
@@ -30686,14 +30700,14 @@ __metadata:
   linkType: hard
 
 "piscina@npm:^4.3.1":
-  version: 4.9.2
-  resolution: "piscina@npm:4.9.2"
+  version: 4.9.3
+  resolution: "piscina@npm:4.9.3"
   dependencies:
     "@napi-rs/nice": "npm:^1.0.1"
   dependenciesMeta:
     "@napi-rs/nice":
       optional: true
-  checksum: 10c0/ab67830065ff41523cd901db41b11045cb00a0be43bf79323ff7b4ef2fbce5e3a56ad440d99d6c3944ce94451a0a69fd175500e3220b21efe54142e601322189
+  checksum: 10c0/357abfcc6226ec3da411f717ba76e55c105fff692269a6faedf8425eb429053b9c2aa65b58ccd74bae79d77cd30e3a3c677a3a8ed75b35519cf86bf498508a56
   languageName: node
   linkType: hard
 
@@ -36940,24 +36954,24 @@ __metadata:
   languageName: node
   linkType: hard
 
-"typeorm@npm:0.3.28":
-  version: 0.3.28
-  resolution: "typeorm@npm:0.3.28"
+"typeorm@npm:0.3.29":
+  version: 0.3.29
+  resolution: "typeorm@npm:0.3.29"
   dependencies:
     "@sqltools/formatter": "npm:^1.2.5"
     ansis: "npm:^4.2.0"
     app-root-path: "npm:^3.1.0"
     buffer: "npm:^6.0.3"
-    dayjs: "npm:^1.11.19"
+    dayjs: "npm:^1.11.20"
     debug: "npm:^4.4.3"
-    dedent: "npm:^1.7.0"
+    dedent: "npm:^1.7.2"
     dotenv: "npm:^16.6.1"
     glob: "npm:^10.5.0"
     reflect-metadata: "npm:^0.2.2"
     sha.js: "npm:^2.4.12"
     sql-highlight: "npm:^6.1.0"
     tslib: "npm:^2.8.1"
-    uuid: "npm:^11.1.0"
+    uuid: "npm:^11.1.1"
     yargs: "npm:^17.7.2"
   peerDependencies:
     "@google-cloud/spanner": ^5.18.0 || ^6.0.0 || ^7.0.0 || ^8.0.0
@@ -37013,7 +37027,7 @@ __metadata:
     typeorm: cli.js
     typeorm-ts-node-commonjs: cli-ts-node-commonjs.js
     typeorm-ts-node-esm: cli-ts-node-esm.js
-  checksum: 10c0/b850b2f76ed576f9eae3deb39617466c527572328cb2727cb962d263822aabf289b52fe3f070d779e9cde5c164eed7486e73d77aef91e69a919b21e59a2e6122
+  checksum: 10c0/9fe642e87657ff81005edfcf983f183a3172adba0eaca90fdc36fba1dd1348b41444f2b168d98adc57f3dc16b20b86bdde65c489cad9ba35bb7627c103dcc413
   languageName: node
   linkType: hard
 
@@ -37822,7 +37836,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"uuid@npm:^11.1.0":
+"uuid@npm:^11.1.1":
   version: 11.1.1
   resolution: "uuid@npm:11.1.1"
   bin:
@@ -37840,12 +37854,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"uuid@npm:^14.0.0":
-  version: 14.0.0
-  resolution: "uuid@npm:14.0.0"
+"uuid@npm:^14.0.1":
+  version: 14.0.1
+  resolution: "uuid@npm:14.0.1"
   bin:
     uuid: dist-node/bin/uuid
-  checksum: 10c0/a57ae7794c45005c1a9208989196c5baf79a7679c30f43c1bee9033a2c4d113a2cea216fa6fcc9663b08b0d55635df1a7c6eb7e7f3d21c3e50688c698fa39a50
+  checksum: 10c0/2d961289097cb68c37d93d1da0b5c3aafc1eb9948a455cca8d0ae53a099b2fe583b8933254a84097f700e6bac2e23033364904df0467c22551d5d9611febcaf6
   languageName: node
   linkType: hard
 
@@ -38614,8 +38628,8 @@ __metadata:
   linkType: hard
 
 "webpack-dev-server@npm:^5.2.1":
-  version: 5.2.4
-  resolution: "webpack-dev-server@npm:5.2.4"
+  version: 5.2.5
+  resolution: "webpack-dev-server@npm:5.2.5"
   dependencies:
     "@types/bonjour": "npm:^3.5.13"
     "@types/connect-history-api-fallback": "npm:^1.5.4"
@@ -38654,7 +38668,7 @@ __metadata:
       optional: true
   bin:
     webpack-dev-server: bin/webpack-dev-server.js
-  checksum: 10c0/42f8afe11b7bfe65d72e30d861ddf1e4d05f27202c4c1162d204cb41a4a858dffc91c5a02bf44ec08acc8c02b4a57aaf46924ec12a5e5b97c307991379282669
+  checksum: 10c0/8963b3533197ebd820456f3cb14d9234ba4dff10412eb11200b8099c501559abf7a700e9a5d4136f17929374b61c1af5c6ef597471ea45b97ba6ca69a12e5ca8
   languageName: node
   linkType: hard
 
