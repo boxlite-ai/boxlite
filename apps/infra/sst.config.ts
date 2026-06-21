@@ -108,13 +108,14 @@ export default $config({
   },
 
   async run() {
-    // Stamp every IAM role this app creates with the developer permissions
+    // Stamp every IAM role this app creates with the workload permissions
     // boundary. The deploy principal's grant to create/manage boxlite-* roles is
-    // CONDITIONAL on the created role carrying this boundary (see the LimitedIAM
-    // `AllowCreateBoundedBoxLiteRoles` statement); without it, CreateRole is denied.
-    // Registered first, before any resource — including SST-internal roles — is created.
+    // CONDITIONAL on the created role carrying this boundary (see boxlite-deploy-delegation
+    // `AllowCreateBoundedRoles` / `AllowSetBoundary`, which require the boundary to be
+    // boxlite-boundary-workload or -appdeploy); without it CreateRole/PutRolePermissionsBoundary
+    // are denied. Registered first, before any resource — including SST-internal roles — is created.
     $transform(aws.iam.Role, (args) => {
-      args.permissionsBoundary ??= 'arn:aws:iam::064212132677:policy/BoxLiteDeveloperPermissionsBoundary'
+      args.permissionsBoundary ??= 'arn:aws:iam::064212132677:policy/boxlite-boundary-workload'
     })
 
     // Load .env overrides (anything unset falls back to auto-generated values)

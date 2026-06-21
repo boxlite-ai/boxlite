@@ -26,8 +26,6 @@
 name: Deploy
 
 on:
-  push:
-    branches: ['feat/deploy-boundary-fix'] # TEMP: trigger deploy via deployer-dev to reconcile dev; remove before PR
   workflow_dispatch:
     inputs:
       stage:
