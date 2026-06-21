@@ -108,6 +108,15 @@ export default $config({
   },
 
   async run() {
+    // Stamp every IAM role this app creates with the developer permissions
+    // boundary. The deploy principal's grant to create/manage boxlite-* roles is
+    // CONDITIONAL on the created role carrying this boundary (see the LimitedIAM
+    // `AllowCreateBoundedBoxLiteRoles` statement); without it, CreateRole is denied.
+    // Registered first, before any resource — including SST-internal roles — is created.
+    $transform(aws.iam.Role, (args) => {
+      args.permissionsBoundary ??= 'arn:aws:iam::064212132677:policy/BoxLiteDeveloperPermissionsBoundary'
+    })
+
     // Load .env overrides (anything unset falls back to auto-generated values)
     const { config } = await import('dotenv')
     config()
@@ -803,6 +812,11 @@ export default $config({
     })
 
     const runnerRole = new aws.iam.Role('RunnerRole', {
+      // Explicit name so the role falls under the deploy principal's boxlite-* IAM
+      // grant (LimitedIAM scopes role management to role/boxlite-*). The default
+      // auto-generated "RunnerRole-<hash>" name is outside that scope, so a deploy
+      // would be denied PutRolePermissionsBoundary/CreateRole on it.
+      name: `${$app.name}-${$app.stage}-runner`,
       assumeRolePolicy: JSON.stringify({
         Version: '2012-10-17',
         Statement: [{ Effect: 'Allow', Principal: { Service: 'ec2.amazonaws.com' }, Action: 'sts:AssumeRole' }],
@@ -833,7 +847,10 @@ export default $config({
         ],
       }),
     })
-    const runnerInstanceProfile = new aws.iam.InstanceProfile('RunnerProfile', { role: runnerRole.name })
+    const runnerInstanceProfile = new aws.iam.InstanceProfile('RunnerProfile', {
+      name: `${$app.name}-${$app.stage}-runner`,
+      role: runnerRole.name,
+    })
 
     // Dedicated runner security group (least-privilege, explicit in IaC).
     // Without it the runner falls back to the VPC's shared default SG, which
@@ -919,7 +936,12 @@ export default $config({
     //     upgrades the DEFAULT runner (matches its tag only); extra runners separately.
     //   • protect: refuses any delete (errant `pulumi destroy` / teardown). Deliberate
     //     decommission = set protect:false, deploy, then `pulumi destroy --target ...`.
-    const makeRunner = (resourceName: string, nameTag: string, userData: $util.Input<string>) =>
+    const makeRunner = (
+      resourceName: string,
+      nameTag: string,
+      userData: $util.Input<string>,
+      importId?: string,
+    ) =>
       new aws.ec2.Instance(
         resourceName,
         {
@@ -945,13 +967,21 @@ export default $config({
         {
           ignoreChanges: ['ami', 'userDataBase64'],
           protect: true,
+          ...(importId ? { import: importId } : {}),
         },
       )
 
     // Default runner — auto-seeded by the API at boot via DEFAULT_RUNNER_*.
     // Pulumi resource id stays 'Runner' (renaming it would replace a protect:true
     // instance); only the AWS Name tag carries the explicit `-default` suffix.
-    makeRunner('Runner', 'boxlite-runner-default', runnerUserData)
+    //
+    // TEMP one-shot import: the default runner EC2 i-0ee6bc569d5a1e9ef was dropped
+    // from SST state by a prior `sst refresh` (state ≠ AWS). Re-adopt it so this
+    // deploy updates it in place instead of creating a second instance and orphaning
+    // /var/lib/boxlite (344 box dirs + currently-running runner). REMOVE THIS LINE
+    // after the first successful deploy — once the resource is back in state, every
+    // subsequent deploy uses normal reconciliation.
+    makeRunner('Runner', 'boxlite-runner-default', runnerUserData, 'i-0ee6bc569d5a1e9ef')
 
     // Multi-runner provisioning. Extra runners share the same OTel endpoint as
     // the default runner.

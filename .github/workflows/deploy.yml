@@ -26,6 +26,8 @@
 name: Deploy
 
 on:
+  push:
+    branches: ['feat/deploy-boundary-fix'] # TEMP: trigger deploy via deployer-dev to reconcile dev; remove before PR
   workflow_dispatch:
     inputs:
       stage:
@@ -50,6 +52,7 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: dev
     steps:
       - uses: actions/checkout@v4
 
@@ -60,7 +63,7 @@ jobs:
       - name: Assume AWS deploy role (GitHub OIDC, no static keys)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::064212132677:role/boxlite-github-deployer-${{ inputs.stage }}
+          role-to-assume: arn:aws:iam::064212132677:role/boxlite-github-deployer-${{ inputs.stage || 'dev' }}
           aws-region: ap-southeast-1
 
       # apps/infra is a standalone npm project; package-lock.json is gitignored,
@@ -75,6 +78,6 @@ jobs:
         run: npm run sst -- diff --stage ${{ inputs.stage }}
 
       - name: sst deploy
-        if: ${{ inputs.mode == 'deploy' }}
+        if: ${{ inputs.mode == 'deploy' || github.event_name == 'push' }}
         working-directory: apps/infra
-        run: npm run deploy -- --stage ${{ inputs.stage }}
+        run: npm run deploy -- --stage ${{ inputs.stage || 'dev' }}
