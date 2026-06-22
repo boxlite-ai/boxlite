@@ -29,9 +29,9 @@ on:
         options: [dev]
         default: dev
       mode:
-        description: diff (read-only preview) or deploy (apply)
+        description: diff (read-only preview), deploy (apply), or unlock (clear stale SST lock)
         type: choice
-        options: [diff, deploy]
+        options: [diff, deploy, unlock]
         default: diff
 
 permissions:
@@ -71,6 +71,11 @@ jobs:
         if: ${{ inputs.mode == 'diff' }}
         working-directory: apps/infra
         run: npm run sst -- diff --stage ${{ inputs.stage }}
+
+      - name: sst unlock
+        if: ${{ inputs.mode == 'unlock' }}
+        working-directory: apps/infra
+        run: npm run sst -- unlock --stage ${{ inputs.stage }}
 
       - name: sst deploy
         if: ${{ inputs.mode == 'deploy' }}
