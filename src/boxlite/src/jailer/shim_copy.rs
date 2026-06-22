@@ -90,6 +90,7 @@ pub fn copy_shim_to_box(shim_path: &Path, box_dir: &Path) -> BoxliteResult<PathB
             e
         ))
     })?;
+    ensure_executable(&dest_shim)?;
 
     if copied {
         tracing::debug!(
@@ -105,6 +106,34 @@ pub fn copy_shim_to_box(shim_path: &Path, box_dir: &Path) -> BoxliteResult<PathB
     }
 
     Ok(dest_shim)
+}
+
+#[cfg(unix)]
+fn ensure_executable(path: &Path) -> BoxliteResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = std::fs::metadata(path)
+        .map(|metadata| metadata.permissions().mode() & 0o777)
+        .map_err(|e| BoxliteError::Storage(format!("stat {}: {}", path.display(), e)))?;
+    let executable_mode = mode | 0o755;
+    if executable_mode != mode {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(executable_mode)).map_err(
+            |e| {
+                BoxliteError::Storage(format!(
+                    "chmod {:o} {}: {}",
+                    executable_mode,
+                    path.display(),
+                    e
+                ))
+            },
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_executable(_path: &Path) -> BoxliteResult<()> {
+    Ok(())
 }
 
 /// Copy libkrunfw from the shim's directory to `dest_dir`.
@@ -156,4 +185,31 @@ fn copy_libkrunfw(src_dir: &Path, dest_dir: &Path) -> BoxliteResult<()> {
     }
 
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn copy_shim_to_box_marks_existing_copy_executable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let shim = tmp.path().join("boxlite-shim");
+        let box_dir = tmp.path().join("box");
+        let bin_dir = box_dir.join("bin");
+        let dest = bin_dir.join("boxlite-shim");
+
+        fs::write(&shim, b"same-size").unwrap();
+        fs::create_dir_all(&bin_dir).unwrap();
+        fs::write(&dest, b"same-size").unwrap();
+        fs::set_permissions(&dest, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let copied = copy_shim_to_box(&shim, &box_dir).unwrap();
+
+        assert_eq!(copied, dest);
+        let mode = fs::metadata(&copied).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755);
+    }
 }
