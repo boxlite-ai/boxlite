@@ -8,7 +8,7 @@
 #   release   : install an already-published version (e.g. 0.9.5) from GitHub
 #               Releases. This is the only source allowed for prod.
 #
-# Auth = GitHub OIDC -> boxlite-github-deployer-<stage> (same role as Deploy).
+# Auth = GitHub OIDC -> boxlite-app-<stage>-deploy (same role as Deploy).
 # The actual swap + integrity check + auto-rollback lives in
 # scripts/deploy/runner-update-binary.sh; this workflow only builds + stages the
 # artifact and hands the script a URL.
@@ -31,8 +31,13 @@ on:
       stage:
         description: Stage
         type: choice
-        options: [dev]
+        options: [dev, prod]
         default: dev
+      region:
+        description: AWS region the runner lives in (dev = ap-southeast-1)
+        type: choice
+        options: [ap-southeast-1, us-east-1, us-west-2, eu-west-1, eu-central-1, ap-northeast-1]
+        default: ap-southeast-1
       source:
         description: dev-build (build the ref now) or release (install a published version)
         type: choice
@@ -48,7 +53,7 @@ on:
         options: [upgrade, rollback]
         default: upgrade
       instance_id:
-        description: "Pin a specific runner instance id (blank = find boxlite-runner-default by tag)"
+        description: "Pin a specific runner instance id (blank = find boxlite-<stage>-runner-default by tag)"
         type: string
         default: ""
 
@@ -61,8 +66,11 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  AWS_REGION: ap-southeast-1
-  S3_BUCKET: boxlite-dev-runner-builds
+  # Stage-scoped so dev and prod don't collide. The S3 bucket only backs the
+  # dev-build source (release source pulls from GitHub Releases, never S3), and
+  # prod refuses dev-build (runner-update-binary.sh), so a prod run never touches it.
+  AWS_REGION: ${{ inputs.region || 'ap-southeast-1' }}
+  S3_BUCKET: boxlite-${{ inputs.stage || 'dev' }}-runner-builds
 
 jobs:
   config:
@@ -205,7 +213,8 @@ jobs:
       - name: Assume AWS deploy role (GitHub OIDC, no static keys)
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
-          role-to-assume: arn:aws:iam::064212132677:role/boxlite-github-deployer-${{ steps.in.outputs.stage }}
+          # Per-stage role: boxlite-app-dev-deploy / boxlite-app-prod-deploy
+          role-to-assume: arn:aws:iam::064212132677:role/boxlite-app-${{ steps.in.outputs.stage }}-deploy
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Upload dev build to S3 + presign

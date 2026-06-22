@@ -424,4 +424,4 @@ initial setup: `aws ecs update-service --force-new-deployment --service Proxy`.
 
 Figures are approximate (ap-southeast-1 on-demand). The **Runner and the load
 balancers dominate** — the NAT is ~$16, not a headline cost. `npm run remove -- --stage dev` tears it all down; S3 buckets and RDS snapshots are retained in
-production stage (`--stage production`) per SST's default.
+the prod stage (`--stage prod`), which the config marks for retention.

@@ -37,17 +37,31 @@ fi
 echo "==> Upgrading boxlite-runner on stage=$STAGE region=$AWS_REGION"
 
 # Target instance: pin via BOXLITE_RUNNER_INSTANCE_ID (skips the tag lookup — for a specific
-# runner, or when the tag describe is unavailable), else find the default by Name tag.
+# runner, or when the tag describe is unavailable), else find the stage's default by Name tag.
+# The runner's tag is boxlite-<stage>-runner-default (set in sst.config.ts). For dev we also
+# accept the legacy un-staged "boxlite-runner-default" so a rollout still works in the window
+# before the next dev deploy re-tags the existing instance; prod never matches the legacy tag,
+# keeping a prod rollout from ever picking up the dev runner.
 if [[ -n "${BOXLITE_RUNNER_INSTANCE_ID:-}" ]]; then
   INSTANCE_ID="$BOXLITE_RUNNER_INSTANCE_ID"
 else
+  TAG_VALUES="boxlite-${STAGE}-runner-default"
+  if [[ "$STAGE" == "dev" ]]; then
+    TAG_VALUES="${TAG_VALUES},boxlite-runner-default"
+  fi
   INSTANCE_ID=$(aws ec2 describe-instances --region "$AWS_REGION" \
-    --filters "Name=tag:Name,Values=boxlite-runner-default" "Name=instance-state-name,Values=running" \
+    --filters "Name=tag:Name,Values=${TAG_VALUES}" "Name=instance-state-name,Values=running" \
     --query 'Reservations[].Instances[].InstanceId' --output text)
 fi
 
 if [[ -z "$INSTANCE_ID" || "$INSTANCE_ID" == "None" ]]; then
-  echo "error: no running boxlite-runner-default instance found in region $AWS_REGION" >&2
+  echo "error: no running boxlite-${STAGE}-runner-default instance found in region $AWS_REGION" >&2
+  exit 1
+fi
+# describe-instances returns whitespace-separated ids; more than one means the tag filter
+# matched multiple runners. Refuse rather than roll an ambiguous target — pin via BOXLITE_RUNNER_INSTANCE_ID.
+if [[ "$INSTANCE_ID" == *[[:space:]]* ]]; then
+  echo "error: tag filter matched multiple instances ($INSTANCE_ID); pin one via BOXLITE_RUNNER_INSTANCE_ID" >&2
   exit 1
 fi
 echo "    instance: $INSTANCE_ID"
