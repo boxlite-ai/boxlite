@@ -128,7 +128,9 @@ jobs:
 
       - name: Install system dependencies
         if: ${{ steps.in.outputs.source == 'dev-build' }}
-        run: make setup:build
+        run: |
+          make setup:build
+          sudo apt-get install -y libx11-dev libxtst-dev libxinerama-dev
 
       - name: Determine version + sha
         id: version
