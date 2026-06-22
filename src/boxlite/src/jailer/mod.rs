@@ -175,7 +175,7 @@ use std::path::PathBuf;
 /// │   ├── disk.qcow2                      # VM/container root disk image
 /// │   └── guest-rootfs.qcow2              # guest rootfs COW overlay
 /// ├── mounts/                     [--]  # EXCLUDED: host writes, shim reads via shared/
-/// ├── shim.pid                    [--]  # EXCLUDED: written by pre_exec (before sandbox)
+/// ├── shim.pid                    [RW]  # written by child pre_exec after Landlock applies
 /// └── shim.stderr                 [--]  # EXCLUDED: host creates before spawn
 ///
 /// External read-only paths:
@@ -210,10 +210,11 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
         }
     }
 
-    // Writable files (pre-created before sandbox for bind-mounting)
+    // Writable files (pre-created before sandbox for bind-mounting/pre_exec writes)
     // Note: console_output_path() not listed — lives inside logs/ [RW subpath]
     for file in [
         layout.exit_file_path(),
+        layout.pid_file_path(),
         layout.disk_path(),
         layout.guest_rootfs_disk_path(),
     ] {
@@ -357,6 +358,7 @@ impl<S: Sandbox> Jail for Jailer<S> {
             for path in [
                 self.layout.exit_file_path(),
                 self.layout.console_output_path(),
+                self.layout.pid_file_path(),
             ] {
                 if !path.exists() {
                     let _ = std::fs::File::create(&path);
@@ -397,6 +399,16 @@ impl<S: Sandbox> Jail for Jailer<S> {
         } else {
             binary.to_path_buf()
         };
+
+        if self.security.jailer_enabled
+            && let Some(bin_dir) = effective_binary.parent().filter(|d| d.exists())
+            && !ctx.paths.iter().any(|pa| pa.path == bin_dir)
+        {
+            ctx.paths.push(PathAccess {
+                path: bin_dir.to_path_buf(),
+                writable: false,
+            });
+        }
 
         // Start with a bare command. Sandbox.apply() modifies it in-place.
         let mut cmd = Command::new(&effective_binary);
@@ -588,6 +600,7 @@ mod tests {
         // Pre-create writable files (as the Jailer::command() does)
         // Note: console_output_path() is inside logs/ [RW subpath], not a standalone file grant
         std::fs::File::create(layout.exit_file_path()).unwrap();
+        std::fs::File::create(layout.pid_file_path()).unwrap();
 
         let paths = build_path_access(&layout, &[]);
 
@@ -597,9 +610,24 @@ mod tests {
             .collect();
         assert_eq!(
             writable_files.len(),
-            1,
-            "exit only (console.log covered by logs/ subpath)"
+            2,
+            "exit + shim.pid (console.log covered by logs/ subpath)"
         );
+    }
+
+    #[test]
+    fn test_build_path_access_includes_pid_file_for_child_pre_exec() {
+        let dir = tempdir().unwrap();
+        let layout = test_layout(dir.path().to_path_buf());
+        std::fs::File::create(layout.pid_file_path()).unwrap();
+
+        let paths = build_path_access(&layout, &[]);
+
+        let pid = paths
+            .iter()
+            .find(|p| p.path == layout.pid_file_path())
+            .expect("shim.pid must be granted for the child pre_exec writer");
+        assert!(pid.writable, "shim.pid must be writable under Landlock");
     }
 
     #[test]
