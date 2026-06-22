@@ -181,3 +181,74 @@ func TestIntegrationExecRuntimeCloseUnblocksWait(t *testing.T) {
 		t.Fatal("HANG: Wait did not unblock on Runtime.Close")
 	}
 }
+
+// TestIntegrationExecOutputShapes covers output shapes orthogonal to
+// termination: slow/trickle (gaps wider than the post-exit idle bound), large
+// high-throughput, and binary/no-trailing-newline. Each asserts Wait returns
+// with the exact byte count (no truncation, no extra).
+func TestIntegrationExecOutputShapes(t *testing.T) {
+	rt := newTestRuntime(t)
+	box := createStartedBoxOrSkip(t, rt, "alpine:latest", WithAutoRemove(false))
+
+	run := func(t *testing.T, args []string, watchdog time.Duration) (int, int) {
+		t.Helper()
+		var out bytes.Buffer
+		exec, err := box.StartExecution(context.Background(), "sh", args, &ExecutionOptions{Stdout: &out})
+		if err != nil {
+			t.Fatalf("StartExecution: %v", err)
+		}
+		defer exec.Close()
+		var code int
+		waitWatchdog(t, watchdog, t.Name(), func() { code, _ = exec.Wait(context.Background()) })
+		return code, out.Len()
+	}
+
+	t.Run("slow-trickle", func(t *testing.T) {
+		// 6 lines, 500ms apart: each gap exceeds the 300ms post-exit idle bound,
+		// proving live output is gated by exit (not the idle bound) and is never
+		// cut off.
+		code, n := run(t, []string{"-c", "i=0; while [ $i -lt 6 ]; do echo line-$i; sleep 0.5; i=$((i+1)); done"}, 20*time.Second)
+		if want := len("line-0\n") * 6; n != want {
+			t.Errorf("slow output bytes = %d, want %d", n, want)
+		}
+		if code != 0 {
+			t.Errorf("exit = %d, want 0", code)
+		}
+	})
+
+	t.Run("large-high-throughput", func(t *testing.T) {
+		const lines, line = 200000, "0123456789abcdef0123456789abcdef"
+		code, n := run(t, []string{"-c", "awk 'BEGIN{for(i=0;i<" + itoa(lines) + ";i++)print \"" + line + "\"}'"}, 30*time.Second)
+		if want := lines * (len(line) + 1); n != want {
+			t.Errorf("large output bytes = %d, want %d (%.2f%%)", n, want, 100*float64(n)/float64(want))
+		}
+		if code != 0 {
+			t.Errorf("exit = %d, want 0", code)
+		}
+	})
+
+	t.Run("binary-no-newline", func(t *testing.T) {
+		// 5 printable bytes (no newline) + 1000 NUL bytes: exact, unterminated.
+		code, n := run(t, []string{"-c", "printf 'abcde'; head -c 1000 /dev/zero"}, 12*time.Second)
+		if n != 1005 {
+			t.Errorf("binary output bytes = %d, want 1005", n)
+		}
+		if code != 0 {
+			t.Errorf("exit = %d, want 0", code)
+		}
+	})
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b [20]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(b[i:])
+}

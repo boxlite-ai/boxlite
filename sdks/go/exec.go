@@ -85,7 +85,6 @@ type ExecutionOptions struct {
 // Memory overhead is bounded: each execution adds one map entry plus the
 // state struct (a few writers, two atomics, and a mutex).
 type executionStreamState struct {
-	mu       sync.Mutex
 	stdout   io.Writer
 	stderr   io.Writer
 	onStdout func([]byte)
@@ -112,59 +111,141 @@ type executionStreamState struct {
 	// still flowing progress keeps advancing, so a large tail is never cut
 	// off early.
 	progress atomic.Uint64
+
+	// Stream output is delivered to the caller's sinks by a dedicated
+	// per-execution goroutine (deliverLoop), NOT inline on the shared
+	// per-Runtime drain goroutine. deliverStdout/deliverStderr are invoked on
+	// that single drain goroutine (runtime.go drainLoop -> C dispatch); writing
+	// to a caller-supplied Writer inline there lets one execution's slow or
+	// blocking sink wedge the drain goroutine and stall delivery — including
+	// Wait completions — for EVERY execution on the same Runtime
+	// (head-of-line blocking). Enqueue is non-blocking; the writer goroutine
+	// absorbs sink back-pressure in isolation.
+	qmu         sync.Mutex
+	qcond       *sync.Cond
+	queue       []streamChunk
+	exited      bool // on_exit seen: flush the queue, then close drained
+	stopped     bool // execution released/closed: stop the writer
+	drainedOnce sync.Once
+}
+
+// streamChunk is one ordered unit of stream output queued for async delivery.
+type streamChunk struct {
+	stderr bool
+	data   []byte
 }
 
 func newExecutionStreamState(opts ExecutionOptions) *executionStreamState {
-	return &executionStreamState{
+	s := &executionStreamState{
 		stdout:   opts.Stdout,
 		stderr:   opts.Stderr,
 		onStdout: opts.OnStdout,
 		onStderr: opts.OnStderr,
 		drained:  make(chan struct{}),
 	}
+	s.qcond = sync.NewCond(&s.qmu)
+	go s.deliverLoop()
+	return s
 }
 
-func (s *executionStreamState) deliverStdout(data []byte) {
+// deliverStdout/deliverStderr run on the shared per-Runtime drain goroutine.
+// They only enqueue — never write to the caller's sink — so a blocking sink
+// cannot wedge the drain goroutine (see executionStreamState). The bytes are
+// already a Go-owned copy (C.GoBytes at the cgo boundary), so the slice is safe
+// to retain in the queue.
+func (s *executionStreamState) deliverStdout(data []byte) { s.enqueue(streamChunk{false, data}) }
+func (s *executionStreamState) deliverStderr(data []byte) { s.enqueue(streamChunk{true, data}) }
+
+func (s *executionStreamState) enqueue(c streamChunk) {
 	if s.released.Load() {
 		return
 	}
-	s.mu.Lock()
-	stdout := s.stdout
-	cb := s.onStdout
-	s.mu.Unlock()
-	if cb != nil {
-		cb(data)
+	s.qmu.Lock()
+	if !s.exited && !s.stopped {
+		s.queue = append(s.queue, c)
+		s.qcond.Signal()
 	}
-	if stdout != nil {
-		_, _ = stdout.Write(data)
-	}
-	s.progress.Add(1)
+	s.qmu.Unlock()
 }
 
-func (s *executionStreamState) deliverStderr(data []byte) {
-	if s.released.Load() {
-		return
-	}
-	s.mu.Lock()
-	stderr := s.stderr
-	cb := s.onStderr
-	s.mu.Unlock()
-	if cb != nil {
-		cb(data)
-	}
-	if stderr != nil {
-		_, _ = stderr.Write(data)
-	}
-	s.progress.Add(1)
-}
-
+// deliverExit marks end-of-stream. The writer goroutine flushes whatever is
+// still queued (on_exit fires only after every stream callback for this
+// execution, so the queue holds the full tail) and then closes drained, which
+// Execution.Wait's drain barrier is waiting on.
 func (s *executionStreamState) deliverExit(_ int) {
 	s.released.Store(true)
-	close(s.drained)
+	s.qmu.Lock()
+	s.exited = true
+	s.qcond.Signal()
+	s.qmu.Unlock()
 }
 
 func (s *executionStreamState) markReleased() {
 	s.released.Store(true)
+	s.qmu.Lock()
+	s.stopped = true
+	s.qcond.Signal()
+	s.qmu.Unlock()
+}
+
+// deliverLoop is the per-execution writer goroutine. It drains the queue in
+// FIFO order (preserving stdout/stderr interleaving) into the caller's sinks,
+// bumping progress per chunk so Wait's progress-bounded drain barrier can tell
+// a still-delivering stream from a stalled one. Blocking here isolates sink
+// back-pressure to this one execution. Exits — closing drained — once on_exit
+// has been seen and the queue is empty, or when the execution is released.
+func (s *executionStreamState) deliverLoop() {
+	defer s.closeDrained()
+	for {
+		s.qmu.Lock()
+		for len(s.queue) == 0 && !s.exited && !s.stopped {
+			s.qcond.Wait()
+		}
+		q := s.queue
+		s.queue = nil
+		done := s.exited || s.stopped
+		s.qmu.Unlock()
+
+		for _, c := range q {
+			s.writeChunk(c)
+		}
+		if done {
+			// No more chunks can arrive once exited/stopped is set (deliver*
+			// calls are serialized on the single drain goroutine), but a chunk
+			// enqueued before the flag was observed may remain — flush it.
+			s.qmu.Lock()
+			rest := s.queue
+			s.queue = nil
+			s.qmu.Unlock()
+			for _, c := range rest {
+				s.writeChunk(c)
+			}
+			return
+		}
+	}
+}
+
+func (s *executionStreamState) writeChunk(c streamChunk) {
+	if c.stderr {
+		if s.onStderr != nil {
+			s.onStderr(c.data)
+		}
+		if s.stderr != nil {
+			_, _ = s.stderr.Write(c.data)
+		}
+	} else {
+		if s.onStdout != nil {
+			s.onStdout(c.data)
+		}
+		if s.stdout != nil {
+			_, _ = s.stdout.Write(c.data)
+		}
+	}
+	s.progress.Add(1)
+}
+
+func (s *executionStreamState) closeDrained() {
+	s.drainedOnce.Do(func() { close(s.drained) })
 }
 
 // Execution is a handle to a running command.
