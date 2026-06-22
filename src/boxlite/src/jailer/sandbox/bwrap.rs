@@ -6,6 +6,7 @@
 use super::{Sandbox, SandboxContext};
 use crate::jailer::{bwrap, cgroup};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+use std::path::Path;
 use std::process::Command;
 
 /// Linux sandbox using bubblewrap for namespace isolation.
@@ -114,6 +115,14 @@ impl Sandbox for BwrapSandbox {
             .setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
             .setenv("HOME", "/root");
 
+        if let Some(binary_dir) = Path::new(&binary).parent() {
+            bwrap_cmd.setenv("LD_LIBRARY_PATH", ld_library_path_for_binary(binary_dir));
+            tracing::debug!(
+                binary_dir = %binary_dir.display(),
+                "bwrap: set LD_LIBRARY_PATH with command binary directory first"
+            );
+        }
+
         // Preserve debugging environment variables
         if let Ok(rust_log) = std::env::var("RUST_LOG") {
             bwrap_cmd.setenv("RUST_LOG", rust_log);
@@ -141,5 +150,29 @@ impl Sandbox for BwrapSandbox {
 
     fn name(&self) -> &'static str {
         "bwrap"
+    }
+}
+
+fn ld_library_path_for_binary(binary_dir: &Path) -> String {
+    let mut paths = vec![binary_dir.to_string_lossy().to_string()];
+    if let Ok(existing) = std::env::var("LD_LIBRARY_PATH")
+        && !existing.is_empty()
+    {
+        paths.push(existing);
+    }
+    paths.join(":")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ld_library_path_prioritizes_command_binary_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let binary_dir = tmp.path().join("boxes").join("box-id").join("bin");
+        let path = ld_library_path_for_binary(&binary_dir);
+        let expected = binary_dir.to_string_lossy().to_string();
+        assert_eq!(path.split(':').next(), Some(expected.as_str()));
     }
 }
