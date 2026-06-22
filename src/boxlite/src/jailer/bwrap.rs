@@ -612,17 +612,16 @@ pub fn build_shim_command(
     // These are in the same directory as the shim binary. Without LD_LIBRARY_PATH,
     // the dynamic linker cannot find them and the shim will fail to start.
     //
-    // Note: We get LD_LIBRARY_PATH from the parent process (set by util::find_binary_with_libpath)
-    if let Ok(ld_library_path) = std::env::var("LD_LIBRARY_PATH") {
+    // Always prioritize the effective shim directory. With jailer enabled the
+    // shim is copied into the box-scoped bin/ directory together with
+    // libkrunfw.so; preserving only the parent runner env can point at a stale
+    // runtime cache that is not visible inside this sandbox.
+    if let Some(shim_dir) = shim_path.parent() {
+        let ld_library_path = ld_library_path_for_shim(shim_dir);
         bwrap.setenv("LD_LIBRARY_PATH", ld_library_path);
-        tracing::debug!("Preserved LD_LIBRARY_PATH in sandbox");
-    } else if let Some(shim_dir) = shim_path.parent() {
-        // Fallback: if LD_LIBRARY_PATH not set, use the shim's directory
-        // This handles cases where the shim is invoked directly
-        bwrap.setenv("LD_LIBRARY_PATH", shim_dir.to_string_lossy().to_string());
         tracing::debug!(
             shim_dir = %shim_dir.display(),
-            "Set LD_LIBRARY_PATH to shim directory (fallback)"
+            "Set LD_LIBRARY_PATH with shim directory first"
         );
     }
 
@@ -639,6 +638,16 @@ pub fn build_shim_command(
 
     // Build the final command
     bwrap.build(shim_path, shim_args)
+}
+
+fn ld_library_path_for_shim(shim_dir: &Path) -> String {
+    let mut paths = vec![shim_dir.to_string_lossy().to_string()];
+    if let Ok(existing) = std::env::var("LD_LIBRARY_PATH")
+        && !existing.is_empty()
+    {
+        paths.push(existing);
+    }
+    paths.join(":")
 }
 
 #[cfg(test)]
@@ -677,6 +686,15 @@ mod tests {
         // Note: Mount namespace is implicitly unshared via bind mounts, no --unshare-mount
         // Should NOT contain --unshare-net (we keep network for gvproxy)
         assert!(!args.contains(&"--unshare-net".to_string()));
+    }
+
+    #[test]
+    fn test_ld_library_path_prioritizes_effective_shim_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let shim_dir = tmp.path().join("box").join("bin");
+        let path = ld_library_path_for_shim(&shim_dir);
+        let expected = shim_dir.to_string_lossy().to_string();
+        assert_eq!(path.split(':').next(), Some(expected.as_str()));
     }
 
     #[test]
