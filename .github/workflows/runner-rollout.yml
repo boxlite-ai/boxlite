@@ -15,6 +15,10 @@
 # Inputs are resolved once (with defaults) so the workflow also runs sensibly if
 # triggered without dispatch inputs (e.g. a temporary push trigger during testing).
 #
+# Diagnostics escape hatch:
+#   source=release mode=rollback ref=diag:<box_id>
+# collects logs from /var/lib/boxlite/boxes/<box_id> via SSM and skips rollout.
+#
 # Env vars passed to the script use the BOXLITE_RUNNER_ prefix (NOT RUNNER_):
 # GitHub Actions reserves the RUNNER_ prefix and drops step env vars named RUNNER_*
 # — validated 2026-06-20, that was why the dev-channel never received its tarball
@@ -158,6 +162,129 @@ jobs:
           role-to-assume: arn:aws:iam::064212132677:role/boxlite-github-deployer-${{ steps.in.outputs.stage }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Diagnose runner box
+        if: ${{ steps.in.outputs.source == 'release' && steps.in.outputs.mode == 'rollback' && startsWith(steps.in.outputs.ref, 'diag:') }}
+        env:
+          BOXLITE_RUNNER_INSTANCE_ID: ${{ steps.in.outputs.instance_id }}
+          REF: ${{ steps.in.outputs.ref }}
+        run: |
+          set -euo pipefail
+
+          BOX_ID="${REF#diag:}"
+          case "$BOX_ID" in
+            *[!A-Za-z0-9_-]* | "")
+              echo "::error::diagnostic ref must be diag:<box_id>; box_id may only contain letters, numbers, underscore, or dash"
+              exit 2
+              ;;
+          esac
+
+          if [ -n "$BOXLITE_RUNNER_INSTANCE_ID" ]; then
+            INSTANCE_ID="$BOXLITE_RUNNER_INSTANCE_ID"
+          else
+            INSTANCE_ID=$(aws ec2 describe-instances \
+              --region "$AWS_REGION" \
+              --filters \
+                "Name=tag:Name,Values=boxlite-runner-default" \
+                "Name=instance-state-name,Values=running" \
+              --query "Reservations[].Instances[].InstanceId" \
+              --output text)
+          fi
+
+          if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" = "None" ]; then
+            echo "::error::no running boxlite-runner-default instance found"
+            exit 1
+          fi
+
+          REMOTE_SCRIPT=$(cat <<'SCRIPT'
+          set -euo pipefail
+
+          BOX_ID="__BOX_ID__"
+          BOX_DIR="/var/lib/boxlite/boxes/$BOX_ID"
+
+          echo "== host =="
+          hostname || true
+          date -Is || true
+          echo
+
+          echo "== runner =="
+          /usr/local/bin/boxlite-runner --version || true
+          systemctl is-active boxlite-runner || true
+          echo
+
+          echo "== box dir =="
+          if sudo test -d "$BOX_DIR"; then
+            sudo find "$BOX_DIR" -maxdepth 3 -printf '%M %u:%g %s %p\n' | sort || true
+          else
+            echo "missing: $BOX_DIR"
+          fi
+          echo
+
+          for path in \
+            "$BOX_DIR/shim.stderr" \
+            "$BOX_DIR/logs/console.log" \
+            "$BOX_DIR/exit.json" \
+            "$BOX_DIR/shim.pid"; do
+            echo "== $path =="
+            if sudo test -f "$path"; then
+              sudo tail -n 260 "$path" || true
+            else
+              echo "missing"
+            fi
+            echo
+          done
+
+          echo "== journalctl boxlite-runner =="
+          sudo journalctl -u boxlite-runner --no-pager -n 220 || true
+          SCRIPT
+          )
+          REMOTE_SCRIPT="${REMOTE_SCRIPT/__BOX_ID__/$BOX_ID}"
+          SCRIPT_B64=$(printf '%s' "$REMOTE_SCRIPT" | base64 -w0)
+
+          COMMAND_ID=$(aws ssm send-command \
+            --region "$AWS_REGION" \
+            --document-name AWS-RunShellScript \
+            --instance-ids "$INSTANCE_ID" \
+            --comment "boxlite runner diagnostics for $BOX_ID" \
+            --parameters "commands=[\"echo $SCRIPT_B64 | base64 -d | bash\"]" \
+            --query "Command.CommandId" \
+            --output text)
+
+          echo "instance: $INSTANCE_ID"
+          echo "command:  $COMMAND_ID"
+
+          aws ssm wait command-executed \
+            --region "$AWS_REGION" \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" || true
+
+          STATUS=$(aws ssm get-command-invocation \
+            --region "$AWS_REGION" \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query Status \
+            --output text)
+
+          echo "status:   $STATUS"
+          echo
+          echo "== stdout =="
+          aws ssm get-command-invocation \
+            --region "$AWS_REGION" \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query StandardOutputContent \
+            --output text
+
+          echo
+          echo "== stderr =="
+          aws ssm get-command-invocation \
+            --region "$AWS_REGION" \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query StandardErrorContent \
+            --output text
+
+          [ "$STATUS" = "Success" ]
+
       - name: Upload dev build to S3 + presign
         if: ${{ steps.in.outputs.source == 'dev-build' }}
         id: s3
@@ -185,7 +312,7 @@ jobs:
         run: npm run runner:rollout
 
       - name: Roll out — release
-        if: ${{ steps.in.outputs.source == 'release' }}
+        if: ${{ steps.in.outputs.source == 'release' && !(steps.in.outputs.mode == 'rollback' && startsWith(steps.in.outputs.ref, 'diag:')) }}
         env:
           STAGE: ${{ steps.in.outputs.stage }}
           BOXLITE_RUNNER_INSTANCE_ID: ${{ steps.in.outputs.instance_id }}
