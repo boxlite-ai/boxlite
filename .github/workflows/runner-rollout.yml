@@ -110,6 +110,15 @@ jobs:
           persist-credentials: false
 
       # ── dev-build: build the runner binary from this checkout ──────────────
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        if: ${{ steps.in.outputs.source == 'dev-build' }}
+        with:
+          node-version: 22
+
+      - name: Enable corepack (yarn 4)
+        if: ${{ steps.in.outputs.source == 'dev-build' }}
+        run: corepack enable
+
       - name: Set up Go
         if: ${{ steps.in.outputs.source == 'dev-build' }}
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
