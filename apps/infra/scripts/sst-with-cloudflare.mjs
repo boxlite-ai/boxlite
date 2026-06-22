@@ -70,6 +70,41 @@ function fetchFromSsm(name) {
   }
 }
 
+// Beyond the Cloudflare creds above, a deploy needs the stage's app config + secrets
+// (STACK_DOMAIN, OIDC_*, SVIX_AUTH_TOKEN, …). On a laptop these come from .env; in CI
+// there is no .env, so they live in SSM under /boxlite/<stage>/env/<KEY> (seed them with
+// scripts/seed-deploy-env-ssm.mjs). An env var already set always wins, so laptops keep
+// using their .env unchanged. Only the COUNT is logged — never any value.
+function loadEnvFromSsm(stage) {
+  const path = `/boxlite/${stage}/env/`
+  let json
+  try {
+    json = execFileSync(
+      'aws',
+      ['ssm', 'get-parameters-by-path', '--region', REGION, '--path', path, '--recursive',
+        '--with-decryption', '--query', 'Parameters[].{Name:Name,Value:Value}', '--output', 'json'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    )
+  } catch (err) {
+    if (err.code === 'ENOENT') console.warn('sst-with-cloudflare: `aws` CLI not found; skipping SSM env load')
+    return
+  }
+  let params
+  try {
+    params = JSON.parse(json)
+  } catch {
+    return
+  }
+  let loaded = 0
+  for (const p of params || []) {
+    const key = p.Name.slice(path.length) // segment after the prefix = env var name
+    if (!key || process.env[key]) continue // already set (e.g. from .env) wins
+    process.env[key] = p.Value
+    loaded++
+  }
+  if (loaded) console.log(`sst-with-cloudflare: loaded ${loaded} env var(s) from SSM ${path}*`)
+}
+
 const stage = resolveStage(sstArgs)
 
 for (const { env, param } of CREDS) {
@@ -85,6 +120,8 @@ for (const { env, param } of CREDS) {
     )
   }
 }
+
+loadEnvFromSsm(stage)
 
 // node_modules/.bin is on PATH because this runs via `npm run`, so `sst` resolves.
 const result = spawnSync('sst', sstArgs, { stdio: 'inherit', env: process.env })

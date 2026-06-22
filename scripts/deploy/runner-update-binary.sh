@@ -13,6 +13,8 @@
 # Usage:
 #   scripts/deploy/runner-update-binary.sh                  # version from Cargo.toml
 #   scripts/deploy/runner-update-binary.sh 0.9.5            # explicit version
+#   BOXLITE_RUNNER_TARBALL_URL=<url> STAGE=dev scripts/deploy/runner-update-binary.sh   # dev channel: install an unreleased build (refused on prod)
+#   BOXLITE_RUNNER_TARBALL_URL=<url> BOXLITE_RUNNER_TARBALL_SHA256_URL=<url> STAGE=dev ...       # dev channel with a separate sha256 URL (S3 presigned: ".sha256" can't be appended)
 #   AWS_REGION=us-west-2 scripts/deploy/runner-update-binary.sh
 #   STAGE=production scripts/deploy/runner-update-binary.sh
 
@@ -32,11 +34,17 @@ else
   fi
 fi
 
-echo "==> Upgrading boxlite-runner to v$VERSION on stage=$STAGE region=$AWS_REGION"
+echo "==> Upgrading boxlite-runner on stage=$STAGE region=$AWS_REGION"
 
-INSTANCE_ID=$(aws ec2 describe-instances --region "$AWS_REGION" \
-  --filters "Name=tag:Name,Values=boxlite-runner-default" "Name=instance-state-name,Values=running" \
-  --query 'Reservations[].Instances[].InstanceId' --output text)
+# Target instance: pin via BOXLITE_RUNNER_INSTANCE_ID (skips the tag lookup — for a specific
+# runner, or when the tag describe is unavailable), else find the default by Name tag.
+if [[ -n "${BOXLITE_RUNNER_INSTANCE_ID:-}" ]]; then
+  INSTANCE_ID="$BOXLITE_RUNNER_INSTANCE_ID"
+else
+  INSTANCE_ID=$(aws ec2 describe-instances --region "$AWS_REGION" \
+    --filters "Name=tag:Name,Values=boxlite-runner-default" "Name=instance-state-name,Values=running" \
+    --query 'Reservations[].Instances[].InstanceId' --output text)
+fi
 
 if [[ -z "$INSTANCE_ID" || "$INSTANCE_ID" == "None" ]]; then
   echo "error: no running boxlite-runner-default instance found in region $AWS_REGION" >&2
@@ -44,8 +52,27 @@ if [[ -z "$INSTANCE_ID" || "$INSTANCE_ID" == "None" ]]; then
 fi
 echo "    instance: $INSTANCE_ID"
 
-ASSET_BASE="https://github.com/boxlite-ai/boxlite/releases/download/v${VERSION}"
-ASSET_TARBALL="boxlite-runner-v${VERSION}-linux-amd64.tar.gz"
+# Dev channel: install an UNRELEASED build by passing its full tarball URL (a CI
+# build artifact / S3 dev path) instead of a published GitHub Release — lets us test
+# a runner change without cutting a formal release. Prod refuses it: prod only ever
+# installs a released version.
+if [[ -n "${BOXLITE_RUNNER_TARBALL_URL:-}" ]]; then
+  if [[ "$STAGE" == "prod" || "$STAGE" == "production" ]]; then
+    echo "error: BOXLITE_RUNNER_TARBALL_URL is not allowed on stage=$STAGE (prod installs released versions only)" >&2
+    exit 1
+  fi
+  ASSET_URL="$BOXLITE_RUNNER_TARBALL_URL"
+  echo "    source: dev tarball $ASSET_URL"
+else
+  ASSET_URL="https://github.com/boxlite-ai/boxlite/releases/download/v${VERSION}/boxlite-runner-v${VERSION}-linux-amd64.tar.gz"
+  echo "    source: release v$VERSION"
+fi
+
+# The .sha256 integrity manifest URL. For a GitHub release it sits next to the
+# tarball (URL + ".sha256"); for a dev tarball served via an S3 presigned URL that
+# suffix can't be appended (the signed query string would absorb it), so accept it
+# as a separate URL via BOXLITE_RUNNER_TARBALL_SHA256_URL.
+SHA_URL="${BOXLITE_RUNNER_TARBALL_SHA256_URL:-${ASSET_URL}.sha256}"
 
 # Remote upgrade script. Mirrors the boot user-data's integrity policy and adds a
 # rollback: download + checksum-verify BEFORE stopping the unit (so a failed or
@@ -58,14 +85,14 @@ echo "current version:"
 
 WORK=\$(mktemp -d)
 trap 'rm -rf "\$WORK"' EXIT
-curl -fsSL "${ASSET_BASE}/${ASSET_TARBALL}" -o "\$WORK/runner.tar.gz"
-if curl -fsSL "${ASSET_BASE}/${ASSET_TARBALL}.sha256" -o "\$WORK/runner.sha256"; then
+curl -fsSL "${ASSET_URL}" -o "\$WORK/runner.tar.gz"
+if curl -fsSL "${SHA_URL}" -o "\$WORK/runner.sha256"; then
   EXPECTED=\$(awk '{print \$1}' "\$WORK/runner.sha256")
   ACTUAL=\$(sha256sum "\$WORK/runner.tar.gz" | awk '{print \$1}')
   [ "\$EXPECTED" = "\$ACTUAL" ] || { echo "FATAL: checksum mismatch (want \$EXPECTED got \$ACTUAL)" >&2; exit 1; }
   echo "checksum verified (\$ACTUAL)"
 else
-  echo "WARNING: no .sha256 published for v${VERSION}; installing without integrity verification" >&2
+  echo "WARNING: no .sha256 at ${SHA_URL}; installing without integrity verification" >&2
 fi
 tar -xzf "\$WORK/runner.tar.gz" -C "\$WORK"
 test -x "\$WORK/boxlite-runner" || { echo "FATAL: tarball has no boxlite-runner binary" >&2; exit 1; }
@@ -84,7 +111,9 @@ if install -m 0755 "\$WORK/boxlite-runner" /usr/local/bin/boxlite-runner && syst
   [ "\$HAD_PREVIOUS" = true ] && rm -f /usr/local/bin/boxlite-runner.bak
   echo "systemd unit: active"
   echo "new version:"
-  /usr/local/bin/boxlite-runner --version
+  # --version exits non-zero standalone (it wants runtime config); never let that
+  # cosmetic print fail an already-successful install under set -e (false "Failed").
+  /usr/local/bin/boxlite-runner --version || true
 else
   echo "upgrade failed; rolling back" >&2
   if [ "\$HAD_PREVIOUS" = true ]; then
