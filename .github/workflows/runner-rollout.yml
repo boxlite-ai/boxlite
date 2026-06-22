@@ -84,11 +84,19 @@ jobs:
           IN_REF: ${{ inputs.ref }}
           IN_INSTANCE_ID: ${{ inputs.instance_id }}
         run: |
-          echo "stage=$IN_STAGE"             >> "$GITHUB_OUTPUT"
-          echo "source=$IN_SOURCE"           >> "$GITHUB_OUTPUT"
-          echo "mode=$IN_MODE"               >> "$GITHUB_OUTPUT"
-          echo "ref=$IN_REF"                 >> "$GITHUB_OUTPUT"
-          echo "instance_id=$IN_INSTANCE_ID" >> "$GITHUB_OUTPUT"
+          echo "stage=$IN_STAGE"   >> "$GITHUB_OUTPUT"
+          echo "source=$IN_SOURCE" >> "$GITHUB_OUTPUT"
+          echo "mode=$IN_MODE"     >> "$GITHUB_OUTPUT"
+          # ref / instance_id are free-text: write via heredoc delimiters so a value
+          # containing newlines can't inject extra GITHUB_OUTPUT keys.
+          {
+            echo "ref<<__BL_REF__"
+            echo "$IN_REF"
+            echo "__BL_REF__"
+            echo "instance_id<<__BL_IID__"
+            echo "$IN_INSTANCE_ID"
+            echo "__BL_IID__"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Guard — rollback requires a release version
         if: ${{ steps.in.outputs.mode == 'rollback' && steps.in.outputs.source != 'release' }}
@@ -96,7 +104,7 @@ jobs:
           echo "::error::rollback mode requires source=release with the target version in 'ref'"
           exit 1
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           ref: ${{ (steps.in.outputs.source == 'dev-build' && steps.in.outputs.ref != '') && steps.in.outputs.ref || github.ref }}
           persist-credentials: false
@@ -110,7 +118,7 @@ jobs:
       # decoupling the build source from the runner-update-binary.sh version is TODO.
       - name: Set up Go
         if: ${{ steps.in.outputs.source == 'dev-build' }}
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ needs.config.outputs.go-version }}
 
@@ -195,7 +203,7 @@ jobs:
 
       # ── stage + roll out ──────────────────────────────────────────────────
       - name: Assume AWS deploy role (GitHub OIDC, no static keys)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           role-to-assume: arn:aws:iam::064212132677:role/boxlite-github-deployer-${{ steps.in.outputs.stage }}
           aws-region: ${{ env.AWS_REGION }}
