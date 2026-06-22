@@ -108,6 +108,16 @@ export default $config({
   },
 
   async run() {
+    // Stamp every IAM role this app creates with the workload permissions
+    // boundary. The deploy principal's grant to create/manage boxlite-* roles is
+    // CONDITIONAL on the created role carrying this boundary (see boxlite-deploy-delegation
+    // `AllowCreateBoundedRoles` / `AllowSetBoundary`, which require the boundary to be
+    // boxlite-workload-boundary or boxlite-cd-boundary); without it CreateRole/PutRolePermissionsBoundary
+    // are denied. Registered first, before any resource — including SST-internal roles — is created.
+    $transform(aws.iam.Role, (args) => {
+      args.permissionsBoundary ??= 'arn:aws:iam::064212132677:policy/boxlite-role-boundary'
+    })
+
     // Load .env overrides (anything unset falls back to auto-generated values)
     const { config } = await import('dotenv')
     config()
@@ -803,6 +813,11 @@ export default $config({
     })
 
     const runnerRole = new aws.iam.Role('RunnerRole', {
+      // Explicit name so the role falls under the deploy principal's boxlite-* IAM
+      // grant (LimitedIAM scopes role management to role/boxlite-*). The default
+      // auto-generated "RunnerRole-<hash>" name is outside that scope, so a deploy
+      // would be denied PutRolePermissionsBoundary/CreateRole on it.
+      name: `${$app.name}-${$app.stage}-runner`,
       assumeRolePolicy: JSON.stringify({
         Version: '2012-10-17',
         Statement: [{ Effect: 'Allow', Principal: { Service: 'ec2.amazonaws.com' }, Action: 'sts:AssumeRole' }],
@@ -833,7 +848,10 @@ export default $config({
         ],
       }),
     })
-    const runnerInstanceProfile = new aws.iam.InstanceProfile('RunnerProfile', { role: runnerRole.name })
+    const runnerInstanceProfile = new aws.iam.InstanceProfile('RunnerProfile', {
+      name: `${$app.name}-${$app.stage}-runner`,
+      role: runnerRole.name,
+    })
 
     // Dedicated runner security group (least-privilege, explicit in IaC).
     // Without it the runner falls back to the VPC's shared default SG, which

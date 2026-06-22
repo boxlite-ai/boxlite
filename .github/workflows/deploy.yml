@@ -1,0 +1,76 @@
+# One-click deploy button (MVP "lite+" — manual, reviewable, no static AWS keys).
+#
+# Pick a stage + diff|deploy. Auth = GitHub OIDC -> boxlite-github-deployer-<stage>.
+# Runs `npm run <sst|deploy>` in apps/infra; sst-with-cloudflare.mjs injects the
+# stage's Cloudflare creds + full env config from SSM (/boxlite/<stage>/{cloudflare-*,env/*}),
+# so CI has the same config a laptop's .env provides. No secrets in the repo.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# VALIDATED 2026-06-22: a real `deploy --stage dev` completes end-to-end via OIDC.
+#   ✅ OIDC assume of boxlite-github-deployer-dev (boxlite-bounded-role-admin +
+#      IAMReadOnlyAccess + PowerUserAccess) — can create/manage boxlite-* roles.
+#   ✅ env parity from SSM; 4 images build; sst deploy applies to completion.
+#   ✅ dev healthy after: all services running, ALBs active, api/dashboard 200,
+#      box create → runner krun VM verified.
+# One-time admin setup (account owner): boxlite-github-deployer-<stage> carries
+#   boxlite-bounded-role-admin (CreateRole / PutRolePermissionsBoundary / PassRole on
+#   boxlite-*, conditioned on iam:PermissionsBoundary == boxlite-role-boundary) +
+#   IAMReadOnlyAccess. The $transform in sst.config.ts stamps boxlite-role-boundary on
+#   every role this app creates, satisfying that conditional grant.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Stage to deploy
+        type: choice
+        options: [dev]
+        default: dev
+      mode:
+        description: diff (read-only preview) or deploy (apply)
+        type: choice
+        options: [diff, deploy]
+        default: diff
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.stage }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Assume AWS deploy role (GitHub OIDC, no static keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::064212132677:role/boxlite-github-deployer-${{ inputs.stage }}
+          aws-region: ap-southeast-1
+
+      # apps/infra is a standalone npm project; package-lock.json is gitignored,
+      # so use `npm install` (not `npm ci`) on a fresh checkout.
+      - name: Install infra deps
+        working-directory: apps/infra
+        run: npm install
+
+      - name: sst diff (read-only)
+        if: ${{ inputs.mode == 'diff' }}
+        working-directory: apps/infra
+        run: npm run sst -- diff --stage ${{ inputs.stage }}
+
+      - name: sst deploy
+        if: ${{ inputs.mode == 'deploy' }}
+        working-directory: apps/infra
+        run: npm run deploy -- --stage ${{ inputs.stage }}
