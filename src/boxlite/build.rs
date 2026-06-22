@@ -739,7 +739,7 @@ impl EmbeddedManifest {
                     continue;
                 }
 
-                let mode = Self::file_mode(&path);
+                let mode = Self::runtime_file_mode(&name, &path);
                 entries.push((name, path, mode));
             }
         }
@@ -821,6 +821,15 @@ impl EmbeddedManifest {
     }
 
     /// Return the Unix permission bits to preserve in the generated manifest.
+    fn runtime_file_mode(name: &str, path: &Path) -> u32 {
+        let mode = Self::file_mode(path);
+        if Self::is_runtime_executable(name) {
+            mode | 0o755
+        } else {
+            mode
+        }
+    }
+
     fn file_mode(path: &Path) -> u32 {
         #[cfg(unix)]
         {
@@ -835,6 +844,10 @@ impl EmbeddedManifest {
             let _ = path;
             0o644
         }
+    }
+
+    fn is_runtime_executable(name: &str) -> bool {
+        matches!(name, "boxlite-shim" | "boxlite-guest" | "bwrap")
     }
 
     // ── Embedded manifest generation ────────────────────────────────
@@ -937,6 +950,7 @@ impl EmbeddedManifest {
                 e
             )
         });
+        Self::set_binary_permissions(&dest);
 
         // Ensure boxlite-shim has the hypervisor entitlement on macOS. Cargo's
         // implicit bin-target rebuild (triggered by any `cargo test -p boxlite`)
@@ -953,6 +967,23 @@ impl EmbeddedManifest {
             source.display(),
             fs::metadata(&dest).map(|m| m.len()).unwrap_or(0) as f64 / (1024.0 * 1024.0)
         );
+    }
+
+    fn set_binary_permissions(path: &Path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let permissions = std::fs::Permissions::from_mode(0o755);
+            fs::set_permissions(path, permissions).unwrap_or_else(|e| {
+                panic!("Failed to chmod 755 {}: {}", path.display(), e);
+            });
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+        }
     }
 
     /// Find pre-built boxlite-shim binary for the given build profile.
