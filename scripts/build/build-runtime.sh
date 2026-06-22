@@ -348,8 +348,8 @@ main() {
     echo ""
 
     detect_platform
-    build_shim
     build_guest
+    build_shim
     collect_libraries
 
     # Resolve default destination after collect_libraries discovers RUNTIME_LIBS_DIR
