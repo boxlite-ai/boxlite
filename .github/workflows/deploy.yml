@@ -1,22 +1,31 @@
 # One-click deploy button (MVP "lite+" — manual, reviewable, no static AWS keys).
 #
-# Pick a stage + diff|deploy. Auth = GitHub OIDC -> boxlite-github-deployer-<stage>.
+# Pick a stage + diff|deploy. Auth = GitHub OIDC -> boxlite-app-<stage>-deploy.
 # Runs `npm run <sst|deploy>` in apps/infra; sst-with-cloudflare.mjs injects the
 # stage's Cloudflare creds + full env config from SSM (/boxlite/<stage>/{cloudflare-*,env/*}),
 # so CI has the same config a laptop's .env provides. No secrets in the repo.
 #
 # ─────────────────────────────────────────────────────────────────────────────
-# VALIDATED 2026-06-22: a real `deploy --stage dev` completes end-to-end via OIDC.
-#   ✅ OIDC assume of boxlite-github-deployer-dev (boxlite-bounded-role-admin +
-#      IAMReadOnlyAccess + PowerUserAccess) — can create/manage boxlite-* roles.
+# VALIDATED 2026-06-22: a real `deploy --stage dev` completes end-to-end via OIDC
+#   (validated under the role's former name boxlite-github-deployer-dev; the role is
+#   being renamed to boxlite-app-dev-deploy — see prerequisites below).
 #   ✅ env parity from SSM; 4 images build; sst deploy applies to completion.
 #   ✅ dev healthy after: all services running, ALBs active, api/dashboard 200,
 #      box create → runner krun VM verified.
-# One-time admin setup (account owner): boxlite-github-deployer-<stage> carries
-#   boxlite-bounded-role-admin (CreateRole / PutRolePermissionsBoundary / PassRole on
-#   boxlite-*, conditioned on iam:PermissionsBoundary == boxlite-role-boundary) +
-#   IAMReadOnlyAccess. The $transform in sst.config.ts stamps boxlite-role-boundary on
-#   every role this app creates, satisfying that conditional grant.
+# The deploy role boxlite-app-<stage>-deploy (admin, created by the account owner and
+#   NOT bounded) carries boxlite-bounded-role-admin + IAMReadOnlyAccess + PowerUserAccess,
+#   so it can create/manage boxlite-* roles. The $transform in sst.config.ts stamps
+#   boxlite-role-boundary on every role this app creates, satisfying that grant.
+#
+# Per-stage prerequisites before a stage is selectable here (e.g. prod):
+#   1. IAM role boxlite-app-dev-deploy / boxlite-app-prod-deploy (admin, unbounded;
+#      trust sub = environment:<stage>). Created by the account owner — a PowerUser SSO
+#      login cannot iam:CreateRole (verified 2026-06-22).
+#   2. boxlite-bounded-role-admin must allow PassRole + AddRoleToInstanceProfile on
+#      role/boxlite-<stage>-* (today it lists only boxlite-dev-* / boxlite-e2e-*).
+#   3. GitHub Environment named <stage> (this job's `environment:` gate).
+#   4. SSM seeded: /boxlite/<stage>/{cloudflare-*, env/*} (env via seed-prod-from-dev.mjs).
+#   5. `region` input set to the stage's region (dev = ap-southeast-1).
 # ─────────────────────────────────────────────────────────────────────────────
 name: Deploy
 
@@ -26,13 +35,18 @@ on:
       stage:
         description: Stage to deploy
         type: choice
-        options: [dev]
+        options: [dev, prod]
         default: dev
       mode:
         description: diff (read-only preview) or deploy (apply)
         type: choice
         options: [diff, deploy]
         default: diff
+      region:
+        description: AWS region (dev lives in ap-southeast-1; a new stage may pick another)
+        type: choice
+        options: [ap-southeast-1, us-east-1, us-west-2, eu-west-1, eu-central-1, ap-northeast-1]
+        default: ap-southeast-1
 
 permissions:
   id-token: write
@@ -45,7 +59,11 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: dev
+    # GitHub Environment per stage — gates the deploy behind that environment's
+    # protection rules (required reviewers, branch restrictions). A `prod`
+    # environment must exist before a prod deploy runs; absence fails fast, which
+    # is the intended guard against an unconfigured prod deploy.
+    environment: ${{ inputs.stage }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -58,8 +76,11 @@ jobs:
       - name: Assume AWS deploy role (GitHub OIDC, no static keys)
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
-          role-to-assume: arn:aws:iam::064212132677:role/boxlite-github-deployer-${{ inputs.stage }}
-          aws-region: ap-southeast-1
+          # Per-stage role: boxlite-app-dev-deploy / boxlite-app-prod-deploy.
+          role-to-assume: arn:aws:iam::064212132677:role/boxlite-app-${{ inputs.stage }}-deploy
+          # Exports AWS_REGION/AWS_DEFAULT_REGION to later steps; sst.config.ts + the
+          # SSM helpers read AWS_REGION, so the whole deploy targets this region.
+          aws-region: ${{ inputs.region }}
 
       # apps/infra is a standalone npm project; package-lock.json is gitignored,
       # so use `npm install` (not `npm ci`) on a fresh checkout.

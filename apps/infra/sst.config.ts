@@ -18,7 +18,11 @@
 //   5. observability               10. runner (EC2 + nested KVM)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const REGION = 'ap-southeast-1'
+// Deploy region. Defaults to ap-southeast-1 (where dev lives); a stage can deploy
+// elsewhere by setting AWS_REGION — the deploy workflow exports it from its `region`
+// input, and the SSM helpers (sst-with-cloudflare / seed scripts) already key off the
+// same env var, so a stage's config + creds resolve from the region it deploys to.
+const REGION = process.env.AWS_REGION || 'ap-southeast-1'
 
 // Container ports each service listens on internally
 const PORTS = {
@@ -94,7 +98,7 @@ export default $config({
   app(input) {
     return {
       name: 'boxlite',
-      removal: input?.stage === 'production' ? 'retain' : 'remove',
+      removal: input?.stage === 'prod' ? 'retain' : 'remove',
       home: 'aws',
       providers: {
         aws: { region: REGION, ...(process.env.AWS_PROFILE ? { profile: process.env.AWS_PROFILE } : {}) },
@@ -108,12 +112,13 @@ export default $config({
   },
 
   async run() {
-    // Stamp every IAM role this app creates with the workload permissions
-    // boundary. The deploy principal's grant to create/manage boxlite-* roles is
-    // CONDITIONAL on the created role carrying this boundary (see boxlite-deploy-delegation
-    // `AllowCreateBoundedRoles` / `AllowSetBoundary`, which require the boundary to be
-    // boxlite-workload-boundary or boxlite-cd-boundary); without it CreateRole/PutRolePermissionsBoundary
-    // are denied. Registered first, before any resource — including SST-internal roles — is created.
+    // Stamp every IAM role this app creates with the workload permissions boundary
+    // boxlite-role-boundary. The deploy principal's grant to create/manage boxlite-*
+    // roles is CONDITIONAL on the created role carrying exactly this boundary (see
+    // boxlite-bounded-role-admin `AllowCreateBoundedRoles` / `AllowSetBoundary`, whose
+    // condition is iam:PermissionsBoundary == boxlite-role-boundary); without it
+    // CreateRole / PutRolePermissionsBoundary are denied. Registered first, before any
+    // resource — including SST-internal roles — is created.
     $transform(aws.iam.Role, (args) => {
       args.permissionsBoundary ??= 'arn:aws:iam::064212132677:policy/boxlite-role-boundary'
     })
@@ -223,7 +228,7 @@ export default $config({
     // S3 versioning is on in every stage: cheap, and the only guard against an
     // object-level overwrite/delete (which `removal` never covers). Redis is a
     // transient cache, so it needs neither.
-    const isProd = $app.stage === 'production'
+    const isProd = $app.stage === 'prod'
     // Unique-but-stable suffix for the DB final snapshot: a fixed name would collide
     // with the snapshot a prior teardown of the same stage already created (RDS requires
     // unique final-snapshot ids). RandomId is stable across deploys (no drift) and is
@@ -969,7 +974,10 @@ export default $config({
     // Default runner — auto-seeded by the API at boot via DEFAULT_RUNNER_*.
     // Pulumi resource id stays 'Runner' (renaming it would replace a protect:true
     // instance); only the AWS Name tag carries the explicit `-default` suffix.
-    makeRunner('Runner', 'boxlite-runner-default', runnerUserData)
+    // The tag is stage-scoped (boxlite-<stage>-runner-default) so dev and prod
+    // runners in the same account/region stay distinguishable — runner-rollout's
+    // tag lookup targets the stage's runner, never the other stage's.
+    makeRunner('Runner', `${$app.name}-${$app.stage}-runner-default`, runnerUserData)
 
     // Multi-runner provisioning. Extra runners share the same OTel endpoint as
     // the default runner.
