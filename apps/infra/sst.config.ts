@@ -115,7 +115,7 @@ export default $config({
     // boxlite-workload-boundary or boxlite-cd-boundary); without it CreateRole/PutRolePermissionsBoundary
     // are denied. Registered first, before any resource — including SST-internal roles — is created.
     $transform(aws.iam.Role, (args) => {
-      args.permissionsBoundary ??= 'arn:aws:iam::064212132677:policy/boxlite-workload-boundary'
+      args.permissionsBoundary ??= 'arn:aws:iam::064212132677:policy/boxlite-role-boundary'
     })
 
     // Load .env overrides (anything unset falls back to auto-generated values)
