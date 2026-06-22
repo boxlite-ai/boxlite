@@ -40,7 +40,7 @@ dist\:go:
 	@bash $(SCRIPT_DIR)/build/fix-go-symbols.sh target/release/libboxlite.a
 	@echo "✅ Go SDK release built"
 
-dist\:runner: _ensure-apps-deps
+dist\:runner:
 	@set -euo pipefail; \
 	VERSION="$${RUNNER_VERSION:-$$(grep -m 1 '^version' Cargo.toml | sed -E 's/^version *= *"([^"]+)".*/\1/')}"; \
 	OUT_DIR="$${RUNNER_OUT_DIR:-dist/runner}"; \
@@ -49,13 +49,20 @@ dist\:runner: _ensure-apps-deps
 	$(MAKE) --no-print-directory dist:c; \
 	bash $(SCRIPT_DIR)/build/fix-go-symbols.sh target/release/libboxlite.a; \
 	cp target/release/libboxlite.a sdks/go/libboxlite.a; \
-	mkdir -p apps/dist/libs; \
-	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -C apps -o dist/libs/computer-use-amd64 ./libs/computer-use/; \
-	( cd apps && CGO_ENABLED=1 GOOS=linux GOARCH=amd64 SKIP_COMPUTER_USE_BUILD=true VERSION="$${VERSION}" yarn nx build runner --configuration=production --nxBail=true ); \
 	mkdir -p "$${OUT_DIR}"; \
 	tmp="$$(mktemp -d)"; \
 	trap 'rm -rf "$${tmp}"' EXIT; \
-	install -m 0755 apps/dist/apps/runner-amd64 "$${tmp}/boxlite-runner"; \
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C apps \
+		-ldflags "-X 'github.com/boxlite-ai/daemon/internal.Version=$${VERSION}'" \
+		-o runner/pkg/daemon/static/daemon-amd64 \
+		./daemon/cmd/daemon/; \
+	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -C apps \
+		-o runner/pkg/daemon/static/boxlite-computer-use \
+		./libs/computer-use/; \
+	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -C apps \
+		-ldflags "-X 'github.com/boxlite-ai/runner/internal.Version=$${VERSION}'" \
+		-o "$${tmp}/boxlite-runner" \
+		./runner/cmd/runner/; \
 	tar -czf "$${OUT_DIR}/$${TARBALL}" -C "$${tmp}" boxlite-runner; \
 	( cd "$${OUT_DIR}" && { command -v sha256sum >/dev/null && sha256sum "$${TARBALL}" || shasum -a 256 "$${TARBALL}"; } > "$${TARBALL}.sha256" ); \
 	echo "✅ Runner distribution staged: $${OUT_DIR}/$${TARBALL}"
