@@ -145,7 +145,7 @@ impl SandboxContext<'_> {
 
 /// The sandbox for the current platform.
 ///
-/// On Linux: [`CompositeSandbox`] combining bwrap (namespaces) + Landlock (filesystem ACL).
+/// On Linux: [`CompositeSandbox`] using bwrap for namespace isolation.
 /// On macOS: [`SeatbeltSandbox`] (sandbox-exec).
 /// On other: [`NoopSandbox`] (passthrough).
 #[cfg(target_os = "linux")]

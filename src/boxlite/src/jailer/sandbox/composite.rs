@@ -4,7 +4,7 @@
 //! on the same `Command`. Typical composition on Linux:
 //!
 //! 1. [`BwrapSandbox`](super::BwrapSandbox) — replaces command with bwrap wrapper
-//! 2. [`LandlockSandbox`](super::LandlockSandbox) — adds Landlock pre_exec hook
+//! 2. Restriction sandboxes — add pre_exec hooks to the current command
 //!
 //! Multiple `pre_exec` hooks are safe — `Command` stores them in a `Vec`,
 //! executed in registration order.
@@ -17,7 +17,7 @@ use std::process::Command;
 ///
 /// Each child's `apply()` is called in order on the same `Command`.
 /// The first child typically wraps the command (bwrap replaces it),
-/// subsequent children add restrictions (Landlock adds pre_exec hooks).
+/// subsequent children add restrictions.
 pub struct CompositeSandbox {
     sandboxes: Vec<Box<dyn Sandbox>>,
     name: &'static str,
@@ -82,14 +82,14 @@ impl Sandbox for CompositeSandbox {
 // so we provide a no-arg constructor that assembles the default Linux sandbox stack.
 #[cfg(target_os = "linux")]
 impl CompositeSandbox {
-    /// Create the default Linux sandbox: bwrap (namespaces) + Landlock (filesystem ACL).
+    /// Create the default Linux sandbox.
     ///
-    /// This is called by [`JailerBuilder::build()`] via the `PlatformSandbox::new()` alias.
+    /// Keep Landlock out of the default bwrap stack: a Landlock pre_exec hook
+    /// restricts the bwrap wrapper itself before it can set up uid/gid maps.
+    /// Landlock remains available as a standalone sandbox implementation for
+    /// direct-command use.
     pub fn platform_new() -> Self {
-        Self::new(vec![
-            Box::new(super::BwrapSandbox::new()),
-            Box::new(super::LandlockSandbox::new()),
-        ])
+        Self::new(vec![Box::new(super::BwrapSandbox::new())])
     }
 }
 
@@ -267,5 +267,13 @@ mod tests {
         let mut cmd = Command::new("/bin/echo");
         composite.apply(&ctx, &mut cmd);
         // Should not panic
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_linux_platform_sandbox_defaults_to_bwrap_only() {
+        let sandbox = CompositeSandbox::platform_new();
+
+        assert_eq!(sandbox.name(), "bwrap");
     }
 }
