@@ -30,6 +30,7 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process'
+import { config as loadDotenv } from 'dotenv'
 
 const REGION = process.env.AWS_REGION || 'ap-southeast-1'
 
@@ -92,7 +93,8 @@ function loadEnvFromSsm(stage) {
   let params
   try {
     params = JSON.parse(json)
-  } catch {
+  } catch (err) {
+    console.warn(`sst-with-cloudflare: failed to parse SSM response for ${path}*: ${err.message}`)
     return
   }
   let loaded = 0
@@ -106,6 +108,10 @@ function loadEnvFromSsm(stage) {
 }
 
 const stage = resolveStage(sstArgs)
+
+// Local .env wins over SSM-loaded deploy env on laptops. CI normally has no
+// apps/infra/.env, so SSM still supplies its env after this no-op.
+loadDotenv()
 
 for (const { env, param } of CREDS) {
   if (process.env[env]) continue // already provided — don't touch

@@ -67,6 +67,7 @@ const pairs = parseEnv(text).filter(([k, v]) => !EXCLUDE.has(k) && v !== '')
 console.log(`seed-deploy-env-ssm: stage=${stage} region=${REGION} -> /boxlite/${stage}/env/* (${pairs.length} keys)`)
 
 let ok = 0
+let failed = 0
 for (const [key, val] of pairs) {
   const name = `/boxlite/${stage}/env/${key}`
   if (DRY) {
@@ -84,6 +85,8 @@ for (const [key, val] of pairs) {
   } catch (err) {
     const msg = (err.stderr ? err.stderr.toString() : err.message).split('\n')[0]
     console.error(`  ✗ ${key}: ${msg}`)
+    failed++
   }
 }
 console.log(DRY ? 'seed-deploy-env-ssm: dry-run, nothing written' : `seed-deploy-env-ssm: wrote ${ok}/${pairs.length}`)
+if (failed > 0) process.exit(1)

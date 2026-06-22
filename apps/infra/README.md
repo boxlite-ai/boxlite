@@ -275,8 +275,8 @@ repo root. To deliver a new runner build without recreating the EC2:
 
 ```bash
 # Uses the version in Cargo.toml by default; pass an explicit arg to override.
-scripts/deploy/runner-update-binary.sh           # latest from Cargo.toml
-scripts/deploy/runner-update-binary.sh 0.9.5     # explicit
+npm run runner:rollout               # latest from Cargo.toml
+npm run runner:rollout -- 0.9.5      # explicit
 ```
 
 The script uses AWS SSM Run Command to download the release tarball from

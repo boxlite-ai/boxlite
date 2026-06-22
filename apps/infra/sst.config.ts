@@ -118,7 +118,7 @@ export default $config({
       args.permissionsBoundary ??= 'arn:aws:iam::064212132677:policy/boxlite-role-boundary'
     })
 
-    // Load .env overrides (anything unset falls back to auto-generated values)
+    // Load .env overrides (normally already loaded by scripts/sst-with-cloudflare.mjs)
     const { config } = await import('dotenv')
     config()
 
@@ -933,7 +933,7 @@ export default $config({
     // options keep a runner persistent across routine deploys:
     //   • ignoreChanges ['ami','userDataBase64']: monthly Ubuntu AMIs and Cargo.toml
     //     version bumps no longer force replacement; a new binary lands out-of-band via
-    //     SSM instead of recreating the EC2 — scripts/deploy/runner-update-binary.sh
+    //     SSM instead of recreating the EC2 — apps/infra/scripts/rollout-runner-binary.mjs
     //     upgrades the DEFAULT runner (matches its tag only); extra runners separately.
     //   • protect: refuses any delete (errant `pulumi destroy` / teardown). Deliberate
     //     decommission = set protect:false, deploy, then `pulumi destroy --target ...`.

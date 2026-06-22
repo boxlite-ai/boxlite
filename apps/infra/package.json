@@ -7,6 +7,7 @@
     "dev": "node scripts/sst-with-cloudflare.mjs dev",
     "deploy": "node scripts/sst-with-cloudflare.mjs deploy",
     "remove": "node scripts/sst-with-cloudflare.mjs remove",
+    "runner:rollout": "node scripts/rollout-runner-binary.mjs",
     "sst": "node scripts/sst-with-cloudflare.mjs",
     "secrets": "sst secret list"
   },
