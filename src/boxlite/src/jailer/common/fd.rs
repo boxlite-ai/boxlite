@@ -4,8 +4,10 @@
 //! This ensures the jailed process cannot access file descriptors
 //! inherited from the parent (which might include credentials, sockets, etc.).
 //!
-//! Only the async-signal-safe `close_inherited_fds_raw()` is used,
-//! called from the `pre_exec` hook before exec().
+//! The pre_exec path uses close-on-exec marking so Rust's own spawn
+//! error-reporting pipe remains usable until exec.
+
+const FALLBACK_MAX_FD: i32 = 1_048_576;
 
 /// Close all FDs from `first_fd` onwards. Async-signal-safe.
 ///
@@ -26,6 +28,7 @@
 ///
 /// * `Ok(())` - FDs closed successfully
 /// * `Err(errno)` - Failed (returns raw errno for io::Error conversion)
+#[allow(dead_code)]
 pub fn close_fds_from(first_fd: i32) -> Result<(), i32> {
     #[cfg(target_os = "linux")]
     {
@@ -75,8 +78,56 @@ pub fn close_fds_from(first_fd: i32) -> Result<(), i32> {
 /// Close inherited FDs (3+). Delegates to [`close_fds_from`].
 ///
 /// Keeps stdin(0), stdout(1), stderr(2) open. Closes everything from FD 3 onwards.
+#[allow(dead_code)]
 pub fn close_inherited_fds_raw() -> Result<(), i32> {
     close_fds_from(3)
+}
+
+/// Mark all FDs from `first_fd` onwards as close-on-exec. Async-signal-safe.
+///
+/// This is the safer operation inside `Command::pre_exec`: Rust's process
+/// launcher owns an internal error-reporting pipe above fd 2, and closing it
+/// before `exec` turns later pre_exec/exec failures into a child-side runtime
+/// abort instead of a normal `spawn()` error.
+pub fn cloexec_fds_from(first_fd: i32) -> Result<(), i32> {
+    #[cfg(target_os = "linux")]
+    {
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_close_range,
+                first_fd as libc::c_uint,
+                libc::c_uint::MAX,
+                libc::CLOSE_RANGE_CLOEXEC as libc::c_uint,
+            )
+        };
+        if result == 0 {
+            return Ok(());
+        }
+    }
+
+    for fd in first_fd..max_fd_limit() {
+        unsafe {
+            libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+        }
+    }
+    Ok(())
+}
+
+fn max_fd_limit() -> i32 {
+    let mut limits = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+
+    let rc = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limits) };
+    if rc != 0 || limits.rlim_cur == libc::RLIM_INFINITY {
+        return FALLBACK_MAX_FD;
+    }
+
+    i32::try_from(limits.rlim_cur)
+        .ok()
+        .filter(|limit| *limit > 0)
+        .unwrap_or(FALLBACK_MAX_FD)
 }
 
 #[cfg(test)]
@@ -228,6 +279,36 @@ mod tests {
         run_in_child(
             "test_close_fds_from_closes_target_and_above",
             child_close_fds_from_closes_target_and_above,
+        );
+    }
+
+    fn child_cloexec_fds_from_marks_target_and_above() -> i32 {
+        let fd = unsafe { libc::dup(STDOUT_FD) };
+        if fd < 3 {
+            return 1;
+        }
+
+        if cloexec_fds_from(fd).is_err() {
+            return 2;
+        }
+
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if flags < 0 {
+            return 3;
+        }
+        if flags & libc::FD_CLOEXEC == 0 {
+            return 4;
+        }
+
+        unsafe { libc::close(fd) };
+        0
+    }
+
+    #[test]
+    fn test_cloexec_fds_from_marks_target_and_above() {
+        run_in_child(
+            "test_cloexec_fds_from_marks_target_and_above",
+            child_cloexec_fds_from_marks_target_and_above,
         );
     }
 }

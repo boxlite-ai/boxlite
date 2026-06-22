@@ -5,7 +5,7 @@
 //!
 //! # What it does
 //!
-//! 1. **Close inherited FDs** - Prevents information leakage
+//! 1. **Mark inherited FDs close-on-exec** - Prevents information leakage
 //! 2. **Apply rlimits** - Resource limits (max files, memory, CPU time, etc.)
 //! 3. **Write PID file** - Single source of truth for process tracking
 //!
@@ -32,7 +32,7 @@ use std::process::Command;
 /// Add pre-execution hook for process isolation (async-signal-safe).
 ///
 /// Runs after fork() but before the new program starts in the child process.
-/// Applies: FD preservation (dup2), FD cleanup, rlimits, PID file writing.
+/// Applies: FD preservation (dup2), FD close-on-exec, rlimits, PID file writing.
 ///
 /// # Arguments
 ///
@@ -40,14 +40,14 @@ use std::process::Command;
 /// * `resource_limits` - Resource limits to apply
 /// * `pid_writer` - Async-signal-safe writer (pre-allocated in the parent)
 /// * `preserved_fds` - FDs to preserve: each `(source, target)` is dup2'd before cleanup.
-///   After dup2, all FDs above the highest target are closed.
-///   Pass empty vec for default behavior (close all FDs >= 3).
+///   After dup2, all FDs above the highest target are marked close-on-exec.
+///   Pass empty vec for default behavior (mark all FDs >= 3 close-on-exec).
 ///
 /// # Safety
 ///
 /// This function uses `unsafe` to set the hook. The hook itself
 /// only uses async-signal-safe operations:
-/// - `dup2()` / `close()` / `close_range()` syscalls
+/// - `dup2()` / `fcntl()` / `close_range()` syscalls
 /// - `setrlimit()` syscall
 /// - `open()` / `write()` / `close()` syscalls (for PID file)
 /// - `getpid()` syscall
@@ -85,10 +85,10 @@ pub fn add_pre_exec_hook(
     // See module documentation for details.
     unsafe {
         cmd.pre_exec(move || {
-            // 1. FD preservation + cleanup
+            // 1. FD preservation + close-on-exec cleanup
             // If preserved_fds is non-empty, dup2 each (source -> target),
-            // then close everything above the highest target.
-            // Otherwise, close all FDs >= 3 (default behavior).
+            // then mark everything above the highest target close-on-exec.
+            // Otherwise, mark all FDs >= 3 close-on-exec (default behavior).
             if !preserved_fds.is_empty() {
                 for &(source, target) in &preserved_fds {
                     if source != target {
@@ -96,10 +96,10 @@ pub fn add_pre_exec_hook(
                     }
                 }
                 let first_close = preserved_fds.iter().map(|(_, t)| *t).max().unwrap() + 1;
-                common::fd::close_fds_from(first_close)
+                common::fd::cloexec_fds_from(first_close)
                     .map_err(std::io::Error::from_raw_os_error)?;
             } else {
-                common::fd::close_inherited_fds_raw().map_err(std::io::Error::from_raw_os_error)?;
+                common::fd::cloexec_fds_from(3).map_err(std::io::Error::from_raw_os_error)?;
             }
 
             // 2. Apply resource limits (rlimits)
@@ -145,6 +145,45 @@ mod tests {
         let limits = ResourceLimits::default();
         let writer = PidFileWriter::at(std::path::Path::new("/tmp/test.pid")).ok();
         add_pre_exec_hook(&mut cmd, limits, writer, vec![], false);
+    }
+
+    #[test]
+    fn test_pre_exec_preserves_spawn_error_reporting_pipe() {
+        let mut cmd = Command::new("/definitely/missing/boxlite-shim");
+        add_pre_exec_hook(&mut cmd, ResourceLimits::default(), None, vec![], false);
+
+        let err = cmd
+            .spawn()
+            .expect_err("missing executable should return a spawn error");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn test_pre_exec_writes_pid_file_and_execs() {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let pid_path = dir.path().join("shim.pid");
+        let writer = PidFileWriter::at(&pid_path).expect("create pid writer");
+
+        let true_path = if std::path::Path::new("/bin/true").exists() {
+            "/bin/true"
+        } else {
+            "/usr/bin/true"
+        };
+        let mut cmd = Command::new(true_path);
+        add_pre_exec_hook(
+            &mut cmd,
+            ResourceLimits::default(),
+            Some(writer),
+            vec![],
+            false,
+        );
+
+        let status = cmd.status().expect("spawn true");
+        assert!(status.success(), "child should exit successfully: {status}");
+        let pid_bytes = std::fs::read(&pid_path).expect("read pid file");
+        let record = PidRecord::decode(&pid_bytes).expect("decode pid record");
+        assert!(record.pid > 0, "pid record should contain a process id");
     }
 
     #[test]
