@@ -90,7 +90,7 @@ pub fn build_landlock_ruleset(
 
     // Add system read-only paths (matching bwrap's system binds).
     // Skip paths that don't exist (e.g., /lib64 on some distros).
-    let read_access = AccessFs::from_read(TARGET_ABI);
+    let read_access = AccessFs::from_read(TARGET_ABI) | AccessFs::Execute;
     for path in SYSTEM_READ_PATHS {
         if let Ok(path_fd) = PathFd::new(path) {
             ruleset_created = ruleset_created
@@ -127,7 +127,7 @@ pub fn build_landlock_ruleset(
         let access = if pa.writable {
             AccessFs::from_all(TARGET_ABI)
         } else {
-            AccessFs::from_read(TARGET_ABI)
+            AccessFs::from_read(TARGET_ABI) | AccessFs::Execute
         };
 
         ruleset_created = ruleset_created
@@ -506,6 +506,33 @@ mod tests {
 
         handle.join().expect("multi-path test thread panicked");
         cleanup_home_test_dir(&test_id);
+    }
+
+    #[test]
+    fn test_landlock_system_read_paths_allow_exec() {
+        let result = build_landlock_ruleset(&[], false);
+        let Ok(Some(fd)) = result else {
+            println!("Landlock not available, skipping exec test");
+            return;
+        };
+
+        let true_path = if std::path::Path::new("/bin/true").exists() {
+            "/bin/true"
+        } else {
+            "/usr/bin/true"
+        };
+
+        std::thread::spawn(move || {
+            let errno = unsafe { restrict_self_raw(fd) };
+            assert_eq!(errno, 0, "restrict_self_raw failed with errno {errno}");
+
+            let status = std::process::Command::new(true_path)
+                .status()
+                .expect("execute true after Landlock restriction");
+            assert!(status.success(), "true should exit successfully: {status}");
+        })
+        .join()
+        .expect("exec test thread panicked");
     }
 
     /// E2e: network_enabled=false denies TCP connections (requires kernel 6.7+).
