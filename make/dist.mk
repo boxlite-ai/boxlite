@@ -46,6 +46,7 @@ dist\:runner:
 	OUT_DIR="$${RUNNER_OUT_DIR:-dist/runner}"; \
 	TARBALL="boxlite-runner-v$${VERSION}-linux-amd64.tar.gz"; \
 	echo "🔨 Building runner distribution ($${VERSION}, linux/amd64)..."; \
+	$(MAKE) --no-print-directory runtime; \
 	$(MAKE) --no-print-directory dist:c; \
 	bash $(SCRIPT_DIR)/build/fix-go-symbols.sh target/release/libboxlite.a; \
 	cp target/release/libboxlite.a sdks/go/libboxlite.a; \
