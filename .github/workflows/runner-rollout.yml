@@ -1,0 +1,224 @@
+# Runner Rollout button (MVP "lite+" — manual, reviewable, no static AWS keys).
+#
+# Replaces the boxlite-runner binary on the live Runner EC2 in-place, via SSM.
+# Two sources:
+#   dev-build : build the runner from a branch/commit RIGHT HERE, upload to S3,
+#               and install it — lets you test an unreleased runner change without
+#               cutting a formal release (the "dev channel"). dev/staging only.
+#   release   : install an already-published version (e.g. 0.9.5) from GitHub
+#               Releases. This is the only source allowed for prod.
+#
+# Auth = GitHub OIDC -> boxlite-github-deployer-<stage> (same role as Deploy).
+# The actual swap + integrity check + auto-rollback lives in
+# scripts/deploy/runner-update-binary.sh; this workflow only builds + stages the
+# artifact and hands the script a URL.
+#
+# Inputs are resolved once (with defaults) so the workflow also runs sensibly if
+# triggered without dispatch inputs (e.g. a temporary push trigger during testing).
+#
+# Env vars passed to the script use the BOXLITE_RUNNER_ prefix (NOT RUNNER_):
+# GitHub Actions reserves the RUNNER_ prefix and drops step env vars named RUNNER_*
+# — validated 2026-06-20, that was why the dev-channel never received its tarball
+# URL / instance id.
+#
+# ⚠️ Rolling the binary RESTARTS the runner's systemd unit — boxes running on that
+#    EC2 are interrupted. Box state under /var/lib/boxlite is preserved.
+name: Runner Rollout
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Stage
+        type: choice
+        options: [dev]
+        default: dev
+      source:
+        description: dev-build (build the ref now) or release (install a published version)
+        type: choice
+        options: [dev-build, release]
+        default: dev-build
+      ref:
+        description: "dev-build: branch/commit to build (blank = this ref). release: version e.g. 0.9.5"
+        type: string
+        default: ""
+      mode:
+        description: "upgrade, or rollback (install an older release — requires source=release)"
+        type: choice
+        options: [upgrade, rollback]
+        default: upgrade
+      instance_id:
+        description: "Pin a specific runner instance id (blank = find boxlite-runner-default by tag)"
+        type: string
+        default: ""
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: runner-rollout-${{ inputs.stage || 'dev' }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-southeast-1
+  S3_BUCKET: boxlite-dev-runner-builds
+
+jobs:
+  config:
+    uses: ./.github/workflows/config.yml
+
+  rollout:
+    name: Roll out runner
+    needs: config
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve inputs (defaults make push-triggered runs sane)
+        id: in
+        run: |
+          echo "stage=${{ inputs.stage || 'dev' }}"        >> "$GITHUB_OUTPUT"
+          echo "source=${{ inputs.source || 'dev-build' }}" >> "$GITHUB_OUTPUT"
+          echo "mode=${{ inputs.mode || 'upgrade' }}"       >> "$GITHUB_OUTPUT"
+          echo "ref=${{ inputs.ref }}"                      >> "$GITHUB_OUTPUT"
+          echo "instance_id=${{ inputs.instance_id }}"      >> "$GITHUB_OUTPUT"
+
+      - name: Guard — rollback requires a release version
+        if: ${{ steps.in.outputs.mode == 'rollback' && steps.in.outputs.source != 'release' }}
+        run: |
+          echo "::error::rollback mode requires source=release with the target version in 'ref'"
+          exit 1
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ (steps.in.outputs.source == 'dev-build' && steps.in.outputs.ref != '') && steps.in.outputs.ref || github.ref }}
+
+      # ── dev-build: build the runner binary from this checkout ──────────────
+      # Faithful copy of build-runner-binary.yml's build recipe (could become a
+      # shared composite action later); the additions here are staging to S3 + SSM.
+      #
+      # NOTE: the checkout ref drives BOTH the build source AND this script. Building
+      # an ahead-of-release commit needs libboxlite.a built from source (see below);
+      # decoupling the build source from the runner-update-binary.sh version is TODO.
+      - name: Set up Go
+        if: ${{ steps.in.outputs.source == 'dev-build' }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ needs.config.outputs.go-version }}
+
+      - name: Install system dependencies
+        if: ${{ steps.in.outputs.source == 'dev-build' }}
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxtst-dev libxinerama-dev
+
+      - name: Determine version + sha
+        id: version
+        run: |
+          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      # KNOWN LIMITATION: this downloads the RELEASED libboxlite.a for Cargo.toml's
+      # version. It only links if the checked-out runner source matches that release's
+      # C ABI. A commit AHEAD of the last release (new core symbols) fails to link
+      # ("undefined reference") — see 2026-06-20 validation. A true dev-build of
+      # unreleased source must build libboxlite.a from the Rust core here instead of
+      # downloading it. TODO: add the Rust libboxlite build for the dev-build path.
+      - name: Download prebuilt libboxlite.a
+        if: ${{ steps.in.outputs.source == 'dev-build' }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          ARCHIVE="boxlite-c-v${VERSION}-linux-x64-gnu.tar.gz"
+          URL="https://github.com/${GH_REPO}/releases/download/v${VERSION}/${ARCHIVE}"
+          echo "Downloading $URL"
+          curl -fsSL "${URL}" | tar xz -C /tmp/
+          cp "/tmp/boxlite-c-v${VERSION}-linux-x64-gnu/lib/libboxlite.a" sdks/go/libboxlite.a
+
+      - name: Rewrite go.work for minimal modules
+        if: ${{ steps.in.outputs.source == 'dev-build' }}
+        run: |
+          printf 'go 1.25.4\n\nuse (\n\t./runner\n\t./daemon\n\t./common-go\n\t./api-client-go\n\t./libs/computer-use\n\t../sdks/go\n)\n' > apps/go.work
+
+      - name: Download Go dependencies
+        if: ${{ steps.in.outputs.source == 'dev-build' }}
+        run: |
+          go -C apps/runner mod download
+          go -C apps/daemon mod download
+          go -C apps/common-go mod download
+          go -C apps/api-client-go mod download
+          go -C apps/libs/computer-use mod download
+
+      - name: Build daemon
+        if: ${{ steps.in.outputs.source == 'dev-build' }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C apps \
+            -ldflags "-X 'github.com/boxlite-ai/daemon/internal.Version=${VERSION}'" \
+            -o runner/pkg/daemon/static/daemon-amd64 \
+            ./daemon/cmd/daemon/
+
+      - name: Build computer-use
+        if: ${{ steps.in.outputs.source == 'dev-build' }}
+        run: |
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -C apps \
+            -o runner/pkg/daemon/static/boxlite-computer-use \
+            ./libs/computer-use/
+
+      - name: Build runner
+        if: ${{ steps.in.outputs.source == 'dev-build' }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -C apps \
+            -ldflags "-X 'github.com/boxlite-ai/runner/internal.Version=${VERSION}-dev-${{ steps.version.outputs.sha }}'" \
+            -o /tmp/boxlite-runner \
+            ./runner/cmd/runner/
+
+      - name: Package dev tarball
+        if: ${{ steps.in.outputs.source == 'dev-build' }}
+        id: package
+        run: |
+          TARBALL="boxlite-runner-dev-${{ steps.version.outputs.sha }}-linux-amd64.tar.gz"
+          tar czf "$TARBALL" -C /tmp boxlite-runner
+          sha256sum "$TARBALL" > "$TARBALL.sha256"
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+
+      # ── stage + roll out ──────────────────────────────────────────────────
+      - name: Assume AWS deploy role (GitHub OIDC, no static keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::064212132677:role/boxlite-github-deployer-${{ steps.in.outputs.stage }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Upload dev build to S3 + presign
+        if: ${{ steps.in.outputs.source == 'dev-build' }}
+        id: s3
+        run: |
+          NAME="${{ steps.package.outputs.tarball }}"
+          KEY="runner-builds/${NAME}"
+          aws s3 cp "${NAME}"        "s3://${S3_BUCKET}/${KEY}"        --region "$AWS_REGION"
+          aws s3 cp "${NAME}.sha256" "s3://${S3_BUCKET}/${KEY}.sha256" --region "$AWS_REGION"
+          # Presigned URLs the runner EC2 can curl without AWS creds (30 min TTL).
+          TARBALL_URL=$(aws s3 presign "s3://${S3_BUCKET}/${KEY}"        --region "$AWS_REGION" --expires-in 1800)
+          SHA_URL=$(aws s3 presign     "s3://${S3_BUCKET}/${KEY}.sha256" --region "$AWS_REGION" --expires-in 1800)
+          echo "::add-mask::${TARBALL_URL}"
+          echo "::add-mask::${SHA_URL}"
+          echo "tarball_url=${TARBALL_URL}" >> "$GITHUB_OUTPUT"
+          echo "sha_url=${SHA_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Roll out — dev-build
+        if: ${{ steps.in.outputs.source == 'dev-build' }}
+        env:
+          STAGE: ${{ steps.in.outputs.stage }}
+          BOXLITE_RUNNER_TARBALL_URL: ${{ steps.s3.outputs.tarball_url }}
+          BOXLITE_RUNNER_TARBALL_SHA256_URL: ${{ steps.s3.outputs.sha_url }}
+          BOXLITE_RUNNER_INSTANCE_ID: ${{ steps.in.outputs.instance_id }}
+        run: bash scripts/deploy/runner-update-binary.sh
+
+      - name: Roll out — release
+        if: ${{ steps.in.outputs.source == 'release' }}
+        env:
+          STAGE: ${{ steps.in.outputs.stage }}
+          BOXLITE_RUNNER_INSTANCE_ID: ${{ steps.in.outputs.instance_id }}
+        run: bash scripts/deploy/runner-update-binary.sh "${{ steps.in.outputs.ref }}"
