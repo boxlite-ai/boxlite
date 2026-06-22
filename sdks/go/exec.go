@@ -127,7 +127,26 @@ type executionStreamState struct {
 	exited      bool // on_exit seen: flush the queue, then close drained
 	stopped     bool // execution released/closed: stop the writer
 	drainedOnce sync.Once
+
+	// Bounded-queue back-pressure. queuedBytes is the bytes buffered but not
+	// yet written to the caller's sink. When it crosses the high-water mark the
+	// writer is falling behind, so we pause the C-side pump (which fills the
+	// bounded upstream channel and ultimately blocks the guest process's
+	// write()); we resume once it drains below the low-water mark. `pause` calls
+	// boxlite_execution_set_stream_paused under qmu — Close sets `stopped` under
+	// qmu before freeing the handle, so a pause call can never use it post-free.
+	queuedBytes int
+	paused      bool
+	pause       func(bool)
 }
+
+const (
+	// streamQueueHighWater: buffered bytes at which the writer is deemed behind
+	// and the producer is paused. streamQueueLowWater: resume threshold. The gap
+	// is hysteresis so a steady stream doesn't thrash pause/resume.
+	streamQueueHighWater = 4 << 20 // 4 MiB
+	streamQueueLowWater  = 1 << 20 // 1 MiB
+)
 
 // streamChunk is one ordered unit of stream output queued for async delivery.
 type streamChunk struct {
@@ -135,7 +154,10 @@ type streamChunk struct {
 	data   []byte
 }
 
-func newExecutionStreamState(opts ExecutionOptions) *executionStreamState {
+// newExecutionStreamState builds the stream state. setPaused, when non-nil, is
+// the raw C call that pauses/resumes the execution's pumps; it is wrapped so it
+// only runs while the handle is alive (guarded by qmu against Close's free).
+func newExecutionStreamState(opts ExecutionOptions, setPaused func(bool)) *executionStreamState {
 	s := &executionStreamState{
 		stdout:   opts.Stdout,
 		stderr:   opts.Stderr,
@@ -144,6 +166,18 @@ func newExecutionStreamState(opts ExecutionOptions) *executionStreamState {
 		drained:  make(chan struct{}),
 	}
 	s.qcond = sync.NewCond(&s.qmu)
+	if setPaused != nil {
+		s.pause = func(p bool) {
+			// Call the C FFI while holding qmu and only when not stopped.
+			// markReleased sets `stopped` under qmu before Close frees the
+			// handle, so this can never touch a freed handle.
+			s.qmu.Lock()
+			if !s.stopped {
+				setPaused(p)
+			}
+			s.qmu.Unlock()
+		}
+	}
 	go s.deliverLoop()
 	return s
 }
@@ -160,12 +194,21 @@ func (s *executionStreamState) enqueue(c streamChunk) {
 	if s.released.Load() {
 		return
 	}
+	doPause := false
 	s.qmu.Lock()
 	if !s.exited && !s.stopped {
 		s.queue = append(s.queue, c)
+		s.queuedBytes += len(c.data)
+		if s.queuedBytes > streamQueueHighWater && !s.paused {
+			s.paused = true
+			doPause = true
+		}
 		s.qcond.Signal()
 	}
 	s.qmu.Unlock()
+	if doPause && s.pause != nil {
+		s.pause(true)
+	}
 }
 
 // deliverExit marks end-of-stream. The writer goroutine flushes whatever is
@@ -206,8 +249,24 @@ func (s *executionStreamState) deliverLoop() {
 		done := s.exited || s.stopped
 		s.qmu.Unlock()
 
+		batch := 0
 		for _, c := range q {
 			s.writeChunk(c)
+			batch += len(c.data)
+		}
+		// Account the drained bytes; resume the producer once we're back under
+		// the low-water mark (only while live — on exit/stop the pump is torn
+		// down anyway, and resuming there could race the handle free).
+		doResume := false
+		s.qmu.Lock()
+		s.queuedBytes -= batch
+		if s.paused && !done && s.queuedBytes < streamQueueLowWater {
+			s.paused = false
+			doResume = true
+		}
+		s.qmu.Unlock()
+		if doResume && s.pause != nil {
+			s.pause(false)
 		}
 		if done {
 			// No more chunks can arrive once exited/stopped is set (deliver*
@@ -341,7 +400,14 @@ func (b *Box) StartExecution(_ context.Context, name string, args []string, opts
 		return nil, freeError(&cerr)
 	}
 
-	state := newExecutionStreamState(cfg)
+	// The pause setter throttles this execution's guest producer when the
+	// delivery queue fills (end-to-end back-pressure). `handle` is valid for
+	// the closure's lifetime: it is only invoked while the stream state is not
+	// stopped, and Close frees the handle only after marking it stopped.
+	state := newExecutionStreamState(cfg, func(paused bool) {
+		var cerr C.CBoxliteError
+		C.boxlite_execution_set_stream_paused(handle, boolToCInt(paused), &cerr)
+	})
 	streamHandle := cgo.NewHandle(state)
 
 	if err := registerExecutionCallbacks(handle, streamHandle); err != nil {

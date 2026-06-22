@@ -92,6 +92,13 @@ pub struct ExecutionHandle {
     /// claimer pushes Exit. Both `execution_free` and `exit_pump`
     /// race for it; the loser silently no-ops.
     exit_dispatched: Arc<AtomicBool>,
+    /// Per-execution stream back-pressure flag. When the Go SDK's bounded
+    /// delivery queue fills it sets this (via `boxlite_execution_set_stream_paused`);
+    /// the stdout/stderr pumps then stop reading their bounded upstream channel,
+    /// which fills, blocking the attach reader's `send().await`, which stops
+    /// draining the guest gRPC stream and ultimately blocks the guest process's
+    /// write(). Cleared when the queue drains below its low-water mark.
+    stream_paused: Arc<AtomicBool>,
 }
 
 #[unsafe(no_mangle)]
@@ -156,6 +163,29 @@ pub unsafe extern "C" fn boxlite_execution_stdin_close(
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
     close_stdin(execution, out_error)
+}
+
+/// Pause (paused != 0) or resume (paused == 0) delivery of this execution's
+/// stdout/stderr. While paused, the stream pumps stop reading their bounded
+/// upstream channel, which fills and back-pressures the guest process's
+/// write() — letting a slow consumer throttle the producer instead of buffering
+/// unboundedly. The Go SDK drives this from its delivery queue's high/low-water
+/// marks. Idempotent; safe to call repeatedly.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_execution_set_stream_paused(
+    execution: *mut CExecutionHandle,
+    paused: c_int,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if execution.is_null() {
+            write_error(out_error, null_pointer_error("execution"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        let exec_ref = &*execution;
+        exec_ref.stream_paused.store(paused != 0, Ordering::Release);
+        BoxliteErrorCode::Ok
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -266,6 +296,7 @@ unsafe fn box_exec(
                     tokio_rt: handle_ref.tokio_rt.clone(),
                     process_completed: Arc::new(AtomicBool::new(false)),
                     exit_dispatched: Arc::new(AtomicBool::new(false)),
+                    stream_paused: Arc::new(AtomicBool::new(false)),
                 };
                 *out_execution = Box::into_raw(Box::new(exec_handle));
                 BoxliteErrorCode::Ok
@@ -306,9 +337,14 @@ unsafe fn register_stdout(
         let user_data_addr = user_data as usize;
         let (done_tx, done_rx) = oneshot::channel::<()>();
         exec_ref.stream_done_rx.lock().unwrap().push(done_rx);
-        let pump = exec_ref
-            .tokio_rt
-            .spawn(stdout_pump(stream, cb, user_data_addr, queue, done_tx));
+        let pump = exec_ref.tokio_rt.spawn(stdout_pump(
+            stream,
+            cb,
+            user_data_addr,
+            queue,
+            exec_ref.stream_paused.clone(),
+            done_tx,
+        ));
         exec_ref.pumps.lock().unwrap().push(pump);
         BoxliteErrorCode::Ok
     }
@@ -341,9 +377,14 @@ unsafe fn register_stderr(
         let user_data_addr = user_data as usize;
         let (done_tx, done_rx) = oneshot::channel::<()>();
         exec_ref.stream_done_rx.lock().unwrap().push(done_rx);
-        let pump = exec_ref
-            .tokio_rt
-            .spawn(stderr_pump(stream, cb, user_data_addr, queue, done_tx));
+        let pump = exec_ref.tokio_rt.spawn(stderr_pump(
+            stream,
+            cb,
+            user_data_addr,
+            queue,
+            exec_ref.stream_paused.clone(),
+            done_tx,
+        ));
         exec_ref.pumps.lock().unwrap().push(pump);
         BoxliteErrorCode::Ok
     }
@@ -719,11 +760,22 @@ unsafe fn execution_free(execution: *mut ExecutionHandle) {
 
 // ─── Pump tasks ────────────────────────────────────────────────────────────
 
+/// Block while the execution's stream is paused (Go-side back-pressure). The
+/// pump calls this AFTER delivering a chunk so it stops reading the next one
+/// from the bounded upstream channel — which then fills and back-pressures the
+/// guest. Sleep-poll (2ms) is coarse but cheap; pauses are seconds-scale.
+async fn await_unpaused(paused: &AtomicBool) {
+    while paused.load(Ordering::Acquire) {
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+}
+
 async fn stdout_pump<S>(
     mut stream: S,
     cb: CBoxStdoutFn,
     user_data_addr: usize,
     queue: Arc<EventQueue>,
+    paused: Arc<AtomicBool>,
     done_tx: oneshot::Sender<()>,
 ) where
     S: futures::Stream<Item = String> + Unpin,
@@ -738,6 +790,7 @@ async fn stdout_pump<S>(
             },
         )
         .await;
+        await_unpaused(&paused).await;
     }
     // Signal the exit pump we're done. Failure (rx dropped) means exit_pump
     // already completed or was never registered — either way harmless.
@@ -749,6 +802,7 @@ async fn stderr_pump<S>(
     cb: CBoxStderrFn,
     user_data_addr: usize,
     queue: Arc<EventQueue>,
+    paused: Arc<AtomicBool>,
     done_tx: oneshot::Sender<()>,
 ) where
     S: futures::Stream<Item = String> + Unpin,
@@ -763,6 +817,7 @@ async fn stderr_pump<S>(
             },
         )
         .await;
+        await_unpaused(&paused).await;
     }
     let _ = done_tx.send(());
 }

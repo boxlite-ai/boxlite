@@ -417,6 +417,16 @@ enum BoxliteErrorCode boxlite_execution_stdin_write(CExecutionHandle *execution,
 enum BoxliteErrorCode boxlite_execution_stdin_close(CExecutionHandle *execution,
                                                     CBoxliteError *out_error);
 
+// Pause (paused != 0) or resume (paused == 0) delivery of this execution's
+// stdout/stderr. While paused, the stream pumps stop reading their bounded
+// upstream channel, which fills and back-pressures the guest process's
+// write() — letting a slow consumer throttle the producer instead of buffering
+// unboundedly. The Go SDK drives this from its delivery queue's high/low-water
+// marks. Idempotent; safe to call repeatedly.
+enum BoxliteErrorCode boxlite_execution_set_stream_paused(CExecutionHandle *execution,
+                                                          int paused,
+                                                          CBoxliteError *out_error);
+
 enum BoxliteErrorCode boxlite_execution_wait(CExecutionHandle *execution,
                                              CExecutionWaitCb cb,
                                              void *user_data,

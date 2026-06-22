@@ -19,12 +19,20 @@ pub struct ExecutionInterface {
     client: ExecutionClient<Channel>,
 }
 
+/// Bounded capacity for the per-execution stdout/stderr text channels.
+/// Bounding these (rather than the original unbounded channels) is what lets
+/// host-side back-pressure propagate: when the consumer pauses, this channel
+/// fills, `DecodedStream::send_bytes().await` blocks the attach reader, which
+/// stops draining the guest gRPC stream and ultimately blocks the guest
+/// process's write(). Keep stdin/result channels unbounded (single messages).
+const STREAM_CHANNEL_CAP: usize = 64;
+
 /// Components for building an Execution.
 pub struct ExecComponents {
     pub execution_id: String,
     pub stdin_tx: mpsc::UnboundedSender<Vec<u8>>,
-    pub stdout_rx: mpsc::UnboundedReceiver<String>,
-    pub stderr_rx: mpsc::UnboundedReceiver<String>,
+    pub stdout_rx: mpsc::Receiver<String>,
+    pub stderr_rx: mpsc::Receiver<String>,
     pub result_rx: mpsc::UnboundedReceiver<ExecResult>,
 }
 
@@ -48,8 +56,8 @@ impl ExecutionInterface {
     ) -> BoxliteResult<ExecComponents> {
         // Create channels
         let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let (stdout_tx, stdout_rx) = mpsc::unbounded_channel::<String>();
-        let (stderr_tx, stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (stdout_tx, stdout_rx) = mpsc::channel::<String>(STREAM_CHANNEL_CAP);
+        let (stderr_tx, stderr_rx) = mpsc::channel::<String>(STREAM_CHANNEL_CAP);
         let (result_tx, result_rx) = mpsc::unbounded_channel();
 
         // Build request
@@ -253,8 +261,8 @@ impl ExecProtocol {
     fn spawn_attach(
         mut client: ExecutionClient<Channel>,
         execution_id: String,
-        stdout_tx: mpsc::UnboundedSender<String>,
-        stderr_tx: mpsc::UnboundedSender<String>,
+        stdout_tx: mpsc::Sender<String>,
+        stderr_tx: mpsc::Sender<String>,
         shutdown_token: CancellationToken,
     ) {
         tokio::spawn(async move {
@@ -298,8 +306,8 @@ impl ExecProtocol {
                                     message_count,
                                     "Attach stream cancelled during shutdown"
                                 );
-                                stdout.flush();
-                                stderr.flush();
+                                stdout.flush().await;
+                                stderr.flush().await;
                                 break;
                             }
                             msg = stream.message() => msg,
@@ -308,7 +316,7 @@ impl ExecProtocol {
                         match output.transpose() {
                             Some(Ok(output)) => {
                                 message_count += 1;
-                                Self::route_output(output, &mut stdout, &mut stderr);
+                                Self::route_output(output, &mut stdout, &mut stderr).await;
                             }
                             Some(Err(e)) => {
                                 tracing::debug!(
@@ -321,9 +329,9 @@ impl ExecProtocol {
                                 // the held-over partial bytes (as U+FFFD)
                                 // arrive in correct order ahead of the
                                 // synthesized "Attach stream error: …" line.
-                                stdout.flush();
-                                stderr.flush();
-                                let _ = stderr.tx.send(format!("Attach stream error: {}", e));
+                                stdout.flush().await;
+                                stderr.flush().await;
+                                let _ = stderr.tx.send(format!("Attach stream error: {}", e)).await;
                                 break;
                             }
                             None => {
@@ -331,8 +339,8 @@ impl ExecProtocol {
                                 // bytes still in the decoders as U+FFFD,
                                 // matching `from_utf8_lossy` semantics for
                                 // a truncated input at EOF.
-                                stdout.flush();
-                                stderr.flush();
+                                stdout.flush().await;
+                                stderr.flush().await;
                                 break;
                             }
                         }
@@ -346,21 +354,25 @@ impl ExecProtocol {
                 }
                 Err(e) => {
                     tracing::debug!(execution_id = %execution_id, error = %e, "Attach failed");
-                    let _ = stderr_tx.send(format!("Attach failed: {}", e));
+                    let _ = stderr_tx.send(format!("Attach failed: {}", e)).await;
                 }
             }
         });
     }
 
-    fn route_output(output: ExecOutput, stdout: &mut DecodedStream, stderr: &mut DecodedStream) {
+    async fn route_output(
+        output: ExecOutput,
+        stdout: &mut DecodedStream,
+        stderr: &mut DecodedStream,
+    ) {
         match output.event {
             Some(exec_output::Event::Stdout(chunk)) => {
                 tracing::trace!(len = chunk.data.len(), "Received exec stdout");
-                stdout.send_bytes(chunk.data);
+                stdout.send_bytes(chunk.data).await;
             }
             Some(exec_output::Event::Stderr(chunk)) => {
                 tracing::trace!(len = chunk.data.len(), "Received exec stderr");
-                stderr.send_bytes(chunk.data);
+                stderr.send_bytes(chunk.data).await;
             }
             None => {}
         }
@@ -638,12 +650,12 @@ impl Utf8StreamDecoder {
 /// so the two can't drift apart across the attach loop's branches (the same
 /// co-location tungstenite uses in `StringCollector`).
 struct DecodedStream {
-    tx: mpsc::UnboundedSender<String>,
+    tx: mpsc::Sender<String>,
     decoder: Utf8StreamDecoder,
 }
 
 impl DecodedStream {
-    fn new(tx: mpsc::UnboundedSender<String>) -> Self {
+    fn new(tx: mpsc::Sender<String>) -> Self {
         Self {
             tx,
             decoder: Utf8StreamDecoder::default(),
@@ -651,18 +663,20 @@ impl DecodedStream {
     }
 
     /// Decode a wire chunk and forward any completed text to the receiver.
-    fn send_bytes(&mut self, data: Vec<u8>) {
+    /// The send is awaited on a bounded channel: if the consumer has paused,
+    /// this blocks the attach reader and back-pressures the guest.
+    async fn send_bytes(&mut self, data: Vec<u8>) {
         let text = self.decoder.decode(data);
         if !text.is_empty() {
-            let _ = self.tx.send(text);
+            let _ = self.tx.send(text).await;
         }
     }
 
     /// Drain a held partial codepoint as U+FFFD when the stream ends.
-    fn flush(&mut self) {
+    async fn flush(&mut self) {
         let tail = self.decoder.flush();
         if !tail.is_empty() {
-            let _ = self.tx.send(tail);
+            let _ = self.tx.send(tail).await;
         }
     }
 }
@@ -1088,12 +1102,12 @@ mod tests {
     /// route_output uses the decoder; verify it doesn't double-emit U+FFFD
     /// when a 3-byte char straddles two ExecOutput messages. This is the
     /// integration-shaped reproducer for the original bug.
-    #[test]
-    fn route_output_recovers_split_codepoint_across_messages() {
+    #[tokio::test]
+    async fn route_output_recovers_split_codepoint_across_messages() {
         use boxlite_shared::{Stdout as StdoutMsg, exec_output};
 
-        let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
-        let (stderr_tx, mut stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (stdout_tx, mut stdout_rx) = mpsc::channel::<String>(STREAM_CHANNEL_CAP);
+        let (stderr_tx, mut stderr_rx) = mpsc::channel::<String>(STREAM_CHANNEL_CAP);
         let mut stdout = DecodedStream::new(stdout_tx);
         let mut stderr = DecodedStream::new(stderr_tx);
 
@@ -1102,8 +1116,8 @@ mod tests {
         };
 
         // "─" split into [E2] and [94 80] across two messages.
-        ExecProtocol::route_output(mk_stdout(vec![0xE2]), &mut stdout, &mut stderr);
-        ExecProtocol::route_output(mk_stdout(vec![0x94, 0x80]), &mut stdout, &mut stderr);
+        ExecProtocol::route_output(mk_stdout(vec![0xE2]), &mut stdout, &mut stderr).await;
+        ExecProtocol::route_output(mk_stdout(vec![0x94, 0x80]), &mut stdout, &mut stderr).await;
 
         // First message: holdover only, no emission.
         // Second message: complete "─" emitted.
@@ -1121,22 +1135,22 @@ mod tests {
     /// shutdown cancellation) so trailing partial UTF-8 bytes are never
     /// silently dropped — keeping the helper correct keeps all three paths
     /// correct.
-    #[test]
-    fn decoded_stream_flush_drains_held_bytes_on_any_exit_path() {
-        let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
-        let (stderr_tx, mut stderr_rx) = mpsc::unbounded_channel::<String>();
+    #[tokio::test]
+    async fn decoded_stream_flush_drains_held_bytes_on_any_exit_path() {
+        let (stdout_tx, mut stdout_rx) = mpsc::channel::<String>(STREAM_CHANNEL_CAP);
+        let (stderr_tx, mut stderr_rx) = mpsc::channel::<String>(STREAM_CHANNEL_CAP);
         let mut stdout = DecodedStream::new(stdout_tx);
         let mut stderr = DecodedStream::new(stderr_tx);
 
         // Seed each stream with the first byte of a 3-byte codepoint so it
         // has held-over bytes that would be lost without an explicit flush.
-        stdout.send_bytes(vec![0xE2]);
-        stderr.send_bytes(vec![0xE2]);
+        stdout.send_bytes(vec![0xE2]).await;
+        stderr.send_bytes(vec![0xE2]).await;
         assert!(stdout_rx.try_recv().is_err());
         assert!(stderr_rx.try_recv().is_err());
 
-        stdout.flush();
-        stderr.flush();
+        stdout.flush().await;
+        stderr.flush().await;
 
         // Both channels must receive U+FFFD (matches from_utf8_lossy on a
         // truncated tail). Without the flush, error/shutdown paths silently
@@ -1144,8 +1158,8 @@ mod tests {
         assert_eq!(stdout_rx.try_recv().ok(), Some("\u{FFFD}".to_string()));
         assert_eq!(stderr_rx.try_recv().ok(), Some("\u{FFFD}".to_string()));
         // Idempotent: a second flush is a no-op (channels stay empty).
-        stdout.flush();
-        stderr.flush();
+        stdout.flush().await;
+        stderr.flush().await;
         assert!(stdout_rx.try_recv().is_err());
         assert!(stderr_rx.try_recv().is_err());
     }

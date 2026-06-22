@@ -287,8 +287,8 @@ impl Execution {
         id: &str,
     ) -> (
         Self,
-        mpsc::UnboundedSender<String>,
-        mpsc::UnboundedSender<String>,
+        mpsc::Sender<String>,
+        mpsc::Sender<String>,
         mpsc::UnboundedReceiver<Vec<u8>>,
         mpsc::UnboundedSender<ExecResult>,
     ) {
@@ -312,8 +312,8 @@ impl Execution {
             }
         }
 
-        let (stdout_tx, stdout_rx) = mpsc::unbounded_channel::<String>();
-        let (stderr_tx, stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (stdout_tx, stdout_rx) = mpsc::channel::<String>(64);
+        let (stderr_tx, stderr_rx) = mpsc::channel::<String>(64);
         let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let (result_tx, result_rx) = mpsc::unbounded_channel::<ExecResult>();
 
@@ -393,11 +393,11 @@ impl ExecStdin {
 
 /// Standard output stream (read-only).
 pub struct ExecStdout {
-    receiver: mpsc::UnboundedReceiver<String>,
+    receiver: mpsc::Receiver<String>,
 }
 
 impl ExecStdout {
-    pub(crate) fn new(receiver: mpsc::UnboundedReceiver<String>) -> Self {
+    pub(crate) fn new(receiver: mpsc::Receiver<String>) -> Self {
         Self { receiver }
     }
 }
@@ -412,11 +412,11 @@ impl Stream for ExecStdout {
 
 /// Standard error stream (read-only).
 pub struct ExecStderr {
-    receiver: mpsc::UnboundedReceiver<String>,
+    receiver: mpsc::Receiver<String>,
 }
 
 impl ExecStderr {
-    pub(crate) fn new(receiver: mpsc::UnboundedReceiver<String>) -> Self {
+    pub(crate) fn new(receiver: mpsc::Receiver<String>) -> Self {
         Self { receiver }
     }
 }
