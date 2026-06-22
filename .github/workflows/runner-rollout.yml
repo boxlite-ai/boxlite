@@ -128,7 +128,7 @@ jobs:
 
       - name: Install system dependencies
         if: ${{ steps.in.outputs.source == 'dev-build' }}
-        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxtst-dev libxinerama-dev
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxtst-dev libxinerama-dev meson ninja-build libcap-dev
 
       - name: Determine version + sha
         id: version
