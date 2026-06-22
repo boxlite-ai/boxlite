@@ -1,0 +1,169 @@
+name: Runner Diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Stage
+        type: choice
+        options: [dev]
+        default: dev
+      box_id:
+        description: Box id to inspect under /var/lib/boxlite/boxes
+        type: string
+        required: true
+      instance_id:
+        description: Pin a runner instance id (blank = find boxlite-runner-default by tag)
+        type: string
+        default: ""
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-southeast-1
+
+jobs:
+  diagnose:
+    name: Diagnose runner box
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.stage }}
+    steps:
+      - name: Validate inputs
+        env:
+          BOX_ID: ${{ inputs.box_id }}
+          INSTANCE_ID: ${{ inputs.instance_id }}
+        run: |
+          case "$BOX_ID" in
+            *[!A-Za-z0-9_-]* | "")
+              echo "::error::box_id must contain only letters, numbers, underscore, or dash"
+              exit 2
+              ;;
+          esac
+          case "$INSTANCE_ID" in
+            *[!A-Za-z0-9-]*)
+              echo "::error::instance_id must contain only letters, numbers, or dash"
+              exit 2
+              ;;
+          esac
+
+      - name: Assume AWS deploy role (GitHub OIDC, no static keys)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::064212132677:role/boxlite-github-deployer-${{ inputs.stage }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Collect runner diagnostics
+        env:
+          BOX_ID: ${{ inputs.box_id }}
+          PINNED_INSTANCE_ID: ${{ inputs.instance_id }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "$PINNED_INSTANCE_ID" ]; then
+            INSTANCE_ID="$PINNED_INSTANCE_ID"
+          else
+            INSTANCE_ID=$(aws ec2 describe-instances \
+              --region "$AWS_REGION" \
+              --filters \
+                "Name=tag:Name,Values=boxlite-runner-default" \
+                "Name=instance-state-name,Values=running" \
+              --query "Reservations[].Instances[].InstanceId" \
+              --output text)
+          fi
+
+          if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" = "None" ]; then
+            echo "::error::no running boxlite-runner-default instance found"
+            exit 1
+          fi
+
+          REMOTE_SCRIPT=$(cat <<'SCRIPT'
+          set -euo pipefail
+
+          BOX_ID="__BOX_ID__"
+          BOX_DIR="/var/lib/boxlite/boxes/$BOX_ID"
+
+          echo "== host =="
+          hostname || true
+          date -Is || true
+          echo
+
+          echo "== runner =="
+          /usr/local/bin/boxlite-runner --version || true
+          systemctl is-active boxlite-runner || true
+          echo
+
+          echo "== box dir =="
+          if sudo test -d "$BOX_DIR"; then
+            sudo find "$BOX_DIR" -maxdepth 3 -printf '%M %u:%g %s %p\n' | sort || true
+          else
+            echo "missing: $BOX_DIR"
+          fi
+          echo
+
+          for path in \
+            "$BOX_DIR/shim.stderr" \
+            "$BOX_DIR/logs/console.log" \
+            "$BOX_DIR/exit.json" \
+            "$BOX_DIR/shim.pid"; do
+            echo "== $path =="
+            if sudo test -f "$path"; then
+              sudo tail -n 260 "$path" || true
+            else
+              echo "missing"
+            fi
+            echo
+          done
+
+          echo "== journalctl boxlite-runner =="
+          sudo journalctl -u boxlite-runner --no-pager -n 220 || true
+          SCRIPT
+          )
+          REMOTE_SCRIPT="${REMOTE_SCRIPT/__BOX_ID__/$BOX_ID}"
+          SCRIPT_B64=$(printf '%s' "$REMOTE_SCRIPT" | base64 -w0)
+
+          COMMAND_ID=$(aws ssm send-command \
+            --region "$AWS_REGION" \
+            --document-name AWS-RunShellScript \
+            --instance-ids "$INSTANCE_ID" \
+            --comment "boxlite runner diagnostics for $BOX_ID" \
+            --parameters "commands=[\"echo $SCRIPT_B64 | base64 -d | bash\"]" \
+            --query "Command.CommandId" \
+            --output text)
+
+          echo "instance: $INSTANCE_ID"
+          echo "command:  $COMMAND_ID"
+
+          aws ssm wait command-executed \
+            --region "$AWS_REGION" \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" || true
+
+          STATUS=$(aws ssm get-command-invocation \
+            --region "$AWS_REGION" \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query Status \
+            --output text)
+
+          echo "status:   $STATUS"
+          echo
+          echo "== stdout =="
+          aws ssm get-command-invocation \
+            --region "$AWS_REGION" \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query StandardOutputContent \
+            --output text
+
+          echo
+          echo "== stderr =="
+          aws ssm get-command-invocation \
+            --region "$AWS_REGION" \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query StandardErrorContent \
+            --output text
+
+          [ "$STATUS" = "Success" ]
