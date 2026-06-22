@@ -141,6 +141,38 @@ to one runner instead of all.
 health, `runner-rollout` logs. (SSM + CloudWatch today; SST Console shows the EC2
 resources but not box-level health — box metrics are our own telemetry.)
 
+### Layer 4 — concrete integration points (verified in apps/api, 2026-06-22)
+
+Good news: the scheduling code is small and the DRAIN primitive already exists, so
+runner canary is an extension, not a rewrite.
+
+```
+apps/api/src/box/services/runner.service.ts
+  findAvailableRunners (:283)   filters: state=READY, unschedulable!=true,
+                                draining!=true, availabilityScore>=threshold,
+                                optional region / class / excludedRunnerIds;
+                                returns top-10 by availabilityScore.
+  getRandomAvailableRunner (:722) picks a RANDOM one of those.
+apps/api/src/box/services/box.service.ts:136,198  call getRandomAvailableRunner.
+```
+
+What this means for canary:
+- **DRAIN is already solved.** The `unschedulable` + `draining` flags on the Runner
+  entity are already honored in `findAvailableRunners` (:286-287). "Mark a runner
+  unschedulable, let its boxes finish, then swap its binary" needs no new primitive —
+  just set the flags (admin API) before `runner-update-binary.sh` hits that instance.
+- **Runner already has a `class` field** (:307-308, used as a scheduling filter). A
+  canary cohort can be modeled as a class/label without a schema change of substance.
+- **The only real addition is canary-aware *selection*:** today it's random over the
+  eligible set. Canary = either (a) route a weighted % to the canary runner, or
+  (b) a `canary`/`stable` param so a caller can target one cohort. Both are localized
+  changes to `findAvailableRunners` + `getRandomAvailableRunner` (and a way to flag a
+  runner as canary). That is the whole "piece B" — bounded, in one service.
+
+So the interim "2 runners + coarse canary-by-runner" is genuinely cheap: run a second
+runner, mark it canary (class), drain+swap it first (flags already work), watch it,
+then promote. Full %-weighting is a follow-up, not a prerequisite.
+
 ---
 
 ## What to build, in order (cheapest risk-reduction first)

@@ -103,12 +103,19 @@ AWS_PROFILE=boxlite-sso aws ssm put-parameter --region ap-southeast-1 --type Str
 
 ## The durable fix (beyond this incident)
 
-Env parity is a recurring foot-gun (79 referenced, 18 in SSM). The right durable fix
-is one of:
-- **Seed ALL infra-affecting env into SSM** (extend `seed-deploy-env-ssm.mjs`), so any
-  deploy (laptop / CI / Console) reproduces the same resource shape; OR
-- **Remove env-driven immutable infra props from the hot path** — e.g., make
+Env parity is a recurring foot-gun (79 referenced, 18 in SSM). How the 18 got
+chosen (verified): `seed-deploy-env-ssm.mjs` reads a LOCAL `.env`, parses key=val,
+drops an EXCLUDE set + empty values, and seeds the rest to `/boxlite/<stage>/env/*`.
+So "18" = whatever that one `.env` happened to contain. JAEGER_PUBLIC /
+MAILDEV_PUBLIC / PGADMIN_PUBLIC weren't in it → never seeded → deploy defaults them
+to `false`. The right durable fix is one of:
+- **Seed ALL infra-affecting env into SSM**: add JAEGER_PUBLIC / MAILDEV_PUBLIC /
+  PGADMIN_PUBLIC (+ any other infra-driving var) to the seed `.env` with dev's REAL
+  values, and re-run the seed — so any deploy (laptop / CI / Console) reproduces the
+  same resource shape. (Values need a one-time read of dev's live LB schemes — SSO.)
+- **OR remove env-driven immutable infra props from the hot path** — make
   Jaeger/MailDev/PgAdmin `public` a committed config constant, not an env toggle, so a
-  missing env var can never silently flip an LB's scheme.
+  missing env var can never silently flip an LB's scheme. (Trade-off: loses the
+  documented public-opt-in toggle; aligns with the config's internal-by-default intent.)
 
 Either kills the "deploy from a different machine = destructive diff" class of bug.
