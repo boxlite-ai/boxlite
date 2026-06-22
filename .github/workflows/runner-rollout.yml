@@ -75,12 +75,20 @@ jobs:
     steps:
       - name: Resolve inputs (defaults make push-triggered runs sane)
         id: in
+        # Pass inputs via env, not ${{ }} interpolated into the script text, so a crafted
+        # free-text input (ref / instance_id) is a shell value, never executable script.
+        env:
+          IN_STAGE: ${{ inputs.stage || 'dev' }}
+          IN_SOURCE: ${{ inputs.source || 'dev-build' }}
+          IN_MODE: ${{ inputs.mode || 'upgrade' }}
+          IN_REF: ${{ inputs.ref }}
+          IN_INSTANCE_ID: ${{ inputs.instance_id }}
         run: |
-          echo "stage=${{ inputs.stage || 'dev' }}"        >> "$GITHUB_OUTPUT"
-          echo "source=${{ inputs.source || 'dev-build' }}" >> "$GITHUB_OUTPUT"
-          echo "mode=${{ inputs.mode || 'upgrade' }}"       >> "$GITHUB_OUTPUT"
-          echo "ref=${{ inputs.ref }}"                      >> "$GITHUB_OUTPUT"
-          echo "instance_id=${{ inputs.instance_id }}"      >> "$GITHUB_OUTPUT"
+          echo "stage=$IN_STAGE"             >> "$GITHUB_OUTPUT"
+          echo "source=$IN_SOURCE"           >> "$GITHUB_OUTPUT"
+          echo "mode=$IN_MODE"               >> "$GITHUB_OUTPUT"
+          echo "ref=$IN_REF"                 >> "$GITHUB_OUTPUT"
+          echo "instance_id=$IN_INSTANCE_ID" >> "$GITHUB_OUTPUT"
 
       - name: Guard — rollback requires a release version
         if: ${{ steps.in.outputs.mode == 'rollback' && steps.in.outputs.source != 'release' }}
@@ -91,6 +99,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ (steps.in.outputs.source == 'dev-build' && steps.in.outputs.ref != '') && steps.in.outputs.ref || github.ref }}
+          persist-credentials: false
 
       # ── dev-build: build the runner binary from this checkout ──────────────
       # Faithful copy of build-runner-binary.yml's build recipe (could become a
@@ -221,4 +230,5 @@ jobs:
         env:
           STAGE: ${{ steps.in.outputs.stage }}
           BOXLITE_RUNNER_INSTANCE_ID: ${{ steps.in.outputs.instance_id }}
-        run: bash scripts/deploy/runner-update-binary.sh "${{ steps.in.outputs.ref }}"
+          REF: ${{ steps.in.outputs.ref }}
+        run: bash scripts/deploy/runner-update-binary.sh "$REF"
