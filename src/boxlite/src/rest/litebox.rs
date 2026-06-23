@@ -672,13 +672,17 @@ async fn attach_ws_pump(
                             if let Some((channel, payload)) = bytes.split_first() {
                                 let text = String::from_utf8_lossy(payload).into_owned();
                                 match *channel {
+                                    // try_send (drop on full), NOT send().await: this single
+                                    // loop also processes the Exit/Error control frames, so a
+                                    // back-pressured stdout/stderr must never block — otherwise a
+                                    // slow consumer would stall exit propagation and hang Wait.
                                     0x01 => {
                                         tracing::trace!(len = text.len(), "WS attach: stdout frame");
-                                        let _ = stdout_tx.send(text).await;
+                                        let _ = stdout_tx.try_send(text);
                                     }
                                     0x02 => {
                                         tracing::trace!(len = text.len(), "WS attach: stderr frame");
-                                        let _ = stderr_tx.send(text).await;
+                                        let _ = stderr_tx.try_send(text);
                                     }
                                     other => {
                                         tracing::warn!(channel = other, "WS attach: unknown channel prefix");

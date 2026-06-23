@@ -292,6 +292,13 @@ func (s *executionStreamState) deliverLoop() {
 	}
 }
 
+// writeChunk hands one chunk to the caller's sink. Write errors are
+// deliberately not propagated: this runs on the async delivery goroutine with
+// no caller to return them to, and a transient sink hiccup should not tear down
+// a healthy execution. A sink that fails permanently simply stops accepting
+// bytes, which leaves output buffered and is exactly the condition
+// StreamStallTimeout watches for and kills — so a wedged sink is still handled,
+// without making every transient write error fatal.
 func (s *executionStreamState) writeChunk(c streamChunk) {
 	if c.stderr {
 		if s.onStderr != nil {
@@ -330,21 +337,32 @@ func (s *executionStreamState) stallWatchdog(timeout time.Duration, kill func())
 	defer t.Stop()
 
 	lastProgress := s.progress.Load()
-	lastAdvance := time.Now()
+	var stalledSince time.Time // zero = not currently stalled
 	for {
 		select {
 		case <-s.drained:
 			return
 		case <-t.C:
-			if now := s.progress.Load(); now != lastProgress {
-				lastProgress = now
-				lastAdvance = time.Now()
-				continue
-			}
+			now := s.progress.Load()
+			progressed := now != lastProgress
+			lastProgress = now
+
 			s.qmu.Lock()
 			pending := s.queuedBytes
 			s.qmu.Unlock()
-			if pending > 0 && time.Since(lastAdvance) >= timeout {
+
+			// A stall is "output is buffered but nothing got delivered this
+			// interval". Time it from when the stall began (not from exec start
+			// or last progress), so a sink that goes quiet then stalls still
+			// gets the full timeout, and a quiet exec that buffers nothing is
+			// never killed.
+			if progressed || pending == 0 {
+				stalledSince = time.Time{}
+				continue
+			}
+			if stalledSince.IsZero() {
+				stalledSince = time.Now()
+			} else if time.Since(stalledSince) >= timeout {
 				kill()
 				return
 			}

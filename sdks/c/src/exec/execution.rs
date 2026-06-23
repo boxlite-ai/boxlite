@@ -766,7 +766,8 @@ unsafe fn execution_free(execution: *mut ExecutionHandle) {
 /// Block while the execution's stream is paused (Go-side back-pressure). The
 /// pump calls this AFTER delivering a chunk so it stops reading the next one
 /// from the bounded upstream channel — which then fills and back-pressures the
-/// guest. Sleep-poll (2ms) is coarse but cheap; pauses are seconds-scale.
+/// guest. Blocks on the watch channel (zero CPU) until the pause flag changes,
+/// so resumes wake the pump immediately; pauses are seconds-scale.
 async fn await_unpaused(rx: &mut watch::Receiver<bool>) {
     // Block (zero CPU) while paused; wake on the next pause-flag change. watch
     // is version-tracked, so a resume that races the check is never missed. A

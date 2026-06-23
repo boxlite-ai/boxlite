@@ -84,12 +84,24 @@ func TestIntegrationExecStreamStallTimeout(t *testing.T) {
 	}
 	defer exec.Close()
 
-	done := make(chan int, 1)
-	go func() { c, _ := exec.Wait(context.Background()); done <- c }()
+	type waitResult struct {
+		code int
+		err  error
+	}
+	done := make(chan waitResult, 1)
+	go func() {
+		c, e := exec.Wait(context.Background())
+		done <- waitResult{c, e}
+	}()
 	start := time.Now()
 	select {
-	case code := <-done:
-		if code == 0 {
+	case res := <-done:
+		// The stall-kill must surface through Wait: it returns cleanly (no
+		// error) with the SIGKILL reflected in a non-zero exit code.
+		if res.err != nil {
+			t.Errorf("Wait err = %v, want nil (stall-kill surfaces via exit code)", res.err)
+		}
+		if res.code == 0 {
 			t.Errorf("exit = 0, want non-zero (stall-killed)")
 		}
 		if elapsed := time.Since(start); elapsed > 10*time.Second {

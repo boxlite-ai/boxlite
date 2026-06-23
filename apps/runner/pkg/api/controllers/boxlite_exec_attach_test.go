@@ -718,6 +718,10 @@ func TestWaitForStreamDrain(t *testing.T) {
 			t.Fatalf("took %v to give up on an idle stream; should release "+
 				"within ~idleBound so exit reports promptly", elapsed)
 		}
+		if elapsed < 80*time.Millisecond {
+			t.Fatalf("gave up after only %v; expected it to wait ~one idle "+
+				"window (100ms) before declaring the stream stuck", elapsed)
+		}
 	})
 
 	t.Run("falls back to hard cap when a pipe trickles forever", func(t *testing.T) {
