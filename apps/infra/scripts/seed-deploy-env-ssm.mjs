@@ -22,7 +22,10 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 
-const REGION = process.env.AWS_REGION || 'ap-southeast-1'
+// SSM config region is FIXED (not the deploy region): all stages' /boxlite/<stage>/* config lives
+// in ap-southeast-1 regardless of where the stage deploys, matching sst-with-cloudflare.mjs so seeds
+// land where the deploy reads them. Override with BOXLITE_CONFIG_REGION.
+const REGION = process.env.BOXLITE_CONFIG_REGION || 'ap-southeast-1'
 
 // Machine-specific or handled-elsewhere — never seed these.
 //   AWS_PROFILE       : a local profile name; on CI it would break OIDC creds.
