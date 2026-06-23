@@ -80,6 +80,7 @@ jobs:
     name: Roll out runner
     needs: config
     runs-on: ubuntu-latest
+    environment: ${{ inputs.stage || 'dev' }}
     steps:
       - name: Resolve inputs (defaults make push-triggered runs sane)
         id: in
@@ -110,6 +111,12 @@ jobs:
         if: ${{ steps.in.outputs.mode == 'rollback' && steps.in.outputs.source != 'release' }}
         run: |
           echo "::error::rollback mode requires source=release with the target version in 'ref'"
+          exit 1
+
+      - name: Guard — prod installs releases only
+        if: ${{ steps.in.outputs.stage == 'prod' && steps.in.outputs.source != 'release' }}
+        run: |
+          echo "::error::prod runner rollout only supports source=release"
           exit 1
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
