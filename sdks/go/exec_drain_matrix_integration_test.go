@@ -42,10 +42,14 @@ func TestIntegrationExecDrainMatrix(t *testing.T) {
 		}
 		defer exec.Close()
 		var code int
+		var waitErr error
 		if kill != nil {
 			go kill(exec)
 		}
-		waitWatchdog(t, watchdog, t.Name(), func() { code, _ = exec.Wait(context.Background()) })
+		waitWatchdog(t, watchdog, t.Name(), func() { code, waitErr = exec.Wait(context.Background()) })
+		if waitErr != nil {
+			t.Fatalf("Wait: %v", waitErr)
+		}
 		return code
 	}
 
@@ -199,7 +203,11 @@ func TestIntegrationExecOutputShapes(t *testing.T) {
 		}
 		defer exec.Close()
 		var code int
-		waitWatchdog(t, watchdog, t.Name(), func() { code, _ = exec.Wait(context.Background()) })
+		var waitErr error
+		waitWatchdog(t, watchdog, t.Name(), func() { code, waitErr = exec.Wait(context.Background()) })
+		if waitErr != nil {
+			t.Fatalf("Wait: %v", waitErr)
+		}
 		return code, out.Len()
 	}
 
