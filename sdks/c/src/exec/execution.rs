@@ -92,12 +92,14 @@ pub struct ExecutionHandle {
     /// claimer pushes Exit. Both `execution_free` and `exit_pump`
     /// race for it; the loser silently no-ops.
     exit_dispatched: Arc<AtomicBool>,
-    /// Per-execution stream back-pressure flag. When the Go SDK's bounded
-    /// delivery queue fills it sets this (via `boxlite_execution_set_stream_paused`);
-    /// the stdout/stderr pumps then stop reading their bounded upstream channel,
-    /// which fills, blocking the attach reader's `send().await`, which stops
-    /// draining the guest gRPC stream and ultimately blocks the guest process's
-    /// write(). Cleared when the queue drains below its low-water mark.
+    /// Per-execution stream back-pressure flag driven by high-level bindings
+    /// with their own delivery queues. The Go SDK sets this via
+    /// `boxlite_execution_set_stream_paused` when its bounded queue crosses
+    /// high/low-water marks; direct C callback delivery is already bounded by
+    /// the runtime EventQueue. When set, stdout/stderr pumps stop reading their
+    /// bounded upstream channel, which fills, blocks the attach reader's
+    /// `send().await`, stops draining the guest gRPC stream, and ultimately
+    /// blocks the guest process's write().
     stream_pause_tx: watch::Sender<bool>,
 }
 
@@ -165,14 +167,13 @@ pub unsafe extern "C" fn boxlite_execution_stdin_close(
     close_stdin(execution, out_error)
 }
 
-/// Pause (paused != 0) or resume (paused == 0) delivery of this execution's
-/// stdout/stderr. While paused, the stream pumps stop reading their bounded
-/// upstream channel, which fills and back-pressures the guest process's
-/// write() — letting a slow consumer throttle the producer instead of buffering
-/// unboundedly. The Go SDK drives this from its delivery queue's high/low-water
-/// marks. Idempotent; safe to call repeatedly.
+/// Binding-only hook for SDKs with their own delivery queues to pause or
+/// resume stdout/stderr. It is intentionally not part of the public C header:
+/// direct C callback delivery is already bounded by the runtime EventQueue,
+/// while higher-level bindings such as Go drive this automatically from their
+/// own high/low-water marks.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_execution_set_stream_paused(
+pub(crate) unsafe extern "C" fn boxlite_execution_set_stream_paused(
     execution: *mut CExecutionHandle,
     paused: c_int,
     out_error: *mut CBoxliteError,
