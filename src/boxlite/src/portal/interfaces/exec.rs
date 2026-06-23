@@ -6,7 +6,8 @@
 use crate::litebox::{BoxCommand, ExecResult};
 use boxlite_shared::{
     AttachRequest, BoxliteError, BoxliteResult, ExecOutput, ExecRequest, ExecStdin,
-    ExecutionClient, KillRequest, WaitRequest, WaitResponse, exec_output,
+    ExecutionClient, KillRequest, WaitRequest, WaitResponse, constants::executor as executor_const,
+    exec_output,
 };
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -57,13 +58,18 @@ impl ExecutionInterface {
 
         tracing::debug!(command = %command.command, "exec RPC: sending request");
 
-        // Start execution
+        // Start execution. The guest classifies a user-command error (program
+        // not found / not executable / no PATH) at the source and tags it with
+        // the stable `REASON_USER_COMMAND_ERROR` token; map that to `Execution`
+        // (HTTP 422) so a mistyped command isn't a 5xx that false-alarms SRE.
+        // Everything else stays `Internal` (500). No youki-internal text matching.
         let exec_response = self.client.exec(request).await?.into_inner();
         if let Some(err) = exec_response.error {
-            return Err(BoxliteError::Internal(format!(
-                "{}: {}",
-                err.reason, err.detail
-            )));
+            return Err(if err.reason == executor_const::REASON_USER_COMMAND_ERROR {
+                BoxliteError::Execution(err.detail)
+            } else {
+                BoxliteError::Internal(format!("{}: {}", err.reason, err.detail))
+            });
         }
 
         let execution_id = exec_response.execution_id.clone();

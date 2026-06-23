@@ -12,14 +12,16 @@
 //! See `docs/investigations/concurrent-exec-deadlock.md` for full analysis.
 
 use super::capabilities::capability_names;
+use super::validating_executor::ValidatingExecutor;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use libcontainer::container::builder::ContainerBuilder;
 use libcontainer::syscall::syscall::SyscallType;
+use nix::fcntl::OFlag;
 use nix::sys::socket::{
     recvmsg, sendmsg, socketpair, AddressFamily, ControlMessage, ControlMessageOwned, MsgFlags,
     SockFlag, SockType,
 };
-use nix::unistd::{fork, ForkResult, Pid};
+use nix::unistd::{fork, pipe2, ForkResult, Pid};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{IoSlice, IoSliceMut};
@@ -60,11 +62,28 @@ pub(crate) struct BuildSpec {
     pub gid: u32,
 }
 
+/// Classifies *why* a build failed, so the host can map it to the right status
+/// without re-parsing youki's volatile error text. Set at the source in
+/// [`do_build`] from the [`ValidatingExecutor`](super::validating_executor)
+/// fd side-channel.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub(crate) enum BuildFailureKind {
+    /// The user-supplied command can't be run (not found / not executable / no
+    /// PATH). Maps to `BoxliteError::Execution` → HTTP 422.
+    UserCommandError,
+    /// A genuine platform failure (cgroup, mount, seccomp, init death, IPC).
+    /// Maps to `BoxliteError::Internal` → HTTP 500, stays visible to SRE.
+    Platform,
+}
+
 /// Build outcome. Invalid states are unrepresentable.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub(crate) enum BuildResult {
     Spawned { pid: i32 },
-    Failed { error: String },
+    Failed {
+        kind: BuildFailureKind,
+        error: String,
+    },
 }
 
 /// Process exit outcome from waitpid, serialized over IPC.
@@ -154,9 +173,13 @@ impl Zygote {
         send_request(fd, &ZygoteRequest::Build(spec), fds)?;
         match recv_response(fd)? {
             ZygoteResponse::Build(BuildResult::Spawned { pid }) => Ok(Pid::from_raw(pid)),
-            ZygoteResponse::Build(BuildResult::Failed { error }) => {
-                Err(BoxliteError::Internal(error))
-            }
+            // Type-driven classification — no string matching. The `kind` was
+            // decided at the source (do_build) from the executor fd signal.
+            // `Execution` is the existing 422 mapping; `Internal` stays 500.
+            ZygoteResponse::Build(BuildResult::Failed { kind, error }) => Err(match kind {
+                BuildFailureKind::UserCommandError => BoxliteError::Execution(error),
+                BuildFailureKind::Platform => BoxliteError::Internal(error),
+            }),
             other => Err(BoxliteError::Internal(format!(
                 "expected Build response, got: {other:?}"
             ))),
@@ -235,11 +258,32 @@ fn serve(sock: OwnedFd) -> ! {
 /// This is the same ContainerBuilder chain that was in `command.rs build_and_spawn()`,
 /// moved here to run in the zygote's single-threaded context where clone3() is safe.
 fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
+    // Typed side-channel for user-command errors. The ValidatingExecutor (running
+    // in the clone3'd init child, post-pivot) writes a byte here when youki's
+    // workload validator rejects the program; we read it after build() fails to
+    // classify the failure without parsing youki's error text. O_CLOEXEC so the
+    // fd never leaks into a successfully exec'd user process; O_NONBLOCK so the
+    // post-build read can't hang. A pipe() failure is itself a platform fault.
+    let (signal_read, signal_write) = match pipe2(OFlag::O_CLOEXEC | OFlag::O_NONBLOCK) {
+        Ok(pair) => pair,
+        Err(e) => {
+            return BuildResult::Failed {
+                kind: BuildFailureKind::Platform,
+                error: format!("zygote signal pipe: {e}"),
+            }
+        }
+    };
+    let signal_write_fd = signal_write.as_raw_fd();
+
     let build_fn = || -> Result<Pid, String> {
         let mut builder = ContainerBuilder::new(spec.container_id.clone(), SyscallType::default())
             .with_root_path(spec.state_root.clone())
             .map_err(|e| format!("Failed to set container root path: {e}"))?
             .with_console_socket(spec.console_socket.clone())
+            // Intercept youki's workload validation to flag user-command errors
+            // over the fd above. Set on the base builder so it carries into both
+            // the TTY and non-TTY tenant paths below.
+            .with_executor(ValidatingExecutor::new(signal_write_fd))
             .validate_id()
             .map_err(|e| format!("Invalid container ID: {e}"))?;
 
@@ -303,10 +347,42 @@ fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
         Ok(pid)
     };
 
-    match build_fn() {
+    let outcome = build_fn();
+
+    // Drop our copy of the write end before reading. We don't depend on EOF —
+    // the child wrote (if at all) before its init returned Err, which happens
+    // before build() returns, so any byte is already buffered. A non-blocking
+    // peek is enough.
+    drop(signal_write);
+
+    match outcome {
         Ok(pid) => BuildResult::Spawned { pid: pid.as_raw() },
-        Err(error) => BuildResult::Failed { error },
+        Err(error) => {
+            let kind = if signal_pipe_fired(&signal_read) {
+                BuildFailureKind::UserCommandError
+            } else {
+                BuildFailureKind::Platform
+            };
+            BuildResult::Failed { kind, error }
+        }
     }
+}
+
+/// Non-blocking peek: did the [`ValidatingExecutor`](super::validating_executor)
+/// write its user-command-error byte? Any byte read means yes. EAGAIN / empty /
+/// error means no — we fail safe toward `Platform` (HTTP 500), so a lost signal
+/// can never *downgrade* a real platform fault into a user error.
+fn signal_pipe_fired(read_fd: &OwnedFd) -> bool {
+    let mut buf = [0u8; 1];
+    // SAFETY: read_fd is a valid owned fd; read up to 1 byte into a stack buffer.
+    let n = unsafe {
+        nix::libc::read(
+            read_fd.as_raw_fd(),
+            buf.as_mut_ptr() as *mut nix::libc::c_void,
+            1,
+        )
+    };
+    n > 0
 }
 
 /// Check if a container process has exited (non-blocking).

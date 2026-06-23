@@ -29,9 +29,9 @@ pub(crate) use state::InitHealthCheck;
 use crate::service::exec::executor::{ContainerExecutor, GuestExecutor};
 use crate::service::server::GuestServer;
 use boxlite_shared::{
-    constants::executor as executor_const, AttachRequest, ExecError, ExecOutput, ExecRequest,
-    ExecResponse, ExecStdin, Execution, KillRequest, KillResponse, ResizeTtyRequest,
-    ResizeTtyResponse, SendInputAck, WaitRequest, WaitResponse,
+    constants::executor as executor_const, errors::BoxliteError, AttachRequest, ExecError,
+    ExecOutput, ExecRequest, ExecResponse, ExecStdin, Execution, KillRequest, KillResponse,
+    ResizeTtyRequest, ResizeTtyResponse, SendInputAck, WaitRequest, WaitResponse,
 };
 use futures::stream::Stream;
 use std::pin::Pin;
@@ -353,6 +353,22 @@ fn spawn_error(exec_id: &str, err: String) -> ExecResponse {
     }
 }
 
+/// A user-command error (program not found / not executable / no PATH). Tagged
+/// with the shared `REASON_USER_COMMAND_ERROR` token so the host maps it to
+/// `BoxliteError::Execution` (HTTP 422) rather than the `spawn_failed` → 500
+/// path. `detail` is youki's message, kept for humans, never parsed for control.
+fn user_command_error(exec_id: &str, detail: String) -> ExecResponse {
+    ExecResponse {
+        execution_id: exec_id.to_string(),
+        pid: 0,
+        started_at_ms: 0,
+        error: Some(ExecError {
+            reason: executor_const::REASON_USER_COMMAND_ERROR.to_string(),
+            detail,
+        }),
+    }
+}
+
 fn now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -426,6 +442,14 @@ async fn spawn_with_executor(
             let container_ref = executor.container_ref();
             let handle = match executor.spawn(req).await {
                 Ok(h) => h,
+                // The zygote already classified this as a user-command error
+                // (program not found / not executable / no PATH) from the youki
+                // workload validator via its fd side-channel. Carry that across
+                // the gRPC boundary as a stable `reason` token so the host maps
+                // it to a 422, not a 500 — no init-death probe, no string match.
+                Err(BoxliteError::Execution(detail)) => {
+                    return Err(user_command_error(execution_id, detail));
+                }
                 Err(e) => {
                     // Check if container init died — provide actionable diagnostics
                     let mut container = container_ref.lock().await;
