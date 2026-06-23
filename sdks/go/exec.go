@@ -69,6 +69,14 @@ type ExecutionOptions struct {
 	// means no timeout (the C side treats `timeout_secs <= 0` as
 	// unbounded — see `sdks/c/src/exec/command.rs`).
 	Timeout time.Duration
+	// StreamStallTimeout auto-kills the execution if back-pressure has fully
+	// stalled — i.e. there is output buffered but the caller's Stdout/Stderr
+	// sink has accepted nothing for this long. It guards against a permanently
+	// blocked/abandoned sink leaving the producer suspended (and the box's
+	// resources held) forever. A sink that keeps making progress, however
+	// slowly, is never killed; an execution that simply produces no output is
+	// never killed (nothing is buffered). Zero disables the guard.
+	StreamStallTimeout time.Duration
 }
 
 // executionStreamState holds the user-provided sinks for streaming output
@@ -307,6 +315,43 @@ func (s *executionStreamState) closeDrained() {
 	s.drainedOnce.Do(func() { close(s.drained) })
 }
 
+// stallWatchdog auto-kills (via the supplied closure) an execution whose
+// back-pressure has fully stalled: output is buffered (queuedBytes > 0) but the
+// caller's sink has delivered nothing — progress has not advanced — for the
+// whole timeout. Resets on any progress, so a slow-but-advancing sink is never
+// killed; ignores quiet executions, which buffer nothing. Exits when the stream
+// drains (clean end) or after it has fired the kill.
+func (s *executionStreamState) stallWatchdog(timeout time.Duration, kill func()) {
+	interval := timeout / 4
+	if interval < 50*time.Millisecond {
+		interval = 50 * time.Millisecond
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+
+	lastProgress := s.progress.Load()
+	lastAdvance := time.Now()
+	for {
+		select {
+		case <-s.drained:
+			return
+		case <-t.C:
+			if now := s.progress.Load(); now != lastProgress {
+				lastProgress = now
+				lastAdvance = time.Now()
+				continue
+			}
+			s.qmu.Lock()
+			pending := s.queuedBytes
+			s.qmu.Unlock()
+			if pending > 0 && time.Since(lastAdvance) >= timeout {
+				kill()
+				return
+			}
+		}
+	}
+}
+
 // Execution is a handle to a running command.
 type Execution struct {
 	handle      *C.CExecutionHandle
@@ -427,6 +472,12 @@ func (b *Box) StartExecution(_ context.Context, name string, args []string, opts
 		closing:     b.runtime.closing,
 	}
 	execution.Stdin = &executionStdin{execution: execution}
+
+	if cfg.StreamStallTimeout > 0 {
+		go state.stallWatchdog(cfg.StreamStallTimeout, func() {
+			_ = execution.Kill(context.Background())
+		})
+	}
 	return execution, nil
 }
 

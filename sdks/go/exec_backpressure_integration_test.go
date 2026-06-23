@@ -61,3 +61,46 @@ func TestIntegrationExecBackpressureBoundsMemory(t *testing.T) {
 			"back-pressure is not bounding host memory (want plateau under %d)", grew, bound)
 	}
 }
+
+// TestIntegrationExecStreamStallTimeout verifies the StreamStallTimeout safety
+// net: when output is buffered but the caller's sink accepts nothing for the
+// configured duration (a permanently blocked/abandoned sink), the execution is
+// auto-killed so Wait returns and the box's resources are released — no manual
+// stop required.
+func TestIntegrationExecStreamStallTimeout(t *testing.T) {
+	rt := newTestRuntime(t)
+	box := createStartedBoxOrSkip(t, rt, "alpine:latest", WithAutoRemove(false))
+
+	// A sink that blocks forever on the first write.
+	rel := make(chan struct{})
+	defer close(rel)
+	sink := writerFunc(func(p []byte) (int, error) { <-rel; return len(p), nil })
+
+	exec, err := box.StartExecution(context.Background(), "sh",
+		[]string{"-c", "echo hi; sleep 600"},
+		&ExecutionOptions{Stdout: sink, StreamStallTimeout: 3 * time.Second})
+	if err != nil {
+		t.Fatalf("StartExecution: %v", err)
+	}
+	defer exec.Close()
+
+	done := make(chan int, 1)
+	go func() { c, _ := exec.Wait(context.Background()); done <- c }()
+	start := time.Now()
+	select {
+	case code := <-done:
+		if code == 0 {
+			t.Errorf("exit = 0, want non-zero (stall-killed)")
+		}
+		if elapsed := time.Since(start); elapsed > 10*time.Second {
+			t.Errorf("stall-kill took %s, want ~3s", elapsed)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("HANG: stalled exec was not auto-killed by StreamStallTimeout")
+	}
+}
+
+// writerFunc adapts a func to io.Writer.
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
