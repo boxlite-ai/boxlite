@@ -28,12 +28,14 @@
  *   AWS_PROFILE=boxlite-sso node scripts/seed-prod-from-dev.mjs --apply        # actually write
  *   node scripts/seed-prod-from-dev.mjs --source-stage dev --target-stage prod
  *   node scripts/seed-prod-from-dev.mjs --dev-domain dev.boxlite.ai --prod-domain app.boxlite.ai
- *   AWS_REGION=us-west-2 node scripts/seed-prod-from-dev.mjs                    # target a region
+ *   BOXLITE_CONFIG_REGION=us-west-2 node scripts/seed-prod-from-dev.mjs         # override config region
  */
 
 import { execFileSync } from 'node:child_process'
 
-const REGION = process.env.AWS_REGION || 'ap-southeast-1'
+// SSM config region is FIXED (not the deploy region): all stages' config lives in ap-southeast-1
+// regardless of where the stage deploys, matching sst-with-cloudflare.mjs. Override BOXLITE_CONFIG_REGION.
+const REGION = process.env.BOXLITE_CONFIG_REGION || 'ap-southeast-1'
 
 function arg(flag, fallback) {
   const i = process.argv.indexOf(flag)

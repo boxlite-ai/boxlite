@@ -18,10 +18,11 @@
 //   5. observability               10. runner (EC2 + nested KVM)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Deploy region. Defaults to ap-southeast-1 (where dev lives); a stage can deploy
-// elsewhere by setting AWS_REGION — the deploy workflow exports it from its `region`
-// input, and the SSM helpers (sst-with-cloudflare / seed scripts) already key off the
-// same env var, so a stage's config + creds resolve from the region it deploys to.
+// Deploy region for this stack's AWS resources. Defaults to ap-southeast-1 (where dev lives);
+// a stage can deploy elsewhere by setting AWS_REGION (the deploy workflow exports it from its
+// `region` input). NOTE: this is the RESOURCE region only — the SSM config helpers
+// (sst-with-cloudflare / seed scripts) read from a FIXED region (BOXLITE_CONFIG_REGION ||
+// ap-southeast-1), so a stage's config + creds stay in ap-southeast-1 even when it deploys elsewhere.
 const REGION = process.env.AWS_REGION || 'ap-southeast-1'
 
 // Container ports each service listens on internally
