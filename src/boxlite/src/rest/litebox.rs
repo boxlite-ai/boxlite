@@ -580,6 +580,11 @@ async fn attach_ws_pump(
     // Sticky across reconnects: once the server has ever sent a frame the
     // exec is real, so a later reconnect uses the steady-state watchdog.
     let mut first_frame_seen = false;
+    // Counts stdout/stderr frames dropped when the consumer's bounded channel
+    // is full. We warn once on the first drop (so backpressure-induced output
+    // loss is visible without flooding logs) and report the running total on
+    // clean exit.
+    let mut dropped_output_frames: u64 = 0;
 
     let mut current_stream = Some(initial_stream);
 
@@ -678,11 +683,23 @@ async fn attach_ws_pump(
                                     // slow consumer would stall exit propagation and hang Wait.
                                     0x01 => {
                                         tracing::trace!(len = text.len(), "WS attach: stdout frame");
-                                        let _ = stdout_tx.try_send(text);
+                                        if let Err(err) = stdout_tx.try_send(text) {
+                                            note_dropped_frame(
+                                                "stdout",
+                                                err,
+                                                &mut dropped_output_frames,
+                                            );
+                                        }
                                     }
                                     0x02 => {
                                         tracing::trace!(len = text.len(), "WS attach: stderr frame");
-                                        let _ = stderr_tx.try_send(text);
+                                        if let Err(err) = stderr_tx.try_send(text) {
+                                            note_dropped_frame(
+                                                "stderr",
+                                                err,
+                                                &mut dropped_output_frames,
+                                            );
+                                        }
                                     }
                                     other => {
                                         tracing::warn!(channel = other, "WS attach: unknown channel prefix");
@@ -693,6 +710,12 @@ async fn attach_ws_pump(
                         Message::Text(text) => match parse_control_frame(&text) {
                             ControlFrame::Exit { exit_code } => {
                                 tracing::debug!(exit_code, "WS attach: exit control frame");
+                                if dropped_output_frames > 0 {
+                                    tracing::warn!(
+                                        dropped_output_frames,
+                                        "WS attach: exec completed but some output frames were dropped (consumer fell behind)"
+                                    );
+                                }
                                 let _ = result_tx.send(ExecResult {
                                     exit_code,
                                     error_message: None,
@@ -828,6 +851,28 @@ async fn probe_execution_status(
         // the reconnect budget against something that isn't there.
         Ok(Err(BoxliteError::NotFound(_))) => ProbeResult::Gone,
         _ => ProbeResult::Unavailable,
+    }
+}
+
+/// Record a stdout/stderr frame that couldn't be delivered to the consumer's
+/// bounded channel. `Full` means backpressure dropped output — warn once (on the
+/// first drop) so the loss is visible without flooding logs, and keep counting.
+/// `Closed` means the consumer is gone — that's the normal teardown race, so it
+/// stays at debug.
+fn note_dropped_frame(stream: &str, err: mpsc::error::TrySendError<String>, dropped: &mut u64) {
+    match err {
+        mpsc::error::TrySendError::Full(_) => {
+            *dropped += 1;
+            if *dropped == 1 {
+                tracing::warn!(
+                    stream,
+                    "WS attach: dropping output frame (consumer channel full)"
+                );
+            }
+        }
+        mpsc::error::TrySendError::Closed(_) => {
+            tracing::debug!(stream, "WS attach: consumer channel closed; dropping frame");
+        }
     }
 }
 
@@ -1500,5 +1545,28 @@ mod tests {
 
         attach.await.unwrap();
         server.abort();
+    }
+
+    #[test]
+    fn note_dropped_frame_counts_full_not_closed() {
+        // A full bounded channel yields TrySendError::Full — that's a real
+        // backpressure drop and must be counted.
+        let (tx, _rx) = mpsc::channel::<String>(1);
+        tx.try_send("first".to_string()).unwrap(); // fills the single slot
+        let full = tx.try_send("dropped".to_string()).unwrap_err();
+        assert!(matches!(full, mpsc::error::TrySendError::Full(_)));
+
+        let mut dropped = 0u64;
+        note_dropped_frame("stdout", full, &mut dropped);
+        assert_eq!(dropped, 1, "a Full drop must be counted");
+
+        // A closed channel (consumer gone) is the normal teardown race, not a
+        // backpressure drop — it must NOT inflate the dropped-output count.
+        let (tx2, rx2) = mpsc::channel::<String>(1);
+        drop(rx2);
+        let closed = tx2.try_send("after-close".to_string()).unwrap_err();
+        assert!(matches!(closed, mpsc::error::TrySendError::Closed(_)));
+        note_dropped_frame("stdout", closed, &mut dropped);
+        assert_eq!(dropped, 1, "a Closed send must not be counted as a drop");
     }
 }
