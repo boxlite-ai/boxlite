@@ -1105,8 +1105,8 @@ mod tests {
     /// stdout/stderr/result channels we control from the test.
     fn make_test_active() -> (
         Arc<ActiveExecution>,
-        tokio::sync::mpsc::UnboundedSender<String>, // stdout driver
-        tokio::sync::mpsc::UnboundedSender<String>, // stderr driver
+        tokio::sync::mpsc::Sender<String>, // stdout driver
+        tokio::sync::mpsc::Sender<String>, // stderr driver
         tokio::sync::mpsc::UnboundedSender<boxlite::ExecResult>, // result driver
     ) {
         let (exec, stdout_tx, stderr_tx, _stdin_rx, result_tx) =
@@ -1135,7 +1135,7 @@ mod tests {
         // task inside ActiveExecution::new reads these and broadcasts
         // them.
         for i in 1..=5 {
-            stdout_tx.send(format!("line-{i}\n")).unwrap();
+            stdout_tx.send(format!("line-{i}\n")).await.unwrap();
         }
         // Give the pump task a tick to broadcast all 5 chunks.
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1147,7 +1147,7 @@ mod tests {
 
         // Push one more line AFTER the subscribe so we can prove the
         // channel is alive.
-        stdout_tx.send("line-6\n".to_string()).unwrap();
+        stdout_tx.send("line-6\n".to_string()).await.unwrap();
         tokio::time::sleep(Duration::from_millis(20)).await;
 
         let mut received = Vec::new();
@@ -1194,7 +1194,7 @@ mod tests {
 
         // Push output, then signal exit immediately. The pump task
         // must read from ExecStdout and broadcast BEFORE done fires.
-        stdout_tx.send("final-line\n".to_string()).unwrap();
+        stdout_tx.send("final-line\n".to_string()).await.unwrap();
         drop(stdout_tx);
         drop(stderr_tx);
         result_tx
