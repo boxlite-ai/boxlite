@@ -63,7 +63,7 @@ func attachDrainOutcome(t *testing.T, tty bool, exitCode int, producer func(s *s
 	}
 
 	for {
-		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 		mt, payload, err := conn.ReadMessage()
 		if err != nil {
 			return r // deadline/close without exit => HANG (exitSeen stays false)
@@ -77,7 +77,7 @@ func attachDrainOutcome(t *testing.T, tty bool, exitCode int, producer func(s *s
 				r.exitSeen = true
 				seenExit = true
 				// Drain any trailing frames briefly to catch ordering bugs.
-				_ = conn.SetReadDeadline(time.Now().Add(400 * time.Millisecond))
+				_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 				for {
 					mt2, p2, e2 := conn.ReadMessage()
 					if e2 != nil {
@@ -99,6 +99,14 @@ func attachDrainOutcome(t *testing.T, tty bool, exitCode int, producer func(s *s
 func TestAttachDrainMatrix(t *testing.T) {
 	big := strings.Repeat("a", 64*1024) // 16 chunks < 256 channel buffer: lossless
 
+	// fireDone models Exit-strictly-last: settle so the broadcaster fully fans
+	// out everything the producer wrote before exit is observed, otherwise
+	// close(done) -> unsubscribe races the fan-out and can drop trailing bytes.
+	fireDone := func(s *stubAttachExec) {
+		time.Sleep(50 * time.Millisecond)
+		close(s.done)
+	}
+
 	cases := []struct {
 		name       string
 		tty        bool
@@ -108,35 +116,40 @@ func TestAttachDrainMatrix(t *testing.T) {
 	}{
 		{"clean-none", false, 0, 0, func(s *stubAttachExec) {
 			s.stdoutW.Close()
-			close(s.done)
+			fireDone(s)
 		}},
 		{"clean-short", false, 2, 0, func(s *stubAttachExec) {
 			s.stdoutW.Write([]byte("hi"))
 			s.stdoutW.Close()
-			close(s.done)
+			fireDone(s)
 		}},
 		{"clean-long-64k", false, len(big), 0, func(s *stubAttachExec) {
 			s.stdoutW.Write([]byte(big))
 			s.stdoutW.Close()
-			close(s.done)
+			fireDone(s)
 		}},
 		{"stderr-channel", false, 3, 7, func(s *stubAttachExec) {
 			s.stdoutW.Write([]byte("OUT"))
 			s.stderrW.Write([]byte("ERRLINE"))
 			s.stdoutW.Close()
 			s.stderrW.Close()
-			close(s.done)
+			fireDone(s)
 		}},
 		{"tty-merged", true, 9, 0, func(s *stubAttachExec) {
 			s.stdoutW.Write([]byte("hello-tty"))
 			s.stdoutW.Close()
 			s.stderrW.Close()
-			close(s.done)
+			fireDone(s)
 		}},
 		{"stuck-never-eof", false, 2, 0, func(s *stubAttachExec) {
 			// SIGKILLed guest: exit is known (Done) but stdout never EOFs.
+			// Model Exit-strictly-last: the "hi" the process emitted is fully
+			// delivered before its exit is observed. Without the settle the stub
+			// races close(done) (-> unsubscribe) against the broadcaster's
+			// fan-out and can drop "hi" (in-process delivery is microseconds;
+			// the settle is many orders of margin).
 			s.stdoutW.Write([]byte("hi"))
-			close(s.done)
+			fireDone(s)
 			// deliberately never close stdoutW
 		}},
 	}

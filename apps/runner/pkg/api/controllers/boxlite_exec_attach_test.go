@@ -76,7 +76,7 @@ func newStubAttachExec() *stubAttachExec {
 // production fan-out broadcaster); each subscriber gets its own channels and
 // sees all subsequent bytes. The pump goroutines exit when the stdout/stderr
 // pipes EOF or when the subscriber is cancelled.
-func (s *stubAttachExec) Subscribe(bufSize int) (stdout, stderr <-chan []byte, cancel func()) {
+func (s *stubAttachExec) Subscribe(bufSize int) (stdout, stderr <-chan []byte, dropped func() uint64, cancel func()) {
 	if bufSize <= 0 {
 		bufSize = 256
 	}
@@ -107,7 +107,7 @@ func (s *stubAttachExec) Subscribe(bufSize int) (stdout, stderr <-chan []byte, c
 			close(errCh)
 		})
 	}
-	return outCh, errCh, cancel
+	return outCh, errCh, func() uint64 { return 0 }, cancel
 }
 
 // broadcastPipe is the test-side analog of ManagedExec.broadcastPipe. Same

@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::runtime::Runtime as TokioRuntime;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 use tokio::task::JoinHandle;
 
 /// Synthetic exit code emitted when `boxlite_execution_free` tears down a
@@ -98,7 +98,7 @@ pub struct ExecutionHandle {
     /// which fills, blocking the attach reader's `send().await`, which stops
     /// draining the guest gRPC stream and ultimately blocks the guest process's
     /// write(). Cleared when the queue drains below its low-water mark.
-    stream_paused: Arc<AtomicBool>,
+    stream_pause_tx: watch::Sender<bool>,
 }
 
 #[unsafe(no_mangle)]
@@ -183,7 +183,7 @@ pub unsafe extern "C" fn boxlite_execution_set_stream_paused(
             return BoxliteErrorCode::InvalidArgument;
         }
         let exec_ref = &*execution;
-        exec_ref.stream_paused.store(paused != 0, Ordering::Release);
+        exec_ref.stream_pause_tx.send_replace(paused != 0);
         BoxliteErrorCode::Ok
     }
 }
@@ -296,7 +296,10 @@ unsafe fn box_exec(
                     tokio_rt: handle_ref.tokio_rt.clone(),
                     process_completed: Arc::new(AtomicBool::new(false)),
                     exit_dispatched: Arc::new(AtomicBool::new(false)),
-                    stream_paused: Arc::new(AtomicBool::new(false)),
+                    stream_pause_tx: {
+                        let (tx, _rx) = watch::channel(false);
+                        tx
+                    },
                 };
                 *out_execution = Box::into_raw(Box::new(exec_handle));
                 BoxliteErrorCode::Ok
@@ -342,7 +345,7 @@ unsafe fn register_stdout(
             cb,
             user_data_addr,
             queue,
-            exec_ref.stream_paused.clone(),
+            exec_ref.stream_pause_tx.subscribe(),
             done_tx,
         ));
         exec_ref.pumps.lock().unwrap().push(pump);
@@ -382,7 +385,7 @@ unsafe fn register_stderr(
             cb,
             user_data_addr,
             queue,
-            exec_ref.stream_paused.clone(),
+            exec_ref.stream_pause_tx.subscribe(),
             done_tx,
         ));
         exec_ref.pumps.lock().unwrap().push(pump);
@@ -764,9 +767,15 @@ unsafe fn execution_free(execution: *mut ExecutionHandle) {
 /// pump calls this AFTER delivering a chunk so it stops reading the next one
 /// from the bounded upstream channel — which then fills and back-pressures the
 /// guest. Sleep-poll (2ms) is coarse but cheap; pauses are seconds-scale.
-async fn await_unpaused(paused: &AtomicBool) {
-    while paused.load(Ordering::Acquire) {
-        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+async fn await_unpaused(rx: &mut watch::Receiver<bool>) {
+    // Block (zero CPU) while paused; wake on the next pause-flag change. watch
+    // is version-tracked, so a resume that races the check is never missed. A
+    // dropped sender (Err) means the execution is torn down — return and let
+    // the pump finish.
+    while *rx.borrow_and_update() {
+        if rx.changed().await.is_err() {
+            return;
+        }
     }
 }
 
@@ -775,7 +784,7 @@ async fn stdout_pump<S>(
     cb: CBoxStdoutFn,
     user_data_addr: usize,
     queue: Arc<EventQueue>,
-    paused: Arc<AtomicBool>,
+    mut paused: watch::Receiver<bool>,
     done_tx: oneshot::Sender<()>,
 ) where
     S: futures::Stream<Item = String> + Unpin,
@@ -790,7 +799,7 @@ async fn stdout_pump<S>(
             },
         )
         .await;
-        await_unpaused(&paused).await;
+        await_unpaused(&mut paused).await;
     }
     // Signal the exit pump we're done. Failure (rx dropped) means exit_pump
     // already completed or was never registered — either way harmless.
@@ -802,7 +811,7 @@ async fn stderr_pump<S>(
     cb: CBoxStderrFn,
     user_data_addr: usize,
     queue: Arc<EventQueue>,
-    paused: Arc<AtomicBool>,
+    mut paused: watch::Receiver<bool>,
     done_tx: oneshot::Sender<()>,
 ) where
     S: futures::Stream<Item = String> + Unpin,
@@ -817,7 +826,7 @@ async fn stderr_pump<S>(
             },
         )
         .await;
-        await_unpaused(&paused).await;
+        await_unpaused(&mut paused).await;
     }
     let _ = done_tx.send(());
 }
@@ -928,7 +937,10 @@ mod tests {
             tokio_rt: runtime,
             process_completed: Arc::new(AtomicBool::new(false)),
             exit_dispatched: Arc::new(AtomicBool::new(false)),
-            stream_paused: Arc::new(AtomicBool::new(false)),
+            stream_pause_tx: {
+                let (tx, _rx) = watch::channel(false);
+                tx
+            },
         }
     }
 
@@ -1410,7 +1422,7 @@ mod tests {
             noop_stdout_cb,
             0xFEED_DEAD,
             queue.clone(),
-            Arc::new(AtomicBool::new(false)),
+            watch::channel(false).1,
             done_tx,
         )
         .await;
@@ -1444,7 +1456,7 @@ mod tests {
             noop_stderr_cb,
             0xCAFE_BABE,
             queue.clone(),
-            Arc::new(AtomicBool::new(false)),
+            watch::channel(false).1,
             done_tx,
         )
         .await;

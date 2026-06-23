@@ -64,7 +64,9 @@ type attachExec interface {
 	// channels plus a cancel function that must be called when the /attach
 	// session ends. The broadcaster owns the underlying pipe readers for
 	// the exec's lifetime, so there is no stale-pump race on reattach.
-	Subscribe(bufSize int) (stdout, stderr <-chan []byte, cancel func())
+	// dropped reports the cumulative bytes this subscriber lost to
+	// back-pressure (slow client); the handler surfaces it as a lag warning.
+	Subscribe(bufSize int) (stdout, stderr <-chan []byte, dropped func() uint64, cancel func())
 
 	WriteStdin(data []byte) (int, error)
 	DoneCh() <-chan struct{}
@@ -206,7 +208,7 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 	// from bounded channels that respond to ctx cancellation cleanly.
 	// Unsubscribe is deferred so the subscriber slice cannot grow unbounded
 	// across reattach cycles.
-	stdoutCh, stderrCh, unsubscribe := exec.Subscribe(attachSubscriberBuffer)
+	stdoutCh, stderrCh, dropped, unsubscribe := exec.Subscribe(attachSubscriberBuffer)
 
 	// Monotonic count of stream frames written to the client. The post-Done
 	// drain watches it to bound the wait by progress, not a fixed wall clock
@@ -294,6 +296,16 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 		// SIGTERM→SIGKILL'd process) stops bumping it, so we give up after an
 		// idle window and send exit anyway.
 		drained := waitForStreamDrain(pumpsDone, &streamProgress, streamDrainIdleBound, streamDrainHardCap)
+
+		// If this client lagged enough that the broadcaster dropped output for
+		// it, tell it so before the terminal exit frame — its captured stream
+		// is incomplete by that many bytes.
+		if n := dropped(); n > 0 {
+			_ = writeJSONFrame(conn, &writeMu, map[string]any{
+				"type":    "warning",
+				"message": fmt.Sprintf("%d bytes dropped (slow consumer)", n),
+			})
+		}
 
 		// Send the exit frame regardless of whether the pumps drained: a
 		// process killed by its exec timeout (SIGTERM→SIGKILL in the guest)
@@ -540,9 +552,10 @@ type managedExecAttach struct {
 	me *boxlite.ManagedExec
 }
 
-func (m managedExecAttach) Subscribe(bufSize int) (stdout, stderr <-chan []byte, cancel func()) {
+func (m managedExecAttach) Subscribe(bufSize int) (stdout, stderr <-chan []byte, dropped func() uint64, cancel func()) {
 	outSub, errSub, cancel := m.me.Subscribe(bufSize)
-	return outSub.Chan(), errSub.Chan(), cancel
+	dropped = func() uint64 { return outSub.Dropped() + errSub.Dropped() }
+	return outSub.Chan(), errSub.Chan(), dropped, cancel
 }
 
 func (m managedExecAttach) WriteStdin(data []byte) (int, error) { return m.me.AttachWriteStdin(data) }
