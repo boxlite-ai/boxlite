@@ -31,7 +31,11 @@
 
 import { execFileSync, spawnSync } from 'node:child_process'
 
-const REGION = process.env.AWS_REGION || 'ap-southeast-1'
+// SSM config lives in a FIXED region, decoupled from the deploy region: a prod stage may deploy
+// to another region (e.g. us-west-2) while its /boxlite/<stage>/* config + cloudflare creds stay
+// in ap-southeast-1 (the deploy role reads them cross-region). This also lets a region-restricted
+// SSO seed config in ap-southeast-1 for a stage deployed elsewhere. Override with BOXLITE_CONFIG_REGION.
+const REGION = process.env.BOXLITE_CONFIG_REGION || 'ap-southeast-1'
 
 // SSM param consulted only when the matching env var is unset.
 const CREDS = [

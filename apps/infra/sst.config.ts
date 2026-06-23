@@ -154,9 +154,16 @@ export default $config({
     if (!stackDomain) {
       throw new Error('STACK_DOMAIN is required (Cloudflare-managed subdomain, e.g. dev.boxlite.ai)')
     }
+    // Base for the service subdomains (api/proxy/ssh). Defaults to stackDomain so dev is unchanged
+    // (api.dev.boxlite.ai); prod sets SERVICES_DOMAIN=boxlite.ai so services live at api.boxlite.ai
+    // while the dashboard host stays on stackDomain (app.boxlite.ai).
+    const servicesDomain = process.env.SERVICES_DOMAIN || stackDomain
+    // Sub-path the dashboard is served under. Defaults to '' (root) so dev is unchanged; prod sets
+    // DASHBOARD_PATH=/dashboard so the dashboard is at app.boxlite.ai/dashboard. Leading slash, no trailing.
+    const dashboardPath = process.env.DASHBOARD_PATH || ''
     const cloudflareDns = sst.cloudflare.dns()
     const serviceDomain = (name: string) => ({
-      name: `${name}.${stackDomain}`,
+      name: `${name}.${servicesDomain}`,
       dns: cloudflareDns,
     })
 
@@ -374,7 +381,7 @@ export default $config({
         CLICKHOUSE_PASSWORD: clickHouseWriterPassword || 'unused',
         CLICKHOUSE_CREATE_SCHEMA: envOr('CLICKHOUSE_CREATE_SCHEMA', 'false'),
         CLICKHOUSE_COMPRESS: envOr('CLICKHOUSE_COMPRESS', 'none'),
-        BOXLITE_API_URL: envOr('BOXLITE_API_URL', `https://api.${stackDomain}/api`),
+        BOXLITE_API_URL: envOr('BOXLITE_API_URL', `https://api.${servicesDomain}/api`),
         BOXLITE_API_KEY: envOr(
           'BOXLITE_API_KEY',
           envOr('OTEL_COLLECTOR_API_KEY', envOr('ADMIN_API_KEY', adminApiKey.result)),
@@ -557,14 +564,14 @@ export default $config({
         S3_ROLE_NAME: s3AccessRoleName,
 
         // Proxy
-        PROXY_DOMAIN: envOr('PROXY_DOMAIN', `proxy.${stackDomain}`),
+        PROXY_DOMAIN: envOr('PROXY_DOMAIN', `proxy.${servicesDomain}`),
         PROXY_PROTOCOL: envOr('PROXY_PROTOCOL', 'https'),
         PROXY_API_KEY: envOr('PROXY_API_KEY', proxyApiKey.result),
-        PROXY_TEMPLATE_URL: envOr('PROXY_TEMPLATE_URL', `https://proxy.${stackDomain}`),
+        PROXY_TEMPLATE_URL: envOr('PROXY_TEMPLATE_URL', `https://proxy.${servicesDomain}`),
 
-        // SSH Gateway — friendly hostname `ssh.<stackDomain>` is provisioned
+        // SSH Gateway — friendly hostname `ssh.<servicesDomain>` is provisioned
         // as a Cloudflare CNAME pointing at the SshGateway NLB further below.
-        SSH_GATEWAY_URL: envOr('SSH_GATEWAY_URL', `ssh://ssh.${stackDomain}:${PORTS.SSH_GATEWAY}`),
+        SSH_GATEWAY_URL: envOr('SSH_GATEWAY_URL', `ssh://ssh.${servicesDomain}:${PORTS.SSH_GATEWAY}`),
         SSH_GATEWAY_API_KEY: envOr('SSH_GATEWAY_API_KEY', sshGatewayApiKey.result),
 
         // Admin
@@ -634,7 +641,11 @@ export default $config({
         // so this cross-origin dashboard→API path is explicitly allowed.
         DASHBOARD_URL: envOr('DASHBOARD_URL', `https://${stackDomain}`),
         APP_URL: envOr('APP_URL', ''),
-        DASHBOARD_BASE_API_URL: envOr('DASHBOARD_BASE_API_URL', `https://api.${stackDomain}`),
+        DASHBOARD_BASE_API_URL: envOr('DASHBOARD_BASE_API_URL', `https://api.${servicesDomain}`),
+        // Sub-path the dashboard SPA is served under ('' = root for dev; '/dashboard' for prod).
+        // Drives the Api's static-serve renderPath and the SPA's OIDC redirect_uri. DASHBOARD_URL
+        // stays the bare origin (no path) so the Api's CORS allow-list keeps matching.
+        DASHBOARD_PATH: dashboardPath,
 
         // Default runner — the API auto-seeds it at boot; v2 runners self-report
         DEFAULT_RUNNER_NAME: envOr('DEFAULT_RUNNER_NAME', 'default'),
@@ -683,7 +694,7 @@ export default $config({
     // ─── 7. EDGE SERVICES ────────────────────────────────────────────────────
     // Proxy: routes `<port>-<boxid>.proxy.<stack>` to the box port.
     // Wildcard cert covers *.proxy.<stack>; Cloudflare serves wildcard DNS.
-    const proxyDomain = `proxy.${stackDomain}`
+    const proxyDomain = `proxy.${servicesDomain}`
     new sst.aws.Service('Proxy', {
       cluster,
       image: { context: '../..', dockerfile: 'apps/proxy/Dockerfile', cache: false },
@@ -738,7 +749,7 @@ export default $config({
     cloudflareDns.createAlias(
       'SshGateway',
       {
-        name: `ssh.${stackDomain}`,
+        name: `ssh.${servicesDomain}`,
         aliasName: sshGateway.nodes.loadBalancer.dnsName,
         aliasZone: sshGateway.nodes.loadBalancer.zoneId,
       },
