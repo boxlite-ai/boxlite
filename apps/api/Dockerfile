@@ -24,6 +24,11 @@ COPY apps/nx.json apps/tsconfig.base.json apps/NOTICE ./
 ENV NX_DAEMON=false
 ENV NX_SKIP_NX_CACHE=true
 
+# Sub-path the dashboard SPA is served under (e.g. '/dashboard' for prod scheme B). Becomes Vite's
+# `base` at build time, rewriting every asset URL the bundle emits. Empty (default) = served at root.
+# The Api's ServeStaticModule.renderPath (driven by DASHBOARD_PATH at runtime) MUST match this.
+ARG DASHBOARD_PATH=
+
 COPY apps/api/ api/
 COPY apps/dashboard/ dashboard/
 
@@ -33,7 +38,7 @@ COPY apps/libs/analytics-api-client/ libs/analytics-api-client/
 
 RUN yarn nx build api --configuration=production --nxBail=true --output-style=stream && node --check dist/apps/api/main.js
 
-RUN VITE_BASE_API_URL=%BOXLITE_BASE_API_URL% yarn nx build dashboard --configuration=production --nxBail=true --output-style=stream
+RUN VITE_BASE_API_URL=%BOXLITE_BASE_API_URL% VITE_DASHBOARD_PATH="${DASHBOARD_PATH}" yarn nx build dashboard --configuration=production --nxBail=true --output-style=stream
 
 FROM node:24-slim AS boxlite
 ENV CI=true

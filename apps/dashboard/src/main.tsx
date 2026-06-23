@@ -37,7 +37,7 @@ enableMocking().then(() =>
           <ThemeProvider>
             <Suspense fallback={<LoadingFallback />}>
               <ConfigProvider>
-                <BrowserRouter>
+                <BrowserRouter basename={import.meta.env.BASE_URL}>
                   <PostHogProviderWrapper>
                     <NuqsAdapter>
                       <App />

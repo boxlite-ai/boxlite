@@ -36,6 +36,12 @@ export function ConfigProvider(props: Props) {
   const oidcConfig: AuthProviderProps = useMemo(() => {
     const isLocalhost = window.location.hostname === 'localhost'
     const stateStore = isLocalhost ? window.sessionStorage : new InMemoryWebStorage()
+    // OIDC redirect target — must match an Auth0 Allowed Callback URL exactly. The SPA is mounted
+    // under Vite's BASE_URL (always trailing slash, e.g. '/dashboard/' for prod-B, '/' for dev),
+    // and the callback page lives at the SPA root; we strip the trailing slash so the URL Auth0
+    // sees is e.g. 'https://app.boxlite.ai/dashboard' (matches the allowed callback) or
+    // 'https://dev.boxlite.ai' for dev (BASE_URL='/' → strips to '').
+    const appOrigin = window.location.origin + import.meta.env.BASE_URL.replace(/\/$/, '')
 
     return {
       authority: config.oidc.issuer,
@@ -44,7 +50,7 @@ export function ConfigProvider(props: Props) {
         audience: config.oidc.audience,
       },
       scope: 'openid profile email',
-      redirect_uri: window.location.origin,
+      redirect_uri: appOrigin,
       staleStateAgeInSeconds: 60,
       accessTokenExpiringNotificationTimeInSeconds: 290,
       userStore: new WebStorageStateStore({ store: stateStore }),
@@ -54,7 +60,7 @@ export function ConfigProvider(props: Props) {
         window.history.replaceState({}, '', targetUrl)
         window.dispatchEvent(new PopStateEvent('popstate'))
       },
-      post_logout_redirect_uri: window.location.origin,
+      post_logout_redirect_uri: appOrigin,
       // For IdPs (e.g. Dex) that don't advertise end_session_endpoint via discovery,
       // the API exposes a compatible endpoint and reports it here.
       ...(config.oidc.endSessionEndpoint && {
