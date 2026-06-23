@@ -10,8 +10,17 @@ import checker from 'vite-plugin-checker'
 
 const outDir = '../dist/apps/dashboard'
 
+// Sub-path the dashboard is served under in production (e.g. '/dashboard' for prod scheme B).
+// Vite rewrites every asset URL it emits to be relative to this base, so the bundle works when
+// the SPA is mounted at app.boxlite.ai/dashboard instead of the host root. Defaults to '/' so
+// dev (and any prod that serves at the root) is byte-for-byte unchanged. The Api's
+// ServeStaticModule.renderPath must match (driven by the same DASHBOARD_PATH env at runtime).
+const dashboardPath = process.env.VITE_DASHBOARD_PATH || ''
+const dashboardBase = dashboardPath ? `${dashboardPath.replace(/\/$/, '')}/` : '/'
+
 export default defineConfig((mode) => ({
   root: __dirname,
+  base: dashboardBase,
   cacheDir: '../../node_modules/.vite/apps/dashboard',
   server: {
     port: 3000,

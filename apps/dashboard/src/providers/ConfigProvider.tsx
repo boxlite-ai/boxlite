@@ -38,6 +38,11 @@ export function ConfigProvider(props: Props) {
   })
 
   const oidcConfig: AuthProviderProps = useMemo(() => {
+    // OIDC redirect target must match an Auth0 Allowed Callback URL exactly.
+    // The SPA is mounted under Vite's BASE_URL, so strip the trailing slash to
+    // produce either the origin root or a mounted path like /dashboard.
+    const appOrigin = window.location.origin + import.meta.env.BASE_URL.replace(/\/$/, '')
+
     return {
       authority: config.oidc.issuer,
       client_id: config.oidc.clientId,
@@ -45,7 +50,7 @@ export function ConfigProvider(props: Props) {
         audience: config.oidc.audience,
       },
       scope: 'openid profile email',
-      redirect_uri: window.location.origin,
+      redirect_uri: appOrigin,
       staleStateAgeInSeconds: 60,
       accessTokenExpiringNotificationTimeInSeconds: 290,
       // Persist the signed-in user (with tokens) in sessionStorage so a page
@@ -62,7 +67,7 @@ export function ConfigProvider(props: Props) {
         window.history.replaceState({}, '', targetUrl)
         window.dispatchEvent(new PopStateEvent('popstate'))
       },
-      post_logout_redirect_uri: window.location.origin,
+      post_logout_redirect_uri: appOrigin,
       // For IdPs (e.g. Dex) that don't advertise end_session_endpoint via discovery,
       // the API exposes a compatible endpoint and reports it here.
       ...(config.oidc.endSessionEndpoint && {

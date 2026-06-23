@@ -112,10 +112,13 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
         cacheControl: false,
       },
     }),
+    // The dashboard SPA is served under DASHBOARD_PATH (defaults to '/' for the dev root; prod
+    // scheme B sets '/dashboard'). renderPath MUST match the Vite `base` the dashboard was built
+    // with (set via VITE_DASHBOARD_PATH at Dockerfile build time) — a mismatch breaks asset URLs.
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, '..', 'dashboard'),
       exclude: ['/api/{*path}'],
-      renderPath: '/',
+      renderPath: process.env.DASHBOARD_PATH || '/',
       serveStaticOptions: {
         // Disable serve-static's own default Cache-Control; setHeaders applies a
         // content-addressed policy: hashed /assets/* immutable-forever, HTML

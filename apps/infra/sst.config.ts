@@ -397,6 +397,11 @@ export default $config({
       image: {
         context: '../..',
         dockerfile: 'apps/api/Dockerfile',
+        // Pass the dashboard sub-path to the Vite build (Dockerfile ARG DASHBOARD_PATH ->
+        // VITE_DASHBOARD_PATH). When DASHBOARD_PATH is unset (dev / prod-A) this is '' so Vite's
+        // `base` stays '/'; for prod scheme B (DASHBOARD_PATH=/dashboard) Vite rewrites every
+        // asset URL in the bundle to be /dashboard/-prefixed. Matches ServeStaticModule.renderPath.
+        args: { DASHBOARD_PATH: dashboardPath },
       },
       loadBalancer: {
         domain: serviceDomain('api'),
