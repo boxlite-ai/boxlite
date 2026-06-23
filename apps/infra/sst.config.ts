@@ -224,7 +224,7 @@ export default $config({
     // Durable state survives accidental teardown the way the runner does (§10).
     // `removal: 'retain'` (above) already keeps prod resources on `sst remove`, but it
     // does NOT stop a targeted destroy, a replace-on-immutable-change, or an AWS-console
-    // delete — so production also gets RDS deletion-protection + a final snapshot.
+    // delete — so prod also gets RDS deletion-protection + a final snapshot.
     // S3 versioning is on in every stage: cheap, and the only guard against an
     // object-level overwrite/delete (which `removal` never covers). Redis is a
     // transient cache, so it needs neither.

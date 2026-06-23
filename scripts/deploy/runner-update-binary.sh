@@ -16,7 +16,7 @@
 #   BOXLITE_RUNNER_TARBALL_URL=<url> STAGE=dev scripts/deploy/runner-update-binary.sh   # dev channel: install an unreleased build (refused on prod)
 #   BOXLITE_RUNNER_TARBALL_URL=<url> BOXLITE_RUNNER_TARBALL_SHA256_URL=<url> STAGE=dev ...       # dev channel with a separate sha256 URL (S3 presigned: ".sha256" can't be appended)
 #   AWS_REGION=us-west-2 scripts/deploy/runner-update-binary.sh
-#   STAGE=production scripts/deploy/runner-update-binary.sh
+#   STAGE=prod scripts/deploy/runner-update-binary.sh
 
 set -euo pipefail
 
@@ -35,6 +35,11 @@ else
 fi
 
 echo "==> Upgrading boxlite-runner on stage=$STAGE region=$AWS_REGION"
+
+if [[ "$STAGE" != "dev" && "$STAGE" != "prod" ]]; then
+  echo "error: unsupported STAGE=$STAGE (expected dev or prod)" >&2
+  exit 2
+fi
 
 # Target instance: pin via BOXLITE_RUNNER_INSTANCE_ID (skips the tag lookup — for a specific
 # runner, or when the tag describe is unavailable), else find the stage's default by Name tag.
@@ -71,7 +76,7 @@ echo "    instance: $INSTANCE_ID"
 # a runner change without cutting a formal release. Prod refuses it: prod only ever
 # installs a released version.
 if [[ -n "${BOXLITE_RUNNER_TARBALL_URL:-}" ]]; then
-  if [[ "$STAGE" == "prod" || "$STAGE" == "production" ]]; then
+  if [[ "$STAGE" == "prod" ]]; then
     echo "error: BOXLITE_RUNNER_TARBALL_URL is not allowed on stage=$STAGE (prod installs released versions only)" >&2
     exit 1
   fi
