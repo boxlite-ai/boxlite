@@ -928,6 +928,7 @@ mod tests {
             tokio_rt: runtime,
             process_completed: Arc::new(AtomicBool::new(false)),
             exit_dispatched: Arc::new(AtomicBool::new(false)),
+            stream_paused: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -1404,7 +1405,7 @@ mod tests {
         ];
         let stream = stream_iter(chunks.into_iter());
 
-        stdout_pump(stream, noop_stdout_cb, 0xFEED_DEAD, queue.clone(), done_tx).await;
+        stdout_pump(stream, noop_stdout_cb, 0xFEED_DEAD, queue.clone(), Arc::new(AtomicBool::new(false)), done_tx).await;
 
         let bytes = drain_stdout_bytes(&queue);
         assert_eq!(bytes.len(), 4, "expected 4 stdout events");
@@ -1430,7 +1431,7 @@ mod tests {
         let chunks = vec!["error".to_string(), "trace".to_string()];
         let stream = stream_iter(chunks.into_iter());
 
-        stderr_pump(stream, noop_stderr_cb, 0xCAFE_BABE, queue.clone(), done_tx).await;
+        stderr_pump(stream, noop_stderr_cb, 0xCAFE_BABE, queue.clone(), Arc::new(AtomicBool::new(false)), done_tx).await;
 
         let bytes = drain_stderr_bytes(&queue);
         assert_eq!(bytes.len(), 2);
