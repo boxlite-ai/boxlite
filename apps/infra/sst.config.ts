@@ -124,6 +124,15 @@ export default $config({
       args.permissionsBoundary ??= 'arn:aws:iam::064212132677:policy/boxlite-role-boundary'
     })
 
+    // Force every auto-created InstanceProfile (e.g. SST's VpcNatInstanceProfile) into
+    // the boxlite-<stage>-* namespace so the deploy role's `instance-profile/boxlite-<stage>-*`
+    // grant matches. Without this, SST names instance profiles "<LogicalId>-<hash>" which is
+    // outside the deploy role's allowed resource scope → iam:CreateInstanceProfile denied.
+    // Explicit `name:` on a profile (e.g. RunnerProfile) wins because of `??=`.
+    $transform(aws.iam.InstanceProfile, (args, _opts, resourceName) => {
+      args.name ??= `${$app.name}-${$app.stage}-${resourceName}`
+    })
+
     // Load .env overrides (anything unset falls back to auto-generated values)
     const { config } = await import('dotenv')
     config()
