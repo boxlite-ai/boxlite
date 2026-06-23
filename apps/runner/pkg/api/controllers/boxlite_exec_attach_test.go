@@ -52,6 +52,10 @@ type stubAttachExec struct {
 	subMu        sync.Mutex
 	subs         []stubSubscriber
 	broadcasting bool
+
+	// droppedN is returned by the Subscribe dropped() accessor so tests can
+	// exercise the slow-consumer lag-warning path.
+	droppedN uint64
 }
 
 type stubSubscriber struct {
@@ -107,7 +111,7 @@ func (s *stubAttachExec) Subscribe(bufSize int) (stdout, stderr <-chan []byte, d
 			close(errCh)
 		})
 	}
-	return outCh, errCh, func() uint64 { return 0 }, cancel
+	return outCh, errCh, func() uint64 { return s.droppedN }, cancel
 }
 
 // broadcastPipe is the test-side analog of ManagedExec.broadcastPipe. Same

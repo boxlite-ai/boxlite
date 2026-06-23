@@ -173,3 +173,52 @@ func TestAttachDrainMatrix(t *testing.T) {
 		})
 	}
 }
+
+// TestAttachLagWarning verifies FIX #3: when the broadcaster dropped output for
+// a slow client (dropped() > 0), the handler surfaces a `warning` frame before
+// the exit frame.
+func TestAttachLagWarning(t *testing.T) {
+	stub := newStubAttachExec()
+	stub.exitCode = 0
+	stub.droppedN = 42
+	cleanup := withStubExec(t, "exec-lag", stub)
+	defer cleanup()
+	srv := newAttachServer(t)
+	defer srv.Close()
+	conn, _, err := dialAttach(t, srv, "exec-lag")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	go func() { stub.stdoutW.Close(); close(stub.done) }()
+
+	sawWarning := false
+	for {
+		_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+		mt, payload, err := conn.ReadMessage()
+		if err != nil {
+			break
+		}
+		if mt != websocket.TextMessage {
+			continue
+		}
+		var ev map[string]any
+		if json.Unmarshal(payload, &ev) != nil {
+			continue
+		}
+		switch ev["type"] {
+		case "warning":
+			if msg, _ := ev["message"].(string); !strings.Contains(msg, "42 bytes dropped") {
+				t.Fatalf("warning message = %q, want it to mention 42 bytes dropped", msg)
+			}
+			sawWarning = true
+		case "exit":
+			if !sawWarning {
+				t.Fatal("exit frame arrived but no lag warning was sent despite dropped()=42")
+			}
+			return
+		}
+	}
+	t.Fatal("no exit frame seen")
+}
