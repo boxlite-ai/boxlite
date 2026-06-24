@@ -7,7 +7,6 @@
  */
 import React from 'react'
 import { Icon as IconifyIcon, addCollection } from '@iconify/react'
-// @ts-ignore - JSON icon collection ships without types; Vite resolves it at build time.
 import pixelarticons from '@iconify-json/pixelarticons/icons.json'
 
 // Register the collection once (offline — no network fetch) so "pixelarticons:*" resolves.
@@ -20,9 +19,17 @@ export type LucideProps = React.SVGProps<SVGSVGElement> & {
 export type LucideIcon = React.FC<LucideProps>
 
 function makeIcon(pixelName: string): LucideIcon {
-  const Cmp: LucideIcon = ({ size = 24, width, height, strokeWidth, absoluteStrokeWidth, ...rest }) => (
-    <IconifyIcon icon={`pixelarticons:${pixelName}`} width={width ?? size} height={height ?? size} {...rest} />
-  )
+  const Cmp: LucideIcon = ({ size = 24, width, height, strokeWidth, absoluteStrokeWidth, mode, ...rest }) => {
+    void strokeWidth
+    void absoluteStrokeWidth
+    void mode
+
+    const iconProps = rest as Omit<React.ComponentProps<typeof IconifyIcon>, 'icon' | 'width' | 'height'>
+
+    return (
+      <IconifyIcon icon={`pixelarticons:${pixelName}`} width={width ?? size} height={height ?? size} {...iconProps} />
+    )
+  }
   Cmp.displayName = pixelName
   return Cmp
 }

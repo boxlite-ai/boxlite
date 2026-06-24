@@ -30,7 +30,7 @@ interface DataTableProps {
   onRevoke: (key: ApiKeyList) => void
 }
 
-// Mirrors the Sandboxes (BoxTable) layout: borderless full-height column, header with a
+// Mirrors the Boxes (BoxTable) layout: borderless full-height column, header with a
 // bottom rule, hover-highlighted rows, and a plain "Showing N" footer.
 const GRID = 'grid-cols-[1.4fr_1.6fr_1.2fr_1fr_1fr_1fr_44px] gap-x-4'
 
@@ -118,7 +118,8 @@ export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke }: DataTable
                       <DialogHeader>
                         <DialogTitle>Confirm Key Revocation</DialogTitle>
                         <DialogDescription>
-                          Are you absolutely sure? This action cannot be undone and will permanently delete this API key.
+                          Are you absolutely sure? This action cannot be undone and will permanently delete this API
+                          key.
                         </DialogDescription>
                       </DialogHeader>
                       <DialogFooter>

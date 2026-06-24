@@ -41,6 +41,7 @@ import {
   MessageCircle,
   Monitor,
   MoonIcon,
+  MoreHorizontal,
   SearchIcon,
   ShieldCheck,
   SunIcon,
@@ -76,7 +77,9 @@ const themeOptions: { value: Theme; label: string; icon: React.ReactElement }[] 
 function ThemeMenuItems({ theme, setTheme }: { theme: Theme; setTheme: (theme: Theme) => void }) {
   return (
     <div className="px-2 py-2">
-      <div className="px-1 pb-2 font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Appearance</div>
+      <div className="px-1 pb-2 font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+        Appearance
+      </div>
       <ToggleGroup
         type="single"
         value={theme}
@@ -149,7 +152,14 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
   const orgCommands = useMemo<CommandConfig[]>(
     () =>
       selectedOrganization
-        ? [{ id: 'copy-org-id', label: 'Copy Organization ID', icon: <Copy className="w-4 h-4" />, onSelect: copyOrgId }]
+        ? [
+            {
+              id: 'copy-org-id',
+              label: 'Copy Organization ID',
+              icon: <Copy className="w-4 h-4" />,
+              onSelect: copyOrgId,
+            },
+          ]
         : [],
     [selectedOrganization, copyOrgId],
   )
@@ -236,7 +246,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
   // active = neutral grey fill + brightest (foreground) label; inactive = dimmer muted text.
   const navCellClass = (active: boolean, extra?: string) =>
     cn(
-      'relative inline-flex h-full items-center gap-2 px-[18px] text-[13px] font-medium transition-colors',
+      'relative h-full items-center gap-2 px-[18px] text-[13px] font-medium transition-colors',
       active ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-card hover:text-foreground',
       extra,
     )
@@ -263,7 +273,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
       {primaryItems.map((item) => {
         const active = pathname.startsWith(item.path)
         return (
-          <Link key={item.label} to={item.path} className={navCellClass(active)}>
+          <Link key={item.label} to={item.path} className={navCellClass(active, 'hidden md:inline-flex')}>
             {item.label}
           </Link>
         )
@@ -276,7 +286,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
         type="button"
         onClick={() => openCommandPalette('dashboard_header')}
         aria-label="Search"
-        className="hidden min-w-[200px] items-center gap-2.5 border-l border-border px-4 text-muted-foreground transition-colors hover:text-foreground md:flex"
+        className="hidden min-w-[180px] items-center gap-2.5 border-l border-border px-4 text-muted-foreground transition-colors hover:text-foreground lg:flex"
       >
         <SearchIcon className="size-3.5 shrink-0" />
         <span className="flex-1 text-left">Search</span>
@@ -288,7 +298,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
       {/* api keys */}
       <Link
         to={RoutePath.KEYS}
-        className={navCellClass(pathname.startsWith(RoutePath.KEYS), 'hidden border-l border-border md:inline-flex')}
+        className={navCellClass(pathname.startsWith(RoutePath.KEYS), 'hidden border-l border-border lg:inline-flex')}
       >
         <KeyRound className="size-3.5" />
         API Keys
@@ -299,7 +309,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
         type="button"
         onClick={openOnboardingGuide}
         aria-label="Open onboarding guide"
-        className="inline-flex h-full items-center gap-2 border-l border-border px-[18px] text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+        className="hidden h-full items-center gap-2 border-l border-border px-[18px] text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground lg:inline-flex"
       >
         <BookOpen className="size-3.5" />
         <span className="hidden sm:inline">Quickstart</span>
@@ -309,7 +319,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
       <DropdownMenu>
         <DropdownMenuTrigger
           aria-label="Open profile menu"
-          className="inline-flex h-full items-center gap-2.5 border-l border-border px-4 text-[13px] font-medium text-foreground outline-none transition-colors hover:bg-card data-[state=open]:bg-card"
+          className="inline-flex h-full items-center gap-2 border-l border-border px-3 text-[13px] font-medium text-foreground outline-none transition-colors hover:bg-card data-[state=open]:bg-card sm:px-4"
         >
           <span className="flex size-[23px] shrink-0 items-center justify-center overflow-hidden bg-brand text-[9px] font-extrabold text-white">
             {user?.profile.picture ? (
@@ -318,7 +328,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
               initials
             )}
           </span>
-          <span className="hidden max-w-[140px] truncate sm:inline">{userName}</span>
+          <span className="hidden max-w-[140px] truncate xl:inline">{userName}</span>
           <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-[18rem]">
@@ -412,7 +422,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
           aria-label="Open navigation menu"
           className="inline-flex h-full items-center border-l border-border px-4 text-muted-foreground outline-none transition-colors hover:text-foreground md:hidden"
         >
-          <SearchIcon className="size-4" />
+          <MoreHorizontal className="size-4" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-[14rem]">
           <DropdownMenuItem className="cursor-pointer" onClick={() => openCommandPalette('dashboard_mobile_menu')}>

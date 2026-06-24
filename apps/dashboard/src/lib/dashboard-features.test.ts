@@ -3,7 +3,7 @@ import { getBoxContentTabs } from './dashboard-features'
 
 describe('dashboard feature gates', () => {
   it('exposes the base tabs without experiments', () => {
-    expect(getBoxContentTabs({ experimentsEnabled: false })).toEqual(['overview', 'terminal'])
+    expect(getBoxContentTabs({ experimentsEnabled: false })).toEqual(['overview'])
   })
 
   it('adds experiment tabs when experiments are enabled', () => {
@@ -13,7 +13,6 @@ describe('dashboard feature gates', () => {
       'traces',
       'metrics',
       'spending',
-      'terminal',
     ])
   })
 })

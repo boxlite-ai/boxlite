@@ -134,7 +134,7 @@ const Admin: React.FC = () => {
   }
 
   return (
-    <div className="px-[34px] pb-[26px] pt-[26px] font-mono">
+    <div className="px-[34px] pb-[26px] pt-[26px] font-mono lg:px-[40px]">
       <h2 className="mb-5 text-[13px] font-medium uppercase tracking-[3px] text-muted-foreground">Admin</h2>
 
       <AdminStatusStrip />
@@ -177,38 +177,38 @@ const Admin: React.FC = () => {
       </div>
 
       <div className="mt-6">
-          {view === 'overview' && (
-            <AdminOverviewView
-              onJumpToOwner={jumpToOwner}
-              onJumpToRunner={jumpToRunner}
-              onDiagnoseTrace={(traceId) => openDiagnoseTarget(createTraceDiagnoseTarget(traceId))}
-              onDiagnoseExecution={(executionId, traceId) =>
-                openDiagnoseTarget(createExecutionDiagnoseTarget(executionId, traceId))
-              }
-              onDiagnoseJob={(jobId, traceId) => openDiagnoseTarget(createJobDiagnoseTarget(jobId, traceId))}
-              onDiagnoseRequest={(requestId, traceId) =>
-                openDiagnoseTarget(createRequestDiagnoseTarget(requestId, traceId))
-              }
-            />
-          )}
-          {view === 'people' && (
-            <AdminPeopleBoxesView
-              query={query}
-              runnerFilter={runnerFilter}
-              onClearRunnerFilter={() => setRunnerFilter(null)}
-              onOpenBox={openBox}
-              onOpenOwnerGroup={(group) => openDiagnoseTarget(createOwnerGroupDiagnoseTarget(group))}
-            />
-          )}
-          {view === 'fleet' && (
-            <AdminFleetView
-              query={query}
-              highlightRunnerId={highlightRunner}
-              onShowRunnerBoxes={showRunnerBoxes}
-              onDiagnoseRunner={(runner) => openDiagnoseTarget(createRunnerDiagnoseTarget(runner))}
-              onDiagnoseMachine={(machine) => openDiagnoseTarget(createMachineDiagnoseTarget(machine))}
-            />
-          )}
+        {view === 'overview' && (
+          <AdminOverviewView
+            onJumpToOwner={jumpToOwner}
+            onJumpToRunner={jumpToRunner}
+            onDiagnoseTrace={(traceId) => openDiagnoseTarget(createTraceDiagnoseTarget(traceId))}
+            onDiagnoseExecution={(executionId, traceId) =>
+              openDiagnoseTarget(createExecutionDiagnoseTarget(executionId, traceId))
+            }
+            onDiagnoseJob={(jobId, traceId) => openDiagnoseTarget(createJobDiagnoseTarget(jobId, traceId))}
+            onDiagnoseRequest={(requestId, traceId) =>
+              openDiagnoseTarget(createRequestDiagnoseTarget(requestId, traceId))
+            }
+          />
+        )}
+        {view === 'people' && (
+          <AdminPeopleBoxesView
+            query={query}
+            runnerFilter={runnerFilter}
+            onClearRunnerFilter={() => setRunnerFilter(null)}
+            onOpenBox={openBox}
+            onOpenOwnerGroup={(group) => openDiagnoseTarget(createOwnerGroupDiagnoseTarget(group))}
+          />
+        )}
+        {view === 'fleet' && (
+          <AdminFleetView
+            query={query}
+            highlightRunnerId={highlightRunner}
+            onShowRunnerBoxes={showRunnerBoxes}
+            onDiagnoseRunner={(runner) => openDiagnoseTarget(createRunnerDiagnoseTarget(runner))}
+            onDiagnoseMachine={(machine) => openDiagnoseTarget(createMachineDiagnoseTarget(machine))}
+          />
+        )}
       </div>
 
       <AdminTelemetryDrawer

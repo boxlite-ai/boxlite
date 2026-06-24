@@ -30,8 +30,9 @@ export const MOCK_USER = {
 
 export const MOCK_ORGANIZATION_ID = 'mock-org-00000000'
 
-const now = new Date()
-const epoch = new Date(0)
+const nowDate = new Date()
+const epochDate = new Date(0)
+const now = nowDate.toISOString()
 
 export function buildMockConfig(billingApiUrl: string): BoxliteConfiguration {
   return {
@@ -60,12 +61,12 @@ export const MOCK_ORGANIZATION: Organization = {
   createdBy: MOCK_USER.sub,
   isDefaultForAuthenticatedUser: true,
   personal: true,
-  createdAt: now,
-  updatedAt: now,
+  createdAt: nowDate,
+  updatedAt: nowDate,
   suspended: false,
-  suspendedAt: epoch,
+  suspendedAt: epochDate,
   suspensionReason: '',
-  suspendedUntil: epoch,
+  suspendedUntil: epochDate,
   suspensionCleanupGracePeriodHours: 0,
   maxCpuPerBox: 8,
   maxMemoryPerBox: 16,
@@ -90,8 +91,8 @@ export const MOCK_ORGANIZATION_MEMBER: OrganizationUser = {
   role: OrganizationUserRoleEnum.OWNER,
   isDefaultForUser: true,
   assignedRoles: [],
-  createdAt: now,
-  updatedAt: now,
+  createdAt: nowDate,
+  updatedAt: nowDate,
 }
 
 function buildBox(overrides: Partial<Box> & Pick<Box, 'id' | 'name' | 'state'>): Box {

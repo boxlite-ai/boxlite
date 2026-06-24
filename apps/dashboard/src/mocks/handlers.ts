@@ -25,7 +25,14 @@ export const handlers = [
   http.get(`${API_URL}/config`, () => HttpResponse.json(buildMockConfig(BILLING_API_URL))),
   http.get(`${API_URL}/organizations`, () => HttpResponse.json([MOCK_ORGANIZATION])),
   http.get(`${API_URL}/organizations/:organizationId/users`, () => HttpResponse.json([MOCK_ORGANIZATION_MEMBER])),
-  http.get(`${API_URL}/box/paginated`, () => HttpResponse.json(MOCK_PAGINATED_BOXES)),
+  http.get(`${API_URL}/box/paginated`, ({ request }) => {
+    // Respect the ?states=… filter so the fleet count cards (running / stopped)
+    // show real per-state counts in mock, not just the unfiltered total.
+    const states = new URL(request.url).searchParams.getAll('states').flatMap((s) => s.split(','))
+    if (states.length === 0) return HttpResponse.json(MOCK_PAGINATED_BOXES)
+    const items = MOCK_BOXES.filter((b) => b.state != null && states.includes(b.state))
+    return HttpResponse.json({ items, total: items.length, page: 1, totalPages: 1 })
+  }),
   http.get(`${API_URL}/box/:boxIdOrName`, ({ params }) => {
     const box = MOCK_BOXES.find((b) => b.id === params.boxIdOrName) ?? MOCK_BOXES[0]
     return box ? HttpResponse.json(box) : new HttpResponse(null, { status: 404 })

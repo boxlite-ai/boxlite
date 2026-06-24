@@ -27,7 +27,7 @@ function SegBars() {
 
 function Billing() {
   return (
-    <div className="flex min-h-[calc(100svh-60px)] items-center justify-center px-6 py-14">
+    <div className="flex min-h-[calc(100svh-60px)] items-center justify-center px-6 py-14 lg:px-[40px]">
       <div className="w-full max-w-[560px] text-center" style={{ animation: 'stat-in 0.5s ease both' }}>
         <h1 className="mb-3 text-[26px] font-semibold leading-tight tracking-[-0.5px]">Billing is on the way</h1>
         <p className="mx-auto mb-2 max-w-[440px] text-[13px] leading-relaxed text-muted-foreground">

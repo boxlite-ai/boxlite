@@ -11,7 +11,6 @@ import { Box } from '@boxlite-ai/api-client'
 import { BoxLogsTab } from './BoxLogsTab'
 import { BoxMetricsTab } from './BoxMetricsTab'
 import { BoxSpendingTab } from './BoxSpendingTab'
-import { BoxTerminalTab } from './BoxTerminalTab'
 import { BoxTracesTab } from './BoxTracesTab'
 import { TabValue } from './SearchParams'
 
@@ -23,8 +22,8 @@ interface BoxContentTabsProps {
   onTabChange: (tab: TabValue) => void
 }
 
-// Bounded surface so the terminal / observability tabs render with real height
-// inside the detail page's centered scrolling column.
+// Bounded surface so observability tabs render with real height inside the
+// detail page's centered scrolling column.
 const TAB_SHELL =
   'flex flex-col h-[60vh] min-h-[440px] gap-0 overflow-hidden rounded-xl border border-border/60 bg-card shadow-card'
 
@@ -50,24 +49,16 @@ export function BoxContentTabs({ box, isLoading, experimentsEnabled, tab, onTabC
 
   if (!box) return null
 
-  // With observability tabs disabled there is only Terminal, so a tab selector
-  // is noise — show a plain header label and the terminal directly.
   if (!experimentsEnabled) {
-    return (
-      <div className={TAB_SHELL}>
-        <div className="flex h-[41px] shrink-0 items-center px-4 font-display text-sm font-medium text-foreground">
-          Terminal
-        </div>
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          <BoxTerminalTab box={box} />
-        </div>
-      </div>
-    )
+    return null
   }
 
   return (
     <Tabs value={tab} onValueChange={(v) => onTabChange(v as TabValue)} className={TAB_SHELL}>
-      <TabsList variant="underline" className="h-[41px] shrink-0 overflow-x-auto overflow-y-hidden scrollbar-sm border-b-0">
+      <TabsList
+        variant="underline"
+        className="h-[41px] shrink-0 overflow-x-auto overflow-y-hidden scrollbar-sm border-b-0"
+      >
         {experimentsEnabled &&
           availableTabs.some((value) => ['logs', 'traces', 'metrics', 'spending'].includes(value)) && (
             <>
@@ -77,7 +68,6 @@ export function BoxContentTabs({ box, isLoading, experimentsEnabled, tab, onTabC
               <TabsTrigger value="spending">Spending</TabsTrigger>
             </>
           )}
-        <TabsTrigger value="terminal">Terminal</TabsTrigger>
       </TabsList>
 
       {experimentsEnabled && (
@@ -99,9 +89,6 @@ export function BoxContentTabs({ box, isLoading, experimentsEnabled, tab, onTabC
           </TabsContent>
         </>
       )}
-      <TabsContent value="terminal" className="flex-1 min-h-0 m-0 data-[state=active]:flex flex-col overflow-hidden">
-        <BoxTerminalTab box={box} />
-      </TabsContent>
     </Tabs>
   )
 }

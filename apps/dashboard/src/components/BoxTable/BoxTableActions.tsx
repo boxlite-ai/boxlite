@@ -6,9 +6,8 @@
 
 import { RoutePath } from '@/enums/RoutePath'
 import { getBoxRouteId } from '@/lib/box-identity'
-import { isSshAccessible } from '@/lib/utils/box'
 import { BoxState } from '@boxlite-ai/api-client'
-import { Terminal, MoreVertical, Play, Square, Loader2, Wrench } from '@/components/ui/icon'
+import { MoreVertical, Play, Square, Loader2, Wrench } from '@/components/ui/icon'
 import { generatePath, useNavigate } from 'react-router-dom'
 import { useMemo } from 'react'
 import TooltipButton from '../TooltipButton'
@@ -31,9 +30,6 @@ export function BoxTableActions({
   onStart,
   onStop,
   onDelete,
-  onOpenWebTerminal,
-  onCreateSshAccess,
-  onRevokeSshAccess,
   onRecover,
 }: BoxTableActionsProps) {
   const navigate = useNavigate()
@@ -81,34 +77,6 @@ export function BoxTableActions({
       disabled: isLoading,
     })
 
-    if (writePermitted) {
-      // Start/Stop/Recover and Terminal are inline buttons on desktop; Terminal
-      // joins the menu only on compact (mobile) layout. SSH lives in the menu on
-      // every layout so it isn't surfaced inconsistently per row.
-      if (layout === 'mobile' && box.state === BoxState.STARTED) {
-        items.push({
-          key: 'terminal',
-          label: 'Terminal',
-          onClick: () => onOpenWebTerminal(box.id),
-          disabled: isLoading,
-        })
-      }
-      if (isSshAccessible(box)) {
-        items.push({
-          key: 'create-ssh',
-          label: 'Create SSH Access',
-          onClick: () => onCreateSshAccess(box.id),
-          disabled: isLoading,
-        })
-      }
-      items.push({
-        key: 'revoke-ssh',
-        label: 'Revoke SSH Access',
-        onClick: () => onRevokeSshAccess(box.id),
-        disabled: isLoading,
-      })
-    }
-
     if (deletePermitted) {
       if (items.length > 0) {
         items.push({ key: 'separator', type: 'separator' })
@@ -124,19 +92,7 @@ export function BoxTableActions({
     }
 
     return items
-  }, [
-    layout,
-    writePermitted,
-    deletePermitted,
-    box.state,
-    box.id,
-    isLoading,
-    onDelete,
-    onOpenWebTerminal,
-    onCreateSshAccess,
-    onRevokeSshAccess,
-    navigate,
-  ])
+  }, [deletePermitted, box.id, isLoading, onDelete, navigate])
 
   if (!writePermitted && !deletePermitted) {
     return null
@@ -212,30 +168,6 @@ export function BoxTableActions({
       >
         {primaryAction.icon}
       </TooltipButton>
-
-      {box.state === BoxState.STARTED ? (
-        <TooltipButton
-          variant="outline"
-          className="text-muted-foreground"
-          tooltipText="Open terminal"
-          disabled={isLoading}
-          onClick={(e) => {
-            e.stopPropagation()
-            onOpenWebTerminal(box.id)
-          }}
-        >
-          <Terminal className="w-4 h-4" />
-        </TooltipButton>
-      ) : (
-        <TooltipButton
-          variant="outline"
-          className="text-muted-foreground"
-          tooltipText="Terminal available when running"
-          disabled
-        >
-          <Terminal className="w-4 h-4" />
-        </TooltipButton>
-      )}
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>

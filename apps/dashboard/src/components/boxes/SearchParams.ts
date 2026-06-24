@@ -5,7 +5,7 @@
 
 import { parseAsArrayOf, parseAsInteger, parseAsIsoDateTime, parseAsString, parseAsStringLiteral } from 'nuqs'
 
-export const TAB_VALUES = ['overview', 'logs', 'traces', 'metrics', 'spending', 'terminal'] as const
+export const TAB_VALUES = ['overview', 'logs', 'traces', 'metrics', 'spending'] as const
 export type TabValue = (typeof TAB_VALUES)[number]
 
 export const SEVERITY_OPTIONS = ['DEBUG', 'INFO', 'WARN', 'ERROR'] as const

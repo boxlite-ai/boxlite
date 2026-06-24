@@ -33,9 +33,6 @@ interface UseBoxTableProps {
   handleStart: (id: string) => void
   handleStop: (id: string) => void
   handleDelete: (id: string) => void
-  getWebTerminalUrl: (id: string) => Promise<string | null>
-  handleCreateSshAccess: (id: string) => void
-  handleRevokeSshAccess: (id: string) => void
   pagination: {
     pageIndex: number
     pageSize: number
@@ -57,9 +54,6 @@ export function useBoxTable({
   handleStart,
   handleStop,
   handleDelete,
-  getWebTerminalUrl,
-  handleCreateSshAccess,
-  handleRevokeSshAccess,
   pagination,
   pageCount,
   onPaginationChange,
@@ -100,26 +94,12 @@ export function useBoxTable({
         handleStart,
         handleStop,
         handleDelete,
-        getWebTerminalUrl,
         boxIsLoading,
         writePermitted,
         deletePermitted,
-        handleCreateSshAccess,
-        handleRevokeSshAccess,
         handleRecover,
       }),
-    [
-      handleStart,
-      handleStop,
-      handleDelete,
-      getWebTerminalUrl,
-      boxIsLoading,
-      writePermitted,
-      deletePermitted,
-      handleCreateSshAccess,
-      handleRevokeSshAccess,
-      handleRecover,
-    ],
+    [handleStart, handleStop, handleDelete, boxIsLoading, writePermitted, deletePermitted, handleRecover],
   )
 
   const table = useReactTable({

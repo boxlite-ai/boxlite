@@ -74,7 +74,7 @@ const OrganizationSettings: React.FC = () => {
     'w-full border border-border bg-card px-[14px] py-[11px] font-mono text-[13px] text-foreground outline-none focus:border-brand disabled:opacity-60'
 
   return (
-    <div className="px-[34px] pb-[26px] pt-[26px]">
+    <div className="px-[34px] pb-[26px] pt-[26px] lg:px-[40px]">
       <h2 className="mb-5 font-mono text-[13px] font-medium uppercase tracking-[3px] text-muted-foreground">
         Organization Settings
       </h2>
@@ -123,7 +123,11 @@ const OrganizationSettings: React.FC = () => {
             </p>
           </div>
           <div className="flex items-center border border-border bg-card pr-1">
-            <input value={selectedOrganization.id} readOnly className="w-full bg-transparent px-[14px] py-[11px] font-mono text-[13px] text-foreground outline-none" />
+            <input
+              value={selectedOrganization.id}
+              readOnly
+              className="w-full bg-transparent px-[14px] py-[11px] font-mono text-[13px] text-foreground outline-none"
+            />
             <button
               type="button"
               title="Copy"

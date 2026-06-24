@@ -8,7 +8,6 @@ import { OrganizationSuspendedError } from '@/api/errors'
 import { OnboardingGuideDialog } from '@/components/OnboardingGuideDialog'
 import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
 import { BoxTable } from '@/components/BoxTable'
-import { useAggregatedUsage } from '@/hooks/queries/useAnalyticsUsage'
 import { Search } from '@/components/ui/icon'
 import {
   AlertDialog,
@@ -21,11 +20,9 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
-import { Label } from '@/components/ui/label'
 import { DEFAULT_PAGE_SIZE } from '@/constants/Pagination'
 import { LocalStorageKey } from '@/enums/LocalStorageKey'
 import { RoutePath } from '@/enums/RoutePath'
-import { CopyableValue } from '@/components/ui/copyable-value'
 import { useApi } from '@/hooks/useApi'
 import { deleteBoxViaBoxApi, startBoxViaBoxApi, stopBoxViaBoxApi } from '@/lib/cloudBox'
 import { useConfig } from '@/hooks/useConfig'
@@ -58,7 +55,6 @@ import {
   BoxDesiredState,
   BoxState,
   ListBoxesPaginatedStatesEnum,
-  SshAccessDto,
 } from '@boxlite-ai/api-client'
 import { QueryKey, useQuery, useQueryClient } from '@tanstack/react-query'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
@@ -156,11 +152,7 @@ const Boxes: React.FC = () => {
     [selectedOrganization?.id, queryParams],
   )
 
-  const {
-    data: boxesData,
-    isLoading: boxesDataIsLoading,
-    error: boxesDataError,
-  } = useBoxes(queryKey, queryParams)
+  const { data: boxesData, isLoading: boxesDataIsLoading, error: boxesDataError } = useBoxes(queryKey, queryParams)
   const hasBoxes = (boxesData?.items.length ?? 0) > 0 || (boxesData?.total ?? 0) > 0
 
   useEffect(() => {
@@ -268,16 +260,6 @@ const Boxes: React.FC = () => {
     },
     [updateBoxInCache],
   )
-
-  // SSH Access Dialogs
-
-  const [showCreateSshDialog, setShowCreateSshDialog] = useState(false)
-  const [showRevokeSshDialog, setShowRevokeSshDialog] = useState(false)
-  const [sshAccess, setSshAccess] = useState<SshAccessDto | null>(null)
-  const [sshExpiryMinutes, setSshExpiryMinutes] = useState<number>(60)
-  const [revokeSshToken, setRevokeSshToken] = useState<string>('')
-  const [sshBoxId, setSshBoxId] = useState<string>('')
-  const [copied, setCopied] = useState<string | null>(null)
 
   // TODO(image-rewrite): template/image listing removed with the image/template subsystem.
 
@@ -638,85 +620,6 @@ const Boxes: React.FC = () => {
     result.successfulIds.forEach(removeBoxFromCache)
   }
 
-  const getPortPreviewUrl = useCallback(
-    async (boxId: string, port: number): Promise<string> => {
-      setBoxIsLoading((prev) => ({ ...prev, [boxId]: true }))
-      try {
-        return (await boxApi.getSignedPortPreviewUrl(boxId, port, selectedOrganization?.id)).data.url
-      } finally {
-        setBoxIsLoading((prev) => ({ ...prev, [boxId]: false }))
-      }
-    },
-    [boxApi, selectedOrganization],
-  )
-
-  const getWebTerminalUrl = useCallback(
-    async (boxId: string): Promise<string | null> => {
-      try {
-        return await getPortPreviewUrl(boxId, 22222)
-      } catch (error) {
-        handleApiError(error, 'Failed to construct web terminal URL')
-        return null
-      }
-    },
-    [getPortPreviewUrl],
-  )
-
-  const handleCreateSshAccess = async (id: string) => {
-    setBoxIsLoading((prev) => ({ ...prev, [id]: true }))
-    try {
-      const response = await boxApi.createSshAccess(id, selectedOrganization?.id, sshExpiryMinutes)
-      setSshAccess(response.data)
-      setSshBoxId(id)
-      setShowCreateSshDialog(true)
-      toast.success('SSH access created successfully')
-    } catch (error) {
-      handleApiError(error, 'Failed to create SSH access')
-    } finally {
-      setBoxIsLoading((prev) => ({ ...prev, [id]: false }))
-    }
-  }
-
-  const openCreateSshDialog = (id: string) => {
-    setSshBoxId(id)
-    setShowCreateSshDialog(true)
-  }
-
-  const handleRevokeSshAccess = async (id: string) => {
-    if (!revokeSshToken.trim()) {
-      toast.error('Please enter a token to revoke')
-      return
-    }
-
-    setBoxIsLoading((prev) => ({ ...prev, [id]: true }))
-    try {
-      await boxApi.revokeSshAccess(id, selectedOrganization?.id, revokeSshToken)
-      setRevokeSshToken('')
-      setSshBoxId('')
-      setShowRevokeSshDialog(false)
-      toast.success('SSH access revoked successfully')
-    } catch (error) {
-      handleApiError(error, 'Failed to revoke SSH access')
-    } finally {
-      setBoxIsLoading((prev) => ({ ...prev, [id]: false }))
-    }
-  }
-
-  const openRevokeSshDialog = (id: string) => {
-    setSshBoxId(id)
-    setShowRevokeSshDialog(true)
-  }
-
-  const copyToClipboard = async (text: string, label: string) => {
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopied(label)
-      setTimeout(() => setCopied(null), 2000)
-    } catch (err) {
-      console.error('Failed to copy text:', err)
-    }
-  }
-
   useEffect(() => {
     if (!selectedOrganization || !user?.profile.sub) {
       return
@@ -783,30 +686,24 @@ const Boxes: React.FC = () => {
     enabled: !!orgId,
     staleTime: 10_000,
   })
-
-  // This-week spend + CPU-hours from the analytics usage API (gracefully degrades when unset).
-  const weekRange = useMemo(() => {
-    const now = new Date()
-    const sinceMonday = now.getDay() === 0 ? 6 : now.getDay() - 1
-    const from = new Date(now)
-    from.setHours(0, 0, 0, 0)
-    from.setDate(now.getDate() - sinceMonday)
-    return { from, to: now }
-  }, [])
-  const aggregatedUsage = useAggregatedUsage({ from: weekRange.from, to: weekRange.to })
-  const analyticsAvailable = !!api.analyticsUsageApi
-  const usage = aggregatedUsage.data
+  const stoppedBoxesQuery = useQuery({
+    queryKey: ['boxesCount', orgId, 'stopped'],
+    queryFn: async () =>
+      (
+        await boxApi.listBoxesPaginated(orgId, 1, 1, undefined, undefined, undefined, undefined, [
+          ListBoxesPaginatedStatesEnum.STOPPED,
+        ])
+      ).data.total,
+    enabled: !!orgId,
+    staleTime: 10_000,
+  })
 
   const totalBoxesDisplay = totalBoxesQuery.data != null ? totalBoxesQuery.data.toLocaleString('en-US') : '…'
   const runningBoxesDisplay = runningBoxesQuery.data != null ? runningBoxesQuery.data.toLocaleString('en-US') : '…'
-  const cpuHoursDisplay = !analyticsAvailable
-    ? '—'
-    : usage
-      ? ((usage.totalCPUSeconds ?? 0) / 3600).toLocaleString('en-US', { maximumFractionDigits: 1 })
-      : '…'
+  const stoppedBoxesDisplay = stoppedBoxesQuery.data != null ? stoppedBoxesQuery.data.toLocaleString('en-US') : '…'
 
   return (
-    <div className="flex h-[calc(100svh-60px)] min-h-0 flex-col px-[34px] pt-[26px]">
+    <div className="flex h-[calc(100svh-60px)] min-h-0 flex-col px-4 pt-5 sm:px-6 lg:px-[40px] lg:pt-[26px]">
       <OnboardingGuideDialog
         open={showOnboardingDialog}
         onOpenChange={(isOpen) => {
@@ -820,20 +717,20 @@ const Boxes: React.FC = () => {
         progress={onboardingProgress}
       />
       {/* header */}
-      <div className="mb-[22px] flex items-end justify-between">
-        <h1 className="font-mono text-[22px] font-medium leading-none tracking-[-0.5px]">Sandboxes</h1>
+      <div className="mb-[18px] flex items-end justify-between lg:mb-[22px]">
+        <h1 className="font-mono text-[22px] font-medium leading-none tracking-[-0.5px]">Boxes</h1>
       </div>
 
       {/* stat cards */}
-      <div className="grid grid-cols-3 gap-[14px]">
-        <StatCard label="total boxes" value={totalBoxesDisplay} sub="all states" index="01" />
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:gap-[14px]">
+        <StatCard label="total boxes" value={totalBoxesDisplay} sub="all states" />
         <StatCard label="running boxes" value={runningBoxesDisplay} sub="active now" live />
-        <StatCard label="CPU-hours" value={cpuHoursDisplay} sub="this week" index="03" />
+        <StatCard label="stopped boxes" value={stoppedBoxesDisplay} sub="idle" />
       </div>
 
       {/* toolbar */}
-      <div className="mt-[26px] flex h-9 items-stretch gap-3">
-        <div className="flex w-[380px] flex-none items-center gap-[11px] border border-dashed border-border bg-card px-[14px]">
+      <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-stretch lg:mt-[26px]">
+        <div className="flex h-11 w-full min-w-0 items-center gap-[11px] border border-dashed border-border bg-card px-[14px] sm:h-9 sm:max-w-[380px] sm:flex-none">
           <Search className="size-[15px] shrink-0" style={{ color: 'hsl(var(--brand))' }} strokeWidth={2} />
           <input
             value={filters.idOrName ?? ''}
@@ -848,6 +745,7 @@ const Boxes: React.FC = () => {
         <div className="flex-1" />
         {authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES) && (
           <CreateBoxDialog
+            triggerClassName="h-11 justify-center sm:h-9"
             open={createBoxOpen}
             onOpenChange={setCreateBoxOpen}
             onCreated={() => {
@@ -872,9 +770,6 @@ const Boxes: React.FC = () => {
           handleBulkDelete={handleBulkDelete}
           handleBulkStart={handleBulkStart}
           handleBulkStop={handleBulkStop}
-          getWebTerminalUrl={getWebTerminalUrl}
-          handleCreateSshAccess={openCreateSshDialog}
-          handleRevokeSshAccess={openRevokeSshDialog}
           data={boxesData?.items || []}
           loading={boxesDataIsLoading}
           onRowClick={(box: Box) => {
@@ -893,147 +788,38 @@ const Boxes: React.FC = () => {
           onFiltersChange={handleFiltersChange}
           handleRecover={handleRecover}
         />
-        </div>
+      </div>
 
-        {boxToDelete && (
-          <AlertDialog
-            open={showDeleteDialog}
-            onOpenChange={(isOpen) => {
-              setShowDeleteDialog(isOpen)
-              if (!isOpen) {
-                setBoxToDelete(null)
-              }
-            }}
-          >
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Confirm Box Deletion</AlertDialogTitle>
-                <AlertDialogDescription>
-                  Are you sure you want to delete this box? This action cannot be undone.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction
-                  variant="destructive"
-                  onClick={() => handleDelete(boxToDelete)}
-                  disabled={boxIsLoading[boxToDelete]}
-                >
-                  {boxIsLoading[boxToDelete] ? 'Deleting...' : 'Delete'}
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        )}
-
-        {/* Create SSH Access Dialog */}
+      {boxToDelete && (
         <AlertDialog
-          open={showCreateSshDialog}
+          open={showDeleteDialog}
           onOpenChange={(isOpen) => {
-            setShowCreateSshDialog(isOpen)
+            setShowDeleteDialog(isOpen)
             if (!isOpen) {
-              setSshAccess(null)
-              setSshExpiryMinutes(60)
-              setSshBoxId('')
+              setBoxToDelete(null)
             }
           }}
         >
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Create SSH Access</AlertDialogTitle>
+              <AlertDialogTitle>Confirm Box Deletion</AlertDialogTitle>
               <AlertDialogDescription>
-                {sshAccess
-                  ? 'SSH access has been created successfully. Use the token below to connect:'
-                  : 'Set the expiration time for SSH access:'}
+                Are you sure you want to delete this box? This action cannot be undone.
               </AlertDialogDescription>
             </AlertDialogHeader>
-            <div className="space-y-4">
-              {!sshAccess ? (
-                <div className="space-y-3">
-                  <Label className="text-sm font-medium">Expiry (minutes):</Label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="1440"
-                    value={sshExpiryMinutes}
-                    onChange={(e) => setSshExpiryMinutes(Number(e.target.value))}
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                  />
-                </div>
-              ) : (
-                <CopyableValue
-                  displayValue={sshAccess.sshCommand}
-                  copyValue={sshAccess.sshCommand}
-                  copyLabel="SSH command"
-                  copied={copied === 'SSH Command'}
-                  onCopy={(value) => copyToClipboard(value, 'SSH Command')}
-                />
-              )}
-            </div>
-            <AlertDialogFooter>
-              {!sshAccess ? (
-                <>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction
-                    onClick={() => handleCreateSshAccess(sshBoxId)}
-                    disabled={!sshBoxId}
-                    className="bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                  >
-                    Create
-                  </AlertDialogAction>
-                </>
-              ) : (
-                <AlertDialogAction
-                  onClick={() => setShowCreateSshDialog(false)}
-                  className="bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                >
-                  Close
-                </AlertDialogAction>
-              )}
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-
-        {/* Revoke SSH Access Dialog */}
-        <AlertDialog
-          open={showRevokeSshDialog}
-          onOpenChange={(isOpen) => {
-            setShowRevokeSshDialog(isOpen)
-            if (!isOpen) {
-              setRevokeSshToken('')
-              setSshBoxId('')
-            }
-          }}
-        >
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Revoke SSH Access</AlertDialogTitle>
-              <AlertDialogDescription>Enter the SSH access token you want to revoke:</AlertDialogDescription>
-            </AlertDialogHeader>
-            <div className="space-y-4">
-              <div className="space-y-3">
-                <label className="text-sm font-medium">SSH Token:</label>
-                <input
-                  type="text"
-                  value={revokeSshToken}
-                  onChange={(e) => setRevokeSshToken(e.target.value)}
-                  placeholder="Enter SSH token to revoke"
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                />
-              </div>
-            </div>
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>
               <AlertDialogAction
-                onClick={() => handleRevokeSshAccess(sshBoxId)}
-                disabled={!revokeSshToken.trim() || !sshBoxId}
-                className="bg-secondary text-secondary-foreground hover:bg-secondary/80"
+                variant="destructive"
+                onClick={() => handleDelete(boxToDelete)}
+                disabled={boxIsLoading[boxToDelete]}
               >
-                Revoke Access
+                {boxIsLoading[boxToDelete] ? 'Deleting...' : 'Delete'}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+      )}
     </div>
   )
 }
@@ -1089,26 +875,14 @@ function DotMatrix({ text, dot = 4, gap = 1 }: { text: string; dot?: number; gap
   )
 }
 
-function StatCard({
-  label,
-  value,
-  sub,
-  live,
-  index,
-}: {
-  label: string
-  value: string
-  sub: string
-  live?: boolean
-  index?: string
-}) {
+function StatCard({ label, value, sub, live }: { label: string; value: string; sub: string; live?: boolean }) {
   return (
     <div className="flex flex-col gap-[14px] border border-border bg-card px-[22px] pb-5 pt-[18px] transition-transform hover:-translate-y-0.5">
       <div className="flex items-center justify-between">
         <span className="whitespace-nowrap font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
           <span style={{ color: 'hsl(var(--brand))' }}>▸</span> {label}
         </span>
-        {live ? (
+        {live && (
           <span className="inline-flex items-center gap-[6px] font-mono text-[9px] tracking-[1px] text-muted-foreground">
             <span
               className="size-[6px] rounded-full"
@@ -1116,8 +890,6 @@ function StatCard({
             />
             LIVE
           </span>
-        ) : (
-          <span className="font-mono text-[10px] text-muted-foreground">{index}</span>
         )}
       </div>
       <div className="flex items-end gap-[10px]">

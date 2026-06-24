@@ -3,19 +3,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '@/components/ui/dialog'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { RoutePath } from '@/enums/RoutePath'
 import { useCreateBoxMutation } from '@/hooks/mutations/useCreateBoxMutation'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
@@ -25,7 +14,7 @@ import { cn } from '@/lib/utils'
 import type { Box } from '@boxlite-ai/api-client'
 import { ChevronDown, Plus } from '@/components/ui/icon'
 import { useEffect, useState } from 'react'
-import { createSearchParams, generatePath, useNavigate } from 'react-router-dom'
+import { generatePath, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 
 const NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
@@ -65,7 +54,7 @@ function Stepper({
     onChange(Number.isFinite(n) ? clamp(n) : min)
   }
   const btn =
-    'flex w-9 flex-none items-center justify-center font-mono text-[15px] text-muted-foreground transition-colors enabled:hover:bg-accent enabled:hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40'
+    'flex size-11 flex-none items-center justify-center font-mono text-[15px] text-muted-foreground transition-colors enabled:hover:bg-accent enabled:hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 sm:size-9'
   return (
     <div className="flex items-stretch border border-border bg-card">
       <button
@@ -168,10 +157,7 @@ export const CreateBoxDialog = ({
       setOpen(false)
       const boxId = getBoxRouteId(box)
       if (boxId) {
-        navigate({
-          pathname: generatePath(RoutePath.BOX_DETAILS, { boxId }),
-          search: `${createSearchParams({ tab: 'terminal' })}`,
-        })
+        navigate(generatePath(RoutePath.BOX_DETAILS, { boxId }))
       }
     } catch (error) {
       handleApiError(error, 'Failed to create box')
@@ -196,12 +182,17 @@ export const CreateBoxDialog = ({
         </button>
       </DialogTrigger>
 
-      <DialogContent className={cn('flex max-h-[88vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[540px]', className)}>
-        <DialogHeader className="shrink-0 border-b border-border px-6 py-[18px]">
+      <DialogContent
+        className={cn(
+          'flex max-h-[92svh] w-[calc(100vw-1rem)] max-w-[540px] flex-col gap-0 overflow-hidden p-0 sm:max-h-[88vh]',
+          className,
+        )}
+      >
+        <DialogHeader className="shrink-0 border-b border-border px-4 py-[18px] sm:px-6">
           <DialogTitle className="text-[18px] font-bold tracking-[-0.3px]">Create a box for your agent</DialogTitle>
         </DialogHeader>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-[22px] overflow-y-auto px-6 py-6">
+        <div className="flex min-h-0 flex-1 flex-col gap-[22px] overflow-y-auto px-4 py-5 sm:px-6 sm:py-6">
           {/* name */}
           <div className="flex flex-col gap-[9px]">
             <div className="font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground">Name</div>
@@ -244,18 +235,18 @@ export const CreateBoxDialog = ({
             <button
               type="button"
               onClick={() => setAdvancedOpen((v) => !v)}
-              className="flex items-center gap-[9px] font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground transition-colors hover:text-foreground"
+              className="flex w-full flex-wrap items-start gap-x-[9px] gap-y-1 text-left font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground transition-colors hover:text-foreground sm:items-center"
             >
               <span className="text-[11px]">{advancedOpen ? '▾' : '▸'}</span>
               Advanced Options
               {!advancedOpen && (
-                <span className="font-mono text-[11px] normal-case tracking-normal text-muted-foreground/80">
+                <span className="basis-full pl-5 font-mono text-[11px] normal-case tracking-normal text-muted-foreground/80 sm:basis-auto sm:pl-0">
                   · {cpu} vCPU · {memory} GiB · {disk} GiB
                 </span>
               )}
             </button>
             {advancedOpen && (
-              <div className="grid grid-cols-3 gap-[14px]">
+              <div className="grid grid-cols-1 gap-[14px] sm:grid-cols-3">
                 <div className="flex flex-col gap-[9px]">
                   <div className="font-mono text-[10px] uppercase tracking-[1px]">
                     CPU <span className="text-muted-foreground">(vCPU)</span>
@@ -280,19 +271,19 @@ export const CreateBoxDialog = ({
         </div>
 
         {/* price — billing is not enabled yet, so everything is free ($0) */}
-        <div className="flex shrink-0 items-baseline justify-between border-t border-border px-6 py-4">
+        <div className="flex shrink-0 flex-col gap-1 border-t border-border px-4 py-4 sm:flex-row sm:items-baseline sm:justify-between sm:px-6">
           <span className="font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground">Price per hour</span>
-          <span className="font-mono text-[24px] font-bold tracking-[-0.5px]">
+          <span className="font-mono text-[20px] font-bold tracking-[-0.5px] sm:text-[24px]">
             $0.00 <span className="text-[11px] font-normal text-muted-foreground">/ hr · free in preview</span>
           </span>
         </div>
 
         {/* footer */}
-        <div className="flex shrink-0 justify-end gap-[10px] border-t border-border px-6 py-4">
+        <div className="grid shrink-0 grid-cols-2 gap-[10px] border-t border-border px-4 py-4 sm:flex sm:justify-end sm:px-6">
           <button
             type="button"
             onClick={() => setOpen(false)}
-            className="border border-border px-[18px] py-[10px] text-[13px] font-medium transition-colors hover:bg-card"
+            className="border border-border px-[18px] py-[11px] text-[13px] font-medium transition-colors hover:bg-card focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 sm:py-[10px]"
           >
             Cancel
           </button>
@@ -300,7 +291,7 @@ export const CreateBoxDialog = ({
             type="button"
             onClick={handleCreate}
             disabled={submitting || !selectedOrganization?.id || !nameValid}
-            className="bg-primary px-5 py-[10px] text-[13px] font-semibold text-primary-foreground transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50"
+            className="bg-primary px-5 py-[11px] text-[13px] font-semibold text-primary-foreground transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:cursor-not-allowed disabled:opacity-50 sm:py-[10px]"
           >
             {submitting ? 'Creating…' : 'Create Box'}
           </button>

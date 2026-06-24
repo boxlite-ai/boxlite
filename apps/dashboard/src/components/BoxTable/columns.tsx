@@ -45,12 +45,9 @@ interface GetColumnsProps {
   handleStart: (id: string) => void
   handleStop: (id: string) => void
   handleDelete: (id: string) => void
-  getWebTerminalUrl: (id: string) => Promise<string | null>
   boxIsLoading: Record<string, boolean>
   writePermitted: boolean
   deletePermitted: boolean
-  handleCreateSshAccess: (id: string) => void
-  handleRevokeSshAccess: (id: string) => void
   handleRecover: (id: string) => void
 }
 
@@ -58,21 +55,11 @@ export function getColumns({
   handleStart,
   handleStop,
   handleDelete,
-  getWebTerminalUrl,
   boxIsLoading,
   writePermitted,
   deletePermitted,
-  handleCreateSshAccess,
-  handleRevokeSshAccess,
   handleRecover,
 }: GetColumnsProps): ColumnDef<Box>[] {
-  const handleOpenWebTerminal = async (boxId: string) => {
-    const url = await getWebTerminalUrl(boxId)
-    if (url) {
-      window.open(url, '_blank')
-    }
-  }
-
   const columns: ColumnDef<Box>[] = [
     {
       id: 'select',
@@ -239,9 +226,6 @@ export function getColumns({
             onStart={handleStart}
             onStop={handleStop}
             onDelete={handleDelete}
-            onOpenWebTerminal={handleOpenWebTerminal}
-            onCreateSshAccess={handleCreateSshAccess}
-            onRevokeSshAccess={handleRevokeSshAccess}
             onRecover={handleRecover}
           />
         </div>
