@@ -202,6 +202,10 @@ const Boxes: React.FC = () => {
         queryKey: baseQueryKey,
         refetchType: shouldRefetchActiveQueries ? 'active' : 'none',
       })
+      // The stat-card counts live under a separate query key, so the list
+      // invalidation above misses them. Refetch them on every box change
+      // (action or socket push) so the cards stay in sync with the list.
+      queryClient.invalidateQueries({ queryKey: ['boxesCount'], refetchType: 'active' })
     },
     [queryClient, baseQueryKey],
   )
@@ -722,7 +726,7 @@ const Boxes: React.FC = () => {
       </div>
 
       {/* stat cards */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:gap-[14px]">
+      <div className="grid grid-cols-3 gap-2 sm:gap-3 lg:gap-[14px]">
         <StatCard label="total boxes" value={totalBoxesDisplay} sub="all states" />
         <StatCard label="running boxes" value={runningBoxesDisplay} sub="active now" live />
         <StatCard label="stopped boxes" value={stoppedBoxesDisplay} sub="idle" />
@@ -877,22 +881,25 @@ function DotMatrix({ text, dot = 4, gap = 1 }: { text: string; dot?: number; gap
 
 function StatCard({ label, value, sub, live }: { label: string; value: string; sub: string; live?: boolean }) {
   return (
-    <div className="flex flex-col gap-[14px] border border-border bg-card px-[22px] pb-5 pt-[18px] transition-transform hover:-translate-y-0.5">
-      <div className="flex items-center justify-between">
-        <span className="whitespace-nowrap font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
+    <div className="flex flex-col gap-2 border border-border bg-card px-3 py-2.5 transition-transform hover:-translate-y-0.5 sm:gap-[14px] sm:px-[22px] sm:pb-5 sm:pt-[18px]">
+      <div className="flex items-start justify-between gap-1">
+        <span className="font-mono text-[9px] uppercase leading-tight tracking-[1px] text-muted-foreground sm:whitespace-nowrap sm:text-[10px] sm:tracking-[1.5px]">
           <span style={{ color: 'hsl(var(--brand))' }}>▸</span> {label}
         </span>
         {live && (
-          <span className="inline-flex items-center gap-[6px] font-mono text-[9px] tracking-[1px] text-muted-foreground">
+          <span className="inline-flex shrink-0 items-center gap-[5px] font-mono text-[9px] tracking-[1px] text-muted-foreground">
             <span
               className="size-[6px] rounded-full"
               style={{ background: 'hsl(var(--brand))', animation: 'live-pulse 1.6s infinite' }}
             />
-            LIVE
+            <span className="hidden sm:inline">LIVE</span>
           </span>
         )}
       </div>
-      <div className="flex items-end gap-[10px]">
+      {/* mobile: compact numeric value (the dot-matrix is too tall for a 3-up row) */}
+      <div className="font-mono text-[20px] font-semibold leading-none tracking-[-0.5px] sm:hidden">{value}</div>
+      {/* desktop: dot-matrix value + sub label */}
+      <div className="hidden items-end gap-[10px] sm:flex">
         {isNumeric(value) ? (
           <span className="text-foreground">
             <DotMatrix text={value} />

@@ -251,7 +251,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
       {/* brand */}
       <Link
         to={RoutePath.BOXES}
-        className="flex shrink-0 items-center border-r border-border px-[22px] text-foreground"
+        className="flex shrink-0 items-center border-r border-border px-[30px] text-foreground"
         aria-label="BoxLite home"
       >
         <LogoText className="h-[26px] w-auto" />
@@ -307,7 +307,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
       <DropdownMenu>
         <DropdownMenuTrigger
           aria-label="Open profile menu"
-          className="inline-flex h-full items-center gap-2 border-l border-border px-3 text-[13px] font-medium text-foreground outline-none transition-colors hover:bg-card data-[state=open]:bg-card sm:px-4"
+          className="inline-flex h-full items-center gap-2 border-l border-border px-4 text-[13px] font-medium text-foreground outline-none transition-colors hover:bg-card data-[state=open]:bg-card sm:px-5"
         >
           <span className="flex size-[23px] shrink-0 items-center justify-center overflow-hidden bg-brand text-[9px] font-extrabold text-white">
             {user?.profile.picture ? (
@@ -371,7 +371,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
       <DropdownMenu>
         <DropdownMenuTrigger
           aria-label="Open navigation menu"
-          className="inline-flex h-full items-center border-l border-border px-4 text-muted-foreground outline-none transition-colors hover:text-foreground lg:hidden"
+          className="inline-flex h-full items-center border-l border-border px-5 text-muted-foreground outline-none transition-colors hover:text-foreground lg:hidden"
         >
           <MoreHorizontal className="size-4" />
         </DropdownMenuTrigger>

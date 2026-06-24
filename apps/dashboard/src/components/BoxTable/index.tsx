@@ -8,7 +8,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { getBoxDisplayName, getBoxPublicIdLabel } from '@/lib/box-identity'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { getRelativeTimeString } from '@/lib/utils'
-import { isRecoverable, isStartable, isStoppable } from '@/lib/utils/box'
+import { isRecoverable, isStartable, isStoppable, isTransitioning } from '@/lib/utils/box'
 import { OrganizationRolePermissionsEnum, Box, BoxState } from '@boxlite-ai/api-client'
 import {
   ChevronLeft,
@@ -16,6 +16,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Container,
+  Loader2,
   MoreHorizontal,
   Pause,
   Play,
@@ -30,8 +31,9 @@ import { BoxTableProps } from './types'
 const STATUS = {
   running: '#5ad67d',
   idle: '#e0b341',
-  stopped: '#e0564a',
-  dim: '#8C919C',
+  stopped: '#8C919C',
+  error: '#e0564a',
+  dim: '#5b616e',
 } as const
 
 function statusOf(box: Box): { label: string; color: string } {
@@ -41,7 +43,7 @@ function statusOf(box: Box): { label: string; color: string } {
     case BoxState.STOPPED:
       return { label: 'STOPPED', color: STATUS.stopped }
     case BoxState.ERROR:
-      return { label: 'ERROR', color: STATUS.stopped }
+      return { label: 'ERROR', color: STATUS.error }
     case BoxState.CREATING:
     case BoxState.STARTING:
     case BoxState.RESTORING:
@@ -68,18 +70,21 @@ function IconButton({
   onClick,
   children,
   className,
+  disabled,
 }: {
   title: string
   onClick: (e: React.MouseEvent) => void
   children: ReactNode
   className?: string
+  disabled?: boolean
 }) {
   return (
     <button
       type="button"
       title={title}
       onClick={onClick}
-      className={`inline-flex h-[26px] w-7 items-center justify-center border border-border text-foreground transition-colors hover:border-brand hover:bg-brand hover:text-background focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 ${className ?? ''}`}
+      disabled={disabled}
+      className={`inline-flex h-[26px] w-7 items-center justify-center border border-border text-foreground transition-colors enabled:hover:border-brand enabled:hover:bg-brand enabled:hover:text-background focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:cursor-default disabled:text-muted-foreground ${className ?? ''}`}
     >
       {children}
     </button>
@@ -124,6 +129,7 @@ export function BoxTable({
     const startable = isStartable(box)
     const stoppable = isStoppable(box)
     const recoverable = isRecoverable(box)
+    const transitioning = isTransitioning(box)
 
     return (
       <>
@@ -140,6 +146,11 @@ export function BoxTable({
         {writePermitted && stoppable && (
           <IconButton title="Stop" onClick={() => handleStop(box.id)} className={buttonClassName}>
             <Pause className={iconClassName} strokeWidth={1.3} fill="currentColor" />
+          </IconButton>
+        )}
+        {writePermitted && transitioning && !startable && !stoppable && !recoverable && (
+          <IconButton title="Working…" onClick={() => undefined} disabled className={buttonClassName}>
+            <Loader2 className={`${iconClassName} animate-spin`} strokeWidth={1.3} />
           </IconButton>
         )}
         {deletePermitted && (

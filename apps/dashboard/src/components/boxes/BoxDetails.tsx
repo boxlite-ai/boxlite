@@ -50,7 +50,7 @@ import { toast } from 'sonner'
 import { BoxTerminalTab } from './BoxTerminalTab'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
-const STATUS = { running: '#5ad67d', idle: '#e0b341', stopped: '#e0564a', dim: '#8C919C' } as const
+const STATUS = { running: '#5ad67d', idle: '#e0b341', stopped: '#8C919C', error: '#e0564a', dim: '#5b616e' } as const
 
 function statusOf(box: Box): { label: string; color: string } {
   switch (box.state) {
@@ -59,7 +59,7 @@ function statusOf(box: Box): { label: string; color: string } {
     case BoxState.STOPPED:
       return { label: 'Stopped', color: STATUS.dim }
     case BoxState.ERROR:
-      return { label: 'Error', color: STATUS.stopped }
+      return { label: 'Error', color: STATUS.error }
     case BoxState.CREATING:
     case BoxState.STARTING:
     case BoxState.RESTORING:
@@ -356,6 +356,15 @@ export default function BoxDetails() {
                   <Pause className="size-[13px]" fill="currentColor" /> stop
                 </button>
               )}
+              {writePermitted && isTransitioning(box) && !isRecoverable(box) && !isStartable(box) && !isStoppable(box) && (
+                <button
+                  type="button"
+                  disabled
+                  className="flex min-h-10 items-center gap-2 border border-border px-[15px] py-2 text-[13px] font-medium text-muted-foreground"
+                >
+                  <RefreshCw className="size-[14px] animate-spin" /> working…
+                </button>
+              )}
               {deletePermitted && (
                 <DropdownMenu>
                   <DropdownMenuTrigger
@@ -429,7 +438,7 @@ export default function BoxDetails() {
               {box.errorReason && (
                 <>
                   <SectionHeader title="error" />
-                  <p className="text-[12px] leading-relaxed" style={{ color: STATUS.stopped }}>
+                  <p className="text-[12px] leading-relaxed" style={{ color: STATUS.error }}>
                     {box.errorReason}
                   </p>
                 </>
