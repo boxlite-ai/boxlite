@@ -4,8 +4,9 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { Suspense, useEffect, useMemo, useState } from 'react'
 import { Outlet } from 'react-router-dom'
+import { Skeleton } from '@/components/ui/skeleton'
 
 import { AnnouncementBanner } from '@/components/AnnouncementBanner'
 import { CommandPalette, useRegisterCommands, type CommandConfig } from '@/components/CommandPalette'
@@ -140,7 +141,19 @@ const Dashboard: React.FC = () => {
         <Sidebar isBannerVisible={isBannerVisible} billingEnabled={!!config.billingApiUrl} version={config.version} />
         <SidebarInset className="min-h-0 overflow-visible">
           <div className="w-full min-h-[var(--app-content-height,calc(100svh_-_60px))] overscroll-none">
-            <Outlet />
+            {/* Lazy route components (Admin/Billing/Settings/box-details) suspend
+                here so only the content area shows a fallback — the sidebar/shell
+                stays mounted across navigation. */}
+            <Suspense
+              fallback={
+                <div className="space-y-3 p-4 sm:p-5">
+                  <Skeleton className="h-8 w-48" />
+                  <Skeleton className="h-32 w-full" />
+                </div>
+              }
+            >
+              <Outlet />
+            </Suspense>
             <CommandPalette />
           </div>
         </SidebarInset>
