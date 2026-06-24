@@ -557,6 +557,49 @@ mod tests {
     }
 
     #[test]
+    fn test_create_box_request_carries_reserved_executor_env_to_rest_boundary() {
+        use crate::runtime::options::{BoxOptions, RootfsSpec};
+
+        let opts = BoxOptions {
+            rootfs: RootfsSpec::Image("alpine:latest".into()),
+            env: vec![("BOXLITE_EXECUTOR".into(), "guest".into())],
+            ..Default::default()
+        };
+
+        let req = CreateBoxRequest::from_options(&opts, Some("test-box".into()));
+
+        assert_eq!(
+            req.env
+                .as_ref()
+                .and_then(|env| env.get("BOXLITE_EXECUTOR"))
+                .map(String::as_str),
+            Some("guest")
+        );
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"BOXLITE_EXECUTOR\":\"guest\""));
+    }
+
+    #[test]
+    fn test_exec_request_carries_reserved_executor_env_to_rest_boundary() {
+        let command = crate::BoxCommand::new("sh")
+            .arg("-c")
+            .arg("true")
+            .env("BOXLITE_EXECUTOR", "guest");
+
+        let req = ExecRequest::from_command(&command);
+
+        assert_eq!(
+            req.env
+                .as_ref()
+                .and_then(|env| env.get("BOXLITE_EXECUTOR"))
+                .map(String::as_str),
+            Some("guest")
+        );
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"BOXLITE_EXECUTOR\":\"guest\""));
+    }
+
+    #[test]
     fn test_create_box_request_from_options_disabled_network() {
         use crate::runtime::options::{BoxOptions, NetworkSpec, RootfsSpec};
 

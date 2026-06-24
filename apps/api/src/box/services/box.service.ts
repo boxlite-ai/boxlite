@@ -74,6 +74,7 @@ import { BoxLookupCacheInvalidationService } from './box-lookup-cache-invalidati
 import { Region } from '../../region/entities/region.entity'
 import { BoxActivityService } from './box-activity.service'
 import { assertWithinPerBoxLimits } from './per-box-limits'
+import { RESERVED_ENV_MESSAGE, hasReservedEnv } from '../../common/utils/reserved-env.util'
 
 // TODO(image-rewrite): resource defaults previously came from the removed image subsystem;
 // these mirror the Box entity column defaults until image resolution is rebuilt.
@@ -146,6 +147,10 @@ export class BoxService {
   }
 
   async create(createBoxDto: CreateBoxDto, organization: Organization): Promise<BoxDto> {
+    if (hasReservedEnv(createBoxDto.env)) {
+      throw new BadRequestError(RESERVED_ENV_MESSAGE)
+    }
+
     const region = await this.getValidatedOrDefaultRegion(organization, createBoxDto.target)
 
     try {
@@ -858,6 +863,9 @@ export class BoxService {
 
     if (box.state !== BoxState.ERROR) {
       throw new BadRequestError('Box must be in error state to recover')
+    }
+    if (hasReservedEnv(box.env)) {
+      throw new BadRequestError(RESERVED_ENV_MESSAGE)
     }
 
     if (box.pending) {

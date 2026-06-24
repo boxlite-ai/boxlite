@@ -87,6 +87,51 @@ func seedManagedExecForBox(mgr *boxlite.ExecManager, id, boxID string, handle bo
 	return exec
 }
 
+func TestBoxliteExecRejectsReservedExecutorEnv(t *testing.T) {
+	w := runHandler(http.MethodPost,
+		"/v1/boxes/:boxId/exec",
+		"/v1/boxes/box/exec",
+		strings.NewReader(`{"command":"sh","env":{"BOXLITE_EXECUTOR":"guest"}}`),
+		BoxliteExec)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "BOXLITE_EXECUTOR is reserved") {
+		t.Fatalf("expected reserved env message, got body=%s", w.Body.String())
+	}
+}
+
+func TestCreateRejectsReservedExecutorEnv(t *testing.T) {
+	w := runHandler(http.MethodPost,
+		"/v1/boxes",
+		"/v1/boxes",
+		strings.NewReader(`{"id":"box","image":"boxlite/base","osUser":"boxlite","cpuQuota":1,"memoryQuota":1,"storageQuota":1,"env":{"BOXLITE_EXECUTOR":"guest"}}`),
+		Create)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "BOXLITE_EXECUTOR is reserved") {
+		t.Fatalf("expected reserved env message, got body=%s", w.Body.String())
+	}
+}
+
+func TestRecoverRejectsReservedExecutorEnv(t *testing.T) {
+	w := runHandler(http.MethodPost,
+		"/v1/boxes/:boxId/recover",
+		"/v1/boxes/box/recover",
+		strings.NewReader(`{"osUser":"boxlite","cpuQuota":1,"memoryQuota":1,"storageQuota":1,"errorReason":"boom","env":{"BOXLITE_EXECUTOR":"guest"}}`),
+		Recover)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "BOXLITE_EXECUTOR is reserved") {
+		t.Fatalf("expected reserved env message, got body=%s", w.Body.String())
+	}
+}
+
 // Phase 2.1: GET /executions/{id} reports running, then exited+exit_code
 // after Done fires, with no other state surgery.
 func TestBoxliteGetExecutionReturnsRunningThenExited(t *testing.T) {

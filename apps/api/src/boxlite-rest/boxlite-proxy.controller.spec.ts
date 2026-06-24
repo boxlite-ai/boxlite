@@ -52,4 +52,38 @@ describe('BoxliteProxyController', () => {
     expect(boxService.findOneByIdOrName).toHaveBeenCalledWith('public-box', 'org-1')
     expect(proxyHandler).toHaveBeenCalledWith(req, res, next)
   })
+
+  it('rejects reserved executor env vars before proxying exec requests', async () => {
+    const proxyHandler = jest.fn()
+    jest.mocked(createProxyMiddleware).mockReturnValue(proxyHandler as never)
+
+    const boxService = {
+      findOneByIdOrName: jest.fn(),
+      updateLastActivityAt: jest.fn(),
+    }
+    const runnerService = {
+      findOne: jest.fn(),
+    }
+
+    const controller = new BoxliteProxyController(boxService as never, runnerService as never)
+    const req = {
+      url: '/api/v1/boxes/public-box/exec',
+      body: { command: 'sh', env: { BOXLITE_EXECUTOR: 'guest' } },
+    }
+    const res = {}
+    const next = jest.fn()
+
+    await expect(
+      controller.proxyExec({ organizationId: 'org-1' } as never, 'public-box', req as never, res as never, next),
+    ).rejects.toMatchObject({
+      status: 400,
+      response: expect.objectContaining({
+        message: 'BOXLITE_EXECUTOR is reserved and cannot be set by user requests',
+      }),
+    })
+
+    expect(createProxyMiddleware).not.toHaveBeenCalled()
+    expect(boxService.findOneByIdOrName).not.toHaveBeenCalled()
+    expect(proxyHandler).not.toHaveBeenCalled()
+  })
 })

@@ -40,3 +40,28 @@ describe('BoxService public identity lookup', () => {
     )
   })
 })
+
+describe('BoxService reserved env validation', () => {
+  it('rejects BOXLITE_EXECUTOR during create before resolving runners', async () => {
+    const service = Object.create(BoxService.prototype) as BoxService
+
+    await expect(
+      service.create({ env: { BOXLITE_EXECUTOR: 'guest' } } as never, { id: 'org-1' } as never),
+    ).rejects.toThrow('BOXLITE_EXECUTOR is reserved')
+  })
+
+  it('rejects BOXLITE_EXECUTOR during recover before calling the runner', async () => {
+    const organizationId = '057963b2-60ca-4356-81fc-11503e15f249'
+    const box = new Box('us', 'data-loader')
+    box.organizationId = organizationId
+    box.state = BoxState.ERROR
+    box.env = { BOXLITE_EXECUTOR: 'guest' }
+
+    const findOne = jest.fn().mockResolvedValueOnce(box)
+    const service = createService(findOne)
+
+    await expect(service.recover(box.id, { id: organizationId } as never)).rejects.toThrow(
+      'BOXLITE_EXECUTOR is reserved',
+    )
+  })
+})

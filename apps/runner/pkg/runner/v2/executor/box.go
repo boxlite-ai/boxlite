@@ -11,6 +11,7 @@ import (
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
+	runnerboxlite "github.com/boxlite-ai/runner/pkg/boxlite"
 	"github.com/boxlite-ai/runner/pkg/common"
 )
 
@@ -19,6 +20,9 @@ func (e *Executor) createBox(ctx context.Context, job *apiclient.Job) (any, erro
 	err := e.parsePayload(job.Payload, &createBoxDto)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
+	}
+	if err := runnerboxlite.ValidateReservedEnv(createBoxDto.Env); err != nil {
+		return nil, common.FormatRecoverableError(err)
 	}
 
 	_, daemonVersion, err := e.backend.Create(ctx, createBoxDto)
@@ -92,6 +96,9 @@ func (e *Executor) recoverBox(ctx context.Context, job *apiclient.Job) (any, err
 	err := e.parsePayload(job.Payload, &recoverBoxDto)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
+	}
+	if err := runnerboxlite.ValidateReservedEnv(recoverBoxDto.Env); err != nil {
+		return nil, common.FormatRecoverableError(err)
 	}
 
 	err = e.backend.RecoverBox(ctx, job.ResourceId, recoverBoxDto)

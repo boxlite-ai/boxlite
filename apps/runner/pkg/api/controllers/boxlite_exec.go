@@ -37,6 +37,16 @@ type ResizeRequest struct {
 }
 
 func BoxliteExec(ctx *gin.Context) {
+	var req ExecRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid request: %s", err)})
+		return
+	}
+	if err := boxlite.ValidateReservedEnv(req.Env); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	r, err := runner.GetInstance(nil)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -44,12 +54,6 @@ func BoxliteExec(ctx *gin.Context) {
 	}
 
 	boxId := ctx.Param("boxId")
-
-	var req ExecRequest
-	if err := ctx.ShouldBindJSON(&req); err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid request: %s", err)})
-		return
-	}
 
 	bx, err := r.Boxlite.GetBox(ctx.Request.Context(), boxId)
 	if err != nil {

@@ -16,6 +16,7 @@ import {
   UseGuards,
   Logger,
   NotFoundException,
+  BadRequestException,
 } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth, ApiExcludeController } from '@nestjs/swagger'
 import { createProxyMiddleware, fixRequestBody, Options } from 'http-proxy-middleware'
@@ -26,6 +27,7 @@ import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
+import { RESERVED_ENV_MESSAGE, hasReservedEnvInBody } from '../common/utils/reserved-env.util'
 
 // Spec-first surface (openapi/box.openapi.yaml). Must stay out of the product
 // spec: @All() expands to the SEARCH verb, which OpenAPI 3.0 cannot express.
@@ -50,6 +52,9 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
+    if (hasReservedEnvInBody(req.body)) {
+      throw new BadRequestException(RESERVED_ENV_MESSAGE)
+    }
     return this.proxyToRunner(authContext, boxId, (runnerBoxId) => `/v1/boxes/${runnerBoxId}/exec`, req, res, next)
   }
 

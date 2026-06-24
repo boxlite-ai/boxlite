@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/boxlite-ai/runner/pkg/api/dto"
+	"github.com/boxlite-ai/runner/pkg/boxlite"
 	"github.com/boxlite-ai/runner/pkg/common"
 	"github.com/boxlite-ai/runner/pkg/models/enums"
 	"github.com/boxlite-ai/runner/pkg/runner"
@@ -37,6 +38,10 @@ func Create(ctx *gin.Context) {
 	err := ctx.ShouldBindJSON(&createBoxDto)
 	if err != nil {
 		ctx.Error(common_errors.NewInvalidBodyRequestError(err))
+		return
+	}
+	if err := boxlite.ValidateReservedEnv(createBoxDto.Env); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -381,6 +386,10 @@ func Recover(ctx *gin.Context) {
 	err := ctx.ShouldBindJSON(&recoverDto)
 	if err != nil {
 		ctx.Error(common_errors.NewInvalidBodyRequestError(err))
+		return
+	}
+	if err := boxlite.ValidateReservedEnv(recoverDto.Env); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
