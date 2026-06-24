@@ -73,9 +73,7 @@ const themeOptions: { value: Theme; label: string; icon: React.ReactElement }[] 
 function ThemeMenuItems({ theme, setTheme }: { theme: Theme; setTheme: (theme: Theme) => void }) {
   return (
     <div className="px-2 py-2">
-      <div className="px-1 pb-2 font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-        Theme
-      </div>
+      <div className="px-1 pb-2 font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Theme</div>
       <ToggleGroup
         type="single"
         value={theme}
@@ -168,7 +166,12 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
     },
     enabled: !!user,
     retry: false,
-    staleTime: 60_000,
+    // Admin status doesn't change within a session. Cache it for the whole
+    // session so this /admin/overview probe (which 403s for non-admins and
+    // competes with the first-paint API burst) fires once, not on every
+    // sidebar mount / navigation. Cleared with the rest of the cache on logout.
+    staleTime: Infinity,
+    gcTime: Infinity,
     refetchOnWindowFocus: false,
   })
   const canViewAdmin = adminAccessQuery.data === true

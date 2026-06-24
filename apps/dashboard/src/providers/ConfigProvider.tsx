@@ -8,7 +8,7 @@ import { RoutePath } from '@/enums/RoutePath'
 import { queryKeys } from '@/hooks/queries/queryKeys'
 import { BoxliteConfiguration } from '@boxlite-ai/api-client'
 import { useSuspenseQuery } from '@tanstack/react-query'
-import { InMemoryWebStorage, WebStorageStateStore } from 'oidc-client-ts'
+import { WebStorageStateStore } from 'oidc-client-ts'
 import { ReactNode, useMemo } from 'react'
 import { AuthProvider, AuthProviderProps } from 'react-oidc-context'
 import { ConfigContext } from '../contexts/ConfigContext'
@@ -31,12 +31,13 @@ export function ConfigProvider(props: Props) {
       }
       return res.json() as Promise<BoxliteConfiguration>
     },
+    // App config (OIDC issuer, feature flags, domains) is fixed for a deploy.
+    // Never refetch it on navigation — it gates AuthProvider construction.
+    staleTime: Infinity,
+    gcTime: Infinity,
   })
 
   const oidcConfig: AuthProviderProps = useMemo(() => {
-    const isLocalhost = window.location.hostname === 'localhost'
-    const stateStore = isLocalhost ? window.sessionStorage : new InMemoryWebStorage()
-
     return {
       authority: config.oidc.issuer,
       client_id: config.oidc.clientId,
@@ -47,7 +48,14 @@ export function ConfigProvider(props: Props) {
       redirect_uri: window.location.origin,
       staleStateAgeInSeconds: 60,
       accessTokenExpiringNotificationTimeInSeconds: 290,
-      userStore: new WebStorageStateStore({ store: stateStore }),
+      // Persist the signed-in user (with tokens) in sessionStorage so a page
+      // reload restores the session instead of re-running the OIDC redirect +
+      // token exchange (~1.4s on the critical path, and a full Auth0 round-trip
+      // on a hard reload). Was InMemoryWebStorage in prod, which is wiped on
+      // every load. sessionStorage (not localStorage) keeps the XSS exposure to
+      // the tab lifetime; a 401 still clears the user via ApiClient's handler,
+      // so a stale/revoked token can't get stuck.
+      userStore: new WebStorageStateStore({ store: window.sessionStorage }),
       onSigninCallback: (user) => {
         const state = user?.state as { returnTo?: string } | undefined
         const targetUrl = state?.returnTo || RoutePath.DASHBOARD
