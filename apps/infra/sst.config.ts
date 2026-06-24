@@ -129,8 +129,17 @@ export default $config({
     // grant matches. Without this, SST names instance profiles "<LogicalId>-<hash>" which is
     // outside the deploy role's allowed resource scope → iam:CreateInstanceProfile denied.
     // Explicit `name:` on a profile (e.g. RunnerProfile) wins because of `??=`.
+    //
+    // prod-only: prod was a fresh deploy, so its profiles are created under this name from the
+    // start. Stages that predate this transform (dev) already hold an auto-named profile
+    // (VpcNatInstanceProfile-<hash>); applying the rename there forces RemoveRoleFromInstanceProfile
+    // on the OLD name, which the stage's boxlite-<stage>-*-scoped deploy role cannot touch →
+    // iam:RemoveRoleFromInstanceProfile AccessDenied. Leaving those stages on SST's default name
+    // is a no-op against their existing state.
     $transform(aws.iam.InstanceProfile, (args, _opts, resourceName) => {
-      args.name ??= `${$app.name}-${$app.stage}-${resourceName}`
+      if ($app.stage === 'prod') {
+        args.name ??= `${$app.name}-${$app.stage}-${resourceName}`
+      }
     })
 
     // Load .env overrides (anything unset falls back to auto-generated values)
