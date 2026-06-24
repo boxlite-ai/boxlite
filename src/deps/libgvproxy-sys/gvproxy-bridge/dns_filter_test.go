@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -65,6 +66,14 @@ func TestBuildAllowNetDNSZones_PerTLDZonesHaveSinkholeDefaultIP(t *testing.T) {
 //
 // Sorting zones longest-name-first guarantees the most-specific suffix
 // matches first.
+//
+// Upstream contract this test depends on: gvisor-tap-vsock's DNS handler
+// iterates zones in slice order and returns on the first matching suffix,
+// so slice order = match priority. See pkg/services/dns/dns.go in
+// containers/gvisor-tap-vsock@v0.8.7 (the version pinned in go.mod). If a
+// future bump changes the matcher to "most-specific wins", this test
+// keeps passing but becomes redundant; if it changes to "round-robin" or
+// "exact-match-only", this test will catch the regression.
 func TestBuildAllowNetDNSZones_LongestSuffixWinsBeforeRoot(t *testing.T) {
 	zones, err := buildAllowNetDNSZones(context.Background(), []string{
 		"github.com",
@@ -130,11 +139,9 @@ func TestBuildAllowNetDNSZones_EmptyList(t *testing.T) {
 // succeeds with a fixed IP. Used to simulate a brief host-DNS hiccup
 // during box.create (VPN flap, slow corp resolver, mDNSResponder churn).
 type flakyResolver struct {
-	failBefore  int                    // fail this many calls per host before succeeding
-	calls       map[string]*int32      // per-host call counter
-	failWith    error                  // error returned during the failing window
-	successIPs  map[string][]net.IPAddr // per-host IPs returned on success (defaults to 1.2.3.4)
-	attemptHook func(host string, n int32, ctx context.Context)
+	failBefore int               // fail this many calls per host before succeeding
+	calls      map[string]*int32 // per-host call counter
+	failWith   error             // error returned during the failing window
 }
 
 func newFlakyResolver(failBefore int, failWith error) *flakyResolver {
@@ -142,25 +149,18 @@ func newFlakyResolver(failBefore int, failWith error) *flakyResolver {
 		failBefore: failBefore,
 		calls:      make(map[string]*int32),
 		failWith:   failWith,
-		successIPs: make(map[string][]net.IPAddr),
 	}
 }
 
-func (f *flakyResolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
+func (f *flakyResolver) LookupIPAddr(_ context.Context, host string) ([]net.IPAddr, error) {
 	counter, ok := f.calls[host]
 	if !ok {
 		counter = new(int32)
 		f.calls[host] = counter
 	}
 	n := atomic.AddInt32(counter, 1)
-	if f.attemptHook != nil {
-		f.attemptHook(host, n, ctx)
-	}
 	if int(n) <= f.failBefore {
 		return nil, f.failWith
-	}
-	if ips, ok := f.successIPs[host]; ok {
-		return ips, nil
 	}
 	return []net.IPAddr{{IP: net.IPv4(1, 2, 3, 4)}}, nil
 }
@@ -247,14 +247,14 @@ func TestBuildAllowNetDNSZones_FailsClosedAfterRetries(t *testing.T) {
 // attempt (not just after the entire retry loop). We can't measure the
 // exact 2s without slowing the suite, so we override it for the test.
 func TestBuildAllowNetDNSZones_HonorsPerAttemptTimeout(t *testing.T) {
-	origTimeout := dnsLookupAttemptTimeoutVar
-	origBackoff := dnsLookupInitialBackoffVar
+	origTimeout := dnsLookupAttemptTimeout
+	origBackoff := dnsLookupInitialBackoff
 	t.Cleanup(func() {
-		dnsLookupAttemptTimeoutVar = origTimeout
-		dnsLookupInitialBackoffVar = origBackoff
+		dnsLookupAttemptTimeout = origTimeout
+		dnsLookupInitialBackoff = origBackoff
 	})
-	dnsLookupAttemptTimeoutVar = 30 * time.Millisecond
-	dnsLookupInitialBackoffVar = 1 * time.Millisecond
+	dnsLookupAttemptTimeout = 30 * time.Millisecond
+	dnsLookupInitialBackoff = 1 * time.Millisecond
 
 	res := &hangingResolver{}
 	start := time.Now()
@@ -267,7 +267,7 @@ func TestBuildAllowNetDNSZones_HonorsPerAttemptTimeout(t *testing.T) {
 	// Each attempt must terminate at the per-attempt timeout, not hang
 	// forever; total time should be roughly attempts * timeout, not
 	// unbounded. Generous upper bound to avoid flakes on slow CI.
-	maxExpected := time.Duration(dnsLookupAttempts) * dnsLookupAttemptTimeoutVar * 4
+	maxExpected := time.Duration(dnsLookupAttempts) * dnsLookupAttemptTimeout * 4
 	if elapsed > maxExpected {
 		t.Errorf("retry loop took %v; expected <= %v (per-attempt timeout not honored?)", elapsed, maxExpected)
 	}
@@ -288,16 +288,16 @@ func TestBuildAllowNetDNSZones_HonorsPerAttemptTimeout(t *testing.T) {
 // few ms of the cancel; if it ignored ctx, it'd wait out the budget
 // and the test would fail the elapsed-time bound.
 func TestBuildAllowNetDNSZones_ParentCtxCancellationStopsRetryLoop(t *testing.T) {
-	origBackoff := dnsLookupInitialBackoffVar
-	origTimeout := dnsLookupAttemptTimeoutVar
+	origBackoff := dnsLookupInitialBackoff
+	origTimeout := dnsLookupAttemptTimeout
 	t.Cleanup(func() {
-		dnsLookupInitialBackoffVar = origBackoff
-		dnsLookupAttemptTimeoutVar = origTimeout
+		dnsLookupInitialBackoff = origBackoff
+		dnsLookupAttemptTimeout = origTimeout
 	})
 	// Big backoff window relative to test timing — if the sleep is
 	// not interruptible, the test elapsed time will exceed the bound.
-	dnsLookupInitialBackoffVar = 5 * time.Second
-	dnsLookupAttemptTimeoutVar = 50 * time.Millisecond
+	dnsLookupInitialBackoff = 5 * time.Second
+	dnsLookupAttemptTimeout = 50 * time.Millisecond
 
 	res := &alwaysFailResolver{err: errors.New("always fails so we hit the backoff")}
 
@@ -344,7 +344,38 @@ func TestBuildAllowNetDNSZones_PerHostFailureFailsAggregate(t *testing.T) {
 		t.Fatal("expected aggregate error when one host fails to resolve, got nil")
 	}
 	want := "iapi.example.com"
-	if !contains(err.Error(), want) {
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q should mention failing host %q", err.Error(), want)
+	}
+}
+
+// TestBuildAllowNetDNSZones_AAAAonlyHostFailsClosed pins the second half
+// of the fail-closed promise. Resolution can succeed without raising an
+// error, yet still yield zero usable A records when a host returns only
+// AAAA (IPv6) addresses. With the old behaviour the resulting zone would
+// have DefaultIP=0.0.0.0 and zero records, sinkholing the host in
+// exactly the same shape we set out to fix on the resolution-error path.
+//
+// docs/reference/README.md states box.create "fails — by design, so a
+// half-baked sinkhole never silently sinkholes an allow-listed host to
+// 0.0.0.0". This test makes sure that promise covers AAAA-only hosts as
+// well as resolver errors.
+func TestBuildAllowNetDNSZones_AAAAonlyHostFailsClosed(t *testing.T) {
+	v6 := []net.IPAddr{{IP: net.ParseIP("2606:4700:4700::1111")}}
+	res := &mixedResolver{
+		good: map[string][]net.IPAddr{"v6only.example.com": v6},
+	}
+
+	_, err := buildAllowNetDNSZonesWith(
+		context.Background(),
+		[]string{"v6only.example.com"},
+		res,
+	)
+	if err == nil {
+		t.Fatal("expected error when allow-listed host has only AAAA records, got nil")
+	}
+	want := "v6only.example.com"
+	if !strings.Contains(err.Error(), want) {
 		t.Errorf("error %q should mention failing host %q", err.Error(), want)
 	}
 }
@@ -367,15 +398,3 @@ func (m *mixedResolver) LookupIPAddr(_ context.Context, host string) ([]net.IPAd
 	return nil, fmt.Errorf("no test data for %q", host)
 }
 
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || (len(sub) > 0 && indexOf(s, sub) >= 0))
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
-}

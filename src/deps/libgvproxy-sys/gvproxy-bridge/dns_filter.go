@@ -25,15 +25,15 @@ import (
 // silently drop the host's zone, leaving the VM permanently sinkholing
 // it to 0.0.0.0 for the life of the box. We now retry with backoff and
 // fail closed if every attempt fails.
-//
-// Exposed as `var` (not `const`) so tests can override timing without
-// slowing the suite. Production callers MUST treat them as immutable.
 const dnsLookupAttempts = 4
 
+// Timing tunables — exposed as `var` (not `const`) so tests can override
+// them to keep the suite fast. Production callers MUST treat them as
+// immutable.
 var (
-	dnsLookupInitialBackoffVar = 100 * time.Millisecond
-	dnsLookupBackoffFactor     = 3
-	dnsLookupAttemptTimeoutVar = 2 * time.Second
+	dnsLookupInitialBackoff = 100 * time.Millisecond
+	dnsLookupBackoffFactor  = 3
+	dnsLookupAttemptTimeout = 2 * time.Second
 )
 
 // hostResolver is the interface buildAllowNetDNSZones uses to look up
@@ -141,8 +141,15 @@ func buildAllowNetDNSZonesWith(ctx context.Context, allowNet []string, resolver 
 	for zoneName := range zoneRecords {
 		zoneNames = append(zoneNames, zoneName)
 	}
-	sort.Slice(zoneNames, func(i, j int) bool {
-		return len(zoneNames[i]) > len(zoneNames[j])
+	// Length-descending primary key, lexical secondary so equal-length
+	// zones land in deterministic order. Without the lexical tiebreak,
+	// sort.Slice's underlying introsort is unstable and two equal-length
+	// zones (`boxlite.com.` vs `litebox.com.`) could swap order across runs.
+	sort.SliceStable(zoneNames, func(i, j int) bool {
+		if len(zoneNames[i]) != len(zoneNames[j]) {
+			return len(zoneNames[i]) > len(zoneNames[j])
+		}
+		return zoneNames[i] < zoneNames[j]
 	})
 
 	var zones []types.Zone
@@ -186,13 +193,11 @@ func resolveAndAddRecords(ctx context.Context, resolver hostResolver, hostname, 
 
 	trimmed := strings.TrimSuffix(hostname+".", "."+zoneName)
 
-	v4Count := 0
 	v4Strs := make([]string, 0, len(ips))
 	for _, ip := range ips {
 		if ip.IP.To4() == nil {
-			continue // Skip IPv6 for now
+			continue // gvisor-tap-vsock's DNS records carry an IPv4-only IP
 		}
-		v4Count++
 		v4Strs = append(v4Strs, ip.IP.String())
 		zoneRecords[zoneName] = append(zoneRecords[zoneName], types.Record{
 			Name: trimmed,
@@ -200,15 +205,27 @@ func resolveAndAddRecords(ctx context.Context, resolver hostResolver, hostname, 
 		})
 	}
 
-	// One Info line per allow-listed host. Without this it's invisible
-	// whether a hostname's lookup succeeded but yielded only IPv6 (which
-	// we drop), which would silently sinkhole that host even though no
-	// retry/error fired. v4_count=0 is the smoking gun for that case.
+	// Fail closed when the host resolved but yielded only AAAA records.
+	// gvisor-tap-vsock zones can only carry A records today, so an
+	// AAAA-only result would produce a zone with zero records and a
+	// DefaultIP of 0.0.0.0 — exactly the silent-sinkhole symptom this
+	// fix set out to kill. The retry/backoff path already fails closed
+	// on resolver errors; this closes the second hole the docs already
+	// promise we cover (docs/reference/README.md "fails — by design").
+	if len(v4Strs) == 0 {
+		logrus.WithFields(logrus.Fields{
+			"hostname": hostname,
+			"zone":     zoneName,
+			"label":    trimmed,
+		}).Error("allowNet: host resolved with no IPv4 addresses (AAAA-only)")
+		return fmt.Errorf("allowNet: resolve %q: no IPv4 records (only IPv6); allow-listing AAAA-only hosts is not supported", hostname)
+	}
+
 	logrus.WithFields(logrus.Fields{
 		"hostname": hostname,
 		"zone":     zoneName,
 		"label":    trimmed,
-		"v4_count": v4Count,
+		"v4_count": len(v4Strs),
 		"v4_ips":   v4Strs,
 	}).Info("allowNet: host resolved")
 
@@ -232,7 +249,7 @@ func lookupWithRetry(parentCtx context.Context, resolver hostResolver, hostname 
 		ips     []net.IPAddr
 		lastErr error
 	)
-	backoff := dnsLookupInitialBackoffVar
+	backoff := dnsLookupInitialBackoff
 
 	for attempt := 1; attempt <= dnsLookupAttempts; attempt++ {
 		// Bail before spending another attempt if the caller already cancelled.
@@ -240,7 +257,7 @@ func lookupWithRetry(parentCtx context.Context, resolver hostResolver, hostname 
 			return nil, err
 		}
 
-		ctx, cancel := context.WithTimeout(parentCtx, dnsLookupAttemptTimeoutVar)
+		ctx, cancel := context.WithTimeout(parentCtx, dnsLookupAttemptTimeout)
 		ips, lastErr = resolver.LookupIPAddr(ctx, hostname)
 		cancel()
 

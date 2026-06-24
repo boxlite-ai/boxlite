@@ -164,10 +164,19 @@ Structured network configuration for outbound connectivity.
   time and the IPs are pinned into the guest's DNS sinkhole. The lookup
   retries with exponential backoff to ride out transient host-side DNS
   hiccups (VPN flap, slow corp resolver). If a hostname still cannot be
-  resolved after all retries, `box.create` fails — by design, so a
-  half-baked sinkhole never silently sinkholes an allow-listed host to
-  `0.0.0.0`. Make sure the host can resolve every entry in `allow_net`
-  before creating the box.
+  resolved after all retries — or if it resolves only to AAAA (IPv6)
+  addresses, since gvisor-tap-vsock zones can only carry A records —
+  `box.create` fails by design, so a half-baked sinkhole never silently
+  sinkholes an allow-listed host to `0.0.0.0`. Make sure the host can
+  resolve every entry in `allow_net` to at least one IPv4 address before
+  creating the box.
+- Latency: a hostname that fails every retry attempt costs roughly
+  `attempts × per-attempt-timeout + cumulative backoff` ≈ 12s on the
+  defaults (4 attempts, 2s timeout, 100ms × 3× backoff). Hosts are
+  resolved sequentially, so an `allow_net` of N dead hosts costs ≈ 12s
+  × N to fail. Cancelling the runtime context (e.g. Ctrl-C in the host
+  process) breaks out of both the in-flight lookup and the inter-attempt
+  backoff sleep promptly.
 
 **Supported patterns:**
 - Exact hostname: `"api.openai.com"`

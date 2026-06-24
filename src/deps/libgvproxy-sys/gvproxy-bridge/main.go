@@ -20,11 +20,9 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/signal"
 	"runtime"
 	"runtime/debug"
 	"sync"
-	"syscall"
 	"time"
 	"unsafe"
 
@@ -385,14 +383,17 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 	// host (after retries) — better to fail box.create than ship a
 	// silently-incomplete DNS sinkhole.
 	//
-	// The ctx here is signal-aware: SIGINT/SIGTERM during the allow-list
-	// resolution loop (which can take seconds when retries fire on a slow
-	// corp resolver) cancels the in-flight lookup *and* the inter-attempt
-	// backoff, so Ctrl-C ends `box.create` promptly rather than waiting
-	// out the full retry budget.
-	resolveCtx, stopResolve := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	tapConfig, err := buildTapConfig(resolveCtx, config, protocol)
-	stopResolve()
+	// We deliberately do NOT install our own SIGINT/SIGTERM handler here.
+	// gvproxy_create runs inside the embedder's process (rust/python/node
+	// SDKs all link this go code as a c-shared library), and grabbing the
+	// host's signal disposition for the duration of every box.create
+	// would override whatever signal handling the embedder has installed.
+	// The cost is that a SIGTERM mid-create can't interrupt the resolver
+	// loop — worst case ~12s per dead allow_net entry, sequentially. The
+	// embedder is expected to either (a) accept that latency on shutdown,
+	// or (b) run box.create on a worker thread and abandon the worker on
+	// shutdown. See docs/reference/README.md for the latency note.
+	tapConfig, err := buildTapConfig(context.Background(), config, protocol)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to build gvproxy tap config")
 		setErr(err)
