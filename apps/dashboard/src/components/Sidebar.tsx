@@ -12,9 +12,6 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
@@ -22,7 +19,6 @@ import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from '@/constants/ExternalLinks'
 import { Theme, useTheme } from '@/contexts/ThemeContext'
 import { RoutePath } from '@/enums/RoutePath'
 import { useApi } from '@/hooks/useApi'
-import { useOrganizations } from '@/hooks/useOrganizations'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useCopyToClipboard } from 'usehooks-ts'
 import { toast } from 'sonner'
@@ -33,7 +29,6 @@ import {
   ArrowRightIcon,
   BookOpen,
   Building2,
-  Check,
   ChevronDown,
   Copy,
   KeyRound,
@@ -79,7 +74,7 @@ function ThemeMenuItems({ theme, setTheme }: { theme: Theme; setTheme: (theme: T
   return (
     <div className="px-2 py-2">
       <div className="px-1 pb-2 font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-        Appearance
+        Theme
       </div>
       <ToggleGroup
         type="single"
@@ -140,8 +135,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
   const { user, signoutRedirect } = useAuth()
   const { pathname } = useLocation()
   const navigate = useNavigate()
-  const { selectedOrganization, onSelectOrganization } = useSelectedOrganization()
-  const { organizations } = useOrganizations()
+  const { selectedOrganization } = useSelectedOrganization()
   const [, copyToClipboard] = useCopyToClipboard()
 
   const copyOrgId = useCallback(() => {
@@ -216,14 +210,6 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
     markJustLoggedOut()
     signoutRedirect()
   }
-
-  const handleSelectOrganization = useCallback(
-    (organizationId: string) => {
-      if (organizationId === selectedOrganization?.id) return
-      void onSelectOrganization(organizationId)
-    },
-    [onSelectOrganization, selectedOrganization?.id],
-  )
 
   const commandPaletteActions = useCommandPaletteActions()
   useNavCommands(commandItems)
@@ -342,54 +328,17 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
               </span>
             )}
           </DropdownMenuLabel>
-          {selectedOrganization && (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger className="cursor-pointer gap-2">
-                  <Building2 className="size-4 shrink-0 text-muted-foreground" />
-                  <span className="flex min-w-0 flex-col">
-                    <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-muted-foreground">
-                      Organization
-                    </span>
-                    <span className="truncate">{selectedOrganization.name}</span>
-                  </span>
-                </DropdownMenuSubTrigger>
-                <DropdownMenuSubContent className="min-w-[15rem]">
-                  <DropdownMenuLabel className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-                    Switch organization
-                  </DropdownMenuLabel>
-                  {organizations.map((org) => {
-                    const active = org.id === selectedOrganization.id
-                    return (
-                      <DropdownMenuItem
-                        key={org.id}
-                        className="cursor-pointer justify-between"
-                        onClick={() => handleSelectOrganization(org.id)}
-                      >
-                        <span className="truncate">{org.name}</span>
-                        {active && <Check className="size-4 shrink-0 text-brand" />}
-                      </DropdownMenuItem>
-                    )
-                  })}
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem asChild className="cursor-pointer">
-                    <Link to={RoutePath.SETTINGS}>
-                      <Building2 className="size-4" />
-                      Organization settings
-                    </Link>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem className="cursor-pointer" onClick={copyOrgId}>
-                    <Copy className="size-4" />
-                    Copy organization ID
-                  </DropdownMenuItem>
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-            </>
-          )}
           <DropdownMenuSeparator />
           <ThemeMenuItems theme={theme} setTheme={setTheme} />
           <DropdownMenuSeparator />
+          {selectedOrganization && (
+            <DropdownMenuItem asChild className="cursor-pointer">
+              <Link to={RoutePath.SETTINGS}>
+                <Building2 className="size-4" />
+                Organization
+              </Link>
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem asChild className="cursor-pointer">
             <a href={BOXLITE_DOCS_URL} target="_blank" rel="noopener noreferrer">
               <BookOpen className="size-4" />
