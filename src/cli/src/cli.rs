@@ -754,12 +754,26 @@ pub struct ManagementFlags {
     /// Automatically remove the box when it exits
     #[arg(long)]
     pub rm: bool,
+
+    /// Sandbox security: `enable` (default) or `disable` (case-insensitive).
+    /// Absent → the box uses `SecurityOptions::default()` = enable, the
+    /// fully-isolated profile. Use `--security=disable` to turn the sandbox
+    /// off (master switch + all sub-protections) when debugging.
+    #[arg(long, env = "BOXLITE_SECURITY")]
+    pub security: Option<String>,
 }
 
 impl ManagementFlags {
-    pub fn apply_to(&self, opts: &mut BoxOptions) {
+    pub fn apply_to(&self, opts: &mut BoxOptions) -> anyhow::Result<()> {
         opts.detach = self.detach;
         opts.auto_remove = self.rm;
+        if let Some(ref preset) = self.security {
+            // Bubble the typo'd-preset error all the way back to the
+            // CLI exit so the operator sees the offending value.
+            opts.advanced.security =
+                boxlite::SecurityOptions::from_preset(preset).map_err(anyhow::Error::from)?;
+        }
+        Ok(())
     }
 }
 
@@ -1349,5 +1363,67 @@ mod tests {
             panic!("expected AuthCommand::Login");
         };
         assert!(login.api_key_stdin);
+    }
+
+    // ============================================================
+    // ManagementFlags --security
+    //
+    // Side A (setting valid) — `--security=disable` lands as
+    // SecurityOptions::disabled() on the resulting BoxOptions.
+    // Side B (setting invalid) — surfaces back as an
+    // anyhow::Error pointing at the offending value. Reverting the
+    // `from_preset(preset)?` call in apply_to flips both red.
+    // ============================================================
+
+    #[test]
+    fn management_security_preset_applies_to_box_options() {
+        let flags = ManagementFlags {
+            name: None,
+            detach: false,
+            rm: false,
+            security: Some("disable".to_string()),
+        };
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts).expect("setting must apply");
+        assert_eq!(
+            opts.advanced.security,
+            boxlite::SecurityOptions::disabled(),
+            "advanced.security must equal SecurityOptions::disabled()"
+        );
+    }
+
+    #[test]
+    fn management_security_preset_absent_leaves_default() {
+        let flags = ManagementFlags {
+            name: None,
+            detach: false,
+            rm: false,
+            security: None,
+        };
+        let mut opts = BoxOptions::default();
+        flags
+            .apply_to(&mut opts)
+            .expect("absent preset must succeed");
+        assert_eq!(
+            opts.advanced.security,
+            boxlite::SecurityOptions::default(),
+            "absent preset must leave the default in place"
+        );
+    }
+
+    #[test]
+    fn management_security_preset_typo_surfaces_anyhow_error() {
+        let flags = ManagementFlags {
+            name: None,
+            detach: false,
+            rm: false,
+            security: Some("ultra".to_string()),
+        };
+        let mut opts = BoxOptions::default();
+        let err = flags
+            .apply_to(&mut opts)
+            .expect_err("unknown preset must reject at apply_to");
+        let msg = err.to_string();
+        assert!(msg.contains("ultra"), "got {msg}");
     }
 }

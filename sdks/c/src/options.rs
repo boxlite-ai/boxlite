@@ -147,6 +147,29 @@ pub unsafe extern "C" fn boxlite_options_set_detach(opts: *mut CBoxliteOptions, 
     options_set_detach(opts, val)
 }
 
+/// Apply a `CAdvancedBoxOptions` (security, mount isolation, health check) to a
+/// `CBoxliteOptions`. Clones the advanced configuration into the box options —
+/// the caller retains ownership of `advanced_opts` and is responsible for
+/// freeing it via `boxlite_advanced_options_free`.
+///
+/// Either pointer being null is a no-op. Security is reached through the
+/// advanced layer, mirroring the core model (`BoxOptions.advanced.security`):
+/// build the `CAdvancedBoxOptions` handle via `boxlite_advanced_options_new`,
+/// toggle the sandbox with `boxlite_advanced_options_set_security_enabled`,
+/// then apply it here.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_advanced(
+    opts: *mut CBoxliteOptions,
+    advanced_opts: *const crate::CAdvancedBoxOptions,
+) {
+    if opts.is_null() || advanced_opts.is_null() {
+        return;
+    }
+    unsafe {
+        (*opts).options.advanced = (*advanced_opts).options.clone();
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_set_entrypoint(
     opts: *mut CBoxliteOptions,

@@ -90,11 +90,11 @@ mod tests {
         assert_eq!(cmd_args, &["--arg1"]);
     }
 
-    /// SecurityOptions::development() should have jailer_enabled=false.
+    /// SecurityOptions::disabled() should have jailer_enabled=false.
     /// This ensures development preset always bypasses the jailer.
     #[test]
     fn test_development_preset_disables_jailer() {
-        let security = SecurityOptions::development();
+        let security = SecurityOptions::disabled();
         let jail = JailerBuilder::new()
             .with_box_id("test-box")
             .with_layout(test_layout("/tmp/test-box"))

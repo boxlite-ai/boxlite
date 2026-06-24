@@ -186,20 +186,20 @@ fn default_security_options_enable_jailer_on_supported_platforms() {
     );
 }
 
-/// Verify SecurityOptions::development() always disables the jailer.
+/// Verify SecurityOptions::disabled() always disables the jailer.
 #[test]
 fn development_mode_disables_jailer() {
-    let opts = SecurityOptions::development();
+    let opts = SecurityOptions::disabled();
     assert!(
         !opts.jailer_enabled,
         "Development mode must always disable the jailer"
     );
 }
 
-/// Verify SecurityOptions::standard() enables the jailer on Linux/macOS.
+/// Verify SecurityOptions::enabled() enables the jailer on Linux/macOS.
 #[test]
 fn standard_mode_enables_jailer() {
-    let opts = SecurityOptions::standard();
+    let opts = SecurityOptions::enabled();
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     assert!(

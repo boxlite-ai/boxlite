@@ -97,6 +97,7 @@ Every change goes: understand → research → design → implement → test →
 **Cross-cutting** (apply at every phase)
 
 - Verify external findings against the working tree before acting. `/codex:adversarial-review`, lint, and PR comments work from a snapshot — they may name deleted code. `git grep` and `git diff` first.
+- Treat every failure as a class, not an instance: when one surfaces, find and fix every sibling of the same shape in the same pass — grounded in what's actually there, not speculation. A single-site fix to a systemic bug isn't done.
 - Honor scope reduction: "drop X" means drop X. Don't bundle adjacent improvements unprompted.
 
 **Communication**

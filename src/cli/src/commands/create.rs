@@ -52,7 +52,7 @@ impl CreateArgs {
     fn to_box_options(&self, global: &GlobalFlags) -> anyhow::Result<BoxOptions> {
         let mut options = BoxOptions::default();
         self.resource.apply_to(&mut options);
-        self.management.apply_to(&mut options);
+        self.management.apply_to(&mut options)?;
         self.publish.apply_to(&mut options)?;
         self.volume.apply_to(&mut options, global.home.as_deref())?;
         self.network.apply_to(&mut options)?;

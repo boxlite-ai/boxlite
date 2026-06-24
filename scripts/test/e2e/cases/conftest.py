@@ -15,7 +15,6 @@ import asyncio
 import os
 import sys
 import time
-import tomllib
 from pathlib import Path
 
 import pytest
@@ -24,27 +23,10 @@ import pytest_asyncio
 import boxlite
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
+from e2e_auth import auth_context, credentials_path
 from path_verification import runner_journal_seek, runner_hits_for_box
 
-DEFAULT_PROFILE = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
-DEFAULT_IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "alpine:3.23")
-CRED_PATH = Path.home() / ".boxlite" / "credentials.toml"
-
-
-def _profile(name: str) -> dict:
-    if not CRED_PATH.exists():
-        pytest.exit(
-            f"{CRED_PATH} missing — run scripts/test/e2e/fixture_setup.py first",
-            returncode=2,
-        )
-    data = tomllib.loads(CRED_PATH.read_text())
-    p = data.get("profiles", {}).get(name)
-    if not p:
-        pytest.exit(
-            f"profile '{name}' not in {CRED_PATH} — run fixture_setup.py",
-            returncode=2,
-        )
-    return p
+DEFAULT_IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3")
 
 
 class _TrackingRuntime:
@@ -76,11 +58,14 @@ async def rt():
     """REST-mode Boxlite runtime against the local API, wrapped in a
     tracking shim so the autouse fixture can verify each box reached
     the runner."""
-    p = _profile(DEFAULT_PROFILE)
+    try:
+        ctx = auth_context()
+    except RuntimeError as exc:
+        pytest.exit(str(exc), returncode=2)
     opts = boxlite.BoxliteRestOptions(
-        url=p["url"],
-        credential=boxlite.ApiKeyCredential(p["api_key"]),
-        path_prefix=p.get("path_prefix") or "",
+        url=ctx.url,
+        credential=boxlite.ApiKeyCredential(ctx.token),
+        path_prefix=ctx.path_prefix,
     )
     runtime = boxlite.Boxlite.rest(opts)
     tracking = _TrackingRuntime(runtime)
@@ -105,7 +90,16 @@ async def verify_runner_saw_all_boxes(rt):
     journal — if not, the SDK silently bypassed the API → Runner
     chain (e.g. degraded to local FFI, or the runner-side journal
     write broke). Tests that don't create any boxes are unaffected.
+
+    Set ``BOXLITE_E2E_SKIP_PATH_VERIFY=1`` to bypass this check entirely.
+    Intended for cloud-CI runs where the runner journal lives on a
+    remote EC2 instance and isn't reachable from ``journalctl`` on the
+    pytest host.
     """
+    if os.environ.get("BOXLITE_E2E_SKIP_PATH_VERIFY", "").lower() in ("1", "true", "yes", "on"):
+        yield
+        return
+
     since = runner_journal_seek()
     object.__setattr__(rt, "_created", [])
 
@@ -133,6 +127,16 @@ async def verify_runner_saw_all_boxes(rt):
         f"forward to the runner, or journalctl access broke. See "
         f"scripts/test/e2e/README.md for the chain spec."
     )
+
+
+@pytest.fixture(scope="session")
+def e2e_auth():
+    return auth_context()
+
+
+@pytest.fixture(scope="session")
+def e2e_credentials_path() -> Path:
+    return credentials_path()
 
 
 @pytest.fixture(scope="session")

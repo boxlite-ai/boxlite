@@ -3,11 +3,12 @@
  * Copyright (c) 2025 BoxLite AI
  */
 
-import { Injectable, Logger } from '@nestjs/common'
+import { Inject, Injectable, Logger } from '@nestjs/common'
 import type { IncomingMessage } from 'http'
 import type { Socket } from 'net'
 import { createProxyMiddleware, type RequestHandler } from 'http-proxy-middleware'
 import { ApiKeyService } from '../api-key/api-key.service'
+import { JwtStrategy } from '../auth/jwt.strategy'
 import { OrganizationUserService } from '../organization/services/organization-user.service'
 import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
@@ -18,10 +19,10 @@ type RunnerUpgradeRequest = IncomingMessage & {
   __boxliteRunnerBoxId?: string
 }
 
-// Matches /api/v1/boxes/<id>/executions/<id>/attach and the legacy
+// Matches /api/v1/boxes/<id>/executions/<id>/attach and the
 // /api/v1/<tenant>/boxes/<id>/executions/<id>/attach shape with optional query string.
-// Capture group 1 is the box/box id.
-const ATTACH_PATH = /^\/api\/v1\/(?:[^/]+\/)?boxes\/([^/]+)\/executions\/[^/]+\/attach(?:\?.*)?$/
+// Named groups: `tenant` (optional org id / path prefix) and `boxId`.
+const ATTACH_PATH = /^\/api\/v1\/(?:(?<tenant>[^/]+)\/)?boxes\/(?<boxId>[^/]+)\/executions\/[^/]+\/attach(?:\?.*)?$/
 
 /**
  * Singleton WebSocket proxy for `/attach` upgrades.
@@ -44,6 +45,9 @@ export class BoxliteWsProxyService {
     private readonly organizationUserService: OrganizationUserService,
     private readonly boxService: BoxService,
     private readonly runnerService: RunnerService,
+    // Exported by AuthModule (already imported here). Resolves to `undefined`
+    // when `skipConnections` is set, so the JWT path guards on it.
+    @Inject(JwtStrategy) private readonly jwtStrategy: JwtStrategy | undefined,
   ) {
     this.proxy = createProxyMiddleware({
       ws: true,
@@ -76,12 +80,15 @@ export class BoxliteWsProxyService {
     })
   }
 
-  /** True when the request's URL is an `/attach` WS upgrade we should handle. */
-  matchAttachPath(url: string | undefined): { boxId: string } | null {
+  /**
+   * Box id (+ optional tenant/org id) when the URL is an `/attach` WS upgrade.
+   * The tenant is the organization for JWT auth (an API key carries its own org).
+   */
+  matchAttachPath(url: string | undefined): { boxId: string; tenant?: string } | null {
     if (!url) return null
-    const m = url.match(ATTACH_PATH)
-    if (!m) return null
-    return { boxId: m[1] }
+    const groups = url.match(ATTACH_PATH)?.groups as { boxId: string; tenant?: string } | undefined
+    if (!groups) return null
+    return { boxId: groups.boxId, tenant: groups.tenant }
   }
 
   /**
@@ -95,7 +102,7 @@ export class BoxliteWsProxyService {
       return
     }
 
-    const auth = await this.authenticate(req)
+    const auth = await this.authenticate(req, match.tenant)
     if (!auth) {
       this.respondAndClose(socket, 401, 'Unauthorized')
       return
@@ -132,40 +139,66 @@ export class BoxliteWsProxyService {
   }
 
   /**
-   * Inline API-key authentication for WS upgrades. Mirrors what the HTTP path
-   * gets from CombinedAuthGuard + OrganizationResourceActionGuard: the bearer
-   * must be a non-expired API key whose user is still a member of the key's
-   * organization. The membership check is critical — removing a user from an
-   * org deletes the OrganizationUser row but does not cascade to ApiKey rows,
-   * so without it a removed member's surviving key can still attach to
-   * boxes in that org.
+   * Inline authentication for WS upgrades, mirroring the API-key + JWT halves of
+   * CombinedAuthGuard. Membership-only, like the HTTP exec/attach routes
+   * (`BoxliteProxyController`), which carry no resource-permission decorator.
+   * Never throws — any failure resolves to `null` (a 401), so the fire-and-forget
+   * `upgrade` caller can't leak a hung socket.
    *
-   * JWT (the second strategy in CombinedAuthGuard) is unused here because
-   * clients send an opaque, long-lived API key directly as the Bearer
-   * token — there is no token-exchange step. If a JWT issuer is ever
-   * enabled in the auth pipeline, extend this method to fall through to
-   * `jwtVerify` after the API-key check fails.
+   * API key: the bearer must be a non-expired API key whose user is still a
+   * member of the key's organization. The membership check is critical —
+   * removing a user from an org deletes the OrganizationUser row but does not
+   * cascade to ApiKey rows, so without it a removed member's surviving key could
+   * still attach to boxes in that org. The URL tenant is ignored (key is scoped).
+   *
+   * JWT (OIDC): when the bearer is not an API key, verify it via `JwtStrategy`
+   * (same JWKS/issuer/audience as the HTTP path). A JWT carries no org, so the
+   * organization is taken from the URL `{prefix}` (`urlTenant`); a request with
+   * no tenant (or the legacy `default`) is rejected since the org is ambiguous
+   * for a multi-org user. Membership in that org is then required, identically to
+   * the API-key path. `jwtStrategy` is absent when `skipConnections` is set.
    *
    * Unlike the HTTP path, this does not consult the Redis cache used by
    * ApiKeyStrategy / OrganizationAccessGuard. Upgrade frequency is low; if
    * upgrade latency becomes a concern, add caching as a follow-up.
    */
-  private async authenticate(req: IncomingMessage): Promise<{ organizationId: string } | null> {
-    const header = req.headers['authorization']
-    const headerValue = Array.isArray(header) ? header[0] : header
-    if (!headerValue || !/^bearer\s+/i.test(headerValue)) return null
-    const token = headerValue.replace(/^bearer\s+/i, '').trim()
-    if (!token) return null
-
+  private async authenticate(req: IncomingMessage, urlTenant?: string): Promise<{ organizationId: string } | null> {
     try {
-      const apiKey = await this.apiKeyService.getApiKeyByValue(token)
-      if (apiKey.expiresAt && apiKey.expiresAt < new Date()) return null
+      const header = req.headers['authorization']
+      const headerValue = Array.isArray(header) ? header[0] : header
+      if (!headerValue || !/^bearer\s+/i.test(headerValue)) return null
+      const token = headerValue.replace(/^bearer\s+/i, '').trim()
+      if (!token) return null
 
-      const membership = await this.organizationUserService.findOne(apiKey.organizationId, apiKey.userId)
+      // 1. API key — org comes from the key itself; the URL tenant is ignored, as
+      //    before. A *throw* means "not an API key", so it is caught here to fall
+      //    through to JWT rather than being rejected by the outer guard.
+      const apiKey = await this.apiKeyService.getApiKeyByValue(token).catch(() => null)
+      if (apiKey) {
+        if (apiKey.expiresAt && apiKey.expiresAt < new Date()) return null
+        const membership = await this.organizationUserService.findOne(apiKey.organizationId, apiKey.userId)
+        if (!membership) return null
+        return { organizationId: apiKey.organizationId }
+      }
+
+      // 2. JWT (OIDC) — org comes from the URL tenant; membership required.
+      if (!this.jwtStrategy) return null
+      if (!urlTenant || urlTenant === 'default') return null
+      const payload = await this.jwtStrategy.verifyToken(token)
+      // Mirror JwtStrategy.validate's sub/uid handling (OKTA carries userId in `uid`).
+      const claims = payload as { sub?: string; cid?: unknown; uid?: string }
+      let userId = claims.sub
+      if (claims.cid && claims.uid) userId = claims.uid
+      if (!userId) return null
+
+      const membership = await this.organizationUserService.findOne(urlTenant, userId)
       if (!membership) return null
-
-      return { organizationId: apiKey.organizationId }
+      return { organizationId: urlTenant }
     } catch {
+      // Any failure (invalid JWT signature, a DB error, …) → 401. This single
+      // guard is why authenticate never throws — `upgrade` calls it before its
+      // own try-block and main.ts runs `void upgrade(...)`, so an escaped throw
+      // would leak a hung socket.
       return null
     }
   }

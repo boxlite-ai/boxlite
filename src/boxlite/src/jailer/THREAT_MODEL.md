@@ -289,7 +289,7 @@ The jailer does **not** protect against:
 
 ```rust
 // Maximum security for untrusted workloads
-let security = SecurityOptions::maximum();
+let security = SecurityOptions::enabled();
 
 // This enables:
 // - jailer_enabled: true

@@ -656,6 +656,13 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         None => NetworkSpec::default(),
     };
 
+    // SecurityOptions is deliberately NOT client-configurable over
+    // REST: sandbox security is the operator's policy. The server
+    // always uses `AdvancedBoxOptions::default()` for new boxes, so
+    // the default-flip (jailer + seccomp on for Linux/macOS) applies
+    // uniformly. Operators who want a different policy run the
+    // server with a different default; clients cannot relax it.
+
     Ok(BoxOptions {
         rootfs,
         cpus: req.cpus,
@@ -1015,6 +1022,83 @@ mod tests {
         assert!(!constant_time_eq(b"abc", b"abd"));
         assert!(!constant_time_eq(b"abc", b"abcd"));
         assert!(constant_time_eq(b"", b""));
+    }
+
+    // ============================================================
+    // REST `security` wire contract: server-owned only.
+    //
+    // The REST surface deliberately exposes no knob for clients to
+    // pick a security preset or override `SecurityOptions`. Combined
+    // with `#[serde(deny_unknown_fields)]` on `CreateBoxRequest`,
+    // any client attempt to send `security` / `security_settings`
+    // is rejected at deserialize time (i.e. 400 from the API)
+    // rather than silently relaxing the server's policy.
+    // ============================================================
+
+    #[test]
+    fn build_box_options_empty_body_lands_on_server_default_security() {
+        // Bog-standard REST body. Server resolves security from its
+        // own default; on Linux/macOS that's jailer-on (the standard
+        // preset, post-flip).
+        let json = r#"{"image": "alpine:latest"}"#;
+        let req: super::types::CreateBoxRequest =
+            serde_json::from_str(json).expect("body must deserialize");
+        let opts = build_box_options(&req).expect("build_box_options");
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        assert!(
+            opts.advanced.security.jailer_enabled,
+            "server default must be sandbox-on after the flip"
+        );
+    }
+
+    #[test]
+    fn create_box_request_rejects_client_supplied_security_preset() {
+        // A malicious or careless client sends `security: "development"`
+        // hoping to disable the jailer. `deny_unknown_fields` turns
+        // that into a hard deserialize error, which the REST layer
+        // surfaces as a 400 — there is no quiet fall-through.
+        let json = r#"{"image": "alpine:latest", "security": "development"}"#;
+        let msg = match serde_json::from_str::<super::types::CreateBoxRequest>(json) {
+            Ok(_) => panic!("`security` must be rejected at deserialize"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("unknown field") && msg.contains("security"),
+            "expected deny-unknown-fields rejection mentioning `security`; got {msg}"
+        );
+    }
+
+    #[test]
+    fn create_box_request_rejects_client_supplied_security_settings() {
+        // Same shape as the previous test but with a `security_settings`
+        // struct. Also blocked at deserialize.
+        let json = r#"{
+            "image": "alpine:latest",
+            "security_settings": {
+                "jailer_enabled":  false,
+                "seccomp_enabled": false,
+                "uid": null,
+                "gid": null,
+                "new_pid_ns": false,
+                "new_net_ns": false,
+                "chroot_base": "/srv/boxlite",
+                "chroot_enabled": false,
+                "close_fds": false,
+                "sanitize_env": false,
+                "env_allowlist": [],
+                "resource_limits": {},
+                "sandbox_profile": null,
+                "network_enabled": true
+            }
+        }"#;
+        let msg = match serde_json::from_str::<super::types::CreateBoxRequest>(json) {
+            Ok(_) => panic!("`security_settings` must be rejected at deserialize"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("unknown field") && msg.contains("security_settings"),
+            "expected deny-unknown-fields rejection mentioning `security_settings`; got {msg}"
+        );
     }
 
     /// Build an `ActiveExecution` backed by a stub `Execution` whose

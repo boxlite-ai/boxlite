@@ -38,7 +38,7 @@ impl Sandbox for BwrapSandbox {
                 "Sandbox preflight failed: bwrap cannot create user namespaces.\n\n\
                  {diagnostic}\n\n\
                  To skip the sandbox (development only):\n  \
-                   SecurityOptions::development()"
+                   SecurityOptions::disabled()"
             )));
         }
 

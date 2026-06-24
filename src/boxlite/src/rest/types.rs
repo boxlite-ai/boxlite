@@ -20,6 +20,23 @@ pub(crate) struct ErrorResponse {
     pub error: ErrorModel,
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct FlatErrorResponse {
+    pub message: String,
+    pub code: Option<String>,
+}
+
+impl FlatErrorResponse {
+    pub(crate) fn into_error_model(self) -> ErrorModel {
+        ErrorModel {
+            message: self.message,
+            error_type: "HttpError".to_string(),
+            code: self.code.unwrap_or_else(|| "internal".to_string()),
+            request_id: None,
+        }
+    }
+}
+
 /// Wire shape received from the server.
 ///
 /// - `message` — human-readable error text.
@@ -100,8 +117,6 @@ pub(crate) struct CreateBoxRequest {
     pub auto_remove: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detach: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub security: Option<String>,
 }
 
 impl CreateBoxRequest {
@@ -128,6 +143,14 @@ impl CreateBoxRequest {
             Some(options.secrets.iter().map(CreateBoxSecret::from).collect())
         };
 
+        // SecurityOptions is intentionally NOT carried on the wire.
+        // Sandbox security is the operator's policy and is set
+        // server-side; the REST surface deliberately exposes no knob
+        // for clients to relax it (would be a sandbox-escape vector).
+        // Local-mode callers and CLI/Go/C SDKs continue to honour
+        // `BoxOptions.advanced.security` because those run under the
+        // caller's own trust boundary.
+
         Self {
             name,
             image,
@@ -144,7 +167,6 @@ impl CreateBoxRequest {
             secrets,
             auto_remove: Some(options.auto_remove),
             detach: Some(options.detach),
-            security: None, // TODO: map security preset
         }
     }
 }
@@ -480,7 +502,6 @@ mod tests {
             }]),
             auto_remove: Some(true),
             detach: None,
-            security: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"name\":\"mybox\""));
@@ -551,6 +572,37 @@ mod tests {
             Some("disabled")
         );
         assert!(req.network.as_ref().unwrap().allow_net.is_empty());
+    }
+
+    /// REST is intentionally a "the server picks the security policy"
+    /// surface: even a caller with a non-default `SecurityOptions`
+    /// (here: `maximum`) MUST serialize a wire body that carries
+    /// neither `security` nor `security_settings`. Re-introducing
+    /// either field would let a client toggle the operator's
+    /// sandbox configuration — a sandbox-escape vector. The test
+    /// asserts both the absence of the JSON keys and the absence
+    /// of the preset name to catch either field being smuggled
+    /// back in under a renamed alias.
+    #[test]
+    fn test_create_box_request_never_carries_security_on_the_wire() {
+        use crate::SecurityOptions;
+        use crate::runtime::advanced_options::AdvancedBoxOptions;
+        use crate::runtime::options::{BoxOptions, RootfsSpec};
+
+        let opts = BoxOptions {
+            rootfs: RootfsSpec::Image("alpine:latest".into()),
+            advanced: AdvancedBoxOptions {
+                security: SecurityOptions::enabled(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let req = CreateBoxRequest::from_options(&opts, None);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(
+            !json.contains("security"),
+            "wire form must NOT carry any security knob; got: {json}"
+        );
     }
 
     #[test]

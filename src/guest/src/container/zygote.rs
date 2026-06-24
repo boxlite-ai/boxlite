@@ -303,7 +303,36 @@ fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
         Ok(pid)
     };
 
-    match build_fn() {
+    // Restore the default SIGPIPE disposition across the fork so the container
+    // init — and the user process it execs — does not inherit the guest agent's
+    // process-wide SIG_IGN.
+    //
+    // The agent is a Rust program, and the Rust runtime installs SIG_IGN for
+    // SIGPIPE at startup; that disposition is inherited by the zygote and by
+    // every container process youki forks here. With SIGPIPE ignored, a process
+    // that writes to a pipe whose reader has exited (e.g. the producer in
+    // `yes | head`, or `while :; do echo; done | head`) gets EPIPE instead of
+    // being killed by SIGPIPE. A producer that loops without checking write
+    // errors then never terminates: it spins, the pipeline never completes, the
+    // exec never exits, and Wait hangs forever while a vCPU stays pegged.
+    //
+    // youki's init does not reset SIGPIPE, so set SIG_DFL just for the fork and
+    // restore SIG_IGN immediately after — the long-lived single-threaded zygote
+    // keeps the agent's EPIPE-as-error behavior on its own IPC socket, while the
+    // forked child (and everything it execs) starts with the standard default.
+    use nix::sys::signal::{signal, SigHandler, Signal};
+    let prev_sigpipe = unsafe { signal(Signal::SIGPIPE, SigHandler::SigDfl) };
+
+    let result = build_fn();
+
+    if let Ok(prev) = prev_sigpipe {
+        // SAFETY: restoring the disposition we just read; single-threaded zygote.
+        unsafe {
+            let _ = signal(Signal::SIGPIPE, prev);
+        }
+    }
+
+    match result {
         Ok(pid) => BuildResult::Spawned { pid: pid.as_raw() },
         Err(error) => BuildResult::Failed { error },
     }

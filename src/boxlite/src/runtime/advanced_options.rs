@@ -83,7 +83,15 @@ impl Default for HealthCheckOptions {
 ///
 /// These options control how the boxlite-shim process is isolated from the host.
 /// Different presets are available for different security requirements.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// `#[serde(default)]` is at the struct level on purpose: any field missing
+/// from the input falls back to `SecurityOptions::default()`, so deserializing
+/// `{}` is identical to `SecurityOptions::default()`. There is exactly one
+/// source of truth for "the default profile" — the `Default` impl below — and
+/// `deserializing_empty_equals_default` pins it. (Previously each field carried
+/// its own `#[serde(default = "...")]`, which silently diverged from `Default`
+/// and let a partial JSON body land a *weaker* sandbox than `default()`.)
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SecurityOptions {
     /// Enable jailer isolation.
     ///
@@ -91,15 +99,12 @@ pub struct SecurityOptions {
     /// - Linux: seccomp, namespaces, chroot, privilege drop
     /// - macOS: sandbox-exec profile
     ///
-    /// Default: true on macOS, false on Linux and other platforms
-    #[serde(default = "default_jailer_enabled")]
+    /// Default: on for Linux and macOS (see `SecurityOptions::default`).
     pub jailer_enabled: bool,
 
     /// Enable seccomp syscall filtering (Linux only).
     ///
     /// When true, applies a whitelist of allowed syscalls.
-    /// Default: false
-    #[serde(default = "default_seccomp_enabled")]
     pub seccomp_enabled: bool,
 
     /// UID to drop to after setup (Linux only).
@@ -107,7 +112,6 @@ pub struct SecurityOptions {
     /// - None: Auto-allocate an unprivileged UID
     /// - Some(0): Don't drop privileges (not recommended)
     /// - Some(uid): Drop to specific UID
-    #[serde(default)]
     pub uid: Option<u32>,
 
     /// GID to drop to after setup (Linux only).
@@ -115,77 +119,62 @@ pub struct SecurityOptions {
     /// - None: Auto-allocate an unprivileged GID
     /// - Some(0): Don't drop privileges (not recommended)
     /// - Some(gid): Drop to specific GID
-    #[serde(default)]
     pub gid: Option<u32>,
 
     /// Create new PID namespace (Linux only).
     ///
     /// When true, the shim becomes PID 1 in a new namespace.
-    /// Default: false
-    #[serde(default)]
     pub new_pid_ns: bool,
 
     /// Create new network namespace (Linux only).
     ///
     /// When true, creates isolated network namespace.
     /// Note: gvproxy handles networking, so this may not be needed.
-    /// Default: false
-    #[serde(default)]
     pub new_net_ns: bool,
 
     /// Base directory for chroot jails (Linux only).
     ///
     /// Default: /srv/boxlite
-    #[serde(default = "default_chroot_base")]
     pub chroot_base: PathBuf,
 
     /// Enable chroot isolation (Linux only).
     ///
     /// When true, uses pivot_root to isolate filesystem.
-    /// Default: true on Linux
-    #[serde(default = "default_chroot_enabled")]
     pub chroot_enabled: bool,
 
     /// Close inherited file descriptors.
     ///
     /// When true, closes all FDs except stdin/stdout/stderr before VM start.
-    /// Default: true
-    #[serde(default = "default_close_fds")]
     pub close_fds: bool,
 
     /// Sanitize environment variables.
     ///
     /// When true, clears all environment variables except those in allowlist.
-    /// Default: true
-    #[serde(default = "default_sanitize_env")]
     pub sanitize_env: bool,
 
     /// Environment variables to preserve when sanitizing.
     ///
-    /// Default: ["RUST_LOG", "PATH", "HOME", "USER", "LANG"]
-    #[serde(default = "default_env_allowlist")]
+    /// See `SecurityOptions::default` for the default allowlist.
     pub env_allowlist: Vec<String>,
 
     /// Resource limits to apply.
-    #[serde(default)]
     pub resource_limits: ResourceLimits,
 
     /// Custom sandbox profile path (macOS only).
     ///
     /// If None, uses the built-in modular sandbox profile.
-    #[serde(default)]
     pub sandbox_profile: Option<PathBuf>,
 
-    /// Enable network access in sandbox (macOS only).
+    /// Allow network access inside the sandbox profile.
     ///
-    /// When true, adds network policy to the sandbox.
-    /// Default: true (needed for gvproxy VM networking)
-    #[serde(default = "default_network_enabled")]
+    /// Cross-platform: feeds the macOS seatbelt network policy and the Linux
+    /// landlock TCP rules (false = deny all TCP).
+    /// Default: true (needed for gvproxy VM networking).
     pub network_enabled: bool,
 }
 
 /// Resource limits for the jailed process.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResourceLimits {
     /// Maximum number of open file descriptors (RLIMIT_NOFILE).
     #[serde(default)]
@@ -208,41 +197,12 @@ pub struct ResourceLimits {
     pub max_cpu_time: Option<u64>,
 }
 
-// Default value functions for SecurityOptions
-
-fn default_jailer_enabled() -> bool {
-    cfg!(target_os = "macos")
-}
-
-fn default_seccomp_enabled() -> bool {
-    false
-}
+// Internal helpers shared by `Default` and `disabled()`. The per-field serde
+// defaults were removed in favour of the struct-level `#[serde(default)]`, so
+// `Default` (below) is now the single source of truth for the default profile.
 
 fn default_chroot_base() -> PathBuf {
     PathBuf::from("/srv/boxlite")
-}
-
-fn default_chroot_enabled() -> bool {
-    cfg!(target_os = "linux")
-}
-
-fn default_close_fds() -> bool {
-    true
-}
-
-fn default_sanitize_env() -> bool {
-    true
-}
-
-fn default_env_allowlist() -> Vec<String> {
-    vec![
-        "RUST_LOG".to_string(),
-        "PATH".to_string(),
-        "HOME".to_string(),
-        "USER".to_string(),
-        "LANG".to_string(),
-        "TERM".to_string(),
-    ]
 }
 
 fn default_network_enabled() -> bool {
@@ -250,63 +210,19 @@ fn default_network_enabled() -> bool {
 }
 
 impl Default for SecurityOptions {
+    /// Default is the fully-enabled profile: secure by default.
+    /// `enabled()` and `disabled()` are the two named starting profiles;
+    /// callers needing something in between override individual fields (or use
+    /// the builder / per-field FFI setters) on top of a profile.
     fn default() -> Self {
-        Self {
-            jailer_enabled: default_jailer_enabled(),
-            seccomp_enabled: default_seccomp_enabled(),
-            uid: None,
-            gid: None,
-            new_pid_ns: false,
-            new_net_ns: false,
-            chroot_base: default_chroot_base(),
-            chroot_enabled: default_chroot_enabled(),
-            close_fds: default_close_fds(),
-            sanitize_env: default_sanitize_env(),
-            env_allowlist: default_env_allowlist(),
-            resource_limits: ResourceLimits::default(),
-            sandbox_profile: None,
-            network_enabled: default_network_enabled(),
-        }
-    }
-}
-
-impl SecurityOptions {
-    /// Development mode: minimal isolation for debugging.
-    ///
-    /// Use this when debugging issues where isolation interferes.
-    pub fn development() -> Self {
-        Self {
-            jailer_enabled: false,
-            seccomp_enabled: false,
-            chroot_enabled: false,
-            close_fds: false,
-            sanitize_env: false,
-            ..Default::default()
-        }
-    }
-
-    /// Standard mode: recommended for most use cases.
-    ///
-    /// Enables jailer on Linux/macOS and seccomp on Linux.
-    pub fn standard() -> Self {
-        Self {
-            jailer_enabled: cfg!(any(target_os = "linux", target_os = "macos")),
-            seccomp_enabled: cfg!(target_os = "linux"),
-            ..Default::default()
-        }
-    }
-
-    /// Maximum mode: all isolation features enabled.
-    ///
-    /// Use this for untrusted workloads (AI sandbox, multi-tenant).
-    pub fn maximum() -> Self {
         Self {
             jailer_enabled: true,
             seccomp_enabled: cfg!(target_os = "linux"),
             uid: Some(65534), // nobody
             gid: Some(65534), // nogroup
             new_pid_ns: cfg!(target_os = "linux"),
-            new_net_ns: false, // gvproxy needs network
+            new_net_ns: false, // gvproxy provides networking
+            chroot_base: default_chroot_base(),
             chroot_enabled: cfg!(target_os = "linux"),
             close_fds: true,
             sanitize_env: true,
@@ -315,10 +231,57 @@ impl SecurityOptions {
                 max_open_files: Some(1024),
                 max_file_size: Some(1024 * 1024 * 1024), // 1GB
                 max_processes: Some(100),
-                max_memory: None,   // Let VM config handle this
-                max_cpu_time: None, // Let VM config handle this
+                max_memory: None,   // VM config handles this
+                max_cpu_time: None, // VM config handles this
             },
-            ..Default::default()
+            sandbox_profile: None,
+            network_enabled: default_network_enabled(),
+        }
+    }
+}
+
+impl SecurityOptions {
+    /// Enabled ("enable"): full host isolation. This is the default — every
+    /// protection the platform supports is on (jailer master switch + seccomp,
+    /// chroot, new PID ns on Linux; unprivileged uid/gid; closed fds; sanitized
+    /// env; resource limits).
+    pub fn enabled() -> Self {
+        Self::default()
+    }
+
+    /// Disabled: the jailer master switch is off and every sub-protection is
+    /// off too. The opt-out for debugging / environments that can't sandbox.
+    pub fn disabled() -> Self {
+        Self {
+            jailer_enabled: false,
+            seccomp_enabled: false,
+            uid: None,
+            gid: None,
+            new_pid_ns: false,
+            new_net_ns: false,
+            chroot_base: default_chroot_base(),
+            chroot_enabled: false,
+            close_fds: false,
+            sanitize_env: false,
+            env_allowlist: Vec::new(),
+            resource_limits: ResourceLimits::default(),
+            sandbox_profile: None,
+            network_enabled: default_network_enabled(),
+        }
+    }
+
+    /// Resolve one of the two named profiles by name (case-insensitive). Accepts
+    /// `enable`/`enabled`/`on` and `disable`/`disabled`/`off`; anything else is
+    /// an `InvalidArgument` so operator surfaces echo the typo back verbatim.
+    /// This selects a starting profile; finer customization is done by setting
+    /// individual fields on the result.
+    pub fn from_preset(name: &str) -> boxlite_shared::errors::BoxliteResult<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "enable" | "enabled" | "on" => Ok(Self::enabled()),
+            "disable" | "disabled" | "off" => Ok(Self::disabled()),
+            other => Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                format!("unknown security setting {other:?}; expected one of enable|disable"),
+            )),
         }
     }
 
@@ -327,10 +290,49 @@ impl SecurityOptions {
         cfg!(target_os = "linux")
     }
 
+    /// Warn about fields set on this profile that the current platform silently
+    /// ignores. The struct is a flat bag mixing Linux-only and macOS-only knobs;
+    /// without this, a caller enabling e.g. `seccomp_enabled` on macOS gets no
+    /// signal that it did nothing. Called at the jailer apply boundary.
+    ///
+    /// uid/gid are intentionally not warned on: `default()` sets them on every
+    /// platform, so flagging them would fire on the default profile and be noise.
+    pub fn warn_inert_fields(&self) {
+        #[cfg(not(target_os = "linux"))]
+        {
+            let mut ignored = Vec::new();
+            if self.seccomp_enabled {
+                ignored.push("seccomp_enabled");
+            }
+            if self.new_pid_ns {
+                ignored.push("new_pid_ns");
+            }
+            if self.new_net_ns {
+                ignored.push("new_net_ns");
+            }
+            if self.chroot_enabled {
+                ignored.push("chroot_enabled");
+            }
+            if !ignored.is_empty() {
+                tracing::warn!(
+                    ?ignored,
+                    "SecurityOptions: Linux-only isolation requested but ignored on this non-Linux platform"
+                );
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            if self.sandbox_profile.is_some() {
+                tracing::warn!(
+                    "SecurityOptions: sandbox_profile is macOS-only and ignored on this platform"
+                );
+            }
+        }
+    }
+
     /// Create a builder for customizing security options.
     ///
-    /// Starts with default settings (jailer enabled on macOS, disabled on Linux/other platforms;
-    /// seccomp disabled by default).
+    /// Starts from `SecurityOptions::default()` (the fully-enabled profile).
     ///
     /// # Example
     ///
@@ -360,7 +362,7 @@ impl SecurityOptions {
 /// ```
 /// use boxlite::runtime::advanced_options::SecurityOptionsBuilder;
 ///
-/// let security = SecurityOptionsBuilder::standard()
+/// let security = SecurityOptionsBuilder::enabled()
 ///     .max_open_files(2048)
 ///     .max_file_size_bytes(1024 * 1024 * 512) // 512 MiB
 ///     .build();
@@ -384,30 +386,18 @@ impl SecurityOptionsBuilder {
         }
     }
 
-    /// Create a builder starting from development settings.
-    ///
-    /// Minimal isolation for debugging.
-    pub fn development() -> Self {
+    /// Create a builder starting from the fully-enabled profile (the default).
+    pub fn enabled() -> Self {
         Self {
-            inner: SecurityOptions::development(),
+            inner: SecurityOptions::enabled(),
         }
     }
 
-    /// Create a builder starting from standard settings.
-    ///
-    /// Recommended for most use cases.
-    pub fn standard() -> Self {
+    /// Create a builder starting from the disabled profile (master switch off,
+    /// every sub-protection off).
+    pub fn disabled() -> Self {
         Self {
-            inner: SecurityOptions::standard(),
-        }
-    }
-
-    /// Create a builder starting from maximum security settings.
-    ///
-    /// All isolation features enabled.
-    pub fn maximum() -> Self {
-        Self {
-            inner: SecurityOptions::maximum(),
+            inner: SecurityOptions::disabled(),
         }
     }
 
@@ -545,7 +535,8 @@ impl SecurityOptionsBuilder {
         self
     }
 
-    /// Enable or disable network access in sandbox (macOS only).
+    /// Allow or deny network access inside the sandbox profile (Linux landlock
+    /// + macOS seatbelt).
     pub fn network_enabled(&mut self, enabled: bool) -> &mut Self {
         self.inner.network_enabled = enabled;
         self
@@ -567,18 +558,20 @@ impl SecurityOptionsBuilder {
 
 /// Advanced options for expert users.
 ///
-/// Entry-level users can ignore this — defaults are compatibility-focused.
+/// Entry-level users can ignore this — the defaults are secure and sensible.
 /// Only modify these if you understand the security implications.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AdvancedBoxOptions {
     /// Security isolation options (jailer, seccomp, namespaces, resource limits).
     ///
-    /// Defaults are compatibility-focused (jailer enabled on macOS, disabled on Linux/other
-    /// platforms; seccomp disabled). Use presets:
-    /// - `SecurityOptions::default()` — compatibility-focused defaults
-    /// - `SecurityOptions::standard()` — recommended for production
-    /// - `SecurityOptions::development()` — minimal isolation for debugging
-    /// - `SecurityOptions::maximum()` — maximum isolation for untrusted workloads
+    /// Secure by default: the default is the fully-enabled profile
+    /// (`SecurityOptions::default() == SecurityOptions::enabled()`) — on Linux
+    /// that is jailer + seccomp + new PID ns + chroot + unprivileged uid/gid; on
+    /// macOS, sandbox-exec. Named profiles:
+    /// - `SecurityOptions::enabled()` (== `default()`) — full isolation
+    /// - `SecurityOptions::disabled()` — master switch off, all sub-protections off
+    ///
+    /// For anything in between, override individual fields on top of a profile.
     #[serde(default)]
     pub security: SecurityOptions,
 

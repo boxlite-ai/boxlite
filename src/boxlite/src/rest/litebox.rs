@@ -209,9 +209,28 @@ impl BoxBackend for RestBox {
         &self,
         host_src: &Path,
         container_dst: &str,
-        _opts: CopyOptions,
+        opts: CopyOptions,
     ) -> BoxliteResult<()> {
         let box_id = self.box_id_str();
+
+        // Honor overwrite=false at the REST boundary. The runner's
+        // upload handler always extracts the tar over whatever's at
+        // container_dst (the test in scripts/test/e2e/cases/test_files_io.py::
+        // test_copy_in_overwrite_false_rejects_conflict was catching
+        // 'overwrite=False replaced guest content'). The test contract
+        // explicitly accepts a raised exception OR a no-op — the
+        // invariant is "guest content must be unchanged". We can't
+        // express the per-entry "skip if dst exists" semantics over
+        // the current single-tar upload protocol, so refuse the call
+        // outright instead of silently clobbering.
+        if !opts.overwrite {
+            return Err(BoxliteError::Unsupported(
+                "copy_into with overwrite=false is not supported over the REST backend; \
+                 the current upload protocol cannot express per-entry skip-if-exists. \
+                 Use the FFI backend or pre-check the destination before calling."
+                    .into(),
+            ));
+        }
 
         // Create tar archive from host path
         let tar_bytes = create_tar_from_path(host_src)?;
@@ -490,8 +509,12 @@ async fn attach_ws(
 ) {
     let path = format!("/boxes/{}/executions/{}/attach", box_id, execution_id);
     let stream = match client.connect_ws(&path).await {
-        Ok(s) => s,
+        Ok(s) => {
+            tracing::debug!(path = %path, "WS attach: connected");
+            s
+        }
         Err(e) => {
+            tracing::debug!(path = %path, error = %e, "WS attach: connect failed; falling back to status probe (output will not stream)");
             emit_or_fallback(
                 client,
                 box_id,
@@ -631,15 +654,30 @@ async fn attach_ws_pump(
                     // idle watchdog for the rest of the session.
                     first_frame_seen = true;
 
+                    tracing::trace!(
+                        kind = match &frame {
+                            Message::Binary(_) => "binary",
+                            Message::Text(_) => "text",
+                            Message::Close(_) => "close",
+                            Message::Ping(_) => "ping",
+                            Message::Pong(_) => "pong",
+                            Message::Frame(_) => "raw",
+                        },
+                        len = frame.len(),
+                        "WS attach: frame received",
+                    );
+
                     match frame {
                         Message::Binary(bytes) => {
                             if let Some((channel, payload)) = bytes.split_first() {
                                 let text = String::from_utf8_lossy(payload).into_owned();
                                 match *channel {
                                     0x01 => {
+                                        tracing::trace!(len = text.len(), "WS attach: stdout frame");
                                         let _ = stdout_tx.send(text);
                                     }
                                     0x02 => {
+                                        tracing::trace!(len = text.len(), "WS attach: stderr frame");
                                         let _ = stderr_tx.send(text);
                                     }
                                     other => {
@@ -650,6 +688,7 @@ async fn attach_ws_pump(
                         }
                         Message::Text(text) => match parse_control_frame(&text) {
                             ControlFrame::Exit { exit_code } => {
+                                tracing::debug!(exit_code, "WS attach: exit control frame");
                                 let _ = result_tx.send(ExecResult {
                                     exit_code,
                                     error_message: None,
@@ -681,6 +720,10 @@ async fn attach_ws_pump(
         // distinguish "exec really finished" from "transient WS drop".
         match probe_execution_status(client, box_id, execution_id).await {
             ProbeResult::Terminal(result) => {
+                tracing::debug!(
+                    cause = %disconnect_cause,
+                    "WS attach: disconnected without an exit frame — taking exit code from status probe (any unstreamed stdout/stderr is lost)"
+                );
                 let _ = result_tx.send(result);
                 return;
             }
@@ -826,6 +869,7 @@ async fn emit_or_fallback(
     result_tx: &mpsc::UnboundedSender<ExecResult>,
     cause: String,
 ) {
+    tracing::debug!(cause = %cause, "WS attach: emit_or_fallback — recovering exit code from status probe (stdout/stderr not streamed)");
     let status_path = format!("/boxes/{}/executions/{}", box_id, execution_id);
     let status_probe = tokio::time::timeout(
         std::time::Duration::from_secs(5),
@@ -834,9 +878,16 @@ async fn emit_or_fallback(
     if let Ok(Ok(info)) = status_probe.await {
         match info.status.as_str() {
             "completed" | "killed" | "timed_out" => {
+                // The exec finished server-side, but we only reach
+                // emit_or_fallback when the output stream failed (never
+                // connected, or dropped and couldn't reconnect), so stdout/
+                // stderr were not delivered to the caller. Surface the cause as
+                // an error_message rather than reporting a clean exit: a caller
+                // otherwise can't tell "command produced no output" from "we
+                // lost the output". The real exit code is still preserved.
                 let _ = result_tx.send(ExecResult {
                     exit_code: info.exit_code.unwrap_or(-1),
-                    error_message: None,
+                    error_message: Some(cause.clone()),
                 });
                 return;
             }

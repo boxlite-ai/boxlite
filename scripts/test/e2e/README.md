@@ -69,7 +69,58 @@ This:
 - Sets reasonable per-box quotas on the admin org
 - Adds a `[profiles.p1]` entry in `~/.boxlite/credentials.toml` pointing at the local API
 
-## Running
+## Running against a remote API (dev / staging)
+
+No bootstrap or fixture_setup needed — just set environment variables:
+
+```bash
+# Required:
+export BOXLITE_E2E_API_URL=https://dev.boxlite.ai/api
+export BOXLITE_E2E_API_KEY=blk_live_...        # your API key for the remote env
+export BOXLITE_E2E_AUTH=api-key
+
+# Optional (auto-discovered from /v1/me if omitted):
+export BOXLITE_E2E_PREFIX=<org-path-prefix>
+
+# Image must exist on the remote runner:
+export BOXLITE_E2E_IMAGE=ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3
+
+# Skip local-only checks (journalctl, runner log):
+export BOXLITE_E2E_SKIP_PATH_VERIFY=1
+
+# CLI tests need a profile pointing at the remote API:
+export BOXLITE_E2E_PROFILE=p1
+export BOXLITE_E2E_CLI=/path/to/boxlite   # CLI binary built with REST support
+```
+
+Then run the profile into `~/.boxlite/credentials.toml` so the CLI
+picks it up (one-time per machine):
+
+```bash
+mkdir -p ~/.boxlite
+cat > ~/.boxlite/credentials.toml << 'EOF'
+[profiles.p1]
+url = "https://dev.boxlite.ai/api"
+api_key = "blk_live_..."
+auth_method = "api_key"
+path_prefix = ""
+EOF
+```
+
+The `path_prefix` is auto-discovered at runtime from `/v1/me` — leave
+it empty or set `BOXLITE_E2E_PREFIX` explicitly if discovery fails.
+
+Run:
+
+```bash
+pytest scripts/test/e2e/cases/ -v --timeout=120
+```
+
+For CI, store `BOXLITE_E2E_API_KEY` as a repository secret and pass it
+as an environment variable. No local bootstrap, Postgres, or runner
+services are needed — the remote stack provides everything.
+
+## Running against local stack
 
 ```bash
 # Everything (after bootstrap + fixture_setup):
@@ -85,22 +136,54 @@ pytest scripts/test/e2e/cases/test_p0_6_exec_stdout_race.py -v
 PR_REF=<branch>  scripts/test/e2e/two_sided.sh
 ```
 
+The reusable REST auth matrix entry is:
+
+```bash
+make test:rest:e2e AUTH=api-key
+make test:rest:e2e AUTH=oidc
+```
+
+`AUTH=api-key` reads `BOXLITE_E2E_API_KEY` or profile `api_key`.
+`AUTH=oidc` reads `BOXLITE_E2E_OIDC_TOKEN` or profile `access_token`.
+Both modes call `/v1/me` to refresh the route `path_prefix`; set
+`BOXLITE_E2E_PREFIX` only when you need to override that discovery.
+
+The C, Go, and Node SDK entry-point cases currently skip under `AUTH=oidc`
+because those SDK smoke drivers still expose only API-key credential types.
+The Python SDK REST path does run under both auth modes because its
+`ApiKeyCredential` is the generic bearer-token slot on the wire.
+
 ## Layout
 
 ```
 scripts/test/e2e/
 ├── README.md
-├── bootstrap.sh             # Install services
-├── fixture_setup.py         # Register snapshots / quota / profile (idempotent)
+├── bootstrap.sh             # Install services (local stack only)
+├── fixture_setup.py         # Register snapshots / quota / profile (local stack only)
 ├── run.sh                   # bootstrap + fixture_setup + pytest
 ├── two_sided.sh             # Validates that test catches bug + PR fixes it
 ├── pytest.ini
 ├── lib/
+│   ├── e2e_auth.py          # Auth context: API-key / OIDC, env vars / profile
 │   └── path_verification.py # Helpers that prove SDK→API→Runner was the route
+├── sdks/
+│   ├── node/                # TypeScript drivers (e2e_basic.ts, e2e_exec.ts, e2e_copy.ts, e2e_errors.ts)
+│   ├── go/                  # Go drivers (e2e_basic.go, e2e_exec_options.go, e2e_copy.go, e2e_errors.go)
+│   └── c/                   # C drivers (e2e_basic.c, e2e_exec.c, e2e_errors.c)
 └── cases/
-    ├── conftest.py          # rt / image / box fixtures (REST-only)
-    ├── test_path_verification.py    # Meta-test: prove the path
-    └── test_p0_6_exec_stdout_race.py
+    ├── conftest.py                  # rt / image / box fixtures (REST-only)
+    ├── test_path_verification.py    # Meta-test: prove SDK→API→Runner path
+    ├── test_lifecycle.py            # Box create / get_info / remove
+    ├── test_exec_*.py               # Exec stdout, attach, timeout
+    ├── test_copy_roundtrip.py       # Copy in/out
+    ├── test_cli_entry.py            # CLI smoke (run, exec, whoami)
+    ├── test_cli_detach_recovery.py  # CLI detach + reattach
+    ├── test_node_entry.py           # Node SDK smoke
+    ├── test_node_coverage.py        # Node SDK exec, copy, errors
+    ├── test_go_entry.py             # Go SDK smoke
+    ├── test_go_coverage.py          # Go SDK exec options, copy, errors
+    ├── test_c_entry.py              # C SDK smoke
+    └── test_c_coverage.py           # C SDK exec, errors
 ```
 
 ## Adding a case

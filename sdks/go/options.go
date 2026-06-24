@@ -186,6 +186,7 @@ type boxConfig struct {
 	detach     *bool
 	network    *NetworkSpec
 	secrets    []Secret
+	advanced   *AdvancedBoxOptions // nil = runtime defaults; non-nil = caller-owned advanced opts applied via boxlite_options_set_advanced
 }
 
 type volumeEntry struct {
@@ -302,6 +303,40 @@ func WithAutoRemove(v bool) BoxOption {
 // WithDetach sets whether the box survives parent process exit.
 func WithDetach(v bool) BoxOption {
 	return func(c *boxConfig) { c.detach = &v }
+}
+
+// buildAndFreeCOptions runs buildCOptions, immediately frees the C
+// handle on success, and returns just the error. Exists for unit
+// tests in `_test.go` files, which Go forbids from using cgo
+// directly — without this helper they can't exercise buildCOptions
+// because the caller has to free `*C.CBoxliteOptions`.
+func buildAndFreeCOptions(image string, cfg *boxConfig) error {
+	opts, err := buildCOptions(image, cfg)
+	if err != nil {
+		return err
+	}
+	if opts != nil {
+		C.boxlite_options_free(opts)
+	}
+	return nil
+}
+
+// WithAdvancedOptions attaches advanced box options (currently the security
+// toggle) to the box. Security is reached through this layer, mirroring the
+// core `BoxOptions.advanced.security` model.
+//
+// Build the handle via NewAdvancedBoxOptions and toggle the sandbox with
+// SetSecurityEnabled. The caller retains ownership and must call `adv.Close()`
+// after the box has been created (or sooner, if discarded). If never called,
+// the box uses the defaults (the fully-isolated security profile).
+//
+//	adv, _ := boxlite.NewAdvancedBoxOptions()
+//	defer adv.Close()
+//	adv.SetSecurityEnabled(false) // opt out of the sandbox
+//	box, _ := runtime.Create(ctx, "alpine:latest",
+//	    boxlite.WithAdvancedOptions(adv))
+func WithAdvancedOptions(adv *AdvancedBoxOptions) BoxOption {
+	return func(c *boxConfig) { c.advanced = adv }
 }
 
 func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
@@ -435,6 +470,12 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 	}
 	if cfg.detach != nil {
 		C.boxlite_options_set_detach(cOpts, boolToCInt(*cfg.detach))
+	}
+	if cfg.advanced != nil && cfg.advanced.handle != nil {
+		// Clone the caller-owned advanced options (security, …) onto the box.
+		// The Go-side handle stays caller-owned; the box has its own copy after
+		// set_advanced returns.
+		C.boxlite_options_set_advanced(cOpts, cfg.advanced.handle)
 	}
 	if cfg.entrypoint != nil {
 		cArgs, argc := toCStringArray(cfg.entrypoint)

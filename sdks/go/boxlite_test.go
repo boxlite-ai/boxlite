@@ -479,6 +479,45 @@ func TestBuildCOptions_MissingImageAndPath(t *testing.T) {
 }
 
 // ============================================================================
+// Security preset
+// ============================================================================
+//
+// WithAdvancedOptions(adv) routes through `boxlite_options_set_advanced`;
+// security lives under AdvancedBoxOptions (toggle via adv.SetSecurityEnabled).
+// Both toggles must round-trip cleanly, and not calling WithAdvancedOptions
+// leaves the runtime default (enabled) in place.
+
+func TestBuildCOptions_SecurityEnabledDisabled(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		adv, err := NewAdvancedBoxOptions()
+		if err != nil {
+			t.Fatalf("enabled=%v: NewAdvancedBoxOptions failed: %v", enabled, err)
+		}
+		adv.SetSecurityEnabled(enabled)
+		cfg := &boxConfig{}
+		WithAdvancedOptions(adv)(cfg)
+		if cfg.advanced != adv {
+			t.Fatalf("enabled=%v: WithAdvancedOptions must record the handle on the config", enabled)
+		}
+		if err := buildAndFreeCOptions("alpine:latest", cfg); err != nil {
+			t.Fatalf("enabled=%v: buildCOptions must apply cleanly; got error: %v", enabled, err)
+		}
+		adv.Close()
+	}
+}
+
+func TestBuildCOptions_SecurityUnsetKeepsDefault(t *testing.T) {
+	// WithAdvancedOptions never called → nil → leaves the runtime default in place.
+	cfg := &boxConfig{}
+	if cfg.advanced != nil {
+		t.Fatal("advanced must be nil when WithAdvancedOptions is not called")
+	}
+	if err := buildAndFreeCOptions("alpine:latest", cfg); err != nil {
+		t.Fatalf("unset advanced must be a no-op; got error: %v", err)
+	}
+}
+
+// ============================================================================
 // State constants
 // ============================================================================
 

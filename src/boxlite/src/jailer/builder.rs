@@ -2,10 +2,11 @@
 
 use super::Jailer;
 use super::sandbox::{PlatformSandbox, Sandbox};
-use crate::runtime::advanced_options::SecurityOptions;
+use crate::runtime::advanced_options::{ResourceLimits, SecurityOptions};
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::options::VolumeSpec;
 use std::os::fd::RawFd;
+use std::path::PathBuf;
 
 /// Builder for constructing a [`Jailer`].
 ///
@@ -18,7 +19,7 @@ use std::os::fd::RawFd;
 /// let jail = JailerBuilder::new()
 ///     .with_box_id("my-box")
 ///     .with_layout(layout)
-///     .with_security(SecurityOptions::standard())
+///     .with_security(SecurityOptions::enabled())
 ///     .build()?;
 /// ```
 #[derive(Debug, Clone)]
@@ -95,6 +96,173 @@ impl JailerBuilder {
         self
     }
 
+    // ========================================================================
+    // SECURITY FIELDS — fluent passthroughs for the rest of `SecurityOptions`.
+    //
+    // Until now `JailerBuilder` only exposed `jailer_enabled` /
+    // `seccomp_enabled` even though `SecurityOptions` carries another
+    // dozen knobs (UID/GID drop, namespaces, chroot, FD cleanup, env
+    // allowlist, rlimits, macOS sandbox). Callers wanting any of those
+    // had to construct a `SecurityOptions` separately and pipe it
+    // through `with_security(...)`, which scattered build sites and
+    // skipped past any future invariants the builder might enforce.
+    //
+    // Each setter below maps 1-to-1 to the matching `SecurityOptions`
+    // field (same name minus the `with_` prefix). Naming and signature
+    // mirror `SecurityOptionsBuilder` (`runtime/advanced_options.rs`)
+    // except for `&mut self` → `mut self` to match `JailerBuilder`'s
+    // consuming chain style. No defaults are introduced here — the
+    // initial value still comes from `SecurityOptions::default()`.
+    // ========================================================================
+
+    /// Set the UID to drop to after setup (Linux only).
+    ///
+    /// - `Some(0)` keeps root (not recommended).
+    /// - `Some(uid)` drops to that UID.
+    /// - `None` (the default) leaves the auto-allocate behaviour in place.
+    pub fn with_uid(mut self, uid: Option<u32>) -> Self {
+        self.security.uid = uid;
+        self
+    }
+
+    /// Set the GID to drop to after setup (Linux only). Same semantics
+    /// as [`with_uid`](Self::with_uid).
+    pub fn with_gid(mut self, gid: Option<u32>) -> Self {
+        self.security.gid = gid;
+        self
+    }
+
+    /// Enable / disable a new PID namespace (Linux only). When true,
+    /// the shim becomes PID 1 inside the namespace.
+    pub fn with_new_pid_ns(mut self, enabled: bool) -> Self {
+        self.security.new_pid_ns = enabled;
+        self
+    }
+
+    /// Enable / disable a new network namespace (Linux only). gvproxy
+    /// already handles networking, so this is normally off — flip it
+    /// on for fully isolated traffic.
+    pub fn with_new_net_ns(mut self, enabled: bool) -> Self {
+        self.security.new_net_ns = enabled;
+        self
+    }
+
+    /// Set the base directory for chroot jails (Linux only). Default
+    /// `/srv/boxlite`.
+    pub fn with_chroot_base(mut self, path: impl Into<PathBuf>) -> Self {
+        self.security.chroot_base = path.into();
+        self
+    }
+
+    /// Enable / disable chroot via `pivot_root` (Linux only). Default
+    /// `true` on Linux.
+    pub fn with_chroot_enabled(mut self, enabled: bool) -> Self {
+        self.security.chroot_enabled = enabled;
+        self
+    }
+
+    /// Close inherited file descriptors (keeps stdin/stdout/stderr).
+    /// Default `true`.
+    pub fn with_close_fds(mut self, enabled: bool) -> Self {
+        self.security.close_fds = enabled;
+        self
+    }
+
+    /// Sanitize environment variables (keeps only `env_allowlist`).
+    /// Default `true`.
+    pub fn with_sanitize_env(mut self, enabled: bool) -> Self {
+        self.security.sanitize_env = enabled;
+        self
+    }
+
+    /// Replace the env-var allowlist wholesale. To add a single entry
+    /// without throwing away the default, use
+    /// [`with_allowed_env`](Self::with_allowed_env).
+    pub fn with_env_allowlist(mut self, vars: Vec<String>) -> Self {
+        self.security.env_allowlist = vars;
+        self
+    }
+
+    /// Append a single name to the env-var allowlist (idempotent — a
+    /// duplicate is ignored). The default list keeps `RUST_LOG`, `PATH`,
+    /// `HOME`, `USER`, `LANG`.
+    pub fn with_allowed_env(mut self, var: impl Into<String>) -> Self {
+        let var = var.into();
+        if !self.security.env_allowlist.contains(&var) {
+            self.security.env_allowlist.push(var);
+        }
+        self
+    }
+
+    /// Replace all resource limits at once.
+    pub fn with_resource_limits(mut self, limits: ResourceLimits) -> Self {
+        self.security.resource_limits = limits;
+        self
+    }
+
+    /// `RLIMIT_NOFILE` — maximum open file descriptors.
+    pub fn with_max_open_files(mut self, limit: u64) -> Self {
+        self.security.resource_limits.max_open_files = Some(limit);
+        self
+    }
+
+    /// `RLIMIT_FSIZE` — maximum file size, in bytes.
+    pub fn with_max_file_size_bytes(mut self, bytes: u64) -> Self {
+        self.security.resource_limits.max_file_size = Some(bytes);
+        self
+    }
+
+    /// `RLIMIT_NPROC` — maximum number of processes.
+    pub fn with_max_processes(mut self, limit: u64) -> Self {
+        self.security.resource_limits.max_processes = Some(limit);
+        self
+    }
+
+    /// `RLIMIT_AS` — maximum virtual memory, in bytes.
+    pub fn with_max_memory_bytes(mut self, bytes: u64) -> Self {
+        self.security.resource_limits.max_memory = Some(bytes);
+        self
+    }
+
+    /// `RLIMIT_CPU` — maximum CPU time, in seconds.
+    pub fn with_max_cpu_time_seconds(mut self, seconds: u64) -> Self {
+        self.security.resource_limits.max_cpu_time = Some(seconds);
+        self
+    }
+
+    /// Custom sandbox-exec profile path (macOS only). When `None` the
+    /// built-in modular profile is used.
+    pub fn with_sandbox_profile(mut self, path: Option<PathBuf>) -> Self {
+        self.security.sandbox_profile = path;
+        self
+    }
+
+    /// Allow / deny network access inside the sandbox profile (Linux landlock
+    /// + macOS seatbelt). Default `true` because gvproxy networking needs it.
+    pub fn with_network_enabled(mut self, enabled: bool) -> Self {
+        self.security.network_enabled = enabled;
+        self
+    }
+
+    // -------- preset shortcuts -----------------------------------------------
+    //
+    // Mirror `SecurityOptions::{enabled, disabled}` so a caller can pick a
+    // baseline with the same fluent style they use for the rest of the builder.
+
+    /// Replace the security profile with the fully-**enabled** profile (the
+    /// default) — every supported isolation feature on.
+    pub fn with_security_enabled(mut self) -> Self {
+        self.security = SecurityOptions::enabled();
+        self
+    }
+
+    /// Replace the security profile with the **disabled** profile — master
+    /// switch off, every sub-protection off. For debugging / unsandboxable envs.
+    pub fn with_security_disabled(mut self) -> Self {
+        self.security = SecurityOptions::disabled();
+        self
+    }
+
     /// Preserve an FD through pre_exec by dup2'ing source to target.
     ///
     /// The pre_exec hook dup2s source to target before FD cleanup runs.
@@ -147,6 +315,10 @@ impl JailerBuilder {
         let layout = self.layout.ok_or_else(|| {
             crate::jailer::ConfigError::InvalidConfig("layout is required".to_string())
         })?;
+
+        // Surface fields that this platform silently ignores (flat struct mixes
+        // Linux-only and macOS-only knobs).
+        self.security.warn_inert_fields();
 
         Ok(Jailer {
             sandbox,
@@ -212,7 +384,7 @@ mod tests {
         let jailer = JailerBuilder::new()
             .with_box_id("test-box")
             .with_layout(test_layout("/tmp/box"))
-            .with_security(SecurityOptions::maximum())
+            .with_security(SecurityOptions::enabled())
             .build()
             .expect("Should build successfully");
 
@@ -263,5 +435,163 @@ mod tests {
             .expect("Should build with custom sandbox");
 
         assert_eq!(jailer.box_id(), "test-box");
+    }
+
+    // ===========================================================
+    // SecurityOptions fluent passthroughs
+    //
+    // One test per new public method, all on the same fluent chain
+    // so a regression that drops any setter shows up as a single
+    // failing assertion rather than a compile error elsewhere.
+    // Reverting (deleting) any `with_*` setter on the builder breaks
+    // the corresponding line below.
+    // ===========================================================
+
+    #[test]
+    fn builder_exposes_uid_gid_passthroughs() {
+        let jailer = JailerBuilder::new()
+            .with_box_id("test-box")
+            .with_layout(test_layout("/tmp/box"))
+            .with_uid(Some(1234))
+            .with_gid(Some(5678))
+            .build()
+            .expect("should build");
+        assert_eq!(jailer.security().uid, Some(1234));
+        assert_eq!(jailer.security().gid, Some(5678));
+    }
+
+    #[test]
+    fn builder_exposes_namespace_toggles() {
+        let jailer = JailerBuilder::new()
+            .with_box_id("test-box")
+            .with_layout(test_layout("/tmp/box"))
+            .with_new_pid_ns(true)
+            .with_new_net_ns(true)
+            .build()
+            .expect("should build");
+        assert!(jailer.security().new_pid_ns);
+        assert!(jailer.security().new_net_ns);
+    }
+
+    #[test]
+    fn builder_exposes_chroot_settings() {
+        let jailer = JailerBuilder::new()
+            .with_box_id("test-box")
+            .with_layout(test_layout("/tmp/box"))
+            .with_chroot_base("/var/empty")
+            .with_chroot_enabled(false)
+            .build()
+            .expect("should build");
+        assert_eq!(
+            jailer.security().chroot_base,
+            std::path::PathBuf::from("/var/empty")
+        );
+        assert!(!jailer.security().chroot_enabled);
+    }
+
+    #[test]
+    fn builder_exposes_env_and_fd_hygiene() {
+        let jailer = JailerBuilder::new()
+            .with_box_id("test-box")
+            .with_layout(test_layout("/tmp/box"))
+            .with_close_fds(false)
+            .with_sanitize_env(false)
+            .with_env_allowlist(vec!["FOO".into(), "BAR".into()])
+            .with_allowed_env("BAZ")
+            .with_allowed_env("FOO") // dup must be ignored
+            .build()
+            .expect("should build");
+        assert!(!jailer.security().close_fds);
+        assert!(!jailer.security().sanitize_env);
+        assert_eq!(
+            jailer.security().env_allowlist,
+            vec!["FOO".to_string(), "BAR".to_string(), "BAZ".to_string()]
+        );
+    }
+
+    #[test]
+    fn builder_exposes_resource_limits() {
+        let jailer = JailerBuilder::new()
+            .with_box_id("test-box")
+            .with_layout(test_layout("/tmp/box"))
+            .with_max_open_files(2048)
+            .with_max_file_size_bytes(1_000_000)
+            .with_max_processes(64)
+            .with_max_memory_bytes(2 * 1024 * 1024 * 1024)
+            .with_max_cpu_time_seconds(900)
+            .build()
+            .expect("should build");
+        let rl = &jailer.security().resource_limits;
+        assert_eq!(rl.max_open_files, Some(2048));
+        assert_eq!(rl.max_file_size, Some(1_000_000));
+        assert_eq!(rl.max_processes, Some(64));
+        assert_eq!(rl.max_memory, Some(2 * 1024 * 1024 * 1024));
+        assert_eq!(rl.max_cpu_time, Some(900));
+    }
+
+    #[test]
+    fn builder_exposes_resource_limits_bulk_set() {
+        let bulk = ResourceLimits {
+            max_open_files: Some(99),
+            ..Default::default()
+        };
+        let jailer = JailerBuilder::new()
+            .with_box_id("test-box")
+            .with_layout(test_layout("/tmp/box"))
+            .with_resource_limits(bulk)
+            .build()
+            .expect("should build");
+        assert_eq!(jailer.security().resource_limits.max_open_files, Some(99));
+    }
+
+    #[test]
+    fn builder_exposes_macos_sandbox_knobs() {
+        let jailer = JailerBuilder::new()
+            .with_box_id("test-box")
+            .with_layout(test_layout("/tmp/box"))
+            .with_sandbox_profile(Some("/etc/box.sb".into()))
+            .with_network_enabled(false)
+            .build()
+            .expect("should build");
+        assert_eq!(
+            jailer.security().sandbox_profile,
+            Some(std::path::PathBuf::from("/etc/box.sb"))
+        );
+        assert!(!jailer.security().network_enabled);
+    }
+
+    #[test]
+    fn builder_preset_shortcuts_pick_known_profiles() {
+        // Development → relaxed: jailer/chroot/close_fds off.
+        let dev = JailerBuilder::new()
+            .with_box_id("test-box")
+            .with_layout(test_layout("/tmp/box"))
+            .with_security_disabled()
+            .build()
+            .expect("should build dev");
+        assert!(!dev.security().jailer_enabled);
+
+        // Maximum → strict: jailer + seccomp on, namespaces on.
+        let max = JailerBuilder::new()
+            .with_box_id("test-box")
+            .with_layout(test_layout("/tmp/box"))
+            .with_security_enabled()
+            .build()
+            .expect("should build max");
+        assert!(max.security().jailer_enabled);
+        assert!(max.security().seccomp_enabled);
+
+        // Standard is the recommended default; just confirm it
+        // overrides whatever the chain set before.
+        let std_p = JailerBuilder::new()
+            .with_box_id("test-box")
+            .with_layout(test_layout("/tmp/box"))
+            .with_uid(Some(0)) // would normally be clobbered
+            .with_security_enabled()
+            .build()
+            .expect("should build std");
+        assert!(std_p.security().jailer_enabled);
+        // Preset wholesale-replaces, so the uid=0 set above is gone.
+        assert_ne!(std_p.security().uid, Some(0));
     }
 }

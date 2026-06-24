@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	sdkboxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/pkg/boxlite"
 	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
@@ -74,6 +75,19 @@ func BoxliteExec(ctx *gin.Context) {
 
 	execId, err := execManager.Start(ctx.Request.Context(), bx, boxId, startOpts)
 	if err != nil {
+		// Classify so a stopped / wrong-state box surfaces as 4xx, not
+		// 500. Without this the box-stopped case leaks
+		//   internal error: HTTP 500 Internal Server Error:
+		//   {"error":"exec failed: failed to start execution: boxlite: stopped:
+		//    Handle invalidated after stop(). ... (code=11)"}
+		// and the SDK's 'all 5xx is bug' guard fires. The Go SDK already
+		// gives us a typed bool for the two states that aren't 500 from
+		// the runner's perspective (the box exists but isn't accepting
+		// execs right now).
+		if sdkboxlite.IsStopped(err) || sdkboxlite.IsInvalidState(err) {
+			ctx.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("exec failed: %s", err)})
+			return
+		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("exec failed: %s", err)})
 		return
 	}

@@ -107,7 +107,7 @@ impl BoxRunner {
     async fn create_box(&self) -> anyhow::Result<LiteBox> {
         let mut options = BoxOptions::default();
         self.args.resource.apply_to(&mut options);
-        self.args.management.apply_to(&mut options);
+        self.args.management.apply_to(&mut options)?;
         self.args.publish.apply_to(&mut options)?;
         self.args
             .volume

@@ -327,7 +327,7 @@ mod tests {
         // sandbox-exec, which would block the `/usr/bin/yes` stand-in.
         // The setsid pre_exec hook is unaffected by sandbox state.
         let mut options = BoxOptions::default();
-        options.advanced.security = SecurityOptions::development();
+        options.advanced.security = SecurityOptions::disabled();
         let spawner = ShimSpawner::new(
             std::path::Path::new("/usr/bin/yes"),
             &layout,
@@ -381,7 +381,7 @@ mod tests {
         std::fs::create_dir_all(&box_dir).expect("mkdir box");
         let layout = BoxFilesystemLayout::new(box_dir, FsLayoutConfig::without_bind_mount(), false);
         let mut options = BoxOptions::default();
-        options.advanced.security = SecurityOptions::development();
+        options.advanced.security = SecurityOptions::disabled();
         let spawner = ShimSpawner::new(
             std::path::Path::new("/usr/bin/yes"),
             &layout,

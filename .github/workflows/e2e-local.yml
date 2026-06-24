@@ -7,19 +7,20 @@
 # Architecture:
 #   start-runner (ubuntu-latest)  →  e2e-tests (self-hosted)  →  stop-runner (ubuntu-latest)
 #     Start stopped EC2               Build + run tests             Stop EC2
-#     Wait for runner online           35-min timeout               if: always()
+#     Wait for runner online           50-min timeout               if: always()
 #
 # Concurrency: only ONE e2e run at a time (single persistent instance).
 # Queued runs wait; in-progress runs are cancelled by newer pushes.
 #
-# Cost: ~$0.17/hr (c8i.xlarge) only while running + ~$4/mo EBS storage.
+# Cost: c8i.4xlarge on-demand rate only while running + ~$4/mo EBS storage.
 # Subsequent runs skip setup/compilation (cached) → ~5-10 min → ~$0.03/run.
 #
 # Authentication:
 #   AWS: GitHub OIDC → AWS STS (no stored AWS credentials)
 #   GitHub: GitHub App → short-lived installation token (no PAT)
 #
-# Setup: ./scripts/ci/setup-ci-runner.sh
+# Setup:   ./scripts/ci/setup-ci-runner.sh
+# Runbook: docs/ci/e2e-local.md
 name: E2E local
 
 on:

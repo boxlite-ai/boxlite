@@ -187,7 +187,7 @@ use boxlite::{AdvancedBoxOptions, SecurityOptions};
 // For advanced users who need maximum isolation:
 let opts = BoxOptions {
     advanced: AdvancedBoxOptions {
-        security: SecurityOptions::maximum(),
+        security: SecurityOptions::enabled(),
         ..Default::default()
     },
     ..Default::default()

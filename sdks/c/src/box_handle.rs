@@ -120,6 +120,9 @@ unsafe fn create_box(
         }
         let cb = crate::unwrap_cb_or_return!(cb, out_error);
 
+        // Security is applied to the options object directly by the
+        // enable/disable setters (two-state, nothing to validate), so there is
+        // no deferred preset to resolve here.
         let runtime_ref = &*runtime;
         let opts_handle = Box::from_raw(opts);
         let runtime_clone = runtime_ref.runtime.clone();

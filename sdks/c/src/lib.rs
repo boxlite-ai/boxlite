@@ -7,6 +7,7 @@
 #![allow(clippy::missing_safety_doc)]
 #![allow(clippy::too_many_arguments)]
 
+mod advanced_options;
 mod box_handle;
 mod copy;
 mod error;
@@ -56,7 +57,9 @@ pub type CImageInfoList = images::CImageInfoList;
 pub type CImagePullResult = images::CImagePullResult;
 pub type CRuntimeMetrics = metrics::CRuntimeMetrics;
 pub type BoxliteCommand = exec::BoxliteCommand;
+pub type CAdvancedBoxOptions = advanced_options::AdvancedBoxOptionsHandle;
 
+pub use advanced_options::*;
 pub use box_handle::*;
 pub use copy::*;
 pub use error::*;

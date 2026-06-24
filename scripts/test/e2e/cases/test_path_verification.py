@@ -2,15 +2,14 @@
 
 The check is two-part:
 
-  (1) The SDK's configured runtime URL is the API on :3000 (not the
-      runner's :8080, and not a default-FFI degenerate). Asserted by
-      inspecting the runtime's BoxliteRestOptions before any work runs.
+  (1) The SDK's configured runtime URL points at the API (has /api base
+      path, is NOT the runner's :8080). Works for both local (:3000) and
+      remote (dev.boxlite.ai) deployments.
 
-  (2) After one round-trip exec, the runner journal contains the box id.
-      Runner journal entries (`CREATE_BOX` / `created box id=…
-      name=<uuid>`) only ever appear when the API queued the job, which
-      only happens when the SDK POSTed to the API on :3000. So a single
-      runner-journal hit is sufficient evidence for the whole chain.
+  (2) After one round-trip create+exec, the API response carries the
+      X-BoxLite-Api-Version header, proving the request went through the
+      NestJS API layer (not direct runner). A successful exec with stdout
+      proves the runner executed the command behind the API.
 
 If either check fails, downstream regression tests cannot be trusted —
 they may be passing because they're talking to something other than the
@@ -18,56 +17,84 @@ production exec path.
 """
 from __future__ import annotations
 
-import sys
-from pathlib import Path
+import json
+import urllib.error
+import urllib.request
 
 import pytest
-import pytest_asyncio
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
-from path_verification import runner_journal_seek, runner_hits_for_box
 from conftest import drain
 
 
 @pytest.mark.asyncio
 async def test_sdk_runtime_is_rest_against_local_api(rt):
-    """The runtime must be REST-mode and pointing at the local API
-    (`:3000`), not local FFI and not directly at the runner."""
-    # Boxlite.rest() always wires REST; check the URL the SDK is actually
-    # going to use by inspecting the credentials we built it from.
-    import tomllib
-    cred = tomllib.loads((Path.home() / ".boxlite/credentials.toml").read_text())
-    p = cred["profiles"]["p1"]
-    url = p["url"]
-    assert ":3000" in url, (
-        f"profile p1.url={url!r} does not target the local API on :3000. "
-        f"E2E tests would talk to the wrong thing."
-    )
+    """The runtime must be REST-mode and pointing at the API
+    (not the runner on :8080, not local FFI)."""
+    from e2e_auth import auth_context
+
+    url = auth_context().url
     assert "/api" in url, (
         f"profile p1.url={url!r} missing /api base path; SDK would route to "
         f"runner endpoints (/v1/boxes...) and skip the NestJS proxy controller."
     )
+    assert ":8080" not in url, (
+        f"profile p1.url={url!r} points at the runner (:8080) instead of "
+        f"the API. E2E tests must go through the API layer."
+    )
 
 
 @pytest.mark.asyncio
-async def test_exec_reaches_runner_journal(rt, image):
-    """One round-trip exec must leave the runner journal with the box id.
-    Runner only sees box ids the API queued for it, so a hit here =
-    proof that SDK→API→Runner went through end-to-end."""
+async def test_exec_roundtrip_proves_api_to_runner_chain(rt, image):
+    """Create a box, exec a command, and verify:
+    1. The API response has X-BoxLite-Api-Version (proves API layer)
+    2. exec stdout contains the expected output (proves runner executed it)
+    Together these prove SDK → API → Runner end-to-end."""
     import boxlite
+    from e2e_auth import auth_context
 
-    runner_before = runner_journal_seek()
-    box = await rt.create(boxlite.BoxOptions(image=image, auto_remove=True))
-    try:
-        ex = await box.exec("cat", ["/etc/os-release"], None)
-        await drain(ex)
-        await ex.wait()
-    finally:
-        await rt.remove(box.id, force=True)
+    ctx = auth_context()
 
-    hits = runner_hits_for_box(runner_before, box.id)
-    assert hits >= 1, (
-        f"no runner journal entries mentioned box_id={box.id}. Either "
-        f"the SDK degraded to local FFI, or the API did not forward to "
-        f"runner on :8080 (boxlite-runner.service)."
+    # Raw HTTP create to inspect response headers
+    req = urllib.request.Request(
+        ctx.url_for(ctx.v1("boxes")),
+        method="POST",
+        data=json.dumps({
+            "image": image, "cpus": 1, "memory_mib": 256, "disk_size_gb": 4,
+        }).encode(),
+        headers=ctx.auth_headers(content_type=True),
     )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        headers = dict(resp.headers)
+        body = json.loads(resp.read())
+        bid = body["box_id"]
+
+    try:
+        assert "X-BoxLite-Api-Version" in headers, (
+            f"create response missing X-BoxLite-Api-Version header — "
+            f"request may have bypassed the API layer. headers={sorted(headers)}"
+        )
+
+        # exec through SDK to verify runner actually runs the command
+        box = await rt._inner.get(bid)
+        if box is None:
+            info_status, info_body = ctx_request_json("GET", ctx.v1(f"boxes/{bid}"))
+            pytest.fail(f"SDK.get({bid}) returned None; API says {info_status}")
+
+        ex = await box.exec("echo", ["e2e-chain-proof"], None)
+        out, _ = await drain(ex)
+        await ex.wait()
+
+        assert "e2e-chain-proof" in out, (
+            f"exec stdout missing expected marker — runner may not have "
+            f"executed the command. stdout={out!r}"
+        )
+    finally:
+        try:
+            req = urllib.request.Request(
+                ctx.url_for(ctx.v1(f"boxes/{bid}")),
+                method="DELETE",
+                headers=ctx.auth_headers(),
+            )
+            urllib.request.urlopen(req, timeout=15)
+        except Exception:
+            pass  # best-effort cleanup; don't fail the test on delete error

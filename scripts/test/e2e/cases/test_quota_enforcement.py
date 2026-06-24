@@ -12,80 +12,26 @@ Plus the bootstrap's `ADMIN_TOTAL_*_QUOTA` envelope (32 CPU, 64 GiB mem,
 Quota violations must surface as 429 ResourceExhausted (or 400 if the API
 treats it as a validation error). 500 means the runner accepted a doomed
 job and crashed it later; that's the bug class this case covers.
-
-ALL cases in this file currently XFAIL — see module-level pytestmark.
 """
-
-# Production bug pinned by every case in this file: API silently clamps
-# out-of-range / over-quota resource values to org defaults instead of
-# rejecting at the boundary. Root cause at
-# apps/api/src/boxlite-rest/dto/create-box.dto.ts:24 (@Min present, no @Max,
-# no quota lookup) + apps/api/src/box/services/box.service.ts
-# (createFromSnapshot doesn't consult max_*_per_box columns even though
-# fixture_setup.py:107-126 sets them).
-#
-# Two-sided requires API-side fix; tests pin the bug, NOT the test code.
 
 from __future__ import annotations
 
 import json
-import tomllib
-import urllib.error
-import urllib.request
-from pathlib import Path
 from typing import Any
 
 import pytest
 
-pytestmark = pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Production bug: API silently clamps out-of-range / over-quota "
-        "resource values to org defaults instead of returning 400/429. See "
-        "module docstring for full root cause."
-    ),
-)
-
-
-def _profile() -> dict:
-    return tomllib.loads((Path.home() / ".boxlite/credentials.toml").read_text())[
-        "profiles"
-    ]["p1"]
+from conftest import DEFAULT_IMAGE
+from e2e_auth import auth_context, request_json
 
 
 def _post_box(spec: dict) -> tuple[int, dict[str, Any] | None]:
-    p = _profile()
-    url = f"{p['url']}/v1/{p['path_prefix']}/boxes"
-    req = urllib.request.Request(
-        url,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {p['api_key']}",
-            "Content-Type": "application/json",
-        },
-        data=json.dumps(spec).encode(),
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            raw = r.read()
-            return r.status, json.loads(raw) if raw else None
-    except urllib.error.HTTPError as e:
-        raw = e.read()
-        try:
-            return e.code, json.loads(raw) if raw else None
-        except json.JSONDecodeError:
-            return e.code, {"_raw": raw.decode("utf-8", "replace")}
+    return request_json("POST", auth_context().v1("boxes"), spec)
 
 
 def _delete_box(box_id: str) -> None:
-    p = _profile()
     try:
-        req = urllib.request.Request(
-            f"{p['url']}/v1/{p['path_prefix']}/boxes/{box_id}",
-            method="DELETE",
-            headers={"Authorization": f"Bearer {p['api_key']}"},
-        )
-        urllib.request.urlopen(req, timeout=30).read()
+        request_json("DELETE", auth_context().v1(f"boxes/{box_id}"))
     except Exception:
         pass
 
@@ -94,7 +40,7 @@ def _delete_box(box_id: str) -> None:
 async def test_cpus_above_per_box_limit_returns_4xx():
     """cpus far above max_cpu_per_box (4) → 429 or 400, not 5xx."""
     status, body = _post_box(
-        {"image": "alpine:3.23", "cpus": 999, "memory_mib": 256, "disk_size_gb": 4}
+        {"image": DEFAULT_IMAGE, "cpus": 999, "memory_mib": 256, "disk_size_gb": 4}
     )
     body_str = json.dumps(body) if body else ""
     assert 400 <= status < 500, f"cpus=999 leaked HTTP {status}: {body_str}"
@@ -105,7 +51,7 @@ async def test_memory_above_per_box_limit_returns_4xx():
     """memory far above max_memory_per_box (8 GiB) → 4xx, not 5xx."""
     status, body = _post_box(
         {
-            "image": "alpine:3.23",
+            "image": DEFAULT_IMAGE,
             "cpus": 1,
             "memory_mib": 8_192_000_000,
             "disk_size_gb": 4,
@@ -120,7 +66,7 @@ async def test_disk_above_per_box_limit_returns_4xx():
     """disk far above max_disk_per_box (20 GiB) → 4xx, not 5xx."""
     status, body = _post_box(
         {
-            "image": "alpine:3.23",
+            "image": DEFAULT_IMAGE,
             "cpus": 1,
             "memory_mib": 256,
             "disk_size_gb": 99_999_999,
@@ -136,7 +82,7 @@ async def test_quota_violation_does_not_silently_create_box(rt):
     immediately and find an orphan with cpus=999, the runner accepted the
     doomed request and the quota check is decorative."""
     status, body = _post_box(
-        {"image": "alpine:3.23", "cpus": 999, "memory_mib": 256, "disk_size_gb": 4}
+        {"image": DEFAULT_IMAGE, "cpus": 999, "memory_mib": 256, "disk_size_gb": 4}
     )
     if 200 <= status < 300:
         pytest.fail(f"cpus=999 unexpectedly succeeded: HTTP {status}, body={body}")
@@ -158,7 +104,7 @@ async def test_quota_zero_cpus_returns_4xx():
     """cpus=0 — boundary at the other end. Must be 4xx, not 500 or a box
     that immediately crashes."""
     status, body = _post_box(
-        {"image": "alpine:3.23", "cpus": 0, "memory_mib": 256, "disk_size_gb": 4}
+        {"image": DEFAULT_IMAGE, "cpus": 0, "memory_mib": 256, "disk_size_gb": 4}
     )
     body_str = json.dumps(body) if body else ""
     assert 400 <= status < 500, f"cpus=0 leaked HTTP {status}: {body_str}"

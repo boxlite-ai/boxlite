@@ -39,6 +39,14 @@ pub(super) struct CreateBoxRequest {
     pub auto_remove: Option<bool>,
     #[serde(default)]
     pub detach: Option<bool>,
+    // `security` / `security_settings` are intentionally absent from
+    // the REST wire schema. Sandbox security is the operator's
+    // policy, set server-side. Because the struct carries
+    // `#[serde(deny_unknown_fields)]`, any attempt by a client to
+    // smuggle a security knob in surfaces as a 400 from
+    // serde_json::from_str — there is no quiet fall-through. See
+    // `build_box_options_rejects_client_supplied_security_*` tests
+    // below for the wire-shape pin.
 }
 
 #[derive(Deserialize)]

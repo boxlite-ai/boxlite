@@ -3,7 +3,7 @@ use crate::*;
 use boxlite::BoxliteError;
 use boxlite::runtime::BoxliteRuntime;
 use std::ffi::{CStr, CString};
-use std::os::raw::c_void;
+use std::os::raw::{c_int, c_void};
 use std::path::PathBuf;
 use std::ptr;
 use std::sync::Arc;
@@ -374,6 +374,54 @@ fn create_box_rejects_null_callback() {
         boxlite_runtime_free(runtime);
     }
     let _ = std::fs::remove_dir_all(home_dir);
+}
+
+// Security is toggled through the advanced layer:
+// `boxlite_advanced_options_set_security_enabled` selects the enabled/disabled
+// profile on a `CAdvancedBoxOptions`, then `boxlite_options_set_advanced`
+// clones the advanced options (security included) onto the box. This pins that
+// each toggle lands on `advanced.security` as the matching profile; reverting
+// either setter to a no-op flips it red.
+#[test]
+fn set_advanced_applies_security_profile_to_options() {
+    use boxlite::SecurityOptions;
+
+    let image = CString::new("alpine:latest").expect("image cstring");
+    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
+    let mut error = FFIError::default();
+    let code =
+        unsafe { boxlite_options_new(image.as_ptr(), &mut opts as *mut _, &mut error as *mut _) };
+    assert_eq!(code, BoxliteErrorCode::Ok);
+
+    let handle = opts;
+
+    let apply_security = |enabled: c_int| {
+        let mut advanced: *mut CAdvancedBoxOptions = ptr::null_mut();
+        let mut advanced_error = FFIError::default();
+        let code = unsafe {
+            boxlite_advanced_options_new(&mut advanced as *mut _, &mut advanced_error as *mut _)
+        };
+        assert_eq!(code, BoxliteErrorCode::Ok);
+        unsafe { boxlite_advanced_options_set_security_enabled(advanced, enabled) };
+        unsafe { boxlite_options_set_advanced(opts, advanced) };
+        unsafe { boxlite_advanced_options_free(advanced) };
+    };
+
+    apply_security(0);
+    assert_eq!(
+        unsafe { &(*handle).options.advanced.security },
+        &SecurityOptions::disabled(),
+        "set_security_enabled(0) must apply the disabled profile"
+    );
+
+    apply_security(1);
+    assert_eq!(
+        unsafe { &(*handle).options.advanced.security },
+        &SecurityOptions::enabled(),
+        "set_security_enabled(non-zero) must apply the enabled (full) profile"
+    );
+
+    unsafe { boxlite_options_free(opts) };
 }
 
 #[test]

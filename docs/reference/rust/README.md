@@ -733,30 +733,22 @@ pub struct SecurityOptions {
 }
 ```
 
-#### Presets
+#### Settings
+
+Security is a two-state switch — **enable** (the default) or **disable**.
 
 ```rust
-// Development: minimal isolation for debugging
-let dev = SecurityOptions::development();
+// Enabled (the default): full host isolation.
+let on = SecurityOptions::enabled(); // == SecurityOptions::default()
+// - jailer_enabled: true
+// - seccomp_enabled, new_pid_ns, chroot_enabled: true (Linux)
+// - uid/gid: 65534 (nobody/nogroup)
+// - close_fds, sanitize_env: true; resource limits applied
+
+// Disabled: master switch off, every sub-protection off (debugging / unsandboxable envs).
+let off = SecurityOptions::disabled();
 // - jailer_enabled: false
-// - seccomp_enabled: false
-// - close_fds: false
-
-// Default: compatibility-focused
-let default_security = SecurityOptions::default();
-// - jailer_enabled: true (macOS), false (Linux/other platforms)
-// - seccomp_enabled: false
-
-// Standard: recommended for most use cases
-let std = SecurityOptions::standard();
-// - jailer_enabled: true (Linux/macOS)
-// - seccomp_enabled: true (Linux)
-
-// Maximum: all isolation features
-let max = SecurityOptions::maximum();
-// - All isolation enabled
-// - uid/gid: 65534 (nobody)
-// - Resource limits applied
+// - all sub-protections off
 ```
 
 ### SecurityOptionsBuilder
@@ -766,7 +758,7 @@ Fluent builder for security options.
 ```rust
 use boxlite::runtime::options::{SecurityOptions, SecurityOptionsBuilder};
 
-let security = SecurityOptionsBuilder::standard()
+let security = SecurityOptionsBuilder::enabled()
     .max_open_files(2048)
     .max_file_size_bytes(1024 * 1024 * 512)  // 512 MiB
     .max_processes(100)
@@ -1088,7 +1080,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
         ],
         advanced: AdvancedBoxOptions {
-            security: SecurityOptions::standard(),
+            security: SecurityOptions::enabled(),
             ..Default::default()
         },
         ..Default::default()
