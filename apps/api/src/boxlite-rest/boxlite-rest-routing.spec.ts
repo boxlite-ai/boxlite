@@ -31,7 +31,7 @@ describe('BoxLite REST routing', () => {
         {
           provide: BoxService,
           useValue: {
-            findAllDeprecated: jest.fn().mockResolvedValue([]),
+            listBoxesPageDeprecated: jest.fn().mockResolvedValue({ items: [], hasMore: false }),
             toBoxDtos: jest.fn().mockResolvedValue([]),
           },
         },

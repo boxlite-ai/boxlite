@@ -88,8 +88,27 @@ impl RuntimeBackend for RestRuntime {
     }
 
     async fn list_info(&self) -> BoxliteResult<Vec<BoxInfo>> {
-        let resp: ListBoxesResponse = self.client.get("/boxes").await?;
-        resp.boxes.iter().map(|b| b.to_box_info()).collect()
+        // The server pages this endpoint (openapi `pageSize`/`pageToken`), so a
+        // single request only returns one page. Follow `next_page_token` to
+        // preserve the "list every box" contract callers depend on, requesting
+        // the max page size to keep round-trips down.
+        let mut all = Vec::new();
+        let mut page_token: Option<String> = None;
+        loop {
+            let mut query: Vec<(&str, &str)> = vec![("pageSize", "1000")];
+            if let Some(token) = page_token.as_deref() {
+                query.push(("pageToken", token));
+            }
+            let resp: ListBoxesResponse = self.client.get_with_query("/boxes", &query).await?;
+            for box_response in &resp.boxes {
+                all.push(box_response.to_box_info()?);
+            }
+            match resp.next_page_token {
+                Some(token) if !token.is_empty() => page_token = Some(token),
+                _ => break,
+            }
+        }
+        Ok(all)
     }
 
     async fn exists(&self, id_or_name: &str) -> BoxliteResult<bool> {
