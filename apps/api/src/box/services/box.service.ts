@@ -61,9 +61,11 @@ import { BoxCreatedEvent } from '../events/box-create.event'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
 import {
+  BOX_LIST_CACHE_TTL_S,
   BOX_LOOKUP_CACHE_TTL_MS,
   BOX_ORG_ID_CACHE_TTL_MS,
   TOOLBOX_PROXY_URL_CACHE_TTL_S,
+  boxListCacheKey,
   boxLookupCacheKeyById,
   boxLookupCacheKeyByName,
   boxOrgIdCacheKeyById,
@@ -331,17 +333,17 @@ export class BoxService {
     return this.toBoxDto(updatedBox)
   }
 
-  async findAllDeprecated(
+  private buildDeprecatedListWhere(
     organizationId: string,
     labels?: { [key: string]: string },
     includeErroredDestroyed?: boolean,
-  ): Promise<Box[]> {
+  ): FindOptionsWhere<Box>[] {
     const baseFindOptions: FindOptionsWhere<Box> = {
       organizationId,
       ...(labels ? { labels: JsonContains(labels) } : {}),
     }
 
-    const where: FindOptionsWhere<Box>[] = [
+    return [
       {
         ...baseFindOptions,
         state: Not(In([BoxState.DESTROYED, BoxState.ERROR])),
@@ -352,8 +354,65 @@ export class BoxService {
         ...(includeErroredDestroyed ? {} : { desiredState: Not(BoxDesiredState.DESTROYED) }),
       },
     ]
+  }
 
-    return this.boxRepository.find({ where })
+  async findAllDeprecated(
+    organizationId: string,
+    labels?: { [key: string]: string },
+    includeErroredDestroyed?: boolean,
+  ): Promise<Box[]> {
+    return this.boxRepository.find({
+      where: this.buildDeprecatedListWhere(organizationId, labels, includeErroredDestroyed),
+    })
+  }
+
+  // Bounded variant of findAllDeprecated for the public REST list endpoint:
+  // a single page is never the whole table, so one request can't saturate the
+  // event loop serializing every box in the org.
+  //
+  // Fetches one extra row instead of running a COUNT(*): the public response
+  // only needs to know whether another page exists, and COUNT(*) over the org's
+  // boxes scans every matching row on every request (O(org size), not O(page)).
+  async listBoxesPageDeprecated(
+    organizationId: string,
+    options: {
+      limit: number
+      offset: number
+      labels?: { [key: string]: string }
+      includeErroredDestroyed?: boolean
+    },
+  ): Promise<{ items: Box[]; hasMore: boolean }> {
+    const rows = await this.boxRepository.find({
+      where: this.buildDeprecatedListWhere(organizationId, options.labels, options.includeErroredDestroyed),
+      order: { createdAt: 'DESC' },
+      skip: options.offset,
+      take: options.limit + 1,
+    })
+    const hasMore = rows.length > options.limit
+    return { items: hasMore ? rows.slice(0, options.limit) : rows, hasMore }
+  }
+
+  async listBoxesCached(
+    organizationId: string,
+    labels?: { [key: string]: string },
+    includeErroredDeleted?: boolean,
+  ): Promise<BoxDto[]> {
+    const cacheKey = boxListCacheKey({ organizationId, labels, includeErroredDeleted })
+    const cached = await this.redis.get(cacheKey).catch((err) => {
+      this.logger.warn(`Failed to read box list cache for org ${organizationId}: ${err.message}`)
+      return null
+    })
+    if (cached) {
+      return JSON.parse(cached) as BoxDto[]
+    }
+
+    const boxes = await this.findAllDeprecated(organizationId, labels, includeErroredDeleted)
+    const dtos = await this.toBoxDtos(boxes)
+
+    this.redis.setex(cacheKey, BOX_LIST_CACHE_TTL_S, JSON.stringify(dtos)).catch((err) => {
+      this.logger.warn(`Failed to cache box list for org ${organizationId}: ${err.message}`)
+    })
+    return dtos
   }
 
   async findAll(

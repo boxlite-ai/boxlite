@@ -32,6 +32,7 @@ import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 import { BoxResponseDto, ListBoxesResponseDto } from './dto/box-response.dto'
 import { CreateBoxDto } from './dto/create-box.dto'
 import { boxToBoxResponse, createBoxToCreateBox } from './mappers/box-to-box.mapper'
+import { resolveListPageSize, decodePageToken, encodePageToken } from './utils/list-pagination.util'
 import { Audit, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
@@ -103,11 +104,21 @@ export class BoxliteBoxController {
   async listBoxes(
     @AuthContext() authContext: OrganizationAuthContext,
     @Query('pageSize') pageSize?: string,
+    @Query('pageToken') pageToken?: string,
   ): Promise<ListBoxesResponseDto> {
-    const boxes = await this.boxService.findAllDeprecated(authContext.organizationId)
-    const dtos = await this.boxService.toBoxDtos(boxes)
+    const limit = resolveListPageSize(pageSize)
+    const page = decodePageToken(pageToken)
+    const offset = (page - 1) * limit
+
+    const { items, hasMore } = await this.boxService.listBoxesPageDeprecated(authContext.organizationId, {
+      limit,
+      offset,
+    })
+    const dtos = await this.boxService.toBoxDtos(items)
+
     return {
       boxes: dtos.map(boxToBoxResponse),
+      ...(hasMore ? { next_page_token: encodePageToken(page + 1) } : {}),
     }
   }
 

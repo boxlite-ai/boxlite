@@ -139,9 +139,7 @@ export class BoxController {
     @Query('includeErroredDeleted') includeErroredDeleted?: boolean,
   ): Promise<BoxDto[]> {
     const labels = labelsQuery ? JSON.parse(labelsQuery) : undefined
-    const boxes = await this.boxService.findAllDeprecated(authContext.organizationId, labels, includeErroredDeleted)
-
-    return this.boxService.toBoxDtos(boxes)
+    return this.boxService.listBoxesCached(authContext.organizationId, labels, includeErroredDeleted)
   }
 
   @Get('paginated')
