@@ -184,7 +184,7 @@ export const CreateBoxDialog = ({
 
       <DialogContent
         className={cn(
-          'flex max-h-[92svh] w-[calc(100vw-1rem)] max-w-[540px] flex-col gap-0 overflow-hidden p-0 sm:max-h-[88vh]',
+          'flex max-h-[92svh] w-[calc(100vw-1rem)] flex-col gap-0 overflow-hidden p-0 sm:max-h-[88vh] sm:max-w-[540px]',
           className,
         )}
       >

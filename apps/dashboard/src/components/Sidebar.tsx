@@ -26,6 +26,7 @@ import { useOrganizations } from '@/hooks/useOrganizations'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useCopyToClipboard } from 'usehooks-ts'
 import { toast } from 'sonner'
+import { markJustLoggedOut } from '@/lib/auth-session'
 import { ONBOARDING_OPEN_EVENT } from '@/lib/onboarding-progress'
 import { cn, getMetaKey } from '@/lib/utils'
 import {
@@ -212,6 +213,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
 
   const handleSignOut = () => {
     posthog?.reset()
+    markJustLoggedOut()
     signoutRedirect()
   }
 
@@ -420,7 +422,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
       <DropdownMenu>
         <DropdownMenuTrigger
           aria-label="Open navigation menu"
-          className="inline-flex h-full items-center border-l border-border px-4 text-muted-foreground outline-none transition-colors hover:text-foreground md:hidden"
+          className="inline-flex h-full items-center border-l border-border px-4 text-muted-foreground outline-none transition-colors hover:text-foreground lg:hidden"
         >
           <MoreHorizontal className="size-4" />
         </DropdownMenuTrigger>
@@ -440,6 +442,10 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
               <KeyRound className="size-4" />
               API Keys
             </Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem className="cursor-pointer" onClick={openOnboardingGuide}>
+            <BookOpen className="size-4" />
+            Quickstart
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
