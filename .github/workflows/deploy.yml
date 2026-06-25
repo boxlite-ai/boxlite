@@ -1,6 +1,10 @@
 # One-click deploy button (MVP "lite+" — manual, reviewable, no static AWS keys).
 #
-# Pick a stage + diff|deploy. Auth = GitHub OIDC -> boxlite-app-<stage>-deploy.
+# Flow: dispatch -> [plan job: sst diff to Step Summary] -> [apply job: sst deploy,
+# gated by the stage's GitHub Environment]. plan always runs; apply only after the
+# environment's protection rules pass (e.g. prod's required reviewers). Auth =
+# GitHub OIDC -> boxlite-app-<stage>-deploy.
+#
 # Runs `npm run <sst|deploy>` in apps/infra; sst-with-cloudflare.mjs injects the
 # stage's Cloudflare creds + full env config from SSM (/boxlite/<stage>/{cloudflare-*,env/*}),
 # so CI has the same config a laptop's .env provides. No secrets in the repo.
@@ -23,9 +27,11 @@
 #      login cannot iam:CreateRole (verified 2026-06-22).
 #   2. boxlite-bounded-role-admin must allow PassRole + AddRoleToInstanceProfile on
 #      role/boxlite-<stage>-* (today it lists only boxlite-dev-* / boxlite-e2e-*).
-#   3. GitHub Environment named <stage> (this job's `environment:` gate).
+#   3. GitHub Environment named <stage> (the apply job's `environment:` gate).
+#      For prod, enable Required reviewers on env=prod so apply pauses for human
+#      approval after the plan job's diff is visible in the Step Summary.
 #   4. SSM seeded: /boxlite/<stage>/{cloudflare-*, env/*} (env via seed-prod-from-dev.mjs).
-#   5. `region` input set to the stage's region (dev = ap-southeast-1).
+#   5. `region` input set to the stage's region (dev = ap-southeast-1, prod = us-west-2).
 # ─────────────────────────────────────────────────────────────────────────────
 name: Deploy
 
@@ -37,13 +43,8 @@ on:
         type: choice
         options: [dev, prod]
         default: dev
-      mode:
-        description: diff (read-only preview) or deploy (apply)
-        type: choice
-        options: [diff, deploy]
-        default: diff
       region:
-        description: AWS region (dev lives in ap-southeast-1; a new stage may pick another)
+        description: AWS region (dev = ap-southeast-1, prod = us-west-2)
         type: choice
         options: [ap-southeast-1, us-east-1, us-west-2, eu-west-1, eu-central-1, ap-northeast-1]
         default: ap-southeast-1
@@ -57,12 +58,53 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  plan:
+    name: Plan (sst diff)
     runs-on: ubuntu-latest
-    # GitHub Environment per stage — gates the deploy behind that environment's
-    # protection rules (required reviewers, branch restrictions). A `prod`
-    # environment must exist before a prod deploy runs; absence fails fast, which
-    # is the intended guard against an unconfigured prod deploy.
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Assume AWS deploy role (GitHub OIDC, no static keys)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::064212132677:role/boxlite-app-${{ inputs.stage }}-deploy
+          aws-region: ${{ inputs.region }}
+          role-session-name: deploy-plan-${{ inputs.stage }}-${{ github.run_id }}
+
+      - name: Install infra deps
+        working-directory: apps/infra
+        run: npm install
+
+      - name: sst diff (read-only) → Step Summary
+        working-directory: apps/infra
+        run: |
+          set -o pipefail
+          {
+            echo "## sst diff"
+            echo ""
+            echo "- stage: \`${{ inputs.stage }}\`"
+            echo "- region: \`${{ inputs.region }}\`"
+            echo "- ref: \`${{ github.sha }}\`"
+            echo ""
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          npm run sst -- diff --stage ${{ inputs.stage }} 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+  apply:
+    name: Apply (sst deploy)
+    needs: plan
+    runs-on: ubuntu-latest
+    # GitHub Environment per stage gates apply behind that environment's
+    # protection rules. Approvers see the plan job's Step Summary diff before
+    # approving. Prod MUST have Required reviewers configured for this to be a
+    # real gate; dev runs through automatically (no reviewers on env=dev).
     environment: ${{ inputs.stage }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -76,24 +118,14 @@ jobs:
       - name: Assume AWS deploy role (GitHub OIDC, no static keys)
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
-          # Per-stage role: boxlite-app-dev-deploy / boxlite-app-prod-deploy.
           role-to-assume: arn:aws:iam::064212132677:role/boxlite-app-${{ inputs.stage }}-deploy
-          # Exports AWS_REGION/AWS_DEFAULT_REGION to later steps; sst.config.ts + the
-          # SSM helpers read AWS_REGION, so the whole deploy targets this region.
           aws-region: ${{ inputs.region }}
+          role-session-name: deploy-apply-${{ inputs.stage }}-${{ github.run_id }}
 
-      # apps/infra is a standalone npm project; package-lock.json is gitignored,
-      # so use `npm install` (not `npm ci`) on a fresh checkout.
       - name: Install infra deps
         working-directory: apps/infra
         run: npm install
 
-      - name: sst diff (read-only)
-        if: ${{ inputs.mode == 'diff' }}
-        working-directory: apps/infra
-        run: npm run sst -- diff --stage ${{ inputs.stage }}
-
       - name: sst deploy
-        if: ${{ inputs.mode == 'deploy' }}
         working-directory: apps/infra
         run: npm run deploy -- --stage ${{ inputs.stage }}
