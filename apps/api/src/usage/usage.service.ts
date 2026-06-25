@@ -9,6 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { IsNull, Repository } from 'typeorm'
 import { Box } from '../box/entities/box.entity'
 import { BoxEvents } from '../box/constants/box-events.constants'
+import { BoxCreatedEvent } from '../box/events/box-create.event'
 import { BoxStateUpdatedEvent } from '../box/events/box-state-updated.event'
 import { BoxState } from '../box/enums/box-state.enum'
 import { UsagePeriod } from './entities/usage-period.entity'
@@ -39,6 +40,19 @@ export class UsageService {
     @InjectRepository(UsagePeriod)
     private readonly periods: Repository<UsagePeriod>,
   ) {}
+
+  @OnEvent(BoxEvents.CREATED)
+  async handleBoxCreated(event: BoxCreatedEvent): Promise<void> {
+    // A box can be inserted directly at STARTED (box.service.ts), which emits
+    // only CREATED — not STATE_UPDATED (an insert has no previous state). Open
+    // the initial period here, or the running time before the first transition
+    // is lost.
+    try {
+      await this.applyTransition(event.box, event.box.state, new Date())
+    } catch (err) {
+      this.logger.error(`usage ledger open failed for box ${event.box?.id}: ${err}`)
+    }
+  }
 
   @OnEvent(BoxEvents.STATE_UPDATED)
   async handleBoxStateUpdated(event: BoxStateUpdatedEvent): Promise<void> {
