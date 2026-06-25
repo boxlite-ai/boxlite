@@ -148,6 +148,11 @@ func (s *server) Start() error {
 	noTelemetryRouter.Use(sloggin.New(s.logger))
 	r.Use(errMiddleware)
 	noTelemetryRouter.Use(errMiddleware)
+	// Enforce the box auth token when TOOLBOX_REQUIRE_AUTH=true (off by default;
+	// see toolboxAuthMiddleware). Applied to both routers so the /proxy group on
+	// noTelemetryRouter is covered.
+	r.Use(s.toolboxAuthMiddleware())
+	noTelemetryRouter.Use(s.toolboxAuthMiddleware())
 	binding.Validator = new(DefaultValidator)
 
 	// Add swagger UI in development mode
