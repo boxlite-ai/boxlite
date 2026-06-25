@@ -8,6 +8,7 @@ import { ForbiddenException, Injectable, Logger, NotFoundException, ConflictExce
 import { InjectRepository } from '@nestjs/typeorm'
 import { Not, Repository, LessThan, In, JsonContains, FindOptionsWhere, ILike } from 'typeorm'
 import { Box } from '../entities/box.entity'
+import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
 import { CreateBoxDto } from '../dto/create-box.dto'
 import { ResizeBoxDto } from '../dto/resize-box.dto'
 import { BoxState } from '../enums/box-state.enum'
@@ -242,7 +243,15 @@ export class BoxService {
       box.runnerId = runner.id
       box.pending = true
 
-      const insertedBox = await this.boxRepository.insert(box)
+      // No caller-provided name -> assign a fun default (e.g. "cozy-otter"),
+      // falling back to "cozy-otter-{boxId}" if it collides with the per-org
+      // @Unique(['organizationId', 'name']) constraint.
+      const insertedBox = createBoxDto.name
+        ? await this.boxRepository.insert(box)
+        : await persistWithGeneratedBoxName(box.id, (name) => {
+            box.name = name
+            return this.boxRepository.insert(box)
+          })
 
       this.eventEmitter
         .emitAsync(BoxEvents.CREATED, new BoxCreatedEvent(insertedBox))
@@ -251,7 +260,11 @@ export class BoxService {
       return this.toBoxDto(insertedBox)
     } catch (error) {
       if (error.code === '23505') {
-        throw new ConflictException(`Box with name ${createBoxDto.name} already exists`)
+        throw new ConflictException(
+          createBoxDto.name
+            ? `Box with name ${createBoxDto.name} already exists`
+            : 'Could not allocate a unique box name, please retry',
+        )
       }
 
       throw error
@@ -269,10 +282,6 @@ export class BoxService {
       labels: createBoxDto.labels || {},
       organizationId: organization.id,
       createdAt: now,
-    }
-
-    if (createBoxDto.name) {
-      updateData.name = createBoxDto.name
     }
 
     if (createBoxDto.autoStopInterval !== undefined) {
@@ -310,10 +319,19 @@ export class BoxService {
       )
     }
 
-    const updatedBox = await this.boxRepository.update(warmPoolBox.id, {
-      updateData,
-      entity: warmPoolBox,
-    })
+    // Resolve the name at persist time. A caller-provided name updates in one
+    // shot (reusing the pre-fetched entity). A generated default falls back to
+    // "{name}-{boxId}" on collision and omits `entity` so each attempt re-reads
+    // the row — reusing the mutated entity would corrupt the optimistic-update
+    // guard.
+    const updatedBox = createBoxDto.name
+      ? await this.boxRepository.update(warmPoolBox.id, {
+          updateData: { ...updateData, name: createBoxDto.name },
+          entity: warmPoolBox,
+        })
+      : await persistWithGeneratedBoxName(warmPoolBox.id, (name) =>
+          this.boxRepository.update(warmPoolBox.id, { updateData: { ...updateData, name } }),
+        )
 
     // Defensive invalidation of orgId cache since the box moved from unassigned to a real organization
     this.boxLookupCacheInvalidationService.invalidateOrgId({
