@@ -137,17 +137,32 @@ func (c *Config) GetOtelHeaders() map[string]string {
 }
 
 func GetContainerRuntime() string {
+	if config == nil {
+		return os.Getenv("CONTAINER_RUNTIME")
+	}
 	return config.ContainerRuntime
 }
 
 func GetContainerNetwork() string {
+	if config == nil {
+		return os.Getenv("CONTAINER_NETWORK")
+	}
 	return config.ContainerNetwork
 }
 
 func GetEnvironment() string {
+	if config == nil {
+		return os.Getenv("ENVIRONMENT")
+	}
 	return config.Environment
 }
 
 func GetBuildEngine() string {
+	if config == nil {
+		if buildEngine := os.Getenv("BUILD_ENGINE"); buildEngine != "" {
+			return buildEngine
+		}
+		return "buildkit"
+	}
 	return config.BuildEngine
 }
