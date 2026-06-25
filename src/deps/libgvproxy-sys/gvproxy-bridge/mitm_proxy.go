@@ -20,6 +20,12 @@ func mitmAndForward(guestConn net.Conn, hostname string, destAddr string, ca *Bo
 	cert, err := ca.GenerateHostCert(hostname)
 	if err != nil {
 		logrus.WithError(err).WithField("hostname", hostname).Error("MITM: cert generation failed")
+		// Surface via ErrSink as well — a persistent cert-gen failure
+		// means MITM is silently disabled for this hostname, which is a
+		// security-shaped event the operator MUST see. Logrus alone is
+		// pre-#634 silent-from-Rust behavior. ca.errSink may be nil in
+		// pre-init / test paths; reportCertGenFailure is a safe no-op then.
+		ca.reportCertGenFailure(hostname, err)
 		guestConn.Close()
 		return
 	}

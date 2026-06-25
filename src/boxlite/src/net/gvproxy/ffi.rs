@@ -10,6 +10,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use super::config::GvproxyConfig;
 use libgvproxy_sys::{
     gvproxy_create, gvproxy_destroy, gvproxy_free_string, gvproxy_get_stats, gvproxy_get_version,
+    gvproxy_poll_runtime_error,
 };
 
 /// Create a new gvproxy instance with full configuration
@@ -129,6 +130,37 @@ pub fn get_stats_json(id: i64) -> BoxliteResult<String> {
     unsafe { gvproxy_free_string(c_str) };
 
     Ok(json_str)
+}
+
+/// Poll the oldest unread runtime-phase error from the named instance.
+///
+/// Returns `Ok(Some(rendered))` if an error was waiting, `Ok(None)` if the
+/// queue is empty (steady-state common case), or `Err` only on UTF-8
+/// decode failure of the C string (effectively never).
+///
+/// `rendered` shape: `"[2026-06-03T10:00:00.000Z] vn.AcceptQemu: <cause>"`.
+/// Forwarded verbatim into `tracing::warn!` at target
+/// `gvproxy.runtime_error` by `instance::poll_and_route_once`.
+///
+/// Producer-side counterpart to the five `sink.Runtime(...)` call sites
+/// in `gvproxy-bridge`. This FFI is what makes #634's framework
+/// externally observable from the Rust runtime.
+pub fn poll_runtime_error(id: i64) -> BoxliteResult<Option<String>> {
+    let c_str = unsafe { gvproxy_poll_runtime_error(id) };
+    if c_str.is_null() {
+        return Ok(None);
+    }
+
+    let rendered = unsafe { CStr::from_ptr(c_str) }
+        .to_str()
+        .map(|s| s.to_string())
+        .map_err(|e| {
+            unsafe { gvproxy_free_string(c_str) };
+            BoxliteError::Network(format!("Invalid UTF-8 in runtime error string: {}", e))
+        })?;
+
+    unsafe { gvproxy_free_string(c_str) };
+    Ok(Some(rendered))
 }
 
 #[cfg(test)]

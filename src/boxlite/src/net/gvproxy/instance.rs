@@ -265,9 +265,296 @@ pub(super) fn start_stats_logging(instance: Weak<GvproxyInstance>) {
     tracing::debug!("Started background stats logging task");
 }
 
+/// Interval between successive `gvproxy_poll_runtime_error` calls. 250ms is
+/// the design budget: tight enough that an operator chasing a silent failure
+/// sees the event in their tracing stream within a quarter-second of it
+/// happening; loose enough that on the steady-state common case (empty
+/// queue → NULL return) we burn negligible CPU per gvproxy instance.
+///
+/// Coupled with the Go-side `runtimeErrQueueSize = 16` and the documented
+/// "typical runtime failure cadence < 1 per minute" — at 250ms we'd need
+/// the producer to push >64 events/sec for the queue to overflow before a
+/// poll drains it, which is well outside any realistic VM-transport
+/// failure rate.
+const RUNTIME_ERROR_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Starts a background task that polls the gvproxy ErrSink for runtime
+/// errors and routes each one into `tracing::warn!` with the target
+/// `gvproxy.runtime_error`.
+///
+/// This is the **consumer** half of the ErrSink framework introduced in
+/// #634. The five silent-failure sites in `gvproxy-bridge` (Accept loops
+/// on both transports, both protocol pumps, and OverrideTCPHandler) now
+/// feed `sink.Runtime(...)`; without a Rust-side reader, those events
+/// would accumulate in the bounded queue and eventually drop. This task
+/// is what makes the framework externally observable.
+///
+/// # Design
+///
+/// - Uses `Weak<GvproxyInstance>` like `start_stats_logging` — drops out
+///   automatically when the instance is destroyed, no explicit cancel.
+/// - Polls at 250ms intervals (see [`RUNTIME_ERROR_POLL_INTERVAL`]).
+/// - Each non-empty poll drains the queue completely in a tight loop so
+///   bursty failures (e.g. a 10-event RST storm during VM shutdown) reach
+///   the operator within one poll cycle instead of one event per cycle.
+/// - Decode failures bubble through `poll_runtime_error` as `Err` — we
+///   log them but do NOT exit the loop (a single malformed event must
+///   not blind us to subsequent good events).
+///
+/// # Tracing
+///
+/// Every event is `warn!` at target `gvproxy.runtime_error` with fields
+/// `instance_id` and `event` (the rendered `[ts] source: cause` string).
+/// Operators can grep `gvproxy.runtime_error` to find every silent-failure
+/// path covered by #634 firing in production.
+pub(super) fn start_runtime_error_polling(instance: Weak<GvproxyInstance>) {
+    tokio::spawn(async move {
+        loop {
+            let Some(instance) = instance.upgrade() else {
+                tracing::debug!("Runtime error polling task exiting (instance dropped)");
+                break;
+            };
+
+            let id = instance.id();
+            // Drop the Arc before draining so we don't pin the instance.
+            drop(instance);
+
+            poll_and_route_once(id);
+            tokio::time::sleep(RUNTIME_ERROR_POLL_INTERVAL).await;
+        }
+    });
+
+    tracing::debug!("Started background runtime-error polling task");
+}
+
+/// Drains every queued runtime error from the given instance via
+/// `ffi::poll_runtime_error` and routes each one into a `tracing::warn!`
+/// at target `gvproxy.runtime_error`. Returns the number of events
+/// drained so tests can assert without scraping tracing output.
+///
+/// Extracted from `start_runtime_error_polling` so it can be unit-tested
+/// without a real `tokio::spawn` loop / `Weak<GvproxyInstance>` setup.
+/// Production calls this once per ~250ms tick; tests call it directly
+/// after injecting events via `libgvproxy_sys::gvproxy_test_inject_runtime_error`.
+pub(super) fn poll_and_route_once(id: i64) -> usize {
+    let mut count = 0;
+    loop {
+        match ffi::poll_runtime_error(id) {
+            Ok(Some(event)) => {
+                tracing::warn!(
+                    target: "gvproxy.runtime_error",
+                    instance_id = id,
+                    event = %event,
+                    "gvproxy goroutine reported a runtime error",
+                );
+                count += 1;
+            }
+            Ok(None) => break,
+            Err(e) => {
+                // Don't kill the loop on a single decode failure — log
+                // and continue. The bounded Go-side queue means any
+                // leftover bad event drops naturally.
+                tracing::error!(
+                    target: "gvproxy.runtime_error",
+                    instance_id = id,
+                    error = %e,
+                    "poll_runtime_error decode failed; continuing"
+                );
+                break;
+            }
+        }
+    }
+    count
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::CString;
+    use std::sync::{Arc, Mutex};
+
+    /// Inject a synthetic runtime error into a test-fixture gvproxy
+    /// instance via the test-only FFI exports. Used by the polling
+    /// tests below to validate the consumer side without needing a real
+    /// VM transport + virtualnetwork setup.
+    fn inject_runtime_error(id: i64, source: &str, message: &str) {
+        let c_source = CString::new(source).unwrap();
+        let c_message = CString::new(message).unwrap();
+        unsafe {
+            libgvproxy_sys::gvproxy_test_inject_runtime_error(
+                id,
+                c_source.as_ptr(),
+                c_message.as_ptr(),
+            );
+        }
+    }
+
+    /// Create a test-fixture gvproxy instance + cleanup guard. The
+    /// fixture has no socket / no goroutines / no virtual network — it
+    /// exists only so its `errSink` can be driven by inject + polled by
+    /// the consumer under test.
+    struct PollingFixture {
+        id: i64,
+    }
+
+    impl PollingFixture {
+        fn new() -> Self {
+            let id = unsafe { libgvproxy_sys::gvproxy_test_create_for_polling() };
+            assert!(id > 0, "test-fixture creation must return a positive id");
+            Self { id }
+        }
+    }
+
+    impl Drop for PollingFixture {
+        fn drop(&mut self) {
+            unsafe {
+                libgvproxy_sys::gvproxy_destroy(self.id);
+            }
+        }
+    }
+
+    /// Tracing-capture writer used to assert tracing output from
+    /// `poll_and_route_once` without scraping a real subscriber. Same
+    /// pattern as `vmm/controller/shim.rs::BufWriter`.
+    #[derive(Clone)]
+    struct BufWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for BufWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufWriter {
+        type Writer = BufWriter;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// ffi::poll_runtime_error round-trips: empty -> inject -> rendered
+    /// event string surfaces with source + cause + RFC3339 timestamp.
+    /// Validates the Rust-side wrapper of the gvproxy_poll_runtime_error
+    /// FFI specifically (no tracing involved).
+    #[test]
+    fn ffi_poll_runtime_error_round_trips() {
+        let f = PollingFixture::new();
+
+        // Empty queue -> None.
+        assert!(
+            ffi::poll_runtime_error(f.id).unwrap().is_none(),
+            "newly-created fixture must have no events",
+        );
+
+        inject_runtime_error(f.id, "vn.AcceptQemu", "synthesized cause");
+
+        let event = ffi::poll_runtime_error(f.id)
+            .expect("poll succeeded")
+            .expect("event present after inject");
+
+        assert!(
+            event.contains("vn.AcceptQemu"),
+            "event must name source 'vn.AcceptQemu'; got: {event}",
+        );
+        assert!(
+            event.contains("synthesized cause"),
+            "event must contain cause; got: {event}",
+        );
+        assert!(
+            event.contains('T') && event.contains('Z'),
+            "event must contain RFC3339 timestamp; got: {event}",
+        );
+
+        // Drained.
+        assert!(ffi::poll_runtime_error(f.id).unwrap().is_none());
+    }
+
+    /// poll_and_route_once drains EVERY queued event into tracing in a
+    /// single call (so bursty failures reach the operator within one
+    /// poll cycle, not one event per cycle). Asserts on:
+    ///   - returned drain count = number injected
+    ///   - tracing output contains the rendered event for each
+    ///   - tracing output uses the `gvproxy.runtime_error` target
+    #[test]
+    fn poll_and_route_once_drains_and_emits_tracing_per_event() {
+        let f = PollingFixture::new();
+
+        // Inject 3 events of distinct source / cause so we can verify
+        // each one was forwarded to tracing.
+        inject_runtime_error(f.id, "listener.Accept", "first event cause");
+        inject_runtime_error(f.id, "vn.AcceptQemu", "second event cause");
+        inject_runtime_error(f.id, "transport.AcceptVfkit", "third event cause");
+
+        let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(BufWriter(buf.clone()))
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .finish();
+
+        let drained = tracing::subscriber::with_default(subscriber, || poll_and_route_once(f.id));
+
+        assert_eq!(
+            drained, 3,
+            "all 3 injected events must be drained in a single poll cycle",
+        );
+
+        let written = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+
+        for (source, cause) in [
+            ("listener.Accept", "first event cause"),
+            ("vn.AcceptQemu", "second event cause"),
+            ("transport.AcceptVfkit", "third event cause"),
+        ] {
+            assert!(
+                written.contains(source),
+                "tracing output must contain source {source}; got:\n{written}",
+            );
+            assert!(
+                written.contains(cause),
+                "tracing output must contain cause {cause}; got:\n{written}",
+            );
+        }
+        assert!(
+            written.contains("gvproxy.runtime_error"),
+            "tracing output must use target gvproxy.runtime_error so operators can grep it; got:\n{written}",
+        );
+        assert!(
+            written.contains(&format!("instance_id={}", f.id)),
+            "tracing event must include instance_id={} for correlation; got:\n{written}",
+            f.id,
+        );
+    }
+
+    /// Polling an empty queue returns 0 and emits nothing — pins that
+    /// the steady-state common case (no errors) is silent in tracing,
+    /// so the 250ms tick doesn't flood logs on a healthy instance.
+    #[test]
+    fn poll_and_route_once_on_empty_queue_emits_nothing() {
+        let f = PollingFixture::new();
+
+        let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(BufWriter(buf.clone()))
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .finish();
+
+        let drained = tracing::subscriber::with_default(subscriber, || poll_and_route_once(f.id));
+
+        assert_eq!(drained, 0, "empty queue must return 0 drained events");
+
+        let written = buf.lock().unwrap();
+        assert!(
+            written.is_empty(),
+            "empty-queue poll must not emit any tracing; got: {:?}",
+            String::from_utf8_lossy(&written),
+        );
+    }
 
     #[test]
     #[ignore] // Requires libgvproxy.dylib to be available

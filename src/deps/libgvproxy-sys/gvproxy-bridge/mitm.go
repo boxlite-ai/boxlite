@@ -17,11 +17,51 @@ import (
 )
 
 // BoxCA is an ephemeral ECDSA P-256 certificate authority for MITM.
+//
+// Carries an optional ErrSink so cert-generation failures surface to
+// the operator via the same channel as the gvproxy goroutine errors.
+// A persistent cert-gen failure is security-shaped: it means MITM is
+// silently disabled for that hostname (the guest sees a TLS handshake
+// error and may fall back to a non-intercepted path), so it needs to
+// be observable, not just logged. See SetErrSink below.
 type BoxCA struct {
 	cert      *x509.Certificate
 	key       *ecdsa.PrivateKey
 	certPEM   []byte
 	certCache sync.Map // hostname -> *tls.Certificate
+
+	// errSink is optional — nil means "MITM has no observable sink, fall
+	// back to logrus-only" which is the pre-#634 behavior. Production
+	// wiring sets it via SetErrSink in gvproxy_create.
+	errSink *ErrSink
+}
+
+// SetErrSink wires an ErrSink into the BoxCA. mitmAndForward routes
+// cert-generation failures through it via reportCertGenFailure so the
+// Rust-side polling consumer (instance::poll_and_route_once) picks
+// them up. Per-connection MITM events (TLS handshake mismatch,
+// upstream dial fail, websocket hijack) remain log-only — they're
+// expected failure modes, not silent regressions.
+func (ca *BoxCA) SetErrSink(sink *ErrSink) {
+	ca.errSink = sink
+}
+
+// reportCertGenFailure pushes a hostname-tagged event onto the
+// configured ErrSink, no-op if no sink is set. Pulled into a method
+// so the test suite can drive it without needing a real CA / cert gen
+// failure.
+//
+// Pre-#634, the cert-gen failure path was `logrus.Error + close conn`,
+// invisible to the Rust runtime. Post-fix, this method makes the
+// failure observable; combined with the polling consumer added in this
+// PR, an operator sees it in tracing under
+// target=gvproxy.runtime_error with source=mitm.GenerateHostCert and
+// the hostname embedded in the cause string.
+func (ca *BoxCA) reportCertGenFailure(hostname string, cause error) {
+	if ca.errSink == nil {
+		return
+	}
+	ca.errSink.Runtime("mitm.GenerateHostCert", fmt.Errorf("hostname=%q: %w", hostname, cause))
 }
 
 // NewBoxCAFromPEM reconstructs a BoxCA from PEM-encoded cert and key.

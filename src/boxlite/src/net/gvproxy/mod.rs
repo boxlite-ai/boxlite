@@ -160,6 +160,13 @@ impl GvisorTapBackend {
         // Start background stats logging thread
         instance::start_stats_logging(Arc::downgrade(&instance));
 
+        // Start background runtime-error polling — drains the gvproxy
+        // ErrSink (Go side) into Rust tracing so the 5 silent-failure
+        // sites covered by #634 are externally observable. Without this
+        // task, sink.Runtime events accumulate in the bounded queue and
+        // eventually drop without anyone reading them.
+        instance::start_runtime_error_polling(Arc::downgrade(&instance));
+
         let socket_path = config.socket_path;
 
         tracing::info!(
