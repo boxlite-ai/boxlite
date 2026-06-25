@@ -182,6 +182,61 @@ func (r *Runtime) Create(ctx context.Context, image string, opts ...BoxOption) (
 	}
 }
 
+// GetOrCreate returns the box with the given name, creating it only if no box
+// with that name exists. Unlike Create it does not fail with "already exists"
+// when the box is already present — it adopts it. This mirrors the core
+// runtime's get_or_create() (also bound by the Python and Node SDKs) and makes
+// create idempotent for callers that key a box on a stable unique name.
+//
+// On context cancellation it only frees the returned handle (like Get); it does
+// NOT force-remove the box, because an adopted box may be one the caller did
+// not create and must not be destroyed.
+func (r *Runtime) GetOrCreate(ctx context.Context, image string, opts ...BoxOption) (*Box, error) {
+	r.ensureDrainRunning()
+
+	cfg := &boxConfig{}
+	for _, o := range opts {
+		o(cfg)
+	}
+
+	cOpts, err := buildCOptions(image, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	ch := make(chan handleResult[*C.CBoxHandle], 1)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
+
+	var cerr C.CBoxliteError
+	code := C.boxlite_get_or_create_box(r.handle, cOpts, C.cbCreateBox(), handleToPtr(h), &cerr)
+	if code != C.Ok {
+		deleteHandleForDispatch(h)
+		// boxlite_get_or_create_box consumes opts on success but not on synchronous failure.
+		C.boxlite_options_free(cOpts)
+		return nil, freeError(&cerr)
+	}
+
+	freeOrphanHandle := func(handle *C.CBoxHandle) {
+		if handle != nil {
+			C.boxlite_box_free(handle)
+		}
+	}
+
+	select {
+	case res := <-ch:
+		if res.err != nil {
+			return nil, res.err
+		}
+		return newBoxFromHandle(r, res.value, cfg.name), nil
+	case <-ctx.Done():
+		abandonAsync(ch, h, r.closing, freeOrphanHandle)
+		return nil, ctx.Err()
+	case <-r.closing:
+		abandonAsync(ch, h, r.closing, freeOrphanHandle)
+		return nil, ErrRuntimeClosed
+	}
+}
+
 // Get retrieves an existing box by ID or name.
 func (r *Runtime) Get(ctx context.Context, idOrName string) (*Box, error) {
 	r.ensureDrainRunning()
