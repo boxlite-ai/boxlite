@@ -169,7 +169,9 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
     // Admin status doesn't change within a session. Cache it for the whole
     // session so this /admin/overview probe (which 403s for non-admins and
     // competes with the first-paint API burst) fires once, not on every
-    // sidebar mount / navigation. Cleared with the rest of the cache on logout.
+    // sidebar mount / navigation. Login/logout go through a full OIDC page
+    // redirect, which discards the in-memory queryClient — so a same-tab user
+    // switch can't carry a stale admin flag across.
     staleTime: Infinity,
     gcTime: Infinity,
     refetchOnWindowFocus: false,

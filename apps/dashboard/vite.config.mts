@@ -92,11 +92,13 @@ export default defineConfig((mode) => ({
     rollupOptions: {
       external: ['tar'],
       output: {
-        // Only pin the heavy first-paint-shared vendors into stable, cacheable
-        // chunks. Everything else is intentionally left to Rollup's default
-        // splitting so deps used ONLY by lazy routes (recharts on Admin/Billing,
-        // xterm/monaco on box-details) land in those async chunks instead of the
-        // eager entry — a catch-all `vendor` bucket would force them back eager.
+        // Pin two broadly-shared vendor groups into stable, cacheable chunks:
+        // @tanstack/* (react-query + react-table are both on the first-paint
+        // boxes path) and react-router. Everything else is intentionally left
+        // to Rollup's default splitting, so deps used ONLY by lazy routes
+        // (recharts on Admin/Billing, xterm/monaco on box-details) land in those
+        // async chunks instead of the eager entry — a catch-all `vendor` bucket
+        // would force them back eager.
         manualChunks(id) {
           if (!id.includes('node_modules')) return undefined
           if (id.includes('@tanstack')) return 'tanstack'
