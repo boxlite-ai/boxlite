@@ -43,8 +43,31 @@ pub struct ResolvedVolume {
     pub owner_gid: u32,
 }
 
-pub fn resolve_user_volumes(volumes: &[VolumeSpec]) -> BoxliteResult<Vec<ResolvedVolume>> {
+/// Resolve user-requested volumes into mountable specs.
+///
+/// Step-2 gate: every `host_path` must canonicalize to a directory under
+/// `<home>/volumes/anonymous/` or `<home>/volumes/named/`. The CLI parser
+/// produces only these shapes (see `cli::parse_volume_spec` +
+/// `materialize_volume`); SDK callers that pass arbitrary host paths
+/// (`/etc`, `/root`, …) hit this gate and get a `Config` error. Without
+/// the gate, the box could see any host path the shim's uid could read.
+///
+/// Empty `volumes` slice is always allowed so no-volume boxes spawn
+/// cleanly without touching the home dir.
+pub fn resolve_user_volumes(
+    volumes: &[VolumeSpec],
+    home: &std::path::Path,
+) -> BoxliteResult<Vec<ResolvedVolume>> {
     let mut resolved = Vec::with_capacity(volumes.len());
+
+    // Canonical roots that the gate allows. We canonicalize once up
+    // front — if `<home>` itself doesn't canonicalize (transient FS
+    // error, dangling symlink), fall back to the lexical form so the
+    // gate still functions; the per-volume `starts_with` check below
+    // will simply reject everything until the home dir is healthy.
+    let home_canon = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+    let allowed_anon = home_canon.join("volumes").join("anonymous");
+    let allowed_named = home_canon.join("volumes").join("named");
 
     for (i, vol) in volumes.iter().enumerate() {
         let host_path = PathBuf::from(&vol.host_path);
@@ -67,6 +90,30 @@ pub fn resolve_user_volumes(volumes: &[VolumeSpec]) -> BoxliteResult<Vec<Resolve
             return Err(BoxliteError::Config(format!(
                 "Volume host path is not a directory: {}",
                 vol.host_path
+            )));
+        }
+
+        // Structural gate: must be one volume directory deep under a
+        // managed root — i.e. `<home>/volumes/anonymous/<id>` or
+        // `<home>/volumes/named/<name>`. A bare `starts_with` would
+        // also accept the aggregate roots themselves and arbitrary
+        // deeper paths (`…/named/myvol/etc/`), letting SDK callers
+        // pierce the per-volume isolation contract. The check runs
+        // AFTER canonicalize so symlinks pointing out of the managed
+        // roots are caught too.
+        let parent = resolved_path.parent();
+        let is_anon_volume_dir = parent == Some(allowed_anon.as_path());
+        let is_named_volume_dir = parent == Some(allowed_named.as_path());
+        if !is_anon_volume_dir && !is_named_volume_dir {
+            return Err(BoxliteError::Config(format!(
+                "Volume host path '{path}' is not a boxlite-managed volume. \
+                 Host bind mounts were removed in step 2 — use a named volume \
+                 (CLI: `-v <name>:{guest}`) or an anonymous volume \
+                 (CLI: `-v {guest}`) instead. Managed roots: '{anon}' and '{named}'.",
+                path = resolved_path.display(),
+                guest = vol.guest_path,
+                anon = allowed_anon.display(),
+                named = allowed_named.display(),
             )));
         }
 
@@ -328,52 +375,198 @@ mod tests {
     use super::*;
     use crate::runtime::options::VolumeSpec;
 
+    /// Build a fake `<home>/volumes/<kind>/<id>` dir on disk and return
+    /// `(home, host_path_string)` so resolve_user_volumes can see a
+    /// path that lives under one of its allowed roots.
+    fn make_managed_volume(home: &std::path::Path, kind: &str, id: &str) -> String {
+        let p = home.join("volumes").join(kind).join(id);
+        std::fs::create_dir_all(&p).unwrap();
+        p.to_str().unwrap().to_string()
+    }
+
     #[test]
-    fn resolve_volume_gets_owner_uid() {
-        let tmp = tempfile::tempdir().unwrap();
+    fn resolve_volume_anonymous_under_home_succeeds() {
+        let home = tempfile::tempdir().unwrap();
+        let host_path = make_managed_volume(home.path(), "anonymous", "01J000");
         let volumes = vec![VolumeSpec {
-            host_path: tmp.path().to_str().unwrap().to_string(),
+            host_path: host_path.clone(),
             guest_path: "/data".to_string(),
             read_only: false,
         }];
 
-        let resolved = resolve_user_volumes(&volumes).unwrap();
+        let resolved = resolve_user_volumes(&volumes, home.path()).expect("anon under home OK");
         assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].tag, "uservol0");
 
-        // owner_uid should be the current user's UID
         use std::os::unix::fs::MetadataExt;
-        let expected_uid = std::fs::metadata(tmp.path()).unwrap().uid();
-        let expected_gid = std::fs::metadata(tmp.path()).unwrap().gid();
-
+        let expected_uid = std::fs::metadata(&host_path).unwrap().uid();
+        let expected_gid = std::fs::metadata(&host_path).unwrap().gid();
         assert_eq!(resolved[0].owner_uid, expected_uid);
         assert_eq!(resolved[0].owner_gid, expected_gid);
-        assert_eq!(resolved[0].tag, "uservol0");
+    }
+
+    #[test]
+    fn resolve_volume_named_under_home_succeeds() {
+        let home = tempfile::tempdir().unwrap();
+        let host_path = make_managed_volume(home.path(), "named", "myvol");
+        let volumes = vec![VolumeSpec {
+            host_path,
+            guest_path: "/data".to_string(),
+            read_only: true,
+        }];
+
+        let resolved = resolve_user_volumes(&volumes, home.path()).expect("named under home OK");
+        assert_eq!(resolved.len(), 1);
+        assert!(resolved[0].read_only);
+    }
+
+    /// **Side B for the runtime gate.** Deleting the
+    /// `if !resolved_path.starts_with(&allowed_anon) && ... { Err }`
+    /// branch in `resolve_user_volumes` flips this red — the test
+    /// names a real host directory (the system tempdir) that is NOT
+    /// under `<home>/volumes/`, and the gate is what stops it.
+    #[test]
+    fn resolve_volume_rejects_non_managed_host_path() {
+        let home = tempfile::tempdir().unwrap();
+        // tempdir() lives under /tmp, which is NOT under home/volumes/.
+        let outside = tempfile::tempdir().unwrap();
+        let volumes = vec![VolumeSpec {
+            host_path: outside.path().to_str().unwrap().to_string(),
+            guest_path: "/data".to_string(),
+            read_only: false,
+        }];
+
+        let err = resolve_user_volumes(&volumes, home.path())
+            .expect_err("non-managed host path must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("not a boxlite-managed volume"),
+            "expected managed-volume rejection; got {msg}"
+        );
+        assert!(
+            msg.contains("named volume") && msg.contains("anonymous"),
+            "error must point at the supported alternatives; got {msg}"
+        );
+    }
+
+    /// Aggregate-root escape (coderabbitai #639 finding):
+    /// `<home>/volumes/named` itself must NOT pass the gate, because
+    /// mounting the aggregate root would let the box see every named
+    /// volume on the host. Reverting the per-volume-dir check (going
+    /// back to `starts_with`) flips this red.
+    #[test]
+    fn resolve_volume_aggregate_root_rejected() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join("volumes").join("named")).unwrap();
+        std::fs::create_dir_all(home.path().join("volumes").join("anonymous")).unwrap();
+
+        for root in ["named", "anonymous"] {
+            let aggregate = home.path().join("volumes").join(root);
+            let volumes = vec![VolumeSpec {
+                host_path: aggregate.to_str().unwrap().to_string(),
+                guest_path: "/data".to_string(),
+                read_only: false,
+            }];
+            let err = match resolve_user_volumes(&volumes, home.path()) {
+                Err(e) => e,
+                Ok(_) => panic!("aggregate root {root:?} must be rejected; got Ok"),
+            };
+            assert!(
+                err.to_string().contains("not a boxlite-managed volume"),
+                "aggregate root {root:?} rejection must use the managed-volume message; got {err}"
+            );
+        }
+    }
+
+    /// Sub-volume descendant escape (same coderabbitai finding):
+    /// `<home>/volumes/named/myvol/etc/` (a path one level deeper
+    /// than a named volume directory) must NOT pass — the box would
+    /// be mounting a sub-tree of someone else's volume.
+    #[test]
+    fn resolve_volume_deep_descendant_rejected() {
+        let home = tempfile::tempdir().unwrap();
+        let vol_dir = home.path().join("volumes").join("named").join("myvol");
+        let deep = vol_dir.join("etc");
+        std::fs::create_dir_all(&deep).unwrap();
+
+        let volumes = vec![VolumeSpec {
+            host_path: deep.to_str().unwrap().to_string(),
+            guest_path: "/data".to_string(),
+            read_only: false,
+        }];
+        let result = resolve_user_volumes(&volumes, home.path());
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("deep descendant must be rejected; got Ok"),
+        };
+        assert!(
+            err.to_string().contains("not a boxlite-managed volume"),
+            "deep descendant rejection must use the managed-volume message; got {err}"
+        );
+    }
+
+    /// Symlink escape: a host_path that lives lexically under
+    /// `<home>/volumes/` but symlinks out to /etc must be rejected
+    /// because we canonicalize before the `starts_with` check.
+    #[test]
+    fn resolve_volume_symlink_escape_rejected() {
+        let home = tempfile::tempdir().unwrap();
+        let escape_target = tempfile::tempdir().unwrap();
+        // Place the symlink under home/volumes/named/escapevol → outside.
+        let link_dir = home.path().join("volumes").join("named");
+        std::fs::create_dir_all(&link_dir).unwrap();
+        let link_path = link_dir.join("escapevol");
+        std::os::unix::fs::symlink(escape_target.path(), &link_path).unwrap();
+
+        let volumes = vec![VolumeSpec {
+            host_path: link_path.to_str().unwrap().to_string(),
+            guest_path: "/data".to_string(),
+            read_only: false,
+        }];
+
+        let err = resolve_user_volumes(&volumes, home.path())
+            .expect_err("symlink out of managed roots must be rejected");
+        assert!(err.to_string().contains("not a boxlite-managed volume"));
     }
 
     #[test]
     fn resolve_volume_nonexistent_path_errors() {
+        let home = tempfile::tempdir().unwrap();
         let volumes = vec![VolumeSpec {
             host_path: "/nonexistent/path/12345".to_string(),
             guest_path: "/data".to_string(),
             read_only: false,
         }];
 
-        let result = resolve_user_volumes(&volumes);
+        let result = resolve_user_volumes(&volumes, home.path());
         assert!(result.is_err());
     }
 
     #[test]
     fn resolve_volume_file_not_dir_errors() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        // Plant a regular file under home/volumes/named/badvol so the
+        // managed-root check passes and the file/dir check is exercised.
+        let dir = home.path().join("volumes").join("named");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("badvol");
+        std::fs::write(&f, b"hi").unwrap();
         let volumes = vec![VolumeSpec {
-            host_path: tmp.path().to_str().unwrap().to_string(),
+            host_path: f.to_str().unwrap().to_string(),
             guest_path: "/data".to_string(),
             read_only: false,
         }];
 
-        let result = resolve_user_volumes(&volumes);
+        let result = resolve_user_volumes(&volumes, home.path());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not a directory"));
+    }
+
+    #[test]
+    fn resolve_volume_empty_slice_ok() {
+        let home = tempfile::tempdir().unwrap();
+        let resolved = resolve_user_volumes(&[], home.path()).unwrap();
+        assert!(resolved.is_empty());
     }
 
     /// Reverting Drop to call `remove_box` (the pre-fix behavior) flips this red:

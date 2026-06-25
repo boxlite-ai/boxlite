@@ -72,16 +72,20 @@ async fn mount_security_integration() {
     })
     .expect("create runtime");
 
-    let tmp = TempDir::new_in("/tmp").unwrap();
-
-    // Pre-create test file on host
-    std::fs::write(tmp.path().join("hello.txt"), "hello from host\n").unwrap();
+    // Step-2 contract: host_path must be a boxlite-managed volume dir
+    // under `<home>/volumes/{anonymous,named}/`. We create a named-
+    // volume dir directly (the CLI does this via `-v name:/guest`).
+    let vol_dir = home.path.join("volumes").join("named").join("idmap-test");
+    std::fs::create_dir_all(&vol_dir).expect("create managed volume dir");
+    std::fs::write(vol_dir.join("hello.txt"), "hello from host\n").unwrap();
+    let tmp = TempDir::new_in("/tmp").unwrap(); // retained for the other test helpers below
+    let _ = &tmp;
 
     let bx = runtime
         .create(
             BoxOptions {
                 volumes: vec![VolumeSpec {
-                    host_path: tmp.path().to_str().unwrap().into(),
+                    host_path: vol_dir.to_str().unwrap().into(),
                     guest_path: "/workspace/data".into(),
                     read_only: false,
                 }],
@@ -100,8 +104,8 @@ async fn mount_security_integration() {
     idmap_syscall_feasibility(&bx).await;
 
     // ── Baseline: current UID behavior ──
-    volume_rw_access(&bx, tmp.path()).await;
-    volume_uid_check(&bx, tmp.path()).await;
+    volume_rw_access(&bx, &vol_dir).await;
+    volume_uid_check(&bx, &vol_dir).await;
 
     // ── Read-only enforcement ──
     readonly_mount_enforced(&bx).await;

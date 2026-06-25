@@ -134,7 +134,7 @@ async fn build_config(
     let transport = Transport::unix(layout.socket_path());
     let ready_transport = Transport::unix(layout.ready_socket_path());
 
-    let user_volumes = resolve_user_volumes(&options.volumes)?;
+    let user_volumes = resolve_user_volumes(&options.volumes, runtime.layout.home_dir())?;
 
     // Prepare container directories (image/, rw/, rootfs/)
     let container_layout = layout.shared_layout().container(container_id.as_str());

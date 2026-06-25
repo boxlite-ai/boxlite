@@ -15,7 +15,6 @@ mod common;
 use boxlite::runtime::options::{BoxOptions, BoxliteOptions, NetworkSpec, RootfsSpec, VolumeSpec};
 use boxlite::{BoxCommand, BoxliteRuntime, LiteBox};
 use futures::StreamExt;
-use tempfile::TempDir;
 
 // ============================================================================
 // HELPERS
@@ -66,22 +65,26 @@ async fn virtiofs_readonly_and_capabilities() {
     })
     .expect("create runtime");
 
-    let ro_dir = TempDir::new_in("/tmp").unwrap();
-    std::fs::write(ro_dir.path().join("secret.txt"), "classified\n").unwrap();
-
-    let rw_dir = TempDir::new_in("/tmp").unwrap();
+    // Step-2 contract: host_path must be a boxlite-managed volume dir.
+    // Materialise two named-volume dirs directly (the CLI would do this
+    // via `-v ro-vol:/data/readonly:ro` / `-v rw-vol:/data/writable`).
+    let ro_dir = home.path.join("volumes").join("named").join("ro-vol");
+    let rw_dir = home.path.join("volumes").join("named").join("rw-vol");
+    std::fs::create_dir_all(&ro_dir).unwrap();
+    std::fs::create_dir_all(&rw_dir).unwrap();
+    std::fs::write(ro_dir.join("secret.txt"), "classified\n").unwrap();
 
     let bx = runtime
         .create(
             BoxOptions {
                 volumes: vec![
                     VolumeSpec {
-                        host_path: ro_dir.path().to_str().unwrap().into(),
+                        host_path: ro_dir.to_str().unwrap().into(),
                         guest_path: "/data/readonly".into(),
                         read_only: true,
                     },
                     VolumeSpec {
-                        host_path: rw_dir.path().to_str().unwrap().into(),
+                        host_path: rw_dir.to_str().unwrap().into(),
                         guest_path: "/data/writable".into(),
                         read_only: false,
                     },
