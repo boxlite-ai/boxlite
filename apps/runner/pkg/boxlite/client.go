@@ -256,7 +256,13 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 
 	opts = append(opts, boxlite.WithNetwork(networkSpec(boxDto.NetworkBlockAll, boxDto.NetworkAllowList)))
 
-	bx, err := c.runtime.Create(ctx, boxDto.Image, opts...)
+	// GetOrCreate (not Create) so a CREATE_BOX replay is idempotent. The local
+	// box name is boxDto.Id — the control plane's globally-unique box id — so if
+	// the box was already persisted by a prior CREATE_BOX for the SAME box (e.g.
+	// the host rebooted before the job was marked COMPLETED and the poller is
+	// replaying the still-IN_PROGRESS job), the core adopts it instead of
+	// failing with "already exists", which the API would surface as a 400.
+	bx, err := c.runtime.GetOrCreate(ctx, boxDto.Image, opts...)
 	if err != nil {
 		if len(volumeMounts) > 0 {
 			if cleanupErr := c.removeBoxVolumeMountRecord(ctx, boxDto.Id); cleanupErr != nil {

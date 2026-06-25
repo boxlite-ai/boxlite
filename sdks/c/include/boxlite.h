@@ -340,6 +340,19 @@ enum BoxliteErrorCode boxlite_create_box(CBoxliteRuntime *runtime,
                                          void *user_data,
                                          CBoxliteError *out_error);
 
+// Get an existing box by name, or create a new one if it does not exist.
+//
+// Same shape as [`boxlite_create_box`] (it reuses the create callback), but
+// when a box with the given name already exists it returns that box instead
+// of failing with "already exists". The `created` flag from the core
+// `get_or_create` is not surfaced over the FFI; callers that only need a box
+// handle (create-if-absent, idempotent retry) do not depend on it.
+enum BoxliteErrorCode boxlite_get_or_create_box(CBoxliteRuntime *runtime,
+                                                CBoxliteOptions *opts,
+                                                CBoxCreateBoxCb cb,
+                                                void *user_data,
+                                                CBoxliteError *out_error);
+
 enum BoxliteErrorCode boxlite_stop_box(CBoxHandle *handle,
                                        CBoxStopBoxCb cb,
                                        void *user_data,
