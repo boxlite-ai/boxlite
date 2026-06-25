@@ -128,9 +128,9 @@ const Dashboard: React.FC = () => {
   return (
     <div
       className={cn(
-        'relative w-full [--app-content-height:calc(100svh_-_3.5rem)]',
+        'relative w-full [--app-content-height:calc(100svh_-_60px)]',
         isBannerVisible &&
-          'pt-16 [--app-banner-height:4rem] [--app-content-height:calc(100svh_-_3.5rem_-_var(--app-banner-height))] md:pt-12 md:[--app-banner-height:3rem]',
+          'pt-16 [--app-banner-height:4rem] [--app-content-height:calc(100svh_-_60px_-_var(--app-banner-height))] md:pt-12 md:[--app-banner-height:3rem]',
       )}
     >
       {isBannerVisible && bannerText && (
@@ -139,7 +139,7 @@ const Dashboard: React.FC = () => {
       <SidebarProvider isBannerVisible={false} defaultOpen={true} className="flex-col">
         <Sidebar isBannerVisible={isBannerVisible} billingEnabled={!!config.billingApiUrl} version={config.version} />
         <SidebarInset className="min-h-0 overflow-visible">
-          <div className="w-full min-h-[var(--app-content-height,calc(100svh_-_3.5rem))] overscroll-none">
+          <div className="w-full min-h-[var(--app-content-height,calc(100svh_-_60px))] overscroll-none">
             <Outlet />
             <CommandPalette />
           </div>
