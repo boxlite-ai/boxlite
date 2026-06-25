@@ -22,22 +22,27 @@ impl BlockDeviceMount {
     /// * `filesystem` - Target filesystem type
     /// * `need_format` - If true, format device before mounting
     /// * `need_resize` - If true, resize filesystem after mounting to fill disk
+    /// * `read_only` - If true, OR `MS_RDONLY` into the mount flags. Required
+    ///   when the host opened the underlying file ro at the libkrun device
+    ///   layer — without MS_RDONLY the kernel returns EACCES on mount(2).
     pub fn mount(
         device: &Path,
         mount_point: &Path,
         filesystem: Filesystem,
         need_format: bool,
         need_resize: bool,
+        read_only: bool,
     ) -> BoxliteResult<()> {
         let fs_name = filesystem_to_str(filesystem);
 
         tracing::info!(
-            "Mounting block device: {} → {} (filesystem={:?}, format={}, resize={})",
+            "Mounting block device: {} → {} (filesystem={:?}, format={}, resize={}, ro={})",
             device.display(),
             mount_point.display(),
             filesystem,
             need_format,
-            need_resize
+            need_resize,
+            read_only
         );
 
         // Check device exists
@@ -69,7 +74,10 @@ impl BlockDeviceMount {
         // - MS_NODIRATIME: Don't update directory access times
         // These flags significantly reduce I/O overhead, especially for read-heavy
         // workloads. Access time tracking is rarely needed in container contexts.
-        let mount_flags = MsFlags::MS_NOATIME | MsFlags::MS_NODIRATIME;
+        let mut mount_flags = MsFlags::MS_NOATIME | MsFlags::MS_NODIRATIME;
+        if read_only {
+            mount_flags |= MsFlags::MS_RDONLY;
+        }
 
         // Mount using nix
         mount(

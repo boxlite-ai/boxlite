@@ -308,6 +308,11 @@ pub unsafe fn options_add_volume(
                 host_path: h,
                 guest_path: g,
                 read_only: read_only != 0,
+                // size cap is not exposed through the C ABI yet — the
+                // CLI `size=N[K|M|G]` parser is the only producer today.
+                // Add an `options_add_volume_size` (or extend the
+                // existing entry) when SDK-side size enforcement lands.
+                size_bytes: None,
             });
         }
     }

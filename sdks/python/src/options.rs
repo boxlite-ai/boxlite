@@ -576,6 +576,11 @@ impl From<PyVolumeSpec> for VolumeSpec {
             host_path: v.host,
             guest_path: v.guest,
             read_only: v.read_only,
+            // size cap is not exposed through the Python API yet — add
+            // a `size_bytes` field on `PyVolumeSpec` (and its
+            // `FromPyObject` parser) when SDK-side size enforcement
+            // lands.
+            size_bytes: None,
         }
     }
 }

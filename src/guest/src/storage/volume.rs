@@ -76,6 +76,7 @@ pub fn mount_volume(vol: &Volume) -> BoxliteResult<()> {
                 filesystem,
                 block.need_format,
                 block.need_resize,
+                block.read_only,
             )
         }
         None => {

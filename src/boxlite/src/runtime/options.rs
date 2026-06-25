@@ -552,6 +552,14 @@ pub struct VolumeSpec {
     pub host_path: String,
     pub guest_path: String,
     pub read_only: bool,
+    /// Hard size cap (bytes). When `Some(n)`, boxlite backs the volume with a
+    /// per-volume loop FS sized to `n` (rather than a passthrough bind), so
+    /// writes inside the box hit ENOSPC at the cap instead of consuming host
+    /// disk without limit. `None` (default) preserves legacy bind/anonymous
+    /// volume behavior. Omitted from on-wire JSON when unset so existing
+    /// serialized box configs continue to parse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
 }
 
 /// Network mode for public box configuration surfaces.

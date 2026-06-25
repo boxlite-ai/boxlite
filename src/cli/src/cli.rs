@@ -558,15 +558,87 @@ fn parse_port(s: &str) -> anyhow::Result<u16> {
 // ============================================================================
 
 /// Result of parsing a volume spec. Anonymous volumes have host_path = None.
+#[derive(Debug)]
 struct ParsedVolumeSpec {
     host_path: Option<String>,
     guest_path: String,
     read_only: bool,
+    /// Hard size cap parsed from `size=N[K|M|G]`. `None` keeps legacy
+    /// passthrough/bind behavior; `Some(n)` requests a sized loop-FS volume.
+    size_bytes: Option<u64>,
+}
+
+/// Parsed contents of a volume option segment (the third+ colon-separated
+/// token, e.g. `ro,size=10G`).
+#[derive(Default)]
+struct VolumeOptions {
+    read_only: bool,
+    size_bytes: Option<u64>,
+}
+
+impl VolumeOptions {
+    fn parse(opts: &str) -> anyhow::Result<Self> {
+        let mut out = Self::default();
+        for raw in opts.split(',') {
+            let opt = raw.trim();
+            if opt.is_empty() {
+                continue;
+            }
+            if opt.eq_ignore_ascii_case("ro") {
+                out.read_only = true;
+            } else if opt.eq_ignore_ascii_case("rw") {
+                out.read_only = false;
+            } else if let Some((key, val)) = opt.split_once('=')
+                && key.trim().eq_ignore_ascii_case("size")
+            {
+                out.size_bytes = Some(parse_size_token(val)?);
+            } else {
+                anyhow::bail!(
+                    "unknown volume option {:?}; supported: ro, rw, size=N[K|M|G]",
+                    opt
+                );
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// Parse a size token like `10G`, `512M`, `1024K`, or a bare byte count
+/// (e.g. `1048576`). Suffix is case-insensitive; K/M/G use binary multiples
+/// (1024). Empty / negative / non-numeric / overflow are errors.
+fn parse_size_token(s: &str) -> anyhow::Result<u64> {
+    let s = s.trim();
+    if s.is_empty() {
+        anyhow::bail!("size value is empty");
+    }
+    let last = s.chars().last().expect("non-empty");
+    let (num_part, mult) = match last {
+        'K' | 'k' => (&s[..s.len() - 1], 1024_u64),
+        'M' | 'm' => (&s[..s.len() - 1], 1024_u64 * 1024),
+        'G' | 'g' => (&s[..s.len() - 1], 1024_u64 * 1024 * 1024),
+        c if c.is_ascii_digit() => (s, 1_u64),
+        _ => anyhow::bail!(
+            "invalid size {:?}; use N[K|M|G] (e.g. 10G, 512M, 1024K) or bare bytes",
+            s
+        ),
+    };
+    let num: u64 = num_part
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("size must be a positive integer, got {:?}", num_part))?;
+    num.checked_mul(mult)
+        .ok_or_else(|| anyhow::anyhow!("size overflow: {:?}", s))
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct VolumeFlags {
-    /// Mount a volume (format: hostPath:boxPath[:options], or boxPath for anonymous volume, e.g. /data:/app/data, /data:ro)
+    /// Mount a volume. Format: `hostPath:boxPath[:options]` for a bind mount
+    /// (`/data:/app/data`, `/data:/app/data:ro`), or `boxPath[:options]` for an
+    /// anonymous volume (`/data`, `/data:ro`, `/data:size=10G,ro`). Options
+    /// (comma-separated): `ro` / `rw` / `size=N[K|M|G]`. `size=` is only valid
+    /// on anonymous volumes — it hard-caps the volume at N bytes by backing it
+    /// with a per-volume loop FS so writes inside the box hit ENOSPC at the
+    /// cap instead of consuming host disk without limit.
     #[arg(short = 'v', long = "volume", value_name = "VOLUME")]
     pub volume: Vec<String>,
 }
@@ -587,18 +659,19 @@ fn is_windows_absolute_path(path: &str) -> bool {
     b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
 }
 
-/// Parse options string (e.g. "ro" or "rw,nocopy") and return read_only. Other options are ignored.
-fn parse_volume_read_only(opts: &str) -> bool {
-    opts.split(',').any(|o| o.trim().eq_ignore_ascii_case("ro"))
-}
-
 /// Parse a single volume spec.
-/// - Anonymous : `boxPath` or `boxPath:ro` (e.g. `/data`, `/data:ro`).
-/// - Bind mount: `hostPath:boxPath[:options]` (e.g. `/data:/app/data`, `/data:/app/data:ro`).
 ///
-/// Options: `ro` (read-only), `rw` (read-write, default). Other options are ignored.
-///   Windows: host path may be a drive path like `C:\data`; the colon after the drive letter is not
-///   treated as a separator (e.g. `C:\data:/app/data` → host=`C:\data`, guest=`/app/data`).
+/// - Anonymous : `boxPath[:options]` (e.g. `/data`, `/data:ro`, `/data:size=10G`).
+/// - Bind mount: `hostPath:boxPath[:options]` (e.g. `/data:/app/data`,
+///   `/data:/app/data:ro`, `/data:/app/data:size=10G,ro`).
+///
+/// Options (comma-separated): `ro` / `rw` / `size=N[K|M|G]`. Unknown options
+/// are rejected (no silent drop of typos). `size=` is only meaningful for
+/// anonymous volumes — bind mounts re-use existing host directories.
+///
+/// Windows: host path may be a drive path like `C:\data`; the colon after the
+/// drive letter is not treated as a separator (e.g. `C:\data:/app/data` →
+/// host=`C:\data`, guest=`/app/data`).
 fn parse_volume_spec(s: &str) -> anyhow::Result<ParsedVolumeSpec> {
     let s = s.trim();
     if s.is_empty() {
@@ -606,7 +679,7 @@ fn parse_volume_spec(s: &str) -> anyhow::Result<ParsedVolumeSpec> {
     }
     let parts: Vec<&str> = s.split(':').map(str::trim).collect();
 
-    let (host_path, guest_path, read_only) = match parts.len() {
+    let (host_path, guest_path, options) = match parts.len() {
         1 => {
             // Anonymous volume: box path only (e.g. /data)
             let guest = parts[0].to_string();
@@ -619,35 +692,47 @@ fn parse_volume_spec(s: &str) -> anyhow::Result<ParsedVolumeSpec> {
                     guest
                 );
             }
-            (None, guest, false)
+            (None, guest, VolumeOptions::default())
         }
         2 => {
-            // Either anonymous with options (guest:ro) or bind (host:guest)
+            // Anonymous-with-opts iff the second token isn't path-like (a
+            // Linux absolute path always starts with `/`); else it's a bind
+            // host:guest pair with no options.
             let second = parts[1];
-            if second.eq_ignore_ascii_case("ro") || second.eq_ignore_ascii_case("rw") {
+            if second.is_empty() {
+                anyhow::bail!(
+                    "invalid volume spec {:?}: trailing colon with no path/options",
+                    s
+                );
+            }
+            if second.starts_with('/') {
+                (
+                    Some(parts[0].to_string()),
+                    parts[1].to_string(),
+                    VolumeOptions::default(),
+                )
+            } else {
                 let guest = parts[0].to_string();
                 if guest.is_empty() {
                     anyhow::bail!("volume box path must be non-empty");
                 }
-                (None, guest, second.eq_ignore_ascii_case("ro"))
-            } else {
-                (Some(parts[0].to_string()), parts[1].to_string(), false)
+                (None, guest, VolumeOptions::parse(second)?)
             }
         }
         3 => {
             if is_windows_drive(parts[0]) {
                 let host = format!("{}:{}", parts[0], parts[1]);
-                (Some(host), parts[2].to_string(), false)
+                (Some(host), parts[2].to_string(), VolumeOptions::default())
             } else {
-                let ro = parse_volume_read_only(parts[2]);
-                (Some(parts[0].to_string()), parts[1].to_string(), ro)
+                let opts = VolumeOptions::parse(parts[2])?;
+                (Some(parts[0].to_string()), parts[1].to_string(), opts)
             }
         }
         4.. => {
             if is_windows_drive(parts[0]) {
                 let host = format!("{}:{}", parts[0], parts[1]);
-                let ro = parse_volume_read_only(parts[3]);
-                (Some(host), parts[2].to_string(), ro)
+                let opts = VolumeOptions::parse(parts[3])?;
+                (Some(host), parts[2].to_string(), opts)
             } else {
                 anyhow::bail!(
                     "invalid volume spec {:?}; use hostPath:boxPath[:options] (e.g. /data:/app/data or C:\\data:/app/data:ro)",
@@ -671,10 +756,21 @@ fn parse_volume_spec(s: &str) -> anyhow::Result<ParsedVolumeSpec> {
     if guest_path.is_empty() {
         anyhow::bail!("volume box path must be non-empty");
     }
+    // `size=` requires per-volume managed storage — we only honor it on
+    // anonymous volumes. Setting it on a bind mount would silently no-op
+    // (we don't reformat the operator's host dir).
+    if host_path.is_some() && options.size_bytes.is_some() {
+        anyhow::bail!(
+            "size= is only valid on anonymous volumes (omit hostPath); got bind \
+             mount {:?}",
+            s
+        );
+    }
     Ok(ParsedVolumeSpec {
         host_path,
         guest_path,
-        read_only,
+        read_only: options.read_only,
+        size_bytes: options.size_bytes,
     })
 }
 
@@ -731,6 +827,7 @@ impl VolumeFlags {
                 host_path,
                 guest_path: spec.guest_path,
                 read_only: spec.read_only,
+                size_bytes: spec.size_bytes,
             });
         }
         Ok(())
@@ -1231,6 +1328,76 @@ mod tests {
         assert_eq!(spec.host_path.as_deref(), Some(r"D:\path"));
         assert_eq!(spec.guest_path, "/mnt");
         assert!(!spec.read_only);
+    }
+
+    // ── size= option ────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_size_token_accepts_k_m_g_and_bare_bytes() {
+        assert_eq!(super::parse_size_token("1024").unwrap(), 1024);
+        assert_eq!(super::parse_size_token("10K").unwrap(), 10 * 1024);
+        assert_eq!(super::parse_size_token("10k").unwrap(), 10 * 1024);
+        assert_eq!(super::parse_size_token("512M").unwrap(), 512 * 1024 * 1024);
+        assert_eq!(
+            super::parse_size_token("2G").unwrap(),
+            2 * 1024 * 1024 * 1024
+        );
+        assert_eq!(
+            super::parse_size_token(" 100M ").unwrap(),
+            100 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn parse_size_token_rejects_garbage_and_overflow() {
+        assert!(super::parse_size_token("").is_err());
+        assert!(super::parse_size_token("-5G").is_err());
+        assert!(super::parse_size_token("10T").is_err()); // T not supported (binary multiples K/M/G only)
+        assert!(super::parse_size_token("xyz").is_err());
+        // u64::MAX in GiB would overflow
+        assert!(super::parse_size_token("99999999999G").is_err());
+    }
+
+    #[test]
+    fn test_parse_volume_spec_anonymous_with_size() {
+        let spec = super::parse_volume_spec("/data:size=10G").unwrap();
+        assert_eq!(spec.host_path, None);
+        assert_eq!(spec.guest_path, "/data");
+        assert!(!spec.read_only);
+        assert_eq!(spec.size_bytes, Some(10 * 1024 * 1024 * 1024));
+    }
+
+    #[test]
+    fn test_parse_volume_spec_anonymous_with_size_and_ro() {
+        // Comma-combined options, either order.
+        let spec = super::parse_volume_spec("/data:ro,size=500M").unwrap();
+        assert_eq!(spec.guest_path, "/data");
+        assert!(spec.read_only);
+        assert_eq!(spec.size_bytes, Some(500 * 1024 * 1024));
+
+        let spec2 = super::parse_volume_spec("/data:size=500M,ro").unwrap();
+        assert_eq!(spec2.size_bytes, Some(500 * 1024 * 1024));
+        assert!(spec2.read_only);
+    }
+
+    #[test]
+    fn test_parse_volume_spec_size_on_bind_rejected() {
+        // size= on bind mount must error — we don't reformat operator host
+        // dirs. The hint guides the user to drop the host path.
+        let err = super::parse_volume_spec("/host/dir:/app:size=10G").unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("size=") && msg.contains("anonymous"),
+            "error must explain size= is anonymous-only; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_volume_spec_unknown_option_rejected() {
+        // Typos / unsupported options must surface, not silently no-op.
+        let err = super::parse_volume_spec("/data:zise=10G").unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("unknown volume option"), "got {msg:?}");
     }
 
     #[test]

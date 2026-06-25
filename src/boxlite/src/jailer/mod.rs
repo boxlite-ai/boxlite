@@ -723,11 +723,13 @@ mod tests {
                 host_path: vol_ro.to_string_lossy().to_string(),
                 guest_path: "/mnt/input".to_string(),
                 read_only: true,
+                size_bytes: None,
             },
             VolumeSpec {
                 host_path: vol_rw.to_string_lossy().to_string(),
                 guest_path: "/mnt/output".to_string(),
                 read_only: false,
+                size_bytes: None,
             },
         ];
 
@@ -755,6 +757,7 @@ mod tests {
             host_path: "/does/not/exist".to_string(),
             guest_path: "/mnt/data".to_string(),
             read_only: true,
+            size_bytes: None,
         }];
 
         let paths = build_path_access(&layout, &volumes);
@@ -890,6 +893,7 @@ mod tests {
                 host_path: vol_dir.to_string_lossy().to_string(),
                 guest_path: "/mnt/data".to_string(),
                 read_only: false,
+                size_bytes: None,
             }])
             .build()
             .unwrap();

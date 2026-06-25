@@ -203,6 +203,7 @@ impl GuestVolumeManager {
                     boxlite_shared::Filesystem::Ext4,
                     entry.need_format,
                     entry.need_resize,
+                    entry.read_only,
                 ));
             }
         }

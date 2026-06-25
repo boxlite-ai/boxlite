@@ -69,13 +69,16 @@ fn prepare_rootfs(
             std::fs::create_dir_all(shared_rootfs)
                 .map_err(|e| format!("Failed to create shared rootfs directory: {}", e))?;
 
-            // Mount container rootfs disk with options from host
+            // Mount container rootfs disk with options from host. Rootfs is
+            // always writable — the container needs an rw `/` for app writes
+            // outside any sized volume.
             BlockDeviceMount::mount(
                 Path::new(&disk.device),
                 shared_rootfs,
                 Filesystem::Ext4,
                 disk.need_format,
                 disk.need_resize,
+                false,
             )
             .map_err(|e| format!("Failed to mount rootfs disk: {}", e))?;
 

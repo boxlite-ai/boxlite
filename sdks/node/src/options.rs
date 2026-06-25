@@ -257,6 +257,11 @@ impl From<JsVolumeSpec> for VolumeSpec {
             host_path: v.host_path,
             guest_path: v.guest_path,
             read_only: v.read_only.unwrap_or(false),
+            // size cap is not exposed through the Node API yet — add a
+            // `sizeBytes` field on `JsVolumeSpec` when SDK-side size
+            // enforcement lands. Until then JS callers can't request
+            // one and a `None` here is the only honest mapping.
+            size_bytes: None,
         }
     }
 }

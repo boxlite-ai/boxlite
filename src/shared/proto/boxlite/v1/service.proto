@@ -117,11 +117,16 @@ message VirtiofsSource {
 // - need_format: If true, format device before mounting (use for fresh disks)
 // - need_resize: If true, resize filesystem after mounting to fill available space
 //                (use when QCOW2 virtual size > filesystem size)
+// - read_only:  If true, guest mounts with MS_RDONLY. Required when the host
+//                opens the underlying file ro at the libkrun device layer —
+//                without MS_RDONLY the guest mount(2) returns EACCES on a
+//                read-only block device.
 message BlockDeviceSource {
   string device = 1;           // device path (e.g., "/dev/vda")
   Filesystem filesystem = 2;   // target filesystem type (e.g., EXT4)
   bool need_format = 3;        // if true, format device with filesystem before mount
   bool need_resize = 4;        // if true, run resize2fs after mount to fill disk
+  bool read_only = 5;          // if true, mount with MS_RDONLY in guest
 }
 
 // Supported filesystem types

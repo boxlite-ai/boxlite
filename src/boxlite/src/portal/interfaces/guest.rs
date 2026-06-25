@@ -127,6 +127,8 @@ pub enum VolumeConfig {
         need_format: bool,
         /// If true, resize filesystem after mounting to fill disk
         need_resize: bool,
+        /// If true, guest mounts with MS_RDONLY.
+        read_only: bool,
     },
 }
 
@@ -153,6 +155,7 @@ impl VolumeConfig {
         filesystem: Filesystem,
         need_format: bool,
         need_resize: bool,
+        read_only: bool,
     ) -> Self {
         Self::BlockDevice {
             device: device.into(),
@@ -160,6 +163,7 @@ impl VolumeConfig {
             filesystem,
             need_format,
             need_resize,
+            read_only,
         }
     }
 
@@ -184,6 +188,7 @@ impl VolumeConfig {
                 filesystem,
                 need_format,
                 need_resize,
+                read_only,
             } => Volume {
                 mount_point,
                 source: Some(boxlite_shared::volume::Source::BlockDevice(
@@ -192,6 +197,7 @@ impl VolumeConfig {
                         filesystem: filesystem.into(),
                         need_format,
                         need_resize,
+                        read_only,
                     },
                 )),
                 container_id: String::new(),

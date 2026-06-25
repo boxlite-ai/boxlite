@@ -79,11 +79,13 @@ async fn virtiofs_readonly_and_capabilities() {
                         host_path: ro_dir.path().to_str().unwrap().into(),
                         guest_path: "/data/readonly".into(),
                         read_only: true,
+                        size_bytes: None,
                     },
                     VolumeSpec {
                         host_path: rw_dir.path().to_str().unwrap().into(),
                         guest_path: "/data/writable".into(),
                         read_only: false,
+                        size_bytes: None,
                     },
                 ],
                 rootfs: RootfsSpec::Image("alpine:latest".into()),

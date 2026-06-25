@@ -78,7 +78,7 @@ tokio-stream = "0.1.17"
 term_size = "0.3"
 qcow2-rs = "0.1.6"
 zstd = "0.13"
-nix = { version = "0.30.1", features = ["mount"] }
+nix = { version = "0.30.1", features = ["mount", "fs"] }
 rand = "0.9.3"
 hex = "0.4.3"
 signal-hook = "0.3"
