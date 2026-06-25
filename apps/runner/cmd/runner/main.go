@@ -204,10 +204,11 @@ func run() int {
 		}
 
 		pollerService, err := poller.NewService(&poller.PollerServiceConfig{
-			PollTimeout: cfg.PollTimeout,
-			PollLimit:   cfg.PollLimit,
-			Logger:      logger,
-			Executor:    executorService,
+			PollTimeout:            cfg.PollTimeout,
+			PollLimit:              cfg.PollLimit,
+			MaxConcurrentSpawnJobs: cfg.MaxConcurrentSpawnJobs,
+			Logger:                 logger,
+			Executor:               executorService,
 		})
 		if err != nil {
 			logger.Error("Failed to create poller service", "error", err)
