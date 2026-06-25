@@ -63,7 +63,7 @@ function statusOf(box: Box): { label: string; color: string } {
 
 // Proportional columns so the gaps stay even as the table widens, instead of
 // dumping all the slack into the Name column.
-const GRID = 'grid-cols-[2fr_1.3fr_1fr_1.7fr_1fr_120px] gap-x-4'
+const GRID = 'grid-cols-[2fr_1.3fr_1fr_120px] gap-x-4'
 
 function IconButton({
   title,
@@ -188,8 +188,6 @@ export function BoxTable({
         <span>Name</span>
         <span>Box ID</span>
         <span>Status</span>
-        <span>Resource Quota</span>
-        <span>Created</span>
         <span className="text-right">Actions</span>
       </div>
 
@@ -213,7 +211,6 @@ export function BoxTable({
           data.map((box) => {
             const st = statusOf(box)
             const name = getBoxDisplayName(box)
-            const created = getRelativeTimeString(box.createdAt).relativeTimeString.toUpperCase()
             const busy = boxIsLoading[box.id]
             const transitioning = boxStateIsTransitioning[box.id]
 
@@ -241,16 +238,6 @@ export function BoxTable({
                   <span className="size-[7px]" style={{ background: st.color, boxShadow: `0 0 6px ${st.color}` }} />
                   <span style={{ color: st.color }}>{st.label}</span>
                 </span>
-
-                {/* resource quota */}
-                <div className="flex items-baseline gap-4 truncate pr-4">
-                  <Quota label="CPU" value={box.cpu} unit="vCPU" />
-                  <Quota label="RAM" value={box.memory} unit="GB" />
-                  <Quota label="DISK" value={box.disk} unit="GB" />
-                </div>
-
-                {/* created */}
-                <span className="font-mono text-[11px] text-muted-foreground">{created}</span>
 
                 {/* actions */}
                 <div className="flex justify-end gap-[6px]" onClick={(e) => e.stopPropagation()}>

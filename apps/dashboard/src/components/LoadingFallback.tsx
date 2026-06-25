@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react'
 // pixel/mono aesthetic instead of a generic skeleton shell.
 const LoadingFallback = () => {
   const [showLongLoadingMessage, setShowLongLoadingMessage] = useState(false)
+  const [dotCount, setDotCount] = useState(1)
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -18,6 +19,12 @@ const LoadingFallback = () => {
     }, 5_000)
 
     return () => clearTimeout(timer)
+  }, [])
+
+  // Typewriter ellipsis: cycle 1 → 2 → 3 dots and back, a touch retro.
+  useEffect(() => {
+    const id = setInterval(() => setDotCount((d) => (d % 3) + 1), 400)
+    return () => clearInterval(id)
   }, [])
 
   return (
@@ -30,17 +37,9 @@ const LoadingFallback = () => {
           style={{ boxShadow: '0 0 12px hsl(var(--brand))' }}
         />
         <span>booting console</span>
-        {/* animated ellipsis */}
-        <span className="inline-flex w-[1.6em] justify-start" aria-hidden="true">
-          <span className="animate-pulse" style={{ animationDelay: '0ms' }}>
-            .
-          </span>
-          <span className="animate-pulse" style={{ animationDelay: '250ms' }}>
-            .
-          </span>
-          <span className="animate-pulse" style={{ animationDelay: '500ms' }}>
-            .
-          </span>
+        {/* typewriter ellipsis: 1 → 2 → 3 dots, looping */}
+        <span className="inline-block w-[1.6em] text-left" aria-hidden="true">
+          {'.'.repeat(dotCount)}
         </span>
       </div>
 
