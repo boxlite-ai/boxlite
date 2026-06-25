@@ -8,10 +8,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"net"
 	"net/http"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -19,7 +17,6 @@ import (
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	"github.com/boxlite-ai/proxy/cmd/proxy/config"
 	"github.com/boxlite-ai/proxy/internal"
-	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/securecookie"
 
@@ -145,22 +142,7 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 		}
 	}))
 
-	router.Use(func(ctx *gin.Context) {
-		if ctx.Request.Header.Get("X-BoxLite-Disable-CORS") == "true" {
-			ctx.Request.Header.Del("X-BoxLite-Disable-CORS")
-			return
-		}
-
-		corsConfig := cors.DefaultConfig()
-		corsConfig.AllowOriginFunc = func(origin string) bool {
-			return true
-		}
-		corsConfig.AllowCredentials = true
-		corsConfig.AllowHeaders = slices.Collect(maps.Keys(ctx.Request.Header))
-		corsConfig.AllowHeaders = append(corsConfig.AllowHeaders, ctx.Request.Header.Values("Access-Control-Request-Headers")...)
-
-		cors.New(corsConfig)(ctx)
-	})
+	router.Use(corsMiddleware(config.CorsAllowedOrigins, proxy.cookieDomain))
 
 	if config.PreviewWarningEnabled {
 		router.Use(proxy.browserWarningMiddleware())
