@@ -485,6 +485,22 @@ const WS_RECONNECT_BUDGET: std::time::Duration = std::time::Duration::from_secs(
 const WS_RECONNECT_BACKOFF_INITIAL: std::time::Duration = std::time::Duration::from_secs(15);
 const WS_RECONNECT_BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// How often the client sends its own WebSocket Ping on an established,
+/// otherwise-idle session.
+///
+/// The runner already pings client-ward every 15s, but those server->client
+/// pings can be silently dropped or coalesced by an intermediary (ALB / CDN /
+/// corporate proxy) that still tunnels the upgrade. With no client->server
+/// traffic of its own, an idle interactive exec then looks dead to such an
+/// intermediary, and the client's `WS_WATCHDOG` trips on a connection that is
+/// actually fine. A client-initiated Ping guarantees bidirectional traffic and
+/// feeds our own watchdog via the returned Pong, independent of whether the
+/// server's pings survive every hop. Must stay comfortably below `WS_WATCHDOG`.
+#[cfg(not(test))]
+const WS_CLIENT_PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+#[cfg(test)]
+const WS_CLIENT_PING_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// Drive the bidirectional WS attach for a single execution.
 ///
 /// Wire contract (mirrors the server's `/executions/{id}/attach` handler):
@@ -590,6 +606,14 @@ async fn attach_ws_pump(
         };
         let (mut sink, mut read) = stream.split();
 
+        // Client-initiated keepalive for this connection. The branch that
+        // fires it is gated on `first_frame_seen`, so the short
+        // `WS_FIRST_FRAME_TIMEOUT` fast-fail for never-streaming execs is
+        // preserved: we only start pinging once the server has sent a real
+        // frame, so the Pong to our own Ping can never be mistaken for it.
+        let mut ping_interval = tokio::time::interval(WS_CLIENT_PING_INTERVAL);
+        ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
         // If the user closed stdin during a previous attach, propagate the
         // EOF to this fresh server-side handler immediately. Best-effort.
         if user_closed_stdin {
@@ -626,6 +650,17 @@ async fn attach_ws_pump(
                                 .await;
                             // Continue reading — server still owes us an exit frame.
                         }
+                    }
+                }
+                // Client keepalive: once the session is established, ping on a
+                // fixed cadence so an idle connection keeps bidirectional
+                // traffic flowing and our watchdog is fed by the returned Pong,
+                // even if an intermediary swallows the server's own pings.
+                _ = ping_interval.tick(), if first_frame_seen => {
+                    if sink.send(Message::Ping(Vec::new())).await.is_err() {
+                        disconnect_cause =
+                            "keepalive ping write failed (sink closed)".to_string();
+                        break;
                     }
                 }
                 next = tokio::time::timeout(
@@ -1442,6 +1477,81 @@ mod tests {
         assert!(msg.contains("watchdog"), "unexpected diagnostic: {:?}", msg);
 
         attach.await.unwrap();
+        server.abort();
+    }
+
+    // ─── ws_client_keepalive_pings_idle_session ──────────────────────────
+    //
+    // Regression for the idle-disconnect bug (POL-120). Once a session is
+    // established, the client must send its OWN periodic WS Ping so an idle
+    // interactive exec keeps bidirectional traffic — otherwise an intermediary
+    // that silently drops the server's keepalive pings lets the client
+    // `WS_WATCHDOG` trip on a perfectly healthy connection.
+    //
+    // The server flips `first_frame_seen` with one stdout frame, then stays
+    // quiet and waits for the client's Ping (tungstenite surfaces it here while
+    // auto-replying the Pong), signalling a oneshot when it arrives. Without
+    // the client keepalive that Ping never comes, the oneshot never fires, and
+    // the assertion pinpoints the missing keepalive.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ws_client_keepalive_pings_idle_session() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let state: SharedState = Arc::new(Mutex::new(ServerState::default()));
+
+        // Fires when the server observes the client's first keepalive Ping.
+        let (ping_tx, ping_rx) = tokio::sync::oneshot::channel::<()>();
+
+        let server = tokio::spawn(async move {
+            run_server(listener, state, None, move |mut ws, _state| async move {
+                let mut ping_tx = Some(ping_tx);
+                // One stdout frame establishes the session (first_frame_seen),
+                // the precondition for the client to begin keepalive pings.
+                ws.send(Message::Binary(vec![0x01, b'o', b'k']))
+                    .await
+                    .unwrap();
+                // Stay quiet and wait for the client's keepalive Ping.
+                while let Some(Ok(frame)) = ws.next().await {
+                    if let Message::Ping(_) = frame {
+                        if let Some(tx) = ping_tx.take() {
+                            let _ = tx.send(());
+                        }
+                        let _ = ws
+                            .send(Message::Text(r#"{"type":"exit","exit_code":0}"#.into()))
+                            .await;
+                        let _ = ws.close(None).await;
+                        return;
+                    }
+                }
+            })
+            .await;
+        });
+
+        let client = client_for(port);
+        let (stdout_tx, _stdout_rx) = mpsc::unbounded_channel::<String>();
+        let (stderr_tx, _stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (_stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (result_tx, _result_rx) = mpsc::unbounded_channel::<ExecResult>();
+
+        let attach = tokio::spawn(async move {
+            attach_ws(
+                &client, "box1", "exec1", stdin_rx, stdout_tx, stderr_tx, result_tx,
+            )
+            .await;
+        });
+
+        // The established session is idle, so only a client-initiated Ping can
+        // keep it alive end-to-end. 3s is well above the test ping interval
+        // (100ms) and watchdog (300ms): a healthy client pings comfortably
+        // inside it, while a client that never pings leaves the oneshot unfired.
+        let pinged = tokio::time::timeout(Duration::from_secs(3), ping_rx).await;
+        assert!(
+            matches!(pinged, Ok(Ok(()))),
+            "client sent no keepalive WS ping on the idle session (waited 3s, got {:?})",
+            pinged,
+        );
+
+        attach.abort();
         server.abort();
     }
 
