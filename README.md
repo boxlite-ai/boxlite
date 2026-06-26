@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  Compute substrate for AI agents: lightweight enough to live on your laptop, elastic enough to scale into the cloud and unleash unlimited resources.
+  <strong>The compute substrate for AI agents</strong> — light enough to embed on your laptop, elastic enough to power an agentic cloud.
 </p>
 
 
@@ -36,231 +36,114 @@ install packages, create files, build up environment state, then come back later
 - **Network policy + secret placeholders**: restrict outbound access with `allow_net` and inject real HTTP(S) secrets from host-side `secrets`.
 - **Local-first**: runs entirely on your machine — no cloud account needed. Scale out when ready.
 
-## Python Quick Start
+## Get started
 
-<details>
-<summary>View guide</summary>
+One engine. Embed it, run it, deploy it, distribute it.
 
-### Install
+### 1 · Embed it — a library in your app
+
+Import BoxLite and give your agent an isolated VM to run code in — in-process, no daemon, no binary. *(Python 3.10+)*
 
 ```bash
 pip install boxlite
 ```
 
-Requires Python 3.10+.
-
-### Run
-
 ```python
 import asyncio
 import boxlite
-
 
 async def main():
     async with boxlite.SimpleBox(image="python:slim") as box:
         result = await box.exec("python", "-c", "print('Hello from BoxLite!')")
         print(result.stdout)
 
-
 asyncio.run(main())
 ```
 
-</details>
-
-
-## Node.js Quick Start
-
 <details>
-<summary>View guide</summary>
+<summary>Other languages — Node.js, Go, Rust (and the C SDK)</summary>
 
-### Install
-
-```bash
-npm install @boxlite-ai/boxlite
-```
-
-Requires Node.js 18+.
-
-### Run
+**Node.js** (`npm install @boxlite-ai/boxlite`, Node 18+)
 
 ```javascript
 import { SimpleBox } from '@boxlite-ai/boxlite';
 
-async function main() {
-  const box = new SimpleBox({ image: 'python:slim' });
-  try {
-    const result = await box.exec('python', '-c', "print('Hello from BoxLite!')");
-    console.log(result.stdout);
-  } finally {
-    await box.stop();
-  }
-}
-
-main();
-```
-
-</details>
-
-
-## Rust Quick Start
-
-<details>
-<summary>View guide</summary>
-
-### Install
-
-```bash
-cargo add boxlite tokio futures --features tokio/macros,tokio/rt-multi-thread
-```
-
-### Run
-
-```rust
-use boxlite::{BoxCommand, BoxOptions, BoxliteRuntime, RootfsSpec};
-use futures::StreamExt;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let runtime = BoxliteRuntime::default_runtime();
-    let options = BoxOptions {
-        rootfs: RootfsSpec::Image("alpine:latest".into()),
-        ..Default::default()
-    };
-
-    let litebox = runtime.create(options, None).await?;
-    let mut execution = litebox
-        .exec(BoxCommand::new("echo").arg("Hello from BoxLite!"))
-        .await?;
-
-    let mut stdout = execution.stdout().unwrap();
-    while let Some(line) = stdout.next().await {
-        println!("{}", line);
-    }
-
-    Ok(())
+const box = new SimpleBox({ image: 'python:slim' });
+try {
+  const result = await box.exec('python', '-c', "print('Hello from BoxLite!')");
+  console.log(result.stdout);
+} finally {
+  await box.stop();
 }
 ```
 
-</details>
-
-
-## Go Quick Start
-
-<details>
-<summary>View guide</summary>
-
-### Install
-
-```bash
-go get github.com/boxlite-ai/boxlite/sdks/go
-go run github.com/boxlite-ai/boxlite/sdks/go/cmd/setup
-```
-
-Requires Go 1.24+ with CGO enabled. The setup step downloads the prebuilt native library (one-time).
-
-### Run
+**Go** (`go get github.com/boxlite-ai/boxlite/sdks/go`, Go 1.24+ with CGO)
 
 ```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"log"
-
-	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
-)
-
-func main() {
-	rt, err := boxlite.NewRuntime()
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer rt.Close()
-
-	ctx := context.Background()
-	box, err := rt.Create(ctx, "alpine:latest", boxlite.WithName("my-box"))
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer box.Close()
-
-	result, err := box.Exec(ctx, "echo", "Hello from BoxLite!")
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Print(result.Stdout)
-}
+rt, _ := boxlite.NewRuntime()
+defer rt.Close()
+box, _ := rt.Create(ctx, "alpine:latest")
+defer box.Close()
+result, _ := box.Exec(ctx, "echo", "Hello from BoxLite!")
+fmt.Print(result.Stdout)
 ```
+
+**Rust** (`cargo add boxlite tokio futures --features tokio/macros,tokio/rt-multi-thread`)
+
+```rust
+let runtime = BoxliteRuntime::default_runtime();
+let litebox = runtime.create(BoxOptions {
+    rootfs: RootfsSpec::Image("alpine:latest".into()),
+    ..Default::default()
+}, None).await?;
+let mut execution = litebox.exec(BoxCommand::new("echo").arg("Hello from BoxLite!")).await?;
+let mut stdout = execution.stdout().unwrap();
+while let Some(line) = stdout.next().await { println!("{}", line); }
+```
+
+Full runnable versions: [Python](./sdks/python/), [Node](./sdks/node/), [Go](./sdks/go/), [Rust](./docs/reference/rust/), [C](./sdks/c/).
 
 </details>
 
+### 2 · Run it — the binary, one command
 
-## CLI Quick Start
-
-<details>
-<summary>View guide</summary>
-
-### Install
+Don't want to write code? One install, then run any OCI image straight from your terminal.
 
 ```bash
 curl -fsSL https://sh.boxlite.ai | sh
-```
-
-Installs to `$HOME/.local/bin/boxlite`. The runtime is embedded in the
-binary — no extra setup. For alternatives (`cargo install boxlite-cli`,
-version pinning, custom install dir) and release-artifact verification,
-see the [CLI Reference's Installation & Verification section](./docs/reference/cli/README.md#installation--verification).
-
-### Run
-
-```bash
 boxlite run python:slim python -c "print('Hello from BoxLite!')"
 ```
 
-</details>
+Installs to `$HOME/.local/bin/boxlite`, runtime embedded — no extra setup. Alternatives (`cargo install boxlite-cli`, version pinning, verification) → [CLI reference](./docs/reference/cli/README.md#installation--verification).
 
+### 3 · Deploy it — a standalone server
 
-## REST API Quick Start
-
-<details>
-<summary>View guide</summary>
-
-### Install
-
-Install the `boxlite` CLI — see [CLI Quick Start](#cli-quick-start). The
-REST server ships with the same binary. For release-artifact verification,
-see the [CLI Reference's Installation & Verification section](./docs/reference/cli/README.md#installation--verification).
-
-### Start the server
+Run BoxLite as a long-lived REST service and drive it from anything that speaks HTTP.
 
 ```bash
 boxlite serve
 # Listening on 0.0.0.0:8100
 ```
 
-### Use it
-
 ```bash
-# Create a box
 curl -s -X POST http://localhost:8100/v1/boxes \
   -H 'Content-Type: application/json' \
   -d '{"image": "alpine:latest"}'
-
-# Run a command (replace BOX_ID from the response above)
-curl -s -X POST http://localhost:8100/v1/boxes/BOX_ID/exec \
-  -H 'Content-Type: application/json' \
-  -d '{"command": "echo", "args": ["Hello from BoxLite!"]}'
 ```
 
-All CLI commands also work against a running server:
+Every CLI command also works against a running server with `--url`: `boxlite --url http://localhost:8100 list`.
+
+### 4 · Distribute it — your own agentic cloud
+
+Deploy the BoxLite control plane into your own AWS account — REST-compatible, multi-tenant, autoscaling boxes for a fleet of agents. The substrate at full scale.
 
 ```bash
-boxlite --url http://localhost:8100 list
-boxlite --url http://localhost:8100 exec BOX_ID -- echo "Hello!"
+git clone https://github.com/boxlite-ai/boxlite && cd boxlite/apps/infra
+npm install
+npm run deploy -- --stage production
 ```
 
-</details>
+Needs an AWS account, a Cloudflare-managed domain, and Docker. Full guide → [`apps/infra/README.md`](./apps/infra/README.md).
 
 
 ## Next steps
