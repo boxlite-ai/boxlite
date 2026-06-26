@@ -69,15 +69,10 @@ impl Sandbox for BwrapSandbox {
         // =====================================================================
         // Namespace and session isolation
         // =====================================================================
-        bwrap_cmd.with_default_namespaces();
-        // A detached box (`run -d`) must outlive the launching process: bwrap's
-        // --die-with-parent (PR_SET_PDEATHSIG) would otherwise kill the shim/VM
-        // the instant the launcher returns, so the box is born Stopped. Only
-        // foreground boxes — which should die with their launcher — get it.
-        if !ctx.detached {
-            bwrap_cmd.with_die_with_parent();
-        }
-        bwrap_cmd.with_new_session();
+        bwrap_cmd
+            .with_default_namespaces()
+            .with_die_with_parent()
+            .with_new_session();
 
         // =====================================================================
         // System directories (read-only)
@@ -196,7 +191,6 @@ mod tests {
             resource_limits: limits,
             network_enabled: false,
             sandbox_profile: None,
-            detached: false,
         };
 
         let shim = "/var/lib/boxlite/boxes/abc/bin/boxlite-shim";
@@ -216,44 +210,6 @@ mod tests {
             args[pos + 2],
             "/var/lib/boxlite/boxes/abc/bin",
             "LD_LIBRARY_PATH must point at the shim's own directory (where libkrunfw is copied)"
-        );
-    }
-
-    /// A detached box must outlive the launcher, so it must NOT get bwrap's
-    /// `--die-with-parent` (PR_SET_PDEATHSIG kills the shim/VM the instant
-    /// `run -d` returns, leaving the box born-Stopped). Foreground boxes keep it
-    /// so they die with their launcher.
-    #[test]
-    fn apply_sets_die_with_parent_only_for_foreground() {
-        if !bwrap::is_available() {
-            eprintln!(
-                "skipping apply_sets_die_with_parent_only_for_foreground: bwrap not available"
-            );
-            return;
-        }
-
-        fn has_die_with_parent(detached: bool) -> bool {
-            let limits = Box::leak(Box::new(ResourceLimits::default()));
-            let ctx = SandboxContext {
-                id: "test-box",
-                paths: vec![],
-                resource_limits: limits,
-                network_enabled: false,
-                sandbox_profile: None,
-                detached,
-            };
-            let mut cmd = Command::new("/var/lib/boxlite/boxes/abc/bin/boxlite-shim");
-            BwrapSandbox::new().apply(&ctx, &mut cmd);
-            cmd.get_args().any(|a| a == "--die-with-parent")
-        }
-
-        assert!(
-            has_die_with_parent(false),
-            "foreground box must get --die-with-parent so it dies with its launcher"
-        );
-        assert!(
-            !has_die_with_parent(true),
-            "detached box must not get --die-with-parent or it is killed when run -d returns"
         );
     }
 }

@@ -500,7 +500,6 @@ impl<S: Sandbox> Jailer<S> {
             resource_limits: &self.security.resource_limits,
             network_enabled: self.security.network_enabled,
             sandbox_profile: self.security.sandbox_profile.as_deref(),
-            detached: self.detach,
         }
     }
 
