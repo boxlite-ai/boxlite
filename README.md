@@ -78,6 +78,7 @@ try {
 **Go** (`go get github.com/boxlite-ai/boxlite/sdks/go`, Go 1.24+ with CGO)
 
 ```go
+ctx := context.Background()
 rt, _ := boxlite.NewRuntime()
 defer rt.Close()
 box, _ := rt.Create(ctx, "alpine:latest")
@@ -155,7 +156,7 @@ Needs an AWS account, a Cloudflare-managed domain, and Docker. Full guide → [`
 |------|--------------|
 | **Execution** | run any OCI image · async exec with streamed stdout/stderr + exit codes · interactive PTY with live resize · per-command timeout, workdir, env, run-as-user · entrypoint/cmd override |
 | **Isolation & security** | a hardware-virtualized VM per box (KVM / Hypervisor.framework) · OS sandbox (seccomp / sandbox-exec) · CPU, memory & resource limits · egress allow-list (`allow_net`) · secret injection — real values never enter the VM · env sanitization |
-| **Storage & state** | persists across stop/restart · volume mounts (ro/rw) · per-box QCOW2 disk with copy-on-write · bidirectional file copy · clone, or export/import as `.boxlite` archives · detached boxes that outlive the host |
+| **Storage & state** | persists across stop/restart · volume mounts (ro/rw) · per-box QCOW2 disk with copy-on-write · bidirectional file copy · clone, or export/import as `.boxlite` archives · detached boxes that outlive the parent process |
 | **Networking** | outbound internet · TCP/UDP port forwarding · network I/O metrics |
 | **Images** | pull + cache any OCI image · custom & private [registries](./docs/guides/image-registry-configuration.md) · custom rootfs |
 | **Observability** | per-box & runtime metrics — CPU, memory, network, boot time, commands · console logs · live `stats` |
