@@ -103,6 +103,35 @@ func goBoxliteOnCreateBox(box *C.CBoxHandle, errPtr *C.CBoxliteError, userData u
 	ch <- handleResult[*C.CBoxHandle]{value: box, err: errorFromCError(errPtr)}
 }
 
+// boxAndCreated carries a get-or-create result across the dispatch channel: the
+// box handle plus whether it was newly created (true) or an adopted existing
+// box (false). Wrapping both in one value lets GetOrCreate reuse the generic
+// handleResult/abandonAsync machinery.
+type boxAndCreated struct {
+	box     *C.CBoxHandle
+	created bool
+}
+
+//export goBoxliteOnGetOrCreateBox
+func goBoxliteOnGetOrCreateBox(box *C.CBoxHandle, created C.bool, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	if !claimOrFreePayload(h, &box, freeBoxHandlePayload) {
+		return
+	}
+	defer h.Delete()
+	ch, ok := h.Value().(chan handleResult[boxAndCreated])
+	if !ok {
+		return
+	}
+	ch <- handleResult[boxAndCreated]{
+		value: boxAndCreated{box: box, created: bool(created)},
+		err:   errorFromCError(errPtr),
+	}
+}
+
 //export goBoxliteOnGetBox
 func goBoxliteOnGetBox(box *C.CBoxHandle, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	h := ptrToHandle(userData)

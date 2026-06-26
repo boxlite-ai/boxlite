@@ -262,7 +262,9 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	// the host rebooted before the job was marked COMPLETED and the poller is
 	// replaying the still-IN_PROGRESS job), the core adopts it instead of
 	// failing with "already exists", which the API would surface as a 400.
-	bx, err := c.runtime.GetOrCreate(ctx, boxDto.Image, opts...)
+	// The created flag (new vs adopted) is irrelevant here: either way the box
+	// now exists locally and the job can proceed, so it is discarded.
+	bx, _, err := c.runtime.GetOrCreate(ctx, boxDto.Image, opts...)
 	if err != nil {
 		if len(volumeMounts) > 0 {
 			if cleanupErr := c.removeBoxVolumeMountRecord(ctx, boxDto.Id); cleanupErr != nil {

@@ -13,6 +13,7 @@ extern void goBoxliteOnStderr(uint8_t const *data, size_t len, void *ud);
 extern void goBoxliteOnExit(int exit_code, void *ud);
 
 extern void goBoxliteOnCreateBox(CBoxHandle *box, CBoxliteError *err, void *ud);
+extern void goBoxliteOnGetOrCreateBox(CBoxHandle *box, bool created, CBoxliteError *err, void *ud);
 extern void goBoxliteOnGetBox(CBoxHandle *box, CBoxliteError *err, void *ud);
 extern void goBoxliteOnStartBox(CBoxliteError *err, void *ud);
 extern void goBoxliteOnStopBox(CBoxliteError *err, void *ud);
@@ -40,6 +41,7 @@ CBoxStderrCb cbStderr(void) { return (CBoxStderrCb)goBoxliteOnStderr; }
 CBoxExitCb cbExit(void) { return (CBoxExitCb)goBoxliteOnExit; }
 
 CBoxCreateBoxCb cbCreateBox(void) { return (CBoxCreateBoxCb)goBoxliteOnCreateBox; }
+CBoxGetOrCreateBoxCb cbGetOrCreateBox(void) { return (CBoxGetOrCreateBoxCb)goBoxliteOnGetOrCreateBox; }
 CBoxGetBoxCb cbGetBox(void) { return (CBoxGetBoxCb)goBoxliteOnGetBox; }
 CBoxStartBoxCb cbStartBox(void) { return (CBoxStartBoxCb)goBoxliteOnStartBox; }
 CBoxStopBoxCb cbStopBox(void) { return (CBoxStopBoxCb)goBoxliteOnStopBox; }
