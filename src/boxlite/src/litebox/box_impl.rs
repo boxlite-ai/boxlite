@@ -1029,16 +1029,12 @@ impl BoxImpl {
 
         tokio::spawn(async move {
             let id = box_id.to_string();
-            // Open the accumulator at the current usage_usec baseline; CPU-seconds
-            // are the delta of this monotonic counter, so a missed first read
-            // (baseline 0) only over-counts the very first period slightly.
-            let mut acc = match cgroup::read_usage(&id) {
-                Ok(u) => ActualUsageAccumulator::new(u.cpu_usage_usec),
-                Err(e) => {
-                    tracing::debug!(box_id = %box_id, error = %e, "usage sampler: cgroup unreadable at open; baseline 0");
-                    ActualUsageAccumulator::new(0)
-                }
-            };
+            // Lazily open the accumulator on the first *successful* read: that
+            // read sets the usage_usec baseline. CPU consumed before sampling
+            // began must not be attributed to this period, so we never baseline
+            // at 0 — a cgroup that is briefly unreadable at startup would then
+            // over-count the first sample by the whole pre-sampling counter.
+            let mut acc: Option<ActualUsageAccumulator> = None;
 
             loop {
                 tokio::select! {
@@ -1046,20 +1042,28 @@ impl BoxImpl {
                     _ = shutdown_token.cancelled() => break,
                 }
                 match cgroup::read_usage(&id) {
-                    Ok(u) => acc.record_sample(u.cpu_usage_usec, u.memory_current),
+                    Ok(u) => match acc.as_mut() {
+                        None => acc = Some(ActualUsageAccumulator::new(u.cpu_usage_usec)),
+                        Some(a) => a.record_sample(u.cpu_usage_usec, u.memory_current),
+                    },
                     Err(e) => tracing::trace!(box_id = %box_id, error = %e, "usage sampler: sample read failed"),
                 }
             }
 
-            let snap = acc.snapshot();
-            tracing::info!(
-                box_id = %box_id,
-                actual_cpu_seconds = snap.actual_cpu_seconds,
-                actual_rss_avg_bytes = snap.actual_rss_avg_bytes,
-                actual_rss_peak_bytes = snap.actual_rss_peak_bytes,
-                sample_count = snap.sample_count,
-                "box actual-usage period snapshot",
-            );
+            match acc {
+                Some(a) => {
+                    let snap = a.snapshot();
+                    tracing::info!(
+                        box_id = %box_id,
+                        actual_cpu_seconds = snap.actual_cpu_seconds,
+                        actual_rss_avg_bytes = snap.actual_rss_avg_bytes,
+                        actual_rss_peak_bytes = snap.actual_rss_peak_bytes,
+                        sample_count = snap.sample_count,
+                        "box actual-usage period snapshot",
+                    );
+                }
+                None => tracing::debug!(box_id = %box_id, "usage sampler: no successful cgroup reads in period"),
+            }
         })
     }
 
