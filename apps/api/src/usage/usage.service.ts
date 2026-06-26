@@ -126,4 +126,34 @@ export class UsageService {
       totalGPUSeconds: 0, // Phase 1: no GPU metering
     }
   }
+
+  /**
+   * Back-fill the actual (cgroup-measured) consumption the runner reports onto
+   * the box's most-recent running period. Actual data feeds over-commit / COGS
+   * only — never billing — so a miss is non-fatal. Last-write-wins: the Rust
+   * accumulator is monotonic within a period, so the latest report is truth.
+   */
+  async recordActualUsage(boxId: string, actual: ActualUsageReport): Promise<void> {
+    const period = await this.periods.findOne({
+      where: { boxId, kind: 'running' },
+      order: { periodStart: 'DESC' },
+    })
+    if (!period) {
+      this.logger.warn(`actual usage for box ${boxId} dropped: no running period to attach to`)
+      return
+    }
+    period.actualCpuSeconds = actual.actualCpuSeconds
+    period.actualRssAvgBytes = actual.actualRssAvgBytes
+    period.actualRssPeakBytes = actual.actualRssPeakBytes
+    period.sampleCount = actual.sampleCount
+    await this.periods.save(period)
+  }
+}
+
+/** The runner's reported actual-usage snapshot for a box's current period. */
+export interface ActualUsageReport {
+  actualCpuSeconds: number
+  actualRssAvgBytes: string // bigint serialized as string
+  actualRssPeakBytes: string
+  sampleCount: number
 }
