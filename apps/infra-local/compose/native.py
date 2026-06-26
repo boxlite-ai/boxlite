@@ -202,7 +202,7 @@ class _Component:
     timeout_s: int
     argv: list[str]
     cwd: Path | None
-    env: dict[str, str]   # extra env layered on top of os.environ
+    env: dict[str, str | None]   # extra env layered on top of os.environ; None unsets
     pkill_pattern: str    # orphan-sweep fallback (matches the bash pkill -f)
 
 
@@ -236,6 +236,11 @@ def _components(p: _Paths) -> dict[str, _Component]:
                 "BOXLITE_HOME_DIR": str(p.runner_home),
                 "INSECURE_REGISTRIES": "127.0.0.1:25000",
                 "AWS_REGION": "us-east-1",
+                # The runner links the locally-built core, whose embedded guest
+                # may differ from the PyPI SDK version that ensure_runtime_env()
+                # pins for L1. Unset that pin so the runner resolves the runtime
+                # matching its OWN core (avoids "Guest binary hash mismatch").
+                "BOXLITE_RUNTIME_DIR": None,
             },
             "boxlite-runner$",
         ),
@@ -281,7 +286,9 @@ def start_component(p: _Paths, comp: _Component) -> bool:
         proc = subprocess.Popen(
             comp.argv,
             cwd=str(comp.cwd) if comp.cwd else None,
-            env={**os.environ, **comp.env},
+            # A None value in comp.env unsets an inherited var (e.g. the L1
+            # BOXLITE_RUNTIME_DIR pin must not leak to the runner — see below).
+            env={k: v for k, v in {**os.environ, **comp.env}.items() if v is not None},
             stdout=logf,
             stderr=subprocess.STDOUT,
             start_new_session=True,  # detach: survives our exit + own process group
