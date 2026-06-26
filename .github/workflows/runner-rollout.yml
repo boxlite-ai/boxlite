@@ -1,0 +1,66 @@
+# Runner Rollout — thin caller wrapper. Delegates to boxlite-app-env reusable workflow.
+#
+# All real work lives in boxlite-ai/boxlite-app-env's runner-rollout.yml (callee).
+# This file's only job is: declare the workflow_dispatch UI button + per-stage
+# inputs + forward to the callee at a pinned SHA.
+#
+# The callee checks out boxlite source (this repo) to build the Go runner binary
+# from Rust libboxlite.a + apps/runner / daemon / common-go / api-client-go /
+# libs/computer-use. caller_ref pins which commit gets built.
+#
+# ⚠ This RESTARTS the runner systemd unit on the target EC2. Boxes are interrupted
+#   (state under /var/lib/boxlite is preserved).
+name: Runner Rollout
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Stage
+        type: choice
+        options: [dev, prod]
+        default: dev
+      region:
+        description: AWS region the runner lives in
+        type: choice
+        options: [ap-southeast-1, us-east-1, us-west-2, eu-west-1, eu-central-1, ap-northeast-1]
+        default: ap-southeast-1
+      source:
+        description: dev-build (build the ref now) or release (install a published version)
+        type: choice
+        options: [dev-build, release]
+        default: dev-build
+      ref:
+        description: "dev-build: branch/commit to build (blank = this caller's commit). release: version e.g. 0.9.5"
+        type: string
+        default: ""
+      mode:
+        description: "upgrade, or rollback (rollback requires source=release)"
+        type: choice
+        options: [upgrade, rollback]
+        default: upgrade
+      instance_id:
+        description: "Pin a specific runner instance id (blank = find boxlite-<stage>-runner-default by tag)"
+        type: string
+        default: ""
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  rollout:
+    # Pinned to boxlite-app-env tag v0.1.0 SHA.
+    uses: boxlite-ai/boxlite-app-env/.github/workflows/runner-rollout.yml@27322286d9c8fb4b5eed476138d75524f67692ad
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      stage:       ${{ inputs.stage }}
+      region:      ${{ inputs.region }}
+      source:      ${{ inputs.source }}
+      mode:        ${{ inputs.mode }}
+      ref:         ${{ inputs.ref }}
+      instance_id: ${{ inputs.instance_id }}
+      role_arn:    arn:aws:iam::064212132677:role/boxlite-app-${{ inputs.stage }}-deploy
+      caller_ref:  ${{ github.sha }}

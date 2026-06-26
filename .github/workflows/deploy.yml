@@ -1,0 +1,50 @@
+# Deploy — thin caller wrapper. Delegates to boxlite-app-env reusable workflow.
+#
+# All real work lives in boxlite-ai/boxlite-app-env's sst-deploy.yml (callee).
+# This file's only job is: declare the workflow_dispatch UI button + per-stage
+# inputs + forward to the callee at a pinned SHA.
+#
+# To bump the callee version: change @<sha> below after reading the diff between
+# the old and new SHAs in boxlite-app-env.
+#
+# OIDC: AWS sees sub = repo:boxlite-ai/boxlite:environment:<stage> (caller, not
+# callee). IAM role boxlite-app-<stage>-deploy continues to trust this caller.
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Stage to deploy
+        type: choice
+        options: [dev, prod]
+        default: dev
+      mode:
+        description: diff (read-only preview) or deploy (apply)
+        type: choice
+        options: [diff, deploy]
+        default: diff
+      region:
+        description: AWS region (dev = ap-southeast-1)
+        type: choice
+        options: [ap-southeast-1, us-east-1, us-west-2, eu-west-1, eu-central-1, ap-northeast-1]
+        default: ap-southeast-1
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    # Pinned to boxlite-app-env tag v0.1.0 SHA. Update after reading the diff at
+    # https://github.com/boxlite-ai/boxlite-app-env/compare/<old-sha>...<new-sha>
+    uses: boxlite-ai/boxlite-app-env/.github/workflows/sst-deploy.yml@27322286d9c8fb4b5eed476138d75524f67692ad
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      stage:      ${{ inputs.stage }}
+      mode:       ${{ inputs.mode }}
+      region:     ${{ inputs.region }}
+      role_arn:   arn:aws:iam::064212132677:role/boxlite-app-${{ inputs.stage }}-deploy
+      caller_ref: ${{ github.sha }}
