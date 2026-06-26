@@ -32,9 +32,16 @@ export class Migration1782399865888 implements MigrationInterface {
     await queryRunner.query(
       `CREATE INDEX "usage_period_org_period_start_idx" ON "usage_period" ("organizationId", "periodStart")`,
     )
+    // At most one open period per box — partial unique index on the open rows.
+    // Makes the "two concurrent state events both open a period" race fail the
+    // second insert (caught + logged) instead of double-counting in queries.
+    await queryRunner.query(
+      `CREATE UNIQUE INDEX "usage_period_one_open_per_box_idx" ON "usage_period" ("boxId") WHERE "periodEnd" IS NULL`,
+    )
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`DROP INDEX "public"."usage_period_one_open_per_box_idx"`)
     await queryRunner.query(`DROP INDEX "public"."usage_period_org_period_start_idx"`)
     await queryRunner.query(`DROP INDEX "public"."usage_period_box_period_start_idx"`)
     await queryRunner.query(`DROP TABLE "usage_period"`)

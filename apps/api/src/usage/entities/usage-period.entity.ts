@@ -17,6 +17,9 @@ import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, Update
 @Entity()
 @Index('usage_period_box_period_start_idx', ['boxId', 'periodStart'], { unique: true })
 @Index('usage_period_org_period_start_idx', ['organizationId', 'periodStart'])
+// At most one open period (periodEnd IS NULL) per box — partial unique index.
+// Structurally prevents two concurrent state events from both opening a period.
+@Index('usage_period_one_open_per_box_idx', ['boxId'], { unique: true, where: '"periodEnd" IS NULL' })
 export class UsagePeriod {
   @PrimaryGeneratedColumn('uuid')
   id: string
