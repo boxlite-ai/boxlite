@@ -31,6 +31,7 @@ import { BoxStateUpdatedEvent } from '../events/box-state-updated.event'
 import { BoxDestroyedEvent } from '../events/box-destroyed.event'
 import { BoxStartedEvent } from '../events/box-started.event'
 import { BoxStoppedEvent } from '../events/box-stopped.event'
+import { BoxConflictError } from '../errors/box-conflict.error'
 import { OrganizationService } from '../../organization/services/organization.service'
 import { OrganizationEvents } from '../../organization/constants/organization-events.constant'
 import { OrganizationSuspendedBoxStoppedEvent } from '../../organization/events/organization-suspended-box-stopped.event'
@@ -860,9 +861,14 @@ export class BoxService {
         updateData: { pending: true, desiredState: BoxDesiredState.STARTED },
         whereCondition: { pending: false, state: BoxState.STOPPED, desiredState: BoxDesiredState.STOPPED },
       })
-    } catch {
-      // A concurrent state change won the row (BoxConflictError). Leave it —
-      // the exec already succeeded and box_sync will reconcile state.
+    } catch (err) {
+      // Lost the race to a concurrent state change — expected, no-op.
+      if (err instanceof BoxConflictError) {
+        return
+      }
+      // Any other failure (DB / validation): the exec already happened so don't
+      // block it, but surface the unexpected error instead of swallowing it.
+      this.logger.warn(`ensureStartedForExec: unexpected failure for box ${boxIdOrName}: ${err}`)
       return
     }
 

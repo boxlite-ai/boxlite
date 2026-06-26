@@ -108,4 +108,15 @@ describe('BoxService.ensureStartedForExec', () => {
     await expect(service.ensureStartedForExec('box-1', 'org-1')).resolves.toBeUndefined()
     expect(eventEmitter.emit).not.toHaveBeenCalled()
   })
+
+  it('swallows an unexpected (non-conflict) failure without emitting', async () => {
+    const { service, boxRepository, eventEmitter } = makeService()
+    jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue(stoppedBox as any)
+    boxRepository.updateWhere.mockRejectedValue(new Error('db connection lost'))
+    const warn = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined)
+
+    await expect(service.ensureStartedForExec('box-1', 'org-1')).resolves.toBeUndefined()
+    expect(eventEmitter.emit).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalled()
+  })
 })

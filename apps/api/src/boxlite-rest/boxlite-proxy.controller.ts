@@ -27,6 +27,10 @@ import { OrganizationAuthContext } from '../common/interfaces/auth-context.inter
 import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
 
+// Cap how long exec waits on the best-effort control-plane start hint so a
+// contended box-row lock can never block the user's exec request.
+const EXEC_START_HINT_TIMEOUT_MS = 2000
+
 // Spec-first surface (openapi/box.openapi.yaml). Must stay out of the product
 // spec: @All() expands to the SEARCH verb, which OpenAPI 3.0 cannot express.
 @ApiExcludeController()
@@ -52,10 +56,12 @@ export class BoxliteProxyController {
   ) {
     // exec auto-starts a stopped box in the runtime; reflect that intent in the
     // control plane before forwarding so sync-states does not immediately stop
-    // it back. Best-effort: never block the exec on this.
-    await this.boxService
-      .ensureStartedForExec(boxId, authContext.organizationId)
-      .catch((err) => this.logger.warn(`ensureStartedForExec failed for ${boxId}: ${err}`))
+    // it back. Best-effort + time-boxed: ensureStartedForExec takes a pessimistic
+    // row lock, so cap the wait — a contended lock must never block the exec.
+    await Promise.race([
+      this.boxService.ensureStartedForExec(boxId, authContext.organizationId),
+      new Promise<void>((resolve) => setTimeout(resolve, EXEC_START_HINT_TIMEOUT_MS)),
+    ]).catch((err) => this.logger.warn(`ensureStartedForExec failed for ${boxId}: ${err}`))
     return this.proxyToRunner(authContext, boxId, (runnerBoxId) => `/v1/boxes/${runnerBoxId}/exec`, req, res, next)
   }
 
