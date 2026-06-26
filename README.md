@@ -133,7 +133,7 @@ Every CLI command also works against a running server with `--url`: `boxlite --u
 
 ### 4 · Distribute it — your own agentic cloud
 
-Deploy the control plane to your own AWS — multi-tenant, autoscaling boxes for a fleet of agents. The substrate at full scale.
+Deploy the control plane into your own AWS account (GCP on the way) — multi-tenant, autoscaling boxes for a fleet of agents. The substrate at full scale.
 
 ```bash
 git clone https://github.com/boxlite-ai/boxlite && cd boxlite/apps/infra
