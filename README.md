@@ -106,6 +106,7 @@ Full runnable versions: [Python](./sdks/python/), [Node](./sdks/node/), [Go](./s
 
 ### 2 · Run it — the binary, one command
 
+
 No code needed — one install, then run any OCI image from your terminal.
 
 ```bash
@@ -117,7 +118,8 @@ Installs to `$HOME/.local/bin/boxlite`, runtime embedded — no extra setup. Alt
 
 ### 3 · Deploy it — a standalone server
 
-Run BoxLite as a REST service; drive it from anything that speaks HTTP.
+<details>
+<summary>Run BoxLite as a REST service; drive it from anything that speaks HTTP.</summary>
 
 ```bash
 boxlite serve
@@ -132,9 +134,12 @@ curl -s -X POST http://localhost:8100/v1/boxes \
 
 Every CLI command also works against a running server with `--url`: `boxlite --url http://localhost:8100 list`.
 
+</details>
+
 ### 4 · Distribute it — your own agentic cloud
 
-Deploy the control plane into your own AWS account (GCP on the way) — multi-tenant, autoscaling boxes for a fleet of agents. The substrate at full scale.
+<details>
+<summary>Deploy the control plane into your own AWS account (GCP on the way) — multi-tenant, autoscaling boxes for a fleet of agents. The substrate at full scale.</summary>
 
 ```bash
 git clone https://github.com/boxlite-ai/boxlite && cd boxlite/apps/infra
@@ -143,6 +148,8 @@ npm run deploy -- --stage production
 ```
 
 Needs an AWS account, a Cloudflare-managed domain, and Docker. Full guide → [`apps/infra/README.md`](./apps/infra/README.md).
+
+</details>
 
 
 ## Next steps
