@@ -60,6 +60,8 @@ type Config struct {
 	InsecureRegistries                 string        `envconfig:"INSECURE_REGISTRIES"`
 	GhcrUsername                       string        `envconfig:"GHCR_USERNAME"`
 	GhcrToken                          string        `envconfig:"GHCR_TOKEN"`
+	DockerHubUsername                  string        `envconfig:"DOCKERHUB_USERNAME"`
+	DockerHubToken                     string        `envconfig:"DOCKERHUB_TOKEN"`
 }
 
 var DEFAULT_API_PORT int = 8080

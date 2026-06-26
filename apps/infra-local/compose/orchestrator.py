@@ -126,6 +126,25 @@ def ensure_home_env(config: InfraConfig) -> None:
 def get_runtime():
     ensure_runtime_env()
     Boxlite, _ = import_sdk()
+    # Local override: authenticate docker.io pulls when creds are supplied via
+    # env, so L1 image pulls don't hit the anonymous Docker Hub rate limit.
+    # The BoxLite puller does NOT read ~/.docker/config.json — auth must come
+    # through the runtime's image_registries config.
+    from . import _local_arm64
+    user, secret = _local_arm64.dockerhub_creds()
+    if user and secret:
+        from boxlite import ImageRegistry, Options
+        opts = Options(image_registries=[
+            ImageRegistry("docker.io", username=user, password=secret, search=True),
+        ])
+        # Seed the PROCESS-WIDE default runtime with auth, then return that
+        # shared singleton — NOT a fresh Boxlite(opts). A fresh runtime per call
+        # would re-acquire the home-dir flock and collide with itself when
+        # get_runtime() runs more than once in a process.
+        try:
+            Boxlite.init_default(opts)
+        except Exception:
+            pass  # default runtime already initialized in this process
     return Boxlite.default()
 
 

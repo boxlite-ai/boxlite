@@ -48,6 +48,8 @@ type ClientConfig struct {
 	InsecureRegistries           []string
 	GhcrUsername                 string
 	GhcrToken                    string
+	DockerHubUsername            string
+	DockerHubToken               string
 	AWSRegion                    string
 	AWSEndpointUrl               string
 	AWSAccessKeyId               string
@@ -140,6 +142,19 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	}
 	insecureRegistries := normalizeRegistryHosts(config.InsecureRegistries)
 	registries := buildImageRegistries(insecureRegistries, config.GhcrUsername, config.GhcrToken)
+	// docker.io auth (local dev): boxlite-core pulls box base images (e.g. the
+	// debian base disk + public user images) from docker.io; without auth those
+	// hit the anonymous Docker Hub rate limit. Mirror the ghcr.io auth entry.
+	if config.DockerHubUsername != "" && config.DockerHubToken != "" {
+		registries = append(registries, boxlite.ImageRegistry{
+			Host:      "docker.io",
+			Transport: boxlite.RegistryTransportHTTPS,
+			Auth: boxlite.ImageRegistryAuth{
+				Username: config.DockerHubUsername,
+				Password: config.DockerHubToken,
+			},
+		})
+	}
 	if len(registries) > 0 {
 		opts = append(opts, boxlite.WithImageRegistries(registries...))
 	}
