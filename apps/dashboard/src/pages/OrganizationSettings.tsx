@@ -6,12 +6,11 @@
 
 import { useApi } from '@/hooks/useApi'
 import { useOrganizations } from '@/hooks/useOrganizations'
-import { useRegions } from '@/hooks/useRegions'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
 import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { Check, Copy } from '@/components/ui/icon'
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { useCopyToClipboard } from 'usehooks-ts'
 
@@ -26,18 +25,10 @@ const OrganizationSettings: React.FC = () => {
   const { axiosInstance } = useApi()
   const { refreshOrganizations } = useOrganizations()
   const { selectedOrganization, authenticatedUserOrganizationMember } = useSelectedOrganization()
-  const { getRegionName, sharedRegions: regions } = useRegions()
 
   const [organizationName, setOrganizationName] = useState('')
   const [renamingOrganization, setRenamingOrganization] = useState(false)
   const [copied, copyToClipboard] = useCopyToClipboard()
-  const defaultRegionLabel = useMemo(() => {
-    if (selectedOrganization?.defaultRegionId) {
-      return getRegionName(selectedOrganization.defaultRegionId) ?? selectedOrganization.defaultRegionId
-    }
-
-    return regions[0]?.name ?? 'US'
-  }, [getRegionName, regions, selectedOrganization?.defaultRegionId])
 
   useEffect(() => {
     setOrganizationName(getOrganizationDisplayName(selectedOrganization?.name))
@@ -115,7 +106,7 @@ const OrganizationSettings: React.FC = () => {
         </div>
 
         {/* id */}
-        <div className="grid items-center gap-4 border-b border-border px-5 py-5 sm:grid-cols-2">
+        <div className="grid items-center gap-4 px-5 py-5 sm:grid-cols-2">
           <div>
             <div className="text-[13px] font-semibold">Organization ID</div>
             <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
@@ -137,15 +128,6 @@ const OrganizationSettings: React.FC = () => {
               {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
             </button>
           </div>
-        </div>
-
-        {/* default region */}
-        <div className="grid items-center gap-4 px-5 py-5 sm:grid-cols-2">
-          <div>
-            <div className="text-[13px] font-semibold">Default Region</div>
-            <p className="mt-1 text-[12px] text-muted-foreground">Used automatically when creating boxes.</p>
-          </div>
-          <input value={defaultRegionLabel} readOnly className={`${inputClass} uppercase`} />
         </div>
       </div>
     </div>
