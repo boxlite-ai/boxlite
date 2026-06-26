@@ -18,8 +18,8 @@ use boxlite::litebox::LiteBox;
 
 use crate::error::{BoxliteErrorCode, FFIError, null_pointer_error, write_error};
 use crate::event_queue::{
-    CBoxCreateBoxCb, CBoxGetBoxCb, CBoxRemoveBoxCb, CBoxStartBoxCb, CBoxStopBoxCb, EventQueue,
-    RuntimeEvent, push_event,
+    CBoxCreateBoxCb, CBoxGetBoxCb, CBoxGetOrCreateBoxCb, CBoxRemoveBoxCb, CBoxStartBoxCb,
+    CBoxStopBoxCb, EventQueue, RuntimeEvent, push_event,
 };
 use crate::options::OptionsHandle;
 use crate::runtime::RuntimeHandle;
@@ -51,16 +51,16 @@ pub unsafe extern "C" fn boxlite_create_box(
 
 /// Get an existing box by name, or create a new one if it does not exist.
 ///
-/// Same shape as [`boxlite_create_box`] (it reuses the create callback), but
-/// when a box with the given name already exists it returns that box instead
-/// of failing with "already exists". The `created` flag from the core
-/// `get_or_create` is not surfaced over the FFI; callers that only need a box
-/// handle (create-if-absent, idempotent retry) do not depend on it.
+/// When a box with the given name already exists it returns that box instead
+/// of failing with "already exists". The callback receives an extra `created`
+/// flag: `true` when a new box was created, `false` when an existing box was
+/// adopted — letting callers distinguish the two (e.g. skip re-initialization
+/// for an adopted box).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_get_or_create_box(
     runtime: *mut CBoxliteRuntime,
     opts: *mut CBoxliteOptions,
-    cb: CBoxCreateBoxCb,
+    cb: CBoxGetOrCreateBoxCb,
     user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
@@ -182,7 +182,7 @@ unsafe fn create_box(
 unsafe fn get_or_create_box(
     runtime: *mut RuntimeHandle,
     opts: *mut OptionsHandle,
-    cb: CBoxCreateBoxCb,
+    cb: CBoxGetOrCreateBoxCb,
     user_data: *mut c_void,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
@@ -210,7 +210,7 @@ unsafe fn get_or_create_box(
             let result = runtime_clone
                 .get_or_create(opts_handle.options, opts_handle.name)
                 .await
-                .map(|(handle, _created)| {
+                .map(|(handle, created)| {
                     let box_id = handle.id().clone();
                     let boxed = Box::new(BoxHandle {
                         handle: Arc::new(handle),
@@ -218,11 +218,11 @@ unsafe fn get_or_create_box(
                         tokio_rt: task_tokio_rt,
                         queue: task_queue.clone(),
                     });
-                    crate::event_queue::OwnedFfiPtr::new(boxed)
+                    (crate::event_queue::OwnedFfiPtr::new(boxed), created)
                 });
             push_event(
                 &queue,
-                RuntimeEvent::CreateBox {
+                RuntimeEvent::GetOrCreateBox {
                     cb,
                     user_data: user_data_addr,
                     result,

@@ -134,6 +134,10 @@ typedef struct FFIError CBoxliteError;
 // Box creation completion.
 typedef void (*CBoxCreateBoxCb)(CBoxHandle*, CBoxliteError*, void*);
 
+// Get-or-create completion. Same shape as create plus a `bool` that is `true`
+// when a new box was created and `false` when an existing box was adopted.
+typedef void (*CBoxGetOrCreateBoxCb)(CBoxHandle*, bool, CBoxliteError*, void*);
+
 // Box stop completion.
 typedef void (*CBoxStopBoxCb)(CBoxliteError*, void*);
 
@@ -342,14 +346,14 @@ enum BoxliteErrorCode boxlite_create_box(CBoxliteRuntime *runtime,
 
 // Get an existing box by name, or create a new one if it does not exist.
 //
-// Same shape as [`boxlite_create_box`] (it reuses the create callback), but
-// when a box with the given name already exists it returns that box instead
-// of failing with "already exists". The `created` flag from the core
-// `get_or_create` is not surfaced over the FFI; callers that only need a box
-// handle (create-if-absent, idempotent retry) do not depend on it.
+// When a box with the given name already exists it returns that box instead
+// of failing with "already exists". The callback receives an extra `created`
+// flag: `true` when a new box was created, `false` when an existing box was
+// adopted — letting callers distinguish the two (e.g. skip re-initialization
+// for an adopted box).
 enum BoxliteErrorCode boxlite_get_or_create_box(CBoxliteRuntime *runtime,
                                                 CBoxliteOptions *opts,
-                                                CBoxCreateBoxCb cb,
+                                                CBoxGetOrCreateBoxCb cb,
                                                 void *user_data,
                                                 CBoxliteError *out_error);
 
