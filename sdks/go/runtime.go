@@ -188,9 +188,16 @@ func (r *Runtime) Create(ctx context.Context, image string, opts ...BoxOption) (
 // runtime's get_or_create() (also bound by the Python and Node SDKs) and makes
 // create idempotent for callers that key a box on a stable unique name.
 //
-// On context cancellation it only frees the returned handle (like Get); it does
-// NOT force-remove the box, because an adopted box may be one the caller did
-// not create and must not be destroyed.
+// On context cancellation it only frees the returned handle (like Get); it
+// never force-removes the box. This is a deliberate trade-off: the FFI drops
+// the core's `created` flag, so this layer cannot tell whether the box was
+// ADOPTED (pre-existing — must not be destroyed) or freshly CREATED (which
+// Create would force-remove on cancel). It conservatively never destroys, so a
+// genuine create that is then cancelled leaks one persisted box (a Configured
+// row + its lock). The leak is bounded and self-heals for the runner — the only
+// caller on this path — because the box name is the control plane's unique box
+// id, so a replayed CREATE_BOX re-adopts the orphan. Surfacing `created` over
+// the FFI to branch the cleanup (force-remove vs free) is a tracked follow-up.
 func (r *Runtime) GetOrCreate(ctx context.Context, image string, opts ...BoxOption) (*Box, error) {
 	r.ensureDrainRunning()
 
