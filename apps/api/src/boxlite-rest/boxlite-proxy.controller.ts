@@ -50,6 +50,12 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
+    // exec auto-starts a stopped box in the runtime; reflect that intent in the
+    // control plane before forwarding so sync-states does not immediately stop
+    // it back. Best-effort: never block the exec on this.
+    await this.boxService
+      .ensureStartedForExec(boxId, authContext.organizationId)
+      .catch((err) => this.logger.warn(`ensureStartedForExec failed for ${boxId}: ${err}`))
     return this.proxyToRunner(authContext, boxId, (runnerBoxId) => `/v1/boxes/${runnerBoxId}/exec`, req, res, next)
   }
 

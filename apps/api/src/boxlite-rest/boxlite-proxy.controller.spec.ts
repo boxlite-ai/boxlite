@@ -31,6 +31,7 @@ describe('BoxliteProxyController', () => {
         runnerId: 'runner-1',
       }),
       updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
+      ensureStartedForExec: jest.fn().mockResolvedValue(undefined),
     }
     const runnerService = {
       findOne: jest.fn().mockResolvedValue({
@@ -50,6 +51,49 @@ describe('BoxliteProxyController', () => {
     const pathRewrite = proxyOptions.pathRewrite as (path: string, req: unknown) => string
     expect(pathRewrite('/api/v1/boxes/public-box/exec', req)).toBe('/v1/boxes/box-uuid/exec')
     expect(boxService.findOneByIdOrName).toHaveBeenCalledWith('public-box', 'org-1')
+    expect(proxyHandler).toHaveBeenCalledWith(req, res, next)
+  })
+
+  it('asks the control plane to start the box before proxying exec, so an auto-started box is not stopped back', async () => {
+    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
+
+    const boxService = {
+      findOneByIdOrName: jest.fn().mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1' }),
+      updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
+      ensureStartedForExec: jest.fn().mockResolvedValue(undefined),
+    }
+    const runnerService = {
+      findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }),
+    }
+
+    const controller = new BoxliteProxyController(boxService as never, runnerService as never)
+    const req = { url: '/api/v1/boxes/public-box/exec' }
+
+    await controller.proxyExec({ organizationId: 'org-1' } as never, 'public-box', req as never, {} as never, jest.fn())
+
+    expect(boxService.ensureStartedForExec).toHaveBeenCalledWith('public-box', 'org-1')
+  })
+
+  it('still proxies the exec when the control-plane start hint fails (best-effort)', async () => {
+    const proxyHandler = jest.fn()
+    jest.mocked(createProxyMiddleware).mockReturnValue(proxyHandler as never)
+
+    const boxService = {
+      findOneByIdOrName: jest.fn().mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1' }),
+      updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
+      ensureStartedForExec: jest.fn().mockRejectedValue(new Error('db down')),
+    }
+    const runnerService = {
+      findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }),
+    }
+
+    const controller = new BoxliteProxyController(boxService as never, runnerService as never)
+    const req = { url: '/api/v1/boxes/public-box/exec' }
+    const res = {}
+    const next = jest.fn()
+
+    await controller.proxyExec({ organizationId: 'org-1' } as never, 'public-box', req as never, res as never, next)
+
     expect(proxyHandler).toHaveBeenCalledWith(req, res, next)
   })
 })

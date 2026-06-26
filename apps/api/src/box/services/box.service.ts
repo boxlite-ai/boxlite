@@ -829,6 +829,46 @@ export class BoxService {
     return updatedBox
   }
 
+  /**
+   * Reflect an exec-triggered auto-start in the control plane.
+   *
+   * `exec` on a stopped box auto-starts the VM in the runtime (BoxLite core
+   * live_state), but nothing tells the API. Left alone, PG keeps the box at
+   * desiredState=STOPPED and sync-states promptly issues STOP_BOX, undoing the
+   * auto-start. Flip desiredState to STARTED — exactly like start() — so the
+   * runner-reported STARTED state agrees and the box stays up. We never write
+   * state directly; the runner remains the source of truth for it.
+   *
+   * Best-effort and idempotent: the exec has already happened, so any failure
+   * here is swallowed (box_sync reconciles state on its next tick).
+   */
+  async ensureStartedForExec(boxIdOrName: string, organizationId: string): Promise<void> {
+    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+    if (!box) {
+      return
+    }
+
+    // Only wake a cleanly-stopped box. Leave STARTED, in-transition (pending),
+    // and destroy-intent boxes untouched.
+    if (box.pending || box.state !== BoxState.STOPPED || box.desiredState !== BoxDesiredState.STOPPED) {
+      return
+    }
+
+    let updatedBox: Box
+    try {
+      updatedBox = await this.boxRepository.updateWhere(box.id, {
+        updateData: { pending: true, desiredState: BoxDesiredState.STARTED },
+        whereCondition: { pending: false, state: BoxState.STOPPED, desiredState: BoxDesiredState.STOPPED },
+      })
+    } catch {
+      // A concurrent state change won the row (BoxConflictError). Leave it —
+      // the exec already succeeded and box_sync will reconcile state.
+      return
+    }
+
+    this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updatedBox))
+  }
+
   async stop(boxIdOrName: string, organizationId?: string, force?: boolean): Promise<Box> {
     // Capture the JS call stack so we can identify the code path that hit
     // boxService.stop() — the audit log only records the leaf endpoint,
