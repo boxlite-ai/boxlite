@@ -109,7 +109,7 @@ Full runnable versions: [Python](./sdks/python/), [Node](./sdks/node/), [Go](./s
 
 No code needed — one install, then run any OCI image from your terminal.
 
-```bash
+```console
 curl -fsSL https://sh.boxlite.ai | sh
 boxlite run python:slim python -c "print('Hello from BoxLite!')"
 ```
