@@ -720,6 +720,12 @@ impl BoxImpl {
             *self.health_check_task.write() = Some(health_task);
         }
 
+        // Per-box actual-usage sampler (B-lite producer side). On Linux it reads
+        // the box's host cgroup once a second; elsewhere it is a no-op. Detached:
+        // it self-terminates when this box's shutdown token fires, independent of
+        // whether a health check is configured.
+        drop(self.spawn_usage_sampler(self.config.id.clone(), self.shutdown_token.child_token()));
+
         tracing::info!(
             box_id = %self.config.id,
             "Box started successfully (first_start={})",
@@ -1005,6 +1011,65 @@ impl BoxImpl {
         );
 
         result
+    }
+
+    /// Spawn the per-box actual-usage sampler (B-lite producer side).
+    ///
+    /// Linux: every second, read the box's host cgroup (`cgroup::read_usage`)
+    /// and fold the sample into an [`ActualUsageAccumulator`]; on shutdown,
+    /// snapshot the period. The snapshot feeds the over-commit / COGS view and
+    /// must reach the control-plane via the runner ingest
+    /// (`POST /usage/box/:id/actual`); wiring that transport (which needs the
+    /// generated runner api-client) is the remaining step — for now the snapshot
+    /// is logged so it is observable on the box host.
+    #[cfg(target_os = "linux")]
+    fn spawn_usage_sampler(&self, box_id: BoxID, shutdown_token: CancellationToken) -> JoinHandle<()> {
+        use crate::jailer::cgroup;
+        use crate::metrics::usage::ActualUsageAccumulator;
+
+        tokio::spawn(async move {
+            let id = box_id.to_string();
+            // Open the accumulator at the current usage_usec baseline; CPU-seconds
+            // are the delta of this monotonic counter, so a missed first read
+            // (baseline 0) only over-counts the very first period slightly.
+            let mut acc = match cgroup::read_usage(&id) {
+                Ok(u) => ActualUsageAccumulator::new(u.cpu_usage_usec),
+                Err(e) => {
+                    tracing::debug!(box_id = %box_id, error = %e, "usage sampler: cgroup unreadable at open; baseline 0");
+                    ActualUsageAccumulator::new(0)
+                }
+            };
+
+            loop {
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                    _ = shutdown_token.cancelled() => break,
+                }
+                match cgroup::read_usage(&id) {
+                    Ok(u) => acc.record_sample(u.cpu_usage_usec, u.memory_current),
+                    Err(e) => tracing::trace!(box_id = %box_id, error = %e, "usage sampler: sample read failed"),
+                }
+            }
+
+            let snap = acc.snapshot();
+            tracing::info!(
+                box_id = %box_id,
+                actual_cpu_seconds = snap.actual_cpu_seconds,
+                actual_rss_avg_bytes = snap.actual_rss_avg_bytes,
+                actual_rss_peak_bytes = snap.actual_rss_peak_bytes,
+                sample_count = snap.sample_count,
+                "box actual-usage period snapshot",
+            );
+        })
+    }
+
+    /// Non-Linux hosts have no cgroup, so usage sampling is a no-op that simply
+    /// waits for shutdown.
+    #[cfg(not(target_os = "linux"))]
+    fn spawn_usage_sampler(&self, _box_id: BoxID, shutdown_token: CancellationToken) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            shutdown_token.cancelled().await;
+        })
     }
 
     /// Best-effort guest filesystem quiesce (FIFREEZE) with timeout.
