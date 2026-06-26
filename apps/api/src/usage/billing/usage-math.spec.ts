@@ -4,7 +4,7 @@
  */
 
 import { BoxState } from '../../box/enums/box-state.enum'
-import { aggregatePeriods, billingPeriodKind, planTransition, BillablePeriod } from './usage-math'
+import { aggregatePeriods, billingPeriodKind, planReconcileClose, planTransition, BillablePeriod } from './usage-math'
 
 describe('planTransition', () => {
   it('first STARTED opens a running period', () => {
@@ -163,5 +163,117 @@ describe('aggregatePeriods', () => {
       totalRamGbSeconds: 40, // running 10s × 4
       totalDiskGbSeconds: 300, // (10s + 20s) × 10
     })
+  })
+})
+
+describe('planReconcileClose', () => {
+  const periodStart = new Date('2026-06-26T12:00:00Z')
+  const now = new Date('2026-06-26T12:30:00Z')
+
+  it('leaves a running box with an open running period alone', () => {
+    expect(
+      planReconcileClose({
+        openKind: 'running',
+        periodStart,
+        box: { state: BoxState.STARTED, updatedAt: periodStart },
+        runnerAlive: true,
+        lastAliveAt: now,
+        now,
+      }),
+    ).toBeNull()
+  })
+
+  it('leaves a stopped box with an open stopped (disk-only) period alone', () => {
+    expect(
+      planReconcileClose({
+        openKind: 'stopped',
+        periodStart,
+        box: { state: BoxState.STOPPED, updatedAt: periodStart },
+        runnerAlive: true,
+        lastAliveAt: now,
+        now,
+      }),
+    ).toBeNull()
+  })
+
+  it('closes an open running period when the box is no longer running (missed stop)', () => {
+    const stoppedAt = new Date('2026-06-26T12:10:00Z')
+    expect(
+      planReconcileClose({
+        openKind: 'running',
+        periodStart,
+        box: { state: BoxState.STOPPED, updatedAt: stoppedAt },
+        runnerAlive: true,
+        lastAliveAt: now,
+        now,
+      }),
+    ).toEqual({ closeAt: stoppedAt }) // close at the box's stop transition
+  })
+
+  it('closes any open period when the box is destroyed', () => {
+    const destroyedAt = new Date('2026-06-26T12:15:00Z')
+    expect(
+      planReconcileClose({
+        openKind: 'stopped',
+        periodStart,
+        box: { state: BoxState.DESTROYED, updatedAt: destroyedAt },
+        runnerAlive: true,
+        lastAliveAt: now,
+        now,
+      }),
+    ).toEqual({ closeAt: destroyedAt })
+  })
+
+  it('closes at the last heartbeat when the runner is dead (box.state stale at STARTED)', () => {
+    const lastAliveAt = new Date('2026-06-26T12:20:00Z')
+    expect(
+      planReconcileClose({
+        openKind: 'running',
+        periodStart,
+        box: { state: BoxState.STARTED, updatedAt: periodStart }, // stale: still says running
+        runnerAlive: false,
+        lastAliveAt,
+        now,
+      }),
+    ).toEqual({ closeAt: lastAliveAt }) // NOT periodStart, NOT now
+  })
+
+  it('closes at now when the box row is gone and no heartbeat known', () => {
+    expect(
+      planReconcileClose({
+        openKind: 'running',
+        periodStart,
+        box: null,
+        runnerAlive: true,
+        lastAliveAt: null,
+        now,
+      }),
+    ).toEqual({ closeAt: now })
+  })
+
+  it('clamps a stale close time up to periodStart (never ends before it starts)', () => {
+    const beforeStart = new Date('2026-06-26T11:00:00Z') // earlier than periodStart
+    const result = planReconcileClose({
+      openKind: 'running',
+      periodStart,
+      box: { state: BoxState.STOPPED, updatedAt: beforeStart },
+      runnerAlive: true,
+      lastAliveAt: now,
+      now,
+    })
+    expect(result).toEqual({ closeAt: periodStart }) // clamped, satisfies CHECK constraint
+  })
+
+  it('clamps a future close time down to now', () => {
+    const future = new Date('2026-06-26T13:00:00Z')
+    const result = planReconcileClose({
+      openKind: 'running',
+      periodStart,
+      box: null,
+      runnerAlive: false,
+      lastAliveAt: future,
+      now,
+    })
+    expect(result).toEqual({ closeAt: now }) // clamped down
   })
 })

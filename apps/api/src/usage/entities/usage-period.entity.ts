@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm'
+import { Check, Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm'
 
 /**
  * One billable usage segment for a box (alloc side).
@@ -20,6 +20,8 @@ import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, Update
 // At most one open period (periodEnd IS NULL) per box — partial unique index.
 // Structurally prevents two concurrent state events from both opening a period.
 @Index('usage_period_one_open_per_box_idx', ['boxId'], { unique: true, where: '"periodEnd" IS NULL' })
+// A period can never end before it starts (clock skew / bad reconcile).
+@Check('usage_period_end_after_start', '"periodEnd" IS NULL OR "periodEnd" >= "periodStart"')
 export class UsagePeriod {
   @PrimaryGeneratedColumn('uuid')
   id: string
