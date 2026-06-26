@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import OrganizationSettings from '@/pages/OrganizationSettings'
 import { NotificationSocketProvider } from '@/providers/NotificationSocketProvider'
 import { OrganizationsProvider } from '@/providers/OrganizationsProvider'
 import { SelectedOrganizationProvider } from '@/providers/SelectedOrganizationProvider'
@@ -29,15 +28,24 @@ import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from './constants/ExternalLinks'
 import { RoutePath, getRouteSubPath } from './enums/RoutePath'
 import { useConfig } from './hooks/useConfig'
 import Dashboard from './pages/Dashboard'
-import EmailVerify from './pages/EmailVerify'
-import Keys from './pages/Keys'
 import LandingPage from './pages/LandingPage'
 import Logout from './pages/Logout'
 import NotFound from './pages/NotFound'
-import Admin from './pages/Admin'
-import Billing from './pages/Billing'
 import Boxes from './pages/Boxes'
-import { BoxDetails, BoxTerminalFullscreen } from './components/boxes'
+
+// Code-split the heavier, not-first-paint routes out of the main bundle. They
+// load on demand under the dashboard <Outlet> Suspense boundary, so the initial
+// /boxes paint no longer ships Admin/Billing/Settings/Keys/box-details and their
+// recharts/terminal deps. Boxes + the Dashboard shell stay eager (first paint).
+const Keys = React.lazy(() => import('./pages/Keys'))
+const Billing = React.lazy(() => import('./pages/Billing'))
+const Admin = React.lazy(() => import('./pages/Admin'))
+const EmailVerify = React.lazy(() => import('./pages/EmailVerify'))
+const OrganizationSettings = React.lazy(() => import('@/pages/OrganizationSettings'))
+const BoxDetails = React.lazy(() => import('./components/boxes').then((m) => ({ default: m.BoxDetails })))
+const BoxTerminalFullscreen = React.lazy(() =>
+  import('./components/boxes').then((m) => ({ default: m.BoxTerminalFullscreen })),
+)
 import { ApiProvider } from './providers/ApiProvider'
 import { RegionsProvider } from './providers/RegionsProvider'
 import { BoxSessionProvider } from './providers/BoxSessionProvider'

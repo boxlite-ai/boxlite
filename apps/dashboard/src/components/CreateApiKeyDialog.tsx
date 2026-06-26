@@ -12,12 +12,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useCreateApiKeyMutation } from '@/hooks/mutations/useCreateApiKeyMutation'
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard'
 import { handleApiError } from '@/lib/error-handling'
@@ -64,7 +59,8 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
     }
   }, [open])
 
-  const handleCreate = async () => {
+  const handleCreate = async (event?: React.FormEvent<HTMLFormElement>) => {
+    event?.preventDefault()
     if (!organizationId) {
       toast.error('Select an organization to create an API key.')
       return
@@ -147,61 +143,63 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
               </DialogDescription>
             </DialogHeader>
 
-            <div className="flex flex-col gap-[22px] px-[26px] py-6">
-              {/* name */}
-              <div className="flex flex-col gap-[10px]">
-                <div className="text-[13px] font-semibold">Key Name</div>
-                <input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Name"
-                  autoFocus
-                  className="border border-border bg-card px-[14px] py-[13px] font-mono text-[13px] text-foreground outline-none focus:border-brand"
-                />
-              </div>
+            <form id="create-api-key-form" onSubmit={handleCreate}>
+              <div className="flex flex-col gap-[22px] px-[26px] py-6">
+                {/* name */}
+                <div className="flex flex-col gap-[10px]">
+                  <div className="text-[13px] font-semibold">Key Name</div>
+                  <input
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="Name"
+                    autoFocus
+                    className="border border-border bg-card px-[14px] py-[13px] font-mono text-[13px] text-foreground outline-none focus:border-brand"
+                  />
+                </div>
 
-              {/* expires */}
-              <div className="flex flex-col gap-[10px]">
-                <div className="text-[13px] font-semibold">Expires</div>
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    className={cn(
-                      'flex items-center gap-[11px] border border-border bg-card px-[14px] py-[13px] font-mono text-[13px] outline-none data-[state=open]:border-brand',
-                      expiryIdx === 0 ? 'text-muted-foreground' : 'text-foreground',
-                    )}
-                  >
-                    <Calendar className="size-[15px] shrink-0 text-muted-foreground" strokeWidth={2} />
-                    {EXPIRY_OPTS[expiryIdx].label}
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent
-                    align="start"
-                    className="min-w-[var(--radix-dropdown-menu-trigger-width)] font-mono text-[12px]"
-                  >
-                    {EXPIRY_OPTS.map((opt, i) => (
-                      <DropdownMenuItem
-                        key={opt.label}
-                        className={cn('cursor-pointer', i === expiryIdx && 'text-brand')}
-                        onClick={() => setExpiryIdx(i)}
-                      >
-                        {opt.label}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-                <div className="text-[12px] text-muted-foreground">Optional expiration date for the API key.</div>
-              </div>
+                {/* expires */}
+                <div className="flex flex-col gap-[10px]">
+                  <div className="text-[13px] font-semibold">Expires</div>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      className={cn(
+                        'flex items-center gap-[11px] border border-border bg-card px-[14px] py-[13px] font-mono text-[13px] outline-none data-[state=open]:border-brand',
+                        expiryIdx === 0 ? 'text-muted-foreground' : 'text-foreground',
+                      )}
+                    >
+                      <Calendar className="size-[15px] shrink-0 text-muted-foreground" strokeWidth={2} />
+                      {EXPIRY_OPTS[expiryIdx].label}
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent
+                      align="start"
+                      className="min-w-[var(--radix-dropdown-menu-trigger-width)] font-mono text-[12px]"
+                    >
+                      {EXPIRY_OPTS.map((opt, i) => (
+                        <DropdownMenuItem
+                          key={opt.label}
+                          className={cn('cursor-pointer', i === expiryIdx && 'text-brand')}
+                          onClick={() => setExpiryIdx(i)}
+                        >
+                          {opt.label}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  <div className="text-[12px] text-muted-foreground">Optional expiration date for the API key.</div>
+                </div>
 
-              {/* info */}
-              <div className="flex gap-3 border border-brand/25 bg-brand/[0.06] px-[18px] py-4">
-                <Info className="mt-0.5 size-[17px] shrink-0 text-brand" strokeWidth={2} />
-                <div>
-                  <div className="text-[13px] font-semibold text-brand">Boxes API access</div>
-                  <div className="mt-[5px] text-[12.5px] leading-relaxed text-muted-foreground">
-                    This key can create and manage Boxes. Shared Linux base images are available automatically.
+                {/* info */}
+                <div className="flex gap-3 border border-brand/25 bg-brand/[0.06] px-[18px] py-4">
+                  <Info className="mt-0.5 size-[17px] shrink-0 text-brand" strokeWidth={2} />
+                  <div>
+                    <div className="text-[13px] font-semibold text-brand">Boxes API access</div>
+                    <div className="mt-[5px] text-[12.5px] leading-relaxed text-muted-foreground">
+                      This key can create and manage Boxes. Shared Linux base images are available automatically.
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+            </form>
 
             <div className="flex justify-end gap-[10px] border-t border-border px-[26px] py-4">
               <button
@@ -212,8 +210,8 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
                 Close
               </button>
               <button
-                type="button"
-                onClick={handleCreate}
+                type="submit"
+                form="create-api-key-form"
                 disabled={!name.trim() || submitting || !organizationId || availablePermissions.length === 0}
                 className="bg-primary px-[26px] py-[11px] text-[13px] font-semibold text-primary-foreground transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-45"
               >

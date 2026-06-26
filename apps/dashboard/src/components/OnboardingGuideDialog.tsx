@@ -8,7 +8,6 @@ import goIcon from '@/assets/go.svg'
 import pythonIcon from '@/assets/python.svg'
 import rustIcon from '@/assets/rust.svg'
 import typescriptIcon from '@/assets/typescript.svg'
-import CodeBlock from '@/components/CodeBlock'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useApi } from '@/hooks/useApi'
 import { useConfig } from '@/hooks/useConfig'
@@ -24,8 +23,13 @@ import {
   OrganizationRolePermissionsEnum,
   type ApiKeyResponse,
 } from '@boxlite-ai/api-client'
-import { useEffect, useMemo, useState } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
+
+// Lazy so prism-react-renderer (syntax highlighting, ~130KB) stays out of the
+// first-paint bundle. CodeBlock only renders in step 2 of this dialog, which is
+// closed on load — the <pre> fallback below is never visible during startup.
+const CodeBlock = lazy(() => import('@/components/CodeBlock'))
 
 interface OnboardingGuideDialogProps {
   open: boolean
@@ -411,13 +415,21 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange, pr
                   <div className="mb-[9px] text-[9px] uppercase tracking-[1.5px] text-muted-foreground">
                     Run this from your local machine
                   </div>
-                  <CodeBlock
-                    code={renderedExample}
-                    language={activeExample.codeLanguage}
-                    showCopy
-                    className="rounded-none"
-                    codeAreaClassName="whitespace-pre-wrap break-words text-[11.5px] leading-relaxed"
-                  />
+                  <Suspense
+                    fallback={
+                      <pre className="overflow-auto whitespace-pre-wrap break-words rounded-none p-3 text-[11.5px] leading-relaxed">
+                        {renderedExample}
+                      </pre>
+                    }
+                  >
+                    <CodeBlock
+                      code={renderedExample}
+                      language={activeExample.codeLanguage}
+                      showCopy
+                      className="rounded-none"
+                      codeAreaClassName="whitespace-pre-wrap break-words text-[11.5px] leading-relaxed"
+                    />
+                  </Suspense>
                   <div className="mt-[12px] flex items-start gap-2 text-[11.5px] leading-relaxed text-muted-foreground">
                     <span className="flex-none text-brand">ⓘ</span>
                     <span>

@@ -14,7 +14,7 @@ import {
 } from '@/components/CommandPalette'
 import { cn } from '@/lib/utils'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { liteClient as algoliasearch } from 'algoliasearch/lite'
+import type { liteClient } from 'algoliasearch/lite'
 import { BookOpen, Code2, Container, Terminal } from '@/components/ui/icon'
 import { ReactNode, useEffect, useMemo, useState } from 'react'
 
@@ -25,7 +25,25 @@ const CLI_INDEX = import.meta.env.VITE_ALGOLIA_CLI_INDEX_NAME || 'cli_test'
 const SDK_INDEX = import.meta.env.VITE_ALGOLIA_SDK_INDEX_NAME || 'sdk_test'
 
 const docSearchEnabled = Boolean(ALGOLIA_APP_ID && ALGOLIA_API_KEY)
-const client = docSearchEnabled ? algoliasearch(ALGOLIA_APP_ID, ALGOLIA_API_KEY) : null
+
+// Dynamically import algoliasearch only when a docs search actually runs, so the
+// lib stays out of the first-paint bundle. The client is built once (memoized
+// promise). Docs search lives entirely behind the command palette's "search-docs"
+// page and is never needed for first paint.
+type AlgoliaLiteClient = ReturnType<typeof liteClient>
+let clientPromise: Promise<AlgoliaLiteClient | null> | null = null
+
+const getAlgoliaClient = (): Promise<AlgoliaLiteClient | null> => {
+  if (!docSearchEnabled) {
+    return Promise.resolve(null)
+  }
+  if (!clientPromise) {
+    clientPromise = import('algoliasearch/lite').then(({ liteClient }) =>
+      liteClient(ALGOLIA_APP_ID, ALGOLIA_API_KEY),
+    )
+  }
+  return clientPromise
+}
 
 export type AlgoliaHit = {
   objectID: string
@@ -47,7 +65,12 @@ export type SearchResults = {
 }
 
 export const searchDocumentation = async (query: string): Promise<SearchResults> => {
-  if (!client || !query.trim()) {
+  if (!query.trim()) {
+    return { docs: [], cli: [], sdk: [] }
+  }
+
+  const client = await getAlgoliaClient()
+  if (!client) {
     return { docs: [], cli: [], sdk: [] }
   }
 

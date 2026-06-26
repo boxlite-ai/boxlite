@@ -91,6 +91,21 @@ export default defineConfig((mode) => ({
     // we'd ideally polyfill it but until https://github.com/davidmyersdev/vite-plugin-node-polyfills/issues/118 gets resolved we can just exclude it
     rollupOptions: {
       external: ['tar'],
+      output: {
+        // Pin two broadly-shared vendor groups into stable, cacheable chunks:
+        // @tanstack/* (react-query + react-table are both on the first-paint
+        // boxes path) and react-router. Everything else is intentionally left
+        // to Rollup's default splitting, so deps used ONLY by lazy routes
+        // (recharts on Admin/Billing, xterm/monaco on box-details) land in those
+        // async chunks instead of the eager entry — a catch-all `vendor` bucket
+        // would force them back eager.
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined
+          if (id.includes('@tanstack')) return 'tanstack'
+          if (id.includes('react-router') || id.includes('@remix-run/router')) return 'router'
+          return undefined
+        },
+      },
     },
   },
 }))
