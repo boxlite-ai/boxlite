@@ -17,6 +17,11 @@ import { TypedConfigService } from '../../../config/typed-config.service'
 import { LockCode, RedisLockProvider } from '../../common/redis-lock.provider'
 import { WithSpan } from '../../../common/decorators/otel.decorator'
 import { BoxActivityService } from '../../services/box-activity.service'
+import { CreateBoxSecretDto } from '../../dto/create-box.dto'
+import { InjectRedis } from '@nestjs-modules/ioredis'
+import { Redis } from 'ioredis'
+import { EncryptionService } from '../../../encryption/encryption.service'
+import { boxCreateSecretsKey } from '../../utils/box-create-secrets.util'
 
 @Injectable()
 export class BoxStartAction extends BoxAction {
@@ -29,6 +34,8 @@ export class BoxStartAction extends BoxAction {
     protected readonly configService: TypedConfigService,
     protected readonly redisLockProvider: RedisLockProvider,
     private readonly boxActivityService: BoxActivityService,
+    @InjectRedis() private readonly redis: Redis,
+    private readonly encryptionService: EncryptionService,
   ) {
     super(runnerService, runnerAdapterFactory, boxRepository, redisLockProvider)
   }
@@ -77,10 +84,52 @@ export class BoxStartAction extends BoxAction {
     }
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
-    await runnerAdapter.createBox(box, metadata)
+    const createSecrets = await this.loadCreateSecrets(box.id)
+    await runnerAdapter.createBox(box, metadata, createSecrets)
 
     await this.updateBoxState(box, BoxState.CREATING, lockCode)
+    this.redis.del(boxCreateSecretsKey(box.id)).catch((error) => {
+      this.logger.warn(
+        `Failed to delete create secrets for box ${box.id}: ${error instanceof Error ? error.message : error}`,
+      )
+    })
     return SYNC_AGAIN
+  }
+
+  private async loadCreateSecrets(boxId: string): Promise<CreateBoxSecretDto[]> {
+    const rawSecrets = await this.redis.get(boxCreateSecretsKey(boxId))
+    if (!rawSecrets) {
+      return []
+    }
+
+    let encryptedSecrets: unknown
+    try {
+      encryptedSecrets = JSON.parse(rawSecrets)
+    } catch {
+      throw new Error(`Invalid create secrets payload for box ${boxId}`)
+    }
+
+    if (
+      !Array.isArray(encryptedSecrets) ||
+      encryptedSecrets.some(
+        (secret) =>
+          !secret ||
+          typeof secret !== 'object' ||
+          typeof (secret as CreateBoxSecretDto).name !== 'string' ||
+          typeof (secret as CreateBoxSecretDto).value !== 'string' ||
+          typeof (secret as CreateBoxSecretDto).placeholder !== 'string' ||
+          ((secret as CreateBoxSecretDto).hosts !== undefined && !Array.isArray((secret as CreateBoxSecretDto).hosts)),
+      )
+    ) {
+      throw new Error(`Invalid create secrets payload for box ${boxId}`)
+    }
+
+    return Promise.all(
+      (encryptedSecrets as CreateBoxSecretDto[]).map(async (secret) => ({
+        ...secret,
+        value: await this.encryptionService.decrypt(secret.value),
+      })),
+    )
   }
 
   private async handleRunnerBoxStoppedStateOnDesiredStateStart(box: Box, lockCode: LockCode): Promise<SyncState> {

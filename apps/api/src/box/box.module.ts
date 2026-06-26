@@ -49,12 +49,14 @@ import { EventEmitter2 } from '@nestjs/event-emitter'
 import { BoxLastActivity } from './entities/box-last-activity.entity'
 import { BoxActivityService } from './services/box-activity.service'
 import { BoxStateWaiterService } from './services/box-state-waiter.service'
+import { EncryptionModule } from '../encryption/encryption.module'
 
 @Module({
   imports: [
     UserModule,
     OrganizationModule,
     RegionModule,
+    EncryptionModule,
     TypeOrmModule.forFeature([Box, Runner, WarmPool, Volume, SshAccess, Region, Job, BoxLastActivity]),
   ],
   controllers: [BoxController, RunnerController, PreviewController, VolumeController, JobController],

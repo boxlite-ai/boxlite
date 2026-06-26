@@ -4,10 +4,41 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { IsEnum, IsObject, IsOptional, IsString, IsNumber, IsBoolean, IsArray } from 'class-validator'
+import { Type } from 'class-transformer'
+import {
+  ArrayMaxSize,
+  IsEnum,
+  IsObject,
+  IsOptional,
+  IsString,
+  IsNumber,
+  IsBoolean,
+  IsArray,
+  ValidateNested,
+} from 'class-validator'
 import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxVolume } from './box.dto'
+
+const MAX_SECRETS = 32
+const MAX_SECRET_HOSTS = 64
+
+export class CreateBoxSecretDto {
+  @IsString()
+  name: string
+
+  @IsString()
+  value: string
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_SECRET_HOSTS)
+  @IsString({ each: true })
+  hosts?: string[]
+
+  @IsString()
+  placeholder: string
+}
 
 @ApiSchema({ name: 'CreateBox' })
 export class CreateBoxDto {
@@ -44,6 +75,17 @@ export class CreateBoxDto {
   @IsOptional()
   @IsObject()
   env?: { [key: string]: string }
+
+  @ApiPropertyOptional({
+    description: 'Host-side HTTP(S) secret substitution rules',
+    type: [CreateBoxSecretDto],
+  })
+  @IsOptional()
+  @Type(() => CreateBoxSecretDto)
+  @ValidateNested({ each: true })
+  @IsArray()
+  @ArrayMaxSize(MAX_SECRETS)
+  secrets?: CreateBoxSecretDto[]
 
   @ApiPropertyOptional({
     description: 'Labels for the box',

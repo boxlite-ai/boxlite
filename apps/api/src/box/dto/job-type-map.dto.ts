@@ -40,6 +40,9 @@ export interface JobTypeMap {
   [JobType.UPDATE_BOX_NETWORK_SETTINGS]: {
     resourceType: [ResourceType.BOX]
   }
+  [JobType.UPDATE_BOX_SECRETS]: {
+    resourceType: [ResourceType.BOX]
+  }
   [JobType.INSPECT_ARTIFACT_IN_REGISTRY]: {
     resourceType: [ResourceType.ARTIFACT]
   }

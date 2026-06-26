@@ -17,6 +17,8 @@ import { Cron, CronExpression } from '@nestjs/schedule'
 import { JobStateHandlerService } from './job-state-handler.service'
 import { propagation, context as otelContext } from '@opentelemetry/api'
 import { PaginatedList } from '../../common/interfaces/paginated-list.interface'
+import { EncryptionService } from '../../encryption/encryption.service'
+import type { CreateBoxSecretDto } from '../dto/create-box.dto'
 
 const REDIS_BLOCKING_COMMAND_TIMEOUT_BUFFER_MS = 3_000
 
@@ -40,6 +42,7 @@ export class JobService {
     private readonly jobRepository: Repository<Job>,
     @InjectRedis() private readonly redis: Redis,
     private readonly jobStateHandlerService: JobStateHandlerService,
+    private readonly encryptionService: EncryptionService,
   ) {}
 
   /**
@@ -482,7 +485,7 @@ export class JobService {
         // save() with @VersionColumn will automatically check version and throw OptimisticLockVersionMismatchError if changed
         const savedJob = await this.jobRepository.save(job)
 
-        claimedJobs.push(new JobDto(savedJob))
+        claimedJobs.push(await this.toRunnerJobDto(savedJob))
       } catch (error) {
         // If optimistic lock fails, job was already claimed by another runner - skip it
         this.logger.debug(`Job ${job.id} already claimed by another runner (version mismatch)`)
@@ -494,5 +497,31 @@ export class JobService {
     }
 
     return claimedJobs
+  }
+
+  private async toRunnerJobDto(job: Job): Promise<JobDto> {
+    const dto = new JobDto(job)
+    if (job.type === JobType.UPDATE_BOX_SECRETS && dto.payload) {
+      dto.payload = await this.encryptionService.decrypt(dto.payload)
+    } else if (job.type === JobType.CREATE_BOX && dto.payload) {
+      dto.payload = await this.decryptCreateBoxSecrets(dto.payload)
+    }
+    return dto
+  }
+
+  private async decryptCreateBoxSecrets(payload: string): Promise<string> {
+    const parsedPayload = JSON.parse(payload)
+    if (!Array.isArray(parsedPayload.secrets)) {
+      return payload
+    }
+
+    const secrets = await Promise.all(
+      parsedPayload.secrets.map(async (secret: CreateBoxSecretDto) => ({
+        ...secret,
+        value: await this.encryptionService.decrypt(secret.value),
+      })),
+    )
+
+    return JSON.stringify({ ...parsedPayload, secrets })
   }
 }

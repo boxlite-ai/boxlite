@@ -14,6 +14,7 @@ type CreateBoxDTO struct {
 	MemoryQuota      int64             `json:"memoryQuota" validate:"min=1"`
 	StorageQuota     int64             `json:"storageQuota" validate:"min=1"`
 	Env              map[string]string `json:"env,omitempty"`
+	Secrets          []SecretDTO       `json:"secrets,omitempty"`
 	Registry         *RegistryDTO      `json:"registry,omitempty"`
 	Entrypoint       []string          `json:"entrypoint,omitempty"`
 	Volumes          []VolumeDTO       `json:"volumes,omitempty"`
@@ -41,6 +42,17 @@ type UpdateNetworkSettingsDTO struct {
 	NetworkAllowList   *string `json:"networkAllowList,omitempty"`
 	NetworkLimitEgress *bool   `json:"networkLimitEgress,omitempty"`
 } //	@name	UpdateNetworkSettingsDTO
+
+type SecretDTO struct {
+	Name        string   `json:"name" validate:"required"`
+	Value       string   `json:"value" validate:"required"`
+	Hosts       []string `json:"hosts,omitempty"`
+	Placeholder string   `json:"placeholder" validate:"required"`
+} //	@name	SecretDTO
+
+type UpdateSecretsDTO struct {
+	Secrets []SecretDTO `json:"secrets" validate:"required"`
+} //	@name	UpdateSecretsDTO
 
 type RecoverBoxDTO struct {
 	FromVolumeId     string            `json:"fromVolumeId,omitempty"`

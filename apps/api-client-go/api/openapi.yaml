@@ -7431,6 +7431,7 @@ components:
       - INSPECT_ARTIFACT_IN_REGISTRY
       - REMOVE_ARTIFACT
       - UPDATE_BOX_NETWORK_SETTINGS
+      - UPDATE_BOX_SECRETS
       type: string
     Job:
       example:

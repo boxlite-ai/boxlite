@@ -18,6 +18,9 @@ import { ResourceType } from '../enums/resource-type.enum'
 import { JobService } from '../services/job.service'
 import { BoxRepository } from '../repositories/box.repository'
 import { UpdateNetworkSettingsDTO, RecoverBoxDTO } from '@boxlite-ai/runner-api-client'
+import { UpdateBoxSecretDto } from '../../boxlite-rest/dto/update-box-secrets.dto'
+import { EncryptionService } from '../../encryption/encryption.service'
+import { CreateBoxSecretDto } from '../dto/create-box.dto'
 
 /**
  * RunnerAdapterV2 implements RunnerAdapter for v2 runners.
@@ -34,6 +37,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     @InjectRepository(Job)
     private readonly jobRepository: Repository<Job>,
     private readonly jobService: JobService,
+    private readonly encryptionService: EncryptionService,
   ) {}
 
   async init(runner: Runner): Promise<void> {
@@ -114,7 +118,11 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     }
   }
 
-  async createBox(box: Box, metadata?: { [key: string]: string }): Promise<StartBoxResponse | undefined> {
+  async createBox(
+    box: Box,
+    metadata?: { [key: string]: string },
+    secrets: CreateBoxSecretDto[] = [],
+  ): Promise<StartBoxResponse | undefined> {
     if (!box.image) {
       throw new Error(`Box ${box.id} has no image; cannot create on runner`)
     }
@@ -128,6 +136,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       memoryQuota: box.mem,
       storageQuota: box.disk,
       env: box.env,
+      secrets: await this.encryptSecrets(secrets),
       volumes: box.volumes?.map((volume) => ({
         volumeId: volume.volumeId,
         mountPath: volume.mountPath,
@@ -147,6 +156,15 @@ export class RunnerAdapterV2 implements RunnerAdapter {
 
     //  Daemon version is set in the job result metadata once the runner completes the job.
     return undefined
+  }
+
+  private async encryptSecrets(secrets: CreateBoxSecretDto[]): Promise<CreateBoxSecretDto[]> {
+    return Promise.all(
+      secrets.map(async (secret) => ({
+        ...secret,
+        value: await this.encryptionService.encrypt(secret.value),
+      })),
+    )
   }
 
   async startBox(
@@ -223,6 +241,14 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     )
 
     this.logger.debug(`Created UPDATE_BOX_NETWORK_SETTINGS job for box ${boxId} on runner ${this.runner.id}`)
+  }
+
+  async updateSecrets(boxId: string, secrets: UpdateBoxSecretDto[]): Promise<void> {
+    const payload = await this.encryptionService.encrypt(JSON.stringify({ secrets }))
+
+    await this.jobService.createJob(null, JobType.UPDATE_BOX_SECRETS, this.runner.id, ResourceType.BOX, boxId, payload)
+
+    this.logger.debug(`Created UPDATE_BOX_SECRETS job for box ${boxId} on runner ${this.runner.id}`)
   }
 
   async resizeBox(boxId: string, cpu?: number, memory?: number, disk?: number): Promise<void> {

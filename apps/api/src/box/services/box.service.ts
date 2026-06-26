@@ -74,6 +74,10 @@ import { BoxLookupCacheInvalidationService } from './box-lookup-cache-invalidati
 import { Region } from '../../region/entities/region.entity'
 import { BoxActivityService } from './box-activity.service'
 import { assertWithinPerBoxLimits } from './per-box-limits'
+import { UpdateBoxSecretDto } from '../../boxlite-rest/dto/update-box-secrets.dto'
+import { EncryptionService } from '../../encryption/encryption.service'
+import { CreateBoxSecretDto } from '../dto/create-box.dto'
+import { BOX_CREATE_SECRETS_TTL_SECONDS, boxCreateSecretsKey } from '../utils/box-create-secrets.util'
 
 // TODO(image-rewrite): resource defaults previously came from the removed image subsystem;
 // these mirror the Box entity column defaults until image resolution is rebuilt.
@@ -104,6 +108,7 @@ export class BoxService {
     private readonly regionService: RegionService,
     private readonly boxLookupCacheInvalidationService: BoxLookupCacheInvalidationService,
     private readonly boxActivityService: BoxActivityService,
+    private readonly encryptionService: EncryptionService,
   ) {}
 
   protected getLockKey(id: string): string {
@@ -170,7 +175,7 @@ export class BoxService {
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
         await this.volumeService.validateVolumes(organization.id, volumeIdOrNames)
-      } else if (image) {
+      } else if (image && !createBoxDto.secrets?.length) {
         //  No volumes requested — try to claim a pre-warmed box matching this image/spec
         //  before creating a fresh one.
         const skipWarmPool = (await this.redis.exists(`warm-pool:skip:${image}`)) === 1
@@ -243,6 +248,19 @@ export class BoxService {
       box.pending = true
 
       const insertedBox = await this.boxRepository.insert(box)
+      try {
+        if (createBoxDto.secrets?.length) {
+          await this.storeCreateSecrets(insertedBox.id, createBoxDto.secrets)
+        }
+      } catch (error) {
+        await this.boxRepository.delete({ id: insertedBox.id }).catch((deleteError) => {
+          this.logger.error(
+            `Failed to roll back box ${insertedBox.id} after storing create secrets failed`,
+            deleteError,
+          )
+        })
+        throw error
+      }
 
       this.eventEmitter
         .emitAsync(BoxEvents.CREATED, new BoxCreatedEvent(insertedBox))
@@ -256,6 +274,26 @@ export class BoxService {
 
       throw error
     }
+  }
+
+  private async storeCreateSecrets(boxId: string, secrets: CreateBoxSecretDto[]): Promise<void> {
+    if (secrets.length === 0) {
+      return
+    }
+
+    const encryptedSecrets = await Promise.all(
+      secrets.map(async (secret) => ({
+        ...secret,
+        value: await this.encryptionService.encrypt(secret.value),
+      })),
+    )
+
+    await this.redis.set(
+      boxCreateSecretsKey(boxId),
+      JSON.stringify(encryptedSecrets),
+      'EX',
+      BOX_CREATE_SECRETS_TTL_SECONDS,
+    )
   }
 
   private async assignWarmPoolBox(
@@ -1260,6 +1298,24 @@ export class BoxService {
     }
 
     return updatedBox
+  }
+
+  async updateSecrets(boxIdOrName: string, secrets: UpdateBoxSecretDto[], organizationId?: string): Promise<Box> {
+    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+
+    if (!box.runnerId) {
+      throw new BadRequestError('Box is not assigned to a runner')
+    }
+
+    const runner = await this.runnerService.findOne(box.runnerId)
+    if (!runner) {
+      throw new NotFoundException(`Runner ${box.runnerId} not found`)
+    }
+
+    const runnerAdapter = await this.runnerAdapterFactory.create(runner)
+    await runnerAdapter.updateSecrets(box.id, secrets)
+
+    return box
   }
 
   // used by internal services to update the state of a box to resolve domain and runner state mismatch

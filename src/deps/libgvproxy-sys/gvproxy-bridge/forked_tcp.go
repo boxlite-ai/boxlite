@@ -56,15 +56,16 @@ func init() {
 }
 
 func decideTCPRoute(destIP net.IP, destPort uint16, filter *TCPFilter, secretMatcher *SecretHostMatcher) tcpRoute {
+	hasSecretRules := secretMatcher.HasRules()
 	if filter == nil {
-		if secretMatcher != nil && destPort == 443 {
+		if hasSecretRules && destPort == 443 {
 			return tcpRouteInspect
 		}
 		return tcpRouteStandardForward
 	}
 
 	// Secret substitution needs SNI even if the destination IP is broadly allowed.
-	if secretMatcher != nil && destPort == 443 {
+	if hasSecretRules && destPort == 443 {
 		return tcpRouteInspect
 	}
 

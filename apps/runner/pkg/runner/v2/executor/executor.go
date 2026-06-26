@@ -141,6 +141,8 @@ func (e *Executor) executeJob(ctx context.Context, job *apiclient.Job) (any, err
 		resultMetadata, err = e.resizeBox(ctx, job)
 	case apiclient.JOBTYPE_UPDATE_BOX_NETWORK_SETTINGS:
 		resultMetadata, err = e.updateNetworkSettings(ctx, job)
+	case apiclient.JOBTYPE_UPDATE_BOX_SECRETS:
+		resultMetadata, err = e.updateSecrets(ctx, job)
 	case apiclient.JOBTYPE_RECOVER_BOX:
 		resultMetadata, err = e.recoverBox(ctx, job)
 	default:

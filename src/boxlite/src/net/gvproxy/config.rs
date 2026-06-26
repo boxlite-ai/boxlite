@@ -50,6 +50,9 @@ pub struct GvproxyConfig {
     /// Caller-provided to ensure each box gets a unique, collision-free path.
     pub socket_path: PathBuf,
 
+    /// Unix socket path for gvproxy's in-process admin API.
+    pub admin_sock_path: PathBuf,
+
     /// Virtual network subnet (e.g., "192.168.127.0/24")
     pub subnet: String,
 
@@ -124,6 +127,7 @@ impl std::fmt::Debug for GvproxyConfig {
         // via `GvproxySecretConfig::Debug`.
         f.debug_struct("GvproxyConfig")
             .field("socket_path", &self.socket_path)
+            .field("admin_sock_path", &self.admin_sock_path)
             .field("subnet", &self.subnet)
             .field("gateway_ip", &self.gateway_ip)
             .field("gateway_mac", &self.gateway_mac)
@@ -175,9 +179,11 @@ impl From<&crate::runtime::options::Secret> for GvproxySecretConfig {
 /// Create a config with network defaults for the given socket path.
 fn defaults_with_socket_path(socket_path: PathBuf) -> GvproxyConfig {
     use crate::net::constants::*;
+    let admin_sock_path = socket_path.with_file_name("gvproxy-admin.sock");
 
     GvproxyConfig {
         socket_path,
+        admin_sock_path,
         subnet: SUBNET.to_string(),
         gateway_ip: GATEWAY_IP.to_string(),
         gateway_mac: GATEWAY_MAC_STRING.to_string(),
@@ -431,6 +437,23 @@ mod tests {
         // Verify round-trip
         let deserialized: GvproxyConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.socket_path, socket_path);
+    }
+
+    #[test]
+    fn test_admin_socket_path_is_sibling_of_network_socket() {
+        let config = GvproxyConfig::new(
+            PathBuf::from("/home/user/.boxlite/boxes/my-box/sockets/net.sock"),
+            vec![],
+        );
+
+        assert_eq!(
+            config.admin_sock_path,
+            PathBuf::from("/home/user/.boxlite/boxes/my-box/sockets/gvproxy-admin.sock")
+        );
+
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("\"admin_sock_path\""));
+        assert!(json.contains("gvproxy-admin.sock"));
     }
 
     // ========================================================================

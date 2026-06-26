@@ -183,6 +183,47 @@ func UpdateNetworkSettings(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, "Network settings updated")
 }
 
+// UpdateSecrets godoc
+//
+//	@Tags			box
+//	@Summary		Update box secrets
+//	@Description	Update live secret substitution settings
+//	@Produce		json
+//	@Param			boxId	path		string					true	"Box ID"
+//	@Param			box		body		dto.UpdateSecretsDTO	true	"Update secrets"
+//	@Success		200			{string}	string					"Secrets updated"
+//	@Failure		400			{object}	common_errors.ErrorResponse
+//	@Failure		401			{object}	common_errors.ErrorResponse
+//	@Failure		404			{object}	common_errors.ErrorResponse
+//	@Failure		409			{object}	common_errors.ErrorResponse
+//	@Failure		500			{object}	common_errors.ErrorResponse
+//	@Router			/boxes/{boxId}/secrets [put]
+//
+//	@id				UpdateSecrets
+func UpdateSecrets(ctx *gin.Context) {
+	var updateSecretsDto dto.UpdateSecretsDTO
+	err := ctx.ShouldBindJSON(&updateSecretsDto)
+	if err != nil {
+		ctx.Error(common_errors.NewInvalidBodyRequestError(err))
+		return
+	}
+
+	boxId := ctx.Param("boxId")
+	runner, err := runner.GetInstance(nil)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	err = runner.Boxlite.UpdateSecrets(ctx.Request.Context(), boxId, updateSecretsDto.Secrets)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, "Secrets updated")
+}
+
 // GetNetworkSettings godoc
 //
 //	@Tags			box

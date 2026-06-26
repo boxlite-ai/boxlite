@@ -54,6 +54,10 @@ func (a *BoxliteAdapter) UpdateNetworkSettings(ctx context.Context, boxId string
 	return a.client.UpdateNetworkSettings(ctx, boxId, settings)
 }
 
+func (a *BoxliteAdapter) UpdateSecrets(ctx context.Context, boxId string, secrets []dto.SecretDTO) error {
+	return a.client.UpdateSecrets(ctx, boxId, secrets)
+}
+
 func (a *BoxliteAdapter) GetBoxState(ctx context.Context, boxId string) (enums.BoxState, error) {
 	return a.client.GetBoxState(ctx, boxId)
 }

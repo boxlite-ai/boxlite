@@ -15,10 +15,12 @@ import "C"
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"runtime"
 	"runtime/debug"
@@ -182,6 +184,7 @@ type DNSZone struct {
 // GvproxyConfig matches the Rust structure (must stay in sync!)
 type GvproxyConfig struct {
 	SocketPath       string         `json:"socket_path"`
+	AdminSockPath    string         `json:"admin_sock_path,omitempty"`
 	Subnet           string         `json:"subnet"`
 	GatewayIP        string         `json:"gateway_ip"`
 	GatewayMac       string         `json:"gateway_mac"`
@@ -212,6 +215,88 @@ type GvproxyInstance struct {
 	vnMu          sync.RWMutex                   // Protects vn field
 	ca            *BoxCA                         // Ephemeral MITM CA (nil if no secrets)
 	secretMatcher *SecretHostMatcher             // Hostname→secrets lookup (nil if no secrets)
+}
+
+type updateSecretsRequest struct {
+	Secrets []SecretConfig `json:"secrets"`
+}
+
+func validateSecretConfig(secret SecretConfig) error {
+	if secret.Name == "" {
+		return fmt.Errorf("secret name is required")
+	}
+	if secret.Value == "" {
+		return fmt.Errorf("secret value is required")
+	}
+	if secret.Placeholder == "" {
+		return fmt.Errorf("secret placeholder is required")
+	}
+	if len(secret.Hosts) == 0 {
+		return fmt.Errorf("secret hosts are required")
+	}
+	return nil
+}
+
+func (g *GvproxyInstance) handleUpdateSecrets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut && r.Method != http.MethodPost {
+		w.Header().Set("Allow", "PUT, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if g.ca == nil || g.secretMatcher == nil {
+		http.Error(w, "secret substitution is not enabled for this box", http.StatusConflict)
+		return
+	}
+
+	var req updateSecretsRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		http.Error(w, "invalid secrets payload", http.StatusBadRequest)
+		return
+	}
+	for _, secret := range req.Secrets {
+		if err := validateSecretConfig(secret); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
+	g.secretMatcher.Update(req.Secrets)
+	logrus.WithField("num_secrets", len(req.Secrets)).Info("MITM: updated secrets via admin socket")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func startAdminServer(ctx context.Context, socketPath string, instance *GvproxyInstance, vn *virtualnetwork.VirtualNetwork) (*http.Server, error) {
+	if socketPath == "" {
+		return nil, nil
+	}
+
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("failed to remove existing admin socket %q: %w", socketPath, err)
+	}
+
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to listen on admin socket %q: %w", socketPath, err)
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/services/", vn.ServicesMux())
+	mux.HandleFunc("/services/secrets", instance.handleUpdateSecrets)
+
+	server := &http.Server{Handler: mux}
+	go func() {
+		<-ctx.Done()
+		_ = server.Close()
+		_ = os.Remove(socketPath)
+	}()
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logrus.WithError(err).WithField("socket", socketPath).Error("gvproxy admin server failed")
+		}
+	}()
+
+	logrus.WithField("socket", socketPath).Info("Started gvproxy admin server")
+	return server, nil
 }
 
 func buildDNSZones(config GvproxyConfig) []types.Zone {
@@ -274,11 +359,11 @@ var (
 	nextID      int64 = 1
 )
 
-//export gvproxy_create
-//
 // On failure (return -1), the underlying error message is written to `*errOut`
 // as a heap-allocated C string. Caller must free it via gvproxy_free_string.
 // `errOut` may be nil if the caller doesn't want the message.
+//
+//export gvproxy_create
 func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 	// setErr surfaces the underlying error back to the FFI caller so the
 	// Rust runtime can include it in the user-visible BoxliteError message
@@ -443,6 +528,13 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 			initErr <- err
 			return
 		}
+
+		if _, err := startAdminServer(ctx, config.AdminSockPath, instance, vn); err != nil {
+			logrus.WithError(err).WithField("socket", config.AdminSockPath).Error("Failed to start gvproxy admin server")
+			initErr <- err
+			return
+		}
+
 		initErr <- nil
 
 		// Override TCP handler with AllowNet filter and/or MITM secret substitution

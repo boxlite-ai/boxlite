@@ -8,6 +8,7 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Delete,
   Head,
   Body,
@@ -31,6 +32,7 @@ import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 import { BoxResponseDto, ListBoxesResponseDto } from './dto/box-response.dto'
 import { CreateBoxDto } from './dto/create-box.dto'
+import { UpdateBoxSecretsDto } from './dto/update-box-secrets.dto'
 import { boxToBoxResponse, createBoxToCreateBox } from './mappers/box-to-box.mapper'
 import { Audit, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
@@ -149,6 +151,31 @@ export class BoxliteBoxController {
   })
   async removeBox(@AuthContext() authContext: OrganizationAuthContext, @Param('boxId') boxId: string) {
     await this.boxService.destroy(boxId, authContext.organizationId)
+  }
+
+  @Put(':boxId/secrets')
+  @HttpCode(204)
+  @Audit({
+    action: AuditAction.UPDATE,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    requestMetadata: {
+      body: (req: TypedRequest<UpdateBoxSecretsDto>) => ({
+        secrets: req.body?.secrets?.map((secret) => ({
+          name: secret.name,
+          hosts: secret.hosts,
+          placeholder: secret.placeholder,
+          value: MASKED_AUDIT_VALUE,
+        })),
+      }),
+    },
+  })
+  async updateSecrets(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Body() dto: UpdateBoxSecretsDto,
+  ) {
+    await this.boxService.updateSecrets(boxId, dto.secrets, authContext.organizationId)
   }
 
   @Post(':boxId/start')

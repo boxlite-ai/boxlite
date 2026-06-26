@@ -76,6 +76,27 @@ func networkSpec(blockAll *bool, allowList *string) boxlite.NetworkSpec {
 	return spec
 }
 
+func boxliteSecrets(secrets []dto.SecretDTO) []boxlite.Secret {
+	result := make([]boxlite.Secret, 0, len(secrets))
+	for _, secret := range secrets {
+		result = append(result, boxlite.Secret{
+			Name:        secret.Name,
+			Value:       secret.Value,
+			Hosts:       append([]string(nil), secret.Hosts...),
+			Placeholder: secret.Placeholder,
+		})
+	}
+	return result
+}
+
+func secretOptions(secrets []dto.SecretDTO) []boxlite.BoxOption {
+	opts := make([]boxlite.BoxOption, 0, len(secrets))
+	for _, secret := range boxliteSecrets(secrets) {
+		opts = append(opts, boxlite.WithSecret(secret))
+	}
+	return opts
+}
+
 func daemonBoxEnv(ctx context.Context, boxDto dto.CreateBoxDTO) map[string]string {
 	env := map[string]string{
 		"BOXLITE_BOX_ID": boxDto.Id,
@@ -229,6 +250,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	for k, v := range daemonBoxEnv(ctx, boxDto) {
 		opts = append(opts, boxlite.WithEnv(k, v))
 	}
+	opts = append(opts, secretOptions(boxDto.Secrets)...)
 
 	if len(boxDto.Entrypoint) > 0 {
 		opts = append(opts, boxlite.WithEntrypoint(boxDto.Entrypoint...))

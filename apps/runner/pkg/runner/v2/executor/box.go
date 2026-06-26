@@ -87,6 +87,16 @@ func (e *Executor) updateNetworkSettings(ctx context.Context, job *apiclient.Job
 	return nil, e.backend.UpdateNetworkSettings(ctx, job.ResourceId, updateNetworkSettingsDto)
 }
 
+func (e *Executor) updateSecrets(ctx context.Context, job *apiclient.Job) (any, error) {
+	var updateSecretsDto dto.UpdateSecretsDTO
+	err := e.parsePayload(job.Payload, &updateSecretsDto)
+	if err != nil {
+		return nil, common.FormatRecoverableError(fmt.Errorf("failed to unmarshal payload: %w", err))
+	}
+
+	return nil, e.backend.UpdateSecrets(ctx, job.ResourceId, updateSecretsDto.Secrets)
+}
+
 func (e *Executor) recoverBox(ctx context.Context, job *apiclient.Job) (any, error) {
 	var recoverBoxDto dto.RecoverBoxDTO
 	err := e.parsePayload(job.Payload, &recoverBoxDto)

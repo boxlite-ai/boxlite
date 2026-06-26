@@ -26,6 +26,8 @@ The type of the job
 
 * `UPDATE_BOX_NETWORK_SETTINGS` (value: `'UPDATE_BOX_NETWORK_SETTINGS'`)
 
+* `UPDATE_BOX_SECRETS` (value: `'UPDATE_BOX_SECRETS'`)
+
 * `UNKNOWN_DEFAULT_OPEN_API` (value: `'11184809'`)
 
 [[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)

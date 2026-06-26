@@ -22,6 +22,9 @@ import {
 } from 'class-validator'
 import { isValidNetworkAllowEntry, MAX_NETWORK_ALLOW_LIST_ENTRIES } from '../../box/utils/network-validation.util'
 
+const MAX_SECRETS = 32
+const MAX_SECRET_HOSTS = 64
+
 @ValidatorConstraint({ name: 'isNetworkAllowEntry', async: false })
 class IsNetworkAllowEntryConstraint implements ValidatorConstraintInterface {
   validate(value: unknown): boolean {
@@ -43,6 +46,23 @@ export class NetworkSpecDto {
   @IsString({ each: true })
   @Validate(IsNetworkAllowEntryConstraint, { each: true })
   allow_net?: string[]
+}
+
+export class CreateBoxSecretDto {
+  @IsString()
+  name: string
+
+  @IsString()
+  value: string
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_SECRET_HOSTS)
+  @IsString({ each: true })
+  hosts?: string[]
+
+  @IsString()
+  placeholder: string
 }
 
 export class CreateBoxDto {
@@ -104,4 +124,11 @@ export class CreateBoxDto {
   @ValidateNested()
   @Type(() => NetworkSpecDto)
   network?: NetworkSpecDto
+
+  @IsOptional()
+  @Type(() => CreateBoxSecretDto)
+  @ValidateNested({ each: true })
+  @IsArray()
+  @ArrayMaxSize(MAX_SECRETS)
+  secrets?: CreateBoxSecretDto[]
 }

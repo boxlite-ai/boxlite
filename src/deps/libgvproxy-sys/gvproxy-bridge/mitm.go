@@ -190,6 +190,7 @@ func resolveUpstreamTLS(hostname string, overrides ...*tls.Config) *tls.Config {
 
 // SecretHostMatcher provides O(1) lookup for whether a hostname has secrets.
 type SecretHostMatcher struct {
+	mu               sync.RWMutex
 	exactHosts       map[string]bool
 	wildcardSuffixes []string
 	secrets          []SecretConfig
@@ -197,24 +198,48 @@ type SecretHostMatcher struct {
 
 // NewSecretHostMatcher builds a matcher from secret configs.
 func NewSecretHostMatcher(secrets []SecretConfig) *SecretHostMatcher {
-	m := &SecretHostMatcher{
-		exactHosts: make(map[string]bool),
-		secrets:    secrets,
-	}
+	m := &SecretHostMatcher{}
+	m.Update(secrets)
+	return m
+}
 
+func buildSecretHostIndex(secrets []SecretConfig) (map[string]bool, []string) {
+	exactHosts := make(map[string]bool)
+	var wildcardSuffixes []string
 	for _, s := range secrets {
 		for _, host := range s.Hosts {
 			h := strings.ToLower(host)
 			if strings.HasPrefix(h, "*.") {
 				suffix := h[1:] // e.g., ".openai.com"
-				m.wildcardSuffixes = append(m.wildcardSuffixes, suffix)
+				wildcardSuffixes = append(wildcardSuffixes, suffix)
 			} else {
-				m.exactHosts[h] = true
+				exactHosts[h] = true
 			}
 		}
 	}
+	return exactHosts, wildcardSuffixes
+}
 
-	return m
+// Update replaces the matcher rules in place so existing TCP handler closures
+// observe new secret values without reinstalling the forwarder.
+func (m *SecretHostMatcher) Update(secrets []SecretConfig) {
+	exactHosts, wildcardSuffixes := buildSecretHostIndex(secrets)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.exactHosts = exactHosts
+	m.wildcardSuffixes = wildcardSuffixes
+	m.secrets = append([]SecretConfig(nil), secrets...)
+}
+
+// HasRules returns true when any host rule is configured.
+func (m *SecretHostMatcher) HasRules() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.exactHosts) > 0 || len(m.wildcardSuffixes) > 0
 }
 
 // matchesWildcard checks if hostname matches a wildcard suffix (e.g., ".foo.com").
@@ -226,7 +251,12 @@ func matchesWildcard(hostname, suffix string) bool {
 
 // Matches returns true if hostname has associated secrets.
 func (m *SecretHostMatcher) Matches(hostname string) bool {
+	if m == nil {
+		return false
+	}
 	h := strings.ToLower(hostname)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	if m.exactHosts[h] {
 		return true
 	}
@@ -240,8 +270,13 @@ func (m *SecretHostMatcher) Matches(hostname string) bool {
 
 // SecretsForHost returns all secrets whose Hosts list includes hostname.
 func (m *SecretHostMatcher) SecretsForHost(hostname string) []SecretConfig {
+	if m == nil {
+		return nil
+	}
 	h := strings.ToLower(hostname)
 	var result []SecretConfig
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	for _, s := range m.secrets {
 		for _, host := range s.Hosts {
 			host = strings.ToLower(host)

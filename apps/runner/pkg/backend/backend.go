@@ -25,6 +25,7 @@ type BoxBackend interface {
 	Resize(ctx context.Context, boxId string, resizeDto dto.ResizeBoxDTO) error
 	RecoverBox(ctx context.Context, boxId string, recoverDto dto.RecoverBoxDTO) error
 	UpdateNetworkSettings(ctx context.Context, boxId string, settings dto.UpdateNetworkSettingsDTO) error
+	UpdateSecrets(ctx context.Context, boxId string, secrets []dto.SecretDTO) error
 	GetBoxState(ctx context.Context, boxId string) (enums.BoxState, error)
 
 	// Health
