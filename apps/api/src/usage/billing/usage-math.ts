@@ -123,3 +123,72 @@ export function aggregatePeriods(periods: BillablePeriod[], from: Date, to: Date
 
   return { totalCpuSeconds, totalRamGbSeconds, totalDiskGbSeconds }
 }
+
+/** What the reconcile sweep needs to know about one stuck open period. */
+export interface ReconcileInput {
+  /** Kind of the currently-open period. */
+  openKind: 'running' | 'stopped'
+  periodStart: Date
+  /** Current box row, or `null` if the box was deleted. */
+  box: { state: BoxState; updatedAt: Date } | null
+  /** `false` when the box's runner is unresponsive (box presumed lost). */
+  runnerAlive: boolean
+  /** Best "last known alive" instant (runner heartbeat), if any. */
+  lastAliveAt: Date | null
+  now: Date
+}
+
+/**
+ * Decide whether a stuck open period should be force-closed by the reconcile
+ * sweep (and at what timestamp). Returns `null` to leave it open.
+ *
+ * Force-close when the period can no longer legitimately be open:
+ *  1. **runner dead** — box's runner unresponsive; box.state may be stale at
+ *     STARTED (the runner-death case neither Daytona nor E2B handle). Close at
+ *     the last moment we knew the runner was alive, *not* box.updatedAt (which
+ *     could be the box's start → near-zero duration).
+ *  2. **box gone** — box row deleted.
+ *  3. **box destroyed** — billing kind `gone` (rootfs released).
+ *  4. **missed stop** — open `running` period but box no longer running (the
+ *     running→stopped close event was lost to an API/DB blip).
+ *
+ * A legitimately-open `stopped` period (box stopped, disk still billing) is
+ * left open — only destroy closes it. Close timestamps are clamped to
+ * `[periodStart, now]` so the CHECK constraint can never be violated; closed
+ * rows are marked `sealed = false` (suspect) by the caller.
+ *
+ * Known simplification (safe direction = under-bill, tracked for Phase 1.5):
+ * this only ever *closes*. The live path's running→stopped also *opens* a
+ * disk-only follow-on; reconcile does not, so for a box that stopped (case 4)
+ * but lingers before destroy, the disk between `closeAt` and destroy is billed
+ * to nobody. For the runner-dead / box-gone cases the disk is genuinely
+ * unreachable, so closing-without-reopening is correct there.
+ */
+export function planReconcileClose(input: ReconcileInput): { closeAt: Date } | null {
+  const { openKind, periodStart, box, runnerAlive, lastAliveAt, now } = input
+
+  const close = (at: Date): { closeAt: Date } => ({
+    closeAt: new Date(Math.min(Math.max(at.getTime(), periodStart.getTime()), now.getTime())),
+  })
+
+  // 1. Runner dead — trust the last heartbeat over the (possibly stale) box state.
+  if (!runnerAlive) {
+    return close(lastAliveAt ?? box?.updatedAt ?? now)
+  }
+  // 2. Box row gone — no better signal than "now".
+  if (box === null) {
+    return close(lastAliveAt ?? now)
+  }
+  const kind = billingPeriodKind(box.state)
+  // 3. Box destroyed — close at the destroy transition.
+  if (kind === 'gone') {
+    return close(box.updatedAt)
+  }
+  // 4. Open running period but box no longer running — missed the close.
+  if (openKind === 'running' && kind !== 'running') {
+    return close(box.updatedAt)
+  }
+  // Legitimately open (running box w/ running period, or stopped box w/ disk-only
+  // stopped period). Leave it.
+  return null
+}
