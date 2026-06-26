@@ -2,7 +2,9 @@
 # The Python CLI is the source of truth: `python -m compose --help`.
 # This Makefile exists for muscle memory + tab completion.
 
-PY ?= python
+# Prefer the repo-local venv (.venv-infra) if present, so `make up` just works
+# without the caller needing to activate it; override with `make up PY=...`.
+PY ?= $(shell [ -x ../../.venv-infra/bin/python ] && echo ../../.venv-infra/bin/python || echo python)
 
 .PHONY: help install up down status logs restart reset nuke
 

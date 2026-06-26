@@ -25,13 +25,14 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import _local_arm64
 from . import orchestrator
 from .config import InfraConfig
 from .doctor import _lsof_owner
 from .services import SERVICES
 
 # ── L2 ports + identities (the native host processes) ──────────────────────
-PORT_API = 3001
+PORT_API = int(os.environ.get("BOXLITE_LOCAL_API_PORT", "3001"))  # override if :3001 is taken
 PORT_RUNNER = 3003
 PORT_PROXY = 4000
 PORT_DASHBOARD = 3000
@@ -408,7 +409,12 @@ def _go_build(p: _Paths, comp: str) -> None:
     out = p.runner_bin if comp == "runner" else p.proxy_bin
     p.bin.mkdir(parents=True, exist_ok=True)
     log(f"go build {comp} → {out}")
-    subprocess.run(["go", "build", "-o", str(out), f"./cmd/{comp}"],
+    # The runner links the BoxLite SDK's native lib. Build it with the
+    # boxlite_dev tag so it links this worktree's target/debug/libboxlite.a
+    # (matching the local sdks/go via go.work) instead of a downloaded
+    # prebuilt — otherwise a locally-changed FFI surface fails to link.
+    tags = ["-tags", "boxlite_dev"] if comp == "runner" else []
+    subprocess.run(["go", "build", *tags, "-o", str(out), f"./cmd/{comp}"],
                    cwd=str(p.apps / comp), env={**os.environ, "GOTOOLCHAIN": "auto"}, check=True)
 
 
@@ -443,11 +449,31 @@ def _ensure_installed(p: _Paths) -> None:
     os.execv(sys.executable, [sys.executable, "-m", "compose", *sys.argv[1:]])
 
 
-def _seed_api_env(p: _Paths) -> None:
+def _set_env_kv(path: Path, key: str, value: str) -> None:
+    """Idempotently set KEY=value in a dotenv file (replace or append)."""
+    lines = path.read_text().splitlines() if path.exists() else []
+    out, found = [], False
+    for ln in lines:
+        if ln.startswith(f"{key}="):
+            out.append(f"{key}={value}"); found = True
+        else:
+            out.append(ln)
+    if not found:
+        out.append(f"{key}={value}")
+    path.write_text("\n".join(out) + "\n")
+
+
+def _seed_api_env(p: _Paths, agent_img: str | None = None) -> None:
     api_env = p.apps / "api" / ".env"
     if not api_env.exists():
         log("apps/api/.env missing — seeding from the infra-local template")
         shutil.copy(p.infra_local / "api.env", api_env)
+    # Keep the API's listen port in lockstep with PORT_API (env-overridable),
+    # and point the curated-image allowlist at the local arm64 agent image.
+    _set_env_kv(api_env, "PORT", str(PORT_API))
+    _set_env_kv(api_env, "APP_URL", f"http://localhost:{PORT_API}")
+    if agent_img:
+        _set_env_kv(api_env, "BOXLITE_SYSTEM_BASE_IMAGE", agent_img)
     apps_env = p.apps / ".env"  # NestJS reads .env from cwd=apps/
     if not apps_env.is_symlink():
         try:
@@ -463,7 +489,13 @@ def up(cfg: InfraConfig, components: list[str] | None = None) -> int:
         if name not in ALL_COMPONENTS:
             err(f"unknown component: {name} (valid: {' '.join(ALL_COMPONENTS)})")
             return 2
+    # 0. Apple-Silicon bootstrap (idempotent no-ops once done): thread docker.io
+    # creds through to L1 + runner, build the native lib, fix the runtime cache.
+    _local_arm64.ensure_tools_on_path()
+    _local_arm64.export_dockerhub_env()
     _ensure_installed(p)
+    _local_arm64.ensure_native_lib()
+    _local_arm64.fix_runtime_cache()
 
     # 1. ensure L1 boxes (single asyncio.run; brings L1 up if postgres is down)
     l1_recreated = asyncio.run(_ensure_l1_async(cfg))
@@ -479,8 +511,12 @@ def up(cfg: InfraConfig, components: list[str] | None = None) -> int:
         log("native binaries missing — building")
         build(cfg)
 
-    # 4. API .env template + the apps/.env symlink NestJS needs
-    _seed_api_env(p)
+    # 3.5 arm64 agent image: L1 registry is up now, so build+push a bootable
+    # arm64 box base (no arm64 curated image exists). None on non-arm64 / no docker.
+    agent_img = _local_arm64.ensure_agent_image()
+
+    # 4. API .env template + port + curated-image override + the apps/.env symlink
+    _seed_api_env(p, agent_img)
 
     # 5. start the requested L2 components
     table = _components(p)
