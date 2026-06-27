@@ -1,5 +1,5 @@
 # Python slim provides Python 3.12 while keeping the image smaller than full Debian.
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-bookworm@sha256:8a7e7cc04fd3e2bd787f7f24e22d5d119aa590d429b50c95dfe12b3abe52f48b
 
 # Noninteractive apt avoids CI prompts; pip settings support system-level package installs in boxes.
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -18,10 +18,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # openssh-client: SSH client utilities for git over SSH and remote access.
 # pkg-config: locate native libraries when building Python wheels.
 # procps: ps/top/free process tools used for runtime inspection.
-# sudo: allow passwordless privilege escalation inside this disposable runtime image.
+# sudo: allow the boxlite user to escalate inside this disposable runtime image.
 # tzdata: UTC timezone data so tools report consistent timestamps.
 # unzip/wget/zip: common archive and download utilities for setup workflows.
-# The same RUN configures UTC, upgrades Python 3.12 packaging tools, enables sudo, and removes apt metadata.
+# The same RUN configures UTC, installs pinned Python packaging tools, creates the runtime user, scopes sudo,
+# and removes apt metadata.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     bash \
@@ -41,15 +42,18 @@ RUN apt-get update \
     zip \
   && ln -fs /usr/share/zoneinfo/$TZ /etc/localtime \
   && dpkg-reconfigure -f noninteractive tzdata \
-  && python -m pip install --upgrade pip setuptools wheel \
-  && echo 'ALL ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/boxlite \
+  && python -m pip install --no-cache-dir pip==25.3 setuptools==80.9.0 wheel==0.45.1 \
+  && useradd --create-home --shell /bin/bash boxlite \
+  && echo 'boxlite ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/boxlite \
   && chmod 0440 /etc/sudoers.d/boxlite \
   && rm -rf /var/lib/apt/lists/*
 
 # Create the default workspace for user and agent workloads.
-RUN mkdir -p /workspace
+RUN mkdir -p /workspace && chown boxlite:boxlite /workspace
 
 # Users and agent commands start in /workspace.
 WORKDIR /workspace
+# Run workloads as an unprivileged user by default; sudo remains available when needed.
+USER boxlite
 # Keep the box alive when the runner does not override the image command.
 CMD ["sleep", "infinity"]

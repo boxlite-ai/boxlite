@@ -27,6 +27,7 @@ concurrency:
 jobs:
   publish:
     name: Publish BoxLite Cloud images
+    if: github.ref == 'refs/heads/main' # workflow_dispatch can target other refs; only main may publish.
     runs-on: ubuntu-latest
 
     steps:
@@ -61,8 +62,8 @@ jobs:
             version="$(tr -d '[:space:]' < images/agent-runtime/VERSION)"
           fi
 
-          if ! echo "$version" | grep -Eq '^[0-9]+[.][0-9]+[.][0-9]+([-+][0-9A-Za-z.-]+)?$'; then
-            echo "Invalid version '$version'; expected MAJOR.MINOR.PATCH" >&2
+          if ! echo "$version" | grep -Eq '^[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
+            echo "Invalid version '$version'; expected MAJOR.MINOR.PATCH with optional -PRERELEASE" >&2
             exit 1
           fi
 

@@ -34,8 +34,8 @@ normalize_tag() { # Accept TAG or VERSION overrides and normalize them to vMAJOR
     tag="v$tag"
   fi
 
-  if [[ ! "$tag" =~ ^v[0-9]+[.][0-9]+[.][0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
-    echo "Invalid TAG=$tag; expected vMAJOR.MINOR.PATCH" >&2
+  if [[ ! "$tag" =~ ^v[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+    echo "Invalid TAG=$tag; expected vMAJOR.MINOR.PATCH with optional -PRERELEASE" >&2
     exit 1
   fi
 
