@@ -113,7 +113,7 @@ describe('WalletService.grant', () => {
 
     expect(balances).toEqual({ balanceCents: 500, freeBalanceCents: 500, paidBalanceCents: 0 })
 
-    const tx = inserts.find((i) => i.entity === 'WalletTransaction')!.rows as Record<string, unknown>
+    const tx = (inserts.find((i) => i.entity === 'WalletTransaction')!.rows as Record<string, unknown>[])[0]
     expect(tx).toMatchObject({
       pool: 'free',
       direction: 'inbound',
@@ -141,7 +141,7 @@ describe('WalletService.topUp', () => {
     const { service, inserts } = makeService({ balanceCents: '-50', freeBalanceCents: '0', paidBalanceCents: '0' }, [])
     const balances = await service.topUp('org-1', 1000)
     expect(balances).toEqual({ balanceCents: 950, freeBalanceCents: 0, paidBalanceCents: 950 })
-    const tx = inserts.find((i) => i.entity === 'WalletTransaction')!.rows as Record<string, unknown>
+    const tx = (inserts.find((i) => i.entity === 'WalletTransaction')!.rows as Record<string, unknown>[])[0]
     expect(tx).toMatchObject({ pool: 'paid', amountCents: '1000', remainingCents: '950' }) // only surplus spendable
   })
 })

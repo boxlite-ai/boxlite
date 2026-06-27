@@ -21,6 +21,7 @@ import { ScheduleModule } from '@nestjs/schedule'
 import { EventEmitterModule } from '@nestjs/event-emitter'
 import { AnalyticsModule } from './analytics/analytics.module'
 import { UsageModule } from './usage/usage.module'
+import { BillingModule } from './billing/billing.module'
 import { OrganizationModule } from './organization/organization.module'
 import { EmailModule } from './email/email.module'
 import { TypedConfigService } from './config/typed-config.service'
@@ -171,6 +172,7 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
     ScheduleModule.forRoot(),
     AnalyticsModule,
     UsageModule,
+    BillingModule,
     OrganizationModule,
     RegionModule,
     AdminModule,
