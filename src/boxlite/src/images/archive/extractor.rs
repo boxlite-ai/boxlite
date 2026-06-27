@@ -413,10 +413,26 @@ impl<'a> LayerExtractor<'a> {
                 if keep_if_dir && is_real_dir {
                     return Ok(());
                 }
-                if is_real_dir {
+                let first = if is_real_dir {
                     fs::remove_dir_all(path)
                 } else {
                     fs::remove_file(path)
+                };
+                // OCI layers can mark a dir read-only (e.g. /usr/bin at 0555);
+                // a whiteout or higher-layer overwrite still has to delete
+                // inside it, but std `remove_*` can't unlink within a read-only
+                // parent. On EACCES/EPERM, make the target subtree and its
+                // parent user-writable, then retry once.
+                match first {
+                    Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                        Self::make_removable(path, is_real_dir);
+                        if is_real_dir {
+                            fs::remove_dir_all(path)
+                        } else {
+                            fs::remove_file(path)
+                        }
+                    }
+                    other => other,
                 }
                 .map_err(|e| {
                     BoxliteError::Storage(format!("Failed to remove {}: {}", path.display(), e))
@@ -428,6 +444,37 @@ impl<'a> LayerExtractor<'a> {
                 path.display(),
                 e
             ))),
+        }
+    }
+
+    /// Make `path` (and, for a directory, its whole subtree) plus its parent
+    /// user-writable, so a read-only OCI dir (e.g. `/usr/bin` at 0555) can't
+    /// block a whiteout/overwrite unlink. Best-effort: chmod errors are
+    /// ignored — the caller's retry surfaces any genuine failure.
+    fn make_removable(path: &Path, is_dir: bool) {
+        if let Some(parent) = path.parent() {
+            Self::make_user_writable(parent);
+        }
+        if is_dir {
+            for entry in WalkDir::new(path).into_iter().flatten() {
+                Self::make_user_writable(entry.path());
+            }
+        } else {
+            Self::make_user_writable(path);
+        }
+    }
+
+    /// Add the owner-write bit to `path` when missing. Skips symlinks (chmod
+    /// would follow to the target); no-op when already writable.
+    fn make_user_writable(path: &Path) {
+        if let Ok(meta) = fs::symlink_metadata(path) {
+            if meta.file_type().is_symlink() {
+                return;
+            }
+            let mode = meta.permissions().mode();
+            if mode & 0o200 == 0 {
+                let _ = fs::set_permissions(path, Permissions::from_mode(mode | 0o200));
+            }
         }
     }
 
@@ -1945,6 +1992,63 @@ mod tests {
              a fix that relaxes perms to bypass EACCES would corrupt the \
              override_stat xattr written by fix_rootfs_permissions",
             bin_mode,
+        );
+
+        // Restore u+w so TempDir's Drop can recurse-remove.
+        let _ = fs::set_permissions(dest.join("usr/bin"), Permissions::from_mode(0o755));
+    }
+
+    /// Whiteout regression: a `.wh.` marker deleting a file inside an
+    /// already-finalized read-only parent dir must succeed. OCI base layers
+    /// ship system dirs like `/usr/bin` at 0o555; a higher layer whiteouting a
+    /// file there (e.g. removing coreutils `[`) hits a parent the previous
+    /// layer's `finalize` already chmod'd to 0o555 on disk, so std `remove_*`
+    /// can't unlink within it — pre-fix this surfaced as a cold `make up`
+    /// failure on macOS: "Failed to remove …/usr/bin/[: Permission denied".
+    /// `remove_nofollow` must make the target writable and proceed.
+    #[test]
+    fn whiteout_removes_file_inside_finalized_readonly_parent_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("merged");
+
+        // Layer 1: lay down /usr/bin at 0o555 with a file, then finalize so the
+        // read-only mode is applied on disk (a later layer sees 0o555).
+        let mut ex1 = LayerExtractor::new(&dest);
+        ex1.extract_reader(std::io::Cursor::new(create_raw_tar(&[
+            raw_dir("usr"),
+            RawTarEntry {
+                path: "usr/bin",
+                kind: RawTarEntryKind::Directory,
+                mode: 0o555,
+            },
+            raw_file("usr/bin/[", b"coreutils"),
+        ])))
+        .unwrap();
+        ex1.finalize().unwrap();
+
+        let bin_mode = fs::symlink_metadata(dest.join("usr/bin"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            bin_mode, 0o555,
+            "precondition: /usr/bin must be read-only on disk before the whiteout layer",
+        );
+
+        // Layer 2: whiteout /usr/bin/[ — its parent is 0o555 on disk now, so the
+        // unlink only succeeds if remove_nofollow makes the target writable.
+        let mut ex2 = LayerExtractor::new(&dest);
+        ex2.extract_reader(std::io::Cursor::new(create_raw_tar(&[raw_file(
+            "usr/bin/.wh.[",
+            b"",
+        )])))
+        .expect("whiteout must delete a file inside a read-only parent dir");
+        ex2.finalize().unwrap();
+
+        assert!(
+            !dest.join("usr/bin/[").exists(),
+            "whiteout should have removed /usr/bin/[",
         );
 
         // Restore u+w so TempDir's Drop can recurse-remove.
