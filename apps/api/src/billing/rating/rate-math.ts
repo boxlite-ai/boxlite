@@ -89,3 +89,32 @@ export function computeRatedCents(totals: UsageTotals, snap: RateSnapshot): Rate
     ratedCents: rounded.toNumber(),
   }
 }
+
+/** One closed Phase-1 usage period, just the fields rating needs. */
+export interface ClosedPeriodLike {
+  periodStart: Date
+  periodEnd: Date
+  /** `running` (cpu+ram+disk) or `stopped` (disk only) — matches Phase 1 aggregatePeriods. */
+  kind: string
+  allocCpu: number
+  allocMemGib: number
+  allocDiskGib: number
+}
+
+/**
+ * Turn one closed usage period into billable totals: disk is charged whether the
+ * box was running or stopped; CPU and RAM only while running (the same split
+ * Phase 1 uses to aggregate). `billedSeconds` is the wall-clock span.
+ */
+export function periodBillableTotals(period: ClosedPeriodLike): { totals: UsageTotals; billedSeconds: number } {
+  const billedSeconds = Math.max(0, (period.periodEnd.getTime() - period.periodStart.getTime()) / 1000)
+  const running = period.kind === 'running'
+  return {
+    billedSeconds,
+    totals: {
+      totalCpuSeconds: running ? period.allocCpu * billedSeconds : 0,
+      totalRamGbSeconds: running ? period.allocMemGib * billedSeconds : 0,
+      totalDiskGbSeconds: period.allocDiskGib * billedSeconds,
+    },
+  }
+}

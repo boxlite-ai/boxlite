@@ -4,7 +4,7 @@
  */
 
 import { UsageTotals } from '../../usage/billing/usage-math'
-import { computeRatedCents, resolveRateSnapshot, RateSnapshot } from './rate-math'
+import { computeRatedCents, periodBillableTotals, resolveRateSnapshot, RateSnapshot } from './rate-math'
 
 const totals = (cpu: number, ram: number, disk: number): UsageTotals => ({
   totalCpuSeconds: cpu,
@@ -83,5 +83,28 @@ describe('computeRatedCents', () => {
 
   it('a zero-usage period rates to 0', () => {
     expect(computeRatedCents(totals(0, 0, 0), snap('2', '1', '0.5'))).toEqual({ preciseCents: '0', ratedCents: 0 })
+  })
+})
+
+describe('periodBillableTotals', () => {
+  const start = new Date('2026-06-27T00:00:00Z')
+  const end = new Date('2026-06-27T00:01:00Z') // 60s
+  const alloc = { allocCpu: 2, allocMemGib: 4, allocDiskGib: 10 }
+
+  it('bills cpu+ram+disk for a running period', () => {
+    const r = periodBillableTotals({ periodStart: start, periodEnd: end, kind: 'running', ...alloc })
+    expect(r.billedSeconds).toBe(60)
+    expect(r.totals).toEqual({ totalCpuSeconds: 120, totalRamGbSeconds: 240, totalDiskGbSeconds: 600 })
+  })
+
+  it('bills only disk for a stopped period (cpu/ram zero)', () => {
+    const r = periodBillableTotals({ periodStart: start, periodEnd: end, kind: 'stopped', ...alloc })
+    expect(r.totals).toEqual({ totalCpuSeconds: 0, totalRamGbSeconds: 0, totalDiskGbSeconds: 600 })
+  })
+
+  it('never returns negative seconds for an inverted span', () => {
+    expect(periodBillableTotals({ periodStart: end, periodEnd: start, kind: 'running', ...alloc }).billedSeconds).toBe(
+      0,
+    )
   })
 })
