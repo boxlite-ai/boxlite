@@ -10,7 +10,7 @@ import { CreditGrant } from '../entities/credit-grant.entity'
 import { Wallet } from '../entities/wallet.entity'
 import { TxSource, WalletTransaction } from '../entities/wallet-transaction.entity'
 import { BillingStatus, deriveBillingStatus, InboundLot, Pool } from './wallet-math'
-import { planCredit, planDebit, WalletBalances } from './wallet-plan'
+import { planCredit, planDebit, PlannedLedgerRow, WalletBalances } from './wallet-plan'
 
 const PG_UNIQUE_VIOLATION = '23505'
 const n = (cents: string): number => Number(cents)
@@ -38,6 +38,10 @@ export interface WalletView {
  * (planDebit/planCredit) decide the new balances and ledger rows. `lockVersion`
  * is bumped on every mutation as a monotonic audit/version counter.
  *
+ * The `*Within(manager, ...)` variants let a caller (e.g. WebhookService) fold a
+ * credit into its OWN transaction, so an idempotency marker and the balance
+ * change commit atomically.
+ *
  * NOTE: the design doc weighed optimistic-lock-with-retry (Lago) vs a pessimistic
  * row lock; we take the pessimistic lock here because every step is already
  * inside one transaction, which makes it simpler with the same no-lost-update
@@ -56,44 +60,50 @@ export class WalletService {
     opts: { source: TxSource; ratedPeriodId: string | null },
     now: Date = new Date(),
   ): Promise<WalletBalances> {
+    return this.dataSource.transaction((manager) => this.debitWithin(manager, organizationId, amountCents, opts, now))
+  }
+
+  /** debit() body, runnable inside a caller-provided transaction. */
+  async debitWithin(
+    manager: EntityManager,
+    organizationId: string,
+    amountCents: number,
+    opts: { source: TxSource; ratedPeriodId: string | null },
+    now: Date = new Date(),
+  ): Promise<WalletBalances> {
     if (amountCents <= 0) throw new Error(`debit amount must be positive, got ${amountCents}`)
+    const wallet = await this.lockWallet(manager, organizationId)
+    const lots = await this.openInboundLots(manager, wallet.id)
+    const plan = planDebit(toBalances(wallet), lots, amountCents, now, opts)
 
-    return this.dataSource.transaction(async (manager) => {
-      const wallet = await this.lockWallet(manager, organizationId)
-      const lots = await this.openInboundLots(manager, wallet.id)
-
-      const plan = planDebit(toBalances(wallet), lots, amountCents, now, opts)
-
-      await manager.insert(
-        WalletTransaction,
-        plan.ledgerRows.map((row) => ({
-          walletId: wallet.id,
-          status: 'settled' as const,
-          amountCents: s(row.amountCents),
-          remainingCents: row.remainingCents === null ? null : s(row.remainingCents),
-          pool: row.pool,
-          priority: row.priority,
-          direction: row.direction,
-          expiresAt: row.expiresAt,
-          source: row.source,
-          ratedPeriodId: row.ratedPeriodId,
-        })),
-      )
-      for (const burn of plan.lotBurns) {
-        await manager.update(WalletTransaction, burn.lotId, { remainingCents: s(burn.newRemainingCents) })
-      }
-      await this.persistBalances(manager, wallet, plan.balances)
-      return plan.balances
-    })
+    await this.insertLedger(manager, wallet.id, plan.ledgerRows, null)
+    for (const burn of plan.lotBurns) {
+      await manager.update(WalletTransaction, burn.lotId, { remainingCents: s(burn.newRemainingCents) })
+    }
+    await this.persistBalances(manager, wallet, plan.balances)
+    return plan.balances
   }
 
   /** Top up the paid pool (settles any carried negative first). */
-  async topUp(
+  topUp(
     organizationId: string,
     amountCents: number,
     source: Extract<TxSource, 'manual' | 'threshold'> = 'manual',
   ): Promise<WalletBalances> {
-    return this.credit(organizationId, amountCents, 'paid', { source, expiresAt: null })
+    return this.dataSource.transaction((manager) =>
+      this.topUpWithin(manager, organizationId, amountCents, source, null),
+    )
+  }
+
+  /** topUp() body, runnable inside a caller-provided transaction (e.g. webhook settlement). */
+  topUpWithin(
+    manager: EntityManager,
+    organizationId: string,
+    amountCents: number,
+    source: Extract<TxSource, 'manual' | 'threshold'>,
+    providerEventId: string | null,
+  ): Promise<WalletBalances> {
+    return this.creditWithin(manager, organizationId, amountCents, 'paid', { source, expiresAt: null, providerEventId })
   }
 
   /** Grant free credit (support adjustment); records an immutable credit_grant trail. */
@@ -108,18 +118,7 @@ export class WalletService {
         source: 'grant',
         expiresAt: opts.expiresAt ?? null,
       })
-      const inserted = await manager.insert(WalletTransaction, {
-        walletId: wallet.id,
-        status: 'settled' as const,
-        amountCents: s(plan.ledgerRow.amountCents),
-        remainingCents: plan.ledgerRow.remainingCents === null ? null : s(plan.ledgerRow.remainingCents),
-        pool: plan.ledgerRow.pool,
-        priority: plan.ledgerRow.priority,
-        direction: plan.ledgerRow.direction,
-        expiresAt: plan.ledgerRow.expiresAt,
-        source: plan.ledgerRow.source,
-        ratedPeriodId: null,
-      })
+      const [txId] = await this.insertLedger(manager, wallet.id, [plan.ledgerRow], null)
       await manager.insert(CreditGrant, {
         organizationId,
         amountCents: s(amountCents),
@@ -129,7 +128,7 @@ export class WalletService {
         note: opts.note ?? null,
         operatorId: opts.operatorId,
         expiresAt: opts.expiresAt ?? null,
-        walletTransactionId: inserted.identifiers[0].id as string,
+        walletTransactionId: txId,
       })
       await this.persistBalances(manager, wallet, plan.balances)
       return plan.balances
@@ -165,31 +164,45 @@ export class WalletService {
 
   // ── internals ───────────────────────────────────────────────────────────────
 
-  private async credit(
+  private async creditWithin(
+    manager: EntityManager,
     organizationId: string,
     amountCents: number,
     pool: Pool,
-    opts: { source: TxSource; expiresAt: Date | null },
+    opts: { source: TxSource; expiresAt: Date | null; providerEventId: string | null },
   ): Promise<WalletBalances> {
     if (amountCents <= 0) throw new Error(`credit amount must be positive, got ${amountCents}`)
-    return this.dataSource.transaction(async (manager) => {
-      const wallet = await this.lockWallet(manager, organizationId)
-      const plan = planCredit(toBalances(wallet), amountCents, pool, opts)
-      await manager.insert(WalletTransaction, {
-        walletId: wallet.id,
+    const wallet = await this.lockWallet(manager, organizationId)
+    const plan = planCredit(toBalances(wallet), amountCents, pool, { source: opts.source, expiresAt: opts.expiresAt })
+    await this.insertLedger(manager, wallet.id, [plan.ledgerRow], opts.providerEventId)
+    await this.persistBalances(manager, wallet, plan.balances)
+    return plan.balances
+  }
+
+  /** Insert ledger rows; returns their ids in order. */
+  private async insertLedger(
+    manager: EntityManager,
+    walletId: string,
+    rows: PlannedLedgerRow[],
+    providerEventId: string | null,
+  ): Promise<string[]> {
+    const result = await manager.insert(
+      WalletTransaction,
+      rows.map((row) => ({
+        walletId,
         status: 'settled' as const,
-        amountCents: s(plan.ledgerRow.amountCents),
-        remainingCents: plan.ledgerRow.remainingCents === null ? null : s(plan.ledgerRow.remainingCents),
-        pool: plan.ledgerRow.pool,
-        priority: plan.ledgerRow.priority,
-        direction: plan.ledgerRow.direction,
-        expiresAt: plan.ledgerRow.expiresAt,
-        source: plan.ledgerRow.source,
-        ratedPeriodId: null,
-      })
-      await this.persistBalances(manager, wallet, plan.balances)
-      return plan.balances
-    })
+        amountCents: s(row.amountCents),
+        remainingCents: row.remainingCents === null ? null : s(row.remainingCents),
+        pool: row.pool,
+        priority: row.priority,
+        direction: row.direction,
+        expiresAt: row.expiresAt,
+        source: row.source,
+        ratedPeriodId: row.ratedPeriodId,
+        providerEventId,
+      })),
+    )
+    return result.identifiers.map((i) => i.id as string)
   }
 
   /** Lock the wallet row for update (creates it first if missing). */
