@@ -31,7 +31,6 @@ import { BoxStateUpdatedEvent } from '../events/box-state-updated.event'
 import { BoxDestroyedEvent } from '../events/box-destroyed.event'
 import { BoxStartedEvent } from '../events/box-started.event'
 import { BoxStoppedEvent } from '../events/box-stopped.event'
-import { BoxConflictError } from '../errors/box-conflict.error'
 import { OrganizationService } from '../../organization/services/organization.service'
 import { OrganizationEvents } from '../../organization/constants/organization-events.constant'
 import { OrganizationSuspendedBoxStoppedEvent } from '../../organization/events/organization-suspended-box-stopped.event'
@@ -831,48 +830,57 @@ export class BoxService {
   }
 
   /**
-   * Reflect an exec-triggered auto-start in the control plane.
+   * Reflect a proxy-triggered auto-start in the control plane.
    *
-   * `exec` on a stopped box auto-starts the VM in the runtime (BoxLite core
-   * live_state), but nothing tells the API. Left alone, PG keeps the box at
-   * desiredState=STOPPED and sync-states promptly issues STOP_BOX, undoing the
-   * auto-start. Flip desiredState to STARTED — exactly like start() — so the
-   * runner-reported STARTED state agrees and the box stays up. We never write
-   * state directly; the runner remains the source of truth for it.
+   * exec / files / metrics on a stopped box all reach `Box::live_state()` in
+   * the runtime, which lazily inits the VM — but nothing tells the API. Left
+   * alone, PG keeps the box at desiredState=STOPPED and sync-states promptly
+   * issues STOP_BOX, undoing the auto-start. Flip desiredState to STARTED —
+   * exactly like start() — so the runner-reported STARTED state agrees and
+   * the box stays up. We never write state directly; the runner remains the
+   * source of truth for it.
    *
-   * Best-effort and idempotent: the exec has already happened, so any failure
-   * here is swallowed (box_sync reconciles state on its next tick).
+   * Suspension is a hard wall (same as start()): throws ForbiddenException so
+   * the controller surfaces 403 to the caller and the proxy never runs.
+   *
+   * Otherwise best-effort and idempotent: the proxied call has already (or
+   * will soon) hit the runtime, so DB-side failures are swallowed and
+   * box_sync reconciles state on its next tick.
    */
-  async ensureStartedForExec(boxIdOrName: string, organizationId: string): Promise<void> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+  async ensureStartedForProxy(boxIdOrName: string, organization: Organization): Promise<void> {
+    // Suspension check first — same gate as start() (~line 790). Without it,
+    // a suspended org could exec/files/metrics a STOPPED box back to STARTED,
+    // bypassing the start-time guard entirely.
+    this.organizationService.assertOrganizationIsNotSuspended(organization)
+
+    const box = await this.findOneByIdOrName(boxIdOrName, organization.id)
     if (!box) {
       return
     }
 
-    // Only wake a cleanly-stopped box. Leave STARTED, in-transition (pending),
-    // and destroy-intent boxes untouched.
+    // Cheap pre-check on the cached snapshot. The repository's conditional
+    // UPDATE re-asserts atomically — this just avoids a no-op round-trip when
+    // the snapshot already shows the box isn't a candidate.
     if (box.pending || box.state !== BoxState.STOPPED || box.desiredState !== BoxDesiredState.STOPPED) {
       return
     }
 
-    let updatedBox: Box
+    let updated: Box | null
     try {
-      updatedBox = await this.boxRepository.updateWhere(box.id, {
-        updateData: { pending: true, desiredState: BoxDesiredState.STARTED },
-        whereCondition: { pending: false, state: BoxState.STOPPED, desiredState: BoxDesiredState.STOPPED },
-      })
+      updated = await this.boxRepository.conditionalStartForProxy(box.id, organization.id)
     } catch (err) {
-      // Lost the race to a concurrent state change — expected, no-op.
-      if (err instanceof BoxConflictError) {
-        return
-      }
-      // Any other failure (DB / validation): the exec already happened so don't
-      // block it, but surface the unexpected error instead of swallowing it.
-      this.logger.warn(`ensureStartedForExec: unexpected failure for box ${boxIdOrName}: ${err}`)
+      this.logger.warn(`ensureStartedForProxy: unexpected failure for box ${boxIdOrName}: ${err}`)
       return
     }
 
-    this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updatedBox))
+    // Zero rows matched — race lost or the box transitioned out of the
+    // eligible state between snapshot and write. No-op (same semantics as
+    // the old BoxConflictError swallow).
+    if (!updated) {
+      return
+    }
+
+    this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updated))
   }
 
   async stop(boxIdOrName: string, organizationId?: string, force?: boolean): Promise<Box> {

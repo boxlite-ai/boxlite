@@ -3,17 +3,29 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { ForbiddenException } from '@nestjs/common'
 import { BoxService } from './box.service'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxEvents } from '../constants/box-events.constants'
-import { BoxConflictError } from '../errors/box-conflict.error'
 
-// ensureStartedForExec only touches boxRepository + eventEmitter; every other
-// injected dependency is irrelevant to this unit, so they are stubbed out.
+// ensureStartedForProxy only touches boxRepository + eventEmitter +
+// organizationService; every other injected dependency is irrelevant.
 function makeService() {
-  const boxRepository = { findOneByIdOrName: jest.fn(), updateWhere: jest.fn() } as any
+  const boxRepository = {
+    findOneByIdOrName: jest.fn(),
+    conditionalStartForProxy: jest.fn(),
+  } as any
   const eventEmitter = { emit: jest.fn(), emitAsync: jest.fn() } as any
+  // assertOrganizationIsNotSuspended mirrors the real implementation: throw
+  // ForbiddenException when the org is suspended, no-op otherwise.
+  const organizationService = {
+    assertOrganizationIsNotSuspended: jest.fn((org: any) => {
+      if (org?.suspended) {
+        throw new ForbiddenException('Organization is suspended')
+      }
+    }),
+  } as any
   const noop = {} as any
   const service = new BoxService(
     boxRepository, // boxRepository
@@ -24,7 +36,7 @@ function makeService() {
     noop, // configService
     noop, // warmPoolService
     eventEmitter, // eventEmitter
-    noop, // organizationService
+    organizationService, // organizationService
     noop, // runnerAdapterFactory
     noop, // redisLockProvider
     noop, // redis
@@ -32,8 +44,11 @@ function makeService() {
     noop, // boxLookupCacheInvalidationService
     noop, // boxActivityService
   )
-  return { service, boxRepository, eventEmitter }
+  return { service, boxRepository, eventEmitter, organizationService }
 }
+
+const activeOrg = { id: 'org-1', suspended: false } as any
+const suspendedOrg = { id: 'org-1', suspended: true } as any
 
 const stoppedBox = {
   id: 'box-1',
@@ -42,27 +57,37 @@ const stoppedBox = {
   pending: false,
 }
 
-describe('BoxService.ensureStartedForExec', () => {
-  // The control-plane never writes box.state directly; like start(), it flips
-  // desiredState and lets the runner's reported state catch up. exec has
-  // already auto-started the VM in the runtime, so box_sync will report STARTED
-  // and — now that desiredState agrees — sync-states will not stop it back.
+describe('BoxService.ensureStartedForProxy', () => {
+  // The control plane never writes box.state directly; like start(), it flips
+  // desiredState and lets the runner's reported state catch up. The proxied
+  // call has already auto-started the VM in the runtime, so box_sync will
+  // report STARTED and — now that desiredState agrees — sync-states will not
+  // stop it back.
   it('flips a cleanly-stopped box to desiredState=STARTED and emits STARTED', async () => {
     const { service, boxRepository, eventEmitter } = makeService()
     jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue(stoppedBox as any)
-    boxRepository.updateWhere.mockResolvedValue({
+    boxRepository.conditionalStartForProxy.mockResolvedValue({
       ...stoppedBox,
       pending: true,
       desiredState: BoxDesiredState.STARTED,
     })
 
-    await service.ensureStartedForExec('box-1', 'org-1')
+    await service.ensureStartedForProxy('box-1', activeOrg)
 
-    expect(boxRepository.updateWhere).toHaveBeenCalledWith('box-1', {
-      updateData: { pending: true, desiredState: BoxDesiredState.STARTED },
-      whereCondition: { pending: false, state: BoxState.STOPPED, desiredState: BoxDesiredState.STOPPED },
-    })
+    expect(boxRepository.conditionalStartForProxy).toHaveBeenCalledWith('box-1', 'org-1')
     expect(eventEmitter.emit).toHaveBeenCalledWith(BoxEvents.STARTED, expect.anything())
+  })
+
+  // Same gate as start() (~line 790). Without this, a suspended org could
+  // exec / files / metrics a STOPPED box back to STARTED, bypassing the
+  // start-time guard.
+  it('throws ForbiddenException for a suspended organization', async () => {
+    const { service, boxRepository, eventEmitter } = makeService()
+
+    await expect(service.ensureStartedForProxy('box-1', suspendedOrg)).rejects.toThrow(ForbiddenException)
+
+    expect(boxRepository.conditionalStartForProxy).not.toHaveBeenCalled()
+    expect(eventEmitter.emit).not.toHaveBeenCalled()
   })
 
   it('is a no-op for an already-started box (idempotent)', async () => {
@@ -73,9 +98,9 @@ describe('BoxService.ensureStartedForExec', () => {
       desiredState: BoxDesiredState.STARTED,
     } as any)
 
-    await service.ensureStartedForExec('box-1', 'org-1')
+    await service.ensureStartedForProxy('box-1', activeOrg)
 
-    expect(boxRepository.updateWhere).not.toHaveBeenCalled()
+    expect(boxRepository.conditionalStartForProxy).not.toHaveBeenCalled()
     expect(eventEmitter.emit).not.toHaveBeenCalled()
   })
 
@@ -86,36 +111,39 @@ describe('BoxService.ensureStartedForExec', () => {
       desiredState: BoxDesiredState.DESTROYED,
     } as any)
 
-    await service.ensureStartedForExec('box-1', 'org-1')
+    await service.ensureStartedForProxy('box-1', activeOrg)
 
-    expect(boxRepository.updateWhere).not.toHaveBeenCalled()
+    expect(boxRepository.conditionalStartForProxy).not.toHaveBeenCalled()
   })
 
   it('does not touch a box already mid-transition (pending)', async () => {
     const { service, boxRepository } = makeService()
     jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({ ...stoppedBox, pending: true } as any)
 
-    await service.ensureStartedForExec('box-1', 'org-1')
+    await service.ensureStartedForProxy('box-1', activeOrg)
 
-    expect(boxRepository.updateWhere).not.toHaveBeenCalled()
+    expect(boxRepository.conditionalStartForProxy).not.toHaveBeenCalled()
   })
 
-  it('swallows a conflicting concurrent state change (best-effort)', async () => {
+  // Conditional UPDATE matched zero rows = race lost or box transitioned out
+  // of the eligible state between snapshot and write. Same no-op semantics
+  // as the old BoxConflictError swallow.
+  it('emits nothing when the conditional update matches zero rows (race lost)', async () => {
     const { service, boxRepository, eventEmitter } = makeService()
     jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue(stoppedBox as any)
-    boxRepository.updateWhere.mockRejectedValue(new BoxConflictError())
+    boxRepository.conditionalStartForProxy.mockResolvedValue(null)
 
-    await expect(service.ensureStartedForExec('box-1', 'org-1')).resolves.toBeUndefined()
+    await expect(service.ensureStartedForProxy('box-1', activeOrg)).resolves.toBeUndefined()
     expect(eventEmitter.emit).not.toHaveBeenCalled()
   })
 
-  it('swallows an unexpected (non-conflict) failure without emitting', async () => {
+  it('swallows an unexpected DB failure without emitting', async () => {
     const { service, boxRepository, eventEmitter } = makeService()
     jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue(stoppedBox as any)
-    boxRepository.updateWhere.mockRejectedValue(new Error('db connection lost'))
+    boxRepository.conditionalStartForProxy.mockRejectedValue(new Error('db connection lost'))
     const warn = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined)
 
-    await expect(service.ensureStartedForExec('box-1', 'org-1')).resolves.toBeUndefined()
+    await expect(service.ensureStartedForProxy('box-1', activeOrg)).resolves.toBeUndefined()
     expect(eventEmitter.emit).not.toHaveBeenCalled()
     expect(warn).toHaveBeenCalled()
   })

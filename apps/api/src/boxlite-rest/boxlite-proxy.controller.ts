@@ -16,6 +16,7 @@ import {
   UseGuards,
   Logger,
   NotFoundException,
+  ForbiddenException,
 } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth, ApiExcludeController } from '@nestjs/swagger'
 import { createProxyMiddleware, fixRequestBody, Options } from 'http-proxy-middleware'
@@ -27,9 +28,11 @@ import { OrganizationAuthContext } from '../common/interfaces/auth-context.inter
 import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
 
-// Cap how long exec waits on the best-effort control-plane start hint so a
-// contended box-row lock can never block the user's exec request.
-const EXEC_START_HINT_TIMEOUT_MS = 2000
+// Cap how long the proxy waits on the best-effort control-plane start hint.
+// The hint itself is non-blocking by design (conditional UPDATE, no row lock),
+// but this is kept as a belt-and-suspenders bound — if anything below ever
+// regresses to a blocking write, the proxy still proceeds within 2s.
+const PROXY_START_HINT_TIMEOUT_MS = 2000
 
 // Spec-first surface (openapi/box.openapi.yaml). Must stay out of the product
 // spec: @All() expands to the SEARCH verb, which OpenAPI 3.0 cannot express.
@@ -54,14 +57,7 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
-    // exec auto-starts a stopped box in the runtime; reflect that intent in the
-    // control plane before forwarding so sync-states does not immediately stop
-    // it back. Best-effort + time-boxed: ensureStartedForExec takes a pessimistic
-    // row lock, so cap the wait — a contended lock must never block the exec.
-    await Promise.race([
-      this.boxService.ensureStartedForExec(boxId, authContext.organizationId),
-      new Promise<void>((resolve) => setTimeout(resolve, EXEC_START_HINT_TIMEOUT_MS)),
-    ]).catch((err) => this.logger.warn(`ensureStartedForExec failed for ${boxId}: ${err}`))
+    await this.startHint(boxId, authContext)
     return this.proxyToRunner(authContext, boxId, (runnerBoxId) => `/v1/boxes/${runnerBoxId}/exec`, req, res, next)
   }
 
@@ -155,6 +151,7 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
+    await this.startHint(boxId, authContext)
     const query = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : ''
     return this.proxyToRunner(
       authContext,
@@ -174,7 +171,34 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
+    await this.startHint(boxId, authContext)
     return this.proxyToRunner(authContext, boxId, (runnerBoxId) => `/v1/boxes/${runnerBoxId}/metrics`, req, res, next)
+  }
+
+  /**
+   * Tell the control plane that the proxied call (exec / files / metrics) is
+   * about to auto-start a stopped box in the runtime, so PG agrees and
+   * sync-states does not promptly stop it back.
+   *
+   * - Suspended org → ForbiddenException re-thrown → caller sees 403, proxy
+   *   never runs (same gate as POST /boxes/:id/start).
+   * - Any other failure → swallowed; the proxy proceeds because the hint is
+   *   best-effort and box_sync reconciles state on its next tick.
+   * - Time-boxed via PROXY_START_HINT_TIMEOUT_MS as a safety net against any
+   *   future regression to a blocking write.
+   */
+  private async startHint(boxId: string, authContext: OrganizationAuthContext) {
+    try {
+      await Promise.race([
+        this.boxService.ensureStartedForProxy(boxId, authContext.organization),
+        new Promise<void>((resolve) => setTimeout(resolve, PROXY_START_HINT_TIMEOUT_MS)),
+      ])
+    } catch (err) {
+      if (err instanceof ForbiddenException) {
+        throw err
+      }
+      this.logger.warn(`ensureStartedForProxy failed for ${boxId}: ${err}`)
+    }
   }
 
   private async proxyToRunner(

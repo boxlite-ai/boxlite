@@ -7,6 +7,8 @@
 import { DataSource, EntityManager, FindOptionsWhere } from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
+import { BoxState } from '../enums/box-state.enum'
+import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { BoxConflictError } from '../errors/box-conflict.error'
 import { InjectDataSource } from '@nestjs/typeorm'
@@ -170,6 +172,50 @@ export class BoxRepository extends BaseRepository<Box> {
 
       return box
     })
+  }
+
+  /**
+   * Conditionally flip a STOPPED box to desiredState=STARTED for the proxy
+   * auto-start hint (exec / files / metrics). Single atomic UPDATE — no
+   * SELECT FOR UPDATE, no transaction overhead — so a contended row never
+   * blocks this call. Critical: this sits in front of every proxy request,
+   * pessimistic locking here would let one slow update stall the whole pool.
+   *
+   * Returns the updated box on success, `null` when the WHERE filter matched
+   * nothing (already started, pending, destroy-intent, or race lost).
+   *
+   * @throws DB errors (not wrapped) — caller decides whether to swallow.
+   */
+  async conditionalStartForProxy(boxId: string, organizationId: string): Promise<Box | null> {
+    const result = await this.manager
+      .createQueryBuilder()
+      .update(Box)
+      .set({
+        pending: true,
+        desiredState: BoxDesiredState.STARTED,
+        updatedAt: new Date(),
+      })
+      .where('id = :id', { id: boxId })
+      .andWhere('"organizationId" = :org', { org: organizationId })
+      .andWhere('pending = false')
+      .andWhere('state = :s', { s: BoxState.STOPPED })
+      .andWhere('"desiredState" = :d', { d: BoxDesiredState.STOPPED })
+      .returning('*')
+      .execute()
+
+    const updated = (result.raw as Box[])[0]
+    if (!updated) return null
+
+    // id / name / org haven't changed, but the cached entity snapshot still
+    // holds the old desiredState/pending — invalidate so subsequent
+    // findOneByIdOrName fetches fresh values.
+    this.invalidateLookupCacheOnUpdate(updated, {
+      organizationId: updated.organizationId,
+      name: updated.name,
+      authToken: updated.authToken,
+    })
+
+    return updated
   }
 
   /**
