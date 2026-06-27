@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn } from 'typeorm'
+import { Check, Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn } from 'typeorm'
 
 /** Per-customer rate override (PRD §13.1 P-2). `effectiveRates` beats `discountFactor`. */
 @Entity()
 @Index('rate_override_org_active_idx', ['organizationId'], { unique: true, where: '"effectiveTo" IS NULL' })
+@Check('rate_override_discount_range', '"discountFactor" IS NULL OR ("discountFactor" >= 0 AND "discountFactor" <= 1)')
 export class CustomerRateOverride {
   @PrimaryGeneratedColumn('uuid')
   id: string

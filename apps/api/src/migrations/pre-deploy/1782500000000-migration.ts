@@ -34,7 +34,8 @@ export class Migration1782500000000 implements MigrationInterface {
         "effectiveFrom" TIMESTAMP WITH TIME ZONE NOT NULL,
         "effectiveTo" TIMESTAMP WITH TIME ZONE,
         "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
-        CONSTRAINT "customer_rate_override_id_pk" PRIMARY KEY ("id")
+        CONSTRAINT "customer_rate_override_id_pk" PRIMARY KEY ("id"),
+        CONSTRAINT "rate_override_discount_range" CHECK ("discountFactor" IS NULL OR ("discountFactor" >= 0 AND "discountFactor" <= 1))
       )`,
     )
     await queryRunner.query(
@@ -45,7 +46,7 @@ export class Migration1782500000000 implements MigrationInterface {
     await queryRunner.query(
       `CREATE TABLE "rated_period" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
-        "usagePeriodId" character varying NOT NULL,
+        "usagePeriodId" uuid NOT NULL,
         "organizationId" character varying NOT NULL,
         "boxId" character varying NOT NULL,
         "pricingVersion" integer NOT NULL,

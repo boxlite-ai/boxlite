@@ -4,7 +4,10 @@
  */
 
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger'
-import { IsInt, IsOptional, IsPositive, IsString, MaxLength } from 'class-validator'
+import { IsInt, IsOptional, IsPositive, IsString, Max, MaxLength } from 'class-validator'
+
+/** Upper bound on a single top-up: $1,000,000. Guards against fat-finger / abuse amounts. */
+const MAX_TOP_UP_CENTS = 100_000_000
 import { BillingStatus } from '../wallet/wallet-math'
 import { WalletView } from '../wallet/wallet.service'
 
@@ -43,6 +46,7 @@ export class TopUpRequestDto {
   @ApiProperty({ description: 'Amount to top up, in cents' })
   @IsInt()
   @IsPositive()
+  @Max(MAX_TOP_UP_CENTS)
   amountCents: number
 }
 

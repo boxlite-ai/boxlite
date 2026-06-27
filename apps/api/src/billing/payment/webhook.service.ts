@@ -7,7 +7,9 @@ import { Inject, Injectable, Logger } from '@nestjs/common'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource, EntityManager, QueryFailedError } from 'typeorm'
 import { ProcessedStripeEvent } from '../entities/processed-stripe-event.entity'
+import { TopUpRecord, TopUpStatus } from '../entities/top-up-record.entity'
 import { Wallet } from '../entities/wallet.entity'
+import { WalletTransaction } from '../entities/wallet-transaction.entity'
 import { WalletService } from '../wallet/wallet.service'
 import { PAYMENT_PROVIDER, PaymentProvider, VerifiedWebhookEvent } from './payment-provider.interface'
 
@@ -65,24 +67,46 @@ export class WebhookService {
           throw new Error(`topup webhook ${event.eventId} missing organizationId/amountCents`)
         }
         await this.wallet.topUpWithin(manager, event.organizationId, event.amountCents, 'manual', event.eventId)
+        await this.settleTopUpRecord(manager, event, 'paid')
         return
       }
+      case 'topup.failed':
+        // Auto-reload / checkout failure: no money moves, just flip the pending record.
+        // The wallet stays at its current (possibly low) balance — never debt.
+        await this.settleTopUpRecord(manager, event, 'failed')
+        return
       case 'method.saved': {
         if (event.organizationId) {
+          // Ensure the wallet row exists first — a card can be saved before any wallet
+          // activity, where a bare UPDATE would match zero rows and silently drop the flag.
+          await this.wallet.getOrCreateWallet(event.organizationId)
           await manager.update(Wallet, { organizationId: event.organizationId }, { creditCardConnected: true })
         }
         return
       }
-      case 'topup.failed':
-        // No money moved; the pending top_up_record is marked failed elsewhere. Auto-reload
-        // failure degrades the wallet back to low_balance, never to debt.
-        this.logger.warn(`top-up failed webhook ${event.eventId}`)
-        return
       case 'refund.succeeded':
         // TODO(stripe, M2): reverse the wallet (debit the paid pool by the refunded
         // amount). Deferred — refund/chargeback policy (PRD Q15) is still open.
         this.logger.warn(`refund webhook ${event.eventId} received; wallet reversal not wired yet`)
         return
     }
+  }
+
+  /**
+   * Close out the pending top_up_record this webhook resolves (matched by the
+   * provider checkout ref), and on success link the settlement ledger row.
+   * A no-op when the event carries no provider ref.
+   */
+  private async settleTopUpRecord(
+    manager: EntityManager,
+    event: VerifiedWebhookEvent,
+    status: Extract<TopUpStatus, 'paid' | 'failed'>,
+  ): Promise<void> {
+    if (!event.providerRef) return
+    const walletTransactionId =
+      status === 'paid'
+        ? ((await manager.findOne(WalletTransaction, { where: { providerEventId: event.eventId } }))?.id ?? null)
+        : null
+    await manager.update(TopUpRecord, { stripeSessionId: event.providerRef }, { status, walletTransactionId })
   }
 }

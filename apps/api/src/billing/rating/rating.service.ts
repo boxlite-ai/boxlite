@@ -101,7 +101,7 @@ export class RatingService {
   private findUnratedClosedPeriods(): Promise<UsagePeriod[]> {
     return this.usagePeriods
       .createQueryBuilder('up')
-      .leftJoin(RatedPeriod, 'rp', 'rp."usagePeriodId" = up.id::text')
+      .leftJoin(RatedPeriod, 'rp', 'rp."usagePeriodId" = up.id')
       .where('up."periodEnd" IS NOT NULL')
       .andWhere('rp.id IS NULL')
       .orderBy('up."periodStart"', 'ASC')
