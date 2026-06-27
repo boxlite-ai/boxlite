@@ -27,7 +27,7 @@ from pathlib import Path
 
 from . import _local_arm64
 from . import orchestrator
-from .config import InfraConfig
+from .config import InfraConfig, worktree_home
 from .doctor import _lsof_owner
 from .services import SERVICES
 
@@ -102,7 +102,11 @@ class _Paths:
 
     @property
     def runner_home(self) -> Path:
-        return Path(os.environ.get("BOXLITE_HOME_DIR") or (self.state / "boxlite-runner"))
+        # Anchored at the machine-global short root (NOT under .apps-local): the
+        # runner's box sockets live at <home>/boxes/<id>/sockets/ready.sock and
+        # macOS caps unix socket paths at 104 bytes (SUN_LEN), which a deep
+        # worktree path overflows. See config.worktree_home.
+        return Path(os.environ.get("BOXLITE_HOME_DIR") or worktree_home(self.repo_root, "r"))
 
 
 def _paths(cfg: InfraConfig) -> _Paths:
@@ -438,9 +442,13 @@ def build(cfg: InfraConfig) -> int:
 
 
 def _ensure_installed(p: _Paths) -> None:
-    """Zero-config bring-up: if the boxlite SDK isn't importable, `pip install -e .`
-    (which pulls it in) and re-exec — a fresh interpreter then sees the install.
-    The sentinel env var prevents an install loop if it still doesn't import."""
+    """Zero-config bring-up. Ensures the venv has the repo's own boxlite engine
+    build (with local fixes the PyPI wheel lacks — e.g. the macOS OCI read-only
+    removal fix), then that the SDK is importable; otherwise `pip install -e .`
+    + re-exec. The sentinel env var prevents an install loop."""
+    # boxlite must be the local source build, not the PyPI wheel. This builds it
+    # once (shared cargo cache → reused across worktrees) and no-ops thereafter.
+    _local_arm64.ensure_local_boxlite()
     try:
         import boxlite  # noqa: F401
         return
@@ -497,9 +505,11 @@ def up(cfg: InfraConfig, components: list[str] | None = None) -> int:
             err(f"unknown component: {name} (valid: {' '.join(ALL_COMPONENTS)})")
             return 2
     # 0. Apple-Silicon bootstrap (idempotent no-ops once done): thread docker.io
-    # creds through to L1 + runner, build the native lib, fix the runtime cache.
+    # + ghcr.io creds through to L1 + runner, build the native lib, fix the
+    # runtime cache.
     _local_arm64.ensure_tools_on_path()
     _local_arm64.export_dockerhub_env()
+    _local_arm64.export_ghcr_env()
     _ensure_installed(p)
     _local_arm64.ensure_native_lib()
     _local_arm64.fix_runtime_cache()
@@ -518,9 +528,11 @@ def up(cfg: InfraConfig, components: list[str] | None = None) -> int:
         log("native binaries missing — building")
         build(cfg)
 
-    # 3.5 arm64 agent image: L1 registry is up now, so build+push a bootable
-    # arm64 box base (no arm64 curated image exists). None on non-arm64 / no docker.
-    agent_img = _local_arm64.ensure_agent_image()
+    # 3.5 box base image: the published agent image is multi-arch now, so the
+    # runner pulls the host-matching arch straight from ghcr — no local build or
+    # L1-registry push. None when ghcr creds are absent (caller logs it and
+    # leaves the amd64-only curated default in place).
+    agent_img = _local_arm64.resolve_agent_image()
 
     # 4. API .env template + port + curated-image override + the apps/.env symlink
     _seed_api_env(p, agent_img)
