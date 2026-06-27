@@ -34,7 +34,6 @@
     "sharedGlobals": ["{workspaceRoot}/.github/workflows/ci.yml"],
     "apiClient": [
       "{workspaceRoot}/dist/apps/api/openapi.json",
-      "{workspaceRoot}/daemon/pkg/toolbox/docs/swagger.json",
       { "env": "DEFAULT_PACKAGE_VERSION" },
       { "dependentTasksOutputFiles": "**/*", "transitive": true }
     ],

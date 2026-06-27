@@ -1,12 +1,11 @@
 # Build the runner Go binary for Linux amd64.
 #
 # Self-contained workflow that downloads the prebuilt libboxlite.a from
-# GitHub Releases, builds daemon + computer-use + runner with plain `go build`,
-# and uploads the runner binary to GitHub Releases.
+# GitHub Releases, builds the runner with plain `go build`, and uploads the
+# runner binary to GitHub Releases.
 #
-# The runner binary is fully self-contained: it links libboxlite.a (which
-# auto-extracts the embedded runtime at startup) and embeds the daemon and
-# computer-use binaries as static assets.
+# The runner binary is fully self-contained: it links libboxlite.a, which
+# auto-extracts the embedded runtime at startup.
 #
 # Triggers:
 # - workflow_run: After "Build C SDK" completes (ensures libboxlite.a exists)
@@ -69,30 +68,13 @@ jobs:
 
       - name: Rewrite go.work for minimal modules
         run: |
-          printf 'go 1.25.4\n\nuse (\n\t./runner\n\t./daemon\n\t./common-go\n\t./api-client-go\n\t./libs/computer-use\n\t../sdks/go\n)\n' > apps/go.work
+          printf 'go 1.25.4\n\nuse (\n\t./runner\n\t./common-go\n\t./api-client-go\n\t../sdks/go\n)\n' > apps/go.work
 
       - name: Download Go dependencies
         run: |
           go -C apps/runner mod download
-          go -C apps/daemon mod download
           go -C apps/common-go mod download
           go -C apps/api-client-go mod download
-          go -C apps/libs/computer-use mod download
-
-      - name: Build daemon
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C apps \
-            -ldflags "-X 'github.com/boxlite-ai/daemon/internal.Version=${VERSION}'" \
-            -o runner/pkg/daemon/static/daemon-amd64 \
-            ./daemon/cmd/daemon/
-
-      - name: Build computer-use
-        run: |
-          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -C apps \
-            -o runner/pkg/daemon/static/boxlite-computer-use \
-            ./libs/computer-use/
 
       - name: Build runner
         env:

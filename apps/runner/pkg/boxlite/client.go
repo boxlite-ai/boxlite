@@ -36,7 +36,6 @@ type Client struct {
 	volumeMutexes      map[string]*sync.Mutex
 	volumeMutexesMutex sync.Mutex
 	volumeCleanupMutex sync.Mutex
-	toolboxPortMutex   sync.Mutex
 	lastVolumeCleanup  time.Time
 	volumeCleanup      volumeCleanupConfig
 }
@@ -76,7 +75,7 @@ func networkSpec(blockAll *bool, allowList *string) boxlite.NetworkSpec {
 	return spec
 }
 
-func daemonBoxEnv(ctx context.Context, boxDto dto.CreateBoxDTO) map[string]string {
+func boxRuntimeEnv(ctx context.Context, boxDto dto.CreateBoxDTO) map[string]string {
 	env := map[string]string{
 		"BOXLITE_BOX_ID": boxDto.Id,
 	}
@@ -89,9 +88,9 @@ func daemonBoxEnv(ctx context.Context, boxDto dto.CreateBoxDTO) map[string]strin
 	if boxDto.RegionId != nil && *boxDto.RegionId != "" {
 		env["BOXLITE_REGION_ID"] = *boxDto.RegionId
 	}
-	// Propagate the active W3C trace context into the box so the in-box daemon's telemetry
-	// joins the SAME traceId as the api->runner spans, instead of rooting a fresh disjoint
-	// trace. With no active span the carrier is empty => env is byte-identical to before.
+	// Propagate the active W3C trace context into the box so in-box processes can
+	// join the SAME traceId as the api->runner spans, instead of rooting a fresh
+	// disjoint trace. With no active span the carrier is empty.
 	carrier := propagation.MapCarrier{}
 	propagation.TraceContext{}.Inject(ctx, carrier)
 	if traceParent := carrier.Get("traceparent"); traceParent != "" {
@@ -201,7 +200,7 @@ func (c *Client) Close() error {
 }
 
 // Create creates a new box (VM) from the given image and configuration.
-// Returns the box ID and daemon version.
+// Returns the box ID and runtime version.
 func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error) {
 	// API sends cores / GB / GB as small integers (see apps/api Box entity).
 	cpus := int(boxDto.CpuQuota)
@@ -226,7 +225,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	for k, v := range boxDto.Env {
 		opts = append(opts, boxlite.WithEnv(k, v))
 	}
-	for k, v := range daemonBoxEnv(ctx, boxDto) {
+	for k, v := range boxRuntimeEnv(ctx, boxDto) {
 		opts = append(opts, boxlite.WithEnv(k, v))
 	}
 
@@ -248,12 +247,6 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		}
 	}
 
-	toolboxHostPort, err := c.reserveToolboxHostPort(ctx, boxDto.Id)
-	if err != nil {
-		return "", "", err
-	}
-	opts = append(opts, boxlite.WithPort(boxlite.PortSpec{Host: toolboxHostPort, Guest: ToolboxGuestPort}))
-
 	opts = append(opts, boxlite.WithNetwork(networkSpec(boxDto.NetworkBlockAll, boxDto.NetworkAllowList)))
 
 	// GetOrCreate (not Create) so a CREATE_BOX replay is idempotent. The local
@@ -270,9 +263,6 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 			if cleanupErr := c.removeBoxVolumeMountRecord(ctx, boxDto.Id); cleanupErr != nil {
 				c.logger.WarnContext(ctx, "failed to remove box volume mount record after create failure", "box", boxDto.Id, "error", cleanupErr)
 			}
-		}
-		if cleanupErr := c.removeToolboxPortRecord(ctx, boxDto.Id); cleanupErr != nil {
-			c.logger.WarnContext(ctx, "failed to remove toolbox port record after create failure", "box", boxDto.Id, "error", cleanupErr)
 		}
 		return "", "", fmt.Errorf("failed to create box: %w", err)
 	}
@@ -303,7 +293,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	return bx.ID(), "boxlite", nil
 }
 
-// Start starts a stopped box and returns the daemon version.
+// Start starts a stopped box and returns the runtime version.
 func (c *Client) Start(ctx context.Context, boxId string, authToken *string, metadata map[string]string) (string, error) {
 	if err := c.ensureVolumeMountsFromMetadata(ctx, boxId, metadata); err != nil {
 		c.logger.ErrorContext(ctx, "failed to ensure volume FUSE mounts", "error", err)
@@ -349,9 +339,6 @@ func (c *Client) Destroy(ctx context.Context, boxId string) error {
 
 	if err := c.removeBoxVolumeMountRecord(ctx, boxId); err != nil {
 		c.logger.WarnContext(ctx, "failed to remove box volume mount record", "box", boxId, "error", err)
-	}
-	if err := c.removeToolboxPortRecord(ctx, boxId); err != nil {
-		c.logger.WarnContext(ctx, "failed to remove toolbox port record", "box", boxId, "error", err)
 	}
 	c.CleanupOrphanedVolumeMounts(ctx)
 

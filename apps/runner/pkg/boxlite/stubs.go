@@ -55,21 +55,12 @@ func (c *Client) Resize(ctx context.Context, boxId string, resizeDto dto.ResizeB
 		boxlite.WithNetwork(boxlite.NetworkSpec{Mode: boxlite.NetworkModeEnabled}),
 	}
 
-	toolboxHostPort, err := c.reserveToolboxHostPort(ctx, boxId)
-	if err != nil {
-		return fmt.Errorf("failed to reserve toolbox port during resize: %w", err)
-	}
-	opts = append(opts, boxlite.WithPort(boxlite.PortSpec{Host: toolboxHostPort, Guest: ToolboxGuestPort}))
-
 	if resizeDto.Disk > 0 {
 		opts = append(opts, boxlite.WithDiskSize(int(resizeDto.Disk)))
 	}
 
 	newBox, err := c.runtime.Create(ctx, info.Image, opts...)
 	if err != nil {
-		if cleanupErr := c.removeToolboxPortRecord(ctx, boxId); cleanupErr != nil {
-			c.logger.Warn("failed to remove toolbox port record after resize create failure", "box", boxId, "error", cleanupErr)
-		}
 		return fmt.Errorf("failed to recreate box during resize: %w", err)
 	}
 
@@ -117,7 +108,7 @@ func (c *Client) UpdateNetworkSettings(ctx context.Context, boxId string, settin
 	return errdefs.ErrNotImplemented.WithMessage("live network settings update is not supported by the BoxLite Go SDK")
 }
 
-// GetDaemonVersion returns the version of the in-box daemon.
+// GetDaemonVersion returns the runtime version for the legacy API field.
 func (c *Client) GetDaemonVersion(ctx context.Context, boxId string) (string, error) {
 	return "boxlite", nil
 }

@@ -30,7 +30,6 @@ type Config struct {
 	BoxliteApiUrl         string             `envconfig:"BOXLITE_API_URL" validate:"required"`
 	Oidc                  OidcConfig         `envconfig:"OIDC"`
 	Redis                 *cache.RedisConfig `envconfig:"REDIS"`
-	ToolboxOnlyMode       bool               `envconfig:"TOOLBOX_ONLY_MODE"`
 	PreviewWarningEnabled bool               `envconfig:"PREVIEW_WARNING_ENABLED"`
 	ShutdownTimeoutSec    int                `envconfig:"SHUTDOWN_TIMEOUT_SEC"`
 	ApiClient             *apiclient.APIClient

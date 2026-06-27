@@ -74,23 +74,21 @@ func (p *Proxy) Authenticate(ctx *gin.Context, boxIdOrSignedToken string, port f
 		}
 	}
 
-	if !ctx.GetBool(IS_TOOLBOX_REQUEST_KEY) {
-		cookieDomain := p.getCookieDomain(ctx.Request.Host)
-		boxId, err = p.getBoxIdFromSignedPreviewUrlToken(ctx, boxIdOrSignedToken, port, cookieDomain)
-		if err == nil {
-			return boxId, false, nil
-		} else {
-			authErrors = append(authErrors, err.Error())
-		}
-
-		// All authentication methods failed, redirect to auth URL
-		authUrl, err := p.getAuthUrl(ctx, boxIdOrSignedToken)
-		if err != nil {
-			return boxIdOrSignedToken, false, fmt.Errorf("failed to get auth URL: %w", err)
-		}
-
-		ctx.Redirect(http.StatusTemporaryRedirect, authUrl)
+	cookieDomain := p.getCookieDomain(ctx.Request.Host)
+	boxId, err = p.getBoxIdFromSignedPreviewUrlToken(ctx, boxIdOrSignedToken, port, cookieDomain)
+	if err == nil {
+		return boxId, false, nil
+	} else {
+		authErrors = append(authErrors, err.Error())
 	}
+
+	// All authentication methods failed, redirect to auth URL
+	authUrl, err := p.getAuthUrl(ctx, boxIdOrSignedToken)
+	if err != nil {
+		return boxIdOrSignedToken, false, fmt.Errorf("failed to get auth URL: %w", err)
+	}
+
+	ctx.Redirect(http.StatusTemporaryRedirect, authUrl)
 
 	// Return error with details about what failed
 	var errorMsg string
@@ -100,7 +98,7 @@ func (p *Proxy) Authenticate(ctx *gin.Context, boxIdOrSignedToken string, port f
 		errorMsg = "missing authentication: provide a preview access token (via header, query parameter, or cookie) or use an API key or JWT"
 	}
 
-	return boxIdOrSignedToken, !ctx.GetBool(IS_TOOLBOX_REQUEST_KEY), common_errors.NewUnauthorizedError(errors.New(errorMsg))
+	return boxIdOrSignedToken, true, common_errors.NewUnauthorizedError(errors.New(errorMsg))
 }
 
 func (p *Proxy) getBearerToken(ctx *gin.Context) string {

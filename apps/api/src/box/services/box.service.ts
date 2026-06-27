@@ -82,6 +82,7 @@ const DEFAULT_BOX_CPU = 1
 const DEFAULT_BOX_MEM = 1
 const DEFAULT_BOX_DISK = 10
 const DEFAULT_BOX_GPU = 0
+const TERMINAL_PREVIEW_PORT = 22222
 
 @Injectable()
 export class BoxService {
@@ -675,6 +676,9 @@ export class BoxService {
     if (port < 1 || port > 65535) {
       throw new BadRequestError('Invalid port')
     }
+    if (port !== TERMINAL_PREVIEW_PORT) {
+      throw new BadRequestError(`Port preview is only supported for terminal port ${TERMINAL_PREVIEW_PORT}`)
+    }
 
     const proxyDomain = this.configService.getOrThrow('proxy.domain')
     const proxyProtocol = this.configService.getOrThrow('proxy.protocol')
@@ -704,6 +708,9 @@ export class BoxService {
   ): Promise<SignedPortPreviewUrlDto> {
     if (port < 1 || port > 65535) {
       throw new BadRequestError('Invalid port')
+    }
+    if (port !== TERMINAL_PREVIEW_PORT) {
+      throw new BadRequestError(`Signed port preview is only supported for terminal port ${TERMINAL_PREVIEW_PORT}`)
     }
 
     if (expiresInSeconds < 1 || expiresInSeconds > 60 * 60 * 24) {

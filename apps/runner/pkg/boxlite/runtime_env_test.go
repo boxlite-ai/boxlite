@@ -18,12 +18,12 @@ func TestCreateBoxDTOHasSingleBoxIdentity(t *testing.T) {
 	}
 }
 
-func TestDaemonBoxEnvIncludesRequiredBoxIdentity(t *testing.T) {
+func TestBoxRuntimeEnvIncludesRequiredBoxIdentity(t *testing.T) {
 	organizationID := "org-1"
 	regionID := "region-1"
 	otelEndpoint := "http://otel.local:4318"
 
-	got := daemonBoxEnv(context.Background(), dto.CreateBoxDTO{
+	got := boxRuntimeEnv(context.Background(), dto.CreateBoxDTO{
 		Id:             "box-1",
 		OrganizationId: &organizationID,
 		RegionId:       &regionID,
@@ -47,10 +47,10 @@ func TestDaemonBoxEnvIncludesRequiredBoxIdentity(t *testing.T) {
 	}
 }
 
-func TestDaemonBoxEnvOmitsEmptyOptionalValues(t *testing.T) {
+func TestBoxRuntimeEnvOmitsEmptyOptionalValues(t *testing.T) {
 	empty := ""
 
-	got := daemonBoxEnv(context.Background(), dto.CreateBoxDTO{
+	got := boxRuntimeEnv(context.Background(), dto.CreateBoxDTO{
 		Id:             "box-1",
 		OrganizationId: &empty,
 		RegionId:       &empty,
@@ -58,17 +58,17 @@ func TestDaemonBoxEnvOmitsEmptyOptionalValues(t *testing.T) {
 	})
 
 	if len(got) != 1 {
-		t.Fatalf("expected only required daemon env, got %#v", got)
+		t.Fatalf("expected only required runtime env, got %#v", got)
 	}
 	if got["BOXLITE_BOX_ID"] != "box-1" {
 		t.Fatalf("BOXLITE_BOX_ID = %q, want box-1", got["BOXLITE_BOX_ID"])
 	}
 }
 
-// With an active (remote) span in context, daemonBoxEnv must propagate it as a W3C
-// BOXLITE_TRACEPARENT env so the in-box daemon joins the same traceId. The value crosses
+// With an active (remote) span in context, boxRuntimeEnv must propagate it as a W3C
+// BOXLITE_TRACEPARENT env so in-box processes can join the same traceId. The value crosses
 // propagation.TraceContext{}.Inject (production code), so this is non-tautological.
-func TestDaemonBoxEnvPropagatesTraceparentWhenSpanActive(t *testing.T) {
+func TestBoxRuntimeEnvPropagatesTraceparentWhenSpanActive(t *testing.T) {
 	traceID, err := trace.TraceIDFromHex("0af7651916cd43dd8448eb211c80319c")
 	if err != nil {
 		t.Fatalf("trace id: %v", err)
@@ -85,7 +85,7 @@ func TestDaemonBoxEnvPropagatesTraceparentWhenSpanActive(t *testing.T) {
 	})
 	ctx := trace.ContextWithSpanContext(context.Background(), sc)
 
-	got := daemonBoxEnv(ctx, dto.CreateBoxDTO{Id: "box-1"})
+	got := boxRuntimeEnv(ctx, dto.CreateBoxDTO{Id: "box-1"})
 
 	wantTP := "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
 	if got["BOXLITE_TRACEPARENT"] != wantTP {
@@ -95,8 +95,8 @@ func TestDaemonBoxEnvPropagatesTraceparentWhenSpanActive(t *testing.T) {
 
 // With no active span, BOXLITE_TRACEPARENT must be absent (behavior identical to before the
 // propagation change), so the fix is safe to ship dark.
-func TestDaemonBoxEnvOmitsTraceparentWhenNoSpan(t *testing.T) {
-	got := daemonBoxEnv(context.Background(), dto.CreateBoxDTO{Id: "box-1"})
+func TestBoxRuntimeEnvOmitsTraceparentWhenNoSpan(t *testing.T) {
+	got := boxRuntimeEnv(context.Background(), dto.CreateBoxDTO{Id: "box-1"})
 
 	if _, ok := got["BOXLITE_TRACEPARENT"]; ok {
 		t.Fatalf("BOXLITE_TRACEPARENT must be absent without an active span, got %#v", got)
