@@ -28,7 +28,7 @@ export class RatedPeriod {
   id: string
 
   /** The Phase-1 usage_period this rates. UNIQUE → idempotent rating. */
-  @Column()
+  @Column({ type: 'uuid' })
   usagePeriodId: string
 
   @Column()
