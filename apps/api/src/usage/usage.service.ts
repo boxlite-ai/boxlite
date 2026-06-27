@@ -4,7 +4,6 @@
  */
 
 import { Injectable, Logger } from '@nestjs/common'
-import { OnEvent } from '@nestjs/event-emitter'
 import { InjectRepository } from '@nestjs/typeorm'
 import { IsNull, Repository } from 'typeorm'
 import { Box } from '../box/entities/box.entity'
@@ -12,6 +11,7 @@ import { BoxEvents } from '../box/constants/box-events.constants'
 import { BoxCreatedEvent } from '../box/events/box-create.event'
 import { BoxStateUpdatedEvent } from '../box/events/box-state-updated.event'
 import { BoxState } from '../box/enums/box-state.enum'
+import { OnAsyncEvent } from '../common/decorators/on-async-event.decorator'
 import { UsagePeriod } from './entities/usage-period.entity'
 import { aggregatePeriods, BillablePeriod, planTransition, UsageTotals } from './billing/usage-math'
 
@@ -41,7 +41,7 @@ export class UsageService {
     private readonly periods: Repository<UsagePeriod>,
   ) {}
 
-  @OnEvent(BoxEvents.CREATED)
+  @OnAsyncEvent({ event: BoxEvents.CREATED })
   async handleBoxCreated(event: BoxCreatedEvent): Promise<void> {
     // A box can be inserted directly at STARTED (box.service.ts), which emits
     // only CREATED — not STATE_UPDATED (an insert has no previous state). Open
@@ -50,17 +50,30 @@ export class UsageService {
     try {
       await this.applyTransition(event.box, event.box.state, new Date())
     } catch (err) {
-      this.logger.error(`usage ledger open failed for box ${event.box?.id}: ${err}`)
+      // Metering must never break the box state machine — the CREATED emitter
+      // is `emitAsync` (box.service.ts:248), so an uncaught throw here would
+      // fail box creation outright. Log with stack and swallow; the
+      // UsageReconcileService 5-min cron will pick up any orphaned periods.
+      this.logger.error(
+        `usage ledger open failed for box ${event.box?.id}`,
+        err instanceof Error ? err.stack : String(err),
+      )
     }
   }
 
-  @OnEvent(BoxEvents.STATE_UPDATED)
+  @OnAsyncEvent({ event: BoxEvents.STATE_UPDATED })
   async handleBoxStateUpdated(event: BoxStateUpdatedEvent): Promise<void> {
     try {
       await this.applyTransition(event.box, event.newState, new Date())
     } catch (err) {
-      // Metering must never break the box state machine — log and move on.
-      this.logger.error(`usage ledger update failed for box ${event.box?.id}: ${err}`)
+      // Same guarantee: metering never breaks the state machine. STATE_UPDATED
+      // is `emit` (box.repository.ts), so a throw here would become an
+      // unhandled rejection — still log with stack and swallow; reconcile
+      // cron is the safety net.
+      this.logger.error(
+        `usage ledger update failed for box ${event.box?.id}`,
+        err instanceof Error ? err.stack : String(err),
+      )
     }
   }
 
