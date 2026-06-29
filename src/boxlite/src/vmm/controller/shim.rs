@@ -76,14 +76,13 @@ impl ShimHandler {
             metrics_sys: Mutex::new(sysinfo::System::new()),
         }
     }
-}
 
-impl VmmHandlerTrait for ShimHandler {
-    fn pid(&self) -> u32 {
-        self.pid
-    }
-
-    fn stop(&mut self) -> BoxliteResult<()> {
+    /// Graceful shutdown of the recorded process: SIGTERM, wait, then SIGKILL.
+    ///
+    /// Signals only `self.pid` (the outer launcher). The full process-tree
+    /// sweep happens in `stop()` after this returns — see the comment there for
+    /// why the order matters (libkrun must flush before the hard cgroup kill).
+    fn graceful_stop(&mut self) {
         // Graceful shutdown: SIGTERM first, wait, then SIGKILL if needed.
         // This gives libkrun time to flush its virtio-blk buffers to disk,
         // preventing qcow2 corruption.
@@ -100,69 +99,78 @@ impl VmmHandlerTrait for ShimHandler {
             let start = std::time::Instant::now();
             loop {
                 match process.try_wait() {
-                    Ok(Some(_)) => {
-                        // Process exited gracefully
-                        return Ok(());
-                    }
+                    Ok(Some(_)) => return, // exited gracefully
                     Ok(None) => {
                         // Still running, check timeout
                         if start.elapsed().as_millis() > GRACEFUL_SHUTDOWN_TIMEOUT_MS as u128 {
-                            // Timeout - force kill
                             let _ = process.kill();
                             let _ = process.wait();
-                            return Ok(());
+                            return;
                         }
-                        // Brief sleep before checking again
                         std::thread::sleep(std::time::Duration::from_millis(50));
                     }
                     Err(_) => {
                         // Error checking status - try to kill anyway
                         let _ = process.kill();
                         let _ = process.wait();
-                        return Ok(());
+                        return;
                     }
                 }
             }
         } else {
-            // Attached mode: use SIGTERM then SIGKILL with polling
-            // We don't have a Child handle, so we use waitpid/kill directly
+            // Attached mode: no Child handle, use waitpid/kill directly.
             unsafe {
                 libc::kill(self.pid as i32, libc::SIGTERM);
             }
 
-            // Poll for exit with timeout
             let start = std::time::Instant::now();
             loop {
                 let mut status: i32 = 0;
                 let result = unsafe { libc::waitpid(self.pid as i32, &mut status, libc::WNOHANG) };
 
                 if result > 0 {
-                    // Process exited gracefully (we reaped it)
-                    return Ok(());
+                    return; // exited gracefully (we reaped it)
                 }
                 if result < 0 {
-                    // Error - process may not be our child (common in attached mode)
-                    // Fall back to checking if process still exists
-                    let exists = crate::util::is_process_alive(self.pid);
-                    if !exists {
-                        return Ok(()); // Already dead
+                    // Not our child (common in attached mode): fall back to a
+                    // liveness check.
+                    if !crate::util::is_process_alive(self.pid) {
+                        return; // already dead
                     }
                 }
                 // result == 0 means still running
 
                 if start.elapsed().as_millis() > GRACEFUL_SHUTDOWN_TIMEOUT_MS as u128 {
-                    // Timeout - force kill
                     unsafe {
                         libc::kill(self.pid as i32, libc::SIGKILL);
                     }
-                    return Ok(());
+                    return;
                 }
 
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
         }
+    }
+}
 
-        #[allow(unreachable_code)]
+impl VmmHandlerTrait for ShimHandler {
+    fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    fn stop(&mut self) -> BoxliteResult<()> {
+        self.graceful_stop();
+
+        // Final sweep of the box's whole process tree. `graceful_stop` only
+        // signals the recorded pid — the outer bwrap launcher — and a detached
+        // box's inner pid-ns tree (inner bwrap + shim + VM) outlives it, since
+        // #851 stopped applying `--die-with-parent` to detached boxes. The whole
+        // tree lives in the box's cgroup, so reap it by id. This runs *after*
+        // graceful shutdown on purpose: the SIGTERM above gives libkrun time to
+        // flush its virtio-blk buffers (preventing qcow2 corruption); a cgroup
+        // kill is a hard kill, so reaping first could tear libkrun down
+        // mid-flush. Best-effort and idempotent.
+        crate::jailer::reap_sandbox(&self.box_id);
         Ok(())
     }
 

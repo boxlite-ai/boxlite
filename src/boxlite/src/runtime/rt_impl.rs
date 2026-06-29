@@ -12,6 +12,7 @@ use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
 use crate::runtime::signal_handler::timeout_to_duration;
 use crate::runtime::types::{BoxInfo, BoxState, BoxStatus, ContainerID};
 use crate::vmm::VmmKind;
+use crate::vmm::controller::{ShimHandler, VmmHandler};
 use boxlite_shared::{BoxliteError, BoxliteResult};
 use chrono::Utc;
 use std::collections::HashMap;
@@ -810,15 +811,6 @@ impl RuntimeImpl {
             .ok_or_else(|| BoxliteError::NotFound(id_or_name.to_string()))
     }
 
-    /// Reap any OS processes still belonging to a box (best-effort).
-    ///
-    /// Delegates to the isolation layer by box id, so it works even when no
-    /// live handler or recorded pid remains (e.g. after recovery). The box
-    /// lifecycle asks the runtime for this; neither layer names the mechanism.
-    pub(crate) fn reap_box_processes(&self, id: &BoxID) {
-        crate::jailer::reap_sandbox(id);
-    }
-
     /// Remove a box from the runtime (internal implementation).
     ///
     /// This is the internal implementation called by both `BoxliteRuntime::remove()`
@@ -841,23 +833,18 @@ impl RuntimeImpl {
         if let Some((config, state)) = self.box_manager.box_by_id(id)? {
             // Box exists in database - handle as before
             let mut state = state;
-            // Reap the box's whole process tree through the isolation layer
-            // before anything else. `kill_process` (below) only signals the
-            // recorded pid — the launcher — and a detached box's inner process
-            // tree survives that, since #851 stopped tying detached boxes to the
-            // launcher's lifetime. Reaping by box id tears the whole tree down
-            // atomically, even after recovery has cleared `state.pid`. Best
-            // -effort and idempotent — a no-op on a genuinely-stopped box.
-            if force {
-                self.reap_box_processes(id);
-            }
             if state.status.is_active() || state.pid.is_some() {
                 if force {
-                    // Fallback for hosts without the cgroup jailer (disabled /
-                    // macOS seatbelt), where the tree is a single shim process.
+                    // Stop the box's whole process tree through the same handler
+                    // teardown `LiteBox::stop()` uses: it SIGTERMs the recorded
+                    // pid (the outer launcher), then reaps any survivors of a
+                    // detached box's inner pid-ns tree (inner bwrap + shim + VM) —
+                    // which a single-pid kill misses, since #851 stopped tying
+                    // detached boxes to the launcher's lifetime.
                     if let Some(pid) = state.pid {
-                        tracing::info!(box_id = %id, pid = pid, "Force killing box process");
-                        crate::util::kill_process(pid);
+                        tracing::info!(box_id = %id, pid = pid, "Force stopping box process tree");
+                        let mut handler = ShimHandler::from_pid(pid, config.id.clone());
+                        let _ = handler.stop();
                     }
                     // Update status to stopped and save
                     state.set_status(BoxStatus::Stopped);

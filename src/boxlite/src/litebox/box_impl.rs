@@ -391,13 +391,6 @@ impl BoxImpl {
             ),
         }
 
-        // Make sure no OS processes belonging to this box are left running.
-        // Graceful shutdown above should have torn the VM down, but a detached
-        // box's process tree can outlive `handler.stop()` (since #851 it is no
-        // longer tied to the launcher's lifetime), so ask the runtime to reap
-        // anything of ours that remains. Best-effort and idempotent.
-        self.runtime.reap_box_processes(&self.config.id);
-
         // Check if box was persisted
         let was_persisted = self.state.read().lock_id.is_some();
 
