@@ -89,10 +89,13 @@ relies on — read-write host volumes + host port mapping — is pinned by
 | Any L1 box misbehaving | its stateful in-box process is wedged | `make restart COMPONENTS=<box>` |
 | "Create Box" from the UI is incomplete | image resolution is mid-rewrite upstream + the picker is PostHog flag-gated | known limitation; use `POST /api/box` directly |
 
-> **Box boot is unverified on this stack** — image resolution is mid-rewrite
-> upstream (`TODO(image-rewrite)` in `apps/api/src/box/services/box.service.ts`)
-> and the dashboard image picker was removed. L1 services, API, runner, auth, and
-> the dashboard all work.
+> **Box boot via the API works** (verified 2026-06-29). `POST /api/v1/boxes` with
+> no `image` default-resolves to `ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0`,
+> creates the box, and it boots `creating → started`; `POST .../stop` stops it,
+> and a proxy call (`POST .../:id/exec`) on a stopped box auto-starts it. The
+> dashboard's **"Create Box" UI** is still incomplete (image picker removed /
+> PostHog-gated) — drive box creation through the API directly. L1 services, API,
+> runner, auth, and the dashboard all work.
 
 ## Layout
 
