@@ -112,6 +112,142 @@ applied per runner.
 > `https://api.<STACK_DOMAIN>` and is substituted into the bundled JS at
 > container start (see `apps/api/src/main.ts`).
 
+## Ops Console deployment
+
+Internal control console at `ops.boxlite.ai` — team uses it to view fleet
+state and trigger dev/prod releases. Single instance (not per-stage),
+sits in front of the same `dev` + `prod` deployments managed elsewhere in
+this SST config. Source: `boxlite-app-env/ops-console` (separate repo).
+Edge fronted by **Cloudflare Zero Trust** (Tunnel + Access) so the box
+exposes no public inbound ports and CF handles TLS + identity.
+
+### Account-level prerequisites (one-time, account owner only)
+
+Three things SST cannot automate — they need a human with the Cloudflare
+account-owner identity (typically the boss):
+
+1. **Enable Zero Trust** on the Cloudflare account — Dashboard → Zero
+   Trust → Enable, select **Free plan** (50 users, no card required).
+2. **Set Team name** to `polygala` (login domain becomes
+   `polygala.cloudflareaccess.com`).
+3. **Create an API token** with the minimum scope below.
+
+These are once-per-account. After they exist, every subsequent change to
+Tunnel / Access / DNS goes through `sst deploy`.
+
+### Token — minimum permissions
+
+Create at **Profile → API Tokens → Create Token → Custom Token**:
+
+| Scope | Permission | Why we need it |
+|---|---|---|
+| Account | Cloudflare Tunnel | `Edit` | create + manage the ops tunnel |
+| Account | Access: Apps and Policies | `Edit` | gate `ops.boxlite.ai` |
+| Account | Access: Organizations, Identity Providers, Groups | `Edit` | wire the email-OTP identity provider |
+| Zone | DNS | `Edit` | CNAME `ops.boxlite.ai` → tunnel |
+
+- **Account Resources:** Include → `boxlite` account.
+- **Zone Resources:** Include → Specific zone → `boxlite.ai`.
+- **TTL / Client IP:** leave default.
+
+Token permissions are locked at issue time — enabling Zero Trust later
+does **not** retroactively widen an existing token. Edit the token to
+add scopes, or issue a new one. We use a new one (`boxlite-ops-zerotrust`)
+to keep blast radius separate from the existing DNS-only
+`cloudflare-api-token`.
+
+### Where the token lives
+
+| What | Where | Set with |
+|---|---|---|
+| Zero Trust API token | AWS SSM (`SecureString`) at `/boxlite/ops/cloudflare-zerotrust-token` | `aws ssm put-parameter --type SecureString ...` |
+
+The path uses a new `/boxlite/ops/` namespace rather than
+`/boxlite/<stage>/`: ops is a single instance shared across stages, and
+putting it under `dev` or `prod` would falsely imply it's stage-scoped.
+Existing `/boxlite/<stage>/cloudflare-api-token` (DNS-only) keeps its
+home — the two tokens coexist.
+
+```bash
+aws ssm put-parameter --region ap-southeast-1 \
+  --name /boxlite/ops/cloudflare-zerotrust-token \
+  --type SecureString --value "<token from CF dashboard>" \
+  --description "CF token for SST to manage ZT resources (Tunnel/Access/Policy)"
+```
+
+### Resources `sst deploy` creates
+
+| Resource | Created by | Notes |
+|---|---|---|
+| `cloudflare.ZeroTrustTunnelCloudflared` | Pulumi | one tunnel for ops |
+| `cloudflare.ZeroTrustTunnelCloudflaredConfig` | Pulumi | ingress: `ops.boxlite.ai` → `http://localhost:3001` |
+| `cloudflare.Record` | Pulumi | CNAME `ops.boxlite.ai` → `<tunnel-id>.cfargotunnel.com` (proxied) |
+| `cloudflare.ZeroTrustAccessApplication` | Pulumi | the gate at `ops.boxlite.ai` |
+| `cloudflare.ZeroTrustAccessPolicy` | Pulumi | allow emails ending in `@polygala.ai` |
+| `cloudflared` systemd unit on the EC2 | EC2 user-data | installs the connector with the tunnel token |
+| SG inbound 80/443 | EC2 SG transform | **closed** — tunnel is outbound, no public ports |
+
+`cloudflared` install runs from user-data because Pulumi/IaC can declare
+the tunnel resource but cannot install a daemon on a box. The tunnel
+token (a Pulumi `Output`) is templated into user-data and read once on
+boot; rotating the tunnel triggers an EC2 replace.
+
+### Pitfalls
+
+> Lessons from the manual first-deploy that the codified path inherits — keep
+> them in mind when something breaks.
+
+- **Let's Encrypt rate-limit when iterating without CF.** LE allows 5
+  certs per exact identifier set per 168h. Redeploying the Caddy-fronted
+  prototype hit the cap and forced a fallback to `ops-x.boxlite.ai` for
+  the lockout window. Once CF handles TLS, this disappears — CF issues
+  certs itself with no rate limit. The first deploy *to* CF should be
+  the one and only LE issuance for this domain.
+
+- **NextAuth callback URL pinned to internal host.** Without
+  `header_up Host {host}` (Caddy) the Next.js server sees `Host:
+  localhost:3001` and builds Google OAuth `redirect_uri` against
+  `localhost`. Set `AUTH_URL=https://ops.boxlite.ai` explicitly in the
+  ops-console `.env` and verify
+  `curl https://ops.boxlite.ai/api/auth/providers` returns the
+  externally-visible callback URL. After CF cutover the cloudflared
+  connector sets `Host` correctly upstream — but `AUTH_URL` still needs
+  to point at the public hostname, not localhost.
+
+- **`process.cwd()` at module-load.** A `process.cwd()` call at the
+  top of `lib/config.ts` was reached by the edge middleware (Next 15
+  middleware runs in the edge runtime, which forbids it), 500-ing every
+  request in `standalone` prod builds — invisible in `next dev`. Resolve
+  filesystem paths lazily inside functions, not at import time.
+
+- **Old `cloudflare-api-token` is DNS-only.** The existing SSM token
+  used by SST for DNS records does not have Tunnel / Access permissions.
+  Don't try to reuse it for Zero Trust work — issue the new token above
+  and store it under the new SSM key.
+
+- **`boxlite-debug` is not SSM-managed.** Operations that work on
+  runners via `aws ssm send-command` won't work on the ops box. Use EC2
+  Instance Connect Endpoint (EICE) over a 443 tunnel for shell access,
+  not direct port 22 from the open internet.
+
+- **CF dashboard drift after IaC takes over.** Once these resources are
+  `import`-ed into Pulumi, any subsequent edit in the CF dashboard will
+  be reverted on the next `sst deploy` (standard IaC reconciliation).
+  Change CF config by editing the SST code and deploying — use the
+  dashboard for read-only inspection.
+
+### Rollback (5 minutes, no data loss)
+
+1. Dashboard → Zero Trust → Networks → Tunnels → `boxlite-ops` → Pause
+   (or delete).
+2. Cloudflare DNS → `ops.boxlite.ai` → change from CNAME-to-tunnel back
+   to an `A` record pointing at `boxlite-debug` public IPv4.
+3. Reopen SG inbound 80/443 on the ops box (`aws ec2
+   authorize-security-group-ingress …`).
+
+Caddy + LE on the box resume serving as before. CF configuration stays
+in place at no cost; re-enabling later is reversing the three steps.
+
 ## Public hostnames
 
 Five public DNS names, four different fronting layers:
