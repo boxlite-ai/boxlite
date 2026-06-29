@@ -107,5 +107,13 @@ touch -t 202001010000 "$TMP/.claude/.pr-reviewed.json"
 run "stale mtime (>max_age) → deny"     "gh pr create -t foo"               "deny"
 
 echo
+echo "## Title check: quoted --title must be a Conventional-Commit subject <=72"
+write_marker "reviewed: title cases"
+run "bad --title (no type prefix) → deny"  'gh pr create --title "add a cool thing" --body x'  "deny"
+run "over-72 --title → deny"               'gh pr create --title "feat(api): this title is far too long and clearly exceeds the seventy-two character ceiling"'  "deny"
+run "good --title + valid marker → allow"  'gh pr create --title "feat(api): add a cool thing"'  "passthrough"
+run "marker consumed after allow → deny"   'gh pr create --title "feat(api): add a cool thing"'  "deny"
+
+echo
 echo "RESULT: $pass passed, $fail failed"
 exit $(( fail > 0 ? 1 : 0 ))

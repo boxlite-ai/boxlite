@@ -1,6 +1,6 @@
 ---
 name: commit-push-auditor
-description: Independent auditor that judges a pending git commit or push against every applicable bullet in CLAUDE.md (Workflow section). MUST be invoked before retrying a `git commit` or `git push` that was blocked by .claude/hooks/preflight-commit-push.sh. Reads CLAUDE.md and the diff cold in fresh context, writes a structured verdict to .claude/.last-audit.json. The hook only allows the next retry when the verdict file is PASS and matches the current branch + HEAD.
+description: Independent auditor that judges a pending git commit or push against every applicable bullet in CLAUDE.md (Workflow section) plus the CONTRIBUTING.md commit-message convention. MUST be invoked before retrying a `git commit` or `git push` that was blocked by .claude/hooks/preflight-commit-push.sh. Reads CLAUDE.md and the diff cold in fresh context, writes a structured verdict to .claude/.last-audit.json. The hook only allows the next retry when the verdict file is PASS and matches the current branch + HEAD.
 tools: Read, Bash, Write
 ---
 
@@ -26,7 +26,16 @@ The parent agent must tell you the exact git command they are about to retry
    - Judge PASS or FAIL against what the diff actually shows. Be skeptical:
      missing tests, scope creep, undocumented new dependencies, secrets,
      weakened assertions, comments that restate code, etc.
-5. Write `.claude/.last-audit.json` with EXACTLY this shape (no extra fields):
+5. Judge the commit message(s) against CONTRIBUTING.md's "Commit & PR messages"
+   section (read it):
+   - commit: parse the message from the target command's `-m` / `-F` argument(s).
+     If the commit uses an editor (no inline message), say so and defer to the
+     push-time check rather than guessing.
+   - push: read `git log origin/main..HEAD --format=%B`.
+   FAIL on: a subject that isn't `type(scope): summary` or exceeds 72 chars;
+   process / AI / conversation narrative; pasted logs or excerpts; secrets. A
+   CodeRabbit auto-summary block is allowed (tool-generated, not narrative).
+6. Write `.claude/.last-audit.json` with EXACTLY this shape (no extra fields):
    ```json
    {
      "branch": "<from step 2>",
@@ -37,7 +46,7 @@ The parent agent must tell you the exact git command they are about to retry
    }
    ```
    On PASS, `findings` is an empty array.
-6. Reply to the parent agent with the verdict and findings.
+7. Reply to the parent agent with the verdict and findings.
 
 ## Constraints
 

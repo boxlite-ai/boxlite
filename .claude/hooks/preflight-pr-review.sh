@@ -77,6 +77,27 @@ deny() {
   exit 0
 }
 
+# Deterministic title check: when a quoted --title is given, require a
+# Conventional-Commit subject <=72 chars. (Short `-t` / unquoted forms aren't
+# inspected; body quality / no-narrative is confirmed in the ack below.)
+pr_title=""
+if [[ "$command" =~ --title[[:space:]]+\"([^\"]*)\" ]]; then
+  pr_title="${BASH_REMATCH[1]}"
+elif [[ "$command" =~ --title[[:space:]]+\'([^\']*)\' ]]; then
+  pr_title="${BASH_REMATCH[1]}"
+fi
+if [[ -n "$pr_title" ]]; then
+  title_re='^(feat|fix|docs|refactor|test|chore|perf|ci|build)(\([^)]+\))?!?:[[:space:]].+'
+  if [[ ! "$pr_title" =~ $title_re ]] || (( ${#pr_title} > 72 )); then
+    deny "PR title is not a Conventional-Commit subject <=72 chars.
+  title (${#pr_title} chars): ${pr_title}
+  required: type(scope): summary  — e.g. feat(api): cute default box names
+  types: feat fix docs refactor test chore perf ci build
+
+Fix --title and retry. See CONTRIBUTING.md #commit--pr-messages."
+  fi
+fi
+
 # ─────────────────────────────────────────────────────────────────────────────
 # TODO(user, learning-mode): author the ack instructions Claude reads on every
 # deny. This is the actual UX of the gate — keep it tight, unambiguous, and
@@ -113,7 +134,9 @@ on the question's 'notes' annotation (not the 'answers' field).
 
 Use this AskUserQuestion payload:
   question: 'PR-review acknowledgment for: ${command}
-             Pick \"Other\" and type your acknowledgment in this exact shape:
+             First confirm the description follows the PR template and has no
+             internal/AI narrative, pasted logs, or secrets. Then pick \"Other\"
+             and type your acknowledgment in this exact shape:
                  reviewed: <one-line summary, in your own words, of what
                             this PR changes>'
   header:   'PR review'

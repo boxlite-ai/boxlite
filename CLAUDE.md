@@ -104,5 +104,6 @@ Every change goes: understand → research → design → implement → test →
 
 - Words: as concise and simple as possible, unless explicitly asked otherwise.
 - A simple call graph (func name, class name, file name, LOC, short annotation) is the first choice when explaining code.
+- Commit/PR text: describe the change, not the process that produced it. Conventional-Commit subject ≤72; no process/AI narrative, pasted logs, or secrets. See [CONTRIBUTING.md](./CONTRIBUTING.md#commit--pr-messages).
 
 Adapted from Clean Code (Robert C. Martin) via the polygala-inc AGENTS.md distillation.
