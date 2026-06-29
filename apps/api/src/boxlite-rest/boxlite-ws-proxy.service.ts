@@ -23,6 +23,7 @@ type RunnerUpgradeRequest = IncomingMessage & {
 // /api/v1/<tenant>/boxes/<id>/executions/<id>/attach shape with optional query string.
 // Named groups: `tenant` (optional org id / path prefix) and `boxId`.
 const ATTACH_PATH = /^\/api\/v1\/(?:(?<tenant>[^/]+)\/)?boxes\/(?<boxId>[^/]+)\/executions\/[^/]+\/attach(?:\?.*)?$/
+const ATTACH_ACTIVITY_HEARTBEAT_MS = 30_000
 
 /**
  * Singleton WebSocket proxy for `/attach` upgrades.
@@ -114,12 +115,10 @@ export class BoxliteWsProxyService {
         this.respondAndClose(socket, 404, 'Not Found')
         return
       }
-      // Mirror legacy toolbox path — opening a WS attach is user activity,
-      // so the autostop cron does not reap a session that's still connected.
-      // Best-effort: do not fail the upgrade if this errors.
-      this.boxService
-        .updateLastActivityAt(box.id, new Date())
-        .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${box.id}: ${err}`))
+      // Mirror legacy toolbox path — an open WS attach is user activity, so the
+      // autostop cron does not reap a terminal session that's still connected.
+      this.touchAttachActivity(box.id)
+      this.startAttachActivityHeartbeat(box.id, socket)
       const runner = await this.runnerService.findOne(box.runnerId)
       if (!runner) {
         this.respondAndClose(socket, 404, 'Not Found')
@@ -210,5 +209,30 @@ export class BoxliteWsProxyService {
       // Socket may already be torn down — ignore.
     }
     socket.destroy()
+  }
+
+  private touchAttachActivity(boxId: string): void {
+    this.boxService
+      .updateLastActivityAt(boxId, new Date())
+      .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${boxId}: ${err}`))
+  }
+
+  private startAttachActivityHeartbeat(boxId: string, socket: Socket): void {
+    const interval = setInterval(() => this.touchAttachActivity(boxId), ATTACH_ACTIVITY_HEARTBEAT_MS)
+    interval.unref?.()
+
+    let stopped = false
+    const stop = () => {
+      if (stopped) return
+      stopped = true
+      clearInterval(interval)
+      socket.off('close', stop)
+      socket.off('end', stop)
+      socket.off('error', stop)
+    }
+
+    socket.once('close', stop)
+    socket.once('end', stop)
+    socket.once('error', stop)
   }
 }

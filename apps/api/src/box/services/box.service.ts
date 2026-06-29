@@ -17,7 +17,7 @@ import { RunnerService } from './runner.service'
 import { BoxError } from '../../exceptions/box-error.exception'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Cron, CronExpression } from '@nestjs/schedule'
-import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
+import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION, DEFAULT_AUTO_STOP_INTERVAL_MINUTES } from '../constants/box.constants'
 import { assertSupportedImage } from '../constants/curated-images.constant'
 import { BoxWarmPoolService } from './box-warm-pool.service'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
@@ -269,14 +269,13 @@ export class BoxService {
       labels: createBoxDto.labels || {},
       organizationId: organization.id,
       createdAt: now,
+      autoStopInterval: this.resolveAutoStopInterval(
+        createBoxDto.autoStopInterval ?? DEFAULT_AUTO_STOP_INTERVAL_MINUTES,
+      ),
     }
 
     if (createBoxDto.name) {
       updateData.name = createBoxDto.name
-    }
-
-    if (createBoxDto.autoStopInterval !== undefined) {
-      updateData.autoStopInterval = this.resolveAutoStopInterval(createBoxDto.autoStopInterval)
     }
 
     if (createBoxDto.autoDeleteInterval !== undefined) {

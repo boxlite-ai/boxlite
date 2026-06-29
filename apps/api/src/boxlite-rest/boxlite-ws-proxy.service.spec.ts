@@ -6,6 +6,7 @@
 
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import type { IncomingMessage } from 'http'
+import { EventEmitter } from 'events'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 
 jest.mock('http-proxy-middleware', () => ({
@@ -21,6 +22,10 @@ jest.mock('uuid', () => ({
 describe('BoxliteWsProxyService', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+  })
+
+  afterEach(() => {
+    jest.useRealTimers()
   })
 
   function authRequest(token: string, url = '/api/v1/org-1/boxes/public-box/executions/exec-1/attach') {
@@ -112,5 +117,55 @@ describe('BoxliteWsProxyService', () => {
 
     await expect(service.authenticate(authRequest(jwt), 'org-1')).resolves.toBeNull()
     expect(organizationUserService.findOne).toHaveBeenCalledWith('org-1', 'user-1')
+  })
+
+  it('keeps refreshing activity while an attach websocket remains open', async () => {
+    jest.useFakeTimers()
+    const upgrade = jest.fn()
+    jest.mocked(createProxyMiddleware).mockReturnValue({ upgrade } as never)
+
+    const boxService = {
+      findOneByIdOrName: jest.fn().mockResolvedValue({
+        id: 'box-uuid',
+        runnerId: 'runner-1',
+      }),
+      updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
+    }
+    const runnerService = {
+      findOne: jest.fn().mockResolvedValue({
+        apiUrl: 'http://runner.local',
+        apiKey: 'runner-key',
+      }),
+    }
+    const service = new BoxliteWsProxyService(
+      {} as never,
+      {} as never,
+      boxService as never,
+      runnerService as never,
+      {} as never,
+    )
+    jest.spyOn(service as any, 'authenticate').mockResolvedValue({ organizationId: 'org-1' })
+
+    const socket = new EventEmitter() as EventEmitter & {
+      destroy: jest.Mock
+      write: jest.Mock
+    }
+    socket.destroy = jest.fn()
+    socket.write = jest.fn()
+
+    await service.upgrade(authRequest('blk_live_test'), socket as never, Buffer.alloc(0))
+    await Promise.resolve()
+
+    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
+    expect(upgrade).toHaveBeenCalled()
+
+    jest.advanceTimersByTime(30_000)
+    await Promise.resolve()
+    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(2)
+
+    socket.emit('close')
+    jest.advanceTimersByTime(30_000)
+    await Promise.resolve()
+    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(2)
   })
 })

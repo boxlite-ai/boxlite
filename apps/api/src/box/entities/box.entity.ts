@@ -12,6 +12,7 @@ import { BoxVolume } from '../dto/box.dto'
 import { nanoid } from 'nanoid'
 import { BoxLastActivity } from './box-last-activity.entity'
 import { BOX_ID_LENGTH, BOX_ID_REGEX, generateBoxId } from '../utils/box-id.util'
+import { DEFAULT_AUTO_STOP_INTERVAL_MINUTES } from '../constants/box.constants'
 
 @Entity('box')
 @Unique(['organizationId', 'name'])
@@ -148,8 +149,8 @@ export class Box {
 
   //  this is the interval in minutes after which the box will be stopped if lastActivityAt is not updated
   //  if set to 0, auto stop will be disabled
-  @Column({ default: 15, type: 'int' })
-  autoStopInterval: number | undefined = 15
+  @Column({ default: DEFAULT_AUTO_STOP_INTERVAL_MINUTES, type: 'int' })
+  autoStopInterval: number | undefined = DEFAULT_AUTO_STOP_INTERVAL_MINUTES
 
   //  this is the interval in minutes after which a continuously stopped workspace will be automatically deleted
   //  if set to negative value, auto delete will be disabled
