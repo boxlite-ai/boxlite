@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Tests for .claude/hooks/preflight-verdict-check.sh (the Stop-stage verdict gate).
 #
-# This hook is a VALIDATOR of a self-declared dossier (.claude/.last-verdict.json):
-#   - no dossier                                -> allow (agent declared nothing to prove)
+# This hook REQUIRES a dossier (.claude/.last-verdict.json) on every turn-end (default-deny):
+#   - no dossier                                -> block (hard) or nudge (soft): audit not run
 #   - present, PASS/IN_PROGRESS, matching+fresh -> allow (PASS is consumed)
 #   - present, stale / mismatched / FAIL        -> block (hard) or nudge (soft)
 # Each case builds a throwaway git repo, optionally writes a dossier, and runs the
@@ -14,6 +14,12 @@
 # Run with:  bash .claude/hooks/preflight-verdict-check.test.sh
 # Exits non-zero on any failure.
 set -uo pipefail
+
+# Hermetic baseline: neutralize any ambient VERDICT_GATE_HARD_BLOCK so the soft-mode
+# cases below see it absent regardless of the caller's environment (a session or CI that
+# exports it to hard-block would otherwise turn their nudges into blocks). Hard-mode
+# cases set it explicitly in decide().
+unset VERDICT_GATE_HARD_BLOCK
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 HOOK="$REPO_ROOT/.claude/hooks/preflight-verdict-check.sh"
@@ -92,17 +98,17 @@ check_consumed() {  # desc  repo
   fi
 }
 
-echo "## No dossier → allow (the agent self-declared nothing to prove)"
-R="$(setup)";                                    check "clean tree, no dossier → allow"   "$R" "allow"; rm -rf "$R"
-# The key inversion: a production change is NOT force-gated; gating is agent-declared.
-R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"; check "prod change, no dossier → allow"  "$R" "allow"; rm -rf "$R"
+echo "## No dossier → block (default-deny: every turn must produce an audited dossier)"
+R="$(setup)";                                    check "clean tree, no dossier → block"   "$R" "block"; rm -rf "$R"
+# The whole point: a turn cannot end simply by never invoking the auditor.
+R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"; check "prod change, no dossier → block"  "$R" "block"; rm -rf "$R"
 
 echo
 echo "## Present dossier → validate verdict"
 R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"; write_verdict "$R" "PASS" "[]"
 check "code change + matching PASS → allow"      "$R" "allow"
 check_consumed "PASS dossier consumed on allow"  "$R"
-check "after consume (no dossier) → allow"       "$R" "allow"; rm -rf "$R"
+check "after consume (no dossier) → block"       "$R" "block"; rm -rf "$R"
 
 # A verdict with NO file change (ops / investigation) still validates against the
 # clean-tree hash — this is the whole point of covering non-code verdicts.
@@ -145,6 +151,15 @@ if printf '%s' "$soft_out" | jq -e '(.decision // "") != "block" and .continue =
   pass=$((pass + 1)); printf '  PASS  %s\n' "FAIL dossier → nudge (continue:true + systemMessage), not block"
 else
   fail=$((fail + 1)); printf '  FAIL  %s  (out=%s)\n' "soft-mode nudge" "$soft_out"
+fi
+rm -rf "$R"
+
+R="$(setup)"  # no dossier at all → soft mode must nudge, not block
+soft_nodossier="$(printf '%s' "$PAYLOAD" | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" bash "$HOOK" ) 2>/dev/null)"
+if printf '%s' "$soft_nodossier" | jq -e '(.decision // "") != "block" and .continue == true and (.systemMessage | type) == "string"' >/dev/null 2>&1; then
+  pass=$((pass + 1)); printf '  PASS  %s\n' "no dossier → nudge (continue:true + systemMessage), not block"
+else
+  fail=$((fail + 1)); printf '  FAIL  %s  (out=%s)\n' "soft-mode no-dossier nudge" "$soft_nodossier"
 fi
 rm -rf "$R"
 
