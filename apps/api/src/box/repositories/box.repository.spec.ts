@@ -4,6 +4,7 @@
  */
 
 import { BoxRepository } from './box.repository'
+import { Box } from '../entities/box.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 
@@ -26,9 +27,13 @@ function makeQueryBuilder(execute: jest.Mock) {
 function makeRepository(execute: jest.Mock) {
   const query = jest.fn().mockResolvedValue(undefined)
   const queryBuilder = makeQueryBuilder(execute)
+  // create() hydrates the RETURNING * raw row into a Box; the stub echoes the
+  // row back so return-shape assertions stay on the same object.
+  const create = jest.fn((_entity, raw) => raw)
   const entityManager = {
     query,
     createQueryBuilder: jest.fn(() => queryBuilder),
+    create,
   }
   const manager = {
     transaction: jest.fn(async (cb: (em: typeof entityManager) => Promise<unknown>) => cb(entityManager)),
@@ -38,7 +43,7 @@ function makeRepository(execute: jest.Mock) {
   // invalidateLookupCacheOnUpdate touches the real cache service; stub it out —
   // it is incidental to the lock-timeout behavior under test.
   jest.spyOn(repo as any, 'invalidateLookupCacheOnUpdate').mockImplementation(() => undefined)
-  return { repo, query, execute }
+  return { repo, query, execute, create }
 }
 
 const startedRow = {
@@ -54,11 +59,14 @@ const startedRow = {
 describe('BoxRepository.conditionalStartForProxy', () => {
   it('bounds the row-lock wait with a lock_timeout before the UPDATE', async () => {
     const execute = jest.fn().mockResolvedValue({ raw: [startedRow] })
-    const { repo, query } = makeRepository(execute)
+    const { repo, query, create } = makeRepository(execute)
 
     const updated = await repo.conditionalStartForProxy('box-1', 'org-1')
 
     expect(updated).toEqual(startedRow)
+    // The RETURNING * row is a plain pg object; the repo must hydrate it into a
+    // Box entity, not leak a raw row through the Promise<Box> contract.
+    expect(create).toHaveBeenCalledWith(Box, startedRow)
     // The fix's core: the transaction sets a per-statement lock_timeout so a
     // contended row aborts at the DB instead of pinning the connection.
     expect(query).toHaveBeenCalledWith(expect.stringContaining('SET LOCAL lock_timeout'))

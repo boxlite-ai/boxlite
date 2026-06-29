@@ -230,8 +230,13 @@ export class BoxRepository extends BaseRepository<Box> {
           .returning('*')
           .execute()
 
-        const updated = (result.raw as Box[])[0]
-        if (!updated) return null
+        const raw = (result.raw as Box[])[0]
+        if (!raw) return null
+
+        // RETURNING * yields a plain pg row; hydrate it into a real Box so the
+        // value honors the Promise<Box> contract and downstream consumers (the
+        // caller's events → toBoxDto) get an entity, not a raw row.
+        const updated = entityManager.create(Box, raw)
 
         // id / name / org haven't changed, but the cached entity snapshot still
         // holds the old desiredState/pending — invalidate so subsequent
