@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
-# Stop hook: gate the agent from ENDING ITS TURN while it has unproven behavioral
-# work, on a fresh dossier from the verdict-auditor subagent
+# Stop hook: VALIDATE a self-declared verdict before the agent ends its turn
 # (see .claude/agents/verdict-auditor.md).
 #
-# The hook itself does not call any model; it reads the dossier the subagent
-# writes at .claude/.last-verdict.json and checks that the verdict is PASS (or
-# IN_PROGRESS), recent, and bound to the current branch + HEAD + working-tree hash.
+# Self-declared gating: the hook does NOT detect verdicts. The agent decides when it
+# has made a behavioral verdict (per CLAUDE.md's Verify rule) and self-invokes the
+# verdict-auditor subagent, which writes the dossier at .claude/.last-verdict.json.
+# This hook only validates that dossier; it calls no model and reads no transcript.
 #
-# Flow on a blocked stop:
-#   1. Hook blocks the turn from ending.
-#   2. The `reason` reaches the model; it invokes the verdict-auditor subagent.
-#   3. Subagent writes .claude/.last-verdict.json.
-#   4. Model ends its turn again -> hook reads the dossier and allows on PASS.
+# Flow (agent self-declared):
+#   1. The agent ends a turn asserting a verdict; per CLAUDE.md it first invokes the
+#      verdict-auditor subagent, which writes .claude/.last-verdict.json.
+#   2. Hook validates: a fresh, matching PASS/IN_PROGRESS dossier -> allow.
+#   3. NO dossier -> allow (the agent declared nothing to prove). Gating is opt-in.
+#   4. A stale / mismatched / FAIL dossier -> block (hard) or nudge (soft); the agent
+#      re-audits and ends again.
 # The subagent's own completion is a SubagentStop event, not Stop, so it does not
 # re-trigger this hook (no recursion).
 #
@@ -19,23 +21,25 @@
 #
 # Design notes
 # ------------
-# * Every-turn-end: a Stop hook fires whenever the agent ends a turn, with no
-#   "done vs paused" signal in the payload. So we first apply a cheap, deterministic
-#   PRE-FILTER: unless there are uncommitted changes to PRODUCTION files, we allow
-#   immediately. Pure chat / research / docs-only turns never gate. Production is
-#   decided by PATH, never by parsing the message (no string-match intent guessing).
+# * No detection: a Stop hook fires whenever the agent ends a turn, with no
+#   "done vs paused" signal. Rather than guess from changed files (which misses any
+#   verdict that touches no files — an ops check, a factual answer, "no issues") or
+#   parse the message, we let the AGENT decide: it self-invokes the auditor when it
+#   made a verdict. No dossier => nothing to prove.
 #
-# * Tree-hash binding: at stop time the work is usually UNCOMMITTED (HEAD has not
-#   moved), so HEAD alone can't tell "audited" from "changed since audit". We bind
-#   the dossier to a content-addressed hash of the full working tree, computed via a
-#   throwaway index + `git write-tree` (deterministic; no timestamps; never touches
-#   the real index). The verdict-auditor computes it the SAME way.
+# * Tree-hash binding (present-dossier only): at stop time the work is usually
+#   UNCOMMITTED (HEAD has not moved), so HEAD alone can't tell "audited" from
+#   "changed since audit". We bind the dossier to a content-addressed hash of the
+#   full working tree, computed via a throwaway index + `git write-tree`
+#   (deterministic; no timestamps; never touches the real index). The verdict-auditor
+#   computes it the SAME way. Computed only when a dossier exists — the common
+#   no-dossier turn does no git work.
 #
 # * Loop-safety: the block is satisfiable — a fresh PASS or IN_PROGRESS dossier
 #   always lets the turn end — so we never depend on the (undocumented) stop_hook_active.
 #
 # * One-shot consumption: the dossier is `rm -f`'d on the allow path so the next
-#   "done" re-checks. Mirrors the trade-off in preflight-commit-push.sh.
+#   verdict re-audits. Mirrors the trade-off in preflight-commit-push.sh.
 #
 # Tests: bash .claude/hooks/preflight-verdict-check.test.sh
 set -uo pipefail
@@ -76,22 +80,18 @@ compute_tree_hash() {
   rm -f "$idx"
 }
 
-# ── Pre-filter: is there pending PRODUCTION work worth proving? ───────────────
-# Count changed paths that are NOT docs (*.md, docs/) and NOT agent/tooling infra
-# (.claude/, .codex/). `grep -c` reads all input (no early-exit SIGPIPE under
-# pipefail); `|| true` keeps the no-match exit-1 from aborting.
-n_prod="$(git -C "$repo_root" status --porcelain 2>/dev/null \
-  | sed -E 's/^.{3}//' \
-  | grep -Ecv '(\.md$|^docs/|/docs/|^\.claude/|^\.codex/)' || true)"
-if [[ "${n_prod:-0}" -eq 0 ]]; then
+# ── No dossier → the agent self-declared nothing to prove → allow ────────────
+# This is the heart of self-declared gating: absence is the agent's decision, not a
+# gap to punish. Gating is opt-in; the agent invokes the auditor (per CLAUDE.md) only
+# when it made a verdict. Cheap: the common turn does no git work and reads no file.
+if [[ ! -r "$verdict_file" ]]; then
   allow
 fi
 
-# ── Gate: require a fresh, matching dossier ──────────────────────────────────
+# ── Validate the self-declared dossier ───────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────────
-# TODO(user, learning-mode): this block `reason` is the gate's UX and its
-# anti-cheating contract — what Claude reads when it tries to end a turn with
-# unproven behavioral work. Refine the wording to taste, but keep these invariants:
+# The block `reason` below is the gate's UX + anti-cheating contract — what Claude
+# reads when a present dossier is stale / mismatched / FAIL. Invariants to preserve:
 #   • Direct Claude to invoke the verdict-auditor subagent (Task tool), passing the
 #     transcript path so the auditor can read the very claim it must check.
 #   • The AUDITOR — not Claude — writes ${verdict_file}. Claude must not write or
@@ -101,29 +101,20 @@ fi
 #   • After the auditor reports, end the turn again; this hook re-checks.
 #
 # Variables available: ${transcript_path} ${branch} ${head} ${verdict_file}
-verdict_instruction="You are ending your turn with unproven changes on branch '${branch}'.
-Attach proof for what you claim you did before finishing.
-
-Invoke the verdict-auditor subagent now:
+verdict_instruction="Re-audit before ending: invoke the verdict-auditor subagent.
   Task(subagent_type='verdict-auditor',
        description='verdict proof check',
-       prompt='Check my last message'\\''s verdict against the working-tree diff.
-               transcript_path: ${transcript_path}')
+       prompt='Audit my last message: each claim it presents as established must have
+               concrete, direct proof in the evidence — the working-tree diff, the
+               commands and their output in the transcript, or cited files/logs. A claim
+               backed only by guessing or indirect inference is NOT proven. A turn that
+               asserts nothing verifiable is a PASS. transcript_path: ${transcript_path}')
 
-It judges your claims against CLAUDE.md'\\''s Test/Verify rules and writes its dossier
-to ${verdict_file}. Do NOT write that file yourself.
-
-If you are not actually done (pausing, or asking the user something), have the
-auditor record verdict IN_PROGRESS with what remains. If a claim genuinely cannot
-be proven in this environment, the auditor can mark that proof 'blocked' with the
+The AUDITOR — not you — writes ${verdict_file}; do not write it yourself. If you are
+pausing or asking the user something, have it record IN_PROGRESS with what remains;
+if a claim genuinely cannot be proven here, it can mark that proof 'blocked' with the
 residual risk. Then end your turn again."
 # ─────────────────────────────────────────────────────────────────────────────
-
-if [[ ! -r "$verdict_file" ]]; then
-  block "No verdict dossier found for the changes in your working tree.
-
-${verdict_instruction}"
-fi
 
 v_branch="$(jq -r '.branch // ""'    "$verdict_file" 2>/dev/null || echo '')"
 v_head="$(jq -r '.head // ""'        "$verdict_file" 2>/dev/null || echo '')"

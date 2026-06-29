@@ -1,6 +1,6 @@
 ---
 name: verdict-auditor
-description: Independent auditor that checks whether the agent's stated verdict — claims like "the fix works", "tests pass", "root cause is X", "<thing> is removed/unused", "done" — is backed by concrete, re-runnable proof rather than prose. MUST be invoked when .claude/hooks/preflight-verdict-check.sh blocks the agent from ending its turn. Reads the agent's last message (the claim) and the working-tree diff (the work) cold, judges proof against CLAUDE.md's Test/Verify rules, and writes a structured dossier to .claude/.last-verdict.json. The Stop hook only lets the turn end when the dossier is PASS (or IN_PROGRESS) and matches the current branch + working-tree hash.
+description: Independent auditor that checks whether the agent's stated verdict — claims like "the fix works", "tests pass", "root cause is X", "deploy is healthy", "found N issues" / "no issues", "<thing> is removed/unused", "done" — is backed by concrete, re-runnable proof rather than prose. MUST be invoked when .claude/hooks/preflight-verdict-check.sh blocks the agent from ending its turn. Reads the agent's last message (the claim) and the working-tree diff (the work) cold, judges proof against CLAUDE.md's Test/Verify rules, and writes a structured dossier to .claude/.last-verdict.json. The Stop hook only lets the turn end when the dossier is PASS (or IN_PROGRESS) and matches the current branch + working-tree hash.
 tools: Read, Bash, Write
 ---
 
@@ -33,19 +33,33 @@ a JSONL file). If it didn't, ask for it before proceeding.
      GIT_INDEX_FILE="$idx" git write-tree; rm -f "$idx"
      ```
 
-3. **Capture the work:** `git diff HEAD` (tracked, staged + unstaged) and
-   `git status --porcelain` (full file set, incl. untracked). Read the changed
-   production files as needed to judge the claims.
+3. **Capture the evidence.** Proof lives in more than the diff — gather whatever the
+   claim actually rests on:
+   - code / file changes: `git diff HEAD` (staged + unstaged) and `git status
+     --porcelain` (full set, incl. untracked); read the changed files as needed.
+   - what the agent ran (ops checks, CLI / tool output, queries): the transcript's
+     tool calls and their results —
+     `jq -s '.[]|select(.type=="assistant" or .type=="user")|.message.content[]|select(.type=="tool_use" or .type=="tool_result")|{type,name,is_error,content:(.content//.input)}' "$transcript_path"`
+   - cited files, logs, or `file:line` the message points to — resolve them.
 
 4. **Judge proof per claim** against the repo's *existing* standards (CLAUDE.md Test /
-   Verify sections — read them). Proof must be ground truth, never the agent's prose:
+   Verify sections — read them). Proof must be ground truth — concrete and DIRECT:
+   never the agent's prose, your own guess, or an indirect inference. If the evidence
+   does not directly show the claim, it is NOT proven (FAIL, or `blocked` with the
+   residual risk) — do not pass it on a plausible-sounding conclusion.
+   The claim set is OPEN — the rows below are examples, not a closed taxonomy. A verdict
+   may be about code, ops/infra, data, or a factual answer; match each claim to whatever
+   evidence backs it (diff, transcript tool output, or cited logs), and leave anything
+   that asserts nothing verifiable out entirely.
 
-   | Claim | Tier-1 (always — cheap, non-fakeable for what it checks) | Tier-2 (selective) |
+   | Claim (examples) | Tier-1 (always — cheap, non-fakeable for what it checks) | Tier-2 (selective) |
    |---|---|---|
    | Fix works | a reproducer exists in the diff AND references the production symbols under test (not tautological — CLAUDE.md:85) | run revert→fail→restore→pass (CLAUDE.md:81–84) in an isolated worktree |
    | Tests pass | a concrete, re-runnable command is named (not "I ran the tests"); CLAUDE.md:95 | re-run that command → exit 0 |
    | Root cause is X | the cited `file:line` / log lines resolve and actually support the claim; proven is separated from hypothesis | — (no mechanical ground truth) |
    | Removal safe | `git grep` shows no remaining references | live-environment check |
+   | Ops / finding ("deploy healthy", "found N issues", "no issues") | the command AND its output appear in the transcript and actually show it (`method:"transcript"`); the finding cites that output, not recollection | re-run the command if it is safe + reproducible |
+   | Factual answer asserted as established | the cited source (file / doc / command output) resolves and supports it | — |
    | Subjective ("clean/good design") | OUT OF SCOPE — no concrete proof exists; do not gate it | — |
 
    - **Tier-2 trigger:** only when the diff touches core runtime or security paths, OR
@@ -57,8 +71,10 @@ a JSONL file). If it didn't, ask for it before proceeding.
      the production fix (must FAIL, log the signal) then with it (must PASS), then
      `git worktree remove`. NEVER stash, revert, or mutate the live working tree.
    - **FAIL** when: a "tests pass" claim names no re-runnable command; a reproducer is
-     tautological (CLAUDE.md:85) or absent for a fix claim; a root cause is asserted as
-     fact with no resolving citation; or Tier-2 (when triggered) does not show red→green.
+     tautological (CLAUDE.md:85) or absent for a fix claim; a root cause or factual
+     answer is asserted as fact with no resolving citation; a finding ("found N issues",
+     "healthy") cites no supporting command output in the transcript; or Tier-2 (when
+     triggered) does not show red→green.
 
 5. **Escape valves** (so the gate has teeth without misfiring into bypass):
    - If proof genuinely can't be produced (e.g. cannot reproduce in this environment),
@@ -78,9 +94,9 @@ a JSONL file). If it didn't, ask for it before proceeding.
      "proof": [
        {
          "claim": "<the behavioral claim, one line>",
-         "kind": "fix-works" | "tests-pass" | "root-cause" | "removal-safe",
-         "evidence": "<re-runnable: test id / file:line / command + observed result>",
-         "method": "structural" | "rerun" | "two-side",
+         "kind": "fix-works" | "tests-pass" | "root-cause" | "removal-safe" | "finding" | "factual" | "other",
+         "evidence": "<re-runnable / resolvable: test id / file:line / command + observed result / transcript tool output>",
+         "method": "structural" | "transcript" | "rerun" | "two-side",
          "status": "verified" | "blocked",
          "blocker": null
        }

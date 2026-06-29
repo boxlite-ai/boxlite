@@ -93,6 +93,7 @@ Every change goes: understand → research → design → implement → test →
 
 - Run the smallest relevant verification first (`make test`, package-scoped test), then broaden if risk justifies.
 - Don't claim tests passed unless they actually ran. If verification can't run, state the blocker and the residual risk.
+- Self-declare verdicts: when you end a turn asserting anything as established — a fix that works, tests that pass, a root cause, an ops/infra finding, "no issues", a factual answer — invoke the `verdict-auditor` subagent (Task) to attach proof before ending. You decide when a turn carries a verdict; a turn with nothing verifiable needs no audit. The auditor — not you — writes the dossier (`.claude/.last-verdict.json`); never hand-write it.
 
 **Cross-cutting** (apply at every phase)
 

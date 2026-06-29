@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Tests for .claude/hooks/preflight-verdict-check.sh (the Stop-stage verdict gate).
 #
-# Unlike the commit-push gate (which keys off an artifact + the real repo's
-# branch/HEAD), this hook's decision depends on the WORKING-TREE STATE. So each
-# case builds a throwaway git repo in a controlled state and runs the hook there
-# (cwd + CLAUDE_PROJECT_DIR both pointed at it), asserting allow vs block.
+# This hook is a VALIDATOR of a self-declared dossier (.claude/.last-verdict.json):
+#   - no dossier                                -> allow (agent declared nothing to prove)
+#   - present, PASS/IN_PROGRESS, matching+fresh -> allow (PASS is consumed)
+#   - present, stale / mismatched / FAIL        -> block (hard) or nudge (soft)
+# Each case builds a throwaway git repo, optionally writes a dossier, and runs the
+# hook there (cwd + CLAUDE_PROJECT_DIR pointed at it), asserting allow vs block.
 #
 # Stop contract: allow = empty stdout (exit 0); block = stdout {"decision":"block"};
-# IN_PROGRESS = {"continue":true,...} (non-empty but no block decision = allow).
+# soft nudge / IN_PROGRESS = {"continue":true,...} (non-empty, no block = allow).
 #
 # Run with:  bash .claude/hooks/preflight-verdict-check.test.sh
 # Exits non-zero on any failure.
@@ -80,52 +82,67 @@ check() {  # desc  repo  expect
   fi
 }
 
-echo "## Pre-filter: turns with no production work end freely"
-R="$(setup)";                                                check "clean tree → allow"            "$R" "allow"; rm -rf "$R"
-R="$(setup)"; printf 'docs\n' > "$R/README.md";              check "docs-only (*.md) → allow"      "$R" "allow"; rm -rf "$R"
-R="$(setup)"; mkdir -p "$R/docs"; printf 'x\n' > "$R/docs/a.txt"; check "docs/ dir → allow"         "$R" "allow"; rm -rf "$R"
-R="$(setup)"; mkdir -p "$R/.claude"; printf 'x\n' > "$R/.claude/note.md"; check "agent infra (.claude/) → allow" "$R" "allow"; rm -rf "$R"
+# Assert the dossier file was consumed (removed) by the hook's allow path.
+check_consumed() {  # desc  repo
+  local desc="$1" repo="$2"
+  if [[ ! -e "$repo/.claude/.last-verdict.json" ]]; then
+    pass=$((pass + 1)); printf '  PASS  %s\n' "$desc"
+  else
+    fail=$((fail + 1)); printf '  FAIL  %s  (dossier still present after allow)\n' "$desc"
+  fi
+}
+
+echo "## No dossier → allow (the agent self-declared nothing to prove)"
+R="$(setup)";                                    check "clean tree, no dossier → allow"   "$R" "allow"; rm -rf "$R"
+# The key inversion: a production change is NOT force-gated; gating is agent-declared.
+R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"; check "prod change, no dossier → allow"  "$R" "allow"; rm -rf "$R"
 
 echo
-echo "## Gate: production change present"
-R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"
-check "prod change, no dossier → block"                      "$R" "block"; rm -rf "$R"
-
+echo "## Present dossier → validate verdict"
 R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"; write_verdict "$R" "PASS" "[]"
-check "prod change + matching PASS → allow"                  "$R" "allow"
-check "dossier consumed on allow → block"                    "$R" "block"; rm -rf "$R"
+check "code change + matching PASS → allow"      "$R" "allow"
+check_consumed "PASS dossier consumed on allow"  "$R"
+check "after consume (no dossier) → allow"       "$R" "allow"; rm -rf "$R"
+
+# A verdict with NO file change (ops / investigation) still validates against the
+# clean-tree hash — this is the whole point of covering non-code verdicts.
+R="$(setup)"; write_verdict "$R" "PASS" "[]"
+check "no-file-change verdict + PASS → allow"    "$R" "allow"; rm -rf "$R"
 
 R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"; write_verdict "$R" "FAIL" '["Test: no reproducer"]'
-check "FAIL verdict → block"                                 "$R" "block"; rm -rf "$R"
+check "FAIL verdict → block"                     "$R" "block"; rm -rf "$R"
+
+R="$(setup)"; write_verdict "$R" "FAIL" '["finding cites no command output"]'
+check "no-file-change verdict + FAIL → block"    "$R" "block"; rm -rf "$R"
 
 R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"; write_verdict "$R" "IN_PROGRESS" '["mid-task"]'
-check "IN_PROGRESS → allow"                                  "$R" "allow"; rm -rf "$R"
+check "IN_PROGRESS → allow"                      "$R" "allow"; rm -rf "$R"
 
 echo
-echo "## Gate: binding (branch / head / tree_hash / freshness)"
+echo "## Present dossier → binding (branch / head / tree_hash / freshness)"
 R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"; write_verdict "$R" "PASS" "[]" "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
-check "tree_hash mismatch → block"                          "$R" "block"; rm -rf "$R"
+check "tree_hash mismatch → block"               "$R" "block"; rm -rf "$R"
 
 R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"; write_verdict "$R" "PASS" "[]"
 jq '.head="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"' "$R/.claude/.last-verdict.json" > "$R/.claude/x" \
   && mv "$R/.claude/x" "$R/.claude/.last-verdict.json"
-check "HEAD mismatch → block"                               "$R" "block"; rm -rf "$R"
+check "HEAD mismatch → block"                    "$R" "block"; rm -rf "$R"
 
 R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"; write_verdict "$R" "PASS" "[]"
 touch -t 202001010000 "$R/.claude/.last-verdict.json"
-check "stale mtime (>max_age) → block"                      "$R" "block"; rm -rf "$R"
+check "stale mtime (>max_age) → block"           "$R" "block"; rm -rf "$R"
 
 R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"; write_verdict "$R" "PASS" "[]"
 # Change the tree AFTER auditing → dossier no longer matches.
 printf 'more\n' >> "$R/src/lib.rs"
-check "tree changed after audit → block"                    "$R" "block"; rm -rf "$R"
+check "tree changed after audit → block"         "$R" "block"; rm -rf "$R"
 
 echo
 echo "## Soft mode (default): a block condition becomes a non-blocking nudge"
-R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"
+R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"; write_verdict "$R" "FAIL" '["no reproducer"]'
 soft_out="$(printf '%s' "$PAYLOAD" | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" bash "$HOOK" ) 2>/dev/null)"
 if printf '%s' "$soft_out" | jq -e '(.decision // "") != "block" and .continue == true and (.systemMessage | type) == "string"' >/dev/null 2>&1; then
-  pass=$((pass + 1)); printf '  PASS  %s\n' "prod change + no dossier → nudge (continue:true + systemMessage), not block"
+  pass=$((pass + 1)); printf '  PASS  %s\n' "FAIL dossier → nudge (continue:true + systemMessage), not block"
 else
   fail=$((fail + 1)); printf '  FAIL  %s  (out=%s)\n' "soft-mode nudge" "$soft_out"
 fi
