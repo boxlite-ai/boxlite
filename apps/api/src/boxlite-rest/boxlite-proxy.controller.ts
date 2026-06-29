@@ -28,10 +28,11 @@ import { OrganizationAuthContext } from '../common/interfaces/auth-context.inter
 import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
 
-// Cap how long the proxy waits on the best-effort control-plane start hint.
-// The hint itself is non-blocking by design (conditional UPDATE, no row lock),
-// but this is kept as a belt-and-suspenders bound — if anything below ever
-// regresses to a blocking write, the proxy still proceeds within 2s.
+// Caller-side wait cap for the best-effort control-plane start hint. The hint's
+// DB work is itself bounded by a lock_timeout (see conditionalStartForProxy),
+// which aborts the statement and frees the connection on row-lock contention;
+// this race only limits how long *exec* waits on the hint, so the proxy
+// proceeds even if the hint is momentarily slow. Both bounds are 2s.
 const PROXY_START_HINT_TIMEOUT_MS = 2000
 
 // Spec-first surface (openapi/box.openapi.yaml). Must stay out of the product
@@ -184,8 +185,10 @@ export class BoxliteProxyController {
    *   never runs (same gate as POST /boxes/:id/start).
    * - Any other failure → swallowed; the proxy proceeds because the hint is
    *   best-effort and box_sync reconciles state on its next tick.
-   * - Time-boxed via PROXY_START_HINT_TIMEOUT_MS as a safety net against any
-   *   future regression to a blocking write.
+   * - Caller-side time-boxed via PROXY_START_HINT_TIMEOUT_MS; the hint's DB work
+   *   is independently bounded by a lock_timeout (conditionalStartForProxy), so
+   *   a contended row aborts at the DB and frees its connection rather than
+   *   waiting out this race detached.
    */
   private async startHint(boxId: string, authContext: OrganizationAuthContext) {
     try {
