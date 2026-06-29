@@ -149,6 +149,8 @@ describe('BoxTable pagination controls', () => {
       onPaginationChange,
     })
 
+    expect(document.body.textContent).toContain('Loading boxes...')
+    expect(document.body.textContent).not.toContain('Showing 26-50 of 92 boxes')
     expect(document.body.textContent).toContain('Loading page')
 
     const nextButton = getRequiredElement<HTMLButtonElement>('button[title="Next"]')

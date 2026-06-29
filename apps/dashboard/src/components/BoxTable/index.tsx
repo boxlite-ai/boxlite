@@ -131,9 +131,11 @@ export function BoxTable({
   const shownLastItem =
     totalItems === 0 || data.length === 0 ? 0 : Math.min(pageIndex * pageSize + data.length, totalItems)
   const itemRangeLabel =
-    totalItems === 0
-      ? 'Showing 0 boxes'
-      : `Showing ${shownFirstItem.toLocaleString('en-US')}-${shownLastItem.toLocaleString('en-US')} of ${totalItems.toLocaleString('en-US')} boxes`
+    isPageFetching
+      ? 'Loading boxes...'
+      : totalItems === 0
+        ? 'Showing 0 boxes'
+        : `Showing ${shownFirstItem.toLocaleString('en-US')}-${shownLastItem.toLocaleString('en-US')} of ${totalItems.toLocaleString('en-US')} boxes`
   const goTo = (index: number) => {
     if (isPagingLocked || index === pageIndex || index < 0 || index >= pageCount) {
       return
