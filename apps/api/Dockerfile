@@ -56,7 +56,9 @@ COPY --from=build --chown=node:node /boxlite/apps/dist/apps/api ./dist/apps/api
 COPY --from=build --chown=node:node /boxlite/apps/dist/apps/dashboard ./dist/apps/dashboard
 
 ARG VERSION=0.0.1
+ARG BOXLITE_API_ROLLOUT_MARKER=dev-api-ecs-redeploy-20260629T1350Z
 ENV VERSION=${VERSION}
+LABEL ai.boxlite.api-rollout-marker="${BOXLITE_API_ROLLOUT_MARKER}"
 
 EXPOSE 3000
 HEALTHCHECK CMD [ "curl", "-f", "http://localhost:3000/api/config" ]
