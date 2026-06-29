@@ -63,18 +63,31 @@ export class WebhookService {
   private async apply(manager: EntityManager, event: VerifiedWebhookEvent): Promise<void> {
     switch (event.type) {
       case 'topup.succeeded': {
-        if (!event.organizationId || event.amountCents == null) {
-          throw new Error(`topup webhook ${event.eventId} missing organizationId/amountCents`)
+        const record = await this.lockPendingTopUpRecord(manager, event)
+        if (!record) {
+          this.logger.log(`topup webhook ${event.eventId} has no pending record for ${event.providerRef}; ignored`)
+          return
         }
-        await this.wallet.topUpWithin(manager, event.organizationId, event.amountCents, 'manual', event.eventId)
-        await this.settleTopUpRecord(manager, event, 'paid')
+        await this.wallet.topUpWithin(
+          manager,
+          record.organizationId,
+          Number(record.amountCents),
+          'manual',
+          event.eventId,
+        )
+        const walletTransactionId =
+          (await manager.findOne(WalletTransaction, { where: { providerEventId: event.eventId } }))?.id ?? null
+        await this.settleTopUpRecord(manager, record, 'paid', walletTransactionId)
         return
       }
-      case 'topup.failed':
+      case 'topup.failed': {
         // Auto-reload / checkout failure: no money moves, just flip the pending record.
         // The wallet stays at its current (possibly low) balance — never debt.
-        await this.settleTopUpRecord(manager, event, 'failed')
+        const record = await this.lockPendingTopUpRecord(manager, event)
+        if (!record) return
+        await this.settleTopUpRecord(manager, record, 'failed', null)
         return
+      }
       case 'method.saved': {
         if (event.organizationId) {
           // Ensure the wallet row exists first — a card can be saved before any wallet
@@ -93,20 +106,31 @@ export class WebhookService {
   }
 
   /**
-   * Close out the pending top_up_record this webhook resolves (matched by the
-   * provider checkout ref), and on success link the settlement ledger row.
-   * A no-op when the event carries no provider ref.
+   * Lock the still-pending top_up_record this provider event resolves. The
+   * record is the source of truth for org + amount; webhook payload metadata
+   * only identifies the provider checkout session.
    */
+  private lockPendingTopUpRecord(manager: EntityManager, event: VerifiedWebhookEvent): Promise<TopUpRecord | null> {
+    if (!event.providerRef) throw new Error(`topup webhook ${event.eventId} missing providerRef`)
+    return manager.findOne(TopUpRecord, {
+      where: { stripeSessionId: event.providerRef, status: 'pending' },
+      lock: { mode: 'pessimistic_write' },
+    })
+  }
+
   private async settleTopUpRecord(
     manager: EntityManager,
-    event: VerifiedWebhookEvent,
+    record: TopUpRecord,
     status: Extract<TopUpStatus, 'paid' | 'failed'>,
+    walletTransactionId: string | null,
   ): Promise<void> {
-    if (!event.providerRef) return
-    const walletTransactionId =
-      status === 'paid'
-        ? ((await manager.findOne(WalletTransaction, { where: { providerEventId: event.eventId } }))?.id ?? null)
-        : null
-    await manager.update(TopUpRecord, { stripeSessionId: event.providerRef }, { status, walletTransactionId })
+    const result = await manager.update(
+      TopUpRecord,
+      { id: record.id, status: 'pending' },
+      { status, walletTransactionId },
+    )
+    if (result.affected !== 1) {
+      throw new Error(`top_up_record ${record.id} was not settled as ${status}`)
+    }
   }
 }

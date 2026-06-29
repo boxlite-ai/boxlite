@@ -17,8 +17,8 @@ import { RatedPeriod } from './entities/rated-period.entity'
 import { TopUpRecord } from './entities/top-up-record.entity'
 import { Wallet } from './entities/wallet.entity'
 import { WalletTransaction } from './entities/wallet-transaction.entity'
-import { FakePaymentProvider } from './payment/fake-payment-provider'
 import { PAYMENT_PROVIDER } from './payment/payment-provider.interface'
+import { createPaymentProvider } from './payment/payment-provider.factory'
 import { TopUpService } from './payment/top-up.service'
 import { WebhookService } from './payment/webhook.service'
 import { PricingService } from './rating/pricing.service'
@@ -54,7 +54,7 @@ import { WalletService } from './wallet/wallet.service'
     WalletService,
     WebhookService,
     TopUpService,
-    { provide: PAYMENT_PROVIDER, useClass: FakePaymentProvider },
+    { provide: PAYMENT_PROVIDER, useFactory: createPaymentProvider },
   ],
   exports: [RatingService, WalletService],
 })

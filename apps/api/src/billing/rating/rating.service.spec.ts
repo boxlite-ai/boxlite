@@ -53,6 +53,13 @@ function makeService(opts: {
   unrated?: UsagePeriod[]
 }) {
   const saveMock = opts.save ?? jest.fn(async (r) => ({ id: 'rated-1', ...r }))
+  const transactionManager = {
+    save: saveMock,
+  }
+  const dataSource = {
+    transaction: async (cb: (manager: typeof transactionManager) => unknown) => cb(transactionManager),
+  }
+  const debitWithin = jest.fn(async () => ({ balanceCents: -780, freeBalanceCents: 0, paidBalanceCents: 0 }))
   const ratedPeriods = {
     create: (r: Partial<RatedPeriod>) => r,
     save: saveMock,
@@ -66,7 +73,17 @@ function makeService(opts: {
     createQueryBuilder: () => qb(opts.override ?? null),
   } as unknown as Repository<CustomerRateOverride>
 
-  return { service: new RatingService(usagePeriods, ratedPeriods, plans, overrides), saveMock }
+  const service = new RatingService(
+    usagePeriods,
+    ratedPeriods,
+    plans,
+    overrides,
+    dataSource as never,
+    {
+      debitWithin,
+    } as never,
+  )
+  return { service, saveMock, debitWithin, transactionManager }
 }
 
 describe('RatingService.ratePeriod', () => {
@@ -97,12 +114,23 @@ describe('RatingService.ratePeriod', () => {
     expect(saveMock.mock.calls[0][0].unitRates.discountFactor).toBe('0.5')
   })
 
+  it('debits the wallet in the same transaction after saving the rated period', async () => {
+    const { service, debitWithin, transactionManager } = makeService({})
+    await service.ratePeriod(PERIOD)
+
+    expect(debitWithin).toHaveBeenCalledWith(transactionManager, 'org-1', 780, {
+      source: 'usage',
+      ratedPeriodId: 'rated-1',
+    })
+  })
+
   it('is idempotent: a duplicate (UNIQUE violation) save returns null, not an error', async () => {
     const save = jest.fn(async () => {
       throw new QueryFailedError('insert', [], { code: '23505' } as unknown as Error)
     })
-    const { service } = makeService({ save })
+    const { service, debitWithin } = makeService({ save })
     await expect(service.ratePeriod(PERIOD)).resolves.toBeNull()
+    expect(debitWithin).not.toHaveBeenCalled()
   })
 
   it('rethrows non-unique DB errors', async () => {

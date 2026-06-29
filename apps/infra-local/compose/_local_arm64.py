@@ -27,7 +27,7 @@ from pathlib import Path
 # repo root: this file is <repo>/apps/infra-local/compose/_local_arm64.py
 REPO = Path(__file__).resolve().parents[3]
 
-# The box base image. The curated agent images are now published multi-arch
+# The curated agent images are now published multi-arch
 # (linux/amd64 + linux/arm64) under the v0.1.0 tag, so the runner pulls the
 # arch matching the host straight from ghcr — no local arm64 build/push to the
 # L1 registry. (The default curated tag, …-p0-r3, is still amd64-only, hence
@@ -35,6 +35,15 @@ REPO = Path(__file__).resolve().parents[3]
 REMOTE_AGENT_IMAGE = os.environ.get(
     "BOXLITE_LOCAL_AGENT_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0"
 )
+REMOTE_AGENT_IMAGES = {
+    "BOXLITE_SYSTEM_BASE_IMAGE": os.environ.get("BOXLITE_LOCAL_BASE_IMAGE", REMOTE_AGENT_IMAGE),
+    "BOXLITE_SYSTEM_PYTHON_IMAGE": os.environ.get(
+        "BOXLITE_LOCAL_PYTHON_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-python:v0.1.0"
+    ),
+    "BOXLITE_SYSTEM_NODE_IMAGE": os.environ.get(
+        "BOXLITE_LOCAL_NODE_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-node:v0.1.0"
+    ),
+}
 
 # Machine-global cargo target dir. A fresh worktree's target/ is symlinked here
 # so the first worktree to build pays the slow libkrun/e2fsprogs compile once,
@@ -82,16 +91,71 @@ def ghcr_creds() -> tuple[str | None, str | None]:
 
 
 def _credstore_get(registry: str) -> tuple[str | None, str | None]:
-    """Read (username, secret) for `registry` from Docker Desktop's credStore."""
+    """Read (username, secret) for `registry` from Docker's configured credStore."""
+    for helper in _docker_credential_helpers(registry):
+        try:
+            out = subprocess.run(
+                [helper, "get"],
+                input=registry, capture_output=True, text=True, timeout=5,
+            )
+            if out.returncode != 0:
+                continue
+            d = json.loads(out.stdout or "{}")
+            user, secret = d.get("Username") or None, d.get("Secret") or None
+            if user and secret:
+                return user, secret
+        except Exception:
+            continue
+    return None, None
+
+
+def _docker_credential_helpers(registry: str) -> list[str]:
+    """Return credential helper binaries in Docker config order, plus safe fallbacks."""
+    suffixes: list[str] = []
+    config = _docker_config()
+    cred_helpers = config.get("credHelpers")
+    if isinstance(cred_helpers, dict):
+        for key in _docker_registry_config_keys(registry):
+            helper = cred_helpers.get(key)
+            if isinstance(helper, str):
+                suffixes.append(helper)
+
+    creds_store = config.get("credsStore")
+    if isinstance(creds_store, str):
+        suffixes.append(creds_store)
+
+    # Docker Desktop on macOS has used both names across installs. Keep both as
+    # fallbacks so local infra does not depend on one exact Docker config shape.
+    suffixes.extend(["desktop", "osxkeychain"])
+
+    helpers: list[str] = []
+    seen: set[str] = set()
+    for suffix in suffixes:
+        binary = f"docker-credential-{suffix}"
+        if binary in seen or shutil.which(binary) is None:
+            continue
+        seen.add(binary)
+        helpers.append(binary)
+    return helpers
+
+
+def _docker_config() -> dict:
+    config_dir = Path(os.environ.get("DOCKER_CONFIG") or (Path.home() / ".docker")).expanduser()
+    config_path = config_dir / "config.json"
     try:
-        out = subprocess.run(
-            ["docker-credential-desktop", "get"],
-            input=registry, capture_output=True, text=True, timeout=5,
-        )
-        d = json.loads(out.stdout or "{}")
-        return d.get("Username") or None, d.get("Secret") or None
+        data = json.loads(config_path.read_text())
     except Exception:
-        return None, None
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _docker_registry_config_keys(registry: str) -> list[str]:
+    keys = [registry]
+    if registry == "https://index.docker.io/v1/":
+        keys.extend(["index.docker.io", "docker.io"])
+    elif registry in {"index.docker.io", "docker.io"}:
+        keys.append("https://index.docker.io/v1/")
+    return keys
 
 
 def ensure_tools_on_path() -> None:
@@ -232,18 +296,23 @@ def ensure_local_boxlite() -> None:
     )
 
 
-def resolve_agent_image() -> str | None:
-    """The box base image ref to use as BOXLITE_SYSTEM_BASE_IMAGE.
+def resolve_agent_images() -> dict[str, str]:
+    """Curated image env overrides for local arm64 dev.
 
     The published agent image is now multi-arch (linux/arm64 included), so the
     runner pulls the host-matching arch straight from ghcr — no local build or
-    L1-registry push. Returns the remote ref when ghcr creds are available (the
-    runner needs them to pull a private image), else None so the caller leaves
+    L1-registry push. Returns refs when ghcr creds are available (the runner
+    needs them to pull private images), else an empty dict so the caller leaves
     the curated default in place (amd64-only — won't boot on arm64, but the
     failure is then an explicit, logged pull error rather than a silent one)."""
     u, t = ghcr_creds()
     if not (u and t):
         print("  no ghcr.io creds (try `gh auth login` or `docker login ghcr.io`) — "
               "runner can't pull the arm64 agent image; boxes won't boot")
-        return None
-    return REMOTE_AGENT_IMAGE
+        return {}
+    return REMOTE_AGENT_IMAGES
+
+
+def resolve_agent_image() -> str | None:
+    """Backward-compatible single base-image resolver."""
+    return resolve_agent_images().get("BOXLITE_SYSTEM_BASE_IMAGE")

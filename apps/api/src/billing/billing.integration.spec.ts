@@ -124,6 +124,8 @@ dbDescribe('Phase 2 billing — real Postgres', () => {
       ds.getRepository(RatedPeriod),
       ds.getRepository(PricingPlan),
       ds.getRepository(CustomerRateOverride),
+      ds,
+      new WalletService(ds),
     )
 
     const first = await rating.rateClosedPeriods()

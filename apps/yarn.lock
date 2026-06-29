@@ -16679,6 +16679,7 @@ __metadata:
     cmdk: "npm:^1.1.1"
     cookie-parser: "npm:^1.4.7"
     date-fns: "npm:^4.1.0"
+    decimal.js: "npm:^10.6.0"
     dockerode: "npm:^4.0.4"
     dotenv: "npm:^17.0.1"
     ejs: "npm:^3.1.10"
@@ -19005,7 +19006,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"decimal.js@npm:^10.4.3":
+"decimal.js@npm:^10.4.3, decimal.js@npm:^10.6.0":
   version: 10.6.0
   resolution: "decimal.js@npm:10.6.0"
   checksum: 10c0/07d69fbcc54167a340d2d97de95f546f9ff1f69d2b45a02fd7a5292412df3cd9eb7e23065e532a318f5474a2e1bccf8392fdf0443ef467f97f3bf8cb0477e5aa

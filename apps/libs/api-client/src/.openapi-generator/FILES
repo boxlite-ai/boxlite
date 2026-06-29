@@ -6,6 +6,7 @@ api/admin-api.ts
 api/api-keys-api.ts
 api/audit-api.ts
 api/auth-api.ts
+api/billing-api.ts
 api/box-api.ts
 api/config-api.ts
 api/health-api.ts
@@ -15,6 +16,7 @@ api/organizations-api.ts
 api/preview-api.ts
 api/regions-api.ts
 api/runners-api.ts
+api/usage-api.ts
 api/users-api.ts
 api/volumes-api.ts
 api/webhooks-api.ts
@@ -58,6 +60,7 @@ docs/ApiKeysApi.md
 docs/AuditApi.md
 docs/AuditLog.md
 docs/AuthApi.md
+docs/BillingApi.md
 docs/Box.md
 docs/BoxApi.md
 docs/BoxClass.md
@@ -114,6 +117,7 @@ docs/RegenerateApiKeyResponse.md
 docs/Region.md
 docs/RegionType.md
 docs/RegionsApi.md
+docs/ReportBoxActualUsageDto.md
 docs/ResizeBox.md
 docs/Runner.md
 docs/RunnerFull.md
@@ -129,6 +133,8 @@ docs/SshAccessValidationDto.md
 docs/StorageAccessDto.md
 docs/SystemRole.md
 docs/ToolboxProxyUrl.md
+docs/TopUpCheckoutDto.md
+docs/TopUpRequestDto.md
 docs/TraceSpan.md
 docs/TraceSummary.md
 docs/UpdateBoxStateDto.md
@@ -139,12 +145,14 @@ docs/UpdateOrganizationMemberAccess.md
 docs/UpdateOrganizationName.md
 docs/UpdateOrganizationRole.md
 docs/UpdateRegion.md
+docs/UsageApi.md
 docs/User.md
 docs/UserPublicKey.md
 docs/UsersApi.md
 docs/VolumeDto.md
 docs/VolumeState.md
 docs/VolumesApi.md
+docs/WalletResponseDto.md
 docs/WebhookAppPortalAccess.md
 docs/WebhookControllerGetStatus200Response.md
 docs/WebhookEvent.md
@@ -234,6 +242,7 @@ models/rate-limit-entry.ts
 models/regenerate-api-key-response.ts
 models/region-type.ts
 models/region.ts
+models/report-box-actual-usage-dto.ts
 models/resize-box.ts
 models/runner-full.ts
 models/runner-health-metrics.ts
@@ -248,6 +257,8 @@ models/ssh-access-validation-dto.ts
 models/storage-access-dto.ts
 models/system-role.ts
 models/toolbox-proxy-url.ts
+models/top-up-checkout-dto.ts
+models/top-up-request-dto.ts
 models/trace-span.ts
 models/trace-summary.ts
 models/update-box-state-dto.ts
@@ -262,6 +273,7 @@ models/user-public-key.ts
 models/user.ts
 models/volume-dto.ts
 models/volume-state.ts
+models/wallet-response-dto.ts
 models/webhook-app-portal-access.ts
 models/webhook-controller-get-status200-response.ts
 models/webhook-event.ts

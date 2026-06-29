@@ -58,6 +58,8 @@ type APIClient struct {
 
 	AuthAPI AuthAPI
 
+	BillingAPI BillingAPI
+
 	BoxAPI BoxAPI
 
 	ConfigAPI ConfigAPI
@@ -75,6 +77,8 @@ type APIClient struct {
 	RegionsAPI RegionsAPI
 
 	RunnersAPI RunnersAPI
+
+	UsageAPI UsageAPI
 
 	UsersAPI UsersAPI
 
@@ -103,6 +107,7 @@ func NewAPIClient(cfg *Configuration) *APIClient {
 	c.ApiKeysAPI = (*ApiKeysAPIService)(&c.common)
 	c.AuditAPI = (*AuditAPIService)(&c.common)
 	c.AuthAPI = (*AuthAPIService)(&c.common)
+	c.BillingAPI = (*BillingAPIService)(&c.common)
 	c.BoxAPI = (*BoxAPIService)(&c.common)
 	c.ConfigAPI = (*ConfigAPIService)(&c.common)
 	c.HealthAPI = (*HealthAPIService)(&c.common)
@@ -112,6 +117,7 @@ func NewAPIClient(cfg *Configuration) *APIClient {
 	c.PreviewAPI = (*PreviewAPIService)(&c.common)
 	c.RegionsAPI = (*RegionsAPIService)(&c.common)
 	c.RunnersAPI = (*RunnersAPIService)(&c.common)
+	c.UsageAPI = (*UsageAPIService)(&c.common)
 	c.UsersAPI = (*UsersAPIService)(&c.common)
 	c.VolumesAPI = (*VolumesAPIService)(&c.common)
 	c.WebhooksAPI = (*WebhooksAPIService)(&c.common)

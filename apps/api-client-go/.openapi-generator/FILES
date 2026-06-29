@@ -4,6 +4,7 @@ api_admin.go
 api_api_keys.go
 api_audit.go
 api_auth.go
+api_billing.go
 api_box.go
 api_config.go
 api_health.go
@@ -13,6 +14,7 @@ api_organizations.go
 api_preview.go
 api_regions.go
 api_runners.go
+api_usage.go
 api_users.go
 api_volumes.go
 api_webhooks.go
@@ -101,6 +103,7 @@ model_rate_limit_entry.go
 model_regenerate_api_key_response.go
 model_region.go
 model_region_type.go
+model_report_box_actual_usage_dto.go
 model_resize_box.go
 model_runner.go
 model_runner_full.go
@@ -115,6 +118,8 @@ model_ssh_access_validation_dto.go
 model_storage_access_dto.go
 model_system_role.go
 model_toolbox_proxy_url.go
+model_top_up_checkout_dto.go
+model_top_up_request_dto.go
 model_trace_span.go
 model_trace_summary.go
 model_update_box_state_dto.go
@@ -129,6 +134,7 @@ model_user.go
 model_user_public_key.go
 model_volume_dto.go
 model_volume_state.go
+model_wallet_response_dto.go
 model_webhook_app_portal_access.go
 model_webhook_controller_get_status_200_response.go
 model_webhook_event.go

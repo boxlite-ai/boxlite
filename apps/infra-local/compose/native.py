@@ -352,11 +352,18 @@ def stop_component(p: _Paths, name: str) -> None:
 # Each public command does ALL its L1 async work inside ONE `asyncio.run`: the
 # SDK's default-runtime singleton is bound to the loop it's first used on, so we
 # never spread SDK calls across loops (mirrors the old single-asyncio.run CLI).
+def _is_l1_running(info) -> bool:
+    return (info.state.status or "").lower() == "running"
+
+
 def _l1_running(cfg: InfraConfig) -> bool:
     async def go() -> bool:
         orchestrator.ensure_home_env(cfg)
         infos = await orchestrator.get_runtime().list_info()
-        return any((i.name or "") == "boxlite-local-postgres" for i in infos)
+        return any(
+            (i.name or "") == "boxlite-local-postgres" and _is_l1_running(i)
+            for i in infos
+        )
 
     return asyncio.run(go())
 
@@ -365,7 +372,10 @@ async def _ensure_l1_async(cfg: InfraConfig) -> bool:
     """Bring the whole L1 up if postgres isn't running. True if (re)created."""
     orchestrator.ensure_home_env(cfg)
     infos = await orchestrator.get_runtime().list_info()
-    if any((i.name or "") == "boxlite-local-postgres" for i in infos):
+    if any(
+        (i.name or "") == "boxlite-local-postgres" and _is_l1_running(i)
+        for i in infos
+    ):
         ok("L1 boxes already running")
         return False
     log("L1 boxes not running — starting...")
@@ -478,7 +488,7 @@ def _set_env_kv(path: Path, key: str, value: str) -> None:
     path.write_text("\n".join(out) + "\n")
 
 
-def _seed_api_env(p: _Paths, agent_img: str | None = None) -> None:
+def _seed_api_env(p: _Paths, agent_images: dict[str, str] | None = None) -> None:
     api_env = p.apps / "api" / ".env"
     if not api_env.exists():
         log("apps/api/.env missing — seeding from the infra-local template")
@@ -487,8 +497,8 @@ def _seed_api_env(p: _Paths, agent_img: str | None = None) -> None:
     # and point the curated-image allowlist at the local arm64 agent image.
     _set_env_kv(api_env, "PORT", str(PORT_API))
     _set_env_kv(api_env, "APP_URL", f"http://localhost:{PORT_API}")
-    if agent_img:
-        _set_env_kv(api_env, "BOXLITE_SYSTEM_BASE_IMAGE", agent_img)
+    for key, value in (agent_images or {}).items():
+        _set_env_kv(api_env, key, value)
     apps_env = p.apps / ".env"  # NestJS reads .env from cwd=apps/
     if not apps_env.is_symlink():
         try:
@@ -530,12 +540,12 @@ def up(cfg: InfraConfig, components: list[str] | None = None) -> int:
 
     # 3.5 box base image: the published agent image is multi-arch now, so the
     # runner pulls the host-matching arch straight from ghcr — no local build or
-    # L1-registry push. None when ghcr creds are absent (caller logs it and
-    # leaves the amd64-only curated default in place).
-    agent_img = _local_arm64.resolve_agent_image()
+    # L1-registry push. Empty when ghcr creds are absent (caller logs it and
+    # leaves the amd64-only curated defaults in place).
+    agent_images = _local_arm64.resolve_agent_images()
 
     # 4. API .env template + port + curated-image override + the apps/.env symlink
-    _seed_api_env(p, agent_img)
+    _seed_api_env(p, agent_images)
 
     # 5. start the requested L2 components
     table = _components(p)

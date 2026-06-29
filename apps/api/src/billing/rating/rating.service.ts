@@ -5,12 +5,13 @@
 
 import { Injectable, Logger } from '@nestjs/common'
 import { Cron, CronExpression } from '@nestjs/schedule'
-import { InjectRepository } from '@nestjs/typeorm'
-import { QueryFailedError, Repository } from 'typeorm'
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm'
+import { DataSource, QueryFailedError, Repository } from 'typeorm'
 import { UsagePeriod } from '../../usage/entities/usage-period.entity'
 import { CustomerRateOverride } from '../entities/customer-rate-override.entity'
 import { PricingPlan } from '../entities/pricing-plan.entity'
 import { RatedPeriod } from '../entities/rated-period.entity'
+import { WalletService } from '../wallet/wallet.service'
 import { computeRatedCents, periodBillableTotals, resolveRateSnapshot } from './rate-math'
 
 const PG_UNIQUE_VIOLATION = '23505'
@@ -36,6 +37,8 @@ export class RatingService {
     @InjectRepository(RatedPeriod) private readonly ratedPeriods: Repository<RatedPeriod>,
     @InjectRepository(PricingPlan) private readonly plans: Repository<PricingPlan>,
     @InjectRepository(CustomerRateOverride) private readonly overrides: Repository<CustomerRateOverride>,
+    @InjectDataSource() private readonly dataSource: DataSource,
+    private readonly wallet: WalletService,
   ) {}
 
   @Cron(CronExpression.EVERY_5_MINUTES)
@@ -51,7 +54,8 @@ export class RatingService {
     let skipped = 0
     for (const period of periods) {
       const row = await this.ratePeriod(period)
-      row ? rated++ : skipped++
+      if (row) rated++
+      else skipped++
     }
     return { rated, skipped }
   }
@@ -90,7 +94,16 @@ export class RatingService {
     })
 
     try {
-      return await this.ratedPeriods.save(row)
+      return await this.dataSource.transaction(async (manager) => {
+        const saved = await manager.save(row)
+        if (ratedCents > 0) {
+          await this.wallet.debitWithin(manager, period.organizationId, ratedCents, {
+            source: 'usage',
+            ratedPeriodId: saved.id,
+          })
+        }
+        return saved
+      })
     } catch (err) {
       if (isUniqueViolation(err)) return null // already rated by a concurrent/earlier sweep
       throw err

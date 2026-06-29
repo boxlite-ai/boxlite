@@ -3291,6 +3291,119 @@ paths:
       summary: Update job status
       tags:
       - jobs
+  /usage/box/{boxId}:
+    get:
+      operationId: getBoxUsage
+      parameters:
+      - description: ID of the box
+        explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "ISO start (default: 30d ago)"
+        explode: true
+        in: query
+        name: from
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: "ISO end (default: now)"
+        explode: true
+        in: query
+        name: to
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          description: Aggregated box usage totals
+      security:
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get aggregated usage totals for a box over a time range
+      tags:
+      - usage
+  /usage/box/{boxId}/actual:
+    post:
+      operationId: reportBoxActualUsage
+      parameters:
+      - description: ID of the box
+        explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReportBoxActualUsageDto"
+        required: true
+      responses:
+        "204":
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Report a box actual cgroup usage (runner -> control-plane)
+      tags:
+      - usage
+  /billing/wallet:
+    get:
+      operationId: getWallet
+      parameters: []
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletResponseDto"
+          description: ""
+      security:
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get the organization's wallet balance + billing status
+      tags:
+      - billing
+  /billing/wallet/top-up:
+    post:
+      operationId: topUpWallet
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TopUpRequestDto"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopUpCheckoutDto"
+          description: ""
+      security:
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Start a manual wallet top-up (returns a checkout URL)
+      tags:
+      - billing
   /admin/runners:
     get:
       operationId: adminListRunners
@@ -7601,6 +7714,91 @@ components:
           type: string
       required:
       - status
+      type: object
+    ReportBoxActualUsageDto:
+      example:
+        actualCpuSeconds: 0.8008281904610115
+        actualRssAvgBytes: actualRssAvgBytes
+        actualRssPeakBytes: actualRssPeakBytes
+        sampleCount: 6.027456183070403
+      properties:
+        actualCpuSeconds:
+          description: CPU-seconds actually consumed (cgroup usage_usec delta)
+          type: number
+        actualRssAvgBytes:
+          description: "Mean resident memory across samples, bytes (bigint as string)"
+          type: string
+        actualRssPeakBytes:
+          description: "Peak resident memory across samples, bytes (bigint as string)"
+          type: string
+        sampleCount:
+          description: Number of cgroup samples folded into this report
+          type: number
+      required:
+      - actualCpuSeconds
+      - actualRssAvgBytes
+      - actualRssPeakBytes
+      - sampleCount
+      type: object
+    WalletResponseDto:
+      example:
+        balanceCents: 0.8008281904610115
+        ongoingBalanceCents: 6.027456183070403
+        name: name
+        creditCardConnected: true
+        freeBalanceCents: 1.4658129805029452
+        paidBalanceCents: 5.962133916683182
+        billingStatus: trial
+        hasFailedOrPendingInvoice: true
+      properties:
+        balanceCents:
+          type: number
+        ongoingBalanceCents:
+          type: number
+        name:
+          type: string
+        creditCardConnected:
+          type: boolean
+        freeBalanceCents:
+          type: number
+        paidBalanceCents:
+          type: number
+        billingStatus:
+          enum:
+          - trial
+          - active
+          - low_balance
+          - zero_balance
+          - suspended
+          - closed
+          type: string
+        hasFailedOrPendingInvoice:
+          type: boolean
+      required:
+      - balanceCents
+      - creditCardConnected
+      - name
+      - ongoingBalanceCents
+      type: object
+    TopUpRequestDto:
+      example:
+        amountCents: 0.8008281904610115
+      properties:
+        amountCents:
+          description: "Amount to top up, in cents"
+          type: number
+      required:
+      - amountCents
+      type: object
+    TopUpCheckoutDto:
+      example:
+        url: url
+      properties:
+        url:
+          description: Provider checkout URL to redirect the user to
+          type: string
+      required:
+      - url
       type: object
     AdminCreateRunner:
       example:
