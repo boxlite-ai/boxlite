@@ -19,6 +19,7 @@ export interface BoxTableProps {
   boxIsLoading: Record<string, boolean>
   boxStateIsTransitioning: Record<string, boolean>
   loading: boolean
+  isPageFetching?: boolean
   handleStart: (id: string) => void
   handleStop: (id: string) => void
   handleDelete: (id: string) => void

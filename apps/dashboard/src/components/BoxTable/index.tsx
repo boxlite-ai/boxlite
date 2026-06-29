@@ -7,7 +7,7 @@
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { getBoxDisplayName, getBoxPublicIdLabel } from '@/lib/box-identity'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { getRelativeTimeString } from '@/lib/utils'
+import { cn, getRelativeTimeString } from '@/lib/utils'
 import { isRecoverable, isStartable, isStoppable, isTransitioning } from '@/lib/utils/box'
 import { OrganizationRolePermissionsEnum, Box, BoxState } from '@boxlite-ai/api-client'
 import {
@@ -25,6 +25,8 @@ import {
 } from '@/components/ui/icon'
 import { type ReactNode } from 'react'
 import { BoxTableProps } from './types'
+import { PAGE_SIZE_OPTIONS } from '@/constants/Pagination'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 // Exact design palette (Boxes page.dc.html statusColors) — used inline so the
 // status dots/labels render at the precise hue, not a token approximation.
@@ -106,6 +108,7 @@ export function BoxTable({
   boxIsLoading,
   boxStateIsTransitioning,
   loading,
+  isPageFetching = false,
   handleStart,
   handleStop,
   handleDelete,
@@ -121,7 +124,32 @@ export function BoxTable({
   const deletePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.DELETE_BOXES)
 
   const pageIndex = pagination.pageIndex
-  const goTo = (index: number) => onPaginationChange({ pageIndex: index, pageSize: pagination.pageSize })
+  const pageSize = pagination.pageSize
+  const isPagingLocked = loading || isPageFetching
+  const pageTotal = Math.max(pageCount, 1)
+  const shownFirstItem = totalItems === 0 || data.length === 0 ? 0 : Math.min(pageIndex * pageSize + 1, totalItems)
+  const shownLastItem =
+    totalItems === 0 || data.length === 0 ? 0 : Math.min(pageIndex * pageSize + data.length, totalItems)
+  const itemRangeLabel =
+    totalItems === 0
+      ? 'Showing 0 boxes'
+      : `Showing ${shownFirstItem.toLocaleString('en-US')}-${shownLastItem.toLocaleString('en-US')} of ${totalItems.toLocaleString('en-US')} boxes`
+  const goTo = (index: number) => {
+    if (isPagingLocked || index === pageIndex || index < 0 || index >= pageCount) {
+      return
+    }
+
+    onPaginationChange({ pageIndex: index, pageSize })
+  }
+  const handlePageSizeChange = (value: string) => {
+    const nextPageSize = Number(value)
+
+    if (!Number.isFinite(nextPageSize) || nextPageSize === pageSize) {
+      return
+    }
+
+    onPaginationChange({ pageIndex: 0, pageSize: nextPageSize })
+  }
   const canPrev = pageIndex > 0
   const canNext = pageCount > 0 && pageIndex < pageCount - 1
 
@@ -192,7 +220,13 @@ export function BoxTable({
       </div>
 
       {/* rows */}
-      <div className="hidden min-h-0 flex-1 overflow-y-auto md:block">
+      <div
+        className={cn(
+          'hidden min-h-0 flex-1 overflow-y-auto md:block',
+          isPageFetching && 'opacity-60 transition-opacity',
+        )}
+        aria-busy={loading || isPageFetching}
+      >
         {loading ? (
           Array.from({ length: 5 }).map((_, i) => (
             <div key={i} className={`grid ${GRID} items-center border-b border-border px-[18px] py-3`}>
@@ -249,7 +283,13 @@ export function BoxTable({
         )}
       </div>
 
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto md:hidden">
+      <div
+        className={cn(
+          'min-h-0 flex-1 space-y-3 overflow-y-auto md:hidden',
+          isPageFetching && 'opacity-60 transition-opacity',
+        )}
+        aria-busy={loading || isPageFetching}
+      >
         {loading ? (
           Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="border border-border bg-card p-4">
@@ -328,28 +368,58 @@ export function BoxTable({
 
       {/* footer */}
       <div className="flex flex-none flex-col gap-3 px-0 py-4 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-        <span>
-          Showing {data.length} of {totalItems.toLocaleString('en-US')} boxes
-        </span>
-        {pageCount > 1 && (
-          <div className="flex items-center gap-[7px]">
-            <span className="normal-case tracking-normal">
-              Page {pageIndex + 1} of {pageCount}
-            </span>
-            <PagerButton disabled={!canPrev} title="First" onClick={() => goTo(0)}>
-              <ChevronsLeft className="size-3.5" />
-            </PagerButton>
-            <PagerButton disabled={!canPrev} title="Previous" onClick={() => goTo(pageIndex - 1)}>
-              <ChevronLeft className="size-3.5" />
-            </PagerButton>
-            <PagerButton disabled={!canNext} title="Next" onClick={() => goTo(pageIndex + 1)}>
-              <ChevronRight className="size-3.5" />
-            </PagerButton>
-            <PagerButton disabled={!canNext} title="Last" onClick={() => goTo(pageCount - 1)}>
-              <ChevronsRight className="size-3.5" />
-            </PagerButton>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+          <span>{itemRangeLabel}</span>
+          <div className="flex items-center gap-2">
+            <span className="normal-case tracking-normal">Show</span>
+            <Select value={`${pageSize}`} onValueChange={handlePageSizeChange} disabled={isPagingLocked}>
+              <SelectTrigger
+                aria-label="Rows per page"
+                size="xs"
+                className="h-8 w-[76px] border-border bg-background px-2 font-mono text-[10px] uppercase tracking-[1px]"
+                loading={isPagingLocked}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent side="top">
+                {PAGE_SIZE_OPTIONS.map((option) => (
+                  <SelectItem key={option} value={`${option}`}>
+                    {option}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <span className="normal-case tracking-normal">per page</span>
           </div>
-        )}
+        </div>
+        <div className="flex items-center gap-[7px] pr-14">
+          <span className="inline-flex min-w-[92px] items-center justify-end gap-1 normal-case tracking-normal">
+            {isPageFetching ? (
+              <>
+                <Loader2 className="size-3 animate-spin" strokeWidth={1.5} />
+                Loading page {pageIndex + 1}
+              </>
+            ) : (
+              `Page ${pageIndex + 1} of ${pageTotal}`
+            )}
+          </span>
+          {pageCount > 1 && (
+            <>
+              <PagerButton disabled={isPagingLocked || !canPrev} title="First" onClick={() => goTo(0)}>
+                <ChevronsLeft className="size-3.5" />
+              </PagerButton>
+              <PagerButton disabled={isPagingLocked || !canPrev} title="Previous" onClick={() => goTo(pageIndex - 1)}>
+                <ChevronLeft className="size-3.5" />
+              </PagerButton>
+              <PagerButton disabled={isPagingLocked || !canNext} title="Next" onClick={() => goTo(pageIndex + 1)}>
+                <ChevronRight className="size-3.5" />
+              </PagerButton>
+              <PagerButton disabled={isPagingLocked || !canNext} title="Last" onClick={() => goTo(pageCount - 1)}>
+                <ChevronsRight className="size-3.5" />
+              </PagerButton>
+            </>
+          )}
+        </div>
       </div>
     </div>
   )

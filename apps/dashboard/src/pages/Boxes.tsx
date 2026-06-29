@@ -152,7 +152,12 @@ const Boxes: React.FC = () => {
     [selectedOrganization?.id, queryParams],
   )
 
-  const { data: boxesData, isLoading: boxesDataIsLoading, error: boxesDataError } = useBoxes(queryKey, queryParams)
+  const {
+    data: boxesData,
+    isLoading: boxesDataIsLoading,
+    isPlaceholderData: boxesDataIsPlaceholderData,
+    error: boxesDataError,
+  } = useBoxes(queryKey, queryParams)
   const hasBoxes = (boxesData?.items.length ?? 0) > 0 || (boxesData?.total ?? 0) > 0
 
   useEffect(() => {
@@ -776,6 +781,7 @@ const Boxes: React.FC = () => {
           handleBulkStop={handleBulkStop}
           data={boxesData?.items || []}
           loading={boxesDataIsLoading}
+          isPageFetching={boxesDataIsPlaceholderData}
           onRowClick={(box: Box) => {
             navigate(generatePath(RoutePath.BOX_DETAILS, { boxId: getBoxRouteId(box) }))
           }}
