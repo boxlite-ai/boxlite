@@ -90,12 +90,12 @@ relies on — read-write host volumes + host port mapping — is pinned by
 | "Create Box" from the UI is incomplete | image resolution is mid-rewrite upstream + the picker is PostHog flag-gated | known limitation; use `POST /api/box` directly |
 
 > **Box boot via the API works** (verified 2026-06-29). `POST /api/v1/boxes` with
-> no `image` default-resolves to `ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0`,
-> creates the box, and it boots `creating → started`; `POST .../stop` stops it,
-> and a proxy call (`POST .../:id/exec`) on a stopped box auto-starts it. The
-> dashboard's **"Create Box" UI** is still incomplete (image picker removed /
-> PostHog-gated) — drive box creation through the API directly. L1 services, API,
-> runner, auth, and the dashboard all work.
+> no `image` default-resolves to the first curated `boxlite-agent-base` ref (see
+> `apps/api/src/box/constants/curated-images.constant.ts` — the tag rotates, so
+> it's not pinned here), creates the box, and it boots `creating → started`;
+> `POST .../stop` stops it. The dashboard's **"Create Box" UI** is still incomplete
+> (image picker removed / PostHog-gated) — drive box creation through the API
+> directly. L1 services, API, runner, auth, and the dashboard all work.
 
 ## Layout
 
