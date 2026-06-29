@@ -1,6 +1,6 @@
 ---
-name: claude-md-auditor
-description: Independent auditor that judges a pending git commit or push against every applicable bullet in CLAUDE.md (Workflow section). MUST be invoked before retrying a `git commit` or `git push` that was blocked by .claude/hooks/preflight-claude-md.sh. Reads CLAUDE.md and the diff cold in fresh context, writes a structured verdict to .claude/.last-audit.json. The hook only allows the next retry when the verdict file is PASS and matches the current branch + HEAD.
+name: commit-push-auditor
+description: Independent auditor that judges a pending git commit or push against every applicable bullet in CLAUDE.md (Workflow section). MUST be invoked before retrying a `git commit` or `git push` that was blocked by .claude/hooks/preflight-commit-push.sh. Reads CLAUDE.md and the diff cold in fresh context, writes a structured verdict to .claude/.last-audit.json. The hook only allows the next retry when the verdict file is PASS and matches the current branch + HEAD.
 tools: Read, Bash, Write
 ---
 

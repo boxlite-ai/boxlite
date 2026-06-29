@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PreToolUse hook: gate `git commit` / `git push` on a fresh verdict from the
-# claude-md-auditor subagent (see .claude/agents/claude-md-auditor.md).
+# commit-push-auditor subagent (see .claude/agents/commit-push-auditor.md).
 #
 # The hook itself does not call any model; it only reads the verdict artifact
 # the subagent writes at .claude/.last-audit.json and checks that the verdict
@@ -8,7 +8,7 @@
 #
 # Flow on a denied attempt:
 #   1. Hook denies the git tool call.
-#   2. Reason text instructs the parent agent to invoke the claude-md-auditor
+#   2. Reason text instructs the parent agent to invoke the commit-push-auditor
 #      subagent via the Task tool, then retry the same git command.
 #   3. Subagent writes .claude/.last-audit.json.
 #   4. Parent retries -> hook reads the artifact and allows on PASS.
@@ -31,7 +31,7 @@
 #   commit-then-push of the same HEAD must re-audit; the user has accepted
 #   this trade-off to avoid stale-audit-passes-new-content failure modes.
 #
-# Tests: bash .claude/hooks/preflight-claude-md.test.sh
+# Tests: bash .claude/hooks/preflight-commit-push.test.sh
 set -euo pipefail
 
 payload="$(cat)"
@@ -72,8 +72,8 @@ deny() {
   exit 0
 }
 
-invoke_instruction="Invoke the claude-md-auditor subagent now:
-  Task(subagent_type='claude-md-auditor',
+invoke_instruction="Invoke the commit-push-auditor subagent now:
+  Task(subagent_type='commit-push-auditor',
        description='CLAUDE.md audit',
        prompt='Audit the pending \`${command}\` on branch ${branch}.')
 The subagent will write its verdict to .claude/.last-audit.json. Retry the
@@ -116,7 +116,7 @@ if [[ "$audit_verdict" != "PASS" ]]; then
 
 ${findings}
 
-Address each finding, then re-invoke claude-md-auditor before retrying \`${command}\`."
+Address each finding, then re-invoke commit-push-auditor before retrying \`${command}\`."
 fi
 
 # Verdict is PASS, recent, and matches current state — let the git command run.

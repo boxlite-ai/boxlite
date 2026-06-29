@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for .claude/hooks/preflight-claude-md.sh
+# Tests for .claude/hooks/preflight-commit-push.sh
 #
 # Covers the two areas CLAUDE.md flags for required tests on this change:
 #   1. Command matcher (parsing + branching): direct invocation vs. chain
@@ -7,12 +7,12 @@
 #   2. Gate logic (branching + boundary validation): missing / mismatched /
 #      stale / FAIL / consumed audit-file paths.
 #
-# Run with:  bash .claude/hooks/preflight-claude-md.test.sh
+# Run with:  bash .claude/hooks/preflight-commit-push.test.sh
 # Exits non-zero on any failure.
 set -uo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-HOOK="$REPO_ROOT/.claude/hooks/preflight-claude-md.sh"
+HOOK="$REPO_ROOT/.claude/hooks/preflight-commit-push.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 

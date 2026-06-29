@@ -16,7 +16,7 @@
 #
 # Design notes
 # ------------
-# * Matcher scope: same reason as preflight-claude-md.sh — PreToolUse matchers
+# * Matcher scope: same reason as preflight-commit-push.sh — PreToolUse matchers
 #   are tool-name-only. This script does the actual `gh pr <subcmd>` filtering
 #   and exits 0 immediately on unrelated bash calls.
 #
@@ -28,7 +28,7 @@
 #
 # * One-shot consumption: the marker file is `rm -f`'d on the allow path so
 #   each successive gh pr command forces a fresh ack, even at the same HEAD.
-#   Mirrors the trade-off in preflight-claude-md.sh.
+#   Mirrors the trade-off in preflight-commit-push.sh.
 #
 # Tests: bash .claude/hooks/preflight-pr-review.test.sh
 set -euo pipefail
@@ -38,7 +38,7 @@ command="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""')"
 
 # Match `gh pr create|edit|ready` at start of command OR at start of any chain
 # segment (after &&, ||, ;, |, &, $(, (, `). Same shape as the git matcher in
-# preflight-claude-md.sh so chained invocations are caught.
+# preflight-commit-push.sh so chained invocations are caught.
 #
 # Scan only the FIRST physical line of the command. Multi-line commands almost
 # always put the gh invocation on the first line; this excludes heredoc bodies

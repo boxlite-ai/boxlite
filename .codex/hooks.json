@@ -6,13 +6,25 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/env bash \"$(git rev-parse --show-toplevel)/.claude/hooks/preflight-claude-md.sh\"",
+            "command": "/usr/bin/env bash \"$(git rev-parse --show-toplevel)/.claude/hooks/preflight-commit-push.sh\"",
             "statusMessage": "Checking CLAUDE.md audit"
           },
           {
             "type": "command",
             "command": "/usr/bin/env bash \"$(git rev-parse --show-toplevel)/.claude/hooks/preflight-pr-review.sh\"",
             "statusMessage": "Checking PR review acknowledgement"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/env bash \"$(git rev-parse --show-toplevel)/.claude/hooks/preflight-verdict-check.sh\"",
+            "statusMessage": "Checking verdict proof",
+            "timeout": 60
           }
         ]
       }
