@@ -113,4 +113,41 @@ describe('BoxliteWsProxyService', () => {
     await expect(service.authenticate(authRequest(jwt), 'org-1')).resolves.toBeNull()
     expect(organizationUserService.findOne).toHaveBeenCalledWith('org-1', 'user-1')
   })
+
+  describe('buildCloseFrame', () => {
+    // Feed the hand-built frame into the `ws` library's RFC 6455 parser and
+    // assert it decodes back to a close frame with our code + reason. The bytes
+    // cross the encode→decode boundary through an independent parser, so the
+    // assertion proves wire interoperability rather than re-stating the bytes
+    // the test built. `ws` exports Receiver at runtime but not in its bundled
+    // type declarations, so it is loaded via require.
+    it('produces a 1012 close frame that the ws parser decodes', async () => {
+      const { Receiver } = require('ws') as {
+        Receiver: new (opts: { isServer: boolean }) => {
+          on(event: 'conclude', cb: (code: number, reason: Buffer) => void): void
+          on(event: 'error', cb: (err: Error) => void): void
+          write(chunk: Buffer): void
+        }
+      }
+      const frame = BoxliteWsProxyService.buildCloseFrame(1012, 'api-upgrade')
+
+      const decoded = await new Promise<{ code: number; reason: string }>((resolve, reject) => {
+        // `isServer: false` => the receiver expects unmasked server→client
+        // frames, which is exactly what buildCloseFrame emits.
+        const receiver = new Receiver({ isServer: false })
+        receiver.on('conclude', (code: number, reason: Buffer) => {
+          resolve({ code, reason: reason.toString('utf8') })
+        })
+        receiver.on('error', reject)
+        receiver.write(frame)
+      })
+
+      expect(decoded.code).toBe(1012)
+      expect(decoded.reason).toBe('api-upgrade')
+    })
+
+    it('rejects a reason that overflows the 7-bit length form', () => {
+      expect(() => BoxliteWsProxyService.buildCloseFrame(1012, 'x'.repeat(124))).toThrow(/too long/)
+    })
+  })
 })

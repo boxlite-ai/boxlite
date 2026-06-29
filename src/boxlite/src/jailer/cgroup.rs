@@ -150,8 +150,11 @@ pub fn cgroup_path(box_id: &str) -> PathBuf {
 /// even after `state.pid` has been cleared.
 ///
 /// Best-effort and idempotent: a no-op if the cgroup is gone, already empty, or
-/// `cgroup.kill` is unavailable (kernel < 5.14 / cgroup v1 / no jailer). Returns
-/// `true` if the kill file was written.
+/// `cgroup.kill` is unavailable (kernel < 5.14 / cgroup v1 / no jailer). On a
+/// successful write it then waits (bounded) for the cgroup to drain — see
+/// [`wait_for_empty_cgroup`] — so a caller that respawns immediately (restart)
+/// doesn't race a host port the dying tree hasn't released yet. Returns `true`
+/// if the kill file was written.
 ///
 /// Takes a [`BoxID`] rather than a raw `&str` on purpose: this writes to a path
 /// derived from the id, so it must be a safe single path component. `BoxID`'s
@@ -164,8 +167,40 @@ pub fn cgroup_path(box_id: &str) -> PathBuf {
 /// the jailer's [`super::reap_box`] facade. Layers above the jailer (box,
 /// runtime) reap by box semantics and never name cgroups.
 pub(super) fn kill_cgroup(box_id: &BoxID) -> bool {
-    let kill_file = cgroup_path(box_id.as_str()).join("cgroup.kill");
-    std::fs::write(&kill_file, "1").is_ok()
+    let box_cgroup = cgroup_path(box_id.as_str());
+    let kill_file = box_cgroup.join("cgroup.kill");
+    if fs::write(&kill_file, "1").is_err() {
+        return false;
+    }
+    wait_for_empty_cgroup(&box_cgroup);
+    true
+}
+
+/// Wait (bounded) for a box's cgroup to drain after `cgroup.kill`.
+///
+/// `cgroup.kill` delivers SIGKILL asynchronously: the kernel reaps the processes
+/// and only then releases what they held — notably the host TCP port the shim's
+/// in-process gvproxy bound for a port mapping. A restart that respawns and
+/// rebinds that same persisted host port before the old tree is gone fails with
+/// "address already in use", so a caller reaping *before respawn* needs the
+/// cgroup empty, not merely killed. Polls `cgroup.procs` until empty (or the
+/// cgroup disappears), giving up after 2s so reaping stays best-effort.
+fn wait_for_empty_cgroup(box_cgroup: &Path) {
+    let procs_file = box_cgroup.join("cgroup.procs");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+
+    while std::time::Instant::now() < deadline {
+        match fs::read_to_string(&procs_file) {
+            Ok(procs) if procs.trim().is_empty() => return,
+            Err(_) => return,
+            _ => std::thread::sleep(std::time::Duration::from_millis(25)),
+        }
+    }
+
+    tracing::warn!(
+        cgroup = %box_cgroup.display(),
+        "Timed out waiting for box cgroup to empty after cgroup.kill"
+    );
 }
 
 /// Setup cgroup for a box.

@@ -7,7 +7,7 @@ mod common;
 
 use boxlite::BoxliteRuntime;
 use boxlite::litebox::BoxCommand;
-use boxlite::runtime::options::BoxliteOptions;
+use boxlite::runtime::options::{BoxliteOptions, PortSpec};
 use boxlite::runtime::types::BoxStatus;
 use boxlite::util::{PidFileReader, is_process_alive};
 use std::path::{Path, PathBuf};
@@ -62,6 +62,17 @@ async fn wait_for_box_proc_count_zero(box_id: &str) -> usize {
     }
 
     count
+}
+
+/// Reserve, then release, an ephemeral host TCP port to use as a port mapping.
+///
+/// The box's gvproxy binds this host port; picking a known-free one keeps the
+/// test off unrelated host listeners. There is an inherent reserve→use race,
+/// but it is vanishingly unlikely in a test sandbox.
+#[cfg(target_os = "linux")]
+fn free_host_port() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral host port");
+    listener.local_addr().expect("local addr").port()
 }
 
 // ============================================================================
@@ -422,6 +433,101 @@ async fn detached_box_stop_reaps_whole_tree_and_keeps_box() {
         .unwrap()
         .expect("stopped box should still exist");
     assert_eq!(info.status, BoxStatus::Stopped);
+
+    runtime.remove(&box_id, false).await.unwrap();
+}
+
+/// `start()` on a `Stopped`/`Failed` box must reap a *legacy* stale tree before
+/// it respawns. If a prior run was stopped non-gracefully (only the recorded
+/// outer pid killed — pre-reap behaviour), the detached inner tree keeps running
+/// and keeps gvproxy's host port bound. The next `start()` rebinds that same
+/// persisted port in `VmmSpawn`, so without a reap-before-spawn it fails with
+/// "address already in use". This reproduces that exact state and asserts start
+/// recovers it (and that the subsequent stop still reaps the whole tree).
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn detached_box_restart_reaps_legacy_stale_tree_before_spawn() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let host_port = free_host_port();
+    let box_id: String;
+    let recorded_pid: u32;
+
+    {
+        let runtime = BoxliteRuntime::new(BoxliteOptions {
+            home_dir: home.path.clone(),
+            image_registries: common::test_registries(),
+        })
+        .expect("create runtime");
+
+        let mut opts = common::alpine_opts();
+        opts.detach = true;
+        opts.ports.push(PortSpec {
+            host_port: Some(host_port),
+            guest_port: 8080,
+            ..Default::default()
+        });
+
+        let handle = runtime.create(opts, None).await.unwrap();
+        handle
+            .exec(BoxCommand::new("sleep").args(["300"]))
+            .await
+            .expect("start detached sleep workload");
+
+        box_id = handle.id().to_string();
+        let pf = pid_file_path(&home.path, &box_id);
+        recorded_pid = PidFileReader::at(&pf).read().map(|r| r.pid).unwrap();
+
+        assert!(
+            box_proc_count(&box_id) > 0,
+            "detached box should have a live process tree after start"
+        );
+
+        // Simulate the legacy stop bug: only the recorded outer pid is killed,
+        // while the detached inner tree keeps running and keeps gvproxy's host
+        // port bound. The next runtime sync sees the dead recorded pid and
+        // treats the box as stopped, but the stale tree is still present.
+        assert!(
+            boxlite::util::kill_process(recorded_pid),
+            "failed to kill recorded outer pid {recorded_pid}"
+        );
+    }
+
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create replacement runtime");
+
+    let info = runtime
+        .get_info(&box_id)
+        .await
+        .unwrap()
+        .expect("box should still exist");
+    assert_eq!(info.status, BoxStatus::Stopped);
+    assert!(
+        box_proc_count(&box_id) > 0,
+        "legacy stale process tree should remain before restart"
+    );
+
+    let handle = runtime.get(&box_id).await.unwrap().unwrap();
+    handle
+        .start()
+        .await
+        .expect("restart should reap stale tree before binding gvproxy port");
+
+    let info = runtime
+        .get_info(&box_id)
+        .await
+        .unwrap()
+        .expect("box should still exist after restart");
+    assert_eq!(info.status, BoxStatus::Running);
+
+    handle.stop().await.unwrap();
+    let proc_count = wait_for_box_proc_count_zero(&box_id).await;
+    assert_eq!(
+        proc_count, 0,
+        "stop should reap restarted detached box tree"
+    );
 
     runtime.remove(&box_id, false).await.unwrap();
 }

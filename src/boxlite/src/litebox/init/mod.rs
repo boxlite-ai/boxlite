@@ -201,6 +201,20 @@ impl BoxBuilder {
         let reuse_rootfs = status == BoxStatus::Stopped;
         let skip_guest_wait = status == BoxStatus::Running;
 
+        // Restart path (Stopped/Failed): a prior run can leave a stale process
+        // tree — inner bwrap + shim + the shim's in-process gvproxy — alive in
+        // the box's cgroup if it was stopped non-gracefully (host/API process
+        // killed before the cgroup reap ran, or an engine that only signalled
+        // the recorded outer pid). That stale gvproxy still holds the box's
+        // persisted host port, so the upcoming VmmSpawn → gvproxy_create would
+        // fail to bind it. Reap the cgroup and wait for it to drain before
+        // respawning; best-effort and idempotent (~no-op when nothing survived).
+        // Run off-thread so the bounded drain wait can't block the async runtime.
+        if matches!(status, BoxStatus::Stopped | BoxStatus::Failed) {
+            let box_id = config.id.clone();
+            let _ = tokio::task::spawn_blocking(move || crate::jailer::reap_box(&box_id)).await;
+        }
+
         let ctx = InitPipelineContext::new(config, runtime.clone(), reuse_rootfs, skip_guest_wait);
         let ctx = Arc::new(Mutex::new(ctx));
         let ctx_for_cleanup = Arc::clone(&ctx);

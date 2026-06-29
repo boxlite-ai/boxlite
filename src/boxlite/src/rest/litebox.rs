@@ -624,6 +624,10 @@ async fn attach_ws_pump(
 
         // Cause that ended the inner loop — used by the reconnect/fallback path.
         let disconnect_cause: String;
+        // Set when the server closed with a "restarting" close code (1012/1013),
+        // e.g. an API rolling deploy. The reconnect path then skips the initial
+        // backoff sleep and reattaches immediately instead of waiting it out.
+        let mut reconnect_immediately = false;
 
         // Inner pump loop. Reads from WS and forwards stdin from the
         // SDK-side channel. Returns by setting `disconnect_cause` and
@@ -738,7 +742,9 @@ async fn attach_ws_pump(
                                 tracing::warn!(text = %text, "WS attach: unrecognized text frame");
                             }
                         },
-                        Message::Close(_) => {
+                        Message::Close(frame) => {
+                            let code = frame.as_ref().map(|f| f.code);
+                            reconnect_immediately = should_reconnect_immediately(code);
                             disconnect_cause = last_error_message.clone().unwrap_or_else(|| {
                                 "WS closed before exit frame (likely connection idle timeout or proxy cut)".to_string()
                             });
@@ -774,6 +780,10 @@ async fn attach_ws_pump(
 
         // Reconnect attempt loop with exponential backoff.
         let mut backoff = WS_RECONNECT_BACKOFF_INITIAL;
+        // A "server restarting" close (1012/1013) bypasses the first backoff
+        // sleep so a rolling API deploy reattaches immediately; later retries in
+        // this loop still back off normally.
+        let mut skip_first_backoff = reconnect_immediately;
         let reconnect_start = Instant::now();
         loop {
             if reconnect_budget.is_zero() {
@@ -787,9 +797,13 @@ async fn attach_ws_pump(
                 return;
             }
 
-            let sleep_for = backoff.min(reconnect_budget);
-            tokio::time::sleep(sleep_for).await;
-            reconnect_budget = reconnect_budget.saturating_sub(sleep_for);
+            if skip_first_backoff {
+                skip_first_backoff = false;
+            } else {
+                let sleep_for = backoff.min(reconnect_budget);
+                tokio::time::sleep(sleep_for).await;
+                reconnect_budget = reconnect_budget.saturating_sub(sleep_for);
+            }
 
             match client.connect_ws(&path).await {
                 Ok(new_stream) => {
@@ -815,6 +829,17 @@ async fn attach_ws_pump(
             }
         }
     }
+}
+
+/// Whether a server close code signals "I'm restarting, come back now" — in
+/// which case the reconnect path skips its initial backoff sleep. Only the
+/// `Restart` (1012) and `Again` (1013) codes qualify; every other close code
+/// (and a bare close with no code) keeps the normal backoff.
+fn should_reconnect_immediately(
+    code: Option<tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode>,
+) -> bool {
+    use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+    matches!(code, Some(CloseCode::Restart) | Some(CloseCode::Again))
 }
 
 /// Outcome of probing `/executions/{id}` after a WS disconnect.
@@ -1606,5 +1631,22 @@ mod tests {
 
         attach.await.unwrap();
         server.abort();
+    }
+
+    /// `should_reconnect_immediately` must skip the initial backoff only for the
+    /// "server restarting" close codes (1012 Restart / 1013 Again). The inputs
+    /// are real tungstenite `CloseCode` values, so the mapping crosses from the
+    /// library's enum into the helper under test rather than being rebuilt here.
+    #[test]
+    fn restart_close_codes_reconnect_immediately() {
+        use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+
+        assert!(should_reconnect_immediately(Some(CloseCode::Restart)));
+        assert!(should_reconnect_immediately(Some(CloseCode::Again)));
+
+        assert!(!should_reconnect_immediately(Some(CloseCode::Normal)));
+        assert!(!should_reconnect_immediately(Some(CloseCode::Away)));
+        assert!(!should_reconnect_immediately(Some(CloseCode::Abnormal)));
+        assert!(!should_reconnect_immediately(None));
     }
 }

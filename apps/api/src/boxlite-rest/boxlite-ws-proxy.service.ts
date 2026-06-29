@@ -3,7 +3,7 @@
  * Copyright (c) 2025 BoxLite AI
  */
 
-import { Inject, Injectable, Logger } from '@nestjs/common'
+import { Inject, Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common'
 import type { IncomingMessage } from 'http'
 import type { Socket } from 'net'
 import { createProxyMiddleware, type RequestHandler } from 'http-proxy-middleware'
@@ -36,9 +36,18 @@ const ATTACH_PATH = /^\/api\/v1\/(?:(?<tenant>[^/]+)\/)?boxes\/(?<boxId>[^/]+)\/
  * shared `createProxyMiddleware({ ws: true, ... })` instance.
  */
 @Injectable()
-export class BoxliteWsProxyService {
+export class BoxliteWsProxyService implements OnApplicationShutdown {
   private readonly logger = new Logger(BoxliteWsProxyService.name)
   private readonly proxy: RequestHandler
+
+  // Client sockets we have successfully proxied. On shutdown (SIGTERM from an
+  // ECS rolling deploy) we send each a graceful WS Close so the CLI reconnects
+  // at once instead of stalling on a TCP RST. Only the client (browser/CLI)
+  // side is tracked: http-proxy-middleware owns the upstream runner socket and
+  // does not hand it back here, so we cannot close it directly. Ending the
+  // client socket tears down the proxied pair, and the runner's own keepalive
+  // reaps the orphaned session shortly after.
+  private readonly liveSockets = new Set<Socket>()
 
   constructor(
     private readonly apiKeyService: ApiKeyService,
@@ -127,12 +136,18 @@ export class BoxliteWsProxyService {
       }
       ;(req as RunnerUpgradeRequest).__boxliteRunner = runner
       ;(req as RunnerUpgradeRequest).__boxliteRunnerBoxId = box.id
+      // Track only sockets we actually proxy (auth + routing succeeded), and
+      // deregister on close or error so the set never leaks dead sockets.
+      this.liveSockets.add(socket)
+      socket.once('close', () => this.liveSockets.delete(socket))
+      socket.once('error', () => this.liveSockets.delete(socket))
       ;(
         this.proxy as unknown as {
           upgrade: (req: IncomingMessage, socket: Socket, head: Buffer) => void
         }
       ).upgrade(req, socket, head)
     } catch (err) {
+      this.liveSockets.delete(socket)
       this.logger.warn(`upgrade failed for ${req.url}: ${(err as Error).message}`)
       this.respondAndClose(socket, 404, 'Not Found')
     }
@@ -210,5 +225,48 @@ export class BoxliteWsProxyService {
       // Socket may already be torn down — ignore.
     }
     socket.destroy()
+  }
+
+  /**
+   * On SIGTERM (ECS rolling deploy) `app.enableShutdownHooks()` invokes this.
+   * Send every proxied client a WS Close (1012 "Service Restart") so the CLI
+   * reconnects immediately rather than waiting out its disconnect backoff after
+   * a silent TCP RST. Best-effort and per-socket — one dead socket must not
+   * abort the loop.
+   */
+  onApplicationShutdown(): void {
+    if (this.liveSockets.size === 0) return
+    const frame = BoxliteWsProxyService.buildCloseFrame(1012, 'api-upgrade')
+    this.logger.log(`shutdown: closing ${this.liveSockets.size} proxied WS socket(s) with 1012`)
+    for (const socket of this.liveSockets) {
+      try {
+        socket.write(frame)
+        socket.end()
+      } catch {
+        // Socket already torn down — skip it and keep closing the rest.
+      }
+    }
+    this.liveSockets.clear()
+  }
+
+  /**
+   * Build an unmasked (server→client) RFC 6455 Close frame. Server frames are
+   * never masked. Layout: byte0 = 0x88 (FIN + opcode 0x8 Close); byte1 = payload
+   * length (7-bit form — `reason` is short); payload = 2-byte big-endian status
+   * code followed by the UTF-8 reason. The 7-bit length form caps payload at
+   * 125 bytes, so the reason must stay short.
+   */
+  static buildCloseFrame(code: number, reason: string): Buffer {
+    const reasonBytes = Buffer.from(reason, 'utf8')
+    const payloadLength = 2 + reasonBytes.length
+    if (payloadLength >= 126) {
+      throw new Error(`ws close reason too long: ${payloadLength} bytes (max 125)`)
+    }
+    const frame = Buffer.alloc(2 + payloadLength)
+    frame[0] = 0x88
+    frame[1] = payloadLength
+    frame.writeUInt16BE(code, 2)
+    reasonBytes.copy(frame, 4)
+    return frame
   }
 }
