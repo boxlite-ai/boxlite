@@ -76,6 +76,9 @@ describe('BoxService.ensureStartedForProxy', () => {
 
     expect(boxRepository.conditionalStartForProxy).toHaveBeenCalledWith('box-1', 'org-1')
     expect(eventEmitter.emit).toHaveBeenCalledWith(BoxEvents.STARTED, expect.anything())
+    // Also raise the desired-state event start() raises, so the notification
+    // gateway and analytics observe the STOPPED→STARTED flip on autostart too.
+    expect(eventEmitter.emit).toHaveBeenCalledWith(BoxEvents.DESIRED_STATE_UPDATED, expect.anything())
   })
 
   // Same gate as start() (~line 790). Without this, a suspended org could

@@ -45,7 +45,7 @@ const startedRow = {
   id: 'box-1',
   organizationId: 'org-1',
   name: 'box-1',
-  authToken: 'tok',
+  authToken: 'redacted',
   state: BoxState.STOPPED,
   desiredState: BoxDesiredState.STARTED,
   pending: true,
@@ -62,6 +62,10 @@ describe('BoxRepository.conditionalStartForProxy', () => {
     // The fix's core: the transaction sets a per-statement lock_timeout so a
     // contended row aborts at the DB instead of pinning the connection.
     expect(query).toHaveBeenCalledWith(expect.stringContaining('SET LOCAL lock_timeout'))
+    // ...and it must be armed BEFORE the UPDATE runs — otherwise the UPDATE
+    // could block on the row lock with no bound. Assert call order, not just
+    // presence.
+    expect(query.mock.invocationCallOrder[0]).toBeLessThan(execute.mock.invocationCallOrder[0])
   })
 
   // Lock wait exceeded lock_timeout (SQLSTATE 55P03): the row is being

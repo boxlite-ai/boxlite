@@ -30,6 +30,7 @@ import { BoxEvents } from '../constants/box-events.constants'
 import { BoxStateUpdatedEvent } from '../events/box-state-updated.event'
 import { BoxDestroyedEvent } from '../events/box-destroyed.event'
 import { BoxStartedEvent } from '../events/box-started.event'
+import { BoxDesiredStateUpdatedEvent } from '../events/box-desired-state-updated.event'
 import { BoxStoppedEvent } from '../events/box-stopped.event'
 import { OrganizationService } from '../../organization/services/organization.service'
 import { OrganizationEvents } from '../../organization/constants/organization-events.constant'
@@ -846,6 +847,11 @@ export class BoxService {
    * Otherwise best-effort and idempotent: the proxied call has already (or
    * will soon) hit the runtime, so DB-side failures are swallowed and
    * box_sync reconciles state on its next tick.
+   *
+   * On a successful flip emits BoxEvents.STARTED (drives convergence) and
+   * BoxEvents.DESIRED_STATE_UPDATED — the same desired-state event start()
+   * raises via updateWhere, so the notification gateway and analytics see the
+   * STOPPED→STARTED transition for an exec-autostart too.
    */
   async ensureStartedForProxy(boxIdOrName: string, organization: Organization): Promise<void> {
     // Suspension check first — same gate as start() (~line 790). Without it,
@@ -880,7 +886,15 @@ export class BoxService {
       return
     }
 
+    // Emit post-commit (conditionalStartForProxy's transaction has returned),
+    // so listeners never observe an uncommitted desiredState. The flip was
+    // strictly STOPPED→STARTED — the pre-check and the conditional UPDATE both
+    // gate on desiredState=STOPPED.
     this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updated))
+    this.eventEmitter.emit(
+      BoxEvents.DESIRED_STATE_UPDATED,
+      new BoxDesiredStateUpdatedEvent(updated, BoxDesiredState.STOPPED, BoxDesiredState.STARTED),
+    )
   }
 
   async stop(boxIdOrName: string, organizationId?: string, force?: boolean): Promise<Box> {
