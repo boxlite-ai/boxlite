@@ -43,6 +43,30 @@ pub(crate) fn stash_exit_file(layout: &BoxFilesystemLayout) {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn box_cgroup_process_count(box_id: &BoxID) -> Option<usize> {
+    crate::jailer::cgroup::process_count(box_id.as_str())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn box_cgroup_process_count(_box_id: &BoxID) -> Option<usize> {
+    None
+}
+
+fn mark_unknown_with_orphaned_cgroup(state: &mut BoxState, box_id: &BoxID, process_count: usize) {
+    state.force_status(BoxStatus::Unknown);
+    state.set_pid(None);
+    state.error_reason = Some(format!(
+        "shim pid is not verifiable, but box cgroup still contains {process_count} process(es)"
+    ));
+    tracing::error!(
+        box_id = %box_id,
+        process_count,
+        "Shim pid is not verifiable, but box cgroup still has processes; \
+         marking Unknown instead of Stopped so the orphaned VM tree is visible"
+    );
+}
+
 /// Move a directory tree, falling back to recursive copy + remove if rename
 /// fails with EXDEV. The import/clone staging dir and the canonical boxes dir
 /// can live on different filesystems (e.g. a tmpfs scratch area vs the on-disk
@@ -524,7 +548,47 @@ impl RuntimeImpl {
                 .await
                 .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))??;
 
-        if let Some((config, state)) = db_result {
+        if let Some((config, mut state)) = db_result {
+            if state.status == BoxStatus::Running {
+                let box_layout = self.layout.box_layout(config.id.as_str(), false)?;
+                let pid_path = box_layout.pid_file_path();
+                if matches!(
+                    crate::util::PidFileReader::at(&pid_path).process_identity(),
+                    crate::util::ProcessIdentity::Absent
+                ) {
+                    let cgroup_processes = box_cgroup_process_count(&config.id);
+                    match cgroup_processes {
+                        Some(0) => {
+                            state.mark_stop();
+                            let _ = std::fs::remove_file(&pid_path);
+                            self.box_manager.save_box(&config.id, &state)?;
+                            tracing::warn!(
+                                box_id = %config.id,
+                                "Running box has no verifiable shim pid and an empty cgroup; \
+                                 marked Stopped during get_info reconciliation"
+                            );
+                        }
+                        Some(process_count) => {
+                            mark_unknown_with_orphaned_cgroup(
+                                &mut state,
+                                &config.id,
+                                process_count,
+                            );
+                            self.box_manager.save_box(&config.id, &state)?;
+                        }
+                        None => {
+                            state.mark_stop();
+                            let _ = std::fs::remove_file(&pid_path);
+                            self.box_manager.save_box(&config.id, &state)?;
+                            tracing::warn!(
+                                box_id = %config.id,
+                                "Running box has no verifiable shim pid and no readable cgroup; \
+                                 marked Stopped during get_info reconciliation"
+                            );
+                        }
+                    }
+                }
+            }
             return Ok(Some(BoxInfo::new(&config, &state)));
         }
         Ok(None)
@@ -1214,6 +1278,7 @@ impl RuntimeImpl {
             let box_id = &config.id;
             let original_status = state.status;
             let original_pid = state.pid;
+            let original_error_reason = state.error_reason.clone();
 
             // Reclaim the lock for this box if one was allocated
             if let Some(lock_id) = state.lock_id {
@@ -1290,7 +1355,15 @@ impl RuntimeImpl {
                     // PID is dead or missing — clean the stale PID file.
                     let _ = std::fs::remove_file(&pid_path);
 
-                    if had_stale_exit && crate::vmm::ExitInfo::from_file(&exit_path).is_some() {
+                    let cgroup_processes = box_cgroup_process_count(box_id);
+                    if state.status == BoxStatus::Running
+                        && let Some(process_count) = cgroup_processes
+                        && process_count > 0
+                    {
+                        mark_unknown_with_orphaned_cgroup(&mut state, box_id, process_count);
+                    } else if had_stale_exit
+                        && crate::vmm::ExitInfo::from_file(&exit_path).is_some()
+                    {
                         // Shim crashed in a prior lifecycle. Surface as
                         // Failed with the crash report; the exit file
                         // stays as the failure artifact (active slot).
@@ -1308,17 +1381,26 @@ impl RuntimeImpl {
                         );
                     } else if state.status == BoxStatus::Running {
                         state.mark_stop();
-                        tracing::warn!(
-                            box_id = %box_id,
-                            "Shim not verifiable (file missing, process dead, or PID reuse); \
-                             marked Stopped"
-                        );
+                        match cgroup_processes {
+                            Some(0) => tracing::warn!(
+                                box_id = %box_id,
+                                "Shim not verifiable and cgroup is empty; marked Stopped"
+                            ),
+                            None => tracing::warn!(
+                                box_id = %box_id,
+                                "Shim not verifiable and cgroup was not readable; marked Stopped"
+                            ),
+                            Some(_) => unreachable!("non-empty cgroup handled above"),
+                        }
                     }
                 }
             }
 
             // Save updated state to database if changed
-            if state.status != original_status || state.pid != original_pid {
+            if state.status != original_status
+                || state.pid != original_pid
+                || state.error_reason != original_error_reason
+            {
                 self.box_manager.save_box(box_id, &state)?;
             }
         }

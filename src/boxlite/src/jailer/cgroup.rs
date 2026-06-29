@@ -138,6 +138,29 @@ pub fn cgroup_path(box_id: &str) -> PathBuf {
     get_cgroup_base().join(BOXLITE_CGROUP).join(box_id)
 }
 
+/// Count processes currently attached to a box cgroup.
+///
+/// Returns `None` when the cgroup is absent or unreadable so callers can
+/// distinguish "no cgroup signal" from "known-empty cgroup".
+#[cfg(target_os = "linux")]
+pub fn process_count(box_id: &str) -> Option<usize> {
+    let procs_file = cgroup_path(box_id).join("cgroup.procs");
+    let contents = std::fs::read_to_string(procs_file).ok()?;
+    Some(parse_cgroup_procs_count(&contents))
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn process_count(_box_id: &str) -> Option<usize> {
+    None
+}
+
+fn parse_cgroup_procs_count(contents: &str) -> usize {
+    contents
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count()
+}
+
 /// Setup cgroup for a box.
 ///
 /// Creates the cgroup directory and configures resource limits.
@@ -417,6 +440,14 @@ mod tests {
         assert_eq!(path, expected);
         // Verify the path ends with the expected suffix
         assert!(path.ends_with("boxlite/test-box-123"));
+    }
+
+    #[test]
+    fn test_parse_cgroup_procs_count() {
+        assert_eq!(parse_cgroup_procs_count(""), 0);
+        assert_eq!(parse_cgroup_procs_count("\n\n"), 0);
+        assert_eq!(parse_cgroup_procs_count("123\n456\n"), 2);
+        assert_eq!(parse_cgroup_procs_count("123\n\n456\n"), 2);
     }
 
     #[test]
