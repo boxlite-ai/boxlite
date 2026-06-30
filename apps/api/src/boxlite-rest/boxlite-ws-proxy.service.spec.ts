@@ -168,4 +168,57 @@ describe('BoxliteWsProxyService', () => {
     await Promise.resolve()
     expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(2)
   })
+
+  it('stops the heartbeat if the socket already closed during the awaited setup', async () => {
+    jest.useFakeTimers()
+    const upgrade = jest.fn()
+    jest.mocked(createProxyMiddleware).mockReturnValue({ upgrade } as never)
+
+    const boxService = {
+      findOneByIdOrName: jest.fn().mockResolvedValue({
+        id: 'box-uuid',
+        runnerId: 'runner-1',
+      }),
+      updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
+    }
+    const runnerService = {
+      findOne: jest.fn().mockResolvedValue({
+        apiUrl: 'http://runner.local',
+        apiKey: 'runner-key',
+      }),
+    }
+    const service = new BoxliteWsProxyService(
+      {} as never,
+      {} as never,
+      boxService as never,
+      runnerService as never,
+      {} as never,
+    )
+    jest.spyOn(service as any, 'authenticate').mockResolvedValue({ organizationId: 'org-1' })
+
+    // Simulate a client that aborted while authenticate/findOne were awaited:
+    // the socket is already destroyed by the time the heartbeat is armed, so
+    // the close/end/error events that would normally stop it have already fired
+    // and our listeners (attached only here) will never see them.
+    const socket = new EventEmitter() as EventEmitter & {
+      destroy: jest.Mock
+      write: jest.Mock
+      destroyed: boolean
+    }
+    socket.destroy = jest.fn()
+    socket.write = jest.fn()
+    socket.destroyed = true
+
+    await service.upgrade(authRequest('blk_live_test'), socket as never, Buffer.alloc(0))
+    await Promise.resolve()
+
+    // Immediate touch still happens; not worth racing it.
+    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
+
+    // But the heartbeat must not keep firing — otherwise the dead session
+    // would refresh lastActivityAt every 30s forever and defeat auto-stop.
+    jest.advanceTimersByTime(60_000)
+    await Promise.resolve()
+    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
+  })
 })

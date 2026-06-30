@@ -234,5 +234,11 @@ export class BoxliteWsProxyService {
     socket.once('close', stop)
     socket.once('end', stop)
     socket.once('error', stop)
+
+    // The awaited setup before us (authenticate, findOneByIdOrName) takes time
+    // during which the client can abort. EventEmitter doesn't replay events, so
+    // a 'close' fired before our listeners attached is lost — without this check
+    // the interval would refresh lastActivityAt every 30s forever.
+    if (socket.destroyed) stop()
   }
 }
