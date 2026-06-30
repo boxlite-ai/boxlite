@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/boxlite-ai/runner/pkg/boxlite"
+	"github.com/boxlite-ai/runner/pkg/drain"
 	"github.com/gin-gonic/gin"
 )
 
@@ -85,6 +86,21 @@ func seedManagedExecForBox(mgr *boxlite.ExecManager, id, boxID string, handle bo
 	exec.SetExecHandle(handle)
 	mgr.Register(id, exec)
 	return exec
+}
+
+func TestBoxliteExecRejectsNewExecWhileDraining(t *testing.T) {
+	drain.Enable()
+	t.Cleanup(drain.Disable)
+
+	w := runHandler(http.MethodPost,
+		"/v1/boxes/:boxId/exec",
+		"/v1/boxes/box/exec",
+		strings.NewReader(`{"command":"sh","args":["-lc","true"]}`),
+		BoxliteExec)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 while draining, got %d body=%s", w.Code, w.Body.String())
+	}
 }
 
 // Phase 2.1: GET /executions/{id} reports running, then exited+exit_code

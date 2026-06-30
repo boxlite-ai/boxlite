@@ -8,6 +8,7 @@ import (
 
 	sdkboxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/pkg/boxlite"
+	"github.com/boxlite-ai/runner/pkg/drain"
 	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
 )
@@ -37,6 +38,11 @@ type ResizeRequest struct {
 }
 
 func BoxliteExec(ctx *gin.Context) {
+	if drain.IsDraining() {
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "runner is draining"})
+		return
+	}
+
 	r, err := runner.GetInstance(nil)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

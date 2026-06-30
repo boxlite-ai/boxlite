@@ -9,6 +9,7 @@ import (
 
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/boxlite-ai/runner/pkg/common"
+	"github.com/boxlite-ai/runner/pkg/drain"
 	"github.com/boxlite-ai/runner/pkg/models/enums"
 	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
@@ -33,6 +34,11 @@ import (
 //
 //	@id				Create
 func Create(ctx *gin.Context) {
+	if drain.IsDraining() {
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "runner is draining"})
+		return
+	}
+
 	var createBoxDto dto.CreateBoxDTO
 	err := ctx.ShouldBindJSON(&createBoxDto)
 	if err != nil {
@@ -237,6 +243,11 @@ func GetNetworkSettings(ctx *gin.Context) {
 //
 //	@id				Start
 func Start(ctx *gin.Context) {
+	if drain.IsDraining() {
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "runner is draining"})
+		return
+	}
+
 	boxId := ctx.Param("boxId")
 
 	runner, err := runner.GetInstance(nil)
@@ -377,6 +388,11 @@ type BoxInfoResponse struct {
 //
 //	@id				Recover
 func Recover(ctx *gin.Context) {
+	if drain.IsDraining() {
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "runner is draining"})
+		return
+	}
+
 	var recoverDto dto.RecoverBoxDTO
 	err := ctx.ShouldBindJSON(&recoverDto)
 	if err != nil {

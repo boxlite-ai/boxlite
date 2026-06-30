@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/boxlite-ai/runner/pkg/boxlite"
+	"github.com/boxlite-ai/runner/pkg/drain"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -135,6 +136,11 @@ func BoxliteExecAttach(ctx *gin.Context) {
 	boxId := ctx.Param("boxId")
 	execId := ctx.Param("execId")
 
+	if drain.IsDraining() {
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "runner is draining"})
+		return
+	}
+
 	target, ok := resolveAttachExec(execId, boxId)
 	if !ok {
 		ctx.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("execution %s not found", execId)})
@@ -155,6 +161,9 @@ func BoxliteExecAttach(ctx *gin.Context) {
 		target.MarkDisconnected()
 		return
 	}
+
+	drain.BeginAttach()
+	defer drain.EndAttach()
 
 	runAttachLoop(ctx.Request.Context(), conn, target)
 }

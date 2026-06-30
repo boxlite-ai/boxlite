@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/boxlite-ai/runner/pkg/drain"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -363,6 +364,73 @@ func TestBoxliteExecAttach_SingleAttach409(t *testing.T) {
 	if resp2.StatusCode != http.StatusConflict {
 		t.Fatalf("expected status 409, got %d", resp2.StatusCode)
 	}
+}
+
+func TestBoxliteExecAttach_DrainingRejectsNewAttach(t *testing.T) {
+	drain.Enable()
+	t.Cleanup(drain.Disable)
+
+	stub := newStubAttachExec()
+	cleanup := withStubExec(t, "exec-draining", stub)
+	defer cleanup()
+
+	srv := newAttachServer(t)
+	defer srv.Close()
+
+	conn, resp, err := dialAttach(t, srv, "exec-draining")
+	if err == nil {
+		conn.Close()
+		t.Fatal("expected draining attach to fail")
+	}
+	if resp == nil {
+		t.Fatalf("expected http response, got nil (err=%v)", err)
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d", resp.StatusCode)
+	}
+	if drain.ActiveAttachCount() != 0 {
+		t.Fatalf("rejected attach must not increment active count, got %d", drain.ActiveAttachCount())
+	}
+}
+
+func TestBoxliteExecAttach_TracksActiveAttachCount(t *testing.T) {
+	drain.Disable()
+	t.Cleanup(drain.Disable)
+
+	stub := newStubAttachExec()
+	cleanup := withStubExec(t, "exec-active-count", stub)
+	defer cleanup()
+
+	srv := newAttachServer(t)
+	defer srv.Close()
+
+	conn, _, err := dialAttach(t, srv, "exec-active-count")
+	if err != nil {
+		t.Fatalf("dial attach: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if drain.ActiveAttachCount() == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if drain.ActiveAttachCount() != 1 {
+		t.Fatalf("expected active attach count 1, got %d", drain.ActiveAttachCount())
+	}
+
+	_ = conn.Close()
+	close(stub.done)
+
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if drain.ActiveAttachCount() == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("expected active attach count 0 after close, got %d", drain.ActiveAttachCount())
 }
 
 func TestBoxliteExecAttach_ResizeFrame(t *testing.T) {

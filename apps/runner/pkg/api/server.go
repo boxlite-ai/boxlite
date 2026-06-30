@@ -128,6 +128,12 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		infoController.GET("", controllers.RunnerInfo)
 	}
 
+	adminController := protected.Group("/admin")
+	{
+		adminController.GET("/drain", controllers.DrainStatus)
+		adminController.POST("/drain", controllers.SetDrain)
+	}
+
 	boxControllerLogger := a.logger.With(slog.String("component", "box_controller"))
 	boxController := protected.Group("/boxes")
 	{

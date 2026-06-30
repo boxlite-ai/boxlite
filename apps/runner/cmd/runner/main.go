@@ -21,6 +21,7 @@ import (
 	"github.com/boxlite-ai/runner/pkg/api"
 	"github.com/boxlite-ai/runner/pkg/backend"
 	blclient "github.com/boxlite-ai/runner/pkg/boxlite"
+	"github.com/boxlite-ai/runner/pkg/drain"
 	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/boxlite-ai/runner/pkg/runner/v2/executor"
 	"github.com/boxlite-ai/runner/pkg/runner/v2/healthcheck"
@@ -249,19 +250,23 @@ func run() int {
 	case <-interruptChannel:
 		logger.Info("Signal received, shutting down")
 
-		// Gracefully stop all running boxes BEFORE freeing the runtime / killing
-		// the API server. Without this step, the systemd SIGTERM that restarts
-		// this runner would kill libkrun mid-write, leaving boxes that can't
-		// re-boot (the original CL84LvGx7RBE incident).
-		//
-		// Timeout budget: 25s is well under systemd's default
-		// TimeoutStopSec=90s for the unit, leaving 60s+ for in-flight HTTP
-		// handlers and the deferred Close() that follows.
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		if err := boxliteClient.Shutdown(shutdownCtx, 25*time.Second); err != nil {
-			logger.Warn("BoxLite graceful shutdown failed; boxes may be in inconsistent state", "error", err)
+		if drain.IsDraining() {
+			logger.Info("Runner is draining; skipping BoxLite runtime shutdown")
+		} else {
+			// Gracefully stop all running boxes BEFORE freeing the runtime / killing
+			// the API server. Without this step, the systemd SIGTERM that restarts
+			// this runner would kill libkrun mid-write, leaving boxes that can't
+			// re-boot (the original CL84LvGx7RBE incident).
+			//
+			// Timeout budget: 25s is well under systemd's default
+			// TimeoutStopSec=90s for the unit, leaving 60s+ for in-flight HTTP
+			// handlers and the deferred Close() that follows.
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			if err := boxliteClient.Shutdown(shutdownCtx, 25*time.Second); err != nil {
+				logger.Warn("BoxLite graceful shutdown failed; boxes may be in inconsistent state", "error", err)
+			}
+			shutdownCancel()
 		}
-		shutdownCancel()
 
 		apiServer.Stop()
 		logger.Info("Shutdown complete")
