@@ -3,7 +3,7 @@
 FROM node:24-slim AS base
 ENV CI=true
 
-RUN apt-get update && apt-get install -y --no-install-recommends bash curl && \
+RUN apt-get update && apt-get install -y --no-install-recommends bash curl python3 make g++ && \
   rm -rf /var/lib/apt/lists/*
 RUN npm install -g corepack && corepack enable
 

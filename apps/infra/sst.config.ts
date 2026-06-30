@@ -19,6 +19,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 const REGION = 'ap-southeast-1'
+const ACCOUNT_ID = '064212132677'
+const IAM_ROLE_BOUNDARY_ARN = `arn:aws:iam::${ACCOUNT_ID}:policy/boxlite-role-boundary`
 
 // Container ports each service listens on internally
 const PORTS = {
@@ -111,6 +113,14 @@ export default $config({
     // Load .env overrides (anything unset falls back to auto-generated values)
     const { config } = await import('dotenv')
     config()
+
+    // BoxLite AWS guardrail: every managed IAM role must keep the account's
+    // permissions boundary. If this is omitted, Pulumi treats the boundary as
+    // drift and tries DeleteRolePermissionsBoundary, which the account policy
+    // explicitly denies.
+    $transform(aws.iam.Role, (args) => {
+      args.permissionsBoundary ??= IAM_ROLE_BOUNDARY_ARN
+    })
 
     // Strip trailing slash from service.url so path concat produces clean URLs
     // (api.url = "https://api.dev.boxlite.ai/" → apiBase = "https://api.dev.boxlite.ai").
@@ -214,6 +224,10 @@ export default $config({
     // object-level overwrite/delete (which `removal` never covers). Redis is a
     // transient cache, so it needs neither.
     const isProd = $app.stage === 'production'
+    const serviceImageCache = envOr(
+      'SERVICE_IMAGE_CACHE',
+      $app.stage === 'prod' || $app.stage === 'production' ? 'false' : 'true',
+    ) === 'true'
     // Unique-but-stable suffix for the DB final snapshot: a fixed name would collide
     // with the snapshot a prior teardown of the same stage already created (RDS requires
     // unique final-snapshot ids). RandomId is stable across deploys (no drift) and is
@@ -323,7 +337,7 @@ export default $config({
 
     const otelCollector = new sst.aws.Service('OtelCollector', {
       cluster,
-      image: { context: '../..', dockerfile: 'apps/otel-collector/Dockerfile', cache: false },
+      image: { context: '../..', dockerfile: 'apps/otel-collector/Dockerfile', cache: serviceImageCache },
       command: [
         '--config',
         '/otelcol/collector-config.yaml',
@@ -374,6 +388,7 @@ export default $config({
       image: {
         context: '../..',
         dockerfile: 'apps/api/Dockerfile',
+        cache: serviceImageCache,
       },
       loadBalancer: {
         domain: serviceDomain('api'),
@@ -671,7 +686,7 @@ export default $config({
     const proxyDomain = `proxy.${stackDomain}`
     new sst.aws.Service('Proxy', {
       cluster,
-      image: { context: '../..', dockerfile: 'apps/proxy/Dockerfile', cache: false },
+      image: { context: '../..', dockerfile: 'apps/proxy/Dockerfile', cache: serviceImageCache },
       loadBalancer: {
         domain: {
           name: proxyDomain,
@@ -707,7 +722,7 @@ export default $config({
     // get a stable, memorable hostname instead of the auto-generated NLB DNS name.
     const sshGateway = new sst.aws.Service('SshGateway', {
       cluster,
-      image: { context: '../..', dockerfile: 'apps/ssh-gateway/Dockerfile', cache: false },
+      image: { context: '../..', dockerfile: 'apps/ssh-gateway/Dockerfile', cache: serviceImageCache },
       loadBalancer: { rules: [{ listen: `${PORTS.SSH_GATEWAY}/tcp`, forward: `${PORTS.SSH_GATEWAY}/tcp` }] },
       environment: {
         // api-client-go composes paths like "/box/ssh-access/validate" directly.
