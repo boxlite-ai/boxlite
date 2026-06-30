@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
@@ -21,7 +21,7 @@ import { Play, RefreshCw, TerminalSquare } from '@/components/ui/icon'
 import { toast } from 'sonner'
 import { BoxTerminalFrame } from './BoxTerminalFrame'
 
-export function BoxTerminalTab({ box }: { box: Box }) {
+export function BoxTerminalTab({ box, refreshSignal = 0 }: { box: Box; refreshSignal?: number }) {
   const running = isStoppable(box)
   const { isTerminalActivated, activateTerminal } = useBoxSessionContext()
   const { authenticatedUserHasPermission } = useSelectedOrganization()
@@ -39,12 +39,27 @@ export function BoxTerminalTab({ box }: { box: Box }) {
 
   const [activated, setActivated] = useState(() => isTerminalActivated(box.id))
 
-  const { data: session, isLoading, isError, isFetching, reset } = useTerminalSessionQuery(box.id, running && activated)
+  const {
+    data: session,
+    isLoading,
+    isError,
+    isFetching,
+    reset,
+    refetch,
+  } = useTerminalSessionQuery(box.id, running && activated)
+  const lastRefreshSignalRef = useRef(refreshSignal)
 
   const handleConnect = () => {
     activateTerminal(box.id)
     setActivated(true)
   }
+
+  useEffect(() => {
+    if (refreshSignal === lastRefreshSignalRef.current) return
+    lastRefreshSignalRef.current = refreshSignal
+    if (!running || !activated) return
+    void refetch()
+  }, [activated, refetch, refreshSignal, running])
 
   if (!running) {
     return (
@@ -142,7 +157,12 @@ export function BoxTerminalTab({ box }: { box: Box }) {
   return (
     <div className="flex-1 flex flex-col">
       <div className="relative flex-1 min-h-0 bg-black overflow-hidden">
-        <BoxTerminalFrame sessionUrl={session.url} fullscreenHref={fullscreenHref} className="h-full" />
+        <BoxTerminalFrame
+          key={session.url}
+          sessionUrl={session.url}
+          fullscreenHref={fullscreenHref}
+          className="h-full"
+        />
       </div>
     </div>
   )

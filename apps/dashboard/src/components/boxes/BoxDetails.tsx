@@ -118,6 +118,7 @@ export default function BoxDetails() {
   const [showOnboardingDialog, setShowOnboardingDialog] = useState(false)
   const [onboardingProgress, setOnboardingProgress] = useState<OnboardingProgress>(() => readOnboardingProgress(userId))
   const [copied, setCopied] = useState(false)
+  const [terminalRefreshSignal, setTerminalRefreshSignal] = useState(0)
   const refreshRef = useRef<HTMLSpanElement>(null)
 
   const updateOnboardingProgress = useCallback(
@@ -236,6 +237,7 @@ export default function BoxDetails() {
 
   const handleRefresh = () => {
     refetch()
+    setTerminalRefreshSignal((signal) => signal + 1)
     const el = refreshRef.current
     if (el) {
       el.style.animation = 'none'
@@ -356,15 +358,19 @@ export default function BoxDetails() {
                   <Pause className="size-[13px]" fill="currentColor" /> stop
                 </button>
               )}
-              {writePermitted && isTransitioning(box) && !isRecoverable(box) && !isStartable(box) && !isStoppable(box) && (
-                <button
-                  type="button"
-                  disabled
-                  className="flex min-h-10 items-center gap-2 border border-border px-[15px] py-2 text-[13px] font-medium text-muted-foreground"
-                >
-                  <RefreshCw className="size-[14px] animate-spin" /> working…
-                </button>
-              )}
+              {writePermitted &&
+                isTransitioning(box) &&
+                !isRecoverable(box) &&
+                !isStartable(box) &&
+                !isStoppable(box) && (
+                  <button
+                    type="button"
+                    disabled
+                    className="flex min-h-10 items-center gap-2 border border-border px-[15px] py-2 text-[13px] font-medium text-muted-foreground"
+                  >
+                    <RefreshCw className="size-[14px] animate-spin" /> working…
+                  </button>
+                )}
               {deletePermitted && (
                 <DropdownMenu>
                   <DropdownMenuTrigger
@@ -457,7 +463,7 @@ export default function BoxDetails() {
                 </span>
               </div>
               <div className="flex min-h-0 flex-1 flex-col">
-                <BoxTerminalTab box={box} />
+                <BoxTerminalTab box={box} refreshSignal={terminalRefreshSignal} />
               </div>
             </div>
           </div>
