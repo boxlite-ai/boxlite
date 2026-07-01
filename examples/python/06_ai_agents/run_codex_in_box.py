@@ -143,9 +143,17 @@ async def drain(execution, *, stream: bool = False) -> tuple[str, str]:
     return "".join(stdout_chunks), "".join(stderr_chunks)
 
 
-async def run(box, command: str, args: list[str], timeout: int = 300, *, stream: bool = False) -> tuple[int, str, str]:
+async def run(
+    box,
+    command: str,
+    args: list[str],
+    timeout: int = 300,
+    *,
+    stream: bool = False,
+    env: list[tuple[str, str]] | None = None,
+) -> tuple[int, str, str]:
     print(f"$ {command} {' '.join(args)}", flush=True)
-    execution = await box.exec(command, args, None)
+    execution = await box.exec(command, args, env)
     stdout, stderr = await drain(execution, stream=stream)
     result = await asyncio.wait_for(execution.wait(), timeout=timeout)
     return result.exit_code, stdout, stderr
@@ -172,10 +180,12 @@ async def install_codex(box) -> None:
     print(f"Codex CLI: {stdout.strip()}")
 
 
-async def run_codex(box, prompt: str, model: str) -> str:
+async def run_codex(box, prompt: str, model: str, *, direct_api_key: str | None = None) -> str:
+    key_source = "direct env key" if direct_api_key else "BoxLite secret placeholder"
+    print(f"Running Codex CLI with {key_source}...", flush=True)
     command = textwrap.dedent(
         f"""
-        export OPENAI_API_KEY="${{BOXLITE_SECRET_OPENAI_API_KEY:-<BOXLITE_SECRET:openai_api_key>}}"
+        export OPENAI_API_KEY="${{OPENAI_API_KEY:-${{BOXLITE_SECRET_OPENAI_API_KEY:-<BOXLITE_SECRET:openai_api_key>}}}}"
         test -n "$OPENAI_API_KEY"
         export CODEX_HOME=/root/.codex-boxlite
         mkdir -p "$CODEX_HOME"
@@ -191,7 +201,8 @@ async def run_codex(box, prompt: str, model: str) -> str:
           </dev/null
         """
     ).strip()
-    exit_code, stdout, stderr = await run(box, "sh", ["-lc", command], timeout=600)
+    env = [("OPENAI_API_KEY", direct_api_key)] if direct_api_key else None
+    exit_code, stdout, stderr = await run(box, "sh", ["-lc", command], timeout=600, env=env)
     if exit_code != 0:
         raise RuntimeError(f"Codex CLI failed with exit code {exit_code}\nstdout={stdout}\nstderr={stderr}")
     return stdout.strip()
@@ -204,6 +215,11 @@ async def main() -> int:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--env-file", type=Path, default=DEFAULT_ENV_FILE)
     parser.add_argument("--profile", default=DEFAULT_PROFILE, help="Cloud REST profile from ~/.boxlite/credentials.toml")
+    parser.add_argument(
+        "--unsafe-direct-api-key",
+        action="store_true",
+        help="Pass the plaintext OpenAI API key into the box to verify Codex CLI itself; do not use for secret-passthrough validation.",
+    )
     parser.add_argument("--keep-box", action="store_true", help="Keep the box after the run for inspection")
     args = parser.parse_args()
 
@@ -231,7 +247,12 @@ async def main() -> int:
     try:
         print(f"Box: {box.id}")
         await install_codex(box)
-        answer = await run_codex(box, " ".join(args.prompt), args.model)
+        answer = await run_codex(
+            box,
+            " ".join(args.prompt),
+            args.model,
+            direct_api_key=api_key if args.unsafe_direct_api_key else None,
+        )
         print(answer)
         return 0
     finally:

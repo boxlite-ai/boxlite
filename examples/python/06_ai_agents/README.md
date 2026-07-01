@@ -166,3 +166,18 @@ This path creates a Node.js box, installs `@openai/codex`, logs in with
 `BOXLITE_SECRET_OPENAI_API_KEY`, and runs `codex exec`. The API key stays on the
 host. The box stores and sends only the placeholder, and gvproxy substitutes the
 real key only for requests to `api.openai.com`.
+
+To verify Codex CLI itself when secret passthrough is unavailable, pass the key
+directly into the box:
+
+```bash
+python examples/python/06_ai_agents/run_codex_in_box.py \
+  --profile p1 \
+  --image ghcr.io/boxlite-ai/boxlite-agent-node:20260605-p0-r3 \
+  --env-file ~/.config/boxlite/e2e-openai.env \
+  --unsafe-direct-api-key \
+  "Reply exactly: codex inside box works"
+```
+
+This unsafe mode is only for manual smoke testing because the plaintext API key
+is visible inside the box.
