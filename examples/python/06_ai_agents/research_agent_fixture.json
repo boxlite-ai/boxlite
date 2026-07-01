@@ -1,0 +1,12 @@
+[
+  {
+    "title": "BoxLite AI agent examples",
+    "url": "https://github.com/boxlite-ai/boxlite/tree/main/examples/python/06_ai_agents",
+    "snippet": "BoxLite examples show how to run AI agent workflows in sandboxed boxes."
+  },
+  {
+    "title": "Codex tool-use loop",
+    "url": "https://platform.openai.com/docs",
+    "snippet": "A tool-use loop lets a model request actions, observe results, and continue reasoning."
+  }
+]

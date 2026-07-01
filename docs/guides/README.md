@@ -66,6 +66,9 @@ scripts/
 
 BoxLite includes 9 comprehensive Python examples demonstrating all major use cases.
 
+For the PR 825 agent-in-box verification flow, see
+[Agent In Box Test Runbook](agent-in-box-test.md).
+
 ### Prerequisites
 
 ```bash
