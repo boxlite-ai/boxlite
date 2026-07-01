@@ -155,6 +155,11 @@ python examples/python/06_ai_agents/run_codex_in_box.py \
   "Reply exactly: codex inside box works"
 ```
 
+The script reads `OPENAI_API_KEY` from the current environment, or prompts for
+it interactively when running in a terminal. The box is created through the
+cloud REST profile from `~/.boxlite/credentials.toml`; use `--profile`,
+`BOXLITE_E2E_PROFILE`, or `BOXLITE_PROFILE` to select it.
+
 This path creates a Node.js box, installs `@openai/codex`, logs in with
 `BOXLITE_SECRET_OPENAI_API_KEY`, and runs `codex exec`. The API key stays on the
 host. The box stores and sends only the placeholder, and gvproxy substitutes the

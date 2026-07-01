@@ -20,8 +20,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import json
 import os
+import sys
 import textwrap
 import urllib.request
 from pathlib import Path
@@ -44,6 +46,13 @@ CODE_SMOKE_PROMPT = (
     "Run `node /workspace/fib.js 10`; if stdout is not exactly 55, fix the file and rerun it. "
     "Do not finish until `node /workspace/fib.js 10` prints exactly 55."
 )
+
+
+def prompt_openai_api_key() -> str | None:
+    if not sys.stdin.isatty():
+        return None
+    value = getpass.getpass("OPENAI_API_KEY: ").strip()
+    return value or None
 
 
 def print_openai_auth_help() -> None:
@@ -270,8 +279,10 @@ async def main() -> int:
 
     api_key = openai_api_key()
     if not api_key:
-        print_openai_auth_help()
-        raise SystemExit(1)
+        api_key = prompt_openai_api_key()
+        if not api_key:
+            print_openai_auth_help()
+            raise SystemExit(1)
 
     runtime = rest_runtime_from_profile(args.profile)
     if args.unsafe_direct_api_key:
