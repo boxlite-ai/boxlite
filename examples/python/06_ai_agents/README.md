@@ -85,11 +85,9 @@ python examples/python/06_ai_agents/run_codex_in_box.py \
   "Reply exactly: codex inside box works"
 ```
 
-The script reads `OPENAI_API_KEY` from the current environment first, then
-falls back to `~/.config/boxlite/e2e-openai.env` (`OPENAI_API_KEY` or
-`BOXLITE_E2E_OPENAI_API_KEY`). Use `--env-file` to point at another file. The
-box is created through the cloud REST profile from `~/.boxlite/credentials.toml`;
-use `--profile`, `BOXLITE_E2E_PROFILE`, or `BOXLITE_PROFILE` to select it.
+The script reads `OPENAI_API_KEY` from the current environment. The box is
+created through the cloud REST profile from `~/.boxlite/credentials.toml`; use
+`--profile`, `BOXLITE_E2E_PROFILE`, or `BOXLITE_PROFILE` to select it.
 
 The box receives `BOXLITE_SECRET_OPENAI_API_KEY=<BOXLITE_SECRET:openai_api_key>`;
 `codex login --with-api-key` stores that placeholder in the box, and gvproxy
@@ -156,10 +154,6 @@ export OPENAI_API_KEY="sk-..."
 python examples/python/06_ai_agents/run_codex_in_box.py \
   "Reply exactly: codex inside box works"
 ```
-
-If you do not want to export the key every time, put `OPENAI_API_KEY` or
-`BOXLITE_E2E_OPENAI_API_KEY` in `~/.config/boxlite/e2e-openai.env`, or pass a
-different file with `--env-file`.
 
 This path creates a Node.js box, installs `@openai/codex`, logs in with
 `BOXLITE_SECRET_OPENAI_API_KEY`, and runs `codex exec`. The API key stays on the

@@ -11,9 +11,6 @@ This is intentionally small and explicit:
 Prerequisites:
     export OPENAI_API_KEY="sk-..."
 
-Or put OPENAI_API_KEY / BOXLITE_E2E_OPENAI_API_KEY in:
-    ~/.config/boxlite/e2e-openai.env
-
 Usage:
     python examples/python/06_ai_agents/run_codex_in_box.py \
       "Say exactly: codex inside box works"
@@ -39,7 +36,6 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
 
 DEFAULT_IMAGE = os.getenv("BOXLITE_CODEX_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-node:20260605-p0-r3")
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
-DEFAULT_ENV_FILE = Path(os.getenv("BOXLITE_OPENAI_ENV_FILE", "~/.config/boxlite/e2e-openai.env")).expanduser()
 DEFAULT_PROFILE = os.getenv("BOXLITE_E2E_PROFILE") or os.getenv("BOXLITE_PROFILE") or "p1"
 DEFAULT_DIRECT_KEY = os.getenv("BOXLITE_CODEX_SECRET_PASSTHROUGH", "").lower() not in ("1", "true", "yes", "on")
 CODE_SMOKE_PROMPT = (
@@ -50,42 +46,13 @@ CODE_SMOKE_PROMPT = (
 )
 
 
-def load_env_file(path: Path) -> dict[str, str]:
-    if not path.exists():
-        return {}
-
-    values: dict[str, str] = {}
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[len("export ") :].strip()
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip("'\"")
-        if key:
-            values[key] = value
-    return values
-
-
-def print_openai_auth_help(env_file: Path) -> None:
+def print_openai_auth_help() -> None:
     print("ERROR: OPENAI_API_KEY not set")
     print("Run: export OPENAI_API_KEY='sk-...'")
-    print(f"Or create {env_file}:")
-    print("  mkdir -p ~/.config/boxlite")
-    print(f"  printf 'export BOXLITE_E2E_OPENAI_API_KEY=\"sk-...\"\\n' > {env_file}")
-    print(f"  chmod 600 {env_file}")
 
 
-def openai_api_key(env_file: Path) -> str | None:
-    if os.getenv("OPENAI_API_KEY"):
-        return os.getenv("OPENAI_API_KEY")
-
-    values = load_env_file(env_file)
-    return values.get("OPENAI_API_KEY") or values.get("BOXLITE_E2E_OPENAI_API_KEY")
+def openai_api_key() -> str | None:
+    return os.getenv("OPENAI_API_KEY")
 
 
 def credentials_path() -> Path:
@@ -280,7 +247,6 @@ async def main() -> int:
     parser.add_argument("prompt", nargs="*", help="Prompt for codex exec")
     parser.add_argument("--image", default=DEFAULT_IMAGE)
     parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--env-file", type=Path, default=DEFAULT_ENV_FILE)
     parser.add_argument("--profile", default=DEFAULT_PROFILE, help="Cloud REST profile from ~/.boxlite/credentials.toml")
     parser.add_argument(
         "--unsafe-direct-api-key",
@@ -302,9 +268,9 @@ async def main() -> int:
     parser.add_argument("--keep-box", action="store_true", help="Keep the box after the run for inspection")
     args = parser.parse_args()
 
-    api_key = openai_api_key(args.env_file.expanduser())
+    api_key = openai_api_key()
     if not api_key:
-        print_openai_auth_help(args.env_file.expanduser())
+        print_openai_auth_help()
         raise SystemExit(1)
 
     runtime = rest_runtime_from_profile(args.profile)
