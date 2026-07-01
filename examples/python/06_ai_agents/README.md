@@ -8,6 +8,8 @@ Using BoxLite as a sandbox for AI agent workflows.
 | `drive_box_with_minimax.py` | Let MiniMax M3 drive a SimpleBox via tool-use loop |
 | `research_agent.py` | Search the web, ask an LLM through host-side secret substitution, and answer a question |
 | `run_codex_in_box.py` | Install and run OpenAI Codex CLI inside a BoxLite box |
+| `run_code_agent_in_box.py` | Run a tiny OpenAI-powered code agent inside a cloud BoxLite box |
+| `code_agent.py` | In-box code agent with write-file, read-file, and run-command tools |
 | `use_skillbox.py` | Run Claude Code CLI with skills inside a box |
 | `chat_with_claude.py` | Multi-turn Claude conversation via stdin JSON protocol |
 | `order_starbucks.py` | End-to-end agent: order Starbucks via browser automation |
@@ -179,3 +181,18 @@ plaintext API key is visible inside the box. Pass `--secret-passthrough` to test
 BoxLite secret substitution instead. The `--code-smoke` path asks Codex to create
 `/workspace/fib.js`, run it, and then verifies the file by running
 `node /workspace/fib.js 10` inside the same box.
+
+## Tiny Code Agent In A Box
+
+`run_code_agent_in_box.py` runs a small custom code agent inside a cloud
+BoxLite box. The host creates the box and copies `code_agent.py` into it; the
+agent then calls an OpenAI chat model from inside the box and uses local tools
+to write files, read files, and run commands.
+
+```bash
+python examples/python/06_ai_agents/run_code_agent_in_box.py --code-smoke
+```
+
+The smoke path prompts for `OPENAI_API_KEY` if it is not set, asks the agent to
+create `/workspace/fib.py`, and verifies `python /workspace/fib.py 10` prints
+`55`.
