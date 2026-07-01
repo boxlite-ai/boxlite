@@ -16,6 +16,7 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
 import { getOnboardingCodeExamples, type OnboardingLanguage } from '@/lib/onboarding-code-examples'
 import { setLocalStorageItem } from '@/lib/local-storage'
+import { createApiKeyWithFallbackName } from '@/lib/quickstart-api-key'
 import { cn } from '@/lib/utils'
 import type { OnboardingProgress } from '@/lib/onboarding-progress'
 import {
@@ -156,9 +157,8 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange, pr
     setCreating(true)
     try {
       const key = (
-        await apiKeyApi.createApiKey(
-          { name: 'sdk-quickstart', permissions: apiKeyPermissions },
-          selectedOrganization.id,
+        await createApiKeyWithFallbackName<{ data: ApiKeyResponse }>((name) =>
+          apiKeyApi.createApiKey({ name, permissions: apiKeyPermissions }, selectedOrganization.id),
         )
       ).data
       setCreatedKey(key)
