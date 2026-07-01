@@ -23,11 +23,13 @@ import { useDeleteBoxMutation } from '@/hooks/mutations/useDeleteBoxMutation'
 import { useRecoverBoxMutation } from '@/hooks/mutations/useRecoverBoxMutation'
 import { useStartBoxMutation } from '@/hooks/mutations/useStartBoxMutation'
 import { useStopBoxMutation } from '@/hooks/mutations/useStopBoxMutation'
+import { useUploadBoxFilesMutation } from '@/hooks/mutations/useUploadBoxFilesMutation'
 import { useBoxQuery } from '@/hooks/queries/useBoxQuery'
 import { useConfig } from '@/hooks/useConfig'
 import { useRegions } from '@/hooks/useRegions'
 import { useBoxWsSync } from '@/hooks/useBoxWsSync'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
+import { DEFAULT_BOX_UPLOAD_DIR, type BoxUploadItem } from '@/lib/box-upload'
 import { getBoxPublicId, getBoxPublicIdLabel } from '@/lib/box-identity'
 import { handleApiError } from '@/lib/error-handling'
 import { setLocalStorageItem } from '@/lib/local-storage'
@@ -47,6 +49,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
+import { BoxFileUploadControl } from './BoxFileUploadControl'
 import { BoxTerminalTab } from './BoxTerminalTab'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
@@ -176,6 +179,7 @@ export default function BoxDetails() {
   const stopMutation = useStopBoxMutation()
   const recoverMutation = useRecoverBoxMutation()
   const deleteMutation = useDeleteBoxMutation()
+  const uploadMutation = useUploadBoxFilesMutation()
 
   const writePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
   const deletePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.DELETE_BOXES)
@@ -183,6 +187,13 @@ export default function BoxDetails() {
   const anyMutating =
     startMutation.isPending || stopMutation.isPending || recoverMutation.isPending || deleteMutation.isPending
   const actionsDisabled = anyMutating || transitioning
+  const uploadDisabledReason = !writePermitted
+    ? 'You need write access to upload files'
+    : actionsDisabled
+      ? 'Wait for the current box action to finish'
+      : !box || !isStoppable(box)
+        ? 'Start the box before uploading files'
+        : undefined
 
   const handleStart = async () => {
     if (!box) return
@@ -232,6 +243,25 @@ export default function BoxDetails() {
       navigate(RoutePath.BOXES)
     } catch (error) {
       handleApiError(error, 'Failed to delete box')
+    }
+  }
+
+  const handleUploadFiles = async (items: BoxUploadItem[]) => {
+    if (!box || items.length === 0) return
+    try {
+      const uploadedPaths = await uploadMutation.mutateAsync({
+        boxId: box.id,
+        detailRef: boxId,
+        destinationDir: DEFAULT_BOX_UPLOAD_DIR,
+        items,
+      })
+      toast.success(
+        items.length === 1
+          ? `Uploaded ${items[0].name} to ${uploadedPaths[0]}`
+          : `Uploaded ${items.length} items to ${DEFAULT_BOX_UPLOAD_DIR}`,
+      )
+    } catch (error) {
+      handleApiError(error, 'Failed to upload files')
     }
   }
 
@@ -453,7 +483,7 @@ export default function BoxDetails() {
 
             {/* shell / terminal */}
             <div className="flex h-[60vh] flex-none flex-col border border-border bg-[hsl(var(--code-background))] lg:h-auto lg:min-h-0 lg:flex-1">
-              <div className="flex flex-none items-center justify-between border-b border-dashed border-border px-5 py-[15px]">
+              <div className="flex flex-none flex-col gap-3 border-b border-dashed border-border px-5 py-[13px] sm:flex-row sm:items-center sm:justify-between">
                 <span className="flex items-center gap-[9px] text-[11px] uppercase tracking-[2px]">
                   <span className="size-[6px] flex-none bg-brand" />
                   shell
@@ -461,6 +491,13 @@ export default function BoxDetails() {
                     {getBoxPublicIdLabel(box)}
                   </span>
                 </span>
+                <BoxFileUploadControl
+                  disabled={actionsDisabled || !writePermitted || !isStoppable(box)}
+                  disabledReason={uploadDisabledReason}
+                  destinationDir={DEFAULT_BOX_UPLOAD_DIR}
+                  isUploading={uploadMutation.isPending}
+                  onUpload={handleUploadFiles}
+                />
               </div>
               <div className="flex min-h-0 flex-1 flex-col">
                 <BoxTerminalTab box={box} refreshSignal={terminalRefreshSignal} />

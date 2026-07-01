@@ -4,6 +4,7 @@
  */
 
 import { ApiClient } from '@/api/apiClient'
+import { buildBoxUploadPath, createBoxUploadTar, createBoxUploadFileItem, type BoxUploadItem } from '@/lib/box-upload'
 
 // Dashboard-side client for the Box API contract (openapi/box.openapi.yaml),
 // served by apps/api/src/boxlite-rest. Box verbs (create/start/stop/delete)
@@ -95,4 +96,32 @@ export async function stopBoxViaBoxApi(api: ApiClient, organizationId: string, b
 
 export async function deleteBoxViaBoxApi(api: ApiClient, organizationId: string, boxId: string): Promise<void> {
   await api.axiosInstance.delete(`${boxesBasePath(organizationId)}/${boxId}`)
+}
+
+export async function uploadFileToBoxViaBoxApi(
+  api: ApiClient,
+  organizationId: string,
+  boxId: string,
+  file: File,
+  destinationDir: string,
+): Promise<string> {
+  return uploadBoxItemViaBoxApi(api, organizationId, boxId, createBoxUploadFileItem(file), destinationDir)
+}
+
+export async function uploadBoxItemViaBoxApi(
+  api: ApiClient,
+  organizationId: string,
+  boxId: string,
+  item: BoxUploadItem,
+  destinationDir: string,
+): Promise<string> {
+  const remotePath = buildBoxUploadPath(destinationDir, item)
+  const archive = await createBoxUploadTar(item)
+
+  await api.axiosInstance.put(`${boxesBasePath(organizationId)}/${boxId}/files`, archive, {
+    headers: { 'Content-Type': 'application/x-tar' },
+    params: { path: remotePath },
+  })
+
+  return remotePath
 }
