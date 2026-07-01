@@ -52,8 +52,10 @@ export function resolvePerBoxLimits(org: OrgPerBoxLimits | null | undefined) {
   }
 }
 
-// Stepper: − / editable value / + . Accepts any integer ≥ min (the backend takes arbitrary
-// cpu/memory/disk); click +/− or type directly (commits/clamps on blur or Enter).
+// Stepper: − / editable value / + . Enforces the ceiling at both edges — the
+// input is pinned at max the moment the typed value would overshoot (so the box
+// never visually holds an over-limit value), and blur/Enter normalizes an empty
+// or shortened entry (parseInt("") → NaN → min).
 function Stepper({
   value,
   onChange,
@@ -75,12 +77,32 @@ function Stepper({
     const v = Math.max(min, n)
     return max != null ? Math.min(max, v) : v
   }
+  // Handle a keystroke or paste: clamp the raw text to max so the input can
+  // never display an out-of-range value (defeats the earlier bug where blur
+  // wouldn't re-sync `text` when the clamped result equalled the previous
+  // parent value, leaving a stale typed number in the box).
+  const handleTyped = (raw: string) => {
+    const digits = raw.replace(/[^0-9]/g, '')
+    if (digits === '') {
+      setText('')
+      return
+    }
+    const n = parseInt(digits, 10)
+    if (max != null && n > max) {
+      onExceed?.()
+      setText(String(max))
+      return
+    }
+    setText(digits)
+  }
+  // On blur / Enter, normalize the text and forward the value to the parent.
+  // Text sync is unconditional so `text` stays consistent even when the parent
+  // value doesn't change (e.g., already at max).
   const commit = (raw: string) => {
     const n = parseInt(raw, 10)
-    // Signal when the typed value overshot the ceiling and had to be pulled
-    // down, so the caller can surface the quota / contact-support hint.
-    if (Number.isFinite(n) && max != null && n > max) onExceed?.()
-    onChange(Number.isFinite(n) ? clamp(n) : min)
+    const next = Number.isFinite(n) ? clamp(n) : min
+    onChange(next)
+    setText(String(next))
   }
   const btn =
     'flex size-11 flex-none items-center justify-center font-mono text-[15px] text-muted-foreground transition-colors enabled:hover:bg-accent enabled:hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 sm:size-9'
@@ -99,7 +121,7 @@ function Stepper({
         value={text}
         inputMode="numeric"
         aria-label="value"
-        onChange={(e) => setText(e.target.value.replace(/[^0-9]/g, ''))}
+        onChange={(e) => handleTyped(e.target.value)}
         onBlur={(e) => commit(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
@@ -119,15 +141,15 @@ function Stepper({
   )
 }
 
-// One resource control: stepper + a red quota / contact-support hint shown only
-// once the user overshoots the organization's per-box max.
+// One resource control: label + stepper. The over-limit note is rendered once,
+// full-width below the grid (see CappedResourcesNote) rather than cramped under
+// each narrow column.
 function ResourceField({
   label,
   unit,
   value,
   onChange,
   max,
-  capped,
   onExceed,
 }: {
   label: string
@@ -135,7 +157,6 @@ function ResourceField({
   value: number
   onChange: (v: number) => void
   max: number
-  capped: boolean
   onExceed: () => void
 }) {
   return (
@@ -144,17 +165,26 @@ function ResourceField({
         {label} <span className="text-muted-foreground">({unit})</span>
       </div>
       <Stepper value={value} onChange={onChange} max={max} onExceed={onExceed} />
-      {capped && (
-        <p className="font-mono text-[10px] leading-snug text-destructive">
-          Max {max} {unit} on your organization. Need more?{' '}
-          <a
-            href={`mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent('Increase box resource limits')}`}
-            className="underline underline-offset-2"
-          >
-            {SUPPORT_EMAIL}
-          </a>
-        </p>
-      )}
+    </div>
+  )
+}
+
+// A single amber "we adjusted your input to the org limit" note, shown full-width
+// below the resource grid when one or more fields were capped. It is informational
+// (the value was corrected to a valid maximum), not an error — hence the warning
+// color and the still-enabled Create button.
+function CappedResourcesNote({ items }: { items: { label: string; unit: string; max: number }[] }) {
+  if (items.length === 0) return null
+  return (
+    <div className="border-l-2 border-warning/60 bg-warning-background/40 px-3 py-2 font-mono text-[11px] leading-relaxed text-warning-foreground">
+      Adjusted to your organization&apos;s max: {items.map((r) => `${r.label} ${r.max} ${r.unit}`).join(' · ')}. Need
+      more?{' '}
+      <a
+        href={`mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent('Increase box resource limits')}`}
+        className="underline underline-offset-2"
+      >
+        {SUPPORT_EMAIL}
+      </a>
     </div>
   )
 }
@@ -326,33 +356,39 @@ export const CreateBoxDialog = ({
               )}
             </button>
             {advancedOpen && (
-              <div className="grid grid-cols-1 gap-[14px] sm:grid-cols-3">
-                <ResourceField
-                  label="CPU"
-                  unit="vCPU"
-                  value={cpu}
-                  onChange={changeResource('cpu', setCpu)}
-                  max={limits.cpu}
-                  capped={capped.cpu}
-                  onExceed={() => setCapped((c) => ({ ...c, cpu: true }))}
-                />
-                <ResourceField
-                  label="Memory"
-                  unit="GiB"
-                  value={memory}
-                  onChange={changeResource('memory', setMemory)}
-                  max={limits.memory}
-                  capped={capped.memory}
-                  onExceed={() => setCapped((c) => ({ ...c, memory: true }))}
-                />
-                <ResourceField
-                  label="Disk"
-                  unit="GiB"
-                  value={disk}
-                  onChange={changeResource('disk', setDisk)}
-                  max={limits.disk}
-                  capped={capped.disk}
-                  onExceed={() => setCapped((c) => ({ ...c, disk: true }))}
+              <div className="flex flex-col gap-[14px]">
+                <div className="grid grid-cols-1 gap-[14px] sm:grid-cols-3">
+                  <ResourceField
+                    label="CPU"
+                    unit="vCPU"
+                    value={cpu}
+                    onChange={changeResource('cpu', setCpu)}
+                    max={limits.cpu}
+                    onExceed={() => setCapped((c) => ({ ...c, cpu: true }))}
+                  />
+                  <ResourceField
+                    label="Memory"
+                    unit="GiB"
+                    value={memory}
+                    onChange={changeResource('memory', setMemory)}
+                    max={limits.memory}
+                    onExceed={() => setCapped((c) => ({ ...c, memory: true }))}
+                  />
+                  <ResourceField
+                    label="Disk"
+                    unit="GiB"
+                    value={disk}
+                    onChange={changeResource('disk', setDisk)}
+                    max={limits.disk}
+                    onExceed={() => setCapped((c) => ({ ...c, disk: true }))}
+                  />
+                </div>
+                <CappedResourcesNote
+                  items={[
+                    capped.cpu && { label: 'CPU', unit: 'vCPU', max: limits.cpu },
+                    capped.memory && { label: 'Memory', unit: 'GiB', max: limits.memory },
+                    capped.disk && { label: 'Disk', unit: 'GiB', max: limits.disk },
+                  ].filter((r): r is { label: string; unit: string; max: number } => Boolean(r))}
                 />
               </div>
             )}

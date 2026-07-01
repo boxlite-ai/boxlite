@@ -103,11 +103,46 @@ describe('CreateBoxDialog per-org resource cap', () => {
 
     // auto-corrected to the org max (4), NOT the built-in ceiling (8)
     expect(input.value).toBe('4')
-    // red hint appears with the quota and the support mailbox
+    // the amber cap note names the capped resource + its max and the support mailbox
     expect(document.body.textContent).toContain('support@boxlite.ai')
-    expect(document.body.textContent).toMatch(/Max\s*4/)
+    expect(document.body.textContent).toMatch(/CPU\s*4\s*vCPU/)
     const mailto = document.querySelector('a[href^="mailto:support@boxlite.ai"]')
     expect(mailto).toBeTruthy()
+  })
+
+  it('pins the visible input at the org max the moment the typed value would overshoot (before any blur)', async () => {
+    await renderOpen()
+    const input = cpuInput()
+
+    // No blur / focusout — this asserts the keystroke-time behaviour, which is
+    // the fix for "the box still shows 123123 even with the amber note up".
+    await act(async () => typeInto(input, '123123'))
+    await flush()
+    expect(input.value).toBe('4')
+    expect(document.body.textContent).toContain('support@boxlite.ai')
+    expect(document.body.textContent).toMatch(/CPU\s*4\s*vCPU/)
+  })
+
+  it('caps each of the three resource fields independently against its own max', async () => {
+    await renderOpen()
+    const inputs = document.querySelectorAll<HTMLInputElement>('input[aria-label="value"]')
+    expect(inputs.length).toBe(3)
+
+    for (const input of Array.from(inputs)) {
+      await act(async () => typeInto(input, '999999'))
+      await act(async () => input.dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
+      await flush()
+    }
+
+    // Org limits from beforeEach: cpu 4, memory 8, disk 10
+    expect(inputs[0].value).toBe('4')
+    expect(inputs[1].value).toBe('8')
+    expect(inputs[2].value).toBe('10')
+
+    const note = document.body.textContent ?? ''
+    expect(note).toMatch(/CPU\s*4\s*vCPU/)
+    expect(note).toMatch(/Memory\s*8\s*GiB/)
+    expect(note).toMatch(/Disk\s*10\s*GiB/)
   })
 
   it('clears the hint once the value is brought back under the max', async () => {
