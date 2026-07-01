@@ -481,10 +481,9 @@ Copy files or directories between host and box.
 **Examples:**
 
 ```bash
-boxlite cp ./local.txt mybox:/tmp/
+boxlite cp ./local.txt mybox:/workspace/
 boxlite cp mybox:/app/out ./output
 ```
-
 
 ### `boxlite info`
 

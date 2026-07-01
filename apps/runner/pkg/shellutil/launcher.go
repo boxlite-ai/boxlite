@@ -14,22 +14,21 @@ package shellutil
 // boxlite.Client.StartExecution when the caller wants an interactive shell
 // session and the user has NOT supplied a specific command.
 //
-// Strategy: a POSIX `/bin/sh -c` launcher cd's to the user's home and
+// Strategy: a POSIX `/bin/sh -c` launcher cd's to the user workspace and
 // execs the best available shell as a login shell:
 //
-//	cd "${HOME:-/root}" 2>/dev/null || cd /;
+//	mkdir -p /workspace 2>/dev/null || true;
+//	cd /workspace 2>/dev/null || cd "${HOME:-/root}" 2>/dev/null || cd /;
 //	exec $(command -v bash || command -v ash || command -v sh) -l
 //
 // Why this shape:
 //
 //   - `/bin/sh` is required by POSIX, so the launcher process itself always
 //     starts. We don't have to guess what the VM ships before we connect.
-//   - The `cd "$HOME"` step mirrors OpenSSH `sshd`'s chdir(pw_dir) before
-//     exec'ing the user's shell. Without it the session lands at `/`,
-//     which is jarring and breaks `~/.something` references in shell
-//     startup files. `${HOME:-/root}` falls back to /root because the
-//     default BoxLite snapshot runs as root with HOME=/root; `|| cd /`
-//     keeps the launcher running even on minimal images that lack /root.
+//   - `/workspace` is the product-level working directory for user files.
+//     Creating it up front means terminal, web upload, and CLI upload all
+//     point users at the same place. `${HOME:-/root}` remains a fallback for
+//     minimal or locked-down images where /workspace cannot be created.
 //   - `command -v` is POSIX and works on busybox/alpine (the default
 //     BoxLite snapshot), bash-only distros, and everything in between.
 //     Trying bash first, then ash, then sh matches user preference for
@@ -51,7 +50,8 @@ package shellutil
 // resolve in that case.
 func DefaultInteractiveShell() (command string, args []string) {
 	return "/bin/sh", []string{"-c",
-		`cd "${HOME:-/root}" 2>/dev/null || cd /; ` +
+		`mkdir -p /workspace 2>/dev/null || true; ` +
+			`cd /workspace 2>/dev/null || cd "${HOME:-/root}" 2>/dev/null || cd /; ` +
 			`exec $(command -v bash || command -v ash || command -v sh) -l`,
 	}
 }
