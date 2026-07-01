@@ -41,6 +41,10 @@ DEFAULT_IMAGE = os.getenv("BOXLITE_CODEX_IMAGE", "node:20-bookworm-slim")
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 DEFAULT_ENV_FILE = Path(os.getenv("BOXLITE_OPENAI_ENV_FILE", "~/.config/boxlite/e2e-openai.env")).expanduser()
 DEFAULT_PROFILE = os.getenv("BOXLITE_E2E_PROFILE") or os.getenv("BOXLITE_PROFILE") or "p1"
+CODE_SMOKE_PROMPT = (
+    "Create /workspace/fib.js. It must read n from process.argv[2], compute fibonacci(n), "
+    "print only the number, then run `node /workspace/fib.js 10` and ensure it prints 55."
+)
 
 
 def load_env_file(path: Path) -> dict[str, str]:
@@ -195,7 +199,7 @@ async def run_codex(box, prompt: str, model: str, *, direct_api_key: str | None 
         codex exec \
           --skip-git-repo-check \
           --ignore-user-config \
-          --sandbox read-only \
+          --sandbox workspace-write \
           --model {model} \
           {prompt!r} \
           </dev/null
@@ -208,9 +212,28 @@ async def run_codex(box, prompt: str, model: str, *, direct_api_key: str | None 
     return stdout.strip()
 
 
+async def verify_code_smoke(box) -> None:
+    print("Verifying Codex-created code inside the box...", flush=True)
+    exit_code, stdout, stderr = await run(
+        box,
+        "sh",
+        [
+            "-lc",
+            "test -f /workspace/fib.js && node /workspace/fib.js 10",
+        ],
+        timeout=60,
+        stream=True,
+    )
+    if exit_code != 0:
+        raise RuntimeError(f"Codex code smoke verification failed\nstdout={stdout}\nstderr={stderr}")
+    if stdout.strip() != "55":
+        raise RuntimeError(f"Codex code smoke printed {stdout.strip()!r}, expected '55'")
+    print("Verified: /workspace/fib.js prints 55", flush=True)
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser(description="Install and run OpenAI Codex CLI inside a BoxLite box.")
-    parser.add_argument("prompt", nargs="+", help="Prompt for codex exec")
+    parser.add_argument("prompt", nargs="*", help="Prompt for codex exec")
     parser.add_argument("--image", default=DEFAULT_IMAGE)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--env-file", type=Path, default=DEFAULT_ENV_FILE)
@@ -219,6 +242,11 @@ async def main() -> int:
         "--unsafe-direct-api-key",
         action="store_true",
         help="Pass the plaintext OpenAI API key into the box to verify Codex CLI itself; do not use for secret-passthrough validation.",
+    )
+    parser.add_argument(
+        "--code-smoke",
+        action="store_true",
+        help="Ask Codex to create and run /workspace/fib.js, then verify the file by running node in the box.",
     )
     parser.add_argument("--keep-box", action="store_true", help="Keep the box after the run for inspection")
     args = parser.parse_args()
@@ -247,13 +275,16 @@ async def main() -> int:
     try:
         print(f"Box: {box.id}")
         await install_codex(box)
+        prompt = CODE_SMOKE_PROMPT if args.code_smoke or not args.prompt else " ".join(args.prompt)
         answer = await run_codex(
             box,
-            " ".join(args.prompt),
+            prompt,
             args.model,
             direct_api_key=api_key if args.unsafe_direct_api_key else None,
         )
         print(answer)
+        if args.code_smoke:
+            await verify_code_smoke(box)
         return 0
     finally:
         if not args.keep_box:
