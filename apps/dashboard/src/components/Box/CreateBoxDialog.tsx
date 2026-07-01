@@ -211,17 +211,24 @@ export const CreateBoxDialog = ({
   const createBoxMutation = useCreateBoxMutation()
   const defaultImage = SUPPORTED_BOX_IMAGES.find((i) => i.isDefault) ?? SUPPORTED_BOX_IMAGES[0]
 
+  // Per-box ceilings for the current org (backend rejects a create above these).
+  const limits = resolvePerBoxLimits(selectedOrganization)
+
+  // A DEFAULT value can exceed a stricter per-org cap (e.g. DEFAULTS.disk=10
+  // vs an org's maxDiskPerBox=3), which would otherwise send an over-limit
+  // create the moment the dialog opens. Clamp on read.
+  const initialCpu = Math.min(DEFAULTS.cpu, limits.cpu)
+  const initialMemory = Math.min(DEFAULTS.memory, limits.memory)
+  const initialDisk = Math.min(DEFAULTS.disk, limits.disk)
+
   const [name, setName] = useState('')
   const [imageRef, setImageRef] = useState<string>(defaultImage.ref)
-  const [cpu, setCpu] = useState(DEFAULTS.cpu)
-  const [memory, setMemory] = useState(DEFAULTS.memory)
-  const [disk, setDisk] = useState(DEFAULTS.disk)
+  const [cpu, setCpu] = useState(initialCpu)
+  const [memory, setMemory] = useState(initialMemory)
+  const [disk, setDisk] = useState(initialDisk)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [capped, setCapped] = useState({ cpu: false, memory: false, disk: false })
-
-  // Per-box ceilings for the current org (backend rejects a create above these).
-  const limits = resolvePerBoxLimits(selectedOrganization)
 
   // Clear a field's "hit the cap" hint once its value is back under the max.
   const changeResource = (key: 'cpu' | 'memory' | 'disk', set: (v: number) => void) => (v: number) => {
@@ -233,14 +240,14 @@ export const CreateBoxDialog = ({
     if (open) {
       setName('')
       setImageRef(defaultImage.ref)
-      setCpu(DEFAULTS.cpu)
-      setMemory(DEFAULTS.memory)
-      setDisk(DEFAULTS.disk)
+      setCpu(initialCpu)
+      setMemory(initialMemory)
+      setDisk(initialDisk)
       setAdvancedOpen(false)
       setSubmitting(false)
       setCapped({ cpu: false, memory: false, disk: false })
     }
-  }, [open, defaultImage.ref])
+  }, [open, defaultImage.ref, initialCpu, initialMemory, initialDisk])
 
   const selectedImage = SUPPORTED_BOX_IMAGES.find((i) => i.ref === imageRef) ?? defaultImage
   const nameValid = !name || NAME_REGEX.test(name)

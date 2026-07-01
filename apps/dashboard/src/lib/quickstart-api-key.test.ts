@@ -12,9 +12,16 @@ describe('buildQuickstartApiKeyName', () => {
     expect(buildQuickstartApiKeyName(0)).toBe('sdk-quickstart')
   })
 
-  it('appends an incrementing suffix on later attempts', () => {
-    expect(buildQuickstartApiKeyName(1)).toBe('sdk-quickstart-2')
-    expect(buildQuickstartApiKeyName(2)).toBe('sdk-quickstart-3')
+  it('appends a short random suffix on later attempts (never scales with attempt count)', () => {
+    const shape = /^sdk-quickstart-[0-9a-z]{8}$/
+    expect(buildQuickstartApiKeyName(1)).toMatch(shape)
+    expect(buildQuickstartApiKeyName(2)).toMatch(shape)
+    expect(buildQuickstartApiKeyName(99)).toMatch(shape)
+  })
+
+  it('produces distinct suffixes across calls so retries do not resurface the same 409', () => {
+    const samples = new Set(Array.from({ length: 50 }, () => buildQuickstartApiKeyName(1)))
+    expect(samples.size).toBeGreaterThan(45)
   })
 })
 
@@ -47,15 +54,14 @@ describe('createApiKeyWithFallbackName', () => {
     const seen: string[] = []
     const create = vi.fn(async (name: string) => {
       seen.push(name)
-      // The default and the first suffix are already taken.
-      if (name === 'sdk-quickstart' || name === 'sdk-quickstart-2') {
-        throw { cause: { response: { status: 409 } } }
-      }
+      // Only the default is taken; any suffixed name is free.
+      if (name === 'sdk-quickstart') throw { cause: { response: { status: 409 } } }
       return { name }
     })
     const result = await createApiKeyWithFallbackName(create)
-    expect(seen).toEqual(['sdk-quickstart', 'sdk-quickstart-2', 'sdk-quickstart-3'])
-    expect(result).toEqual({ name: 'sdk-quickstart-3' })
+    expect(seen[0]).toBe('sdk-quickstart')
+    expect(seen[1]).toMatch(/^sdk-quickstart-[0-9a-z]{8}$/)
+    expect(result).toEqual({ name: seen[1] })
   })
 
   it('propagates a non-conflict error without retrying', async () => {

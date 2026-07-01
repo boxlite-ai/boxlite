@@ -110,6 +110,18 @@ describe('CreateBoxDialog per-org resource cap', () => {
     expect(mailto).toBeTruthy()
   })
 
+  it('opens with the default values already clamped to the org max (no over-limit initial state)', async () => {
+    // Org caps Disk at 3 GiB — tighter than the built-in DEFAULTS.disk = 10.
+    state.org = makeOrg({ maxCpuPerBox: 4, maxMemoryPerBox: 8, maxDiskPerBox: 3 })
+    await renderOpen()
+    const inputs = document.querySelectorAll<HTMLInputElement>('input[aria-label="value"]')
+    // Disk (the third stepper) must open at 3, NOT the DEFAULTS.disk of 10.
+    expect(inputs[2].value).toBe('3')
+    // CPU / Memory defaults (1 each) are already under the caps — untouched.
+    expect(inputs[0].value).toBe('1')
+    expect(inputs[1].value).toBe('1')
+  })
+
   it('pins the visible input at the org max the moment the typed value would overshoot (before any blur)', async () => {
     await renderOpen()
     const input = cpuInput()

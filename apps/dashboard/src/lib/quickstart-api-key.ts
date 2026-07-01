@@ -6,14 +6,29 @@
 // The Quickstart "Create a key" step has no name field, so it creates the key
 // under a default name. API key names are unique per (org, user) on the backend,
 // so re-running the step (e.g. the "Regenerate" button) would 409 ("API key with
-// this name already exists"). We keep the clean default for the first key and
-// append an incrementing suffix on collision so re-running never surfaces an error.
+// this name already exists"). We keep the clean default for the first attempt
+// and switch to a short random suffix on collision — a sequential counter would
+// exhaust after a handful of regenerates once every `sdk-quickstart-N` was taken.
 
 const BASE_NAME = 'sdk-quickstart'
+const RANDOM_SUFFIX_LEN = 8
 
-// Name for the Nth attempt: `sdk-quickstart`, `sdk-quickstart-2`, `sdk-quickstart-3`, …
+// Name for the Nth attempt: `sdk-quickstart` for the first, then a random
+// short suffix (~2^40 combos over 8 chars) so repeated retries never need to
+// walk a dense number line.
 export function buildQuickstartApiKeyName(attempt = 0): string {
-  return attempt <= 0 ? BASE_NAME : `${BASE_NAME}-${attempt + 1}`
+  return attempt <= 0 ? BASE_NAME : `${BASE_NAME}-${randomSuffix()}`
+}
+
+function randomSuffix(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID().replace(/-/g, '').slice(0, RANDOM_SUFFIX_LEN)
+  }
+  // Non-crypto fallback for very old environments (older jsdom, no globalThis.crypto).
+  return Math.random()
+    .toString(36)
+    .slice(2, 2 + RANDOM_SUFFIX_LEN)
+    .padEnd(RANDOM_SUFFIX_LEN, '0')
 }
 
 // True when a create failed because the name is already taken (409 Conflict).
