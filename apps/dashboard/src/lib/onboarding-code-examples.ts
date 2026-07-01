@@ -320,42 +320,55 @@ int main(void) {
   },
   cli: {
     install: 'curl -fsSL https://sh.boxlite.ai | sh',
-    run: `BOXLITE_API_KEY=$KEY BOXLITE_REST_URL=your-api-url boxlite run --rm --name sdk-quickstart \\
+    run: `BOXLITE_API_KEY=$KEY BOXLITE_REST_URL=your-api-url boxlite run --rm --name "sdk-quickstart-cli-$(date +%s)" \\
   ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3 \\
   echo "Hello from BoxLite CLI"`,
     codeLanguage: 'bash',
     setupLabel: 'Install CLI',
     setupDescription:
       'Installs the boxlite command. The next step uses it directly with BOXLITE_API_KEY and BOXLITE_REST_URL.',
-    example: `export BOXLITE_API_KEY="\${BOXLITE_API_KEY:?Set BOXLITE_API_KEY}"
+    example: `if [ -z "\${BOXLITE_API_KEY:-}" ]; then
+  printf "Paste your BoxLite API key from Step 1: " >&2
+  stty -echo
+  IFS= read -r BOXLITE_API_KEY
+  stty echo
+  printf "\\n" >&2
+fi
+export BOXLITE_API_KEY
 export BOXLITE_REST_URL="your-api-url"
 
-boxlite run --rm --name sdk-quickstart \\
+boxlite run --rm --name "sdk-quickstart-cli-$(date +%s)" \\
   ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3 \\
   echo "Hello from BoxLite CLI"`,
   },
   rest: {
     install: `command -v curl
-command -v jq
-curl -fsSL https://raw.githubusercontent.com/boxlite-ai/boxlite/main/openapi/box.openapi.yaml \\
-  -o boxlite.openapi.yaml`,
+command -v jq`,
     run: 'BOXLITE_API_KEY=$KEY BOXLITE_REST_URL=your-api-url bash quickstart-rest.sh',
     codeLanguage: 'bash',
-    setupLabel: 'Get API contract',
+    setupLabel: 'Check REST tools',
     setupDescription:
-      'Downloads the OpenAPI contract for agents and API tools. The next step can use curl, Postman, or a generated client against the documented endpoints.',
+      'REST does not require an SDK install. The next step uses curl and jq to create a Box and execute a command. OpenAPI is available for full endpoint reference and generated clients.',
     example: `#!/usr/bin/env bash
 set -euo pipefail
 
-: "\${BOXLITE_API_KEY:?Set BOXLITE_API_KEY}"
+if [ -z "\${BOXLITE_API_KEY:-}" ]; then
+  printf "Paste your BoxLite API key from Step 1: " >&2
+  stty -echo
+  IFS= read -r BOXLITE_API_KEY
+  stty echo
+  printf "\\n" >&2
+fi
+export BOXLITE_API_KEY
 BOXLITE_REST_URL="\${BOXLITE_REST_URL:-your-api-url}"
 auth=(-H "Authorization: Bearer \${BOXLITE_API_KEY}")
 json=(-H "Content-Type: application/json")
+name="sdk-quickstart-rest-$(date +%s)"
 
 box_id="$(
   curl -fsS -X POST "\${BOXLITE_REST_URL}/v1/boxes" \\
     "\${auth[@]}" "\${json[@]}" \\
-    -d '{"name":"sdk-quickstart","image":"ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3"}' \\
+    -d "{\\"name\\":\\"\${name}\\",\\"image\\":\\"ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3\\"}" \\
     | jq -r '.box_id'
 )"
 trap 'curl -fsS -X DELETE "\${BOXLITE_REST_URL}/v1/boxes/\${box_id}?force=true" "\${auth[@]}" >/dev/null || true' EXIT
