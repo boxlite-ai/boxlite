@@ -9,6 +9,19 @@ export interface OnboardingCodeExample {
   setupDescription?: string
 }
 
+interface RenderOnboardingCodeExampleOptions {
+  apiKey?: string
+  restApiUrl: string
+}
+
+function doubleQuoted(value: string): string {
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`
+}
+
+function shellSingleQuoted(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
 const codeExamples: Record<OnboardingInterface, OnboardingCodeExample> = {
   typescript: {
     install: 'npm install @boxlite-ai/boxlite tsx',
@@ -26,7 +39,8 @@ const rt = JsBoxlite.rest(new BoxliteRestOptions({
   credential: new ApiKeyCredential(apiKey),
 }))
 
-const box = await rt.create({ image: 'ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3' }, 'sdk-quickstart')
+const boxName = \`sdk-quickstart-node-\${Date.now()}\`
+const box = await rt.create({ image: 'ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3' }, boxName)
 await box.start()
 
 const exec = await box.exec('echo', ['Hello from BoxLite SDK'])
@@ -48,6 +62,7 @@ await rt.remove(box.id, true)`,
     codeLanguage: 'python',
     example: `import asyncio
 import os
+import time
 from boxlite import ApiKeyCredential, Boxlite, BoxliteRestOptions, BoxOptions
 
 async def main():
@@ -56,7 +71,8 @@ async def main():
         credential=ApiKeyCredential(os.environ["BOXLITE_API_KEY"]),
     ))
 
-    box = await rt.create(BoxOptions(image="ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3"), name="sdk-quickstart")
+    box_name = f"sdk-quickstart-python-{int(time.time())}"
+    box = await rt.create(BoxOptions(image="ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3"), name=box_name)
     await box.start()
 
     execution = await box.exec("echo", args=["Hello from BoxLite SDK"])
@@ -80,8 +96,10 @@ go run github.com/boxlite-ai/boxlite/sdks/go/cmd/setup`,
 
 import (
     "context"
+    "fmt"
     "log"
     "os"
+    "time"
 
     boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 )
@@ -107,7 +125,8 @@ func main() {
     }
     defer rt.Close()
 
-    box, err := rt.Create(ctx, "ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3", boxlite.WithName("sdk-quickstart"))
+    boxName := fmt.Sprintf("sdk-quickstart-go-%d", time.Now().Unix())
+    box, err := rt.Create(ctx, "ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3", boxlite.WithName(boxName))
     if err != nil {
         log.Fatal(err)
     }
@@ -148,10 +167,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         rootfs: RootfsSpec::Image("ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3".into()),
         ..Default::default()
     };
-    let box_handle = rt.create(options, Some("sdk-quickstart".into())).await?;
+    let suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    let name = format!("sdk-quickstart-rust-{suffix}");
+    let box_handle = rt.create(options, Some(name)).await?;
     box_handle.start().await?;
 
-    let exec = box_handle
+    let mut exec = box_handle
         .exec(BoxCommand::new("echo").arg("Hello from BoxLite SDK"))
         .await?;
     let mut stdout = exec.stdout().expect("stdout stream should be available");
@@ -174,7 +197,7 @@ PLATFORM=darwin-arm64
 curl -fsSL "https://github.com/boxlite-ai/boxlite/releases/download/\${VERSION}/boxlite-c-\${VERSION}-\${PLATFORM}.tar.gz" \\
   | tar xz
 mv "boxlite-c-\${VERSION}-\${PLATFORM}" boxlite-c-sdk`,
-    run: `cc main.c -Iboxlite-c-sdk/include -Lboxlite-c-sdk/lib -lboxlite \\
+    run: `cc main.c -Iboxlite-c-sdk/include -Lboxlite-c-sdk/lib -lboxlite -pthread \\
   -Wl,-rpath,"$PWD/boxlite-c-sdk/lib" -o quickstart
 BOXLITE_API_KEY=$KEY BOXLITE_REST_URL=your-api-url ./quickstart`,
     codeLanguage: 'c',
@@ -182,18 +205,27 @@ BOXLITE_API_KEY=$KEY BOXLITE_REST_URL=your-api-url ./quickstart`,
     setupDescription:
       'Downloads the prebuilt C header and native library. The next step includes boxlite.h and links libboxlite.',
     example: `#include "boxlite.h"
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 typedef struct {
     CBoxliteRuntime *runtime;
     CBoxHandle *box;
     CExecutionHandle *exec;
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
     int done;
     int failed;
     int exit_code;
 } Quickstart;
+
+typedef struct {
+    CBoxliteRuntime *runtime;
+    volatile int stop;
+} DrainLoop;
 
 static int has_error(const CBoxliteError *error) {
     return error && error->code != Ok;
@@ -213,8 +245,42 @@ static void require_ok(BoxliteErrorCode code, const char *op, CBoxliteError *err
     }
 }
 
+static void *drain_loop(void *user_data) {
+    DrainLoop *loop = (DrainLoop *)user_data;
+    CBoxliteError error = {0};
+
+    while (!loop->stop) {
+        if (boxlite_runtime_drain(loop->runtime, 100, &error) < 0) {
+            print_error("drain", &error);
+            error = (CBoxliteError){0};
+        }
+    }
+    return NULL;
+}
+
+static void prepare_wait(Quickstart *qs) {
+    pthread_mutex_lock(&qs->mutex);
+    qs->done = 0;
+    qs->failed = 0;
+    pthread_mutex_unlock(&qs->mutex);
+}
+
+static void wait_until_done(Quickstart *qs) {
+    pthread_mutex_lock(&qs->mutex);
+    while (!qs->done) {
+        pthread_cond_wait(&qs->cond, &qs->mutex);
+    }
+    int failed = qs->failed;
+    pthread_mutex_unlock(&qs->mutex);
+
+    if (failed) {
+        exit(1);
+    }
+}
+
 static void on_create(CBoxHandle *box, CBoxliteError *error, void *user_data) {
     Quickstart *qs = (Quickstart *)user_data;
+    pthread_mutex_lock(&qs->mutex);
     if (has_error(error)) {
         print_error("create box", error);
         qs->failed = 1;
@@ -222,44 +288,38 @@ static void on_create(CBoxHandle *box, CBoxliteError *error, void *user_data) {
         qs->box = box;
     }
     qs->done = 1;
+    pthread_cond_signal(&qs->cond);
+    pthread_mutex_unlock(&qs->mutex);
 }
 
 static void on_done(CBoxliteError *error, void *user_data) {
     Quickstart *qs = (Quickstart *)user_data;
+    pthread_mutex_lock(&qs->mutex);
     if (has_error(error)) {
         print_error("operation", error);
         qs->failed = 1;
     }
     qs->done = 1;
+    pthread_cond_signal(&qs->cond);
+    pthread_mutex_unlock(&qs->mutex);
 }
 
 static void on_wait(int exit_code, CBoxliteError *error, void *user_data) {
     Quickstart *qs = (Quickstart *)user_data;
+    pthread_mutex_lock(&qs->mutex);
     if (has_error(error)) {
         print_error("wait", error);
         qs->failed = 1;
     }
     qs->exit_code = exit_code;
     qs->done = 1;
+    pthread_cond_signal(&qs->cond);
+    pthread_mutex_unlock(&qs->mutex);
 }
 
 static void on_stdout(const uint8_t *data, size_t len, void *user_data) {
     (void)user_data;
     fwrite(data, 1, len, stdout);
-}
-
-static void drain_until_done(Quickstart *qs) {
-    CBoxliteError error = {0};
-    while (!qs->done) {
-        if (boxlite_runtime_drain(qs->runtime, -1, &error) < 0) {
-            print_error("drain", &error);
-            exit(1);
-        }
-    }
-    if (qs->failed) {
-        exit(1);
-    }
-    qs->done = 0;
 }
 
 int main(void) {
@@ -278,43 +338,58 @@ int main(void) {
     CBoxliteRestOptions *rest = NULL;
     CBoxliteOptions *box_options = NULL;
     Quickstart qs = {0};
+    pthread_mutex_init(&qs.mutex, NULL);
+    pthread_cond_init(&qs.cond, NULL);
 
     require_ok(boxlite_api_key_credential_new(api_key, &credential, &error), "credential", &error);
     require_ok(boxlite_rest_options_new(api_url, &rest, &error), "rest options", &error);
     boxlite_rest_options_set_credential(rest, credential);
     require_ok(boxlite_rest_runtime_new_with_options(rest, &qs.runtime, &error), "rest runtime", &error);
+    DrainLoop loop = {.runtime = qs.runtime, .stop = 0};
+    pthread_t drain_thread;
+    pthread_create(&drain_thread, NULL, drain_loop, &loop);
 
     require_ok(
         boxlite_options_new("ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3", &box_options, &error),
         "box options",
         &error
     );
-    boxlite_options_set_name(box_options, "sdk-quickstart");
+    char box_name[64];
+    snprintf(box_name, sizeof(box_name), "sdk-quickstart-c-%ld", (long)time(NULL));
+    boxlite_options_set_name(box_options, box_name);
+    prepare_wait(&qs);
     require_ok(boxlite_create_box(qs.runtime, box_options, on_create, &qs, &error), "create box", &error);
-    drain_until_done(&qs);
+    wait_until_done(&qs);
 
+    prepare_wait(&qs);
     require_ok(boxlite_start_box(qs.box, on_done, &qs, &error), "start box", &error);
-    drain_until_done(&qs);
+    wait_until_done(&qs);
 
     const char *args[] = {"Hello from BoxLite C SDK"};
     BoxliteCommand cmd = {.command = "echo", .args = args, .argc = 1};
     require_ok(boxlite_box_exec(qs.box, &cmd, &qs.exec, &error), "exec", &error);
     require_ok(boxlite_execution_on_stdout(qs.exec, on_stdout, NULL, &error), "stdout", &error);
+    require_ok(boxlite_execution_stdin_close(qs.exec, &error), "stdin close", &error);
+    prepare_wait(&qs);
     require_ok(boxlite_execution_wait(qs.exec, on_wait, &qs, &error), "wait", &error);
-    drain_until_done(&qs);
+    wait_until_done(&qs);
     printf("Exit code: %d\\n", qs.exit_code);
 
     char *box_id = boxlite_box_id(qs.box);
+    prepare_wait(&qs);
     require_ok(boxlite_remove(qs.runtime, box_id, 1, on_done, &qs, &error), "remove box", &error);
-    drain_until_done(&qs);
+    wait_until_done(&qs);
     boxlite_free_string(box_id);
 
+    loop.stop = 1;
+    pthread_join(drain_thread, NULL);
     boxlite_execution_free(qs.exec);
     boxlite_box_free(qs.box);
-    boxlite_options_free(box_options);
     boxlite_rest_options_free(rest);
     boxlite_credential_free(credential);
     boxlite_runtime_free(qs.runtime);
+    pthread_mutex_destroy(&qs.mutex);
+    pthread_cond_destroy(&qs.cond);
     return qs.exit_code;
 }`,
   },
@@ -388,4 +463,76 @@ curl -fsS "\${BOXLITE_REST_URL}/v1/boxes/\${box_id}/executions/\${exec_id}" "\${
 
 export function getOnboardingCodeExamples(): Record<OnboardingInterface, OnboardingCodeExample> {
   return codeExamples
+}
+
+export function renderOnboardingCodeExample(
+  selectedInterface: OnboardingInterface,
+  options: RenderOnboardingCodeExampleOptions,
+): string {
+  const example = codeExamples[selectedInterface].example.replaceAll('your-api-url', options.restApiUrl)
+  const apiKey = options.apiKey
+  if (!apiKey) {
+    return example
+  }
+
+  const quotedApiKey = doubleQuoted(apiKey)
+  const shellQuotedApiKey = shellSingleQuoted(apiKey)
+  switch (selectedInterface) {
+    case 'typescript':
+      return example.replace(
+        `const apiKey = process.env.BOXLITE_API_KEY
+if (!apiKey) {
+  throw new Error('Set BOXLITE_API_KEY before running this script')
+}`,
+        `const apiKey = ${quotedApiKey}`,
+      )
+    case 'python':
+      return example.replace(
+        'credential=ApiKeyCredential(os.environ["BOXLITE_API_KEY"]),',
+        `credential=ApiKeyCredential(${quotedApiKey}),`,
+      )
+    case 'go':
+      return example.replace(
+        `apiKey := os.Getenv("BOXLITE_API_KEY")
+    if apiKey == "" {
+        log.Fatal("Set BOXLITE_API_KEY before running this program")
+    }`,
+        `apiKey := ${quotedApiKey}`,
+      )
+    case 'rust':
+      return example.replace(
+        'let api_key = std::env::var("BOXLITE_API_KEY")?;',
+        `let api_key = ${quotedApiKey}.to_owned();`,
+      )
+    case 'c':
+      return example.replace(
+        'const char *api_key = getenv("BOXLITE_API_KEY");',
+        `const char *api_key = ${quotedApiKey};`,
+      )
+    case 'cli':
+      return example.replace(
+        `if [ -z "\${BOXLITE_API_KEY:-}" ]; then
+  printf "Paste your BoxLite API key from Step 1: " >&2
+  stty -echo
+  IFS= read -r BOXLITE_API_KEY
+  stty echo
+  printf "\\n" >&2
+fi
+export BOXLITE_API_KEY`,
+        `export BOXLITE_API_KEY=${shellQuotedApiKey}`,
+      )
+    case 'rest':
+      return example.replace(
+        `if [ -z "\${BOXLITE_API_KEY:-}" ]; then
+  printf "Paste your BoxLite API key from Step 1: " >&2
+  stty -echo
+  IFS= read -r BOXLITE_API_KEY
+  stty echo
+  printf "\\n" >&2
+fi
+export BOXLITE_API_KEY`,
+        `BOXLITE_API_KEY=${shellQuotedApiKey}
+export BOXLITE_API_KEY`,
+      )
+  }
 }

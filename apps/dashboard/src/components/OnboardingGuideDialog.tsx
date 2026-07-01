@@ -9,13 +9,18 @@ import pythonIcon from '@/assets/python.svg'
 import rustIcon from '@/assets/rust.svg'
 import typescriptIcon from '@/assets/typescript.svg'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Server, Terminal } from '@/components/ui/icon'
+import { KeyRound, Server, Terminal } from '@/components/ui/icon'
 import { useApi } from '@/hooks/useApi'
 import { useConfig } from '@/hooks/useConfig'
 import { getRestApiUrl } from '@/lib/environment'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
-import { getOnboardingCodeExamples, type OnboardingInterface } from '@/lib/onboarding-code-examples'
+import { createApiKeyWithFallbackName, DEFAULT_QUICKSTART_API_KEY_NAME } from '@/lib/quickstart-api-key'
+import {
+  getOnboardingCodeExamples,
+  renderOnboardingCodeExample,
+  type OnboardingInterface,
+} from '@/lib/onboarding-code-examples'
 import { setLocalStorageItem } from '@/lib/local-storage'
 import { cn } from '@/lib/utils'
 import type { OnboardingProgress } from '@/lib/onboarding-progress'
@@ -88,10 +93,12 @@ function PrimaryBtn({ children, onClick }: { children: React.ReactNode; onClick:
   )
 }
 
+type CopyTarget = 'api-key' | 'install'
+
 export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: OnboardingGuideDialogProps) {
   const { apiKeyApi } = useApi()
-  const { apiUrl } = useConfig()
-  const restApiUrl = getRestApiUrl(apiUrl)
+  const config = useConfig()
+  const restApiUrl = getRestApiUrl(config.apiUrl, undefined, config.oidc.issuer)
   const { selectedOrganization, authenticatedUserHasPermission } = useSelectedOrganization()
   const canCreateApiKey = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
 
@@ -100,15 +107,16 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
   const [done, setDone] = useState<[boolean, boolean, boolean]>([false, false, false])
   const [language, setLanguage] = useState<OnboardingInterface>('python')
   const [createdKey, setCreatedKey] = useState<ApiKeyResponse | null>(null)
+  const [keyName, setKeyName] = useState('')
   const [creating, setCreating] = useState(false)
-  const [copied, setCopied] = useState(false)
+  const [copiedTarget, setCopiedTarget] = useState<CopyTarget | null>(null)
 
   const codeExamples = getOnboardingCodeExamples()
   const activeExample = codeExamples[language]
   const activeInterface = LANGS.find((l) => l.value === language)
   const renderedExample = useMemo(
-    () => activeExample.example.replaceAll('your-api-url', restApiUrl),
-    [activeExample.example, restApiUrl],
+    () => renderOnboardingCodeExample(language, { apiKey: createdKey?.value, restApiUrl }),
+    [createdKey?.value, language, restApiUrl],
   )
   const executionDescription =
     language === 'c' ? (
@@ -149,7 +157,8 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
       setStep(0)
       setDone([false, false, false])
       setCreatedKey(null)
-      setCopied(false)
+      setKeyName('')
+      setCopiedTarget(null)
     }
   }, [open])
 
@@ -159,13 +168,15 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
     setStep(0)
     setDone([false, false, false])
     setCreatedKey(null)
-    setCopied(false)
+    setKeyName('')
+    setCopiedTarget(null)
   }
   const backToScenarios = () => {
     setScenario(null)
     setStep(0)
     setDone([false, false, false])
     setCreatedKey(null)
+    setKeyName('')
   }
 
   const finished = done.every(Boolean)
@@ -191,9 +202,9 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
     setCreating(true)
     try {
       const key = (
-        await apiKeyApi.createApiKey(
-          { name: 'sdk-quickstart', permissions: apiKeyPermissions },
-          selectedOrganization.id,
+        await createApiKeyWithFallbackName<{ data: ApiKeyResponse }>(
+          (name) => apiKeyApi.createApiKey({ name, permissions: apiKeyPermissions }, selectedOrganization.id),
+          { baseName: keyName },
         )
       ).data
       setCreatedKey(key)
@@ -205,14 +216,14 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
     }
   }
 
-  const copyKey = (value: string) => {
+  const copyText = (value: string, target: CopyTarget) => {
     try {
       navigator.clipboard?.writeText(value)
     } catch {
       /* clipboard may be unavailable */
     }
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1400)
+    setCopiedTarget(target)
+    setTimeout(() => setCopiedTarget(null), 1400)
   }
 
   return (
@@ -340,32 +351,49 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
               {step === 0 && (
                 <div className="px-5 py-[18px]" style={{ animation: 'stat-in .25s ease' }}>
                   <div className="mb-[9px] text-[9px] uppercase tracking-[1.5px] text-muted-foreground">
-                    {createdKey ? 'Your API key  ·  shown once' : 'Create a key to authenticate'}
+                    {createdKey ? 'Your API key' : 'Key name'}
                   </div>
-                  <div className="flex items-center gap-[10px] border border-border bg-[hsl(var(--code-background))] px-[14px] py-3">
-                    <span
-                      className={cn(
-                        'flex-1 break-all text-[13px] tracking-[0.5px]',
-                        createdKey ? 'text-foreground' : 'text-muted-foreground',
-                      )}
-                    >
-                      {createdKey ? createdKey.value : 'Click “Create key” to generate a secret'}
-                    </span>
-                    {createdKey && (
+                  <div className="flex items-center gap-[10px] border border-border bg-[hsl(var(--code-background))] px-[14px] py-3 focus-within:border-brand">
+                    <KeyRound className={cn('size-4 flex-none', createdKey ? 'text-brand' : 'text-muted-foreground')} />
+                    {createdKey ? (
+                      <span className="flex-1 break-all text-[11.5px] leading-relaxed text-foreground">
+                        {createdKey.value}
+                      </span>
+                    ) : (
+                      <input
+                        value={keyName}
+                        onChange={(e) => setKeyName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !creating) {
+                            void handleCreateKey()
+                          }
+                        }}
+                        placeholder={`${DEFAULT_QUICKSTART_API_KEY_NAME} (default)`}
+                        aria-label="Quickstart API key name"
+                        disabled={creating}
+                        className="min-w-0 flex-1 bg-transparent text-[13px] tracking-[0.5px] text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                      />
+                    )}
+                    {createdKey ? (
                       <button
                         type="button"
-                        onClick={() => copyKey(createdKey.value)}
+                        onClick={() => copyText(createdKey.value, 'api-key')}
                         className={cn(
                           'flex-none border px-[11px] py-[6px] text-[10px] uppercase tracking-[1px] transition-colors',
-                          copied
+                          copiedTarget === 'api-key'
                             ? 'border-success text-success'
                             : 'border-border text-muted-foreground hover:text-foreground',
                         )}
                       >
-                        {copied ? '✓ Copied' : 'Copy'}
+                        {copiedTarget === 'api-key' ? '✓ Copied' : 'Copy'}
                       </button>
-                    )}
+                    ) : null}
                   </div>
+                  {!createdKey && (
+                    <div className="mt-[9px] text-[11.5px] leading-relaxed text-muted-foreground">
+                      Leave blank to use <span className="text-foreground">{DEFAULT_QUICKSTART_API_KEY_NAME}</span>.
+                    </div>
+                  )}
                   {createdKey && (
                     <div className="mt-[11px] flex items-start gap-2 text-[11.5px] leading-relaxed text-muted-foreground">
                       <span className="flex-none text-brand">ⓘ</span>
@@ -443,6 +471,18 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
                     <pre className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-foreground">
                       {activeExample.install}
                     </pre>
+                    <button
+                      type="button"
+                      onClick={() => copyText(activeExample.install, 'install')}
+                      className={cn(
+                        'flex-none border px-[11px] py-[6px] text-[10px] uppercase tracking-[1px] transition-colors',
+                        copiedTarget === 'install'
+                          ? 'border-success text-success'
+                          : 'border-border text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      {copiedTarget === 'install' ? '✓ Copied' : 'Copy'}
+                    </button>
                   </div>
                   <div className="mt-[11px] flex items-start gap-2 text-[11.5px] leading-relaxed text-muted-foreground">
                     <span className="flex-none text-brand">ⓘ</span>
@@ -466,6 +506,40 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
 
               {step === 2 && (
                 <div className="px-5 py-[18px]" style={{ animation: 'stat-in .25s ease' }}>
+                  <div className="mb-[14px] grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {LANGS.map((l) => {
+                      const on = language === l.value
+                      const Icon = l.Icon
+                      return (
+                        <button
+                          key={l.value}
+                          type="button"
+                          aria-label={l.ariaLabel}
+                          onClick={() => setLanguage(l.value)}
+                          className={cn(
+                            'flex min-h-[34px] items-center justify-center gap-2 border px-[10px] py-[7px] text-[12px] transition-colors',
+                            on
+                              ? 'border-brand bg-[hsl(var(--brand)/0.12)] font-semibold text-brand'
+                              : 'border-border text-muted-foreground hover:border-brand/70 hover:text-foreground',
+                          )}
+                        >
+                          {l.iconSrc ? (
+                            <img src={l.iconSrc} alt="" className="size-3.5" />
+                          ) : Icon ? (
+                            <Icon className="size-3.5" />
+                          ) : (
+                            <span
+                              aria-hidden="true"
+                              className="flex size-3.5 items-center justify-center border border-current text-[9px] leading-none"
+                            >
+                              {l.badge}
+                            </span>
+                          )}
+                          {l.label}
+                        </button>
+                      )
+                    })}
+                  </div>
                   <div className="mb-[9px] text-[9px] uppercase tracking-[1.5px] text-muted-foreground">
                     Run this from your local machine
                   </div>

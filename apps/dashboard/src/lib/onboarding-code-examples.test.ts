@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { getOnboardingCodeExamples } from './onboarding-code-examples'
+import {
+  getOnboardingCodeExamples,
+  renderOnboardingCodeExample,
+  type OnboardingInterface,
+} from './onboarding-code-examples'
 
 describe('onboarding code examples', () => {
   it('includes SDK, CLI, and REST entrypoints', () => {
@@ -35,7 +39,20 @@ describe('onboarding code examples', () => {
     expect(examples.c.example).toContain('boxlite_create_box')
     expect(examples.c.example).toContain('boxlite_start_box')
     expect(examples.c.example).toContain('boxlite_box_exec')
+    expect(examples.c.example).toContain('pthread_create')
+    expect(examples.c.example).toContain('boxlite_runtime_drain(loop->runtime, 100')
+    expect(examples.c.example).not.toContain('boxlite_runtime_drain(qs->runtime, -1')
+    expect(examples.c.example).toContain('boxlite_execution_stdin_close')
     expect(examples.c.example).toContain('boxlite_remove')
+    expect(examples.c.example).not.toContain('boxlite_options_free(box_options)')
+    expect(examples.c.run).toContain('-pthread')
+
+    expect(examples.python.example).toContain('sdk-quickstart-python-')
+    expect(examples.typescript.example).toContain('sdk-quickstart-node-')
+    expect(examples.go.example).toContain('sdk-quickstart-go-')
+    expect(examples.rust.example).toContain('sdk-quickstart-rust-')
+    expect(examples.rust.example).toContain('let mut exec =')
+    expect(examples.c.example).toContain('sdk-quickstart-c-')
 
     expect(examples.cli.example).toContain('boxlite run --rm --name "sdk-quickstart-cli-$(date +%s)"')
     expect(examples.cli.example).toContain('echo "Hello from BoxLite CLI"')
@@ -60,5 +77,23 @@ command -v jq`)
     expect(examples.rest.setupLabel).toBe('Check REST tools')
     expect(examples.rest.setupDescription).toContain('REST does not require an SDK install')
     expect(examples.rest.setupDescription).toContain('OpenAPI is available')
+  })
+
+  it('injects the generated API key into rendered quickstart examples', () => {
+    const apiKey = 'blk_test_generated_key'
+    const interfaces: OnboardingInterface[] = ['python', 'typescript', 'go', 'rust', 'c', 'cli', 'rest']
+
+    for (const selectedInterface of interfaces) {
+      expect(
+        renderOnboardingCodeExample(selectedInterface, { apiKey, restApiUrl: 'https://dev.boxlite.ai/api' }),
+      ).toContain(apiKey)
+    }
+
+    expect(renderOnboardingCodeExample('cli', { apiKey, restApiUrl: 'https://dev.boxlite.ai/api' })).not.toContain(
+      'Paste your BoxLite API key from Step 1',
+    )
+    expect(renderOnboardingCodeExample('rest', { apiKey, restApiUrl: 'https://dev.boxlite.ai/api' })).not.toContain(
+      'Paste your BoxLite API key from Step 1',
+    )
   })
 })
