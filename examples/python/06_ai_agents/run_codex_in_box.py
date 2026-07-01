@@ -175,7 +175,8 @@ async def install_codex(box) -> None:
 async def run_codex(box, prompt: str, model: str) -> str:
     command = textwrap.dedent(
         f"""
-        export OPENAI_API_KEY="$BOXLITE_SECRET_OPENAI_API_KEY"
+        export OPENAI_API_KEY="${{BOXLITE_SECRET_OPENAI_API_KEY:-<BOXLITE_SECRET:openai_api_key>}}"
+        test -n "$OPENAI_API_KEY"
         export CODEX_HOME=/root/.codex-boxlite
         mkdir -p "$CODEX_HOME"
         printf '%s' "$OPENAI_API_KEY" | codex login --with-api-key >/dev/null
