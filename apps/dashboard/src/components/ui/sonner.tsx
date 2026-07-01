@@ -29,8 +29,10 @@ const Toaster = ({ ...props }: ToasterProps) => {
           toast:
             'group toast font-mono rounded-none group-[.toaster]:rounded-none group-[.toaster]:bg-popover group-[.toaster]:text-foreground group-[.toaster]:border group-[.toaster]:border-border group-[.toaster]:shadow-lg',
           description: '!text-muted-foreground',
-          actionButton: 'rounded-none group-[.toast]:rounded-none group-[.toast]:bg-primary group-[.toast]:text-primary-foreground',
-          cancelButton: 'rounded-none group-[.toast]:rounded-none group-[.toast]:bg-muted group-[.toast]:text-muted-foreground',
+          actionButton:
+            'rounded-none group-[.toast]:rounded-none group-[.toast]:bg-primary group-[.toast]:text-primary-foreground',
+          cancelButton:
+            'rounded-none group-[.toast]:rounded-none group-[.toast]:bg-muted group-[.toast]:text-muted-foreground',
           closeButton: 'rounded-none group-[.toast]:rounded-none group-[.toast]:border',
         },
       }}
