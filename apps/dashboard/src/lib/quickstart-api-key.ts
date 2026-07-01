@@ -11,7 +11,15 @@ export function resolveQuickstartApiKeyBaseName(value: string): string {
 }
 
 export function buildQuickstartApiKeyName(attempt = 0, baseName = DEFAULT_QUICKSTART_API_KEY_NAME): string {
-  return attempt <= 0 ? baseName : `${baseName}-${attempt + 1}`
+  return attempt <= 0 ? baseName : `${baseName}-${randomUuidSuffix()}`
+}
+
+function randomUuidSuffix(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID().replace(/-/g, '').slice(0, 4)
+  }
+
+  return Math.random().toString(36).slice(2, 6).padEnd(4, '0')
 }
 
 export function isApiKeyNameConflict(error: unknown): boolean {
