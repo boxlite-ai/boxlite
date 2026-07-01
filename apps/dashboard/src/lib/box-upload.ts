@@ -37,6 +37,11 @@ export function buildBoxUploadItems(files: File[]): BoxUploadItem[] {
 
   for (const file of files) {
     const relativePath = getBrowserRelativePath(file)
+    if (!relativePath) {
+      items.push(createBoxUploadFileItem(file))
+      continue
+    }
+
     const segments = splitPathSegments(relativePath)
 
     if (segments.length > 1) {
@@ -56,7 +61,19 @@ export function buildBoxUploadItems(files: File[]): BoxUploadItem[] {
     }
   }
 
+  assertUniqueTopLevelUploadNames(items)
   return items
+}
+
+function assertUniqueTopLevelUploadNames(items: BoxUploadItem[]): void {
+  const seenNames = new Set<string>()
+
+  for (const item of items) {
+    if (seenNames.has(item.name)) {
+      throw new Error(`Multiple uploads resolve to the same destination name: ${item.name}`)
+    }
+    seenNames.add(item.name)
+  }
 }
 
 export function createBoxUploadFileItem(file: File): BoxUploadItem {
@@ -132,8 +149,8 @@ function splitPathSegments(path: string): string[] {
   return path.split(/[\\/]+/).filter(Boolean)
 }
 
-function getBrowserRelativePath(file: File): string {
-  return (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
+function getBrowserRelativePath(file: File): string | undefined {
+  return (file as File & { webkitRelativePath?: string }).webkitRelativePath || undefined
 }
 
 function paddingLength(length: number): number {

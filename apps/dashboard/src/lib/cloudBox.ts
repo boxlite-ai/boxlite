@@ -118,10 +118,16 @@ export async function uploadBoxItemViaBoxApi(
   const remotePath = buildBoxUploadPath(destinationDir, item)
   const archive = await createBoxUploadTar(item)
 
-  await api.axiosInstance.put(`${boxesBasePath(organizationId)}/${boxId}/files`, archive, {
-    headers: { 'Content-Type': 'application/x-tar' },
-    params: { path: remotePath },
-  })
+  try {
+    await api.axiosInstance.put(`${boxesBasePath(organizationId)}/${boxId}/files`, archive, {
+      headers: { 'Content-Type': 'application/x-tar' },
+      params: { path: remotePath },
+    })
+  } catch (error) {
+    throw new Error(`Failed to upload Box item to ${remotePath} (org=${organizationId}, box=${boxId})`, {
+      cause: error,
+    })
+  }
 
   return remotePath
 }

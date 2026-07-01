@@ -13,13 +13,15 @@ import {
   type BoxUploadFileEntry,
   type BoxUploadItem,
 } from '@/lib/box-upload'
-import { useRef, useState } from 'react'
+import { useRef, useState, type DragEvent } from 'react'
 
 interface BoxFileUploadControlProps {
   disabled: boolean
   disabledReason?: string
   destinationDir: string
+  isDragging?: boolean
   isUploading: boolean
+  onError: (error: unknown) => void
   onUpload: (items: BoxUploadItem[]) => void
 }
 
@@ -27,11 +29,14 @@ export function BoxFileUploadControl({
   disabled,
   disabledReason,
   destinationDir,
+  isDragging: externalDragging,
   isUploading,
+  onError,
   onUpload,
 }: BoxFileUploadControlProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const [isDragging, setIsDragging] = useState(false)
+  const [isLocalDragging, setIsLocalDragging] = useState(false)
+  const isDragging = externalDragging ?? isLocalDragging
   const isDisabled = disabled || isUploading
 
   const submitItems = (items: BoxUploadItem[]) => {
@@ -42,12 +47,29 @@ export function BoxFileUploadControl({
   const submitFiles = (fileList: FileList | File[] | null | undefined) => {
     const files = Array.from(fileList ?? [])
     if (files.length === 0) return
-    submitItems(buildBoxUploadItems(files))
+    try {
+      submitItems(buildBoxUploadItems(files))
+    } catch (error) {
+      onError(error)
+    }
   }
 
   const openFilePicker = () => {
     if (isDisabled) return
     fileInputRef.current?.click()
+  }
+
+  const handleDrop = async (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    setIsLocalDragging(false)
+    if (isDisabled) return
+
+    try {
+      submitItems(await buildDroppedUploadItems(event.dataTransfer))
+    } catch (error) {
+      onError(error)
+    }
   }
 
   return (
@@ -60,22 +82,17 @@ export function BoxFileUploadControl({
       ].join(' ')}
       onDragEnter={(event) => {
         event.preventDefault()
-        if (!isDisabled) setIsDragging(true)
+        if (!isDisabled) setIsLocalDragging(true)
       }}
       onDragOver={(event) => {
         event.preventDefault()
-        if (!isDisabled) setIsDragging(true)
+        if (!isDisabled) setIsLocalDragging(true)
       }}
       onDragLeave={(event) => {
         event.preventDefault()
-        setIsDragging(false)
+        setIsLocalDragging(false)
       }}
-      onDrop={async (event) => {
-        event.preventDefault()
-        setIsDragging(false)
-        if (isDisabled) return
-        submitItems(await buildDroppedUploadItems(event.dataTransfer))
-      }}
+      onDrop={handleDrop}
     >
       <input
         ref={fileInputRef}
@@ -139,7 +156,7 @@ type WebkitDataTransferItem = DataTransferItem & {
   webkitGetAsEntry?: () => unknown
 }
 
-async function buildDroppedUploadItems(dataTransfer: DataTransfer): Promise<BoxUploadItem[]> {
+export async function buildDroppedUploadItems(dataTransfer: DataTransfer): Promise<BoxUploadItem[]> {
   const entries = Array.from(dataTransfer.items ?? [])
     .map((item) => ((item as WebkitDataTransferItem).webkitGetAsEntry?.() ?? null) as UploadFileSystemEntry | null)
     .filter((entry): entry is UploadFileSystemEntry => Boolean(entry))

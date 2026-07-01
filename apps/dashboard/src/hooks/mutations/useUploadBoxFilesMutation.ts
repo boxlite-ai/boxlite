@@ -17,35 +17,51 @@ interface UploadBoxFilesVariables {
   items: BoxUploadItem[]
 }
 
+interface UploadBoxFilesResult {
+  organizationId: string
+  uploadedPaths: string[]
+}
+
+interface UploadBoxFilesContext {
+  organizationId?: string
+}
+
 export const useUploadBoxFilesMutation = () => {
   const api = useApi()
   const { selectedOrganization } = useSelectedOrganization()
   const queryClient = useQueryClient()
 
-  const invalidateBoxDetail = (boxId: string, detailRef?: string) => {
+  const invalidateBoxDetail = (organizationId: string, boxId: string, detailRef?: string) => {
     queryClient.invalidateQueries({
-      queryKey: queryKeys.boxes.detail(selectedOrganization?.id ?? '', boxId),
+      queryKey: queryKeys.boxes.detail(organizationId, boxId),
     })
     if (detailRef && detailRef !== boxId) {
       queryClient.invalidateQueries({
-        queryKey: queryKeys.boxes.detail(selectedOrganization?.id ?? '', detailRef),
+        queryKey: queryKeys.boxes.detail(organizationId, detailRef),
       })
     }
   }
 
-  return useMutation({
+  return useMutation<UploadBoxFilesResult, unknown, UploadBoxFilesVariables, UploadBoxFilesContext>({
+    onMutate: () => ({
+      organizationId: selectedOrganization?.id,
+    }),
     mutationFn: async ({ boxId, items, destinationDir = DEFAULT_BOX_UPLOAD_DIR }: UploadBoxFilesVariables) => {
-      if (!selectedOrganization?.id) throw new Error('Missing organization')
+      const organizationId = selectedOrganization?.id
+      if (!organizationId) {
+        throw new Error(`Cannot upload files to box ${boxId}: no organization selected`)
+      }
 
       const uploadedPaths: string[] = []
       for (const item of items) {
-        uploadedPaths.push(await uploadBoxItemViaBoxApi(api, selectedOrganization.id, boxId, item, destinationDir))
+        uploadedPaths.push(await uploadBoxItemViaBoxApi(api, organizationId, boxId, item, destinationDir))
       }
-      return uploadedPaths
+      return { organizationId, uploadedPaths }
     },
-    onSettled: (_data, _error, variables) => {
-      if (variables) {
-        invalidateBoxDetail(variables.boxId, variables.detailRef)
+    onSettled: (data, _error, variables, context) => {
+      const organizationId = data?.organizationId ?? context?.organizationId
+      if (variables && organizationId) {
+        invalidateBoxDetail(organizationId, variables.boxId, variables.detailRef)
       }
     },
   })

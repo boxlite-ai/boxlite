@@ -50,6 +50,12 @@ describe('box upload helpers', () => {
     expect(item.files.map((entry) => entry.relativePath)).toEqual(['src/index.ts', 'README.md'])
   })
 
+  it('rejects upload items with colliding top-level destination names', () => {
+    expect(() => buildBoxUploadItems([new File(['one'], 'report.txt'), new File(['two'], './report.txt')])).toThrow(
+      'Multiple uploads resolve to the same destination name: report.txt',
+    )
+  })
+
   it('creates a folder tar with relative file paths', async () => {
     const [item] = buildBoxUploadItems([
       fileWithRelativePath('one', 'project/src/index.ts'),

@@ -67,4 +67,18 @@ describe('uploadFileToBoxViaBoxApi', () => {
       params: { path: '/workspace/project' },
     })
   })
+
+  it('wraps upload request failures with box and path context', async () => {
+    const requestError = new Error('network down')
+    const put = vi.fn().mockRejectedValue(requestError)
+    const api = { axiosInstance: { put } } as never
+    const item = createBoxUploadDirectoryItem('project', [
+      { file: new File(['payload'], 'index.ts'), relativePath: 'src/index.ts' },
+    ])
+
+    await expect(uploadBoxItemViaBoxApi(api, 'org-1', 'box-1', item, '/workspace')).rejects.toMatchObject({
+      message: 'Failed to upload Box item to /workspace/project (org=org-1, box=box-1)',
+      cause: requestError,
+    })
+  })
 })
