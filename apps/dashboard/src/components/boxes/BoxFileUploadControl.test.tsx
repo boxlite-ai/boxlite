@@ -15,12 +15,6 @@ vi.mock('@/components/ui/tooltip', () => ({
   TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
 }))
 
-function required<T extends Element>(selector: string): T {
-  const element = document.querySelector<T>(selector)
-  if (!element) throw new Error(`Missing expected element: ${selector}`)
-  return element
-}
-
 describe('BoxFileUploadControl', () => {
   let root: Root | null = null
 
@@ -37,16 +31,36 @@ describe('BoxFileUploadControl', () => {
     vi.clearAllMocks()
   })
 
-  function renderControl(onUpload = vi.fn()) {
+  function renderControl(onUpload = vi.fn(), onError = vi.fn()) {
     const host = document.createElement('div')
     document.body.appendChild(host)
     act(() => {
       root = createRoot(host)
       root.render(
-        <BoxFileUploadControl disabled={false} destinationDir="/workspace" isUploading={false} onUpload={onUpload} />,
+        <BoxFileUploadControl
+          disabled={false}
+          destinationDir="/workspace"
+          isUploading={false}
+          onError={onError}
+          onUpload={onUpload}
+        />,
       )
     })
-    return onUpload
+    return { onError, onUpload }
+  }
+
+  function createDragEvent(type: string, dataTransfer?: Partial<DataTransfer>): Event {
+    const event = new Event(type, { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'dataTransfer', {
+      configurable: true,
+      value: dataTransfer ?? { files: [], items: [] },
+    })
+    return event
+  }
+
+  async function flushAsyncDrop() {
+    await Promise.resolve()
+    await Promise.resolve()
   }
 
   it('shows where uploaded files land before the user selects anything', () => {
@@ -58,8 +72,19 @@ describe('BoxFileUploadControl', () => {
     expect(document.body.textContent).toContain('Drop files or folders here')
   })
 
+  it('shows the fixed workspace target while files are dragging over the upload target', () => {
+    renderControl()
+    const dropTarget = document.querySelector<HTMLElement>('[data-testid="box-file-drop-target"]')
+
+    act(() => {
+      dropTarget?.dispatchEvent(createDragEvent('dragenter'))
+    })
+
+    expect(document.body.textContent).toContain('Drop to upload into /workspace')
+  })
+
   it('passes selected files from the hidden file picker', () => {
-    const onUpload = renderControl()
+    const { onUpload } = renderControl()
     const file = new File(['hello'], 'note.txt', { type: 'text/plain' })
     const input = document.querySelectorAll<HTMLInputElement>('input[type="file"]')[0]
 
@@ -80,10 +105,8 @@ describe('BoxFileUploadControl', () => {
     ])
   })
 
-  it('passes dropped folders with relative paths', async () => {
-    const onUpload = renderControl()
+  it('builds dropped folders with relative paths', async () => {
     const file = new File(['hello'], 'note.txt', { type: 'text/plain' })
-    const dropTarget = required<HTMLElement>('[data-testid="box-file-drop-target"]')
     const noteEntry = {
       isDirectory: false,
       isFile: true,
@@ -113,16 +136,17 @@ describe('BoxFileUploadControl', () => {
       }),
     }
 
+    const { onUpload } = renderControl()
+    const dropTarget = document.querySelector<HTMLElement>('[data-testid="box-file-drop-target"]')
+
     await act(async () => {
-      const event = new Event('drop', { bubbles: true })
-      Object.defineProperty(event, 'dataTransfer', {
-        configurable: true,
-        value: {
-          files: [],
-          items: [{ webkitGetAsEntry: () => projectEntry }],
-        },
-      })
-      dropTarget.dispatchEvent(event)
+      dropTarget?.dispatchEvent(
+        createDragEvent('drop', {
+          files: [] as unknown as FileList,
+          items: [{ webkitGetAsEntry: () => projectEntry }] as unknown as DataTransferItemList,
+        }),
+      )
+      await flushAsyncDrop()
     })
 
     expect(onUpload).toHaveBeenCalledWith([
@@ -134,24 +158,14 @@ describe('BoxFileUploadControl', () => {
     ])
   })
 
-  it('passes dropped files and reveals the drop target', async () => {
-    const onUpload = renderControl()
+  it('builds dropped files when directory entries are unavailable', async () => {
+    const { onUpload } = renderControl()
     const file = new File(['payload'], 'archive.zip', { type: 'application/zip' })
-    const dropTarget = required<HTMLElement>('[data-testid="box-file-drop-target"]')
-
-    act(() => {
-      dropTarget.dispatchEvent(new Event('dragenter', { bubbles: true }))
-    })
-
-    expect(document.body.textContent).toContain('Drop to upload into /workspace')
+    const dropTarget = document.querySelector<HTMLElement>('[data-testid="box-file-drop-target"]')
 
     await act(async () => {
-      const event = new Event('drop', { bubbles: true })
-      Object.defineProperty(event, 'dataTransfer', {
-        configurable: true,
-        value: { files: [file] },
-      })
-      dropTarget.dispatchEvent(event)
+      dropTarget?.dispatchEvent(createDragEvent('drop', { files: [file] as unknown as FileList }))
+      await flushAsyncDrop()
     })
 
     expect(onUpload).toHaveBeenCalledWith([
@@ -161,5 +175,33 @@ describe('BoxFileUploadControl', () => {
         files: [{ file, relativePath: 'archive.zip' }],
       }),
     ])
+  })
+
+  it('surfaces dropped folder read failures', async () => {
+    const { onError, onUpload } = renderControl()
+    const readError = new DOMException('not readable', 'NotReadableError')
+    const folderEntry = {
+      isDirectory: true,
+      isFile: false,
+      name: 'project',
+      createReader: () => ({
+        readEntries: (_resolve: (entries: unknown[]) => void, reject: (error: DOMException) => void) =>
+          reject(readError),
+      }),
+    }
+    const dropTarget = document.querySelector<HTMLElement>('[data-testid="box-file-drop-target"]')
+
+    await act(async () => {
+      dropTarget?.dispatchEvent(
+        createDragEvent('drop', {
+          files: [] as unknown as FileList,
+          items: [{ webkitGetAsEntry: () => folderEntry }] as unknown as DataTransferItemList,
+        }),
+      )
+      await flushAsyncDrop()
+    })
+
+    expect(onError).toHaveBeenCalledWith(readError)
+    expect(onUpload).not.toHaveBeenCalled()
   })
 })

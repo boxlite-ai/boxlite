@@ -249,7 +249,7 @@ export default function BoxDetails() {
   const handleUploadFiles = async (items: BoxUploadItem[]) => {
     if (!box || items.length === 0) return
     try {
-      const uploadedPaths = await uploadMutation.mutateAsync({
+      const { uploadedPaths } = await uploadMutation.mutateAsync({
         boxId: box.id,
         detailRef: boxId,
         destinationDir: DEFAULT_BOX_UPLOAD_DIR,
@@ -263,6 +263,10 @@ export default function BoxDetails() {
     } catch (error) {
       handleApiError(error, 'Failed to upload files')
     }
+  }
+
+  const handleUploadInputError = (error: unknown) => {
+    handleApiError(error, 'Failed to prepare upload')
   }
 
   const handleRefresh = () => {
@@ -482,7 +486,7 @@ export default function BoxDetails() {
             </div>
 
             {/* shell / terminal */}
-            <div className="flex h-[60vh] flex-none flex-col border border-border bg-[hsl(var(--code-background))] lg:h-auto lg:min-h-0 lg:flex-1">
+            <div className="flex h-[60vh] flex-none flex-col border border-border bg-[hsl(var(--code-background))] transition-colors lg:h-auto lg:min-h-0 lg:flex-1">
               <div className="flex flex-none flex-col gap-3 border-b border-dashed border-border px-5 py-[13px] sm:flex-row sm:items-center sm:justify-between">
                 <span className="flex items-center gap-[9px] text-[11px] uppercase tracking-[2px]">
                   <span className="size-[6px] flex-none bg-brand" />
@@ -492,10 +496,11 @@ export default function BoxDetails() {
                   </span>
                 </span>
                 <BoxFileUploadControl
-                  disabled={actionsDisabled || !writePermitted || !isStoppable(box)}
+                  disabled={uploadDisabledReason !== undefined}
                   disabledReason={uploadDisabledReason}
                   destinationDir={DEFAULT_BOX_UPLOAD_DIR}
                   isUploading={uploadMutation.isPending}
+                  onError={handleUploadInputError}
                   onUpload={handleUploadFiles}
                 />
               </div>
