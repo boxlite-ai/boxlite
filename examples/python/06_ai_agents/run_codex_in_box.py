@@ -37,13 +37,16 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
     import tomli as tomllib  # type: ignore[no-redef]
 
 
-DEFAULT_IMAGE = os.getenv("BOXLITE_CODEX_IMAGE", "node:20-bookworm-slim")
+DEFAULT_IMAGE = os.getenv("BOXLITE_CODEX_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-node:20260605-p0-r3")
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 DEFAULT_ENV_FILE = Path(os.getenv("BOXLITE_OPENAI_ENV_FILE", "~/.config/boxlite/e2e-openai.env")).expanduser()
 DEFAULT_PROFILE = os.getenv("BOXLITE_E2E_PROFILE") or os.getenv("BOXLITE_PROFILE") or "p1"
+DEFAULT_DIRECT_KEY = os.getenv("BOXLITE_CODEX_SECRET_PASSTHROUGH", "").lower() not in ("1", "true", "yes", "on")
 CODE_SMOKE_PROMPT = (
-    "Create /workspace/fib.js. It must read n from process.argv[2], compute fibonacci(n), "
-    "print only the number, then run `node /workspace/fib.js 10` and ensure it prints 55."
+    "Create /workspace/fib.js. The file must read n from process.argv[2], compute fibonacci(n), "
+    "and call console.log(String(result)) so stdout is exactly the number plus a newline. "
+    "Run `node /workspace/fib.js 10`; if stdout is not exactly 55, fix the file and rerun it. "
+    "Do not finish until `node /workspace/fib.js 10` prints exactly 55."
 )
 
 
@@ -66,6 +69,15 @@ def load_env_file(path: Path) -> dict[str, str]:
         if key:
             values[key] = value
     return values
+
+
+def print_openai_auth_help(env_file: Path) -> None:
+    print("ERROR: OPENAI_API_KEY not set")
+    print("Run: export OPENAI_API_KEY='sk-...'")
+    print(f"Or create {env_file}:")
+    print("  mkdir -p ~/.config/boxlite")
+    print(f"  printf 'export BOXLITE_E2E_OPENAI_API_KEY=\"sk-...\"\\n' > {env_file}")
+    print(f"  chmod 600 {env_file}")
 
 
 def openai_api_key(env_file: Path) -> str | None:
@@ -95,12 +107,25 @@ def discover_path_prefix(url: str, token: str) -> str:
 def rest_runtime_from_profile(profile_name: str):
     path = credentials_path()
     if not path.exists():
-        raise SystemExit(f"{path} is missing; configure a cloud profile first")
+        print(f"ERROR: {path} is missing")
+        print("Create a cloud REST profile first, for example:")
+        print("")
+        print("  mkdir -p ~/.boxlite")
+        print("  cat > ~/.boxlite/credentials.toml <<'EOF'")
+        print("  [profiles.p1]")
+        print('  url = "https://api.dev.boxlite.ai/api"')
+        print('  api_key = "<boxlite-api-key>"')
+        print('  auth_method = "api_key"')
+        print("  EOF")
+        raise SystemExit(1)
 
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     profile = data.get("profiles", {}).get(profile_name)
     if not profile:
-        raise SystemExit(f"profile {profile_name!r} not found in {path}")
+        print(f"ERROR: profile {profile_name!r} not found in {path}")
+        print(f"Run: export BOXLITE_PROFILE='{profile_name}'")
+        print(f"Or pass: --profile {profile_name}")
+        raise SystemExit(1)
 
     url = os.getenv("BOXLITE_E2E_API_URL") or profile.get("url")
     token = (
@@ -110,7 +135,14 @@ def rest_runtime_from_profile(profile_name: str):
         or profile.get("access_token")
     )
     if not url or not token:
-        raise SystemExit(f"profile {profile_name!r} must include url and api_key/access_token")
+        print(f"ERROR: profile {profile_name!r} must include url and api_key/access_token")
+        print("For API-key auth, the profile should look like:")
+        print("")
+        print(f"  [profiles.{profile_name}]")
+        print('  url = "https://api.dev.boxlite.ai/api"')
+        print('  api_key = "<boxlite-api-key>"')
+        print('  auth_method = "api_key"')
+        raise SystemExit(1)
 
     explicit_prefix = os.getenv("BOXLITE_E2E_PREFIX")
     if explicit_prefix is not None:
@@ -219,7 +251,9 @@ async def verify_code_smoke(box) -> None:
         "sh",
         [
             "-lc",
-            "test -f /workspace/fib.js && node /workspace/fib.js 10",
+            "set -eu\n"
+            "test -f /workspace/fib.js\n"
+            "node /workspace/fib.js 10\n",
         ],
         timeout=60,
         stream=True,
@@ -227,7 +261,17 @@ async def verify_code_smoke(box) -> None:
     if exit_code != 0:
         raise RuntimeError(f"Codex code smoke verification failed\nstdout={stdout}\nstderr={stderr}")
     if stdout.strip() != "55":
-        raise RuntimeError(f"Codex code smoke printed {stdout.strip()!r}, expected '55'")
+        _, file_contents, _ = await run(
+            box,
+            "sh",
+            ["-lc", "cat /workspace/fib.js"],
+            timeout=30,
+            stream=True,
+        )
+        raise RuntimeError(
+            "Codex code smoke printed "
+            f"{stdout.strip()!r}, expected '55'\n/workspace/fib.js:\n{file_contents}"
+        )
     print("Verified: /workspace/fib.js prints 55", flush=True)
 
 
@@ -241,7 +285,14 @@ async def main() -> int:
     parser.add_argument(
         "--unsafe-direct-api-key",
         action="store_true",
-        help="Pass the plaintext OpenAI API key into the box to verify Codex CLI itself; do not use for secret-passthrough validation.",
+        default=DEFAULT_DIRECT_KEY,
+        help="Pass the plaintext OpenAI API key into the box to verify Codex CLI itself; this is the default until secret passthrough supports Codex.",
+    )
+    parser.add_argument(
+        "--secret-passthrough",
+        action="store_false",
+        dest="unsafe_direct_api_key",
+        help="Use the BoxLite secret placeholder instead of passing the plaintext key into the box.",
     )
     parser.add_argument(
         "--code-smoke",
@@ -253,9 +304,13 @@ async def main() -> int:
 
     api_key = openai_api_key(args.env_file.expanduser())
     if not api_key:
-        raise SystemExit(f"OPENAI_API_KEY is required on the host or in {args.env_file}")
+        print_openai_auth_help(args.env_file.expanduser())
+        raise SystemExit(1)
 
     runtime = rest_runtime_from_profile(args.profile)
+    if args.unsafe_direct_api_key:
+        print("WARNING: using plaintext OPENAI_API_KEY inside the box for this smoke test.", flush=True)
+        print("         Pass --secret-passthrough to test BoxLite secret substitution instead.", flush=True)
     box = await runtime.create(
         boxlite.BoxOptions(
             image=args.image,

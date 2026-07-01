@@ -154,7 +154,6 @@ LLM-backed agent can run inside a box:
 ```bash
 export OPENAI_API_KEY="sk-..."
 python examples/python/06_ai_agents/run_codex_in_box.py \
-  --profile p1 \
   "Reply exactly: codex inside box works"
 ```
 
@@ -172,14 +171,12 @@ directly into the box:
 
 ```bash
 python examples/python/06_ai_agents/run_codex_in_box.py \
-  --profile p1 \
-  --image ghcr.io/boxlite-ai/boxlite-agent-node:20260605-p0-r3 \
-  --env-file ~/.config/boxlite/e2e-openai.env \
-  --unsafe-direct-api-key \
   --code-smoke
 ```
 
-This unsafe mode is only for manual smoke testing because the plaintext API key
-is visible inside the box. The `--code-smoke` path asks Codex to create
+This direct-key mode is the default for manual smoke testing because current
+cloud secret passthrough does not yet cover Codex's Responses API path. The
+plaintext API key is visible inside the box. Pass `--secret-passthrough` to test
+BoxLite secret substitution instead. The `--code-smoke` path asks Codex to create
 `/workspace/fib.js`, run it, and then verifies the file by running
 `node /workspace/fib.js 10` inside the same box.
