@@ -23,16 +23,24 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import textwrap
+import urllib.request
 from pathlib import Path
 
 import boxlite
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
+    import tomli as tomllib  # type: ignore[no-redef]
 
 
 DEFAULT_IMAGE = os.getenv("BOXLITE_CODEX_IMAGE", "node:20-bookworm-slim")
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 DEFAULT_ENV_FILE = Path(os.getenv("BOXLITE_OPENAI_ENV_FILE", "~/.config/boxlite/e2e-openai.env")).expanduser()
+DEFAULT_PROFILE = os.getenv("BOXLITE_E2E_PROFILE") or os.getenv("BOXLITE_PROFILE") or "p1"
 
 
 def load_env_file(path: Path) -> dict[str, str]:
@@ -64,29 +72,87 @@ def openai_api_key(env_file: Path) -> str | None:
     return values.get("OPENAI_API_KEY") or values.get("BOXLITE_E2E_OPENAI_API_KEY")
 
 
-async def drain(execution) -> tuple[str, str]:
+def credentials_path() -> Path:
+    if os.getenv("BOXLITE_HOME"):
+        return Path(os.environ["BOXLITE_HOME"]) / "credentials.toml"
+    return Path.home() / ".boxlite" / "credentials.toml"
+
+
+def discover_path_prefix(url: str, token: str) -> str:
+    request = urllib.request.Request(
+        f"{url.rstrip('/')}/v1/me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        body = json.loads(response.read() or "null")
+    return (body or {}).get("path_prefix") or ""
+
+
+def rest_runtime_from_profile(profile_name: str):
+    path = credentials_path()
+    if not path.exists():
+        raise SystemExit(f"{path} is missing; configure a cloud profile first")
+
+    data = tomllib.loads(path.read_text(encoding="utf-8"))
+    profile = data.get("profiles", {}).get(profile_name)
+    if not profile:
+        raise SystemExit(f"profile {profile_name!r} not found in {path}")
+
+    url = os.getenv("BOXLITE_E2E_API_URL") or profile.get("url")
+    token = (
+        os.getenv("BOXLITE_E2E_API_KEY")
+        or profile.get("api_key")
+        or os.getenv("BOXLITE_E2E_OIDC_TOKEN")
+        or profile.get("access_token")
+    )
+    if not url or not token:
+        raise SystemExit(f"profile {profile_name!r} must include url and api_key/access_token")
+
+    explicit_prefix = os.getenv("BOXLITE_E2E_PREFIX")
+    if explicit_prefix is not None:
+        path_prefix = explicit_prefix
+    elif os.getenv("BOXLITE_E2E_DISCOVER_PREFIX", "1") != "0":
+        path_prefix = discover_path_prefix(url, token)
+    else:
+        path_prefix = profile.get("path_prefix") or ""
+
+    print(f"Runtime: REST profile={profile_name} url={url} prefix={path_prefix or '<none>'}", flush=True)
+    return boxlite.Boxlite.rest(
+        boxlite.BoxliteRestOptions(
+            url=url,
+            credential=boxlite.ApiKeyCredential(token),
+            path_prefix=path_prefix,
+        )
+    )
+
+
+async def drain(execution, *, stream: bool = False) -> tuple[str, str]:
     stdout_chunks: list[str] = []
     stderr_chunks: list[str] = []
 
-    async def collect(stream, chunks: list[str]) -> None:
-        async for chunk in stream:
+    async def collect(source, chunks: list[str], label: str) -> None:
+        async for chunk in source:
             chunks.append(chunk.decode() if isinstance(chunk, bytes) else str(chunk))
+            if stream:
+                print(f"[{label}] {chunks[-1]}", end="", flush=True)
 
     await asyncio.gather(
-        collect(execution.stdout(), stdout_chunks),
-        collect(execution.stderr(), stderr_chunks),
+        collect(execution.stdout(), stdout_chunks, "stdout"),
+        collect(execution.stderr(), stderr_chunks, "stderr"),
     )
     return "".join(stdout_chunks), "".join(stderr_chunks)
 
 
-async def run(box, command: str, args: list[str], timeout: int = 300) -> tuple[int, str, str]:
+async def run(box, command: str, args: list[str], timeout: int = 300, *, stream: bool = False) -> tuple[int, str, str]:
+    print(f"$ {command} {' '.join(args)}", flush=True)
     execution = await box.exec(command, args, None)
-    stdout, stderr = await drain(execution)
+    stdout, stderr = await drain(execution, stream=stream)
     result = await asyncio.wait_for(execution.wait(), timeout=timeout)
     return result.exit_code, stdout, stderr
 
 
 async def install_codex(box) -> None:
+    print("Installing Codex CLI inside the box...", flush=True)
     exit_code, stdout, stderr = await run(
         box,
         "sh",
@@ -95,6 +161,7 @@ async def install_codex(box) -> None:
             "command -v codex >/dev/null 2>&1 || npm install -g @openai/codex",
         ],
         timeout=600,
+        stream=True,
     )
     if exit_code != 0:
         raise RuntimeError(f"failed to install Codex CLI\nstdout={stdout}\nstderr={stderr}")
@@ -135,6 +202,7 @@ async def main() -> int:
     parser.add_argument("--image", default=DEFAULT_IMAGE)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--env-file", type=Path, default=DEFAULT_ENV_FILE)
+    parser.add_argument("--profile", default=DEFAULT_PROFILE, help="Cloud REST profile from ~/.boxlite/credentials.toml")
     parser.add_argument("--keep-box", action="store_true", help="Keep the box after the run for inspection")
     args = parser.parse_args()
 
@@ -142,7 +210,7 @@ async def main() -> int:
     if not api_key:
         raise SystemExit(f"OPENAI_API_KEY is required on the host or in {args.env_file}")
 
-    runtime = boxlite.Boxlite.default()
+    runtime = rest_runtime_from_profile(args.profile)
     box = await runtime.create(
         boxlite.BoxOptions(
             image=args.image,

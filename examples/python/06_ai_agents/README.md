@@ -81,12 +81,15 @@ logs in with a BoxLite secret-backed API key, and runs `codex exec`:
 
 ```bash
 python examples/python/06_ai_agents/run_codex_in_box.py \
+  --profile p1 \
   "Reply exactly: codex inside box works"
 ```
 
 The script reads `OPENAI_API_KEY` from the current environment first, then
 falls back to `~/.config/boxlite/e2e-openai.env` (`OPENAI_API_KEY` or
-`BOXLITE_E2E_OPENAI_API_KEY`). Use `--env-file` to point at another file.
+`BOXLITE_E2E_OPENAI_API_KEY`). Use `--env-file` to point at another file. The
+box is created through the cloud REST profile from `~/.boxlite/credentials.toml`;
+use `--profile`, `BOXLITE_E2E_PROFILE`, or `BOXLITE_PROFILE` to select it.
 
 The box receives `BOXLITE_SECRET_OPENAI_API_KEY=<BOXLITE_SECRET:openai_api_key>`;
 `codex login --with-api-key` stores that placeholder in the box, and gvproxy
@@ -151,6 +154,7 @@ LLM-backed agent can run inside a box:
 ```bash
 export OPENAI_API_KEY="sk-..."
 python examples/python/06_ai_agents/run_codex_in_box.py \
+  --profile p1 \
   "Reply exactly: codex inside box works"
 ```
 
