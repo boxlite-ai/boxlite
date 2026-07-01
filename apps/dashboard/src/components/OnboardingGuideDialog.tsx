@@ -9,12 +9,13 @@ import pythonIcon from '@/assets/python.svg'
 import rustIcon from '@/assets/rust.svg'
 import typescriptIcon from '@/assets/typescript.svg'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Server, Terminal } from '@/components/ui/icon'
 import { useApi } from '@/hooks/useApi'
 import { useConfig } from '@/hooks/useConfig'
 import { getRestApiUrl } from '@/lib/environment'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
-import { getOnboardingCodeExamples, type OnboardingLanguage } from '@/lib/onboarding-code-examples'
+import { getOnboardingCodeExamples, type OnboardingInterface } from '@/lib/onboarding-code-examples'
 import { setLocalStorageItem } from '@/lib/local-storage'
 import { cn } from '@/lib/utils'
 import type { OnboardingProgress } from '@/lib/onboarding-progress'
@@ -40,7 +41,7 @@ interface OnboardingGuideDialogProps {
 
 const STAGES = [
   { tag: 'STEP 01', label: 'Create a key' },
-  { tag: 'STEP 02', label: 'Install the SDK' },
+  { tag: 'STEP 02', label: 'Install SDK/CLI' },
   { tag: 'STEP 03', label: 'Execute code in box' },
 ] as const
 
@@ -52,17 +53,27 @@ const SCENARIOS = [
     tag: 'Box',
     title: 'Box as your untrusted code container',
     description:
-      'Run AI-generated or untrusted code in an isolated, disposable Box. Create a key, install the SDK, then execute code safely inside a box.',
+      'Run AI-generated or untrusted code in an isolated, disposable Box. Create a key, choose an interface, then execute code safely inside a box.',
   },
 ] as const
 
 type ScenarioId = (typeof SCENARIOS)[number]['id']
 
-const LANGS: { value: OnboardingLanguage; label: string; iconSrc: string }[] = [
+const LANGS: {
+  value: OnboardingInterface
+  label: string
+  ariaLabel?: string
+  iconSrc?: string
+  badge?: string
+  Icon?: React.ComponentType<{ className?: string }>
+}[] = [
   { value: 'python', label: 'Python', iconSrc: pythonIcon },
   { value: 'typescript', label: 'Node', iconSrc: typescriptIcon },
   { value: 'go', label: 'Go', iconSrc: goIcon },
   { value: 'rust', label: 'Rust', iconSrc: rustIcon },
+  { value: 'c', label: 'SDK', ariaLabel: 'C SDK', badge: 'C' },
+  { value: 'cli', label: 'CLI', Icon: Terminal },
+  { value: 'rest', label: 'REST', Icon: Server },
 ]
 
 function PrimaryBtn({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {
@@ -77,7 +88,7 @@ function PrimaryBtn({ children, onClick }: { children: React.ReactNode; onClick:
   )
 }
 
-export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange, progress }: OnboardingGuideDialogProps) {
+export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: OnboardingGuideDialogProps) {
   const { apiKeyApi } = useApi()
   const { apiUrl } = useConfig()
   const restApiUrl = getRestApiUrl(apiUrl)
@@ -87,17 +98,41 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange, pr
   const [scenario, setScenario] = useState<ScenarioId | null>(null)
   const [step, setStep] = useState(0)
   const [done, setDone] = useState<[boolean, boolean, boolean]>([false, false, false])
-  const [language, setLanguage] = useState<OnboardingLanguage>('python')
+  const [language, setLanguage] = useState<OnboardingInterface>('python')
   const [createdKey, setCreatedKey] = useState<ApiKeyResponse | null>(null)
   const [creating, setCreating] = useState(false)
   const [copied, setCopied] = useState(false)
 
   const codeExamples = getOnboardingCodeExamples()
   const activeExample = codeExamples[language]
+  const activeInterface = LANGS.find((l) => l.value === language)
   const renderedExample = useMemo(
     () => activeExample.example.replaceAll('your-api-url', restApiUrl),
     [activeExample.example, restApiUrl],
   )
+  const executionDescription =
+    language === 'c' ? (
+      <>
+        What it does: compiles a C program that reads your <span className="text-foreground">BOXLITE_API_KEY</span>,
+        creates a Box, runs a command inside it, prints stdout, then removes the Box.
+      </>
+    ) : language === 'cli' ? (
+      <>
+        What it does: reads your <span className="text-foreground">BOXLITE_API_KEY</span> and{' '}
+        <span className="text-foreground">BOXLITE_REST_URL</span>, runs one command in a disposable Box, then removes
+        it.
+      </>
+    ) : language === 'rest' ? (
+      <>
+        What it does: reads your <span className="text-foreground">BOXLITE_API_KEY</span>, calls the REST API to create
+        and start a Box, executes a command, prints execution status, then removes the Box.
+      </>
+    ) : (
+      <>
+        What it does: reads your <span className="text-foreground">BOXLITE_API_KEY</span> from the environment, creates
+        a Box, runs a command inside it, prints the output, then removes the Box.
+      </>
+    )
 
   const apiKeyPermissions = useMemo(() => {
     if (!canCreateApiKey) return []
@@ -202,7 +237,7 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange, pr
                   >
                     <div className="text-[13px] font-semibold leading-snug">{sc.title}</div>
                     <div className="mt-[6px] font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">
-                      3 steps · sdk
+                      3 steps · sdk/api
                     </div>
                     <div className="mt-auto flex items-center gap-[7px] pt-4 font-mono text-[11px] uppercase tracking-[1.5px]">
                       Start
@@ -278,7 +313,7 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange, pr
                       </span>
                       <span
                         className={cn(
-                          'whitespace-nowrap text-[12px]',
+                          'hidden whitespace-nowrap text-[12px] sm:inline',
                           active
                             ? 'font-semibold text-foreground'
                             : isDone
@@ -366,40 +401,59 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange, pr
 
               {step === 1 && (
                 <div className="px-5 py-[18px]" style={{ animation: 'stat-in .25s ease' }}>
-                  <div className="mb-[14px] flex border-b border-border">
+                  <div className="mb-[14px] grid grid-cols-2 gap-2 sm:grid-cols-4">
                     {LANGS.map((l) => {
                       const on = language === l.value
+                      const Icon = l.Icon
                       return (
                         <button
                           key={l.value}
                           type="button"
+                          aria-label={l.ariaLabel}
                           onClick={() => setLanguage(l.value)}
                           className={cn(
-                            '-mb-px flex items-center gap-2 border-b-2 px-[14px] py-[7px] text-[12px] transition-colors',
+                            'flex min-h-[34px] items-center justify-center gap-2 border px-[10px] py-[7px] text-[12px] transition-colors',
                             on
-                              ? 'border-brand font-semibold text-foreground'
-                              : 'border-transparent text-muted-foreground',
+                              ? 'border-brand bg-[hsl(var(--brand)/0.12)] font-semibold text-brand'
+                              : 'border-border text-muted-foreground hover:border-brand/70 hover:text-foreground',
                           )}
                         >
-                          <img src={l.iconSrc} alt="" className="size-3.5" />
+                          {l.iconSrc ? (
+                            <img src={l.iconSrc} alt="" className="size-3.5" />
+                          ) : Icon ? (
+                            <Icon className="size-3.5" />
+                          ) : (
+                            <span
+                              aria-hidden="true"
+                              className="flex size-3.5 items-center justify-center border border-current text-[9px] leading-none"
+                            >
+                              {l.badge}
+                            </span>
+                          )}
                           {l.label}
                         </button>
                       )
                     })}
                   </div>
                   <div className="mb-[9px] text-[9px] uppercase tracking-[1.5px] text-muted-foreground">
-                    Run in your local terminal
+                    {activeExample.setupLabel ?? 'Run in your local terminal'}
                   </div>
-                  <div className="flex items-center gap-3 border border-border bg-[hsl(var(--code-background))] px-[14px] py-3">
-                    <span className="flex-none text-success">$</span>
-                    <span className="flex-1 break-all text-[13px]">{activeExample.install}</span>
+                  <div className="flex items-start gap-3 border border-border bg-[hsl(var(--code-background))] px-[14px] py-3">
+                    <span className="flex-none pt-[1px] text-success">$</span>
+                    <pre className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-foreground">
+                      {activeExample.install}
+                    </pre>
                   </div>
                   <div className="mt-[11px] flex items-start gap-2 text-[11.5px] leading-relaxed text-muted-foreground">
                     <span className="flex-none text-brand">ⓘ</span>
                     <span>
-                      Run this command in your <span className="text-foreground">local development environment</span> to
-                      install the {LANGS.find((l) => l.value === language)?.label} library. Continue once the install
-                      finishes.
+                      {activeExample.setupDescription ?? (
+                        <>
+                          Run this command in your{' '}
+                          <span className="text-foreground">local development environment</span> to install the{' '}
+                          {activeInterface?.label} library. Continue once the install finishes.
+                        </>
+                      )}
                     </span>
                   </div>
                   <div className="mt-4 flex justify-end">
@@ -433,9 +487,7 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange, pr
                   <div className="mt-[12px] flex items-start gap-2 text-[11.5px] leading-relaxed text-muted-foreground">
                     <span className="flex-none text-brand">ⓘ</span>
                     <span>
-                      What it does: reads your <span className="text-foreground">BOXLITE_API_KEY</span> from the
-                      environment, creates a Box, runs a command inside it, prints the output, then removes the Box. Run
-                      it in your terminal with the install command from the previous step.
+                      {executionDescription} Run it in your terminal with the install command from the previous step.
                     </span>
                   </div>
                   <div className="mt-4 flex items-center justify-end">
