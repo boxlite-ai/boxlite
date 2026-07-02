@@ -21,10 +21,18 @@ fail=0
 note() { printf '%s\n' "$*"; }
 die_soft() { printf 'FAIL: %s\n' "$*"; fail=1; }
 
-# Normalize per-run randomness: mktemp dirs. Each run gets its own TMPDIR so a
-# sed over that prefix catches every derived path.
-normalize() { # log tmpdir
-  sed -E "s|$2/[A-Za-z0-9._-]+|TMP|g" "$1"
+# Normalize per-run randomness. macOS mktemp ignores an inherited TMPDIR for
+# bare `mktemp -d`, and node's ESM loader realpaths /var → /private/var, so
+# the two implementations legitimately print different-but-equivalent temp
+# paths. Collapse them all before diffing.
+normalize() { # log
+  local work_norm="${WORK#/private}"
+  sed -E \
+    -e 's|/private/var|/var|g' \
+    -e "s|$work_norm/out\.[a-z]+|OUT|g" \
+    -e "s|$work_norm/u?tmp\.[a-z]+|ASSIGNEDTMP|g" \
+    -e 's|(ASSIGNEDTMP\|/var/folders/[A-Za-z0-9/._+-]+/T\|/tmp)/tmp\.[A-Za-z0-9._-]+|TMP|g' \
+    "$1"
 }
 
 run_build() { # impl(sh|mjs) tag
@@ -38,7 +46,7 @@ run_build() { # impl(sh|mjs) tag
     && CALL_LOG="$log" TMPDIR="$tmp" \
        "scripts/deploy/build-runner-binary.$impl" --output-dir "$out" --build-number 123 --skip-setup \
        > "$WORK/stdout.$tag.log" 2>&1 ) || { die_soft "build-runner-binary.$impl exited non-zero"; cat "$WORK/stdout.$tag.log"; return 1; }
-  normalize "$log" "$tmp" > "$log.norm"
+  normalize "$log" > "$log.norm"
 }
 
 run_update() { # impl tag artifact_dir
@@ -54,7 +62,7 @@ run_update() { # impl tag artifact_dir
        RUNNER_ARTIFACT_S3_URI="s3://fixture-bucket/tmp/runner-rollouts/fixed" \
        "scripts/deploy/runner-update-binary.$impl" "$VERSION_UNDER_TEST" \
        > "$WORK/ustdout.$tag.log" 2>&1 ) || { die_soft "runner-update-binary.$impl exited non-zero"; cat "$WORK/ustdout.$tag.log"; return 1; }
-  normalize "$log" "$tmp" > "$log.norm"
+  normalize "$log" > "$log.norm"
 }
 
 # ── build parity ────────────────────────────────────────────────────────────
