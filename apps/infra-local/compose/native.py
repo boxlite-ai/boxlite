@@ -25,13 +25,14 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import _local_arm64
 from . import orchestrator
-from .config import InfraConfig
+from .config import InfraConfig, worktree_home
 from .doctor import _lsof_owner
 from .services import SERVICES
 
 # ── L2 ports + identities (the native host processes) ──────────────────────
-PORT_API = 3001
+PORT_API = int(os.environ.get("BOXLITE_LOCAL_API_PORT", "3001"))  # override if :3001 is taken
 PORT_RUNNER = 3003
 PORT_PROXY = 4000
 PORT_DASHBOARD = 3000
@@ -101,7 +102,11 @@ class _Paths:
 
     @property
     def runner_home(self) -> Path:
-        return Path(os.environ.get("BOXLITE_HOME_DIR") or (self.state / "boxlite-runner"))
+        # Anchored at the machine-global short root (NOT under .apps-local): the
+        # runner's box sockets live at <home>/boxes/<id>/sockets/ready.sock and
+        # macOS caps unix socket paths at 104 bytes (SUN_LEN), which a deep
+        # worktree path overflows. See config.worktree_home.
+        return Path(os.environ.get("BOXLITE_HOME_DIR") or worktree_home(self.repo_root, "r"))
 
 
 def _paths(cfg: InfraConfig) -> _Paths:
@@ -201,7 +206,7 @@ class _Component:
     timeout_s: int
     argv: list[str]
     cwd: Path | None
-    env: dict[str, str]   # extra env layered on top of os.environ
+    env: dict[str, str | None]   # extra env layered on top of os.environ; None unsets
     pkill_pattern: str    # orphan-sweep fallback (matches the bash pkill -f)
 
 
@@ -235,6 +240,11 @@ def _components(p: _Paths) -> dict[str, _Component]:
                 "BOXLITE_HOME_DIR": str(p.runner_home),
                 "INSECURE_REGISTRIES": "127.0.0.1:25000",
                 "AWS_REGION": "us-east-1",
+                # The runner links the locally-built core, whose embedded guest
+                # may differ from the PyPI SDK version that ensure_runtime_env()
+                # pins for L1. Unset that pin so the runner resolves the runtime
+                # matching its OWN core (avoids "Guest binary hash mismatch").
+                "BOXLITE_RUNTIME_DIR": None,
             },
             "boxlite-runner$",
         ),
@@ -280,7 +290,9 @@ def start_component(p: _Paths, comp: _Component) -> bool:
         proc = subprocess.Popen(
             comp.argv,
             cwd=str(comp.cwd) if comp.cwd else None,
-            env={**os.environ, **comp.env},
+            # A None value in comp.env unsets an inherited var (e.g. the L1
+            # BOXLITE_RUNTIME_DIR pin must not leak to the runner — see below).
+            env={k: v for k, v in {**os.environ, **comp.env}.items() if v is not None},
             stdout=logf,
             stderr=subprocess.STDOUT,
             start_new_session=True,  # detach: survives our exit + own process group
@@ -408,7 +420,12 @@ def _go_build(p: _Paths, comp: str) -> None:
     out = p.runner_bin if comp == "runner" else p.proxy_bin
     p.bin.mkdir(parents=True, exist_ok=True)
     log(f"go build {comp} → {out}")
-    subprocess.run(["go", "build", "-o", str(out), f"./cmd/{comp}"],
+    # The runner links the BoxLite SDK's native lib. Build it with the
+    # boxlite_dev tag so it links this worktree's target/debug/libboxlite.a
+    # (matching the local sdks/go via go.work) instead of a downloaded
+    # prebuilt — otherwise a locally-changed FFI surface fails to link.
+    tags = ["-tags", "boxlite_dev"] if comp == "runner" else []
+    subprocess.run(["go", "build", *tags, "-o", str(out), f"./cmd/{comp}"],
                    cwd=str(p.apps / comp), env={**os.environ, "GOTOOLCHAIN": "auto"}, check=True)
 
 
@@ -425,9 +442,13 @@ def build(cfg: InfraConfig) -> int:
 
 
 def _ensure_installed(p: _Paths) -> None:
-    """Zero-config bring-up: if the boxlite SDK isn't importable, `pip install -e .`
-    (which pulls it in) and re-exec — a fresh interpreter then sees the install.
-    The sentinel env var prevents an install loop if it still doesn't import."""
+    """Zero-config bring-up. Ensures the venv has the repo's own boxlite engine
+    build (with local fixes the PyPI wheel lacks — e.g. the macOS OCI read-only
+    removal fix), then that the SDK is importable; otherwise `pip install -e .`
+    + re-exec. The sentinel env var prevents an install loop."""
+    # boxlite must be the local source build, not the PyPI wheel. This builds it
+    # once (shared cargo cache → reused across worktrees) and no-ops thereafter.
+    _local_arm64.ensure_local_boxlite()
     try:
         import boxlite  # noqa: F401
         return
@@ -443,11 +464,31 @@ def _ensure_installed(p: _Paths) -> None:
     os.execv(sys.executable, [sys.executable, "-m", "compose", *sys.argv[1:]])
 
 
-def _seed_api_env(p: _Paths) -> None:
+def _set_env_kv(path: Path, key: str, value: str) -> None:
+    """Idempotently set KEY=value in a dotenv file (replace or append)."""
+    lines = path.read_text().splitlines() if path.exists() else []
+    out, found = [], False
+    for ln in lines:
+        if ln.startswith(f"{key}="):
+            out.append(f"{key}={value}"); found = True
+        else:
+            out.append(ln)
+    if not found:
+        out.append(f"{key}={value}")
+    path.write_text("\n".join(out) + "\n")
+
+
+def _seed_api_env(p: _Paths, agent_img: str | None = None) -> None:
     api_env = p.apps / "api" / ".env"
     if not api_env.exists():
         log("apps/api/.env missing — seeding from the infra-local template")
         shutil.copy(p.infra_local / "api.env", api_env)
+    # Keep the API's listen port in lockstep with PORT_API (env-overridable),
+    # and point the curated-image allowlist at the local arm64 agent image.
+    _set_env_kv(api_env, "PORT", str(PORT_API))
+    _set_env_kv(api_env, "APP_URL", f"http://localhost:{PORT_API}")
+    if agent_img:
+        _set_env_kv(api_env, "BOXLITE_SYSTEM_BASE_IMAGE", agent_img)
     apps_env = p.apps / ".env"  # NestJS reads .env from cwd=apps/
     if not apps_env.is_symlink():
         try:
@@ -463,7 +504,15 @@ def up(cfg: InfraConfig, components: list[str] | None = None) -> int:
         if name not in ALL_COMPONENTS:
             err(f"unknown component: {name} (valid: {' '.join(ALL_COMPONENTS)})")
             return 2
+    # 0. Apple-Silicon bootstrap (idempotent no-ops once done): thread docker.io
+    # + ghcr.io creds through to L1 + runner, build the native lib, fix the
+    # runtime cache.
+    _local_arm64.ensure_tools_on_path()
+    _local_arm64.export_dockerhub_env()
+    _local_arm64.export_ghcr_env()
     _ensure_installed(p)
+    _local_arm64.ensure_native_lib()
+    _local_arm64.fix_runtime_cache()
 
     # 1. ensure L1 boxes (single asyncio.run; brings L1 up if postgres is down)
     l1_recreated = asyncio.run(_ensure_l1_async(cfg))
@@ -479,8 +528,14 @@ def up(cfg: InfraConfig, components: list[str] | None = None) -> int:
         log("native binaries missing — building")
         build(cfg)
 
-    # 4. API .env template + the apps/.env symlink NestJS needs
-    _seed_api_env(p)
+    # 3.5 box base image: the published agent image is multi-arch now, so the
+    # runner pulls the host-matching arch straight from ghcr — no local build or
+    # L1-registry push. None when ghcr creds are absent (caller logs it and
+    # leaves the amd64-only curated default in place).
+    agent_img = _local_arm64.resolve_agent_image()
+
+    # 4. API .env template + port + curated-image override + the apps/.env symlink
+    _seed_api_env(p, agent_img)
 
     # 5. start the requested L2 components
     table = _components(p)

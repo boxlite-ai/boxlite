@@ -75,7 +75,7 @@ If you want the formal API schema, see
 │    boxlite_exec_attach.go  GET /attach (WebSocket)                       │
 │    boxlite_files.go        PUT/GET /files                                │
 │    boxlite_metrics.go      GET /metrics                                  │
-│    proxy.go                /toolbox/*path (xterm.js + WS)                │
+│    proxy.go                terminal preview (xterm.js + WS)              │
 │    info.go, health.go      /info, /                                      │
 │                                                                          │
 │  pkg/services/           BoxService, BoxSyncService              │
@@ -148,7 +148,7 @@ crash handling live in the runtime, not the runner.
 
 | Method | Path | Controller | Purpose |
 | --- | --- | --- | --- |
-| `POST` | `/boxes` | `Create` | Allocate box, pull/use artifact, return daemon version |
+| `POST` | `/boxes` | `Create` | Allocate box, pull/use artifact, return runtime version |
 | `POST` | `/boxes/:id/start` | `Start` | Boot a stopped box (optional auth token + metadata) |
 | `POST` | `/boxes/:id/stop` | `Stop` | Graceful or `force` shutdown |
 | `POST` | `/boxes/:id/destroy` | `Destroy` | Tear down completely |
@@ -157,11 +157,11 @@ crash handling live in the runtime, not the runner.
 | `POST` | `/boxes/:id/is-recoverable` | `IsRecoverable` | Static check against `common.IsRecoverable(reason)` |
 | `POST` | `/boxes/:id/network-settings` | `UpdateNetworkSettings` | Set block-all / allow-list |
 | `POST` | `/boxes/:id/backup` | `CreateBackup` | Kick off async backup; updates `BackupInfoCache` |
-| `GET` | `/boxes/:id` | `Info` | Combined state + backup state + daemon version |
+| `GET` | `/boxes/:id` | `Info` | Combined state + backup state + runtime version |
 
 `Info` is the only endpoint that fans out: it pulls live state from the
-runtime _and_ backup state from `BackupInfoCache`, then fetches the guest
-daemon version only when the box is `STARTED`. See
+runtime _and_ backup state from `BackupInfoCache`, then fetches the
+runtime version only when the box is `STARTED`. See
 [`pkg/services/box.go`](pkg/services/box.go).
 
 `CreateBackup` is fire-and-forget — the runtime starts the snapshot
@@ -439,10 +439,10 @@ durations, and network counters. All values come from
 The Prometheus endpoint is the standard `promhttp.Handler()` and exposes
 the counters maintained in `pkg/common/` (operation counts, etc.).
 
-### 7. Toolbox proxy (browser terminal)
+### 7. Terminal preview
 
-`Any /boxes/:boxId/toolbox/*path` — same controller serves two
-modes:
+`Any /boxes/:boxId/toolbox/*path` — the legacy route is kept for the
+dashboard terminal preview only:
 
 - **HTTP GET** — returns the embedded xterm.js page (HTML + CDN links
   in `proxy.go`).
@@ -460,14 +460,12 @@ When `SSH_GATEWAY_ENABLE=true`, the runner also listens on a configurable
 TCP port (`pkg/sshgateway/config.go::GetSSHGatewayPort`). Clients
 authenticate with a single shared public key configured on the runner
 (`GetSSHPublicKey`), and the **SSH username is interpreted as the
-box ID**. Once authenticated, the handler opens an SSH client
-connection from the runner to `<boxId>:22220` (the toolbox SSH
-endpoint inside the box) and copies channels + requests bidirectionally.
+box ID**. Once authenticated, the handler starts a command in the box via
+`r.Boxlite.StartExecution(...)` and wires the SSH channel to that
+execution's stdin/stdout/stderr.
 
-Caveat: the inner client→box connection currently uses a hardcoded
-password and `ssh.InsecureIgnoreHostKey`. That's safe only because the
-inner connection never leaves the runner's network. Don't expose the
-gateway port directly to untrusted clients without auditing this path.
+Do not expose the gateway port directly to untrusted clients without
+auditing this path.
 
 ---
 
@@ -550,7 +548,7 @@ the Swagger UI (development only).
 | `GET` | `/info` | Runner metrics + service health |
 | `GET` | `/metrics` | Prometheus scrape |
 | `POST` | `/boxes` | Create box |
-| `GET` | `/boxes/:id` | Box info (state + backup state + daemon version) |
+| `GET` | `/boxes/:id` | Box info (state + backup state + runtime version) |
 | `POST` | `/boxes/:id/start` | Start |
 | `POST` | `/boxes/:id/stop` | Stop (graceful or `force`) |
 | `POST` | `/boxes/:id/destroy` | Destroy |
@@ -559,7 +557,7 @@ the Swagger UI (development only).
 | `POST` | `/boxes/:id/recover` | Recover from error state |
 | `POST` | `/boxes/:id/is-recoverable` | Check whether an error reason is recoverable |
 | `POST` | `/boxes/:id/network-settings` | Update block-all / allow-list |
-| `Any` | `/boxes/:id/toolbox/*path` | xterm.js page + WS terminal |
+| `Any` | `/boxes/:id/toolbox/*path` | Terminal preview only |
 | `POST` | `/artifacts/pull` | Async pull (mirror + optional push) |
 | `POST` | `/artifacts/build` | Async build |
 | `GET` | `/artifacts/exists` | Local existence check |

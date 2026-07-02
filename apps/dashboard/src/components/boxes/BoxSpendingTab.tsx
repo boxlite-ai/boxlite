@@ -12,7 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { AnalyticsUsageParams, useBoxUsagePeriods } from '@/hooks/queries/useAnalyticsUsage'
 import { formatMoney } from '@/lib/utils'
 import { format, subHours } from 'date-fns'
-import { DollarSign, RefreshCw } from 'lucide-react'
+import { DollarSign, RefreshCw } from '@/components/ui/icon'
 import { useQueryStates } from 'nuqs'
 import { useCallback, useMemo } from 'react'
 import { timeRangeSearchParams } from './SearchParams'

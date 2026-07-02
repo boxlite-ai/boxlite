@@ -23,7 +23,7 @@ import {
   TriangleAlert,
   Wrench,
   X,
-} from 'lucide-react'
+} from '@/components/ui/icon'
 import React, { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { isErrorState } from './adminHelpers'

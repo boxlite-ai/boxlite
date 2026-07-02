@@ -55,7 +55,6 @@ export async function runLocalDexEnvironment({ mode, command = [] }) {
   await waitForTcp('localhost', 6379, 'Redis')
   await waitForTcp('localhost', 5001, 'Local registry')
   ensureLocalDockerConfig(defaultConfig)
-  ensureDaemonRuntimeBinary(defaultConfig)
   ensureRuntimeImages(defaultConfig)
   ensureGoSdkDevNativeLibrary()
   ensureGoBuildCacheTracksNativeLibrary()
@@ -204,40 +203,6 @@ function ensureRuntimeImages(config) {
 
 function runtimeImageRef(config, name) {
   return `${config.registryHost}/boxlite/${name}:${config.runtimeImageTag}`
-}
-
-function ensureDaemonRuntimeBinary(config) {
-  const outputDir = path.join(appsRoot, 'dist', 'apps', 'daemon-runtime')
-  const outputPath = path.join(outputDir, 'boxlite-daemon')
-  fs.mkdirSync(outputDir, { recursive: true })
-
-  console.log(`[local-dex] building Linux daemon runtime binary for ${config.runtimeImagePlatform}`)
-  const result = spawnSync('go', ['build', '-o', outputPath, './daemon/cmd/daemon/main.go'], {
-    cwd: appsRoot,
-    encoding: 'utf8',
-    stdio: 'inherit',
-    env: {
-      ...process.env,
-      GOOS: 'linux',
-      GOARCH: runtimeImageGoarch(config),
-      CGO_ENABLED: '0',
-    },
-  })
-
-  if (result.status !== 0) {
-    throw new Error('go build daemon runtime binary failed; agent runtime images cannot include toolbox')
-  }
-}
-
-function runtimeImageGoarch(config) {
-  const arch = config.runtimeImagePlatform.split('/').pop()
-  switch (arch) {
-    case 'amd64':
-    case 'arm64':
-      return arch
-    default:
-      throw new Error(`Unsupported runtime image platform for daemon build: ${config.runtimeImagePlatform}`)
-  }
 }
 
 function ensureGoSdkDevNativeLibrary() {

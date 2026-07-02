@@ -76,14 +76,13 @@ impl ShimHandler {
             metrics_sys: Mutex::new(sysinfo::System::new()),
         }
     }
-}
 
-impl VmmHandlerTrait for ShimHandler {
-    fn pid(&self) -> u32 {
-        self.pid
-    }
-
-    fn stop(&mut self) -> BoxliteResult<()> {
+    /// Graceful shutdown of the recorded process: SIGTERM, wait, then SIGKILL.
+    ///
+    /// Signals only `self.pid` (the outer launcher). The full process-tree
+    /// sweep happens in `stop()` after this returns — see the comment there for
+    /// why the order matters (libkrun must flush before the hard cgroup kill).
+    fn graceful_stop(&mut self) -> BoxliteResult<()> {
         // Graceful shutdown: SIGTERM first, wait, then SIGKILL if needed.
         // This gives libkrun time to flush its virtio-blk buffers to disk,
         // preventing qcow2 corruption.
@@ -164,6 +163,26 @@ impl VmmHandlerTrait for ShimHandler {
 
         #[allow(unreachable_code)]
         Ok(())
+    }
+}
+
+impl VmmHandlerTrait for ShimHandler {
+    fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    fn stop(&mut self) -> BoxliteResult<()> {
+        // Graceful shutdown of the recorded pid first, then sweep the box's
+        // whole tree. `graceful_stop` only signals the recorded pid — the outer
+        // bwrap launcher — and a detached box's inner pid-ns tree (inner bwrap +
+        // shim + VM) outlives it, since #851 stopped applying `--die-with-parent`
+        // to detached boxes. The whole tree lives in the box's cgroup, so reap it
+        // by id — *after* graceful shutdown, so libkrun can flush its virtio-blk
+        // buffers first (a cgroup kill is a hard kill; reaping mid-flush risks
+        // qcow2 corruption). Best-effort and idempotent.
+        let result = self.graceful_stop();
+        crate::jailer::reap_box(&self.box_id);
+        result
     }
 
     fn metrics(&self) -> BoxliteResult<VmmMetrics> {

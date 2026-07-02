@@ -8,7 +8,7 @@ import React from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { RoutePath } from '@/enums/RoutePath'
-import { Home } from 'lucide-react'
+import { Home } from '@/components/ui/icon'
 
 const NotFound: React.FC = () => {
   const navigate = useNavigate()

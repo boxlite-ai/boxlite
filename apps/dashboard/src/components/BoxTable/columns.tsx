@@ -8,7 +8,7 @@ import { getBoxDisplayName, getBoxPublicIdLabel } from '@/lib/box-identity'
 import { formatTimestamp, getRelativeTimeString } from '@/lib/utils'
 import { Box, BoxState } from '@boxlite-ai/api-client'
 import { ColumnDef } from '@tanstack/react-table'
-import { ArrowDown, ArrowUp } from 'lucide-react'
+import { ArrowDown, ArrowUp } from '@/components/ui/icon'
 import React from 'react'
 import { ResourceChip } from '../ResourceChip'
 import { Checkbox } from '../ui/checkbox'
@@ -45,36 +45,21 @@ interface GetColumnsProps {
   handleStart: (id: string) => void
   handleStop: (id: string) => void
   handleDelete: (id: string) => void
-  getWebTerminalUrl: (id: string) => Promise<string | null>
   boxIsLoading: Record<string, boolean>
   writePermitted: boolean
   deletePermitted: boolean
-  handleCreateSshAccess: (id: string) => void
-  handleRevokeSshAccess: (id: string) => void
   handleRecover: (id: string) => void
-  handleScreenRecordings: (id: string) => void
 }
 
 export function getColumns({
   handleStart,
   handleStop,
   handleDelete,
-  getWebTerminalUrl,
   boxIsLoading,
   writePermitted,
   deletePermitted,
-  handleCreateSshAccess,
-  handleRevokeSshAccess,
   handleRecover,
-  handleScreenRecordings,
 }: GetColumnsProps): ColumnDef<Box>[] {
-  const handleOpenWebTerminal = async (boxId: string) => {
-    const url = await getWebTerminalUrl(boxId)
-    if (url) {
-      window.open(url, '_blank')
-    }
-  }
-
   const columns: ColumnDef<Box>[] = [
     {
       id: 'select',
@@ -126,7 +111,13 @@ export function getColumns({
       cell: ({ row }) => {
         const displayName = getBoxDisplayName(row.original)
         return (
-          <div className="w-full truncate">
+          <div className="flex w-full items-center gap-2 truncate">
+            <BoxStateComponent
+              iconOnly
+              state={row.original.state}
+              errorReason={row.original.errorReason}
+              recoverable={row.original.recoverable}
+            />
             <span className="truncate block">{displayName}</span>
           </div>
         )
@@ -136,7 +127,7 @@ export function getColumns({
       id: 'id',
       size: 140,
       enableSorting: true,
-      enableHiding: false,
+      enableHiding: true,
       header: ({ column }) => {
         return <SortableHeader column={column} label="Box ID" />
       },
@@ -153,7 +144,7 @@ export function getColumns({
       id: 'state',
       size: 120,
       enableSorting: true,
-      enableHiding: false,
+      enableHiding: true,
       header: ({ column }) => {
         return <SortableHeader column={column} label="State" />
       },
@@ -172,7 +163,7 @@ export function getColumns({
       id: 'resources',
       size: 230,
       enableSorting: false,
-      enableHiding: false,
+      enableHiding: true,
       header: () => {
         return <span>Resources</span>
       },
@@ -208,7 +199,7 @@ export function getColumns({
       id: 'createdAt',
       size: 170,
       enableSorting: true,
-      enableHiding: false,
+      enableHiding: true,
       header: ({ column }) => {
         return <SortableHeader column={column} label="Created At" />
       },
@@ -235,11 +226,7 @@ export function getColumns({
             onStart={handleStart}
             onStop={handleStop}
             onDelete={handleDelete}
-            onOpenWebTerminal={handleOpenWebTerminal}
-            onCreateSshAccess={handleCreateSshAccess}
-            onRevokeSshAccess={handleRevokeSshAccess}
             onRecover={handleRecover}
-            onScreenRecordings={handleScreenRecordings}
           />
         </div>
       ),

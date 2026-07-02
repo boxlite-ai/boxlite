@@ -4,8 +4,6 @@ use (
 	../sdks/go
 	./api-client-go
 	./common-go
-	./daemon
-	./libs/computer-use
 	./otel-collector/exporter
 	./proxy
 	./runner

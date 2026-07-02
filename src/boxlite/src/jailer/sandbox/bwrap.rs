@@ -69,10 +69,15 @@ impl Sandbox for BwrapSandbox {
         // =====================================================================
         // Namespace and session isolation
         // =====================================================================
-        bwrap_cmd
-            .with_default_namespaces()
-            .with_die_with_parent()
-            .with_new_session();
+        bwrap_cmd.with_default_namespaces();
+        // A detached box (`run -d`) must outlive the launching process: bwrap's
+        // --die-with-parent (PR_SET_PDEATHSIG) would otherwise kill the shim/VM
+        // the instant the launcher returns, so the box is born Stopped. Only
+        // foreground boxes — which should die with their launcher — get it.
+        if !ctx.detached {
+            bwrap_cmd.with_die_with_parent();
+        }
+        bwrap_cmd.with_new_session();
 
         // =====================================================================
         // System directories (read-only)
@@ -82,7 +87,16 @@ impl Sandbox for BwrapSandbox {
             .ro_bind_if_exists("/lib", "/lib")
             .ro_bind_if_exists("/lib64", "/lib64")
             .ro_bind_if_exists("/bin", "/bin")
-            .ro_bind_if_exists("/sbin", "/sbin");
+            .ro_bind_if_exists("/sbin", "/sbin")
+            // DNS resolver config: gvproxy resolves `allow_net` hostnames
+            // host-side (it runs in this shim) via the Go resolver, which reads
+            // these. Without them the sandbox has no /etc/resolv.conf, every
+            // lookup in buildAllowNetDNSZones fails, and allow-listed hosts
+            // sinkhole to 0.0.0.0 — the allowlist silently blocks everything
+            // whenever the jailer is enabled (#645).
+            .ro_bind_if_exists("/etc/resolv.conf", "/etc/resolv.conf")
+            .ro_bind_if_exists("/etc/hosts", "/etc/hosts")
+            .ro_bind_if_exists("/etc/nsswitch.conf", "/etc/nsswitch.conf");
 
         // =====================================================================
         // Devices and special mounts
@@ -109,10 +123,22 @@ impl Sandbox for BwrapSandbox {
         // =====================================================================
         // Environment sanitization
         // =====================================================================
+        // The statically-linked shim dlopen's libkrunfw via LD_LIBRARY_PATH (its
+        // `$ORIGIN` rpath is ineffective), and `--clearenv` wipes it — without
+        // this the VM fails to start ("Couldn't find or load libkrunfw.so.5",
+        // libkrun status=-2). Point it at the shim's own directory (`<box>/bin`),
+        // which is bound into the sandbox and is exactly where `copy_libkrunfw`
+        // placed the library the shim loads.
+        let shim_dir = std::path::Path::new(&binary)
+            .parent()
+            .map(|dir| dir.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
         bwrap_cmd
             .with_clearenv()
             .setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
-            .setenv("HOME", "/root");
+            .setenv("HOME", "/root")
+            .setenv("LD_LIBRARY_PATH", shim_dir);
 
         // Preserve debugging environment variables
         if let Ok(rust_log) = std::env::var("RUST_LOG") {
@@ -141,5 +167,93 @@ impl Sandbox for BwrapSandbox {
 
     fn name(&self) -> &'static str {
         "bwrap"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::advanced_options::ResourceLimits;
+
+    /// The shim is statically linked, so libkrun's `dlopen` of `libkrunfw.so.5`
+    /// can only be satisfied via `LD_LIBRARY_PATH` inside the `--clearenv`
+    /// sandbox — the shim's `$ORIGIN` rpath is absent and the inherited
+    /// `LD_LIBRARY_PATH` is wiped by `--clearenv`. Without this the VM fails to
+    /// start ("Couldn't find or load libkrunfw.so.5", libkrun status=-2). This
+    /// guards the env var the composable `apply()` dropped relative to the
+    /// legacy `build_shim_command`.
+    #[test]
+    fn apply_sets_ld_library_path_to_shim_dir() {
+        if !bwrap::is_available() {
+            eprintln!("skipping apply_sets_ld_library_path_to_shim_dir: bwrap not available");
+            return;
+        }
+
+        let limits = Box::leak(Box::new(ResourceLimits::default()));
+        let ctx = SandboxContext {
+            id: "test-box",
+            paths: vec![],
+            resource_limits: limits,
+            network_enabled: false,
+            sandbox_profile: None,
+            detached: false,
+        };
+
+        let shim = "/var/lib/boxlite/boxes/abc/bin/boxlite-shim";
+        let mut cmd = Command::new(shim);
+        BwrapSandbox::new().apply(&ctx, &mut cmd);
+
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+
+        let pos = args
+            .windows(3)
+            .position(|w| w[0] == "--setenv" && w[1] == "LD_LIBRARY_PATH")
+            .expect("bwrap must --setenv LD_LIBRARY_PATH so the static shim can dlopen libkrunfw");
+        assert_eq!(
+            args[pos + 2],
+            "/var/lib/boxlite/boxes/abc/bin",
+            "LD_LIBRARY_PATH must point at the shim's own directory (where libkrunfw is copied)"
+        );
+    }
+
+    /// A detached box must outlive the launcher, so it must NOT get bwrap's
+    /// `--die-with-parent` (PR_SET_PDEATHSIG kills the shim/VM the instant
+    /// `run -d` returns, leaving the box born-Stopped). Foreground boxes keep it
+    /// so they die with their launcher.
+    #[test]
+    fn apply_sets_die_with_parent_only_for_foreground() {
+        if !bwrap::is_available() {
+            eprintln!(
+                "skipping apply_sets_die_with_parent_only_for_foreground: bwrap not available"
+            );
+            return;
+        }
+
+        fn has_die_with_parent(detached: bool) -> bool {
+            let limits = Box::leak(Box::new(ResourceLimits::default()));
+            let ctx = SandboxContext {
+                id: "test-box",
+                paths: vec![],
+                resource_limits: limits,
+                network_enabled: false,
+                sandbox_profile: None,
+                detached,
+            };
+            let mut cmd = Command::new("/var/lib/boxlite/boxes/abc/bin/boxlite-shim");
+            BwrapSandbox::new().apply(&ctx, &mut cmd);
+            cmd.get_args().any(|a| a == "--die-with-parent")
+        }
+
+        assert!(
+            has_die_with_parent(false),
+            "foreground box must get --die-with-parent so it dies with its launcher"
+        );
+        assert!(
+            !has_die_with_parent(true),
+            "detached box must not get --die-with-parent or it is killed when run -d returns"
+        );
     }
 }

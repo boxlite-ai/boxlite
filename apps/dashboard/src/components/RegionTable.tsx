@@ -17,7 +17,7 @@ import {
   SortingState,
   useReactTable,
 } from '@tanstack/react-table'
-import { Copy, MapPinned, MoreHorizontal } from 'lucide-react'
+import { Copy, MapPinned, MoreHorizontal } from '@/components/ui/icon'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { DebouncedInput } from './DebouncedInput'

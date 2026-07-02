@@ -9,7 +9,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sh
 import { Tabs, TabsContent } from '@/components/ui/tabs'
 import { formatTimestamp, getRelativeTimeString } from '@/lib/utils'
 import { Runner, RunnerState } from '@boxlite-ai/api-client'
-import { Copy, Trash, X, CheckCircle, AlertTriangle, Timer, Pause } from 'lucide-react'
+import { Copy, Trash, X, CheckCircle, AlertTriangle, Timer, Pause } from '@/components/ui/icon'
 import React from 'react'
 import { toast } from 'sonner'
 import { ResourceChip } from './ResourceChip'

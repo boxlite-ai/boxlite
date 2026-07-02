@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { SshAccessDto } from '@boxlite-ai/api-client'
 import { useForm } from '@tanstack/react-form'
-import { CheckIcon, CopyIcon, InfoIcon } from 'lucide-react'
+import { CheckIcon, CopyIcon, InfoIcon } from '@/components/ui/icon'
 import { AnimatePresence, motion } from 'motion/react'
 import { NumericFormat } from 'react-number-format'
 import { z } from 'zod'

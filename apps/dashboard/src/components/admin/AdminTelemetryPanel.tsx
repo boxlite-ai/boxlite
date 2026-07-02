@@ -34,7 +34,7 @@ import {
 } from '@/hooks/useAdminObservability'
 import { cn } from '@/lib/utils'
 import { format, subHours } from 'date-fns'
-import { Activity, AlertCircle, BarChart3, FileText, RefreshCw, Search } from 'lucide-react'
+import { Activity, AlertCircle, BarChart3, FileText, RefreshCw, Search } from '@/components/ui/icon'
 import React, { useMemo, useState } from 'react'
 import { DateRange } from 'react-day-picker'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip as RechartsTooltip, XAxis, YAxis } from 'recharts'

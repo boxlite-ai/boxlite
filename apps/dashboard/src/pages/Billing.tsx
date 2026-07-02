@@ -4,145 +4,63 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { PageContent, PageDescription, PageHeader, PageLayout, PageTitle } from '@/components/PageLayout'
-import { Logo } from '@/assets/Logo'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { RoutePath } from '@/enums/RoutePath'
-import { ArrowRight, Box, CheckCircle2, Cpu, KeyRound, ReceiptText, Terminal, Timer } from 'lucide-react'
+import { Clock, Cpu, Database, MemoryStick, type LucideIcon } from '@/components/ui/icon'
 import { Link } from 'react-router-dom'
 
-const trialItems = [
-  {
-    label: 'Create Boxes',
-    icon: Timer,
-  },
-  {
-    label: 'Use terminal',
-    icon: Terminal,
-  },
-  {
-    label: 'Call the API',
-    icon: KeyRound,
-  },
+const DIMENSIONS: { icon: LucideIcon; name: string; unit: string }[] = [
+  { icon: Cpu, name: 'CPU', unit: 'per vCPU·hr' },
+  { icon: MemoryStick, name: 'Memory', unit: 'per GiB·hr' },
+  { icon: Database, name: 'Disk', unit: 'per GiB·mo' },
+  { icon: Clock, name: 'Runtime', unit: 'per second' },
 ]
 
-const futureItems = [
-  {
-    label: 'Box runtime',
-    icon: Box,
-  },
-  {
-    label: 'CPU, memory, storage',
-    icon: Cpu,
-  },
-  {
-    label: 'Usage limits',
-    icon: ReceiptText,
-  },
-]
+function SegBars() {
+  return (
+    <div className="mt-3 flex w-full gap-[3px]">
+      {Array.from({ length: 8 }).map((_, i) => (
+        <span key={i} className="h-[5px] flex-1 bg-brand/15" />
+      ))}
+    </div>
+  )
+}
 
 function Billing() {
   return (
-    <PageLayout>
-      <PageHeader>
-        <div>
-          <PageTitle>Billing</PageTitle>
-          <PageDescription className="mt-2 max-w-2xl">
-            BoxLite is free to try right now. Billing details will be announced before paid usage starts.
-          </PageDescription>
+    <div className="flex min-h-[calc(100svh-60px)] items-center justify-center px-6 py-14 lg:px-[40px]">
+      <div className="w-full max-w-[560px] text-center" style={{ animation: 'stat-in 0.5s ease both' }}>
+        <h1 className="mb-3 text-[26px] font-semibold leading-tight tracking-[-0.5px]">Billing is on the way</h1>
+        <p className="mx-auto mb-2 max-w-[440px] text-[13px] leading-relaxed text-muted-foreground">
+          BoxLite is <span className="text-foreground">free while we finish metering</span>. Nothing is charged today —
+          run as many boxes as you need.
+        </p>
+        <p className="mx-auto mb-[30px] max-w-[440px] text-[12.5px] leading-relaxed text-muted-foreground">
+          When billing launches, usage will be metered across four dimensions:
+        </p>
+
+        <div className="mb-[34px] grid grid-cols-4 gap-[10px]">
+          {DIMENSIONS.map(({ icon: Icon, name, unit }) => (
+            <div
+              key={name}
+              className="flex flex-col items-center gap-[9px] border border-border bg-card px-[10px] pb-[14px] pt-4"
+            >
+              <Icon className="size-[18px] text-muted-foreground" strokeWidth={1.6} />
+              <div className="text-[11px] uppercase tracking-[1px] text-foreground">{name}</div>
+              <div className="text-[9.5px] tracking-[0.5px] text-muted-foreground">{unit}</div>
+              <SegBars />
+            </div>
+          ))}
         </div>
-      </PageHeader>
 
-      <PageContent>
-        <section className="grid gap-5 rounded-md border border-border bg-background p-5 sm:p-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
-          <div className="min-w-0">
-            <Badge variant="secondary">Free trial now</Badge>
-            <h1 className="mt-4 max-w-2xl text-3xl font-semibold tracking-normal text-foreground">
-              Billing is coming soon.
-            </h1>
-            <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
-              BoxLite is currently free to try. We will publish billing details before paid usage starts, with clear
-              usage and resource limits.
-            </p>
-
-            <div className="mt-6 flex flex-col gap-2 sm:flex-row">
-              <Button asChild>
-                <Link to={RoutePath.BOXES}>
-                  Create a Box
-                  <ArrowRight className="size-4" />
-                </Link>
-              </Button>
-              <Button variant="outline" asChild>
-                <Link to={`${RoutePath.BOXES}?onboarding=1`}>Open guide</Link>
-              </Button>
-            </div>
-          </div>
-
-          <div className="overflow-hidden rounded-md border border-border bg-muted/20">
-            <div className="flex h-32 items-center justify-center border-b border-border bg-background">
-              <Logo className="h-20 w-20 opacity-90" decorative />
-            </div>
-            <div className="p-4">
-              <div className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Trial access</div>
-              <div className="mt-3 text-3xl font-semibold">$0</div>
-              <p className="mt-1 text-sm text-muted-foreground">No billing enabled yet.</p>
-              <div className="mt-5 space-y-2 text-sm">
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="size-4 text-muted-foreground" />
-                  Free trial access
-                </div>
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="size-4 text-muted-foreground" />
-                  Shared Linux base images
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section className="grid gap-4 md:grid-cols-2">
-          <div className="rounded-md border border-border bg-background p-4">
-            <div className="flex items-center gap-2 text-sm font-semibold">
-              <Terminal className="size-4 text-muted-foreground" />
-              Included during trial
-            </div>
-            <div className="mt-4 grid gap-2">
-              {trialItems.map((item) => {
-                const Icon = item.icon
-                return (
-                  <div key={item.label} className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Icon className="size-4" />
-                    {item.label}
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-
-          <div className="rounded-md border border-border bg-background p-4">
-            <div className="flex items-center gap-2 text-sm font-semibold">
-              <ReceiptText className="size-4 text-muted-foreground" />
-              Future billing signals
-            </div>
-            <div className="mt-4 grid gap-2">
-              {futureItems.map((item) => {
-                const Icon = item.icon
-                return (
-                  <div key={item.label} className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Icon className="size-4" />
-                    {item.label}
-                  </div>
-                )
-              })}
-            </div>
-            <p className="mt-4 text-sm leading-6 text-muted-foreground">
-              Billing will focus on the resources users actually consume.
-            </p>
-          </div>
-        </section>
-      </PageContent>
-    </PageLayout>
+        <Link
+          to={RoutePath.BOXES}
+          className="inline-flex items-center gap-[9px] bg-primary px-[22px] py-3 text-[12.5px] font-semibold tracking-[0.3px] text-primary-foreground transition-opacity hover:opacity-85"
+        >
+          Back to Boxes
+          <span className="text-[14px] leading-none">→</span>
+        </Link>
+      </div>
+    </div>
   )
 }
 

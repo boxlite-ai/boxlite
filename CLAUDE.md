@@ -93,15 +93,18 @@ Every change goes: understand → research → design → implement → test →
 
 - Run the smallest relevant verification first (`make test`, package-scoped test), then broaden if risk justifies.
 - Don't claim tests passed unless they actually ran. If verification can't run, state the blocker and the residual risk.
+- Attach a verdict before ending: every turn ends by invoking the `verdict-auditor` subagent (Task), which writes the dossier (`.claude/.last-verdict.json`) — never hand-write it. Claims like a fix that works, tests that pass, a root cause, an ops/infra finding, "no issues", or a factual answer must carry concrete proof; a turn that asserts nothing verifiable still gets a one-line PASS (empty proof). The Stop gate is default-deny: a missing dossier blocks the turn-end (hard mode) or nudges (soft, the default), so the audit cannot be skipped by simply not invoking it. The auditor is async, so in hard mode ending a turn is deny -> audit -> wait -> end (like the commit-push gate); that block-then-wait is the accepted cost of proof on every turn.
 
 **Cross-cutting** (apply at every phase)
 
 - Verify external findings against the working tree before acting. `/codex:adversarial-review`, lint, and PR comments work from a snapshot — they may name deleted code. `git grep` and `git diff` first.
+- Treat every failure as a class, not an instance: when one surfaces, find and fix every sibling of the same shape in the same pass — grounded in what's actually there, not speculation. A single-site fix to a systemic bug isn't done.
 - Honor scope reduction: "drop X" means drop X. Don't bundle adjacent improvements unprompted.
 
 **Communication**
 
 - Words: as concise and simple as possible, unless explicitly asked otherwise.
 - A simple call graph (func name, class name, file name, LOC, short annotation) is the first choice when explaining code.
+- Commit/PR text: describe the change, not the process that produced it. Conventional-Commit subject ≤72; no process/AI narrative, pasted logs, or secrets. See [CONTRIBUTING.md](./CONTRIBUTING.md#commit--pr-messages).
 
 Adapted from Clean Code (Robert C. Martin) via the polygala-inc AGENTS.md distillation.

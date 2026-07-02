@@ -6,7 +6,7 @@
 
 import { cn } from '@/lib/utils'
 import { flexRender } from '@tanstack/react-table'
-import { FileText } from 'lucide-react'
+import { FileText } from '@/components/ui/icon'
 import { Pagination } from '../Pagination'
 import { TableEmptyState } from '../TableEmptyState'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table'

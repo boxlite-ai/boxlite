@@ -21,6 +21,49 @@ fn pid_file_path(home_dir: &Path, box_id: &str) -> PathBuf {
     home_dir.join("boxes").join(box_id).join("shim.pid")
 }
 
+/// Count live processes whose argv references `box_id` (Linux `/proc` scan).
+///
+/// A detached box's whole tree — the outer bwrap launcher, the inner
+/// pid-namespace bwrap, the shim, and the VM — carries the unique box id in its
+/// bwrap bind paths, so this counts every process in the tree. Used to assert
+/// that the production reap path tears the *whole* tree down, not just the
+/// recorded outer-bwrap pid.
+#[cfg(target_os = "linux")]
+fn box_proc_count(box_id: &str) -> usize {
+    let mut count = 0;
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return 0;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if name.parse::<u32>().is_err() {
+            continue; // not a pid dir
+        }
+        if let Ok(cmdline) = std::fs::read(entry.path().join("cmdline"))
+            && cmdline
+                .windows(box_id.len())
+                .any(|w| w == box_id.as_bytes())
+        {
+            count += 1;
+        }
+    }
+    count
+}
+
+#[cfg(target_os = "linux")]
+async fn wait_for_box_proc_count_zero(box_id: &str) -> usize {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut count = box_proc_count(box_id);
+
+    while count != 0 && std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        count = box_proc_count(box_id);
+    }
+
+    count
+}
+
 // ============================================================================
 // DETACH MODE TESTS
 // ============================================================================
@@ -279,4 +322,106 @@ async fn detached_box_recoverable_after_restart() {
         // Cleanup
         runtime.remove(&box_id, false).await.unwrap();
     }
+}
+
+/// `runtime.remove(force)` on a detached box must reap its *entire* process
+/// tree. `kill_process` only signals the recorded outer bwrap; since #851
+/// dropped `--die-with-parent`, the inner pid-ns tree (inner bwrap + shim + VM)
+/// survives that. The production fix reaps the box's cgroup. This is the
+/// regression guard for the silent orphan VM that `boxlite rm -f` used to leave
+/// behind — note `PerTestBoxHome`'s `shim.pid`-based leak check can't see it
+/// (force-remove deletes the file), so the explicit `box_proc_count` is the
+/// real assertion here.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn detached_box_force_remove_reaps_whole_tree() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+
+    let handle = runtime
+        .create(
+            boxlite::runtime::options::BoxOptions {
+                detach: true,
+                ..common::alpine_opts()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    handle
+        .exec(BoxCommand::new("sleep").args(["300"]))
+        .await
+        .expect("start detached sleep workload");
+    let box_id = handle.id().to_string();
+
+    assert!(
+        box_proc_count(&box_id) > 0,
+        "detached box should have a live process tree after start"
+    );
+
+    // Production reap path.
+    runtime.remove(&box_id, true).await.unwrap();
+    let proc_count = wait_for_box_proc_count_zero(&box_id).await;
+
+    assert_eq!(
+        proc_count, 0,
+        "force remove must reap the whole detached box tree \
+         (outer + inner bwrap + shim + VM), not just the recorded pid"
+    );
+}
+
+/// `box.stop()` on a detached box must reap the full process tree while
+/// preserving the box record and disk state for a later start.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn detached_box_stop_reaps_whole_tree_and_keeps_box() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+
+    let handle = runtime
+        .create(
+            boxlite::runtime::options::BoxOptions {
+                detach: true,
+                ..common::alpine_opts()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    handle
+        .exec(BoxCommand::new("sleep").args(["300"]))
+        .await
+        .expect("start detached sleep workload");
+    let box_id = handle.id().to_string();
+
+    assert!(
+        box_proc_count(&box_id) > 0,
+        "detached box should have a live process tree after start"
+    );
+
+    handle.stop().await.unwrap();
+    let proc_count = wait_for_box_proc_count_zero(&box_id).await;
+
+    assert_eq!(
+        proc_count, 0,
+        "stop must reap the whole detached box tree \
+         (outer + inner bwrap + shim + VM), not just the recorded pid"
+    );
+
+    let info = runtime
+        .get_info(&box_id)
+        .await
+        .unwrap()
+        .expect("stopped box should still exist");
+    assert_eq!(info.status, BoxStatus::Stopped);
+
+    runtime.remove(&box_id, false).await.unwrap();
 }

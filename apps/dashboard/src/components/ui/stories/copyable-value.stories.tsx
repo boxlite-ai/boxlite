@@ -4,7 +4,7 @@
  */
 
 import type { Meta, StoryObj } from '@storybook/react'
-import { CheckIcon, EyeIcon } from 'lucide-react'
+import { CheckIcon, EyeIcon } from '@/components/ui/icon'
 import { CopyableValue } from '../copyable-value'
 import { Button } from '../button'
 

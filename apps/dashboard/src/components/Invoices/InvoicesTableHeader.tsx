@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Search } from 'lucide-react'
+import { Search } from '@/components/ui/icon'
 import React from 'react'
 import { DebouncedInput } from '../DebouncedInput'
 import { InvoicesTableHeaderProps } from './types'

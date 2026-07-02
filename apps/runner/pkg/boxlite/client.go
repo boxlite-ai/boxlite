@@ -36,7 +36,6 @@ type Client struct {
 	volumeMutexes      map[string]*sync.Mutex
 	volumeMutexesMutex sync.Mutex
 	volumeCleanupMutex sync.Mutex
-	toolboxPortMutex   sync.Mutex
 	lastVolumeCleanup  time.Time
 	volumeCleanup      volumeCleanupConfig
 }
@@ -48,6 +47,8 @@ type ClientConfig struct {
 	InsecureRegistries           []string
 	GhcrUsername                 string
 	GhcrToken                    string
+	DockerHubUsername            string
+	DockerHubToken               string
 	AWSRegion                    string
 	AWSEndpointUrl               string
 	AWSAccessKeyId               string
@@ -76,7 +77,7 @@ func networkSpec(blockAll *bool, allowList *string) boxlite.NetworkSpec {
 	return spec
 }
 
-func daemonBoxEnv(ctx context.Context, boxDto dto.CreateBoxDTO) map[string]string {
+func boxRuntimeEnv(ctx context.Context, boxDto dto.CreateBoxDTO) map[string]string {
 	env := map[string]string{
 		"BOXLITE_BOX_ID": boxDto.Id,
 	}
@@ -89,9 +90,9 @@ func daemonBoxEnv(ctx context.Context, boxDto dto.CreateBoxDTO) map[string]strin
 	if boxDto.RegionId != nil && *boxDto.RegionId != "" {
 		env["BOXLITE_REGION_ID"] = *boxDto.RegionId
 	}
-	// Propagate the active W3C trace context into the box so the in-box daemon's telemetry
-	// joins the SAME traceId as the api->runner spans, instead of rooting a fresh disjoint
-	// trace. With no active span the carrier is empty => env is byte-identical to before.
+	// Propagate the active W3C trace context into the box so in-box processes can
+	// join the SAME traceId as the api->runner spans, instead of rooting a fresh
+	// disjoint trace. With no active span the carrier is empty.
 	carrier := propagation.MapCarrier{}
 	propagation.TraceContext{}.Inject(ctx, carrier)
 	if traceParent := carrier.Get("traceparent"); traceParent != "" {
@@ -140,6 +141,19 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	}
 	insecureRegistries := normalizeRegistryHosts(config.InsecureRegistries)
 	registries := buildImageRegistries(insecureRegistries, config.GhcrUsername, config.GhcrToken)
+	// docker.io auth (local dev): boxlite-core pulls box base images (e.g. the
+	// debian base disk + public user images) from docker.io; without auth those
+	// hit the anonymous Docker Hub rate limit. Mirror the ghcr.io auth entry.
+	if config.DockerHubUsername != "" && config.DockerHubToken != "" {
+		registries = append(registries, boxlite.ImageRegistry{
+			Host:      "docker.io",
+			Transport: boxlite.RegistryTransportHTTPS,
+			Auth: boxlite.ImageRegistryAuth{
+				Username: config.DockerHubUsername,
+				Password: config.DockerHubToken,
+			},
+		})
+	}
 	if len(registries) > 0 {
 		opts = append(opts, boxlite.WithImageRegistries(registries...))
 	}
@@ -201,7 +215,7 @@ func (c *Client) Close() error {
 }
 
 // Create creates a new box (VM) from the given image and configuration.
-// Returns the box ID and daemon version.
+// Returns the box ID and runtime version.
 func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error) {
 	// API sends cores / GB / GB as small integers (see apps/api Box entity).
 	cpus := int(boxDto.CpuQuota)
@@ -226,7 +240,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	for k, v := range boxDto.Env {
 		opts = append(opts, boxlite.WithEnv(k, v))
 	}
-	for k, v := range daemonBoxEnv(ctx, boxDto) {
+	for k, v := range boxRuntimeEnv(ctx, boxDto) {
 		opts = append(opts, boxlite.WithEnv(k, v))
 	}
 
@@ -248,23 +262,22 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		}
 	}
 
-	toolboxHostPort, err := c.reserveToolboxHostPort(ctx, boxDto.Id)
-	if err != nil {
-		return "", "", err
-	}
-	opts = append(opts, boxlite.WithPort(boxlite.PortSpec{Host: toolboxHostPort, Guest: ToolboxGuestPort}))
-
 	opts = append(opts, boxlite.WithNetwork(networkSpec(boxDto.NetworkBlockAll, boxDto.NetworkAllowList)))
 
-	bx, err := c.runtime.Create(ctx, boxDto.Image, opts...)
+	// GetOrCreate (not Create) so a CREATE_BOX replay is idempotent. The local
+	// box name is boxDto.Id — the control plane's globally-unique box id — so if
+	// the box was already persisted by a prior CREATE_BOX for the SAME box (e.g.
+	// the host rebooted before the job was marked COMPLETED and the poller is
+	// replaying the still-IN_PROGRESS job), the core adopts it instead of
+	// failing with "already exists", which the API would surface as a 400.
+	// The created flag (new vs adopted) is irrelevant here: either way the box
+	// now exists locally and the job can proceed, so it is discarded.
+	bx, _, err := c.runtime.GetOrCreate(ctx, boxDto.Image, opts...)
 	if err != nil {
 		if len(volumeMounts) > 0 {
 			if cleanupErr := c.removeBoxVolumeMountRecord(ctx, boxDto.Id); cleanupErr != nil {
 				c.logger.WarnContext(ctx, "failed to remove box volume mount record after create failure", "box", boxDto.Id, "error", cleanupErr)
 			}
-		}
-		if cleanupErr := c.removeToolboxPortRecord(ctx, boxDto.Id); cleanupErr != nil {
-			c.logger.WarnContext(ctx, "failed to remove toolbox port record after create failure", "box", boxDto.Id, "error", cleanupErr)
 		}
 		return "", "", fmt.Errorf("failed to create box: %w", err)
 	}
@@ -295,7 +308,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	return bx.ID(), "boxlite", nil
 }
 
-// Start starts a stopped box and returns the daemon version.
+// Start starts a stopped box and returns the runtime version.
 func (c *Client) Start(ctx context.Context, boxId string, authToken *string, metadata map[string]string) (string, error) {
 	if err := c.ensureVolumeMountsFromMetadata(ctx, boxId, metadata); err != nil {
 		c.logger.ErrorContext(ctx, "failed to ensure volume FUSE mounts", "error", err)
@@ -341,9 +354,6 @@ func (c *Client) Destroy(ctx context.Context, boxId string) error {
 
 	if err := c.removeBoxVolumeMountRecord(ctx, boxId); err != nil {
 		c.logger.WarnContext(ctx, "failed to remove box volume mount record", "box", boxId, "error", err)
-	}
-	if err := c.removeToolboxPortRecord(ctx, boxId); err != nil {
-		c.logger.WarnContext(ctx, "failed to remove toolbox port record", "box", boxId, "error", err)
 	}
 	c.CleanupOrphanedVolumeMounts(ctx)
 

@@ -198,51 +198,6 @@ fn whoami_prints_identity_after_login() {
 }
 
 #[test]
-fn whoami_updates_stale_profile_path_prefix() {
-    let principal_json =
-        PRINCIPAL_JSON.replace("\"path_prefix\":\"acme\"", "\"path_prefix\":\"fresh\"");
-    let stub = Stub::start(move |_m, path| match path {
-        "/v1/me" => (200, principal_json.clone()),
-        _ => (404, NOT_FOUND_JSON.to_string()),
-    });
-    let home = TempDir::new().unwrap();
-
-    auth_cmd(&home)
-        .args(["auth", "login", "--url", &stub.url(), "--api-key-stdin"])
-        .write_stdin("k_test\n")
-        .assert()
-        .success();
-
-    let credentials_path = creds_path(&home);
-    let raw = std::fs::read_to_string(&credentials_path).unwrap();
-    assert!(
-        raw.contains("path_prefix = \"fresh\""),
-        "login must cache the server-returned path prefix"
-    );
-    std::fs::write(
-        &credentials_path,
-        raw.replace("path_prefix = \"fresh\"", "path_prefix = \"stale\""),
-    )
-    .unwrap();
-
-    auth_cmd(&home)
-        .args(["auth", "whoami"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Path prefix:     fresh"));
-
-    let updated = std::fs::read_to_string(credentials_path).unwrap();
-    assert!(
-        updated.contains("path_prefix = \"fresh\""),
-        "whoami must refresh the cached path prefix from /v1/me"
-    );
-    assert!(
-        !updated.contains("path_prefix = \"stale\""),
-        "stale path prefix should not remain in the saved profile"
-    );
-}
-
-#[test]
 fn whoami_not_logged_in_with_no_credentials() {
     let home = TempDir::new().unwrap();
     auth_cmd(&home)

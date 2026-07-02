@@ -240,21 +240,21 @@ class TestSecretIntegration:
         secret = boxlite.Secret(
             name="testkey",
             value=real_value,
-            hosts=["httpbin.org"],
+            hosts=["httpbingo.org"],
         )
         sandbox = runtime.create(
             boxlite.BoxOptions(
                 image="alpine:latest",
                 network=boxlite.NetworkSpec(
                     mode="enabled",
-                    allow_net=["httpbin.org"],
+                    allow_net=["httpbingo.org"],
                 ),
                 secrets=[secret],
             )
         )
         try:
             # Guest sends placeholder in header; MITM substitutes real value;
-            # httpbin.org echoes it back in JSON response.
+            # httpbingo.org echoes it back in JSON response.
             execution = sandbox.exec(
                 "wget",
                 [
@@ -262,7 +262,7 @@ class TestSecretIntegration:
                     "-O-",
                     "--header",
                     "Authorization: Bearer <BOXLITE_SECRET:testkey>",
-                    "https://httpbin.org/headers",
+                    "https://httpbingo.org/headers",
                 ],
             )
             stdout = "".join(list(execution.stdout()))
@@ -297,16 +297,16 @@ class TestSecretIntegration:
                 image="alpine:latest",
                 network=boxlite.NetworkSpec(
                     mode="enabled",
-                    allow_net=["httpbin.org"],
+                    allow_net=["httpbingo.org"],
                 ),
                 secrets=[secret],
             )
         )
         try:
-            # httpbin.org is NOT in secret hosts — should work normally
+            # httpbingo.org is NOT in secret hosts — should work normally
             execution = sandbox.exec(
                 "wget",
-                ["-q", "-O-", "http://httpbin.org/ip"],
+                ["-q", "-O-", "http://httpbingo.org/ip"],
             )
             stdout = "".join(list(execution.stdout()))
             result = execution.wait()

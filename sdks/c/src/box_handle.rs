@@ -18,8 +18,8 @@ use boxlite::litebox::LiteBox;
 
 use crate::error::{BoxliteErrorCode, FFIError, null_pointer_error, write_error};
 use crate::event_queue::{
-    CBoxCreateBoxCb, CBoxGetBoxCb, CBoxRemoveBoxCb, CBoxStartBoxCb, CBoxStopBoxCb, EventQueue,
-    RuntimeEvent, push_event,
+    CBoxCreateBoxCb, CBoxGetBoxCb, CBoxGetOrCreateBoxCb, CBoxRemoveBoxCb, CBoxStartBoxCb,
+    CBoxStopBoxCb, EventQueue, RuntimeEvent, push_event,
 };
 use crate::options::OptionsHandle;
 use crate::runtime::RuntimeHandle;
@@ -47,6 +47,24 @@ pub unsafe extern "C" fn boxlite_create_box(
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
     create_box(runtime, opts, cb, user_data, out_error)
+}
+
+/// Get an existing box by name, or create a new one if it does not exist.
+///
+/// When a box with the given name already exists it returns that box instead
+/// of failing with "already exists". The callback receives an extra `created`
+/// flag: `true` when a new box was created, `false` when an existing box was
+/// adopted — letting callers distinguish the two (e.g. skip re-initialization
+/// for an adopted box).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_get_or_create_box(
+    runtime: *mut CBoxliteRuntime,
+    opts: *mut CBoxliteOptions,
+    cb: CBoxGetOrCreateBoxCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    get_or_create_box(runtime, opts, cb, user_data, out_error)
 }
 
 #[unsafe(no_mangle)]
@@ -149,6 +167,62 @@ unsafe fn create_box(
             push_event(
                 &queue,
                 RuntimeEvent::CreateBox {
+                    cb,
+                    user_data: user_data_addr,
+                    result,
+                },
+            )
+            .await;
+        });
+
+        BoxliteErrorCode::Ok
+    }
+}
+
+unsafe fn get_or_create_box(
+    runtime: *mut RuntimeHandle,
+    opts: *mut OptionsHandle,
+    cb: CBoxGetOrCreateBoxCb,
+    user_data: *mut c_void,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if runtime.is_null() {
+            write_error(out_error, null_pointer_error("runtime"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        if opts.is_null() {
+            write_error(out_error, null_pointer_error("opts"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
+
+        let runtime_ref = &*runtime;
+        let opts_handle = Box::from_raw(opts);
+        let runtime_clone = runtime_ref.runtime.clone();
+        let tokio_rt = runtime_ref.tokio_rt.clone();
+        let queue = runtime_ref.queue.clone();
+        let user_data_addr = user_data as usize;
+        let task_tokio_rt = tokio_rt.clone();
+        let task_queue = queue.clone();
+
+        tokio_rt.spawn(async move {
+            let result = runtime_clone
+                .get_or_create(opts_handle.options, opts_handle.name)
+                .await
+                .map(|(handle, created)| {
+                    let box_id = handle.id().clone();
+                    let boxed = Box::new(BoxHandle {
+                        handle: Arc::new(handle),
+                        box_id,
+                        tokio_rt: task_tokio_rt,
+                        queue: task_queue.clone(),
+                    });
+                    (crate::event_queue::OwnedFfiPtr::new(boxed), created)
+                });
+            push_event(
+                &queue,
+                RuntimeEvent::GetOrCreateBox {
                     cb,
                     user_data: user_data_addr,
                     result,

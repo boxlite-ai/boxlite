@@ -7,7 +7,7 @@
 import { RoutePath } from '@/enums/RoutePath'
 import { getBoxRouteId } from '@/lib/box-identity'
 import { BoxState } from '@boxlite-ai/api-client'
-import { Terminal, MoreVertical, Play, Square, Loader2, Wrench } from 'lucide-react'
+import { MoreVertical, Play, Square, Loader2, Wrench } from '@/components/ui/icon'
 import { generatePath, useNavigate } from 'react-router-dom'
 import { useMemo } from 'react'
 import TooltipButton from '../TooltipButton'
@@ -30,11 +30,7 @@ export function BoxTableActions({
   onStart,
   onStop,
   onDelete,
-  onOpenWebTerminal,
-  onCreateSshAccess,
-  onRevokeSshAccess,
   onRecover,
-  onScreenRecordings,
 }: BoxTableActionsProps) {
   const navigate = useNavigate()
   const isTransitioning = box.state === BoxState.STARTING || box.state === BoxState.STOPPING
@@ -81,59 +77,8 @@ export function BoxTableActions({
       disabled: isLoading,
     })
 
-    if (writePermitted) {
-      if (box.state === BoxState.STARTED) {
-        items.push({
-          key: 'terminal',
-          label: 'Terminal',
-          onClick: () => onOpenWebTerminal(box.id),
-          disabled: isLoading,
-        })
-        items.push({
-          key: 'screen-recordings',
-          label: 'Screen Recordings',
-          onClick: () => onScreenRecordings(box.id),
-          disabled: isLoading,
-        })
-        items.push({
-          key: 'stop',
-          label: 'Stop',
-          onClick: () => onStop(box.id),
-          disabled: isLoading,
-        })
-      } else if (box.state === BoxState.STOPPED) {
-        items.push({
-          key: 'start',
-          label: 'Start',
-          onClick: () => onStart(box.id),
-          disabled: isLoading,
-        })
-      } else if (box.state === BoxState.ERROR && box.recoverable) {
-        items.push({
-          key: 'recover',
-          label: 'Recover',
-          onClick: () => onRecover(box.id),
-          disabled: isLoading,
-        })
-      }
-
-      // Add SSH access options
-      items.push({
-        key: 'create-ssh',
-        label: 'Create SSH Access',
-        onClick: () => onCreateSshAccess(box.id),
-        disabled: isLoading,
-      })
-      items.push({
-        key: 'revoke-ssh',
-        label: 'Revoke SSH Access',
-        onClick: () => onRevokeSshAccess(box.id),
-        disabled: isLoading,
-      })
-    }
-
     if (deletePermitted) {
-      if (items.length > 0 && (box.state === BoxState.STOPPED || box.state === BoxState.STARTED)) {
+      if (items.length > 0) {
         items.push({ key: 'separator', type: 'separator' })
       }
 
@@ -147,23 +92,7 @@ export function BoxTableActions({
     }
 
     return items
-  }, [
-    writePermitted,
-    deletePermitted,
-    box.state,
-    box.id,
-    isLoading,
-    box.recoverable,
-    onStart,
-    onStop,
-    onDelete,
-    onOpenWebTerminal,
-    onCreateSshAccess,
-    onRevokeSshAccess,
-    onRecover,
-    onScreenRecordings,
-    navigate,
-  ])
+  }, [deletePermitted, box.id, isLoading, onDelete, navigate])
 
   if (!writePermitted && !deletePermitted) {
     return null
@@ -174,7 +103,7 @@ export function BoxTableActions({
       <div className="flex items-center justify-end gap-2">
         {writePermitted && (
           <Button
-            variant="outline"
+            variant="secondary"
             size="sm"
             className="min-w-20 justify-center"
             disabled={isLoading || isTransitioning}
@@ -229,8 +158,7 @@ export function BoxTableActions({
   return (
     <div className="flex items-center justify-end gap-2">
       <TooltipButton
-        variant="outline"
-        className="text-muted-foreground"
+        variant="secondary"
         tooltipText={primaryAction.label}
         disabled={isLoading || isTransitioning}
         onClick={(e) => {
@@ -240,30 +168,6 @@ export function BoxTableActions({
       >
         {primaryAction.icon}
       </TooltipButton>
-
-      {box.state === BoxState.STARTED ? (
-        <TooltipButton
-          variant="outline"
-          className="text-muted-foreground"
-          tooltipText="Open terminal"
-          disabled={isLoading}
-          onClick={(e) => {
-            e.stopPropagation()
-            onOpenWebTerminal(box.id)
-          }}
-        >
-          <Terminal className="w-4 h-4" />
-        </TooltipButton>
-      ) : (
-        <TooltipButton
-          variant="outline"
-          className="text-muted-foreground"
-          tooltipText="Terminal available when running"
-          disabled
-        >
-          <Terminal className="w-4 h-4" />
-        </TooltipButton>
-      )}
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>

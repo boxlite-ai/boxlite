@@ -5,7 +5,7 @@
  */
 
 import { ComponentType } from 'react'
-import { Github, Link2, Mail, LucideProps } from 'lucide-react'
+import { Github, Link2, Mail, LucideProps } from '@/components/ui/icon'
 
 type Props = {
   provider: string

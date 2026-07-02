@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { BoxState } from '@boxlite-ai/api-client'
-import { X } from 'lucide-react'
+import { X } from '@/components/ui/icon'
 import { STATUSES, getStateLabel } from '../constants'
 
 interface StateFilterProps {

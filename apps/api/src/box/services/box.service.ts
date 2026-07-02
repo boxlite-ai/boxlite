@@ -8,6 +8,7 @@ import { ForbiddenException, Injectable, Logger, NotFoundException, ConflictExce
 import { InjectRepository } from '@nestjs/typeorm'
 import { Not, Repository, LessThan, In, JsonContains, FindOptionsWhere, ILike } from 'typeorm'
 import { Box } from '../entities/box.entity'
+import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
 import { CreateBoxDto } from '../dto/create-box.dto'
 import { ResizeBoxDto } from '../dto/resize-box.dto'
 import { BoxState } from '../enums/box-state.enum'
@@ -81,6 +82,7 @@ const DEFAULT_BOX_CPU = 1
 const DEFAULT_BOX_MEM = 1
 const DEFAULT_BOX_DISK = 10
 const DEFAULT_BOX_GPU = 0
+const TERMINAL_PREVIEW_PORT = 22222
 
 @Injectable()
 export class BoxService {
@@ -242,7 +244,15 @@ export class BoxService {
       box.runnerId = runner.id
       box.pending = true
 
-      const insertedBox = await this.boxRepository.insert(box)
+      // No caller-provided name -> assign a fun default (e.g. "cozy-otter"),
+      // falling back to "cozy-otter-{boxId}" if it collides with the per-org
+      // @Unique(['organizationId', 'name']) constraint.
+      const insertedBox = createBoxDto.name
+        ? await this.boxRepository.insert(box)
+        : await persistWithGeneratedBoxName(box.id, (name) => {
+            box.name = name
+            return this.boxRepository.insert(box)
+          })
 
       this.eventEmitter
         .emitAsync(BoxEvents.CREATED, new BoxCreatedEvent(insertedBox))
@@ -251,7 +261,11 @@ export class BoxService {
       return this.toBoxDto(insertedBox)
     } catch (error) {
       if (error.code === '23505') {
-        throw new ConflictException(`Box with name ${createBoxDto.name} already exists`)
+        throw new ConflictException(
+          createBoxDto.name
+            ? `Box with name ${createBoxDto.name} already exists`
+            : 'Could not allocate a unique box name, please retry',
+        )
       }
 
       throw error
@@ -272,10 +286,6 @@ export class BoxService {
       autoStopInterval: this.resolveAutoStopInterval(
         createBoxDto.autoStopInterval ?? DEFAULT_AUTO_STOP_INTERVAL_MINUTES,
       ),
-    }
-
-    if (createBoxDto.name) {
-      updateData.name = createBoxDto.name
     }
 
     if (createBoxDto.autoDeleteInterval !== undefined) {
@@ -309,10 +319,19 @@ export class BoxService {
       )
     }
 
-    const updatedBox = await this.boxRepository.update(warmPoolBox.id, {
-      updateData,
-      entity: warmPoolBox,
-    })
+    // Resolve the name at persist time. A caller-provided name updates in one
+    // shot (reusing the pre-fetched entity). A generated default falls back to
+    // "{name}-{boxId}" on collision and omits `entity` so each attempt re-reads
+    // the row — reusing the mutated entity would corrupt the optimistic-update
+    // guard.
+    const updatedBox = createBoxDto.name
+      ? await this.boxRepository.update(warmPoolBox.id, {
+          updateData: { ...updateData, name: createBoxDto.name },
+          entity: warmPoolBox,
+        })
+      : await persistWithGeneratedBoxName(warmPoolBox.id, (name) =>
+          this.boxRepository.update(warmPoolBox.id, { updateData: { ...updateData, name } }),
+        )
 
     // Defensive invalidation of orgId cache since the box moved from unassigned to a real organization
     this.boxLookupCacheInvalidationService.invalidateOrgId({
@@ -656,6 +675,9 @@ export class BoxService {
     if (port < 1 || port > 65535) {
       throw new BadRequestError('Invalid port')
     }
+    if (port !== TERMINAL_PREVIEW_PORT) {
+      throw new BadRequestError(`Port preview is only supported for terminal port ${TERMINAL_PREVIEW_PORT}`)
+    }
 
     const proxyDomain = this.configService.getOrThrow('proxy.domain')
     const proxyProtocol = this.configService.getOrThrow('proxy.protocol')
@@ -685,6 +707,9 @@ export class BoxService {
   ): Promise<SignedPortPreviewUrlDto> {
     if (port < 1 || port > 65535) {
       throw new BadRequestError('Invalid port')
+    }
+    if (port !== TERMINAL_PREVIEW_PORT) {
+      throw new BadRequestError(`Signed port preview is only supported for terminal port ${TERMINAL_PREVIEW_PORT}`)
     }
 
     if (expiresInSeconds < 1 || expiresInSeconds > 60 * 60 * 24) {

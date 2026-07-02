@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -41,9 +40,6 @@ const BOX_AUTH_COOKIE_NAME = "boxlite-box-auth-"
 const SKIP_LAST_ACTIVITY_UPDATE_HEADER = "X-BoxLite-Skip-Last-Activity-Update"
 const ACTIVITY_POLL_STOP_KEY = "boxlite-activity-poll-stop"
 const TERMINAL_PORT = "22222"
-const TOOLBOX_PORT = "2280"
-const RECORDING_DASHBOARD_PORT = "33333"
-const IS_TOOLBOX_REQUEST_KEY = "is-toolbox-request"
 
 // stopActivityPoll retrieves and calls the activity poll stop function from the gin context.
 // This ensures the polling goroutine is stopped when the request (including WebSocket) finishes.
@@ -172,7 +168,7 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 			return
 		}
 
-		targetPort, _, _, err := proxy.parseHost(ctx.Request.Host)
+		_, _, _, err := proxy.parseHost(ctx.Request.Host)
 		// if the host is not valid, we don't proxy the request
 		if err != nil {
 			switch ctx.Request.Method {
@@ -189,35 +185,6 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 				}
 			}
 
-			if strings.HasPrefix(ctx.Request.URL.Path, "/toolbox/") {
-				ctx.Set(IS_TOOLBOX_REQUEST_KEY, true)
-				_, boxID, _, err := proxy.parseToolboxSubpath(ctx.Request.URL.Path)
-				if err != nil {
-					ctx.Error(common_errors.NewNotFoundError(errors.New("not found")))
-					return
-				}
-
-				prefix := fmt.Sprintf("/toolbox/%s", boxID)
-
-				modifyResponse := func(res *http.Response) error {
-					if res.StatusCode >= 300 && res.StatusCode < 400 {
-						if loc := res.Header.Get("Location"); !strings.HasPrefix(loc, prefix) {
-							res.Header.Set("Location", prefix+loc)
-						}
-					}
-					return nil
-				}
-
-				common_proxy.NewProxyRequestHandler(proxy.GetProxyTarget, modifyResponse)(ctx)
-				return
-			}
-
-			ctx.Error(common_errors.NewNotFoundError(errors.New("not found")))
-			return
-		}
-
-		// If toolbox only mode is enabled, only allow requests to the toolbox port
-		if targetPort != TOOLBOX_PORT && proxy.config.ToolboxOnlyMode {
 			ctx.Error(common_errors.NewNotFoundError(errors.New("not found")))
 			return
 		}

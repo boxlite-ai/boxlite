@@ -8,18 +8,34 @@ import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
 import { RoutePath } from '@/enums/RoutePath'
+import { useStartBoxMutation } from '@/hooks/mutations/useStartBoxMutation'
 import { useTerminalSessionQuery } from '@/hooks/queries/useTerminalSessionQuery'
 import { useBoxSessionContext } from '@/hooks/useBoxSessionContext'
+import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { getBoxRouteId } from '@/lib/box-identity'
+import { handleApiError } from '@/lib/error-handling'
 import { isStoppable } from '@/lib/utils/box'
-import { Box } from '@boxlite-ai/api-client'
+import { Box, OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
 import { Spinner } from '@/components/ui/spinner'
-import { Play, RefreshCw, TerminalSquare } from 'lucide-react'
+import { Play, RefreshCw, TerminalSquare } from '@/components/ui/icon'
+import { toast } from 'sonner'
 import { BoxTerminalFrame } from './BoxTerminalFrame'
 
 export function BoxTerminalTab({ box }: { box: Box }) {
   const running = isStoppable(box)
   const { isTerminalActivated, activateTerminal } = useBoxSessionContext()
+  const { authenticatedUserHasPermission } = useSelectedOrganization()
+  const writePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
+  const startMutation = useStartBoxMutation()
+
+  const handleStart = async () => {
+    try {
+      await startMutation.mutateAsync({ boxId: box.id, detailRef: getBoxRouteId(box) })
+      toast.success('Box started')
+    } catch (error) {
+      handleApiError(error, 'Failed to start box')
+    }
+  }
 
   const [activated, setActivated] = useState(() => isTerminalActivated(box.id))
 
@@ -33,11 +49,11 @@ export function BoxTerminalTab({ box }: { box: Box }) {
   if (!running) {
     return (
       <div className="flex-1 flex flex-col p-2 sm:p-4">
-        <div className="flex-1 min-h-0 rounded-md border border-border flex">
+        <div className="flex-1 min-h-0 flex">
           <Empty className="border-0">
             <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <TerminalSquare className="size-4" />
+              <EmptyMedia>
+                <TerminalSquare className="size-12 text-muted-foreground" />
               </EmptyMedia>
               <EmptyTitle>Box is not running</EmptyTitle>
               <EmptyDescription>
@@ -48,6 +64,12 @@ export function BoxTerminalTab({ box }: { box: Box }) {
                 .
               </EmptyDescription>
             </EmptyHeader>
+            {writePermitted && (
+              <Button onClick={handleStart} disabled={startMutation.isPending}>
+                {startMutation.isPending ? <Spinner className="size-4" /> : <Play className="size-4" />}
+                Start box
+              </Button>
+            )}
           </Empty>
         </div>
       </div>
@@ -58,11 +80,11 @@ export function BoxTerminalTab({ box }: { box: Box }) {
   if (!activated) {
     return (
       <div className="flex-1 flex flex-col p-2 sm:p-4">
-        <div className="flex-1 min-h-0 rounded-md border border-border flex">
+        <div className="flex-1 min-h-0 flex">
           <Empty className="border-0">
             <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <TerminalSquare className="size-4" />
+              <EmptyMedia>
+                <TerminalSquare className="size-12 text-muted-foreground" />
               </EmptyMedia>
               <EmptyTitle>Terminal</EmptyTitle>
               <EmptyDescription>
@@ -87,7 +109,7 @@ export function BoxTerminalTab({ box }: { box: Box }) {
   if (isLoading || isFetching) {
     return (
       <div className="flex-1 flex flex-col p-2 sm:p-4">
-        <div className="flex-1 min-h-0 rounded-md border border-border flex items-center justify-center gap-2 text-muted-foreground">
+        <div className="flex-1 min-h-0 flex items-center justify-center gap-2 text-muted-foreground">
           <Spinner className="size-4" />
           <span className="text-sm">Connecting...</span>
         </div>
@@ -99,7 +121,7 @@ export function BoxTerminalTab({ box }: { box: Box }) {
   if (isError || !session) {
     return (
       <div className="flex-1 flex flex-col p-2 sm:p-4">
-        <div className="flex-1 min-h-0 rounded-md border border-border flex">
+        <div className="flex-1 min-h-0 flex">
           <Empty className="border-0">
             <EmptyHeader>
               <EmptyTitle>Failed to connect</EmptyTitle>
@@ -118,8 +140,8 @@ export function BoxTerminalTab({ box }: { box: Box }) {
   // Active session
   const fullscreenHref = RoutePath.BOX_TERMINAL.replace(':boxId', getBoxRouteId(box))
   return (
-    <div className="flex-1 flex flex-col p-2 sm:p-4">
-      <div className="relative flex-1 min-h-0 rounded-md border border-border bg-black overflow-hidden p-1">
+    <div className="flex-1 flex flex-col">
+      <div className="relative flex-1 min-h-0 bg-black overflow-hidden">
         <BoxTerminalFrame sessionUrl={session.url} fullscreenHref={fullscreenHref} className="h-full" />
       </div>
     </div>

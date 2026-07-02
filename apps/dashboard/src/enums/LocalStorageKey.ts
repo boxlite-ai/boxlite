@@ -9,5 +9,5 @@ export enum LocalStorageKey {
   SkipOnboardingPrefix = 'SkipOnboarding_',
   OnboardingProgressPrefix = 'OnboardingProgress_',
   AnnouncementBannerDismissed = 'AnnouncementBannerDismissed',
-  BoxTableColumnVisibility = 'BoxTableColumnVisibility',
+  BoxTableColumnVisibility = 'BoxTableColumnVisibilityV2',
 }

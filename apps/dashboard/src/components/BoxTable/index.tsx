@@ -4,39 +4,102 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { RoutePath } from '@/enums/RoutePath'
-import { useCommandPaletteAnalytics } from '@/hooks/useCommandPaletteAnalytics'
-import { useIsCompactScreen } from '@/hooks/use-mobile'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { getBoxDisplayName, getBoxPublicIdLabel } from '@/lib/box-identity'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { cn } from '@/lib/utils'
-import { filterDeletable, filterStartable, filterStoppable, getBulkActionCounts } from '@/lib/utils/box'
+import { cn, getRelativeTimeString } from '@/lib/utils'
+import { isRecoverable, isStartable, isStoppable, isTransitioning } from '@/lib/utils/box'
 import { OrganizationRolePermissionsEnum, Box, BoxState } from '@boxlite-ai/api-client'
-import { flexRender } from '@tanstack/react-table'
-import { Container } from 'lucide-react'
-import { AnimatePresence } from 'motion/react'
-import { type ReactNode, useCallback, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { useCommandPaletteActions } from '../CommandPalette'
-import { Pagination } from '../Pagination'
-import { ResourceChip } from '../ResourceChip'
-import { SelectionToast } from '../SelectionToast'
-import { TableEmptyState } from '../TableEmptyState'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table'
-import { BulkAction, BulkActionAlertDialog } from './BulkActionAlertDialog'
-import { getBoxDisplayName, getBoxLastEvent, getBoxPublicIdLabel } from './columns'
-import { BoxState as BoxStateComponent } from './BoxState'
-import { BoxTableActions } from './BoxTableActions'
-import { BoxTableHeader } from './BoxTableHeader'
+import {
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  Container,
+  Loader2,
+  MoreHorizontal,
+  Pause,
+  Play,
+  RotateCcw,
+  Trash2,
+} from '@/components/ui/icon'
+import { type ReactNode } from 'react'
 import { BoxTableProps } from './types'
-import { useBoxCommands } from './useBoxCommands'
-import { useBoxTable } from './useBoxTable'
+import { PAGE_SIZE_OPTIONS } from '@/constants/Pagination'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
-function CompactBoxMeta({ label, children }: { label: string; children: ReactNode }) {
+// Exact design palette (Boxes page.dc.html statusColors) — used inline so the
+// status dots/labels render at the precise hue, not a token approximation.
+const STATUS = {
+  running: '#5ad67d',
+  idle: '#e0b341',
+  stopped: '#8C919C',
+  error: '#e0564a',
+  dim: '#5b616e',
+} as const
+
+function statusOf(box: Box): { label: string; color: string } {
+  switch (box.state) {
+    case BoxState.STARTED:
+      return { label: 'RUNNING', color: STATUS.running }
+    case BoxState.STOPPED:
+      return { label: 'STOPPED', color: STATUS.stopped }
+    case BoxState.ERROR:
+      return { label: 'ERROR', color: STATUS.error }
+    case BoxState.CREATING:
+    case BoxState.STARTING:
+    case BoxState.RESTORING:
+      return { label: 'STARTING', color: STATUS.idle }
+    case BoxState.STOPPING:
+      return { label: 'STOPPING', color: STATUS.idle }
+    case BoxState.DESTROYING:
+      return { label: 'DELETING', color: STATUS.idle }
+    case BoxState.RESIZING:
+      return { label: 'RESIZING', color: STATUS.idle }
+    case BoxState.DESTROYED:
+      return { label: 'DELETED', color: STATUS.dim }
+    default:
+      return { label: (box.state ?? 'UNKNOWN').toUpperCase(), color: STATUS.dim }
+  }
+}
+
+// Proportional columns so the gaps stay even as the table widens, instead of
+// dumping all the slack into the Name column.
+const GRID = 'grid-cols-[2fr_1.3fr_1fr_120px] gap-x-4'
+
+function IconButton({
+  title,
+  onClick,
+  children,
+  className,
+  disabled,
+}: {
+  title: string
+  onClick: (e: React.MouseEvent) => void
+  children: ReactNode
+  className?: string
+  disabled?: boolean
+}) {
   return (
-    <div className="min-w-0 space-y-1">
-      <div className="shrink-0 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{label}</div>
-      <div className="min-w-0 text-foreground">{children}</div>
-    </div>
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      disabled={disabled}
+      className={`inline-flex h-[26px] w-7 items-center justify-center border border-border text-foreground transition-colors enabled:hover:border-brand enabled:hover:bg-brand enabled:hover:text-background focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:cursor-default disabled:text-muted-foreground ${className ?? ''}`}
+    >
+      {children}
+    </button>
+  )
+}
+
+function Quota({ label, value, unit }: { label: string; value: number; unit: string }) {
+  return (
+    <span className="inline-flex items-baseline gap-[5px] font-mono text-[11px]">
+      <span className="text-[9px] tracking-[0.5px] text-muted-foreground">{label}</span>
+      <span>{value}</span>
+      <span className="text-[9px] text-muted-foreground">{unit}</span>
+    </span>
   )
 }
 
@@ -45,350 +108,345 @@ export function BoxTable({
   boxIsLoading,
   boxStateIsTransitioning,
   loading,
+  isPageFetching = false,
   handleStart,
   handleStop,
   handleDelete,
-  handleBulkDelete,
-  handleBulkStart,
-  handleBulkStop,
-  getWebTerminalUrl,
-  handleCreateSshAccess,
-  handleRevokeSshAccess,
-  handleScreenRecordings,
-  handleRefresh,
-  isRefreshing,
   onRowClick,
   pagination,
   pageCount,
   totalItems,
   onPaginationChange,
-  sorting,
-  onSortingChange,
-  filters,
-  onFiltersChange,
   handleRecover,
-  headerAction,
 }: BoxTableProps) {
-  const navigate = useNavigate()
-  const useCompactList = useIsCompactScreen()
   const { authenticatedUserHasPermission } = useSelectedOrganization()
   const writePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
   const deletePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.DELETE_BOXES)
 
-  const { table } = useBoxTable({
-    data,
-    boxIsLoading,
-    writePermitted,
-    deletePermitted,
-    handleStart,
-    handleStop,
-    handleDelete,
-    getWebTerminalUrl,
-    handleCreateSshAccess,
-    handleRevokeSshAccess,
-    handleScreenRecordings,
-    pagination,
-    pageCount,
-    onPaginationChange,
-    sorting,
-    onSortingChange,
-    filters,
-    onFiltersChange,
-    handleRecover,
-  })
-
-  const [pendingBulkAction, setPendingBulkAction] = useState<BulkAction | null>(null)
-
-  const selectedRows = table.getRowModel().rows.filter((row) => row.getIsSelected())
-  const hasSelection = selectedRows.length > 0
-  const selectedCount = selectedRows.length
-  const totalCount = table.getRowModel().rows.length
-  const selectedBoxes: Box[] = selectedRows.map((row) => row.original)
-
-  const bulkActionCounts = useMemo(() => getBulkActionCounts(selectedBoxes), [selectedBoxes])
-
-  const handleBulkActionConfirm = () => {
-    if (!pendingBulkAction) return
-
-    const handlers: Record<BulkAction, () => void> = {
-      [BulkAction.Delete]: () => handleBulkDelete(filterDeletable(selectedBoxes).map((s) => s.id)),
-      [BulkAction.Start]: () => handleBulkStart(filterStartable(selectedBoxes).map((s) => s.id)),
-      [BulkAction.Stop]: () => handleBulkStop(filterStoppable(selectedBoxes).map((s) => s.id)),
+  const pageIndex = pagination.pageIndex
+  const pageSize = pagination.pageSize
+  const isPagingLocked = loading || isPageFetching
+  const pageTotal = Math.max(pageCount, 1)
+  const shownFirstItem = totalItems === 0 || data.length === 0 ? 0 : Math.min(pageIndex * pageSize + 1, totalItems)
+  const shownLastItem =
+    totalItems === 0 || data.length === 0 ? 0 : Math.min(pageIndex * pageSize + data.length, totalItems)
+  const itemRangeLabel =
+    isPageFetching
+      ? 'Loading boxes...'
+      : totalItems === 0
+        ? 'Showing 0 boxes'
+        : `Showing ${shownFirstItem.toLocaleString('en-US')}-${shownLastItem.toLocaleString('en-US')} of ${totalItems.toLocaleString('en-US')} boxes`
+  const goTo = (index: number) => {
+    if (isPagingLocked || index === pageIndex || index < 0 || index >= pageCount) {
+      return
     }
 
-    handlers[pendingBulkAction]()
-    setPendingBulkAction(null)
-    table.toggleAllRowsSelected(false)
+    onPaginationChange({ pageIndex: index, pageSize })
   }
+  const handlePageSizeChange = (value: string) => {
+    const nextPageSize = Number(value)
 
-  const toggleAllRowsSelected = useCallback(
-    (selected: boolean) => {
-      if (selected) {
-        for (const row of table.getRowModel().rows) {
-          const selectDisabled = boxIsLoading[row.original.id] || row.original.state === BoxState.DESTROYED
-          if (!selectDisabled) {
-            row.toggleSelected(true)
-          }
-        }
-      } else {
-        table.toggleAllRowsSelected(selected)
-      }
-    },
-    [boxIsLoading, table],
-  )
+    if (!Number.isFinite(nextPageSize) || nextPageSize === pageSize) {
+      return
+    }
 
-  const selectableCount = useMemo(() => {
-    return data.filter((box) => !boxIsLoading[box.id] && box.state !== BoxState.DESTROYED).length
-  }, [boxIsLoading, data])
-
-  useBoxCommands({
-    writePermitted,
-    deletePermitted,
-    selectedCount,
-    totalCount,
-    selectableCount,
-    toggleAllRowsSelected,
-    bulkActionCounts,
-    onDelete: () => setPendingBulkAction(BulkAction.Delete),
-    onStart: () => setPendingBulkAction(BulkAction.Start),
-    onStop: () => setPendingBulkAction(BulkAction.Stop),
-  })
-
-  const { setIsOpen } = useCommandPaletteActions()
-  const { trackOpened } = useCommandPaletteAnalytics()
-  const handleOpenCommandPalette = () => {
-    trackOpened('box_selection_toast')
-    setIsOpen(true)
+    onPaginationChange({ pageIndex: 0, pageSize: nextPageSize })
   }
+  const canPrev = pageIndex > 0
+  const canNext = pageCount > 0 && pageIndex < pageCount - 1
 
-  const handleOpenWebTerminal = useCallback(
-    async (boxId: string) => {
-      const url = await getWebTerminalUrl(boxId)
-      if (url) {
-        window.open(url, '_blank')
-      }
-    },
-    [getWebTerminalUrl],
-  )
+  const renderActions = (box: Box, buttonClassName?: string, iconClassName = 'size-[13px]') => {
+    const startable = isStartable(box)
+    const stoppable = isStoppable(box)
+    const recoverable = isRecoverable(box)
+    const transitioning = isTransitioning(box)
 
-  const emptyStateDescription = (
-    <div className="space-y-2">
-      <p>Spin up a Box to run code in an isolated environment.</p>
-      <p>Use the BoxLite SDK or CLI to create one.</p>
-      <p>
-        <button onClick={() => navigate(RoutePath.ONBOARDING)} className="text-primary hover:underline font-medium">
-          Check out the Onboarding guide
-        </button>{' '}
-        to learn more.
-      </p>
-    </div>
-  )
+    return (
+      <>
+        {writePermitted && recoverable && (
+          <IconButton title="Recover" onClick={() => handleRecover(box.id)} className={buttonClassName}>
+            <RotateCcw className={iconClassName} strokeWidth={1.3} />
+          </IconButton>
+        )}
+        {writePermitted && startable && (
+          <IconButton title="Start" onClick={() => handleStart(box.id)} className={buttonClassName}>
+            <Play className={iconClassName} strokeWidth={1.3} fill="currentColor" />
+          </IconButton>
+        )}
+        {writePermitted && stoppable && (
+          <IconButton title="Stop" onClick={() => handleStop(box.id)} className={buttonClassName}>
+            <Pause className={iconClassName} strokeWidth={1.3} fill="currentColor" />
+          </IconButton>
+        )}
+        {writePermitted && transitioning && !startable && !stoppable && !recoverable && (
+          <IconButton title="Working…" onClick={() => undefined} disabled className={buttonClassName}>
+            <Loader2 className={`${iconClassName} animate-spin`} strokeWidth={1.3} />
+          </IconButton>
+        )}
+        {deletePermitted && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                title="More"
+                className={`inline-flex h-[26px] w-7 items-center justify-center border border-border text-foreground outline-none transition-colors hover:border-brand hover:bg-brand hover:text-background focus-visible:border-brand focus-visible:ring-2 focus-visible:ring-brand/35 data-[state=open]:border-brand data-[state=open]:bg-brand data-[state=open]:text-background ${buttonClassName ?? ''}`}
+              >
+                <MoreHorizontal className={iconClassName} strokeWidth={1.3} />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-[12rem]">
+              <DropdownMenuItem
+                className="cursor-pointer text-destructive focus:text-destructive"
+                onClick={() => handleDelete(box.id)}
+              >
+                <Trash2 className="size-4" />
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </>
+    )
+  }
 
   return (
-    <>
-      <BoxTableHeader table={table} onRefresh={handleRefresh} isRefreshing={isRefreshing} headerAction={headerAction} />
-
-      {useCompactList ? (
-        loading ? (
-          <div className="rounded-sm border border-border px-4 py-8 text-sm text-muted-foreground">Loading...</div>
-        ) : table.getRowModel().rows?.length ? (
-          <div className="overflow-hidden rounded-sm border border-border bg-background/40">
-            {table.getRowModel().rows.map((row) => {
-              const box = row.original
-              const lastEvent = getBoxLastEvent(box)
-
-              return (
-                <div
-                  key={row.id}
-                  className={cn('border-b border-border last:border-b-0', {
-                    'opacity-80 pointer-events-none': boxIsLoading[box.id] || box.state === BoxState.DESTROYED,
-                    'bg-muted animate-pulse': boxStateIsTransitioning[box.id],
-                  })}
-                >
-                  <div
-                    role={onRowClick ? 'button' : undefined}
-                    tabIndex={onRowClick ? 0 : undefined}
-                    className={cn(
-                      'w-full px-4 py-3 text-left transition-colors hover:bg-muted/30 focus-visible:bg-muted/40 focus-visible:outline-none',
-                      {
-                        'cursor-pointer': onRowClick,
-                      },
-                    )}
-                    onClick={() => onRowClick?.(box)}
-                    onKeyDown={(event) => {
-                      if ((event.key === 'Enter' || event.key === ' ') && onRowClick) {
-                        event.preventDefault()
-                        onRowClick(box)
-                      }
-                    }}
-                  >
-                    <div className="grid w-full gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] md:items-center md:gap-4">
-                      <div className="min-w-0 space-y-0.5">
-                        <div className="truncate text-sm font-medium text-primary">{getBoxDisplayName(box)}</div>
-                        <div className="truncate font-mono text-xs text-muted-foreground">
-                          {getBoxPublicIdLabel(box)}
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-1 gap-x-5 gap-y-3 text-xs sm:grid-cols-2 xl:grid-cols-4">
-                        <CompactBoxMeta label="Resources">
-                          <div className="flex flex-wrap gap-1">
-                            <ResourceChip resource="cpu" value={box.cpu} />
-                            <ResourceChip resource="memory" value={box.memory} />
-                            <ResourceChip resource="disk" value={box.disk} />
-                          </div>
-                        </CompactBoxMeta>
-                        <CompactBoxMeta label="Last">{lastEvent.relativeTimeString}</CompactBoxMeta>
-                      </div>
-
-                      <div className="flex items-center justify-between gap-3 md:justify-end">
-                        <BoxStateComponent
-                          state={box.state}
-                          errorReason={box.errorReason}
-                          recoverable={box.recoverable}
-                          className="text-xs"
-                        />
-                        <BoxTableActions
-                          box={box}
-                          layout="mobile"
-                          writePermitted={writePermitted}
-                          deletePermitted={deletePermitted}
-                          isLoading={boxIsLoading[box.id]}
-                          onStart={handleStart}
-                          onStop={handleStop}
-                          onDelete={handleDelete}
-                          onOpenWebTerminal={handleOpenWebTerminal}
-                          onCreateSshAccess={handleCreateSshAccess}
-                          onRevokeSshAccess={handleRevokeSshAccess}
-                          onRecover={handleRecover}
-                          onScreenRecordings={handleScreenRecordings}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        ) : (
-          <div className="flex min-h-56 flex-col items-center justify-center rounded-sm border border-dashed border-border px-6 py-10 text-center">
-            <Container className="mb-4 h-8 w-8 text-muted-foreground" />
-            <div className="text-sm font-medium">No Boxes yet.</div>
-            <div className="mt-2 max-w-sm text-sm text-muted-foreground">{emptyStateDescription}</div>
-          </div>
-        )
-      ) : (
-        <div className="overflow-x-auto rounded-sm border border-border bg-card">
-          <Table
-            className="min-w-[1120px] border-separate border-spacing-0 [&_tbody_td]:py-1"
-            style={{ tableLayout: 'fixed' }}
-          >
-            <TableHeader>
-              {table.getHeaderGroups().map((headerGroup) => (
-                <TableRow key={headerGroup.id}>
-                  {headerGroup.headers.map((header) => {
-                    return (
-                      <TableHead
-                        key={header.id}
-                        data-state={header.column.getCanSort() && 'sortable'}
-                        className={cn(
-                          'sticky top-0 z-[3] border-b border-border bg-card',
-                          header.column.getCanSort() ? 'hover:bg-muted' : '',
-                        )}
-                        style={{
-                          width: `${header.column.getSize()}px`,
-                        }}
-                      >
-                        {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                      </TableHead>
-                    )
-                  })}
-                </TableRow>
-              ))}
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={table.getAllColumns().length} className="h-10 text-center">
-                    Loading...
-                  </TableCell>
-                </TableRow>
-              ) : table.getRowModel().rows?.length ? (
-                table.getRowModel().rows.map((row) => (
-                  <TableRow
-                    key={row.id}
-                    data-state={row.getIsSelected() && 'selected'}
-                    className={cn('group/table-row transition-all', {
-                      'opacity-80 pointer-events-none':
-                        boxIsLoading[row.original.id] || row.original.state === BoxState.DESTROYED,
-                      'bg-muted animate-pulse': boxStateIsTransitioning[row.original.id],
-                      'cursor-pointer': onRowClick,
-                    })}
-                    onClick={() => onRowClick?.(row.original)}
-                  >
-                    {row.getVisibleCells().map((cell) => (
-                      <TableCell
-                        key={cell.id}
-                        onClick={(e) => {
-                          if (cell.column.id === 'select' || cell.column.id === 'actions') {
-                            e.stopPropagation()
-                          }
-                        }}
-                        className={cn('border-b border-border', {
-                          'group-hover/table-row:underline': cell.column.id === 'name',
-                        })}
-                        style={{
-                          width: `${cell.column.getSize()}px`,
-                        }}
-                        sticky={cell.column.id === 'actions' ? 'right' : undefined}
-                      >
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                ))
-              ) : (
-                <TableEmptyState
-                  colSpan={table.getAllColumns().length}
-                  message="No Boxes yet."
-                  icon={<Container className="w-8 h-8" />}
-                  description={emptyStateDescription}
-                />
-              )}
-            </TableBody>
-          </Table>
-        </div>
-      )}
-
-      <div className="flex items-center justify-end relative">
-        <Pagination className="pb-2 pt-4" table={table} entityName="Boxes" totalItems={totalItems} />
-
-        <AnimatePresence>
-          {!useCompactList && hasSelection && (
-            <SelectionToast
-              className="absolute bottom-5 left-1/2 -translate-x-1/2 z-50"
-              selectedCount={selectedRows.length}
-              onClearSelection={() => table.resetRowSelection()}
-              onActionClick={handleOpenCommandPalette}
-            />
-          )}
-        </AnimatePresence>
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* header */}
+      <div
+        className={`hidden ${GRID} flex-none items-center border-b border-border px-[18px] pb-[11px] font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground md:grid`}
+      >
+        <span>Name</span>
+        <span>Box ID</span>
+        <span>Status</span>
+        <span className="text-right">Actions</span>
       </div>
 
-      <BulkActionAlertDialog
-        action={pendingBulkAction}
-        count={
-          pendingBulkAction
-            ? {
-                [BulkAction.Delete]: bulkActionCounts.deletable,
-                [BulkAction.Start]: bulkActionCounts.startable,
-                [BulkAction.Stop]: bulkActionCounts.stoppable,
-              }[pendingBulkAction]
-            : 0
-        }
-        onConfirm={handleBulkActionConfirm}
-        onCancel={() => setPendingBulkAction(null)}
-      />
-    </>
+      {/* rows */}
+      <div
+        className={cn(
+          'hidden min-h-0 flex-1 overflow-y-auto md:block',
+          isPageFetching && 'opacity-60 transition-opacity',
+        )}
+        aria-busy={loading || isPageFetching}
+      >
+        {loading ? (
+          Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className={`grid ${GRID} items-center border-b border-border px-[18px] py-3`}>
+              <div className="h-4 w-40 animate-pulse bg-card" />
+            </div>
+          ))
+        ) : data.length === 0 ? (
+          <div className="flex flex-col items-center justify-center px-6 py-20 text-center">
+            <Container className="mb-4 size-8 text-muted-foreground" strokeWidth={1.3} />
+            <div className="text-sm font-medium">No boxes yet.</div>
+            <div className="mt-2 max-w-sm text-[13px] text-muted-foreground">
+              Spin up a Box with the BoxLite SDK or CLI, or hit “New Box”.
+            </div>
+          </div>
+        ) : (
+          data.map((box) => {
+            const st = statusOf(box)
+            const name = getBoxDisplayName(box)
+            const busy = boxIsLoading[box.id]
+            const transitioning = boxStateIsTransitioning[box.id]
+
+            return (
+              <div
+                key={box.id}
+                onClick={() => onRowClick?.(box)}
+                className={`grid ${GRID} items-center border-b border-border px-[18px] py-3 text-[13px] transition-colors hover:bg-card ${
+                  onRowClick ? 'cursor-pointer' : ''
+                } ${busy ? 'pointer-events-none opacity-70' : ''} ${transitioning ? 'animate-pulse' : ''}`}
+              >
+                {/* name */}
+                <span className="inline-flex items-center gap-2 truncate font-semibold">
+                  <span style={{ color: 'hsl(var(--brand))' }} className="text-[10px]">
+                    ▸
+                  </span>
+                  <span className="truncate">{name}</span>
+                </span>
+
+                {/* box id */}
+                <span className="truncate font-mono text-[11px] text-muted-foreground">{getBoxPublicIdLabel(box)}</span>
+
+                {/* status */}
+                <span className="flex items-center gap-[7px] font-mono text-[11px] tracking-[0.5px]">
+                  <span className="size-[7px]" style={{ background: st.color, boxShadow: `0 0 6px ${st.color}` }} />
+                  <span style={{ color: st.color }}>{st.label}</span>
+                </span>
+
+                {/* actions */}
+                <div className="flex justify-end gap-[6px]" onClick={(e) => e.stopPropagation()}>
+                  {renderActions(box)}
+                </div>
+              </div>
+            )
+          })
+        )}
+      </div>
+
+      <div
+        className={cn(
+          'min-h-0 flex-1 space-y-3 overflow-y-auto md:hidden',
+          isPageFetching && 'opacity-60 transition-opacity',
+        )}
+        aria-busy={loading || isPageFetching}
+      >
+        {loading ? (
+          Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="border border-border bg-card p-4">
+              <div className="h-4 w-36 animate-pulse bg-background" />
+              <div className="mt-4 h-3 w-52 animate-pulse bg-background" />
+            </div>
+          ))
+        ) : data.length === 0 ? (
+          <div className="flex flex-col items-center justify-center border border-dashed border-border px-6 py-16 text-center">
+            <Container className="mb-4 size-8 text-muted-foreground" strokeWidth={1.3} />
+            <div className="text-sm font-medium">No boxes yet.</div>
+            <div className="mt-2 max-w-sm text-[13px] text-muted-foreground">
+              Spin up a Box with the BoxLite SDK or CLI, or hit “New Box”.
+            </div>
+          </div>
+        ) : (
+          data.map((box) => {
+            const st = statusOf(box)
+            const name = getBoxDisplayName(box)
+            const created = getRelativeTimeString(box.createdAt).relativeTimeString.toUpperCase()
+            const busy = boxIsLoading[box.id]
+            const transitioning = boxStateIsTransitioning[box.id]
+
+            return (
+              <div
+                key={box.id}
+                role={onRowClick ? 'button' : undefined}
+                tabIndex={onRowClick ? 0 : undefined}
+                onClick={() => onRowClick?.(box)}
+                onKeyDown={(e) => {
+                  if (!onRowClick || (e.key !== 'Enter' && e.key !== ' ')) return
+                  e.preventDefault()
+                  onRowClick(box)
+                }}
+                className={`w-full border border-border bg-background p-4 text-left transition-colors hover:bg-card focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 ${
+                  onRowClick ? 'cursor-pointer' : ''
+                } ${busy ? 'pointer-events-none opacity-70' : ''} ${transitioning ? 'animate-pulse' : ''}`}
+              >
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                  <span className="min-w-0">
+                    <span className="flex min-w-0 items-center gap-2 font-semibold">
+                      <span style={{ color: 'hsl(var(--brand))' }} className="text-[10px]">
+                        ▸
+                      </span>
+                      <span className="truncate">{name}</span>
+                    </span>
+                    <span className="mt-1 block truncate font-mono text-[11px] text-muted-foreground">
+                      {getBoxPublicIdLabel(box)}
+                    </span>
+                  </span>
+                  <span className="flex shrink-0 items-center gap-[7px] font-mono text-[11px] tracking-[0.5px]">
+                    <span className="size-[7px]" style={{ background: st.color, boxShadow: `0 0 6px ${st.color}` }} />
+                    <span style={{ color: st.color }}>{st.label}</span>
+                  </span>
+                </div>
+
+                <div className="mt-4 grid grid-cols-3 gap-2 border-y border-dashed border-border py-3">
+                  <Quota label="CPU" value={box.cpu} unit="vCPU" />
+                  <Quota label="RAM" value={box.memory} unit="GB" />
+                  <Quota label="DISK" value={box.disk} unit="GB" />
+                </div>
+
+                <div className="mt-3 flex items-center justify-between gap-3">
+                  <span className="font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">
+                    Created {created}
+                  </span>
+                  <span className="flex gap-2" onClick={(e) => e.stopPropagation()}>
+                    {renderActions(box, 'size-10', 'size-4')}
+                  </span>
+                </div>
+              </div>
+            )
+          })
+        )}
+      </div>
+
+      {/* footer */}
+      <div className="flex flex-none flex-col gap-3 px-0 py-4 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+          <span>{itemRangeLabel}</span>
+          <div className="flex items-center gap-2">
+            <span className="normal-case tracking-normal">Show</span>
+            <Select value={`${pageSize}`} onValueChange={handlePageSizeChange} disabled={isPagingLocked}>
+              <SelectTrigger
+                aria-label="Rows per page"
+                size="xs"
+                className="h-8 w-[76px] border-border bg-background px-2 font-mono text-[10px] uppercase tracking-[1px]"
+                loading={isPagingLocked}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent side="top">
+                {PAGE_SIZE_OPTIONS.map((option) => (
+                  <SelectItem key={option} value={`${option}`}>
+                    {option}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <span className="normal-case tracking-normal">per page</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-[7px] pr-14">
+          <span className="inline-flex min-w-[92px] items-center justify-end gap-1 normal-case tracking-normal">
+            {isPageFetching ? (
+              <>
+                <Loader2 className="size-3 animate-spin" strokeWidth={1.5} />
+                Loading page {pageIndex + 1}
+              </>
+            ) : (
+              `Page ${pageIndex + 1} of ${pageTotal}`
+            )}
+          </span>
+          {pageCount > 1 && (
+            <>
+              <PagerButton disabled={isPagingLocked || !canPrev} title="First" onClick={() => goTo(0)}>
+                <ChevronsLeft className="size-3.5" />
+              </PagerButton>
+              <PagerButton disabled={isPagingLocked || !canPrev} title="Previous" onClick={() => goTo(pageIndex - 1)}>
+                <ChevronLeft className="size-3.5" />
+              </PagerButton>
+              <PagerButton disabled={isPagingLocked || !canNext} title="Next" onClick={() => goTo(pageIndex + 1)}>
+                <ChevronRight className="size-3.5" />
+              </PagerButton>
+              <PagerButton disabled={isPagingLocked || !canNext} title="Last" onClick={() => goTo(pageCount - 1)}>
+                <ChevronsRight className="size-3.5" />
+              </PagerButton>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PagerButton({
+  disabled,
+  title,
+  onClick,
+  children,
+}: {
+  disabled: boolean
+  title: string
+  onClick: () => void
+  children: ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      disabled={disabled}
+      onClick={onClick}
+      className="inline-flex size-9 items-center justify-center border border-border text-muted-foreground transition-colors enabled:hover:border-brand enabled:hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      {children}
+    </button>
   )
 }

@@ -7,7 +7,7 @@ interface BoxContentTabsOptions {
 }
 
 export function getBoxContentTabs({ experimentsEnabled }: BoxContentTabsOptions): TabValue[] {
-  return ['overview', ...(experimentsEnabled ? EXPERIMENT_TABS : []), 'terminal']
+  return ['overview', ...(experimentsEnabled ? EXPERIMENT_TABS : [])]
 }
 
 export function isBoxContentTabAvailable(tab: TabValue, options: BoxContentTabsOptions): boolean {

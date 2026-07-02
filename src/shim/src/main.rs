@@ -153,7 +153,10 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
     {
         use boxlite::jailer::seccomp;
 
-        if config.security.jailer_enabled && config.security.seccomp_enabled {
+        if config.security.jailer_enabled
+            && config.security.seccomp_enabled
+            && config.network_config.is_none()
+        {
             tracing::info!(
                 box_id = %config.box_id,
                 "Applying VMM seccomp filter (TSYNC)"
@@ -164,6 +167,11 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
             tracing::info!(
                 box_id = %config.box_id,
                 "Seccomp isolation complete"
+            );
+        } else if config.security.jailer_enabled && config.security.seccomp_enabled {
+            tracing::warn!(
+                box_id = %config.box_id,
+                "Seccomp disabled for network-enabled VM; gvproxy runs in-process and is not covered by the VMM syscall profile"
             );
         } else if config.security.jailer_enabled {
             tracing::warn!(

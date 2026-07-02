@@ -8,7 +8,8 @@ import { cn } from '@/lib/utils'
 import { type ComponentProps } from 'react'
 import { BannerStack } from './Banner'
 
-type PageSize = 'default' | 'full'
+// default = narrow forms/settings (960); content = list/detail tables centered (1040); full = wide admin tables (1440)
+type PageSize = 'default' | 'content' | 'full'
 
 function PageLayout({ className, ...props }: ComponentProps<'div'>) {
   return <div className={cn('group/page flex h-full flex-col', className)} {...props} />
@@ -26,6 +27,7 @@ function PageHeader({
         'flex min-h-10 w-full flex-wrap items-center gap-3 gap-y-3 px-4 pt-7 pb-2 sm:px-5 2xl:px-0',
         {
           'mx-auto max-w-[960px]': size === 'default',
+          'mx-auto max-w-[1040px]': size === 'content',
           'mx-auto max-w-[1440px]': size === 'full',
         },
         className,
@@ -74,6 +76,7 @@ function PageContent({ className, size = 'default', ...props }: ComponentProps<'
           'flex w-full flex-col gap-4 px-4 pb-8 sm:px-5 2xl:px-0',
           {
             'mx-auto max-w-[960px]': size === 'default',
+            'mx-auto max-w-[1040px]': size === 'content',
             'mx-auto max-w-[1440px]': size === 'full',
           },
           className,

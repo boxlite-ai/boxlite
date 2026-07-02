@@ -33,10 +33,6 @@ interface UseBoxTableProps {
   handleStart: (id: string) => void
   handleStop: (id: string) => void
   handleDelete: (id: string) => void
-  getWebTerminalUrl: (id: string) => Promise<string | null>
-  handleCreateSshAccess: (id: string) => void
-  handleRevokeSshAccess: (id: string) => void
-  handleScreenRecordings: (id: string) => void
   pagination: {
     pageIndex: number
     pageSize: number
@@ -58,10 +54,6 @@ export function useBoxTable({
   handleStart,
   handleStop,
   handleDelete,
-  getWebTerminalUrl,
-  handleCreateSshAccess,
-  handleRevokeSshAccess,
-  handleScreenRecordings,
   pagination,
   pageCount,
   onPaginationChange,
@@ -71,20 +63,21 @@ export function useBoxTable({
   onFiltersChange,
   handleRecover,
 }: UseBoxTableProps) {
-  // Column visibility state management with persistence
+  // Column visibility state management with persistence.
+  // Minimal default (exe.dev-style): only name + last event + actions show; the rest
+  // (id / state / resources / created at) are hidden but toggleable via the View menu.
+  // State still leads the name cell as a status dot regardless of the column's visibility.
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(() => {
+    const defaults: VisibilityState = { id: false, state: false, resources: false, createdAt: false, labels: false }
     const saved = getLocalStorageItem(LocalStorageKey.BoxTableColumnVisibility)
     if (saved) {
       try {
-        const parsed = JSON.parse(saved)
-        // Drop the legacy `region` key left in persisted state after the Region column was removed.
-        delete parsed.region
-        return { ...parsed, id: true, labels: false }
+        return { ...defaults, ...JSON.parse(saved) }
       } catch {
-        return { id: true, labels: false }
+        return defaults
       }
     }
-    return { id: true, labels: false }
+    return defaults
   })
 
   useEffect(() => {
@@ -101,28 +94,12 @@ export function useBoxTable({
         handleStart,
         handleStop,
         handleDelete,
-        getWebTerminalUrl,
         boxIsLoading,
         writePermitted,
         deletePermitted,
-        handleCreateSshAccess,
-        handleRevokeSshAccess,
         handleRecover,
-        handleScreenRecordings,
       }),
-    [
-      handleStart,
-      handleStop,
-      handleDelete,
-      getWebTerminalUrl,
-      boxIsLoading,
-      writePermitted,
-      deletePermitted,
-      handleCreateSshAccess,
-      handleRevokeSshAccess,
-      handleRecover,
-      handleScreenRecordings,
-    ],
+    [handleStart, handleStop, handleDelete, boxIsLoading, writePermitted, deletePermitted, handleRecover],
   )
 
   const table = useReactTable({

@@ -8,7 +8,6 @@ import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
 import { Region, RegionType } from '@boxlite-ai/api-client'
 import { IRegionsContext, RegionsContext } from '@/contexts/RegionsContext'
 import { useApi } from '@/hooks/useApi'
-import { handleApiError } from '@/lib/error-handling'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 
 type Props = {
@@ -31,7 +30,9 @@ export function RegionsProvider(props: Props) {
       const regions = (await regionsApi.listSharedRegions()).data
       setSharedRegions(regions)
     } catch (error) {
-      handleApiError(error, 'Failed to fetch shared regions')
+      // Optimistic prefetch at app start — fail silently like the admin probe.
+      // Pages that actually need regions surface their own empty/error state.
+      console.warn('Failed to fetch shared regions', error)
       setSharedRegions([])
     } finally {
       setLoadingSharedRegions(false)
@@ -49,7 +50,9 @@ export function RegionsProvider(props: Props) {
       setAvailableRegions(regions)
       return regions
     } catch (error) {
-      handleApiError(error, 'Failed to fetch available regions')
+      // Optimistic prefetch at app start — fail silently like the admin probe.
+      // Pages that actually need regions surface their own empty/error state.
+      console.warn('Failed to fetch available regions', error)
       setAvailableRegions([])
       return []
     } finally {

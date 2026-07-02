@@ -5,7 +5,7 @@
  */
 
 import { useTheme } from '@/contexts/ThemeContext'
-import { CheckCircleIcon, InfoIcon, WarningIcon, XCircleIcon } from '@phosphor-icons/react'
+import { AlertTriangle, CheckCircle, Info, XCircle } from '@/components/ui/icon'
 import { Toaster as Sonner } from 'sonner'
 
 type ToasterProps = React.ComponentProps<typeof Sonner>
@@ -18,19 +18,20 @@ const Toaster = ({ ...props }: ToasterProps) => {
       theme={resolvedTheme as ToasterProps['theme']}
       className="toaster group"
       icons={{
-        success: <CheckCircleIcon weight="fill" className="size-4 text-success" />,
-        error: <XCircleIcon weight="fill" className="size-4 text-destructive" />,
-        warning: <WarningIcon weight="fill" className="size-4 text-warning" />,
-        info: <InfoIcon weight="fill" className="size-4 text-foreground" />,
+        success: <CheckCircle className="size-4 text-success" />,
+        error: <XCircle className="size-4 text-destructive" />,
+        warning: <AlertTriangle className="size-4 text-warning" />,
+        info: <Info className="size-4 text-foreground" />,
       }}
       toastOptions={{
         classNames: {
+          // Square corners + mono font + bordered popover surface — matches the ASCII/terminal shell.
           toast:
-            'group toast group-[.toaster]:bg-background group-[.toaster]:text-foreground group-[.toaster]:border-border group-[.toaster]:shadow-lg group-[.toaster]:border',
+            'group toast font-mono rounded-none group-[.toaster]:rounded-none group-[.toaster]:bg-popover group-[.toaster]:text-foreground group-[.toaster]:border group-[.toaster]:border-border group-[.toaster]:shadow-lg',
           description: '!text-muted-foreground',
-          actionButton: 'group-[.toast]:bg-primary group-[.toast]:text-primary-foreground',
-          cancelButton: 'group-[.toast]:bg-muted group-[.toast]:text-muted-foreground',
-          closeButton: 'group-[.toast]:border',
+          actionButton: 'rounded-none group-[.toast]:rounded-none group-[.toast]:bg-primary group-[.toast]:text-primary-foreground',
+          cancelButton: 'rounded-none group-[.toast]:rounded-none group-[.toast]:bg-muted group-[.toast]:text-muted-foreground',
+          closeButton: 'rounded-none group-[.toast]:rounded-none group-[.toast]:border',
         },
       }}
       closeButton

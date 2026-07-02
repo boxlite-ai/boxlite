@@ -5,25 +5,11 @@
  */
 
 import { CREATE_API_KEY_PERMISSIONS_GROUPS } from '@/constants/CreateApiKeyPermissionsGroups'
-import { DEFAULT_PAGE_SIZE } from '@/constants/Pagination'
 import { getRelativeTimeString } from '@/lib/utils'
-import { ApiKeyList, ApiKeyListPermissionsEnum, CreateApiKeyPermissionsEnum } from '@boxlite-ai/api-client'
-
-import {
-  ColumnDef,
-  flexRender,
-  getCoreRowModel,
-  getPaginationRowModel,
-  getSortedRowModel,
-  SortingState,
-  useReactTable,
-} from '@tanstack/react-table'
-import { KeyRound, Loader2 } from 'lucide-react'
-import { useMemo, useState } from 'react'
-import { Pagination } from './Pagination'
-import { TableEmptyState } from './TableEmptyState'
+import { ApiKeyList, ApiKeyListPermissionsEnum } from '@boxlite-ai/api-client'
+import { KeyRound, Loader2, Trash2 } from '@/components/ui/icon'
+import { useMemo } from 'react'
 import { Badge } from './ui/badge'
-import { Button } from './ui/button'
 import {
   Dialog,
   DialogClose,
@@ -35,9 +21,7 @@ import {
   DialogTrigger,
 } from './ui/dialog'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
-import { Skeleton } from './ui/skeleton'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table'
-import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
+import { Button } from './ui/button'
 
 interface DataTableProps {
   data: ApiKeyList[]
@@ -46,322 +30,171 @@ interface DataTableProps {
   onRevoke: (key: ApiKeyList) => void
 }
 
-export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke }: DataTableProps) {
-  const [sorting, setSorting] = useState<SortingState>([])
-  const columns = getColumns({ onRevoke, isLoadingKey })
-  const table = useReactTable({
-    data,
-    columns,
-    getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-    onSortingChange: setSorting,
-    getSortedRowModel: getSortedRowModel(),
-    state: {
-      sorting,
-    },
-    initialState: {
-      pagination: {
-        pageSize: DEFAULT_PAGE_SIZE,
-      },
-    },
-  })
+// Mirrors the Boxes (BoxTable) layout: borderless full-height column, header with a
+// bottom rule, hover-highlighted rows, and a plain "Showing N" footer.
+const GRID = 'grid-cols-[1.4fr_1.6fr_1.2fr_1fr_1fr_1fr_44px] gap-x-4'
 
+export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke }: DataTableProps) {
   return (
-    <div>
-      <div className="rounded-md border">
-        <Table>
-          <TableHeader>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id}>
-                {headerGroup.headers.map((header) => {
-                  return (
-                    <TableHead className="px-2" key={header.id}>
-                      {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                    </TableHead>
-                  )
-                })}
-              </TableRow>
-            ))}
-          </TableHeader>
-          <TableBody>
-            {loading ? (
-              <>
-                {Array.from(new Array(5)).map((_, i) => (
-                  <TableRow key={i}>
-                    {table.getVisibleLeafColumns().map((column, i, arr) =>
-                      i === arr.length - 1 ? null : (
-                        <TableCell key={column.id}>
-                          <Skeleton className="h-4 w-10/12" />
-                        </TableCell>
-                      ),
-                    )}
-                  </TableRow>
-                ))}
-              </>
-            ) : table.getRowModel().rows?.length ? (
-              table.getRowModel().rows.map((row) => (
-                <TableRow
-                  key={row.id}
-                  data-state={row.getIsSelected() && 'selected'}
-                  className={`${isLoadingKey(row.original) ? 'opacity-50 pointer-events-none' : ''}`}
-                >
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell className="px-2" key={cell.id}>
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </TableCell>
-                  ))}
-                </TableRow>
-              ))
-            ) : (
-              <TableEmptyState
-                colSpan={columns.length}
-                message="No API Keys yet."
-                icon={<KeyRound className="w-8 h-8" />}
-                description={
-                  <div className="space-y-2">
-                    <p>API Keys authenticate requests made through the BoxLite SDK or CLI.</p>
-                    <p>
-                      Generate one and{' '}
-                      <a
-                        href="https://docs.boxlite.ai"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-primary hover:underline font-medium"
-                      >
-                        check out the API Key setup guide
-                      </a>
-                      .
-                    </p>
-                  </div>
-                }
-              />
-            )}
-          </TableBody>
-        </Table>
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* header */}
+      <div
+        className={`grid ${GRID} flex-none items-center border-b border-border px-[18px] pb-[11px] font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground`}
+      >
+        <span>Name</span>
+        <span>Key</span>
+        <span>Permissions</span>
+        <span>Created</span>
+        <span>Last Used</span>
+        <span>Expires</span>
+        <span />
       </div>
-      <Pagination table={table} className="mt-4" entityName="API Keys" />
+
+      {/* rows */}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {loading ? (
+          Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className={`grid ${GRID} items-center border-b border-border px-[18px] py-3`}>
+              <div className="h-4 w-3/4 animate-pulse bg-card" />
+            </div>
+          ))
+        ) : data.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center px-6 text-center">
+            <KeyRound className="size-14 text-muted-foreground opacity-70" strokeWidth={1.4} />
+            <div className="mt-[22px] text-[17px] font-semibold">No API Keys yet.</div>
+            <div className="mt-[18px] max-w-[440px] text-[13.5px] leading-relaxed text-muted-foreground">
+              API Keys authenticate requests made through the BoxLite SDK or CLI.
+            </div>
+            <div className="mt-1.5 text-[13.5px] text-muted-foreground">
+              Generate one and{' '}
+              <a
+                href="https://docs.boxlite.ai"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-semibold text-foreground underline decoration-brand underline-offset-2"
+              >
+                check out the API Key setup guide
+              </a>
+              .
+            </div>
+          </div>
+        ) : (
+          data.map((key) => {
+            const busy = isLoadingKey(key)
+            return (
+              <div
+                key={`${key.userId}-${key.name}`}
+                className={`grid ${GRID} items-center border-b border-border px-[18px] py-3 text-[13px] transition-colors hover:bg-card ${
+                  busy ? 'pointer-events-none opacity-50' : ''
+                }`}
+              >
+                <span className="truncate font-semibold">{key.name}</span>
+                <span className="truncate font-mono text-[12px] text-muted-foreground">{key.value}</span>
+                <span>
+                  <PermissionsTooltip permissions={key.permissions} />
+                </span>
+                <span className="font-mono text-[12px] text-muted-foreground">
+                  {getRelativeTimeString(key.createdAt).relativeTimeString}
+                </span>
+                <span className="font-mono text-[12px] text-muted-foreground">
+                  {key.lastUsedAt ? getRelativeTimeString(key.lastUsedAt).relativeTimeString : 'Never'}
+                </span>
+                <span className="font-mono text-[12px] text-muted-foreground">
+                  {key.expiresAt ? getRelativeTimeString(key.expiresAt).relativeTimeString : 'Never'}
+                </span>
+                <span className="flex justify-end">
+                  <Dialog>
+                    <DialogTrigger asChild>
+                      <button
+                        type="button"
+                        title="Revoke key"
+                        disabled={busy}
+                        className="inline-flex h-7 w-[30px] items-center justify-center border border-border text-muted-foreground transition-colors hover:border-destructive hover:text-destructive"
+                      >
+                        {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+                      </button>
+                    </DialogTrigger>
+                    <DialogContent>
+                      <DialogHeader>
+                        <DialogTitle>Confirm Key Revocation</DialogTitle>
+                        <DialogDescription>
+                          Are you absolutely sure? This action cannot be undone and will permanently delete this API
+                          key.
+                        </DialogDescription>
+                      </DialogHeader>
+                      <DialogFooter>
+                        <DialogClose asChild>
+                          <Button type="button" variant="secondary">
+                            Close
+                          </Button>
+                        </DialogClose>
+                        <DialogClose asChild>
+                          <Button variant="destructive" onClick={() => onRevoke(key)}>
+                            Revoke
+                          </Button>
+                        </DialogClose>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
+                </span>
+              </div>
+            )
+          })
+        )}
+      </div>
+
+      {/* footer */}
+      <div className="flex flex-none items-center justify-between px-0 py-4 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">
+        <span>
+          Showing {data.length} key{data.length === 1 ? '' : 's'}
+        </span>
+      </div>
     </div>
   )
 }
 
-const getExpiresAtColor = (expiresAt: Date | null) => {
-  if (!expiresAt) {
-    return 'text-foreground'
-  }
-
-  const MILLISECONDS_IN_MINUTE = 1000 * 60
-  const MINUTES_IN_DAY = 24 * 60
-
-  const diffInMinutes = Math.floor((new Date(expiresAt).getTime() - new Date().getTime()) / MILLISECONDS_IN_MINUTE)
-
-  // Already expired
-  if (diffInMinutes < 0) {
-    return 'text-red-500'
-  }
-
-  // Expires within a day
-  if (diffInMinutes < MINUTES_IN_DAY) {
-    return 'text-yellow-600 dark:text-yellow-400'
-  }
-
-  // Expires in more than a day
-  return 'text-foreground'
-}
-
-const getColumns = ({
-  onRevoke,
-  isLoadingKey,
-}: {
-  onRevoke: (key: ApiKeyList) => void
-  isLoadingKey: (key: ApiKeyList) => boolean
-}): ColumnDef<ApiKeyList>[] => {
-  const columns: ColumnDef<ApiKeyList>[] = [
-    {
-      accessorKey: 'name',
-      header: 'Name',
-    },
-    {
-      accessorKey: 'value',
-      header: 'Key',
-    },
-    {
-      accessorKey: 'permissions',
-      header: () => {
-        return <div className="max-w-md px-3">Permissions</div>
-      },
-      cell: ({ row }) => {
-        return <PermissionsTooltip permissions={row.original.permissions} availablePermissions={visiblePermissions} />
-      },
-    },
-    {
-      accessorKey: 'createdAt',
-      header: 'Created',
-      cell: ({ row }) => {
-        const createdAt = row.original.createdAt
-        const relativeTime = getRelativeTimeString(createdAt).relativeTimeString
-        const fullDate = new Date(createdAt).toLocaleString()
-
-        return (
-          <Tooltip>
-            <TooltipTrigger>
-              <span className="cursor-default">{relativeTime}</span>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>{fullDate}</p>
-            </TooltipContent>
-          </Tooltip>
-        )
-      },
-    },
-    {
-      accessorKey: 'lastUsedAt',
-      header: 'Last Used',
-      cell: ({ row }) => {
-        const lastUsedAt = row.original.lastUsedAt
-        const relativeTime = getRelativeTimeString(lastUsedAt).relativeTimeString
-
-        if (!lastUsedAt) {
-          return <span className="text-muted-foreground">{relativeTime}</span>
-        }
-
-        const fullDate = new Date(lastUsedAt).toLocaleString()
-
-        return (
-          <Tooltip>
-            <TooltipTrigger>
-              <span className="cursor-default">{relativeTime}</span>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>{fullDate}</p>
-            </TooltipContent>
-          </Tooltip>
-        )
-      },
-    },
-    {
-      accessorKey: 'expiresAt',
-      header: 'Expires',
-      cell: ({ row }) => {
-        const expiresAt = row.original.expiresAt
-        const relativeTime = getRelativeTimeString(expiresAt).relativeTimeString
-
-        if (!expiresAt) {
-          return <span className="text-muted-foreground">{relativeTime}</span>
-        }
-
-        const fullDate = new Date(expiresAt).toLocaleString()
-        const color = getExpiresAtColor(expiresAt)
-
-        return (
-          <Tooltip>
-            <TooltipTrigger>
-              <span className={`cursor-default ${color}`}>{relativeTime}</span>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>{fullDate}</p>
-            </TooltipContent>
-          </Tooltip>
-        )
-      },
-    },
-    {
-      id: 'actions',
-      size: 80,
-      cell: ({ row }) => {
-        const isLoading = isLoadingKey(row.original)
-
-        return (
-          <Dialog>
-            <DialogTrigger asChild>
-              <Button variant="ghost" size={isLoading ? 'icon-sm' : 'sm'} disabled={isLoading} title="Revoke Key">
-                {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Revoke'}
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Confirm Key Revocation</DialogTitle>
-                <DialogDescription>
-                  Are you absolutely sure? This action cannot be undone. This will permanently delete this API key.
-                </DialogDescription>
-              </DialogHeader>
-              <DialogFooter>
-                <DialogClose asChild>
-                  <Button type="button" variant="secondary">
-                    Close
-                  </Button>
-                </DialogClose>
-                <DialogClose asChild>
-                  <Button variant="destructive" onClick={() => onRevoke(row.original)}>
-                    Revoke
-                  </Button>
-                </DialogClose>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        )
-      },
-    },
-  ]
-
-  return columns
-}
-
 const visiblePermissions = CREATE_API_KEY_PERMISSIONS_GROUPS.flatMap((group) => group.permissions)
-
 const IMPLICIT_READ_RESOURCES = ['Boxes']
 
-function PermissionsTooltip({
-  permissions,
-  availablePermissions,
-}: {
-  permissions: ApiKeyListPermissionsEnum[]
-  availablePermissions: CreateApiKeyPermissionsEnum[]
-}) {
+function PermissionsTooltip({ permissions }: { permissions: ApiKeyListPermissionsEnum[] }) {
   const isFullAccess = visiblePermissions.every((permission) => permissions.includes(permission))
   const isSingleResourceAccess = CREATE_API_KEY_PERMISSIONS_GROUPS.find(
     (group) =>
       group.permissions.length === permissions.length && group.permissions.every((p) => permissions.includes(p)),
   )
 
-  const availableGroups = useMemo(() => {
-    return CREATE_API_KEY_PERMISSIONS_GROUPS.map((group) => ({
-      ...group,
-      permissions: group.permissions.filter((p) => availablePermissions.includes(p)),
-    })).filter((group) => group.permissions.length > 0)
-  }, [availablePermissions])
+  const availableGroups = useMemo(
+    () => CREATE_API_KEY_PERMISSIONS_GROUPS.filter((group) => group.permissions.length > 0),
+    [],
+  )
 
-  const badgeVariant = isFullAccess && !isSingleResourceAccess ? 'warning' : 'outline'
   const badgeText = isSingleResourceAccess ? isSingleResourceAccess.name : isFullAccess ? 'Full' : 'Restricted'
 
   return (
     <Popover>
       <PopoverTrigger>
-        <Badge variant={badgeVariant} className="whitespace-nowrap">
-          {badgeText} <span className="hidden xs:inline ml-1">Access</span>
-        </Badge>
+        <span className="inline-flex items-center border border-brand/30 px-[9px] py-[3px] font-mono text-[11px] tracking-[0.5px] text-brand">
+          {badgeText}
+        </span>
       </PopoverTrigger>
       <PopoverContent className="p-0">
-        <p className="p-2 text-muted-foreground text-xs font-medium border-b">Permissions</p>
+        <p className="border-b border-border p-2 text-xs font-medium text-muted-foreground">Permissions</p>
         <div className="flex flex-col">
           {availableGroups.map((group) => {
             const selectedPermissions = group.permissions.filter((p) => permissions.includes(p))
             const hasImplicitRead = IMPLICIT_READ_RESOURCES.includes(group.name)
-
-            if (selectedPermissions.length === 0 && !hasImplicitRead) {
-              return null
-            }
-
+            if (selectedPermissions.length === 0 && !hasImplicitRead) return null
             return (
-              <div key={group.name} className="flex justify-between gap-3 border-b last:border-b-0 p-2">
+              <div key={group.name} className="flex justify-between gap-3 border-b border-border p-2 last:border-b-0">
                 <h3 className="text-sm">{group.name}</h3>
-                <div className="flex gap-2 flex-wrap justify-end">
+                <div className="flex flex-wrap justify-end gap-2">
                   {hasImplicitRead && (
-                    <Badge variant="outline" className="capitalize rounded-sm">
+                    <Badge variant="outline" className="capitalize">
                       Read
                     </Badge>
                   )}
                   {selectedPermissions.map((p) => (
-                    <Badge key={p} variant="outline" className="capitalize rounded-sm">
+                    <Badge key={p} variant="outline" className="capitalize">
                       {p.split(':')[0]}
                     </Badge>
                   ))}

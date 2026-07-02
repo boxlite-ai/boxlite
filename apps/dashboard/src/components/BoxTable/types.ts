@@ -12,25 +12,20 @@ import {
   Box,
   BoxState,
 } from '@boxlite-ai/api-client'
-import { ColumnFiltersState, SortingState, Table } from '@tanstack/react-table'
-import type { ReactNode } from 'react'
+import { ColumnFiltersState, SortingState } from '@tanstack/react-table'
 
 export interface BoxTableProps {
   data: Box[]
   boxIsLoading: Record<string, boolean>
   boxStateIsTransitioning: Record<string, boolean>
   loading: boolean
+  isPageFetching?: boolean
   handleStart: (id: string) => void
   handleStop: (id: string) => void
   handleDelete: (id: string) => void
   handleBulkDelete: (ids: string[]) => void
   handleBulkStart: (ids: string[]) => void
   handleBulkStop: (ids: string[]) => void
-  getWebTerminalUrl: (id: string) => Promise<string | null>
-  handleCreateSshAccess: (id: string) => void
-  handleRevokeSshAccess: (id: string) => void
-  handleRefresh: () => void
-  isRefreshing?: boolean
   onRowClick?: (box: Box) => void
   pagination: {
     pageIndex: number
@@ -44,8 +39,6 @@ export interface BoxTableProps {
   filters: BoxFilters
   onFiltersChange: (filters: BoxFilters) => void
   handleRecover: (id: string) => void
-  handleScreenRecordings: (id: string) => void
-  headerAction?: ReactNode
 }
 
 export interface BoxTableActionsProps {
@@ -57,18 +50,7 @@ export interface BoxTableActionsProps {
   onStart: (id: string) => void
   onStop: (id: string) => void
   onDelete: (id: string) => void
-  onOpenWebTerminal: (id: string) => void
-  onCreateSshAccess: (id: string) => void
-  onRevokeSshAccess: (id: string) => void
   onRecover: (id: string) => void
-  onScreenRecordings: (id: string) => void
-}
-
-export interface BoxTableHeaderProps {
-  table: Table<Box>
-  onRefresh: () => void
-  isRefreshing?: boolean
-  headerAction?: ReactNode
 }
 
 export interface FacetedFilterOption {

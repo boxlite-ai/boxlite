@@ -9,7 +9,7 @@ import { TimeRangeSelector } from '@/components/telemetry/TimeRangeSelector'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
-import { RefreshCw, DollarSign } from 'lucide-react'
+import { RefreshCw, DollarSign } from '@/components/ui/icon'
 import { format, subHours } from 'date-fns'
 
 function formatPrice(price: number): string {

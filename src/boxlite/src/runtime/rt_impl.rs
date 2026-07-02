@@ -12,6 +12,7 @@ use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
 use crate::runtime::signal_handler::timeout_to_duration;
 use crate::runtime::types::{BoxInfo, BoxState, BoxStatus, ContainerID};
 use crate::vmm::VmmKind;
+use crate::vmm::controller::{ShimHandler, VmmHandler};
 use boxlite_shared::{BoxliteError, BoxliteResult};
 use chrono::Utc;
 use std::collections::HashMap;
@@ -834,10 +835,16 @@ impl RuntimeImpl {
             let mut state = state;
             if state.status.is_active() || state.pid.is_some() {
                 if force {
-                    // Force mode: kill the process directly
+                    // Stop the box's whole process tree through the same handler
+                    // teardown `LiteBox::stop()` uses: it SIGTERMs the recorded
+                    // pid (the outer launcher), then reaps any survivors of a
+                    // detached box's inner pid-ns tree (inner bwrap + shim + VM) —
+                    // which a single-pid kill misses, since #851 stopped tying
+                    // detached boxes to the launcher's lifetime.
                     if let Some(pid) = state.pid {
-                        tracing::info!(box_id = %id, pid = pid, "Force killing box process");
-                        crate::util::kill_process(pid);
+                        tracing::info!(box_id = %id, pid = pid, "Force stopping box process tree");
+                        let mut handler = ShimHandler::from_pid(pid, config.id.clone());
+                        let _ = handler.stop();
                     }
                     // Update status to stopped and save
                     state.set_status(BoxStatus::Stopped);

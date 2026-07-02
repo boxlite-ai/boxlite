@@ -6,7 +6,7 @@
 'use client'
 
 import { Command as CommandPrimitive } from 'cmdk'
-import { Check, SearchIcon } from 'lucide-react'
+import { Check, SearchIcon } from '@/components/ui/icon'
 import * as React from 'react'
 
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'

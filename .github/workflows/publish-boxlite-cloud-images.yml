@@ -1,0 +1,77 @@
+name: Publish BoxLite Cloud Images
+
+on:
+  push:
+    branches: [main] # Publish only after the PR lands on main.
+    paths:
+      - '.dockerignore' # Docker context changes can change the published image contents.
+      - 'images/agent-runtime/VERSION' # Version bumps are the normal way to publish a new tag.
+      - 'images/agent-runtime/**' # Dockerfiles and version file directly define image contents.
+      - 'scripts/images/build-agent-runtime.sh' # Build script changes affect all published images.
+      - '.github/workflows/publish-boxlite-cloud-images.yml' # Workflow changes should validate themselves on main.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag to publish, with or without leading v. Defaults to images/agent-runtime/VERSION.'
+        required: false
+        type: string
+
+permissions:
+  contents: read # Checkout only needs repository read access.
+  packages: write # GHCR push requires package write access.
+
+concurrency:
+  group: publish-boxlite-cloud-images-${{ github.ref }} # Serialize publishes per branch/ref.
+  cancel-in-progress: false # Do not cancel an in-flight release publish.
+
+jobs:
+  publish:
+    name: Publish BoxLite Cloud images
+    if: github.ref == 'refs/heads/main' # workflow_dispatch can target other refs; only main may publish.
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # Pin checkout for supply-chain stability.
+        with:
+          persist-credentials: false # Later steps do not need git credentials.
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # Enable cross-arch build emulation.
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # Buildx is required for multi-arch images.
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # Authenticate Docker so buildx can push to GHCR.
+        with:
+          registry: ghcr.io # Target registry for BoxLite runtime images.
+          username: ${{ github.actor }} # GitHub actor is accepted for GITHUB_TOKEN auth.
+          password: ${{ secrets.GITHUB_TOKEN }} # Built-in token has packages:write from workflow permissions.
+
+      - name: Determine image version
+        id: version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }} # Optional manual override from workflow_dispatch.
+        run: |
+          set -euo pipefail
+
+          if [ -n "${INPUT_VERSION:-}" ]; then
+            version="${INPUT_VERSION#v}"
+          else
+            version="$(tr -d '[:space:]' < images/agent-runtime/VERSION)"
+          fi
+
+          if ! echo "$version" | grep -Eq '^[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
+            echo "Invalid version '$version'; expected MAJOR.MINOR.PATCH with optional -PRERELEASE" >&2
+            exit 1
+          fi
+
+          echo "tag=v$version" >> "$GITHUB_OUTPUT" # Share normalized Docker tag with the publish step.
+
+      - name: Publish images
+        env:
+          TAG: ${{ steps.version.outputs.tag }} # Use the version resolved above.
+          PUSH: '1' # CI path must push to GHCR instead of local Docker.
+          PLATFORMS: linux/amd64,linux/arm64 # Publish both supported CPU architectures.
+        run: bash scripts/images/build-agent-runtime.sh

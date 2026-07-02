@@ -10,7 +10,7 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTi
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Spinner } from '@/components/ui/spinner'
 import { subMonths } from 'date-fns'
-import { AlertCircle, BarChart3, RefreshCw } from 'lucide-react'
+import { AlertCircle, BarChart3, RefreshCw } from '@/components/ui/icon'
 import * as React from 'react'
 import { useCallback, useMemo } from 'react'
 import { FacetFilter } from '../ui/facet-filter'

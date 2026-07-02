@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { getRelativeTimeString } from '@/lib/utils'
 import { ColumnDef, RowData, Table } from '@tanstack/react-table'
-import { MoreHorizontal } from 'lucide-react'
+import { MoreHorizontal } from '@/components/ui/icon'
 import { EndpointOut } from 'svix'
 import { CopyButton } from '../../CopyButton'
 

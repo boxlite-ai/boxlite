@@ -14,6 +14,7 @@ import { BoxModule } from './box/box.module'
 import { AuthModule } from './auth/auth.module'
 import { ServeStaticModule } from '@nestjs/serve-static'
 import { join } from 'path'
+import { setDashboardStaticHeaders } from './serve-static-cache'
 import { ApiKeyModule } from './api-key/api-key.module'
 import { seconds, ThrottlerModule } from '@nestjs/throttler'
 import { RedisModule, getRedisConnectionToken } from '@nestjs-modules/ioredis'
@@ -116,7 +117,11 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
       exclude: ['/api/{*path}'],
       renderPath: '/',
       serveStaticOptions: {
+        // Disable serve-static's own default Cache-Control; setHeaders applies a
+        // content-addressed policy: hashed /assets/* immutable-forever, HTML
+        // no-cache. Stops the ~600KB bundle re-downloading on every visit.
         cacheControl: false,
+        setHeaders: setDashboardStaticHeaders,
       },
     }),
     RedisModule.forRootAsync({

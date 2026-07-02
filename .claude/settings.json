@@ -1,4 +1,7 @@
 {
+  "env": {
+    "VERDICT_GATE_HARD_BLOCK": "1"
+  },
   "hooks": {
     "PreToolUse": [
       {
@@ -6,11 +9,22 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/preflight-claude-md.sh"
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/preflight-commit-push.sh"
           },
           {
             "type": "command",
             "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/preflight-pr-review.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/preflight-verdict-check.sh",
+            "timeout": 60
           }
         ]
       }

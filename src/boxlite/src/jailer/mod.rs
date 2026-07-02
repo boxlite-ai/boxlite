@@ -88,6 +88,28 @@ pub use sandbox::{
     CompositeSandbox, NoopSandbox, PathAccess, PlatformSandbox, Sandbox, SandboxContext,
 };
 
+// ============================================================================
+// Teardown facade
+// ============================================================================
+
+/// Reap any OS processes still belonging to a box's sandbox (best-effort).
+///
+/// The semantic teardown entry for the isolation layer: callers name the
+/// *box*, not the mechanism, so nothing above the jailer has to know how a box
+/// is confined. On Linux the box's whole process tree lives in its cgroup, so
+/// this reaps it by id; on platforms with no host-side sandbox tree it is a
+/// no-op. Idempotent — safe on an already-stopped or never-started box.
+#[cfg(target_os = "linux")]
+pub(crate) fn reap_box(box_id: &crate::runtime::id::BoxID) -> bool {
+    cgroup::kill_cgroup(box_id)
+}
+
+/// See the Linux variant. No host-side sandbox process tree to reap here.
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn reap_box(_box_id: &crate::runtime::id::BoxID) -> bool {
+    false
+}
+
 // Volume specification (convenience re-export)
 pub use crate::runtime::options::VolumeSpec;
 
@@ -286,6 +308,18 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
         });
     }
 
+    // The in-shim network backend may validate upstream TLS certificates
+    // (for example secret-substitution MITM forwarding). Keep host trust
+    // stores readable inside the sandbox without granting broader /etc access.
+    for path in system_ca_paths() {
+        if path.exists() {
+            paths.push(PathAccess {
+                path,
+                writable: false,
+            });
+        }
+    }
+
     // User volumes
     for vol in volumes {
         let p = PathBuf::from(&vol.host_path);
@@ -298,6 +332,18 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
     }
 
     paths
+}
+
+fn system_ca_paths() -> [PathBuf; 7] {
+    [
+        PathBuf::from("/etc/ssl/certs"),
+        PathBuf::from("/etc/pki/tls/certs"),
+        PathBuf::from("/etc/ca-certificates"),
+        PathBuf::from("/etc/ssl/cert.pem"),
+        PathBuf::from("/etc/ssl/certs/ca-certificates.crt"),
+        PathBuf::from("/etc/pki/tls/certs/ca-bundle.crt"),
+        PathBuf::from("/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"),
+    ]
 }
 
 /// Jailer provides process isolation for boxlite-shim.
@@ -398,6 +444,22 @@ impl<S: Sandbox> Jail for Jailer<S> {
             binary.to_path_buf()
         };
 
+        // copy_shim_to_box() created box/bin and the copied shim above, but
+        // context() computed the bind list *before* that — so box/bin (which
+        // didn't exist yet) was skipped. Add it now, read-only, otherwise bwrap
+        // can't see the shim binary it is about to exec (execvp ENOENT).
+        #[allow(clippy::collapsible_if)]
+        if self.security.jailer_enabled {
+            if let Some(bin_dir) = effective_binary.parent().filter(|d| d.exists()) {
+                if !ctx.paths.iter().any(|pa| pa.path == bin_dir) {
+                    ctx.paths.push(PathAccess {
+                        path: bin_dir.to_path_buf(),
+                        writable: false,
+                    });
+                }
+            }
+        }
+
         // Start with a bare command. Sandbox.apply() modifies it in-place.
         let mut cmd = Command::new(&effective_binary);
         cmd.args(args);
@@ -484,6 +546,7 @@ impl<S: Sandbox> Jailer<S> {
             resource_limits: &self.security.resource_limits,
             network_enabled: self.security.network_enabled,
             sandbox_profile: self.security.sandbox_profile.as_deref(),
+            detached: self.detach,
         }
     }
 
@@ -515,8 +578,27 @@ mod tests {
 
         let paths = build_path_access(&layout, &[]);
 
-        // Empty box dir: no subdirectories exist yet, so no paths
-        assert!(paths.is_empty(), "No paths for empty box dir");
+        let existing_ca_paths: Vec<_> = system_ca_paths()
+            .into_iter()
+            .filter(|p| p.exists())
+            .collect();
+
+        assert_eq!(
+            paths.len(),
+            existing_ca_paths.len(),
+            "empty box dir should only include existing system CA paths"
+        );
+        for ca_path in existing_ca_paths {
+            let entry = paths
+                .iter()
+                .find(|p| p.path == ca_path)
+                .unwrap_or_else(|| panic!("missing CA path {}", ca_path.display()));
+            assert!(
+                !entry.writable,
+                "CA path must be read-only: {}",
+                ca_path.display()
+            );
+        }
     }
 
     #[test]
@@ -643,6 +725,34 @@ mod tests {
         let bases_paths: Vec<_> = paths.iter().filter(|p| p.path == bases_dir).collect();
         assert_eq!(bases_paths.len(), 1, "Should include home_dir/bases/");
         assert!(!bases_paths[0].writable);
+    }
+
+    #[test]
+    fn test_build_path_access_includes_system_ca_paths_readonly() {
+        let dir = tempdir().unwrap();
+        let layout = test_layout(dir.path().to_path_buf());
+        let existing_ca_paths: Vec<_> = system_ca_paths()
+            .into_iter()
+            .filter(|p| p.exists())
+            .collect();
+
+        if existing_ca_paths.is_empty() {
+            return;
+        }
+
+        let paths = build_path_access(&layout, &[]);
+
+        for ca_path in existing_ca_paths {
+            let entry = paths
+                .iter()
+                .find(|p| p.path == ca_path)
+                .unwrap_or_else(|| panic!("missing CA path {}", ca_path.display()));
+            assert!(
+                !entry.writable,
+                "CA path must be read-only: {}",
+                ca_path.display()
+            );
+        }
     }
 
     #[test]

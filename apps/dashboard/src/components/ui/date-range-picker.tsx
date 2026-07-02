@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 import { format, subDays, subHours, subMinutes } from 'date-fns'
-import { CalendarIcon } from 'lucide-react'
+import { CalendarIcon } from '@/components/ui/icon'
 import { forwardRef, useEffect, useImperativeHandle, useState } from 'react'
 import { DateRange } from 'react-day-picker'
 
