@@ -14,17 +14,6 @@
           }
         ]
       }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/preflight-verdict-check.sh",
-            "timeout": 60
-          }
-        ]
-      }
     ]
   }
 }

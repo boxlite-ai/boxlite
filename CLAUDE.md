@@ -93,7 +93,7 @@ Every change goes: understand → research → design → implement → test →
 
 - Run the smallest relevant verification first (`make test`, package-scoped test), then broaden if risk justifies.
 - Don't claim tests passed unless they actually ran. If verification can't run, state the blocker and the residual risk.
-- Attach a verdict before ending: every turn ends by invoking the `verdict-auditor` subagent (Task), which writes the dossier (`.claude/.last-verdict.json`) — never hand-write it. Claims like a fix that works, tests that pass, a root cause, an ops/infra finding, "no issues", or a factual answer must carry concrete proof; a turn that asserts nothing verifiable still gets a one-line PASS (empty proof). The Stop gate is default-deny: a missing dossier blocks the turn-end (hard mode) or nudges (soft, the default), so the audit cannot be skipped by simply not invoking it. The auditor is async, so in hard mode ending a turn is deny -> audit -> wait -> end (like the commit-push gate); that block-then-wait is the accepted cost of proof on every turn.
+- Attach a verdict once at task close when the change is ready for commit, push, PR review, or another explicit handoff. Use the `verdict-auditor` subagent (Task) for that final verification pass and let it write `.claude/.last-verdict.json` — never hand-write it. Do not launch the auditor on every conversational turn, for ordinary explanations, or while iterating locally. Do not use a subagent for review unless the user explicitly asks for one. Claims like a fix that works, tests that pass, a root cause, an ops/infra finding, or "no issues" still need concrete proof from commands, file refs, or the single final verdict.
 
 **Cross-cutting** (apply at every phase)
 
