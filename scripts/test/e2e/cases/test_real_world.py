@@ -249,31 +249,39 @@ async def test_network_curl(box):
 
 @pytest.mark.asyncio
 async def test_background_process_and_kill(box):
-    """User starts a background process, verifies it's running, kills it."""
-    # Start background sleep, get its PID
-    ex = await box.exec(
-        "sh", ["-c", "sleep 300 & echo PID=$! && ps aux | grep 'sleep 300' | grep -v grep"],
+    """User starts a background process, verifies it's running, kills it.
+
+    Uses a separate exec to start the process (avoids shell waiting for
+    background jobs to finish, which blocks the exec stream)."""
+    # Start a long sleep in one exec (will run in background because
+    # we don't wait for it to finish — just fire and move on)
+    ex_bg = await box.exec(
+        "sh", ["-c", "nohup sleep 300 >/dev/null 2>&1 & echo PID=$!"],
     )
-    out, _ = await drain(ex)
-    rc = await asyncio.wait_for(ex.wait(), timeout=30)
+    out, _ = await drain(ex_bg)
+    rc = await asyncio.wait_for(ex_bg.wait(), timeout=10)
     assert rc.exit_code == 0
     assert "PID=" in out, f"no PID in output: {out!r}"
-
-    # Extract PID and kill it
     pid = out.split("PID=")[1].split()[0]
+
+    # Verify it's running
+    ex = await box.exec("kill", ["-0", pid])
+    await drain(ex)
+    rc = await asyncio.wait_for(ex.wait(), timeout=10)
+    assert rc.exit_code == 0, f"process {pid} not running"
+
+    # Kill it
     ex = await box.exec("kill", [pid])
     await drain(ex)
-    rc = await asyncio.wait_for(ex.wait(), timeout=30)
+    rc = await asyncio.wait_for(ex.wait(), timeout=10)
     assert rc.exit_code == 0
 
-    # Verify it's gone (ps should not find it)
+    # Verify it's gone
     await asyncio.sleep(0.5)
-    ex = await box.exec(
-        "sh", ["-c", f"ps -p {pid} -o pid= 2>/dev/null || echo GONE"],
-    )
-    out, _ = await drain(ex)
-    await asyncio.wait_for(ex.wait(), timeout=30)
-    assert "GONE" in out or out.strip() == "", f"process still alive: {out!r}"
+    ex = await box.exec("kill", ["-0", pid])
+    await drain(ex)
+    rc = await asyncio.wait_for(ex.wait(), timeout=10)
+    assert rc.exit_code != 0, f"process {pid} still alive after kill"
 
 
 # ── Multi-user file permissions ────────────────────────────────────

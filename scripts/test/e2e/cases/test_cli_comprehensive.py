@@ -107,14 +107,14 @@ def test_cli_exec_env_var(cli, detached_box):
 # ── working directory ──────────────────────────────────────────────
 
 
-def test_cli_exec_cwd(cli, detached_box):
-    """--cwd should set the working directory in the guest."""
-    r = run(cli, "exec", "--cwd", "/tmp",
+def test_cli_exec_workdir(cli, detached_box):
+    """--workdir / -w should set the working directory in the guest."""
+    r = run(cli, "exec", "-w", "/tmp",
             detached_box, "--", "pwd", check=False)
     if r.returncode != 0 and "unknown" in r.stderr.lower():
-        pytest.skip("--cwd flag not supported on this CLI version")
+        pytest.skip("-w/--workdir flag not supported on this CLI version")
     assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
-    assert "/tmp" in r.stdout.strip(), f"cwd not honoured: {r.stdout!r}"
+    assert "/tmp" in r.stdout.strip(), f"workdir not honoured: {r.stdout!r}"
 
 
 # ── multiple sequential execs ─────────────────────────────────────
@@ -156,15 +156,12 @@ def test_cli_nonexistent_command(cli, detached_box):
 # ── box info / inspect ────────────────────────────────────────────
 
 
-def test_cli_info(cli, detached_box):
-    """`boxlite info <id>` should return box metadata."""
-    r = run(cli, "info", detached_box, check=False)
-    if r.returncode != 0 and "unknown" in r.stderr.lower():
-        pytest.skip("`boxlite info` not supported on this CLI version")
-    assert r.returncode == 0, f"info failed: {r.stderr}"
-    out = r.stdout.lower()
-    assert detached_box.lower() in out or "id" in out, (
-        f"info output doesn't contain box data: {r.stdout!r}"
+def test_cli_ls_shows_box(cli, detached_box):
+    """`boxlite ls` should list the detached box."""
+    r = run(cli, "ls")
+    assert r.returncode == 0, f"ls failed: {r.stderr}"
+    assert detached_box in r.stdout, (
+        f"detached box {detached_box} not in ls output: {r.stdout!r}"
     )
 
 
