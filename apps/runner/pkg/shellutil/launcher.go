@@ -38,6 +38,9 @@ package shellutil
 //   - `-l` makes it a *login* shell: /etc/profile and ~/.profile are
 //     sourced, PATH is populated. Pairs with the cd above to match what
 //     `ssh user@host` users expect when they land at a prompt.
+//   - `PROMPT_COMMAND` emits OSC 7 cwd updates for shells that support it,
+//     allowing the dashboard terminal to keep upload destinations aligned
+//     with the user's current directory.
 //
 // This follows the kubectl exec convention for unknown container images
 // (see https://kubernetes.io/docs/reference/kubectl/generated/kubectl_exec/),
@@ -52,6 +55,7 @@ func DefaultInteractiveShell() (command string, args []string) {
 	return "/bin/sh", []string{"-c",
 		`mkdir -p /workspace 2>/dev/null || true; ` +
 			`cd /workspace 2>/dev/null || cd "${HOME:-/root}" 2>/dev/null || cd /; ` +
+			`export PROMPT_COMMAND='printf "\033]7;file://boxlite%s\007" "$PWD"'; ` +
 			`exec $(command -v bash || command -v ash || command -v sh) -l`,
 	}
 }

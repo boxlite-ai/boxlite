@@ -6,8 +6,9 @@
 /**
  * Bridge for the box-controlled terminal iframe.
  *
- * Only the bounded font-size scalar is forwarded on the iframe URL. User
- * snippets or custom key sequences stay out of URL/query/postMessage paths.
+ * Only the bounded font-size scalar is forwarded on the iframe URL. The
+ * parent page may send the fixed "ls" command to a registered terminal frame
+ * after file uploads so the visible shell refreshes in its current directory.
  */
 
 const FONT_SIZE_KEY = 'boxlite.terminal.fontSize'
@@ -45,22 +46,59 @@ export function buildTerminalIframeSrc(baseUrl: string): string {
 let listenerInstalled = false
 
 // Registered iframe windows are allowed to persist non-sensitive prefs and
-// receive paste replies with a precise targetOrigin. Registration is not a
-// user gesture, so iframe-originated messages never trigger clipboard reads.
-const activeTerminalFrames = new Map<Window, string>()
+// receive bounded dashboard commands with a precise targetOrigin. Registration
+// is not a user gesture, so iframe-originated messages never trigger clipboard
+// reads.
+interface ActiveTerminalFrame {
+  onCurrentDirChange?: (path: string) => void
+  origin: string
+}
 
-export function registerActiveTerminalFrame(frame: Window, sessionUrl: string): () => void {
+const activeTerminalFrames = new Map<Window, ActiveTerminalFrame>()
+let currentTerminalFrame: Window | null = null
+
+export function registerActiveTerminalFrame(
+  frame: Window,
+  sessionUrl: string,
+  options: { onCurrentDirChange?: (path: string) => void } = {},
+): () => void {
   if (typeof window === 'undefined') return () => {}
+  ensureTerminalPrefListener()
   let origin: string
   try {
     origin = new URL(sessionUrl).origin
   } catch {
     return () => {}
   }
-  activeTerminalFrames.set(frame, origin)
+  activeTerminalFrames.set(frame, {
+    onCurrentDirChange: options.onCurrentDirChange,
+    origin,
+  })
+  currentTerminalFrame = frame
   return () => {
-    if (activeTerminalFrames.get(frame) === origin) activeTerminalFrames.delete(frame)
+    if (activeTerminalFrames.get(frame)?.origin === origin) activeTerminalFrames.delete(frame)
+    if (currentTerminalFrame === frame) currentTerminalFrame = null
   }
+}
+
+export function sendActiveTerminalListCommand(): boolean {
+  if (typeof window === 'undefined') return false
+
+  const frame = currentTerminalFrame
+  if (!frame) return false
+
+  const registeredFrame = activeTerminalFrames.get(frame)
+  if (!registeredFrame) return false
+
+  frame.postMessage(
+    {
+      source: 'boxlite-dashboard',
+      type: 'command',
+      command: 'ls',
+    },
+    registeredFrame.origin,
+  )
+  return true
 }
 
 function ensureTerminalPrefListener() {
@@ -79,9 +117,9 @@ function ensureTerminalPrefListener() {
 
     const senderFrame = event.source as Window | null
     if (!senderFrame) return
-    const registeredOrigin = activeTerminalFrames.get(senderFrame)
-    if (!registeredOrigin) return
-    if (event.origin !== registeredOrigin) return
+    const registeredFrame = activeTerminalFrames.get(senderFrame)
+    if (!registeredFrame) return
+    if (event.origin !== registeredFrame.origin) return
 
     if (msg.type === 'pref') {
       if (msg.key === 'fontSize' && typeof msg.value === 'number' && msg.value >= 8 && msg.value <= 32) {
@@ -94,6 +132,13 @@ function ensureTerminalPrefListener() {
       return
     }
 
+    if (msg.type === 'cwd') {
+      if (typeof msg.value === 'string' && isSafeAbsoluteBoxPath(msg.value)) {
+        registeredFrame.onCurrentDirChange?.(msg.value)
+      }
+      return
+    }
+
     if (msg.type === 'ready') {
       // Handshake ping only; no user-supplied terminal data is sent back.
       return
@@ -101,4 +146,8 @@ function ensureTerminalPrefListener() {
 
     // In particular, iframe-originated paste requests are ignored.
   })
+}
+
+function isSafeAbsoluteBoxPath(value: string): boolean {
+  return value.startsWith('/') && value.length <= 4096 && !/[\u0000-\u001f\u007f]/.test(value)
 }

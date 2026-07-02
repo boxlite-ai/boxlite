@@ -33,3 +33,15 @@ func TestDefaultInteractiveShellStartsInWorkspaceBeforeHome(t *testing.T) {
 		t.Fatalf("launcher %q tries HOME before /workspace", launcher)
 	}
 }
+
+func TestDefaultInteractiveShellReportsCwdWithOSC7(t *testing.T) {
+	_, args := DefaultInteractiveShell()
+	launcher := args[1]
+
+	if !strings.Contains(launcher, "PROMPT_COMMAND") {
+		t.Fatalf("launcher %q does not configure PROMPT_COMMAND", launcher)
+	}
+	if !strings.Contains(launcher, `\033]7;file://boxlite`) {
+		t.Fatalf("launcher %q does not emit OSC 7 cwd updates", launcher)
+	}
+}
