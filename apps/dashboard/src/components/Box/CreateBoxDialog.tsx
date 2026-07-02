@@ -7,23 +7,19 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { RoutePath } from '@/enums/RoutePath'
 import { useCreateBoxMutation } from '@/hooks/mutations/useCreateBoxMutation'
+import { useConfig } from '@/hooks/useConfig'
+import { getBoxImageOptions, getDefaultBoxImage, resolveCreateBoxImageRef } from '@/lib/box-images'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { getBoxRouteId } from '@/lib/box-identity'
 import { handleApiError } from '@/lib/error-handling'
 import { cn } from '@/lib/utils'
 import type { Box } from '@boxlite-ai/api-client'
 import { ChevronDown, Plus } from '@/components/ui/icon'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { generatePath, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 
 const NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
-
-const SUPPORTED_BOX_IMAGES = [
-  { id: 'base', name: 'Base', ref: 'ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3', isDefault: true },
-  { id: 'python', name: 'Python', ref: 'ghcr.io/boxlite-ai/boxlite-agent-python:20260605-p0-r3', isDefault: false },
-  { id: 'node', name: 'Node.js', ref: 'ghcr.io/boxlite-ai/boxlite-agent-node:20260605-p0-r3', isDefault: false },
-] as const
 
 const DEFAULTS = { cpu: 1, memory: 1, disk: 10 }
 const LIMITS = { cpu: 8, memory: 32, disk: 50 }
@@ -104,13 +100,15 @@ export const CreateBoxDialog = ({
   onCreated?: (box: Box) => void
 }) => {
   const navigate = useNavigate()
+  const config = useConfig()
   const [internalOpen, setInternalOpen] = useState(false)
   const open = controlledOpen ?? internalOpen
   const setOpen = onOpenChange ?? setInternalOpen
 
   const { selectedOrganization } = useSelectedOrganization()
   const createBoxMutation = useCreateBoxMutation()
-  const defaultImage = SUPPORTED_BOX_IMAGES.find((i) => i.isDefault) ?? SUPPORTED_BOX_IMAGES[0]
+  const imageOptions = useMemo(() => getBoxImageOptions(config.environment), [config.environment])
+  const defaultImage = getDefaultBoxImage(imageOptions)
 
   const [name, setName] = useState('')
   const [imageRef, setImageRef] = useState<string>(defaultImage.ref)
@@ -132,7 +130,7 @@ export const CreateBoxDialog = ({
     }
   }, [open, defaultImage.ref])
 
-  const selectedImage = SUPPORTED_BOX_IMAGES.find((i) => i.ref === imageRef) ?? defaultImage
+  const selectedImage = imageOptions.find((i) => i.ref === imageRef) ?? defaultImage
   const nameValid = !name || NAME_REGEX.test(name)
 
   const handleCreate = async () => {
@@ -148,7 +146,7 @@ export const CreateBoxDialog = ({
     try {
       const box = await createBoxMutation.mutateAsync({
         name: name.trim() || undefined,
-        image: imageRef || defaultImage.ref,
+        image: resolveCreateBoxImageRef(imageRef),
         network: { mode: 'enabled' },
         resources: { cpu, memory, disk },
       })
@@ -217,7 +215,7 @@ export const CreateBoxDialog = ({
                 align="start"
                 className="min-w-[var(--radix-dropdown-menu-trigger-width)] font-mono text-[12px]"
               >
-                {SUPPORTED_BOX_IMAGES.map((img) => (
+                {imageOptions.map((img) => (
                   <DropdownMenuItem
                     key={img.id}
                     className={cn('cursor-pointer', img.ref === imageRef && 'text-brand')}

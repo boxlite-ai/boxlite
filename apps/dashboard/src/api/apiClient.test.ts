@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AxiosRequestConfig } from 'axios'
 
 const config = { apiUrl: 'http://api.test/api' } as never
 
@@ -61,5 +62,28 @@ describe('ApiClient 401 -> bounded re-login recovery', () => {
     await expect(api.organizationsApi.listOrganizations()).rejects.toBeTruthy()
     // Marker cleared so a later genuine 401 still gets its one recovery attempt.
     expect(window.sessionStorage.getItem('boxlite.reauth-attempted')).toBeNull()
+  })
+})
+
+describe('ApiClient usage requests', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('sends the selected organization header for usage reads', async () => {
+    vi.resetModules()
+    const axios = (await import('axios')).default
+    const requests: AxiosRequestConfig[] = []
+    axios.defaults.adapter = (async (cfg: AxiosRequestConfig) => {
+      requests.push(cfg)
+      return { data: cfg.url?.endsWith('/periods') ? [] : {}, status: 200, statusText: '', headers: {}, config: cfg }
+    }) as never
+
+    const { ApiClient } = await import('./apiClient')
+    const api = new ApiClient(config, 'tok')
+    await api.getBoxUsage('box-1', 'org-1')
+    await api.getBoxUsagePeriods('box-1', 'org-1')
+
+    expect(requests.map((request) => request.headers?.['X-BoxLite-Organization-ID'])).toEqual(['org-1', 'org-1'])
   })
 })

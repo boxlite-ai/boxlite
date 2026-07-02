@@ -197,6 +197,7 @@ staticClients:
     redirectURIs:
       - '${REDIRECT_URI}'
       - 'http://localhost:3000'
+      - 'http://localhost:3002'
       - 'http://localhost:5173'
       # `boxlite auth login` (browser/OIDC) loopback callback — RFC 8252 §8.3
       # loopback IP literal on the CLI's fixed default port 5555. The CLI binds

@@ -9,7 +9,7 @@ import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 import { BoxAccessGuard } from '../box/guards/box-access.guard'
-import { BoxUsageResult, UsageService } from './usage.service'
+import { BoxUsagePeriodRow, BoxUsageResult, UsageService } from './usage.service'
 
 const DEFAULT_RANGE_MS = 30 * 24 * 60 * 60 * 1000 // 30 days
 
@@ -38,5 +38,17 @@ export class UsageController {
     const toDate = to ? new Date(to) : new Date()
     const fromDate = from ? new Date(from) : new Date(toDate.getTime() - DEFAULT_RANGE_MS)
     return this.usageService.getBoxUsage(boxId, fromDate, toDate)
+  }
+
+  @Get('box/:boxId/periods')
+  @ApiOperation({
+    summary: 'List raw usage_period rows for a box',
+    operationId: 'listBoxUsagePeriods',
+  })
+  @ApiParam({ name: 'boxId', description: 'ID of the box', type: 'string' })
+  @ApiResponse({ status: 200, description: 'Raw usage_period rows for the box' })
+  @UseGuards(BoxAccessGuard)
+  async listBoxUsagePeriods(@Param('boxId') boxId: string): Promise<BoxUsagePeriodRow[]> {
+    return this.usageService.listBoxPeriods(boxId)
   }
 }

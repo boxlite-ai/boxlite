@@ -80,6 +80,9 @@ export const queryKeys = {
     all: ['boxes'] as const,
     detail: (organizationId: string, boxId: string) =>
       [...queryKeys.boxes.all, organizationId, boxId, 'detail'] as const,
+    usage: (organizationId: string, boxId: string) => [...queryKeys.boxes.all, organizationId, boxId, 'usage'] as const,
+    usagePeriods: (organizationId: string, boxId: string) =>
+      [...queryKeys.boxes.all, organizationId, boxId, 'usage-periods'] as const,
     terminalSession: (boxId: string) => [...queryKeys.boxes.all, boxId, 'terminal-session'] as const,
   },
   telemetry: {

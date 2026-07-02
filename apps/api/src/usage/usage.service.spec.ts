@@ -21,6 +21,9 @@ class FakeRepo {
   }
 
   async save(obj: UsagePeriod): Promise<UsagePeriod> {
+    const now = new Date('2026-06-25T12:00:00Z')
+    obj.createdAt ??= now
+    obj.updatedAt = now
     if (!obj.id) {
       obj.id = `p${this.rows.length + 1}`
       this.rows.push(obj)
@@ -31,6 +34,12 @@ class FakeRepo {
   async findOne(opts: { where: { boxId: string } }): Promise<UsagePeriod | null> {
     const open = this.rows.filter((r) => r.boxId === opts.where.boxId && r.periodEnd == null)
     return open.length ? open[open.length - 1] : null
+  }
+
+  async find(opts: { where: { boxId: string }; order: { periodStart: 'ASC' } }): Promise<UsagePeriod[]> {
+    return this.rows
+      .filter((r) => r.boxId === opts.where.boxId)
+      .sort((a, b) => a.periodStart.getTime() - b.periodStart.getTime())
   }
 }
 
@@ -94,5 +103,26 @@ describe('UsageService.applyTransition', () => {
     await svc.applyTransition(box(BoxState.DESTROYED), BoxState.DESTROYED, t1)
     expect(repo.rows).toHaveLength(1)
     expect(repo.rows[0].periodEnd).toEqual(t1)
+  })
+
+  it('lists raw period rows in table order for dashboard inspection', async () => {
+    const t0 = new Date('2026-06-25T12:00:00Z')
+    const t1 = new Date('2026-06-25T12:00:10Z')
+    await svc.applyTransition(box(BoxState.STARTED), BoxState.STARTED, t0)
+    await svc.applyTransition(box(BoxState.STOPPED), BoxState.STOPPED, t1)
+
+    const rows = await svc.listBoxPeriods('box-1')
+
+    expect(rows.map((row) => row.kind)).toEqual(['running', 'stopped'])
+    expect(rows[0]).toMatchObject({
+      boxId: 'box-1',
+      organizationId: 'org-1',
+      periodStart: '2026-06-25T12:00:00.000Z',
+      periodEnd: '2026-06-25T12:00:10.000Z',
+      allocCpu: 2,
+      allocMemGib: 4,
+      allocDiskGib: 10,
+    })
+    expect(rows[1].periodEnd).toBeNull()
   })
 })

@@ -48,6 +48,7 @@ import { useAuth } from 'react-oidc-context'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { BoxTerminalTab } from './BoxTerminalTab'
+import { BoxUsageLedger } from './BoxUsageLedger'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 const STATUS = { running: '#5ad67d', idle: '#e0b341', stopped: '#8C919C', error: '#e0564a', dim: '#5b616e' } as const
@@ -356,15 +357,19 @@ export default function BoxDetails() {
                   <Pause className="size-[13px]" fill="currentColor" /> stop
                 </button>
               )}
-              {writePermitted && isTransitioning(box) && !isRecoverable(box) && !isStartable(box) && !isStoppable(box) && (
-                <button
-                  type="button"
-                  disabled
-                  className="flex min-h-10 items-center gap-2 border border-border px-[15px] py-2 text-[13px] font-medium text-muted-foreground"
-                >
-                  <RefreshCw className="size-[14px] animate-spin" /> working…
-                </button>
-              )}
+              {writePermitted &&
+                isTransitioning(box) &&
+                !isRecoverable(box) &&
+                !isStartable(box) &&
+                !isStoppable(box) && (
+                  <button
+                    type="button"
+                    disabled
+                    className="flex min-h-10 items-center gap-2 border border-border px-[15px] py-2 text-[13px] font-medium text-muted-foreground"
+                  >
+                    <RefreshCw className="size-[14px] animate-spin" /> working…
+                  </button>
+                )}
               {deletePermitted && (
                 <DropdownMenu>
                   <DropdownMenuTrigger
@@ -434,6 +439,8 @@ export default function BoxDetails() {
               <SectionHeader title="timestamps" />
               <SpecRow label="created">{getRelativeTimeString(box.createdAt).relativeTimeString}</SpecRow>
               <SpecRow label="last event">{getRelativeTimeString(box.updatedAt).relativeTimeString}</SpecRow>
+
+              <BoxUsageLedger boxId={box.id} />
 
               {box.errorReason && (
                 <>

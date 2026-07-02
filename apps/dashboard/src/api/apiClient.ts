@@ -5,6 +5,7 @@
  */
 
 import { BillingApiClient } from '@/billing-api/billingApiClient'
+import type { BoxUsagePeriodRow, BoxUsageTotals } from '@/lib/usage-verification'
 import { DashboardConfig } from '@/types/DashboardConfig'
 import {
   Configuration as AnalyticsConfiguration,
@@ -265,6 +266,22 @@ export class ApiClient {
       url,
       data,
     })
+  }
+
+  public async getBoxUsage(boxId: string, organizationId: string): Promise<BoxUsageTotals> {
+    return (
+      await this.axiosInstance.get<BoxUsageTotals>(`/usage/box/${encodeURIComponent(boxId)}`, {
+        headers: { 'X-BoxLite-Organization-ID': organizationId },
+      })
+    ).data
+  }
+
+  public async getBoxUsagePeriods(boxId: string, organizationId: string): Promise<BoxUsagePeriodRow[]> {
+    return (
+      await this.axiosInstance.get<BoxUsagePeriodRow[]>(`/usage/box/${encodeURIComponent(boxId)}/periods`, {
+        headers: { 'X-BoxLite-Organization-ID': organizationId },
+      })
+    ).data
   }
 
   public get axiosInstance() {

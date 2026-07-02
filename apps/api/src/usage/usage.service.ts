@@ -20,6 +20,21 @@ export interface BoxUsageResult extends UsageTotalsContract {
   boxId: string
 }
 
+export interface BoxUsagePeriodRow {
+  id: string
+  boxId: string
+  organizationId: string
+  region: string | null
+  kind: string
+  periodStart: string
+  periodEnd: string | null
+  allocCpu: number
+  allocMemGib: number
+  allocDiskGib: number
+  createdAt: string
+  updatedAt: string
+}
+
 interface UsageTotalsContract {
   totalCPUSeconds: number
   totalRAMGBSeconds: number
@@ -141,5 +156,28 @@ export class UsageService {
       totalDiskGBSeconds: totals.totalDiskGbSeconds,
       totalGPUSeconds: 0, // MVP: no GPU metering
     }
+  }
+
+  /** Return the raw ledger rows for a box, ordered exactly as the table is inspected during local validation. */
+  async listBoxPeriods(boxId: string): Promise<BoxUsagePeriodRow[]> {
+    const rows = await this.periods.find({
+      where: { boxId },
+      order: { periodStart: 'ASC' },
+    })
+
+    return rows.map((row) => ({
+      id: row.id,
+      boxId: row.boxId,
+      organizationId: row.organizationId,
+      region: row.region,
+      kind: row.kind,
+      periodStart: row.periodStart.toISOString(),
+      periodEnd: row.periodEnd ? row.periodEnd.toISOString() : null,
+      allocCpu: row.allocCpu,
+      allocMemGib: row.allocMemGib,
+      allocDiskGib: row.allocDiskGib,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    }))
   }
 }

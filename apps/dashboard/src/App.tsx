@@ -39,6 +39,7 @@ import Boxes from './pages/Boxes'
 // recharts/terminal deps. Boxes + the Dashboard shell stay eager (first paint).
 const Keys = React.lazy(() => import('./pages/Keys'))
 const Billing = React.lazy(() => import('./pages/Billing'))
+const UsageVerification = React.lazy(() => import('./pages/UsageVerification'))
 const Admin = React.lazy(() => import('./pages/Admin'))
 const EmailVerify = React.lazy(() => import('./pages/EmailVerify'))
 const OrganizationSettings = React.lazy(() => import('@/pages/OrganizationSettings'))
@@ -187,6 +188,7 @@ function App() {
         <Route path={getRouteSubPath(RoutePath.KEYS)} element={<Keys />} />
         <Route path={getRouteSubPath(RoutePath.BOXES)} element={<Boxes />} />
         <Route path={getRouteSubPath(RoutePath.BILLING)} element={<Billing />} />
+        <Route path={getRouteSubPath(RoutePath.USAGE_VERIFICATION)} element={<UsageVerification />} />
         <Route path={getRouteSubPath(RoutePath.PRICING)} element={<Navigate to={RoutePath.BILLING} replace />} />
         <Route path={getRouteSubPath(RoutePath.ADMIN)} element={<Admin />} />
         {/* TODO(image-rewrite): legacy /dashboard/templates route removed with the templates page. */}
