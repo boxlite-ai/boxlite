@@ -286,6 +286,8 @@ impl RuntimeImpl {
         // Recover boxes from database
         inner.recover_boxes()?;
 
+        super::host_sleep_watcher::spawn(Arc::clone(&inner), inner.shutdown_token.clone());
+
         Ok(inner)
     }
 
@@ -704,6 +706,31 @@ impl RuntimeImpl {
                 "Shutdown completed with errors: {}",
                 errors.join(", ")
             )))
+        }
+    }
+
+    /// Synchronize guest wall clocks for all running boxes (best-effort).
+    pub(crate) async fn sync_running_box_clocks(&self, trigger: &'static str) {
+        let boxes: Vec<SharedBoxImpl> = {
+            let sync = self.sync_state.read().unwrap();
+            sync.active_boxes_by_id
+                .values()
+                .filter_map(|weak| weak.upgrade())
+                .collect()
+        };
+
+        for box_impl in boxes {
+            if box_impl.state.read().status != BoxStatus::Running {
+                continue;
+            }
+            if let Err(e) = box_impl.sync_guest_clock(trigger).await {
+                tracing::warn!(
+                    box_id = %box_impl.id(),
+                    trigger,
+                    error = %e,
+                    "Guest clock sync failed"
+                );
+            }
         }
     }
 

@@ -1,4 +1,5 @@
 mod binary_finder;
+mod clock;
 mod pid_file;
 pub mod process;
 
@@ -17,6 +18,7 @@ use tracing_subscriber::{EnvFilter, fmt};
 pub use process::{
     ProcessExit, ProcessMonitor, is_process_alive, kill_process, process_start_time,
 };
+pub use clock::host_realtime_nanos;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 unsafe extern "C" {
