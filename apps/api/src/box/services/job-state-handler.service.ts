@@ -17,17 +17,6 @@ import { RedisLockProvider } from '../common/redis-lock.provider'
 import { ResourceType } from '../enums/resource-type.enum'
 import { getStateChangeLockKey } from '../utils/lock-key.util'
 
-// The runner reports box name/ID collisions as:
-// - "box with name '<id>' already exists"
-// - "box <id> already exists"
-// - "box with this name already exists"
-// The pattern intentionally avoids matching unrelated resource collisions.
-const BOX_ALREADY_EXISTS_PATTERN = /\bbox (?:with name ['"][^'"]+['"]|with this name|\S+) already exists\b/i
-
-function isBoxAlreadyExistsError(errorReason: string | undefined | null): boolean {
-  return !!errorReason && BOX_ALREADY_EXISTS_PATTERN.test(errorReason)
-}
-
 /**
  * Service for handling entity state updates based on job completion (v2 runners only).
  * This service listens to job status changes and updates entity states accordingly.
@@ -121,25 +110,11 @@ export class JobStateHandlerService {
           updateData.daemonVersion = metadata.daemonVersion
         }
       } else if (job.status === JobStatus.FAILED) {
+        this.logger.error(`CREATE_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
+        updateData.state = BoxState.ERROR
         const { recoverable, errorReason } = sanitizeBoxError(job.errorMessage)
-        if (isBoxAlreadyExistsError(errorReason)) {
-          // Split-brain: a previous CREATE_BOX already built this box on the runner, but the
-          // API never recorded success (lost/stale job ack). Re-running CREATE collides on the
-          // box name and the runner reports "already exists". The box is present, not failed —
-          // so converge to STOPPED and let the start flow re-drive it with an idempotent
-          // START_BOX rather than stranding it in ERROR (and re-emitting the same collision).
-          this.logger.warn(
-            `CREATE_BOX job ${job.id} hit split-brain (box ${boxId} already exists on runner); converging to STOPPED for restart`,
-          )
-          updateData.state = BoxState.STOPPED
-          updateData.errorReason = null
-        } else {
-          const sanitizedErrorReason = errorReason || 'Failed to create box'
-          this.logger.error(`CREATE_BOX job ${job.id} failed for box ${boxId}: ${sanitizedErrorReason}`)
-          updateData.state = BoxState.ERROR
-          updateData.errorReason = sanitizedErrorReason
-          updateData.recoverable = recoverable
-        }
+        updateData.errorReason = errorReason || 'Failed to create box'
+        updateData.recoverable = recoverable
       }
 
       await this.boxRepository.update(boxId, { updateData, entity: box })
