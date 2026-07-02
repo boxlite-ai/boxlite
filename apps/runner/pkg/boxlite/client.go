@@ -7,10 +7,12 @@
 package boxlite
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"log/slog"
+	pathpkg "path"
 	"strings"
 	"sync"
 	"time"
@@ -426,6 +428,72 @@ func (c *Client) CopyInto(ctx context.Context, boxId string, hostSrc, guestDst s
 		return err
 	}
 	return bx.CopyInto(ctx, hostSrc, guestDst)
+}
+
+// WriteFileFromReader streams a raw upload into a guest file from inside the
+// guest so tmpfs destinations such as /tmp are written to the live mount.
+func (c *Client) WriteFileFromReader(ctx context.Context, boxId string, guestDst string, r io.Reader) error {
+	bx, err := c.getOrFetchBox(ctx, boxId)
+	if err != nil {
+		return err
+	}
+	command, args, err := rawUploadCommand(guestDst)
+	if err != nil {
+		return err
+	}
+
+	var stdout, stderr bytes.Buffer
+	execution, err := bx.StartExecution(ctx, command, args, &boxlite.ExecutionOptions{
+		Stdout: &stdout,
+		Stderr: &stderr,
+	})
+	if err != nil {
+		return err
+	}
+
+	copyErr := func() error {
+		if execution.Stdin == nil {
+			return fmt.Errorf("execution stdin is closed")
+		}
+		if _, err := io.Copy(execution.Stdin, r); err != nil {
+			_ = execution.Kill(ctx)
+			_ = execution.Stdin.Close()
+			return err
+		}
+		return execution.Stdin.Close()
+	}()
+
+	exitCode, waitErr := execution.Wait(ctx)
+	output := strings.TrimSpace(stdout.String() + stderr.String())
+	if copyErr != nil {
+		return fmt.Errorf("raw upload stdin failed: %w", copyErr)
+	}
+	if waitErr != nil {
+		if output != "" {
+			return fmt.Errorf("raw upload wait failed: %w: %s", waitErr, output)
+		}
+		return fmt.Errorf("raw upload wait failed: %w", waitErr)
+	}
+	if exitCode != 0 {
+		if output == "" {
+			output = fmt.Sprintf("exit code %d", exitCode)
+		}
+		return fmt.Errorf("raw upload command failed: %s", output)
+	}
+	return nil
+}
+
+func rawUploadCommand(guestDst string) (string, []string, error) {
+	if guestDst == "" {
+		return "", nil, fmt.Errorf("guest destination path required")
+	}
+	return "sh", []string{
+		"-c",
+		`mkdir -p "$1" && cat > "$2"`,
+		"boxlite-raw-upload",
+		pathpkg.Dir(guestDst),
+		guestDst,
+	}, nil
 }
 
 // CopyOut copies a file from a box to the host.

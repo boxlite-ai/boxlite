@@ -37,11 +37,12 @@ func BoxliteFileUpload(ctx *gin.Context) {
 
 	src := stagingDir
 	if uploadUsesRawBody(ctx.GetHeader("Content-Type")) {
-		src, err = stageRawUploadBody(ctx.Request.Body, stagingDir)
-		if err != nil {
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to stage raw upload: %s", err)})
+		if err := r.Boxlite.WriteFileFromReader(ctx.Request.Context(), boxId, destPath, ctx.Request.Body); err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("raw upload failed: %s", err)})
 			return
 		}
+		ctx.Status(http.StatusNoContent)
+		return
 	} else {
 		// The SDK uploads a tar archive (Content-Type: application/x-tar) so
 		// that copy_in(host_dir, ...) can move trees in a single request.
@@ -79,20 +80,6 @@ func uploadUsesRawBody(contentType string) bool {
 		mediaType = contentType
 	}
 	return strings.EqualFold(mediaType, "application/octet-stream")
-}
-
-func stageRawUploadBody(r io.Reader, destDir string) (string, error) {
-	target := filepath.Join(destDir, "boxlite-upload-raw")
-	f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		return "", fmt.Errorf("create %s: %w", target, err)
-	}
-	defer f.Close()
-
-	if _, err := io.Copy(f, r); err != nil {
-		return "", fmt.Errorf("write %s: %w", target, err)
-	}
-	return target, nil
 }
 
 // extractTarToDir reads a tar archive from r and writes every entry into

@@ -29,27 +29,6 @@ func TestUploadUsesRawBodyOnlyForOctetStream(t *testing.T) {
 	}
 }
 
-func TestStageRawUploadBodyDoesNotExtractTar(t *testing.T) {
-	payload := tarBytes(t, "skills/main.py", "print('hello')\n")
-	destDir := t.TempDir()
-
-	stagedPath, err := stageRawUploadBody(bytes.NewReader(payload), destDir)
-	if err != nil {
-		t.Fatalf("stageRawUploadBody: %v", err)
-	}
-
-	got, err := os.ReadFile(stagedPath)
-	if err != nil {
-		t.Fatalf("read staged raw upload: %v", err)
-	}
-	if !bytes.Equal(got, payload) {
-		t.Fatalf("raw upload was modified")
-	}
-	if _, err := os.Stat(filepath.Join(destDir, "skills")); !os.IsNotExist(err) {
-		t.Fatalf("raw upload unexpectedly extracted tar entry, stat err=%v", err)
-	}
-}
-
 func TestExtractTarToDirStillExtractsTar(t *testing.T) {
 	destDir := t.TempDir()
 

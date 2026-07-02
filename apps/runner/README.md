@@ -409,8 +409,10 @@ a feature.
 
 Tar framing is used for directory-shaped transfers so a single endpoint can
 move files, directories, and symlinks uniformly. `application/octet-stream`
-is accepted for clients that need to upload one file verbatim. Temp files live
-under `os.TempDir()` and are cleaned up before the response returns.
+is accepted for clients that need to upload one file verbatim; raw uploads are
+streamed through a guest-side command so tmpfs destinations such as `/tmp` are
+written to the live mount. Temp files live under `os.TempDir()` and are cleaned
+up before the response returns.
 
 ### 5. Per-box metrics
 
