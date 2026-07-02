@@ -5,7 +5,7 @@
 
 import { Button } from '@/components/ui/button'
 import { Upload } from '@/components/ui/icon'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Spinner } from '@/components/ui/spinner'
 import {
   buildBoxUploadItems,
   createBoxUploadDirectoryItem,
@@ -13,13 +13,12 @@ import {
   type BoxUploadFileEntry,
   type BoxUploadItem,
 } from '@/lib/box-upload'
-import { useRef, useState, type DragEvent } from 'react'
+import { useRef } from 'react'
 
 interface BoxFileUploadControlProps {
   disabled: boolean
   disabledReason?: string
   destinationDir: string
-  isDragging?: boolean
   isUploading: boolean
   onError: (error: unknown) => void
   onUpload: (items: BoxUploadItem[]) => void
@@ -29,14 +28,12 @@ export function BoxFileUploadControl({
   disabled,
   disabledReason,
   destinationDir,
-  isDragging: externalDragging,
   isUploading,
   onError,
   onUpload,
 }: BoxFileUploadControlProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const [isLocalDragging, setIsLocalDragging] = useState(false)
-  const isDragging = externalDragging ?? isLocalDragging
+  const directoryInputRef = useRef<HTMLInputElement>(null)
   const isDisabled = disabled || isUploading
 
   const submitItems = (items: BoxUploadItem[]) => {
@@ -59,41 +56,13 @@ export function BoxFileUploadControl({
     fileInputRef.current?.click()
   }
 
-  const handleDrop = async (event: DragEvent<HTMLDivElement>) => {
-    event.preventDefault()
-    event.stopPropagation()
-    setIsLocalDragging(false)
+  const openDirectoryPicker = () => {
     if (isDisabled) return
-
-    try {
-      submitItems(await buildDroppedUploadItems(event.dataTransfer))
-    } catch (error) {
-      onError(error)
-    }
+    directoryInputRef.current?.click()
   }
 
   return (
-    <div
-      data-testid="box-file-drop-target"
-      className={[
-        'flex min-w-0 flex-col items-stretch justify-between gap-2 border border-dashed px-3 py-1.5 text-[11px] transition-colors sm:flex-row sm:items-center',
-        isDragging ? 'border-brand bg-brand/10 text-foreground' : 'border-border text-muted-foreground',
-        isDisabled ? 'opacity-60' : 'hover:border-brand/70',
-      ].join(' ')}
-      onDragEnter={(event) => {
-        event.preventDefault()
-        if (!isDisabled) setIsLocalDragging(true)
-      }}
-      onDragOver={(event) => {
-        event.preventDefault()
-        if (!isDisabled) setIsLocalDragging(true)
-      }}
-      onDragLeave={(event) => {
-        event.preventDefault()
-        setIsLocalDragging(false)
-      }}
-      onDrop={handleDrop}
-    >
+    <div data-testid="box-file-upload-control" className="flex flex-none items-center gap-1">
       <input
         ref={fileInputRef}
         type="file"
@@ -104,31 +73,41 @@ export function BoxFileUploadControl({
           event.currentTarget.value = ''
         }}
       />
-      <div className="min-w-0 leading-tight">
-        <div className="truncate text-foreground">
-          {isDragging ? `Drop to upload into ${destinationDir}` : 'Drop files or folders here'}
-        </div>
-      </div>
-      <div className="flex flex-none">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="inline-flex" tabIndex={isDisabled ? 0 : -1}>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={isDisabled}
-                onClick={openFilePicker}
-                className="h-7 gap-2 px-2.5 font-mono text-[12px]"
-              >
-                <Upload className="size-4" />
-                {isUploading ? 'Uploading' : 'Upload'}
-              </Button>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent>{disabledReason ?? `Upload files to ${destinationDir}`}</TooltipContent>
-        </Tooltip>
-      </div>
+      <input
+        ref={directoryInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        {...{ webkitdirectory: '', directory: '' }}
+        onChange={(event) => {
+          submitFiles(event.currentTarget.files)
+          event.currentTarget.value = ''
+        }}
+      />
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={isDisabled}
+        title={disabledReason ?? `Upload files to ${destinationDir}; drag folders into the shell area`}
+        onClick={openFilePicker}
+        className="h-7 gap-2 px-2.5 font-mono text-[12px]"
+      >
+        {isUploading ? <Spinner className="size-4" /> : <Upload className="size-4" />}
+        {isUploading ? 'Uploading' : 'Upload Files'}
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={isDisabled}
+        title={disabledReason ?? `Upload a folder to ${destinationDir}`}
+        onClick={openDirectoryPicker}
+        className="h-7 gap-2 px-2.5 font-mono text-[12px]"
+      >
+        <Upload className="size-4" />
+        Folder
+      </Button>
     </div>
   )
 }
