@@ -1,10 +1,12 @@
-# E2E suite against the dev cloud stack — SDK → dev API → dev Runner → libkrun VM.
+# E2E suite against the dev cloud stack — SDK → dev API → dev Runner → VM.
 #
-# Stripped-down version of e2e-cloud-test.yml: builds the Python SDK
-# from the current checkout, downloads pre-built C / Node / CLI
-# artifacts, and runs pytest against the always-on dev environment.
-# Does NOT build or deploy the API or runner — the dev stack is assumed
-# to be running the version you want to test against.
+# Builds ALL SDKs (Python, Node, C) and the CLI from source using
+# BOXLITE_DEPS_STUB=1 (skips vendor submodule builds — those only
+# matter inside the runner, not the SDK client), then runs the full
+# REST e2e pytest suite against the dev environment.
+#
+# Does NOT build or deploy the API or runner — the dev stack is
+# assumed to be already running the version you want to test against.
 #
 # Authentication: GitHub OIDC → AWS STS (no stored AWS credentials).
 # Required GitHub repo variables (Settings → Variables → Actions):
@@ -14,7 +16,7 @@
 #
 # Required AWS resources:
 #   - SSM parameter `/boxlite/dev/admin-api-key` (SecureString)
-#   - Dev API reachable at the URL resolved from the runner's stack
+#   - Dev API reachable at the input URL
 
 name: E2E dev
 
@@ -26,18 +28,6 @@ on:
         type: string
         required: true
         default: 'https://api.dev.boxlite.ai/api'
-      c_sdk_run_id:
-        description: 'GHA run ID that uploaded c-sdk-linux-x64-gnu artifact (optional — skip C/Go tests if blank)'
-        type: string
-        required: false
-      node_sdk_run_id:
-        description: 'GHA run ID that uploaded artifacts-linux-x64-gnu artifact (optional — skip Node tests if blank)'
-        type: string
-        required: false
-      cli_run_id:
-        description: 'GHA run ID that uploaded cli-linux-x64-gnu artifact (optional — skip CLI tests if blank)'
-        type: string
-        required: false
 
 permissions:
   contents: read
@@ -50,6 +40,7 @@ env:
   AWS_REGION: ${{ vars.AWS_E2E_DEV_REGION || 'ap-southeast-1' }}
   AWS_ROLE_ARN: ${{ vars.AWS_E2E_DEV_ROLE_ARN }}
   STAGE: dev
+  BOXLITE_DEPS_STUB: "1"
 
 jobs:
   e2e:
@@ -59,7 +50,6 @@ jobs:
     permissions:
       id-token: write
       contents: read
-      actions: read
     steps:
       - uses: actions/checkout@v5
 
@@ -78,72 +68,63 @@ jobs:
                -o /dev/null "${API_URL}/health"
           echo "::notice::${API_URL}/health returned 2xx"
 
-      # ── Build Python SDK from this checkout ───────────────────────
-      - name: Build & install Python SDK
-        env:
-          BOXLITE_DEPS_STUB: "1"
+      # ── System deps ──────────────────────────────────────────────
+      - name: Install system dependencies
         run: |
-          set -euo pipefail
-          sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends protobuf-compiler
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            protobuf-compiler gcc pkg-config
+
+      # ── Rust toolchain (for SDK + CLI builds) ────────────────────
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # ── Build all Rust artifacts in one pass ─────────────────────
+      # boxlite-c (libboxlite.a/.so + boxlite.h), boxlite-cli,
+      # boxlite-node (.node via napi), and boxlite-python (.whl via
+      # maturin) all share the boxlite core crate. Building boxlite-c
+      # first warms the cache; the others are incremental.
+      - name: Build C SDK (libboxlite.a + libboxlite.so + boxlite.h)
+        run: |
+          cargo build --release -p boxlite-c
+          ls -lh target/release/libboxlite.{a,so}
+          # cbindgen header — the test drivers need sdks/c/include/boxlite.h
+          if [ ! -f sdks/c/include/boxlite.h ]; then
+            cargo install cbindgen --quiet 2>/dev/null || true
+            if command -v cbindgen >/dev/null; then
+              mkdir -p sdks/c/include
+              cbindgen --config sdks/c/cbindgen.toml --crate boxlite-c \
+                --output sdks/c/include/boxlite.h 2>/dev/null || true
+            fi
+          fi
+
+      - name: Build CLI
+        run: |
+          cargo build --release -p boxlite-cli
+          sudo install -m 0755 target/release/boxlite /usr/local/bin/boxlite
+          boxlite --version
+
+      # ── Node SDK (napi-rs) ───────────────────────────────────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build Node SDK (napi)
+        run: |
+          cd sdks/node
+          npm install --ignore-scripts
+          npx napi build --platform --release --js native/boxlite.js --output-dir native
+          ls -lh native/
+
+      # ── Python SDK (maturin + PyO3) ──────────────────────────────
+      - name: Build & install Python SDK
+        run: |
           cd sdks/python
           pip install --break-system-packages --quiet maturin
           maturin build --release
           pip install --break-system-packages --force-reinstall ../../target/wheels/boxlite-*.whl
           pip install --break-system-packages --quiet pytest pytest-asyncio pytest-timeout
-
-      # ── Optional: download pre-built C / Node / CLI artifacts ────
-      - name: Download C SDK artifact
-        if: inputs.c_sdk_run_id != ''
-        uses: actions/download-artifact@v4
-        with:
-          name: c-sdk-linux-x64-gnu
-          path: /tmp/c-sdk
-          run-id: ${{ inputs.c_sdk_run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Install C SDK
-        if: inputs.c_sdk_run_id != ''
-        run: |
-          set -euo pipefail
-          ARCHIVE=$(ls /tmp/c-sdk/boxlite-c-v*-linux-x64-gnu.tar.gz)
-          tar -xzf "$ARCHIVE" -C /tmp/c-sdk
-          DIR=$(ls -d /tmp/c-sdk/boxlite-c-v*-linux-x64-gnu)
-          mkdir -p target/release sdks/c/include
-          cp "$DIR/lib/libboxlite.a"  target/release/
-          cp "$DIR/lib/libboxlite.so" target/release/
-          cp "$DIR/include/boxlite.h" sdks/c/include/
-
-      - name: Download CLI artifact
-        if: inputs.cli_run_id != ''
-        uses: actions/download-artifact@v4
-        with:
-          name: cli-linux-x64-gnu
-          path: /tmp/cli
-          run-id: ${{ inputs.cli_run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Install CLI
-        if: inputs.cli_run_id != ''
-        run: |
-          set -euo pipefail
-          ARCHIVE=$(ls /tmp/cli/boxlite-cli-v*-x86_64-unknown-linux-gnu.tar.gz)
-          tar -xzf "$ARCHIVE" -C /tmp/cli
-          sudo install -m 0755 /tmp/cli/boxlite /usr/local/bin/boxlite
-          boxlite --version
-
-      - name: Download Node SDK artifact
-        if: inputs.node_sdk_run_id != ''
-        uses: actions/download-artifact@v4
-        with:
-          name: artifacts-linux-x64-gnu
-          path: /tmp/node-sdk
-          run-id: ${{ inputs.node_sdk_run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Install Node SDK
-        if: inputs.node_sdk_run_id != ''
-        run: |
-          set -euo pipefail
-          ARCHIVE=$(ls /tmp/node-sdk/artifacts-linux-x64-gnu.tar)
-          tar -xf "$ARCHIVE" -C sdks/node
-          find sdks/node/npm -name '*.node' -print | head -5
 
       # ── Configure pytest credentials ─────────────────────────────
       - name: Configure pytest profile p1
@@ -177,6 +158,7 @@ jobs:
         env:
           BOXLITE_E2E_SKIP_PATH_VERIFY: '1'
           BOXLITE_E2E_PROFILE: p1
+          BOXLITE_E2E_REQUIRE_SDK_BUILDS: '1'
         run: |
           timeout 35m python3 -m pytest scripts/test/e2e/cases/ \
               -v --tb=short --no-header -p no:cacheprovider \
