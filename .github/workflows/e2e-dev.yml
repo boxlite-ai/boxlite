@@ -1,9 +1,13 @@
 # E2E suite against the dev cloud stack — SDK → dev API → dev Runner → VM.
 #
-# Builds ALL SDKs (Python, Node, C) and the CLI from source using
+# Builds Python SDK, Node SDK, and the CLI from source using
 # BOXLITE_DEPS_STUB=1 (skips vendor submodule builds — those only
-# matter inside the runner, not the SDK client), then runs the full
-# REST e2e pytest suite against the dev environment.
+# matter inside the runner, not the SDK client), then runs the REST
+# e2e pytest suite against the dev environment.
+#
+# C and Go SDK tests are excluded — those SDKs wrap libboxlite.a over
+# REST purely to test FFI bindings, not a real user path. Python,
+# Node, and CLI cover the actual user-facing REST surface.
 #
 # Does NOT build or deploy the API or runner — the dev stack is
 # assumed to be already running the version you want to test against.
@@ -55,27 +59,13 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            protobuf-compiler gcc pkg-config
+          sudo apt-get install -y --no-install-recommends protobuf-compiler
 
-      # ── Rust toolchain (for SDK + CLI builds) ────────────────────
+      # ── Rust toolchain ───────────────────────────────────────────
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      # ── Build all Rust artifacts in one pass ─────────────────────
-      - name: Build C SDK (libboxlite.a + libboxlite.so + boxlite.h)
-        run: |
-          cargo build --release -p boxlite-c
-          ls -lh target/release/libboxlite.{a,so}
-          if [ ! -f sdks/c/include/boxlite.h ]; then
-            cargo install cbindgen --quiet 2>/dev/null || true
-            if command -v cbindgen >/dev/null; then
-              mkdir -p sdks/c/include
-              cbindgen --config sdks/c/cbindgen.toml --crate boxlite-c \
-                --output sdks/c/include/boxlite.h 2>/dev/null || true
-            fi
-          fi
-
+      # ── CLI (cargo build, warms the shared boxlite core) ─────────
       - name: Build CLI
         run: |
           cargo build --release -p boxlite-cli
@@ -133,13 +123,20 @@ jobs:
           chmod 600 ~/.boxlite/credentials.toml
 
       # ── Run pytest ───────────────────────────────────────────────
+      # --ignore the C, Go, and path-verification tests (C/Go are
+      # FFI-binding tests, not user paths; path-verify needs runner
+      # journal access).
       - name: Run E2E suite
         env:
           BOXLITE_E2E_SKIP_PATH_VERIFY: '1'
           BOXLITE_E2E_PROFILE: p1
-          BOXLITE_E2E_REQUIRE_SDK_BUILDS: '1'
         run: |
           timeout 35m python3 -m pytest scripts/test/e2e/cases/ \
+              --ignore=scripts/test/e2e/cases/test_c_entry.py \
+              --ignore=scripts/test/e2e/cases/test_c_coverage.py \
+              --ignore=scripts/test/e2e/cases/test_go_entry.py \
+              --ignore=scripts/test/e2e/cases/test_go_coverage.py \
+              --ignore=scripts/test/e2e/cases/test_path_verification.py \
               -v --tb=short --no-header -p no:cacheprovider \
               --timeout=180 --timeout-method=thread \
               --junit-xml=pytest-junit.xml
