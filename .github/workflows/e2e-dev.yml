@@ -124,10 +124,11 @@ jobs:
           chmod 600 ~/.boxlite/credentials.toml
 
       # ── Run pytest ───────────────────────────────────────────────
-      # --ignore the C, Go, path-verification, and exec-timeout tests
-      # (C/Go are FFI-binding tests, not user paths; path-verify needs
-      # runner journal access; exec-timeout is flaky on the single-node
-      # dev runner).
+      # --ignore the C, Go, path-verification, exec-timeout, and
+      # node-entry tests (C/Go are FFI-binding tests; path-verify and
+      # node-entry need runner journal access; exec-timeout is flaky
+      # on the single-node dev runner).  node-coverage already covers
+      # the Node SDK REST surface without journal checks.
       - name: Run E2E suite
         env:
           BOXLITE_E2E_SKIP_PATH_VERIFY: '1'
@@ -140,6 +141,7 @@ jobs:
               --ignore=scripts/test/e2e/cases/test_go_coverage.py \
               --ignore=scripts/test/e2e/cases/test_path_verification.py \
               --ignore=scripts/test/e2e/cases/test_exec_timeout.py \
+              --ignore=scripts/test/e2e/cases/test_node_entry.py \
               -v --tb=short --no-header -p no:cacheprovider \
               --timeout=180 --timeout-method=thread \
               --junit-xml=pytest-junit.xml
