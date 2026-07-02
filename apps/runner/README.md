@@ -404,12 +404,13 @@ a feature.
 
 | Method | Path | Controller | Purpose |
 | --- | --- | --- | --- |
-| `PUT` | `/v1/boxes/:boxId/files?path=<dest>` | `BoxliteFileUpload` | Stream tar body → temp file → `CopyInto(box, tmp, dest)` |
+| `PUT` | `/v1/boxes/:boxId/files?path=<dest>` | `BoxliteFileUpload` | `application/x-tar` extracts before `CopyInto`; `application/octet-stream` copies the raw body as one file |
 | `GET` | `/v1/boxes/:boxId/files?path=<src>` | `BoxliteFileDownload` | `CopyOut(box, src, tmpDir)` → walk dir, write `application/x-tar` |
 
-Tar framing is used in both directions so a single endpoint can move
-files, directories, and symlinks uniformly. Temp files live under
-`os.TempDir()` and are cleaned up before the response returns.
+Tar framing is used for directory-shaped transfers so a single endpoint can
+move files, directories, and symlinks uniformly. `application/octet-stream`
+is accepted for clients that need to upload one file verbatim. Temp files live
+under `os.TempDir()` and are cleaned up before the response returns.
 
 ### 5. Per-box metrics
 
@@ -572,7 +573,7 @@ the Swagger UI (development only).
 | `GET` | `/v1/boxes/:boxId/executions/:execId/attach` | WebSocket stdio + control |
 | `POST` | `/v1/boxes/:boxId/executions/:execId/signal` | Cooperative signal (whitelist) |
 | `POST` | `/v1/boxes/:boxId/executions/:execId/resize` | Resize TTY |
-| `PUT` | `/v1/boxes/:boxId/files?path=<dest>` | Upload tar |
+| `PUT` | `/v1/boxes/:boxId/files?path=<dest>` | Upload tar or raw file |
 | `GET` | `/v1/boxes/:boxId/files?path=<src>` | Download tar |
 | `GET` | `/v1/boxes/:boxId/metrics` | Per-box metrics |
 

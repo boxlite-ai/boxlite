@@ -4,9 +4,11 @@ import (
 	"archive/tar"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
@@ -26,13 +28,6 @@ func BoxliteFileUpload(ctx *gin.Context) {
 		return
 	}
 
-	// The SDK uploads a tar archive (Content-Type: application/x-tar) so
-	// that copy_in(host_dir, ...) can move trees in a single request.
-	// We MUST extract the archive into a staging dir on the runner host
-	// before handing it to the Go SDK's CopyInto — that lower-level call
-	// expects a *real path*, not a tar file, and would otherwise dump the
-	// entire .tar blob into the guest as a single binary file (which
-	// silently breaks both single-file and directory uploads).
 	stagingDir, err := os.MkdirTemp("", "boxlite-upload-stage-*")
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create staging dir"})
@@ -40,19 +35,34 @@ func BoxliteFileUpload(ctx *gin.Context) {
 	}
 	defer os.RemoveAll(stagingDir)
 
-	stagedPath, isSingleFile, err := extractTarToDir(ctx.Request.Body, stagingDir)
-	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("failed to extract upload tar: %s", err)})
-		return
-	}
-
-	// If the archive contained exactly one regular file, CopyInto its
-	// extracted path (a real file) so the guest sees the file at destPath.
-	// Otherwise CopyInto the staging dir as a whole — the Go SDK's
-	// recursive copy handles directories natively.
 	src := stagingDir
-	if isSingleFile {
-		src = stagedPath
+	if uploadUsesRawBody(ctx.GetHeader("Content-Type")) {
+		src, err = stageRawUploadBody(ctx.Request.Body, stagingDir)
+		if err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to stage raw upload: %s", err)})
+			return
+		}
+	} else {
+		// The SDK uploads a tar archive (Content-Type: application/x-tar) so
+		// that copy_in(host_dir, ...) can move trees in a single request.
+		// We MUST extract the archive into a staging dir on the runner host
+		// before handing it to the Go SDK's CopyInto — that lower-level call
+		// expects a *real path*, not a tar file, and would otherwise dump the
+		// entire .tar blob into the guest as a single binary file (which
+		// silently breaks both single-file and directory uploads).
+		stagedPath, isSingleFile, err := extractTarToDir(ctx.Request.Body, stagingDir)
+		if err != nil {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("failed to extract upload tar: %s", err)})
+			return
+		}
+
+		// If the archive contained exactly one regular file, CopyInto its
+		// extracted path (a real file) so the guest sees the file at destPath.
+		// Otherwise CopyInto the staging dir as a whole — the Go SDK's
+		// recursive copy handles directories natively.
+		if isSingleFile {
+			src = stagedPath
+		}
 	}
 
 	if err := r.Boxlite.CopyInto(ctx.Request.Context(), boxId, src, destPath); err != nil {
@@ -61,6 +71,28 @@ func BoxliteFileUpload(ctx *gin.Context) {
 	}
 
 	ctx.Status(http.StatusNoContent)
+}
+
+func uploadUsesRawBody(contentType string) bool {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		mediaType = contentType
+	}
+	return strings.EqualFold(mediaType, "application/octet-stream")
+}
+
+func stageRawUploadBody(r io.Reader, destDir string) (string, error) {
+	target := filepath.Join(destDir, "boxlite-upload-raw")
+	f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return "", fmt.Errorf("create %s: %w", target, err)
+	}
+	defer f.Close()
+
+	if _, err := io.Copy(f, r); err != nil {
+		return "", fmt.Errorf("write %s: %w", target, err)
+	}
+	return target, nil
 }
 
 // extractTarToDir reads a tar archive from r and writes every entry into
