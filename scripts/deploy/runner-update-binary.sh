@@ -5,9 +5,9 @@
 # /usr/local/bin/boxlite-runner at it, restarts the systemd unit, and verifies
 # that detached box shims that were alive before the restart are still alive and
 # can be re-attached by the new runner. The EC2 instance itself is not replaced;
-# box state under /var/lib/boxlite is preserved. It uploads the locally built
-# runner tarball to a temporary S3 location, then asks SSM to install it on the
-# target runner.
+# box state under /var/lib/boxlite is preserved. Official versions are fetched
+# directly from GitHub Releases by the target runner; dev builds upload the
+# locally built runner tarball to a temporary S3 location first.
 #
 # Pair with the `ignoreChanges: ["ami", "userDataBase64"]` setting on the
 # Runner resource in apps/infra/sst.config.ts — that prevents `sst deploy`
@@ -16,8 +16,10 @@
 #
 # Usage:
 #   scripts/deploy/runner-update-binary.sh                  # version from Cargo.toml
+#   scripts/deploy/runner-update-binary.sh 0.9.7            # official GitHub release
 #   scripts/deploy/runner-update-binary.sh 0.9.7-dev-123-58d8f01bcd02
 #   scripts/deploy/runner-update-binary.sh --output-dir /tmp/dist 0.9.7-dev-123-58d8f01bcd02
+#   scripts/deploy/runner-update-binary.sh --tarball dist/boxlite-runner-v0.9.7-dev-123-58d8f01bcd02-linux-amd64.tar.gz
 #   AWS_REGION=us-west-2 scripts/deploy/runner-update-binary.sh
 #   STAGE=production scripts/deploy/runner-update-binary.sh
 #   RUNNER_INSTANCE_ID=i-0123456789abcdef0 scripts/deploy/runner-update-binary.sh
@@ -38,7 +40,13 @@ RUNNER_INSTANCE_ID="${RUNNER_INSTANCE_ID:-}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ARTIFACT_DIR="${RUNNER_ARTIFACT_DIR:-$REPO_ROOT/dist}"
 RUNNER_ARTIFACT_S3_URI="${RUNNER_ARTIFACT_S3_URI:-}"
+RUNNER_DOWNLOAD_CONNECT_TIMEOUT_SECONDS="${RUNNER_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}"
+RUNNER_DOWNLOAD_MAX_TIME_SECONDS="${RUNNER_DOWNLOAD_MAX_TIME_SECONDS:-600}"
+RUNNER_CHECKSUM_DOWNLOAD_MAX_TIME_SECONDS="${RUNNER_CHECKSUM_DOWNLOAD_MAX_TIME_SECONDS:-120}"
+SSM_WAIT_TIMEOUT_SECONDS="${SSM_WAIT_TIMEOUT_SECONDS:-1800}"
+SSM_WAIT_POLL_SECONDS="${SSM_WAIT_POLL_SECONDS:-10}"
 VERSION=""
+LOCAL_TARBALL_OVERRIDE=""
 
 usage() {
   sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
@@ -54,6 +62,11 @@ while [[ $# -gt 0 ]]; do
     --version)
       [[ $# -ge 2 ]] || { echo "error: --version requires a value" >&2; exit 1; }
       VERSION="$2"
+      shift 2
+      ;;
+    --tarball)
+      [[ $# -ge 2 ]] || { echo "error: --tarball requires a value" >&2; exit 1; }
+      LOCAL_TARBALL_OVERRIDE="$2"
       shift 2
       ;;
     -h|--help)
@@ -102,7 +115,16 @@ case "$STAGE" in
 esac
 
 if [[ -z "$VERSION" ]]; then
-  VERSION=$(grep -m 1 '^version' "$REPO_ROOT/Cargo.toml" | sed -E 's/^version *= *"([^"]+)".*/\1/')
+  if [[ -n "$LOCAL_TARBALL_OVERRIDE" ]]; then
+    TARBALL_BASENAME="$(basename "$LOCAL_TARBALL_OVERRIDE")"
+    VERSION="$(printf '%s\n' "$TARBALL_BASENAME" | sed -E 's/^boxlite-runner-v(.+)-linux-amd64\.tar\.gz$/\1/')"
+    if [[ "$VERSION" == "$TARBALL_BASENAME" ]]; then
+      echo "error: could not infer version from tarball name: $TARBALL_BASENAME" >&2
+      exit 1
+    fi
+  else
+    VERSION=$(grep -m 1 '^version' "$REPO_ROOT/Cargo.toml" | sed -E 's/^version *= *"([^"]+)".*/\1/')
+  fi
   if [[ -z "$VERSION" ]]; then
     echo "error: could not read version from Cargo.toml at $REPO_ROOT/Cargo.toml" >&2
     exit 1
@@ -110,22 +132,32 @@ if [[ -z "$VERSION" ]]; then
 fi
 
 ASSET_TARBALL="boxlite-runner-v${VERSION}-linux-amd64.tar.gz"
-LOCAL_TARBALL="$ARTIFACT_DIR/$ASSET_TARBALL"
+LOCAL_TARBALL="${LOCAL_TARBALL_OVERRIDE:-$ARTIFACT_DIR/$ASSET_TARBALL}"
 LOCAL_SHA="$LOCAL_TARBALL.sha256"
 RUNTIME_CACHE_VERSION="${VERSION%%-dev-*}"
-
-if [[ ! -f "$LOCAL_TARBALL" ]]; then
-  echo "error: local runner tarball not found: $LOCAL_TARBALL" >&2
-  echo "       run scripts/deploy/build-runner-binary.sh first, or set --output-dir/RUNNER_ARTIFACT_DIR" >&2
-  exit 1
-fi
-if [[ ! -f "$LOCAL_SHA" ]]; then
-  echo "error: local runner checksum not found: $LOCAL_SHA" >&2
-  echo "       run scripts/deploy/build-runner-binary.sh first" >&2
-  exit 1
+IS_DEV_VERSION=0
+if [[ "$VERSION" == *-dev-* ]]; then
+  IS_DEV_VERSION=1
 fi
 
-echo "==> Upgrading boxlite-runner from local artifact v$VERSION on stage=$STAGE region=$AWS_REGION"
+if [[ "$IS_DEV_VERSION" -eq 1 ]]; then
+  if [[ ! -f "$LOCAL_TARBALL" ]]; then
+    echo "error: local dev runner tarball not found: $LOCAL_TARBALL" >&2
+    echo "       run scripts/deploy/build-runner-binary.sh first, or set --output-dir/RUNNER_ARTIFACT_DIR" >&2
+    exit 1
+  fi
+  if [[ ! -f "$LOCAL_SHA" ]]; then
+    echo "error: local dev runner checksum not found: $LOCAL_SHA" >&2
+    echo "       run scripts/deploy/build-runner-binary.sh first" >&2
+    exit 1
+  fi
+fi
+
+if [[ "$IS_DEV_VERSION" -eq 1 ]]; then
+  echo "==> Upgrading boxlite-runner from local dev artifact v$VERSION on stage=$STAGE region=$AWS_REGION"
+else
+  echo "==> Upgrading boxlite-runner from GitHub release v$VERSION on stage=$STAGE region=$AWS_REGION"
+fi
 
 if [[ -n "$RUNNER_INSTANCE_ID" ]]; then
   INSTANCE_ID="$RUNNER_INSTANCE_ID"
@@ -154,17 +186,26 @@ else
 fi
 echo "    instance: $INSTANCE_ID"
 
-if [[ -z "$RUNNER_ARTIFACT_S3_URI" ]]; then
-  ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-  RUNNER_ARTIFACT_S3_URI="s3://boxlite-${STAGE}-runner-builds/tmp/runner-rollouts/${ACCOUNT_ID}/${VERSION}/$(date -u +%Y%m%dT%H%M%SZ)"
+if [[ "$IS_DEV_VERSION" -eq 1 ]]; then
+  if [[ -z "$RUNNER_ARTIFACT_S3_URI" ]]; then
+    ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+    RUNNER_ARTIFACT_S3_URI="s3://boxlite-${STAGE}-runner-builds/tmp/runner-rollouts/${ACCOUNT_ID}/${VERSION}/$(date -u +%Y%m%dT%H%M%SZ)"
+  fi
+  REMOTE_TARBALL_URL="${RUNNER_ARTIFACT_S3_URI%/}/$ASSET_TARBALL"
+  REMOTE_SHA_URL="$REMOTE_TARBALL_URL.sha256"
+  echo "==> Uploading local artifact to $RUNNER_ARTIFACT_S3_URI"
+  aws s3 cp --region "$AWS_REGION" "$LOCAL_TARBALL" "$REMOTE_TARBALL_URL"
+  aws s3 cp --region "$AWS_REGION" "$LOCAL_SHA" "$REMOTE_SHA_URL"
+  DOWNLOAD_TARBALL_URL=$(aws s3 presign --region "$AWS_REGION" "$REMOTE_TARBALL_URL" --expires-in 3600)
+  DOWNLOAD_SHA_URL=$(aws s3 presign --region "$AWS_REGION" "$REMOTE_SHA_URL" --expires-in 3600)
+else
+  RELEASE_REPOSITORY="${BOXLITE_RELEASE_REPOSITORY:-boxlite-ai/boxlite}"
+  RELEASE_TAG="${BOXLITE_RELEASE_TAG:-v${VERSION}}"
+  RELEASE_BASE_URL="https://github.com/${RELEASE_REPOSITORY}/releases/download/${RELEASE_TAG}"
+  DOWNLOAD_TARBALL_URL="$RELEASE_BASE_URL/$ASSET_TARBALL"
+  DOWNLOAD_SHA_URL="$DOWNLOAD_TARBALL_URL.sha256"
+  echo "==> Target runner will download $DOWNLOAD_TARBALL_URL"
 fi
-REMOTE_TARBALL_URL="${RUNNER_ARTIFACT_S3_URI%/}/$ASSET_TARBALL"
-REMOTE_SHA_URL="$REMOTE_TARBALL_URL.sha256"
-echo "==> Uploading local artifact to $RUNNER_ARTIFACT_S3_URI"
-aws s3 cp --region "$AWS_REGION" "$LOCAL_TARBALL" "$REMOTE_TARBALL_URL"
-aws s3 cp --region "$AWS_REGION" "$LOCAL_SHA" "$REMOTE_SHA_URL"
-PRESIGNED_TARBALL_URL=$(aws s3 presign --region "$AWS_REGION" "$REMOTE_TARBALL_URL" --expires-in 3600)
-PRESIGNED_SHA_URL=$(aws s3 presign --region "$AWS_REGION" "$REMOTE_SHA_URL" --expires-in 3600)
 
 # Remote upgrade script. Mirrors the boot user-data's integrity policy and adds a
 # rollback: download + checksum-verify BEFORE stopping the unit (so a failed or
@@ -301,6 +342,78 @@ runtime_cache_dirs() {
   done
 }
 
+primary_runtime_cache_dir() {
+  local version_dir="\${RUNTIME_CACHE_DIR_NAME:-v${RUNTIME_CACHE_VERSION}}"
+  local svc_user svc_home
+
+  svc_user=\$(systemctl show "\$SERVICE" --property=User --value 2>/dev/null || true)
+  if [ -z "\$svc_user" ]; then
+    svc_user=root
+  fi
+
+  svc_home=\$(getent passwd "\$svc_user" 2>/dev/null | cut -d: -f6 || true)
+  if [ -z "\$svc_home" ]; then
+    svc_home=/root
+  fi
+
+  printf '%s\n' "\$svc_home/.local/share/boxlite/runtimes/\$version_dir"
+}
+
+install_embedded_runtime_payload() {
+  local payload="\$1"
+  local cache_dir tmp_dir guest_hash
+
+  if [ -z "\${GUEST_EXPECTED:-}" ]; then
+    echo "embedded runtime install skipped: no expected guest hash sidecar"
+    return 0
+  fi
+  if [ ! -f "\$payload" ]; then
+    echo "embedded runtime install skipped: no runtime payload in tarball"
+    return 0
+  fi
+
+  cache_dir="\$(primary_runtime_cache_dir)"
+  tmp_dir="\${cache_dir}.tmp.\$\$"
+  rm -rf "\$tmp_dir"
+  mkdir -p "\$tmp_dir"
+  tar -xzf "\$payload" -C "\$tmp_dir"
+
+  if [ ! -f "\$tmp_dir/boxlite-guest" ]; then
+    echo "FATAL: embedded runtime payload has no boxlite-guest" >&2
+    rm -rf "\$tmp_dir"
+    return 1
+  fi
+
+  guest_hash=\$(sha256sum "\$tmp_dir/boxlite-guest" | awk '{print \$1}')
+  if [ "\$guest_hash" != "\$GUEST_EXPECTED" ]; then
+    echo "FATAL: embedded runtime payload guest hash mismatch (expected=\${GUEST_EXPECTED:0:12} actual=\${guest_hash:0:12})" >&2
+    rm -rf "\$tmp_dir"
+    return 1
+  fi
+
+  mkdir -p "\$(dirname "\$cache_dir")"
+  rm -rf "\$cache_dir"
+  mv "\$tmp_dir" "\$cache_dir"
+  echo "embedded runtime payload installed: \${guest_hash:0:12} (\$cache_dir)"
+}
+
+write_runtime_dir_override() {
+  local cache_dir
+  cache_dir="\$(primary_runtime_cache_dir)"
+  if [ ! -d "\$cache_dir" ]; then
+    echo "FATAL: runtime cache directory missing before start: \$cache_dir" >&2
+    return 1
+  fi
+
+  mkdir -p "/etc/systemd/system/\$SERVICE.service.d"
+  cat > "/etc/systemd/system/\$SERVICE.service.d/runtime-dir.conf" <<SERVICEEOF
+[Service]
+Environment=BOXLITE_RUNTIME_DIR=\$cache_dir
+SERVICEEOF
+  systemctl daemon-reload
+  echo "systemd runtime override: BOXLITE_RUNTIME_DIR=\$cache_dir"
+}
+
 verify_embedded_runtime_hash() {
   local checked=0
   local cache_dir guest_hash
@@ -325,25 +438,7 @@ verify_embedded_runtime_hash() {
   done < <(runtime_cache_dirs)
 
   if [ "\$checked" -eq 0 ]; then
-    # "Deferred" used to pass silently — that shipped a runner whose guest key
-    # never materialized and every box start failed with a hash mismatch.
-    # Force extraction by probing the runner, then re-check within a bounded
-    # window; a miss is FATAL so restart_with_target routes to auto-rollback.
-    echo "runtime cache not extracted yet for \$RUNTIME_CACHE_DIR_NAME; waiting for the runner to extract it"
-    local waited=0
-    while [ "\$waited" -lt 20 ]; do
-      sleep 2
-      waited=\$((waited + 2))
-      while IFS= read -r cache_dir; do
-        [ -n "\$cache_dir" ] && [ -f "\$cache_dir/boxlite-guest" ] || continue
-        guest_hash=\$(sha256sum "\$cache_dir/boxlite-guest" | awk '{print \$1}')
-        if [ "\$guest_hash" = "\$GUEST_EXPECTED" ]; then
-          echo "embedded runtime guest hash verified after extraction: \${guest_hash:0:12} (\$cache_dir)"
-          return 0
-        fi
-      done < <(runtime_cache_dirs)
-    done
-    echo "FATAL: expected guest \${GUEST_EXPECTED:0:12} never appeared in any runtime cache dir (key \$RUNTIME_CACHE_DIR_NAME) — refusing a runner that cannot start boxes" >&2
+    echo "FATAL: embedded runtime cache not found for \$RUNTIME_CACHE_DIR_NAME; refusing rollout before create/start can hit an old guest binary" >&2
     return 1
   fi
 }
@@ -463,6 +558,7 @@ restart_with_target() {
   local target="\$1"
   systemctl stop "\$SERVICE" || true
   activate_runner_target "\$target" || return 1
+  write_runtime_dir_override || return 1
   systemctl start "\$SERVICE" || return 1
   sleep 2
   systemctl is-active --quiet "\$SERVICE" || return 1
@@ -472,14 +568,40 @@ restart_with_target() {
   verify_hot_adopted_shims || return 1
 }
 
+restart_rollback_target() {
+  local target="\$1"
+  local saved_guest_expected="\${GUEST_EXPECTED:-}"
+  local saved_runtime_suffix="\${RUNTIME_SUFFIX:-}"
+  local saved_runtime_cache_dir_name="\${RUNTIME_CACHE_DIR_NAME:-}"
+
+  GUEST_EXPECTED=""
+  RUNTIME_SUFFIX=""
+  RUNTIME_CACHE_DIR_NAME="v${RUNTIME_CACHE_VERSION}"
+  restart_with_target "\$target"
+  local rc=\$?
+
+  GUEST_EXPECTED="\$saved_guest_expected"
+  RUNTIME_SUFFIX="\$saved_runtime_suffix"
+  RUNTIME_CACHE_DIR_NAME="\$saved_runtime_cache_dir_name"
+  return "\$rc"
+}
+
 load_runner_env
 snapshot_live_detached_shims
 echo "hot rollout: captured \$(wc -l < "\$HOT_SNAPSHOT" | tr -d ' ') live detached shim(s)"
 
 WORK=\$(mktemp -d)
 trap 'rm -rf "\$WORK"; rm -f "\$HOT_SNAPSHOT"' EXIT
-curl -fsSL "${PRESIGNED_TARBALL_URL}" -o "\$WORK/runner.tar.gz"
-if curl -fsSL "${PRESIGNED_SHA_URL}" -o "\$WORK/runner.sha256"; then
+curl -fL --show-error --silent \
+  --retry 5 --retry-delay 2 --retry-connrefused \
+  --connect-timeout "${RUNNER_DOWNLOAD_CONNECT_TIMEOUT_SECONDS}" \
+  --max-time "${RUNNER_DOWNLOAD_MAX_TIME_SECONDS}" \
+  "${DOWNLOAD_TARBALL_URL}" -o "\$WORK/runner.tar.gz"
+if curl -fL --show-error --silent \
+  --retry 3 --retry-delay 2 --retry-connrefused \
+  --connect-timeout "${RUNNER_DOWNLOAD_CONNECT_TIMEOUT_SECONDS}" \
+  --max-time "${RUNNER_CHECKSUM_DOWNLOAD_MAX_TIME_SECONDS}" \
+  "${DOWNLOAD_SHA_URL}" -o "\$WORK/runner.sha256"; then
   EXPECTED=\$(awk '{print \$1}' "\$WORK/runner.sha256")
   ACTUAL=\$(sha256sum "\$WORK/runner.tar.gz" | awk '{print \$1}')
   [ "\$EXPECTED" = "\$ACTUAL" ] || { echo "FATAL: checksum mismatch (want \$EXPECTED got \$ACTUAL)" >&2; exit 1; }
@@ -509,20 +631,9 @@ else
   RUNTIME_CACHE_DIR_NAME="v${RUNTIME_CACHE_VERSION}"
   echo "runner runtime cache key: \$RUNTIME_CACHE_DIR_NAME"
 fi
+install_embedded_runtime_payload "\$WORK/boxlite-runtime.tar.gz" || exit 1
 
 CURRENT_TARGET=\$(current_runner_target)
-# Same-binary skip: fleet re-runs and canary-then-fleet overlaps hit runners that
-# already run these exact bits — comparing sha256 (not version label) makes the
-# no-op safe even when a dev artifact reuses a version name.
-if [ -n "\$CURRENT_TARGET" ] && [ -f "\$CURRENT_TARGET" ]; then
-  NEW_SHA=\$(sha256sum "\$WORK/boxlite-runner" | awk '{print \$1}')
-  CUR_SHA=\$(sha256sum "\$CURRENT_TARGET" | awk '{print \$1}')
-  if [ "\$NEW_SHA" = "\$CUR_SHA" ]; then
-    echo "same binary already active (\${CUR_SHA:0:12}); skipping swap"
-    systemctl is-active --quiet "\$SERVICE" && echo "systemd unit: active"
-    exit 0
-  fi
-fi
 NEW_TARGET=\$(prepare_release_target "\$WORK/boxlite-runner" "v${VERSION}")
 verify_release_target "\$NEW_TARGET" "new" || exit 1
 echo "install target: \$NEW_TARGET"
@@ -542,7 +653,7 @@ if restart_with_target "\$NEW_TARGET"; then
 else
   echo "upgrade failed or detached-box adoption failed; rolling back" >&2
   if [ -n "\$CURRENT_TARGET" ]; then
-    if restart_with_target "\$CURRENT_TARGET"; then
+    if restart_rollback_target "\$CURRENT_TARGET"; then
       echo "rollback complete"
     else
       echo "rollback failed" >&2
@@ -565,10 +676,28 @@ CMD_ID=$(aws ssm send-command --region "$AWS_REGION" \
   --query 'Command.CommandId' --output text)
 
 echo "    command:  $CMD_ID"
-echo "==> Waiting for SSM command to finish..."
+echo "==> Waiting for SSM command to finish (timeout=${SSM_WAIT_TIMEOUT_SECONDS}s)..."
 
-aws ssm wait command-executed --region "$AWS_REGION" \
-  --command-id "$CMD_ID" --instance-id "$INSTANCE_ID"
+STATUS=""
+DEADLINE=$((SECONDS + SSM_WAIT_TIMEOUT_SECONDS))
+while true; do
+  STATUS=$(aws ssm get-command-invocation --region "$AWS_REGION" \
+    --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+    --query 'Status' --output text 2>/dev/null || true)
+
+  case "$STATUS" in
+    Success|Failed|Cancelled|TimedOut|Cancelling)
+      break
+      ;;
+  esac
+
+  if (( SECONDS >= DEADLINE )); then
+    echo "error: SSM command still ${STATUS:-unknown} after ${SSM_WAIT_TIMEOUT_SECONDS}s" >&2
+    exit 1
+  fi
+
+  sleep "$SSM_WAIT_POLL_SECONDS"
+done
 
 STATUS=$(aws ssm get-command-invocation --region "$AWS_REGION" \
   --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \

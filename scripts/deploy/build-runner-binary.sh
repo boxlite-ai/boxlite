@@ -79,6 +79,24 @@ require_cmd make
 require_cmd sha256sum
 require_cmd tar
 
+find_embedded_runtime_dir() {
+  local guest_sha256="$1"
+  local runtime_dir
+  local runtime_guest_sha256
+
+  while IFS= read -r runtime_dir; do
+    [ -f "$runtime_dir/boxlite-guest" ] || continue
+    runtime_guest_sha256="$(sha256sum "$runtime_dir/boxlite-guest" | awk '{print $1}')"
+    if [[ "$runtime_guest_sha256" == "$guest_sha256" ]]; then
+      printf '%s\n' "$runtime_dir"
+      return 0
+    fi
+  done < <(find "$ROOT_DIR/target/release/build" -maxdepth 3 -path '*/boxlite-*/out/runtime' -type d 2>/dev/null | sort)
+
+  echo "error: embedded runtime payload not found for guest hash ${guest_sha256:0:12}" >&2
+  exit 1
+}
+
 if [[ "$(uname -s)" != "Linux" || "$(uname -m)" != "x86_64" ]]; then
   echo "error: runner tarball build currently requires a Linux x86_64 builder" >&2
   exit 1
@@ -174,9 +192,10 @@ RUNTIME_CACHE_SUFFIX="dev-${BUILD_SEQUENCE}-${RUNTIME_SUFFIX}"
 RUNNER_VERSION="${VERSION}-${RUNTIME_CACHE_SUFFIX}"
 
 echo "==> Building libboxlite with runtime cache key v${RUNNER_VERSION}"
-BOXLITE_RUNTIME_CACHE_VERSION="$VERSION" \
-  BOXLITE_RUNTIME_CACHE_SUFFIX="$RUNTIME_CACHE_SUFFIX" \
-  make dist:c
+make dist:c
+RUNTIME_DIR="$(find_embedded_runtime_dir "$GUEST_SHA256")"
+tar czf "$TMP_DIR/boxlite-runtime.tar.gz" -C "$RUNTIME_DIR" .
+echo "==> Wrote embedded runtime payload from $RUNTIME_DIR"
 cp "$ROOT_DIR/target/release/libboxlite.a" "$ROOT_DIR/sdks/go/libboxlite.a"
 
 go -C apps/runner mod download
@@ -197,7 +216,8 @@ TARBALL="$OUTPUT_DIR/boxlite-runner-v${RUNNER_VERSION}-linux-amd64.tar.gz"
 tar czf "$TARBALL" -C "$TMP_DIR" \
   boxlite-runner \
   boxlite-runner.guest.sha256 \
-  boxlite-runner.runtime-suffix
+  boxlite-runner.runtime-suffix \
+  boxlite-runtime.tar.gz
 
 if command -v sha256sum >/dev/null 2>&1; then
   sha256sum "$TARBALL" > "$TARBALL.sha256"
