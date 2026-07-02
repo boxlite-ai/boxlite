@@ -325,7 +325,26 @@ verify_embedded_runtime_hash() {
   done < <(runtime_cache_dirs)
 
   if [ "\$checked" -eq 0 ]; then
-    echo "embedded runtime guest hash verification deferred: runtime cache not extracted yet for \$RUNTIME_CACHE_DIR_NAME"
+    # "Deferred" used to pass silently — that shipped a runner whose guest key
+    # never materialized and every box start failed with a hash mismatch.
+    # Force extraction by probing the runner, then re-check within a bounded
+    # window; a miss is FATAL so restart_with_target routes to auto-rollback.
+    echo "runtime cache not extracted yet for \$RUNTIME_CACHE_DIR_NAME; waiting for the runner to extract it"
+    local waited=0
+    while [ "\$waited" -lt 20 ]; do
+      sleep 2
+      waited=\$((waited + 2))
+      while IFS= read -r cache_dir; do
+        [ -n "\$cache_dir" ] && [ -f "\$cache_dir/boxlite-guest" ] || continue
+        guest_hash=\$(sha256sum "\$cache_dir/boxlite-guest" | awk '{print \$1}')
+        if [ "\$guest_hash" = "\$GUEST_EXPECTED" ]; then
+          echo "embedded runtime guest hash verified after extraction: \${guest_hash:0:12} (\$cache_dir)"
+          return 0
+        fi
+      done < <(runtime_cache_dirs)
+    done
+    echo "FATAL: expected guest \${GUEST_EXPECTED:0:12} never appeared in any runtime cache dir (key \$RUNTIME_CACHE_DIR_NAME) — refusing a runner that cannot start boxes" >&2
+    return 1
   fi
 }
 
