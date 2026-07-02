@@ -8,15 +8,8 @@
 # Does NOT build or deploy the API or runner — the dev stack is
 # assumed to be already running the version you want to test against.
 #
-# Authentication: GitHub OIDC → AWS STS (no stored AWS credentials).
-# Required GitHub repo variables (Settings → Variables → Actions):
-#   - AWS_ACCOUNT_ID
-#   - AWS_E2E_DEV_REGION       (ap-southeast-1)
-#   - AWS_E2E_DEV_ROLE_ARN     (arn:aws:iam::<acct>:role/boxlite-e2e-dev-github-actions)
-#
-# Required AWS resources:
-#   - SSM parameter `/boxlite/dev/admin-api-key` (SecureString)
-#   - Dev API reachable at the input URL
+# Authentication: boxlite API key stored as GitHub repo secret
+# `BOXLITE_DEV_API_KEY`. No AWS credentials needed.
 
 name: E2E dev
 
@@ -27,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       api_url:
-        description: 'Dev API base URL (e.g. https://api.dev.boxlite.ai/api)'
+        description: 'Dev API base URL'
         type: string
         required: false
         default: 'https://api.dev.boxlite.ai/api'
@@ -40,33 +33,20 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  AWS_REGION: ${{ vars.AWS_E2E_DEV_REGION || 'ap-southeast-1' }}
-  AWS_ROLE_ARN: ${{ vars.AWS_E2E_DEV_ROLE_ARN }}
-  STAGE: dev
   BOXLITE_DEPS_STUB: "1"
+  API_URL: ${{ inputs.api_url || 'https://api.dev.boxlite.ai/api' }}
 
 jobs:
   e2e:
     name: E2E suite (dev)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    permissions:
-      id-token: write
-      contents: read
     steps:
       - uses: actions/checkout@v5
-
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ env.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-          role-session-name: e2e-dev-${{ github.run_id }}
 
       # ── Health check ──────────────────────────────────────────────
       - name: Probe API health
         run: |
-          API_URL="${{ inputs.api_url || 'https://api.dev.boxlite.ai/api' }}"
           curl -fsS --retry 6 --retry-delay 5 --retry-all-errors --max-time 10 \
                -o /dev/null "${API_URL}/health"
           echo "::notice::${API_URL}/health returned 2xx"
@@ -83,15 +63,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       # ── Build all Rust artifacts in one pass ─────────────────────
-      # boxlite-c (libboxlite.a/.so + boxlite.h), boxlite-cli,
-      # boxlite-node (.node via napi), and boxlite-python (.whl via
-      # maturin) all share the boxlite core crate. Building boxlite-c
-      # first warms the cache; the others are incremental.
       - name: Build C SDK (libboxlite.a + libboxlite.so + boxlite.h)
         run: |
           cargo build --release -p boxlite-c
           ls -lh target/release/libboxlite.{a,so}
-          # cbindgen header — the test drivers need sdks/c/include/boxlite.h
           if [ ! -f sdks/c/include/boxlite.h ]; then
             cargo install cbindgen --quiet 2>/dev/null || true
             if command -v cbindgen >/dev/null; then
@@ -131,17 +106,18 @@ jobs:
 
       # ── Configure pytest credentials ─────────────────────────────
       - name: Configure pytest profile p1
+        env:
+          BOXLITE_DEV_API_KEY: ${{ secrets.BOXLITE_DEV_API_KEY }}
         run: |
           set -euo pipefail
-          API_URL="${{ inputs.api_url || 'https://api.dev.boxlite.ai/api' }}"
 
-          ADMIN_KEY=$(aws ssm get-parameter \
-            --name "/boxlite/${STAGE}/admin-api-key" \
-            --with-decryption \
-            --query Parameter.Value --output text)
-          echo "::add-mask::$ADMIN_KEY"
+          if [ -z "$BOXLITE_DEV_API_KEY" ]; then
+            echo "::error::Secret BOXLITE_DEV_API_KEY is not set. Add it in repo Settings → Secrets."
+            exit 1
+          fi
+          echo "::add-mask::$BOXLITE_DEV_API_KEY"
 
-          PATH_PREFIX=$(curl -fsS -H "Authorization: Bearer $ADMIN_KEY" \
+          PATH_PREFIX=$(curl -fsS -H "Authorization: Bearer $BOXLITE_DEV_API_KEY" \
             "${API_URL}/v1/me" | python3 -c 'import json,sys; print(json.load(sys.stdin)["path_prefix"])')
           [ -n "$PATH_PREFIX" ] || { echo "::error::Empty path_prefix from /v1/me"; exit 1; }
           echo "Resolved path_prefix=${PATH_PREFIX}"
@@ -151,7 +127,7 @@ jobs:
           {
               printf '[profiles.p1]\n'
               printf 'url = "%s"\n'         "$API_URL"
-              printf 'api_key = "%s"\n'     "$ADMIN_KEY"
+              printf 'api_key = "%s"\n'     "$BOXLITE_DEV_API_KEY"
               printf 'path_prefix = "%s"\n' "$PATH_PREFIX"
           } > ~/.boxlite/credentials.toml
           chmod 600 ~/.boxlite/credentials.toml
