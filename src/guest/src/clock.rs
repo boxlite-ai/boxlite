@@ -1,9 +1,9 @@
 //! Guest wall-clock synchronization with the host.
 //!
 //! After host sleep/resume the guest vCPU clock stops advancing while host
-//! wall time continues. Correct `CLOCK_REALTIME` by reading the virtual RTC
-//! (preferred on macOS AVF / Docker-for-Mac pattern) or applying the host
-//! timestamp supplied over gRPC.
+//! wall time continues. Prefer the virtual RTC when it agrees with the host
+//! timestamp; when RTC is stale (common after libkrun host suspend), apply
+//! the host timestamp supplied over gRPC.
 
 use boxlite_shared::SyncClockSource;
 use nix::errno::Errno;
@@ -20,6 +20,8 @@ pub struct SyncClockOutcome {
 }
 
 const RTC_DEVICE: &str = "/dev/rtc0";
+/// Max allowed skew between host timestamp and RTC before treating RTC as stale.
+const MAX_HOST_RTC_SKEW_NANOS: i64 = 2_000_000_000;
 // Linux RTC_RD_TIME: _IOR('p', 0x09, struct rtc_time)
 const RTC_RD_TIME: nix::libc::c_ulong = 0x8024_7009;
 
@@ -47,18 +49,7 @@ pub fn sync_clock(host_unix_nanos: i64, force_host_timestamp: bool) -> Result<Sy
         (host_unix_nanos, SyncClockSource::HostTimestamp)
     } else {
         match read_rtc_unix_nanos() {
-            Ok(rtc_nanos) => {
-                if host_unix_nanos > 0 {
-                    let host_skew = (host_unix_nanos - rtc_nanos).abs();
-                    if host_skew > 2_000_000_000 {
-                        warn!(
-                            host_skew_secs = host_skew / 1_000_000_000,
-                            "RTC and host timestamp differ; using RTC"
-                        );
-                    }
-                }
-                (rtc_nanos, SyncClockSource::Rtc)
-            }
+            Ok(rtc_nanos) => choose_sync_target(host_unix_nanos, rtc_nanos),
             Err(e) => {
                 debug!(error = %e, "RTC unavailable, using host timestamp");
                 if host_unix_nanos <= 0 {
@@ -134,6 +125,20 @@ fn read_rtc_unix_nanos() -> Result<i64, String> {
     Ok(unix_secs * 1_000_000_000)
 }
 
+fn choose_sync_target(host_unix_nanos: i64, rtc_nanos: i64) -> (i64, SyncClockSource) {
+    if host_unix_nanos > 0 {
+        let host_skew = (host_unix_nanos - rtc_nanos).abs();
+        if host_skew > MAX_HOST_RTC_SKEW_NANOS {
+            warn!(
+                host_skew_secs = host_skew / 1_000_000_000,
+                "RTC and host timestamp differ; using host timestamp"
+            );
+            return (host_unix_nanos, SyncClockSource::HostTimestamp);
+        }
+    }
+    (rtc_nanos, SyncClockSource::Rtc)
+}
+
 fn rtc_time_to_unix(rtc: &RtcTime) -> Result<i64, String> {
     let mut tm: nix::libc::tm = unsafe { std::mem::zeroed() };
     tm.tm_sec = rtc.tm_sec;
@@ -157,6 +162,24 @@ fn rtc_time_to_unix(rtc: &RtcTime) -> Result<i64, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn choose_sync_target_prefers_rtc_when_host_agrees() {
+        let host = 1_700_000_000_000_000_000_i64;
+        let rtc = host + 500_000_000;
+        let (target, source) = choose_sync_target(host, rtc);
+        assert_eq!(target, rtc);
+        assert_eq!(source, SyncClockSource::Rtc);
+    }
+
+    #[test]
+    fn choose_sync_target_uses_host_when_rtc_stale() {
+        let host = 1_700_000_000_000_000_000_i64;
+        let rtc = host - 3_600_000_000_000;
+        let (target, source) = choose_sync_target(host, rtc);
+        assert_eq!(target, host);
+        assert_eq!(source, SyncClockSource::HostTimestamp);
+    }
 
     #[test]
     fn rtc_time_to_unix_converts_utc_components() {
