@@ -82,8 +82,7 @@ jobs:
         run: |
           cd sdks/node
           npm install --ignore-scripts
-          mkdir -p native
-          npx napi build --platform --release --js native/boxlite.js --output-dir native
+          npm run build:native
           ls -lh native/
 
       # ── Python SDK (maturin + PyO3) ──────────────────────────────
