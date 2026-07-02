@@ -471,8 +471,10 @@ Copy files or directories between host and box.
 **Examples:**
 
 ```bash
-boxlite cp ./local.txt mybox:/workspace/
-boxlite cp mybox:/app/out ./output
+WORKDIR=/path/to/working-directory
+
+boxlite cp ./local.txt mybox:${WORKDIR}/
+boxlite cp mybox:${WORKDIR}/out ./output
 ```
 
 ### `boxlite info`
