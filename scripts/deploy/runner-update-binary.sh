@@ -492,6 +492,18 @@ else
 fi
 
 CURRENT_TARGET=\$(current_runner_target)
+# Same-binary skip: fleet re-runs and canary-then-fleet overlaps hit runners that
+# already run these exact bits — comparing sha256 (not version label) makes the
+# no-op safe even when a dev artifact reuses a version name.
+if [ -n "\$CURRENT_TARGET" ] && [ -f "\$CURRENT_TARGET" ]; then
+  NEW_SHA=\$(sha256sum "\$WORK/boxlite-runner" | awk '{print \$1}')
+  CUR_SHA=\$(sha256sum "\$CURRENT_TARGET" | awk '{print \$1}')
+  if [ "\$NEW_SHA" = "\$CUR_SHA" ]; then
+    echo "same binary already active (\${CUR_SHA:0:12}); skipping swap"
+    systemctl is-active --quiet "\$SERVICE" && echo "systemd unit: active"
+    exit 0
+  fi
+fi
 NEW_TARGET=\$(prepare_release_target "\$WORK/boxlite-runner" "v${VERSION}")
 verify_release_target "\$NEW_TARGET" "new" || exit 1
 echo "install target: \$NEW_TARGET"
