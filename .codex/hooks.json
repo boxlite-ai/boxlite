@@ -16,18 +16,6 @@
           }
         ]
       }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/usr/bin/env bash \"$(git rev-parse --show-toplevel)/.claude/hooks/preflight-verdict-check.sh\"",
-            "statusMessage": "Checking verdict proof",
-            "timeout": 60
-          }
-        ]
-      }
     ]
   }
 }
