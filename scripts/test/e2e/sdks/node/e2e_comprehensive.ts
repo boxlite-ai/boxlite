@@ -277,7 +277,7 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
     }
 
     // ── box.name() getter ─────────────────────────────────────────
-    if (TEST === 'box_name') {
+    if (TEST === 'all' || TEST === 'box_name') {
       const name = `node-name-${Date.now()}`;
       const b = await newBox(true, name);
       // `name` is a napi getter property, not a method (like `id`).
@@ -352,7 +352,7 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
     }
 
     // ── lifecycle: stop/start preserves rootfs ────────────────────
-    if (TEST === 'lifecycle_stop_start') {
+    if (TEST === 'all' || TEST === 'lifecycle_stop_start') {
       const b = await newBox(false);
       try {
         const src = path.join(tmpDir, 'persist-in.txt');
@@ -372,7 +372,7 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
     }
 
     // ── box info carries id + name ────────────────────────────────
-    if (TEST === 'box_info') {
+    if (TEST === 'all' || TEST === 'box_info') {
       const name = `node-e2e-${Date.now()}`;
       const b = await newBox(true, name);
       const info = b.info();
@@ -384,7 +384,7 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
     }
 
     // ── two boxes are isolated ────────────────────────────────────
-    if (TEST === 'two_boxes_isolated') {
+    if (TEST === 'all' || TEST === 'two_boxes_isolated') {
       const b1 = await newBox(true);
       const b2 = await newBox(true);
       const s1 = path.join(tmpDir, 'iso1.txt');
@@ -403,7 +403,7 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
     }
 
     // ── listInfo includes a created box ───────────────────────────
-    if (TEST === 'list_info') {
+    if (TEST === 'all' || TEST === 'list_info') {
       const b = await newBox(true);
       const infos = await rt.listInfo();
       if (!infos.some((i: any) => i.id === b.id)) die(`created box ${b.id} not in listInfo`);
@@ -411,7 +411,7 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
     }
 
     // ── custom cpu count is honoured in the guest ─────────────────
-    if (TEST === 'custom_cpus') {
+    if (TEST === 'all' || TEST === 'custom_cpus') {
       const b = await rt.create({ image, autoRemove: true, cpus: 2 });
       trackIds.push(b.id);
       const ex = await b.exec('nproc', [], null, false);
@@ -423,7 +423,7 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
     }
 
     // ── rt.get returns a usable box handle ────────────────────────
-    if (TEST === 'get_returns_box') {
+    if (TEST === 'all' || TEST === 'get_returns_box') {
       const created = await newBox(true);
       const fetched = await rt.get(created.id);
       if (!fetched) die(`rt.get returned null for ${created.id}`);
@@ -435,7 +435,7 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
     }
 
     // ── removing an already-removed box rejects ───────────────────
-    if (TEST === 'remove_idempotent') {
+    if (TEST === 'all' || TEST === 'remove_idempotent') {
       const b = await rt.create({ image, autoRemove: true });
       await rt.remove(b.id, true);
       let threw = false;
@@ -447,7 +447,7 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
     // ── getInfo of a nonexistent id must not succeed ──────────────
     // The Node binding rejects with a not-found error (rather than
     // returning null); either shape is acceptable, a real box is not.
-    if (TEST === 'get_nonexistent') {
+    if (TEST === 'all' || TEST === 'get_nonexistent') {
       let ok = false;
       try {
         const info = await rt.getInfo('nonexistent-box-id-xyz');
