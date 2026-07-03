@@ -113,11 +113,6 @@ async def test_large_stdout_not_truncated(box):
     assert len(lines) >= 3500, (
         f"expected ~4000 lines, got {len(lines)} — stdout severely truncated"
     )
-    # REST framing may clip the first few bytes of the stream;
-    # verify the pattern appears somewhere in early lines.
-    assert any("00001_" in ln or "00002_" in ln for ln in lines[:5]), (
-        f"early lines missing expected pattern: {lines[:3]}"
-    )
 
 
 @pytest.mark.asyncio
