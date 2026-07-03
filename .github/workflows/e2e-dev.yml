@@ -124,11 +124,15 @@ jobs:
           chmod 600 ~/.boxlite/credentials.toml
 
       # ── Run pytest ───────────────────────────────────────────────
-      # --ignore the C, Go, path-verification, exec-timeout, and
-      # node-entry tests (C/Go are FFI-binding tests; path-verify and
-      # node-entry need runner journal access; exec-timeout is flaky
-      # on the single-node dev runner).  node-coverage already covers
-      # the Node SDK REST surface without journal checks.
+      # --ignore the C, Go, and node-entry tests: C/Go are FFI-binding
+      # tests whose SDKs aren't built here, and node-entry needs runner
+      # journal access (unreachable from GHA against remote dev).
+      # node-coverage already covers the Node SDK REST surface without
+      # journal checks. test_path_verification runs — despite the name it
+      # does NOT touch the journal; it proves the API→Runner chain via the
+      # X-BoxLite-Api-Version response header + an exec marker. exec-timeout
+      # runs too — it exercises a real user-facing feature (timeout kills
+      # long commands).
       - name: Run E2E suite
         env:
           BOXLITE_E2E_SKIP_PATH_VERIFY: '1'
@@ -139,8 +143,6 @@ jobs:
               --ignore=scripts/test/e2e/cases/test_c_coverage.py \
               --ignore=scripts/test/e2e/cases/test_go_entry.py \
               --ignore=scripts/test/e2e/cases/test_go_coverage.py \
-              --ignore=scripts/test/e2e/cases/test_path_verification.py \
-              --ignore=scripts/test/e2e/cases/test_exec_timeout.py \
               --ignore=scripts/test/e2e/cases/test_node_entry.py \
               -v --tb=short --no-header -p no:cacheprovider \
               --timeout=180 --timeout-method=thread \
