@@ -14,21 +14,27 @@ package shellutil
 // boxlite.Client.StartExecution when the caller wants an interactive shell
 // session and the user has NOT supplied a specific command.
 //
-// Strategy: a POSIX `/bin/sh -c` launcher cd's to the user workspace and
-// execs the best available shell as a login shell:
+// Strategy: a POSIX `/bin/sh -c` launcher keeps the exec's working
+// directory (the image WORKDIR — standard BoxLite images declare
+// /workspace there) and execs the best available shell as a login shell:
 //
-//	mkdir -p /workspace 2>/dev/null || true;
-//	cd /workspace 2>/dev/null || cd "${HOME:-/root}" 2>/dev/null || cd /;
+//	[ -d "$PWD" ] || cd "${HOME:-/root}" 2>/dev/null || cd /;
+//	[ "$PWD" = "/" ] && { cd "${HOME:-/root}" 2>/dev/null || true; };
 //	exec $(command -v bash || command -v ash || command -v sh) -l
 //
 // Why this shape:
 //
 //   - `/bin/sh` is required by POSIX, so the launcher process itself always
 //     starts. We don't have to guess what the VM ships before we connect.
-//   - `/workspace` is the product-level working directory for user files.
-//     Creating it up front means terminal, web upload, and CLI upload all
-//     point users at the same place. `${HOME:-/root}` remains a fallback for
-//     minimal or locked-down images where /workspace cannot be created.
+//   - The exec already starts at the image WORKDIR (`docker exec` /
+//     `kubectl exec` parity — see Container::cmd in the guest), so standard
+//     BoxLite images land in /workspace via their own Dockerfile. We do NOT
+//     create or force /workspace here: custom images may not have it, and
+//     inventing directories the image author didn't declare breaks the
+//     image's own layout. `[ -d "$PWD" ]` only rescues a broken cwd
+//     (deleted directory), and the `$PWD = /` kick gives images with no
+//     declared WORKDIR an ssh-like landing in `${HOME:-/root}` instead of
+//     bare `/`.
 //   - `command -v` is POSIX and works on busybox/alpine (the default
 //     BoxLite snapshot), bash-only distros, and everything in between.
 //     Trying bash first, then ash, then sh matches user preference for
@@ -36,8 +42,8 @@ package shellutil
 //   - `exec` replaces the launcher sh in-place — no extra PID hangs around
 //     and the chosen shell becomes pid 1 of the SSH/terminal session.
 //   - `-l` makes it a *login* shell: /etc/profile and ~/.profile are
-//     sourced, PATH is populated. Pairs with the cd above to match what
-//     `ssh user@host` users expect when they land at a prompt.
+//     sourced, PATH is populated — what `ssh user@host` users expect when
+//     they land at a prompt.
 //   - `PROMPT_COMMAND` emits OSC 7 cwd updates for shells that support it,
 //     allowing the dashboard terminal to keep upload destinations aligned
 //     with the user's current directory.
@@ -53,8 +59,8 @@ package shellutil
 // resolve in that case.
 func DefaultInteractiveShell() (command string, args []string) {
 	return "/bin/sh", []string{"-c",
-		`mkdir -p /workspace 2>/dev/null || true; ` +
-			`cd /workspace 2>/dev/null || cd "${HOME:-/root}" 2>/dev/null || cd /; ` +
+		`[ -d "$PWD" ] || cd "${HOME:-/root}" 2>/dev/null || cd /; ` +
+			`[ "$PWD" = "/" ] && { cd "${HOME:-/root}" 2>/dev/null || true; }; ` +
 			`export PROMPT_COMMAND='printf "\033]7;file://boxlite%s\007" "$PWD"'; ` +
 			`exec $(command -v bash || command -v ash || command -v sh) -l`,
 	}

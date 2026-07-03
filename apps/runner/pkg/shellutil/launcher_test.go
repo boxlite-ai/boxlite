@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestDefaultInteractiveShellStartsInWorkspaceBeforeHome(t *testing.T) {
+func TestDefaultInteractiveShellRespectsImageWorkdir(t *testing.T) {
 	command, args := DefaultInteractiveShell()
 	if command != "/bin/sh" {
 		t.Fatalf("command = %q, want /bin/sh", command)
@@ -18,19 +18,24 @@ func TestDefaultInteractiveShellStartsInWorkspaceBeforeHome(t *testing.T) {
 	}
 
 	launcher := args[1]
-	if !strings.Contains(launcher, "mkdir -p /workspace") {
-		t.Fatalf("launcher %q does not create /workspace", launcher)
+	// docker/kubectl exec parity: the launcher must NOT invent or force
+	// /workspace — the exec already starts at the image WORKDIR.
+	if strings.Contains(launcher, "mkdir") {
+		t.Fatalf("launcher %q creates directories the image did not declare", launcher)
 	}
-	workspaceIndex := strings.Index(launcher, "cd /workspace")
-	if workspaceIndex < 0 {
-		t.Fatalf("launcher %q does not cd to /workspace", launcher)
+	if strings.Contains(launcher, "cd /workspace") {
+		t.Fatalf("launcher %q forces /workspace over the image WORKDIR", launcher)
 	}
-	homeIndex := strings.Index(launcher, `cd "${HOME:-/root}"`)
-	if homeIndex < 0 {
+	// A broken cwd (deleted dir) must be rescued...
+	if !strings.Contains(launcher, `[ -d "$PWD" ]`) {
+		t.Fatalf("launcher %q does not validate the starting cwd", launcher)
+	}
+	// ...and a bare "/" landing (image with no WORKDIR) kicks to HOME.
+	if !strings.Contains(launcher, `[ "$PWD" = "/" ]`) {
+		t.Fatalf("launcher %q does not redirect a bare / landing to HOME", launcher)
+	}
+	if !strings.Contains(launcher, `cd "${HOME:-/root}"`) {
 		t.Fatalf("launcher %q does not fall back to HOME", launcher)
-	}
-	if workspaceIndex > homeIndex {
-		t.Fatalf("launcher %q tries HOME before /workspace", launcher)
 	}
 }
 
