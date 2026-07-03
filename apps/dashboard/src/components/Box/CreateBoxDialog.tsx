@@ -9,6 +9,7 @@ import { RoutePath } from '@/enums/RoutePath'
 import { useCreateBoxMutation } from '@/hooks/mutations/useCreateBoxMutation'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { getBoxRouteId } from '@/lib/box-identity'
+import { generateBoxName } from '@/lib/box-name'
 import { handleApiError } from '@/lib/error-handling'
 import { cn } from '@/lib/utils'
 import type { Box } from '@boxlite-ai/api-client'
@@ -113,6 +114,9 @@ export const CreateBoxDialog = ({
   const defaultImage = SUPPORTED_BOX_IMAGES.find((i) => i.isDefault) ?? SUPPORTED_BOX_IMAGES[0]
 
   const [name, setName] = useState('')
+  // Freshly generated on each open; shown as the placeholder so the empty-name
+  // default reads like the real thing ("cozy-otter") rather than a static hint.
+  const [suggestedName, setSuggestedName] = useState(generateBoxName)
   const [imageRef, setImageRef] = useState<string>(defaultImage.ref)
   const [cpu, setCpu] = useState(DEFAULTS.cpu)
   const [memory, setMemory] = useState(DEFAULTS.memory)
@@ -123,6 +127,7 @@ export const CreateBoxDialog = ({
   useEffect(() => {
     if (open) {
       setName('')
+      setSuggestedName(generateBoxName())
       setImageRef(defaultImage.ref)
       setCpu(DEFAULTS.cpu)
       setMemory(DEFAULTS.memory)
@@ -199,7 +204,7 @@ export const CreateBoxDialog = ({
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="my-new-box"
+              placeholder={suggestedName}
               aria-invalid={!nameValid}
               className="w-full border border-border bg-card px-[13px] py-[11px] font-mono text-[13px] text-foreground outline-none focus:border-brand aria-[invalid=true]:border-destructive"
             />
