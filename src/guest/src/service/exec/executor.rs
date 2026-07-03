@@ -281,3 +281,68 @@ fn spawn_with_pty(req: &ExecRequest, config: PtyConfig) -> BoxliteResult<ExecHan
 
     Ok(handle)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::StreamExt;
+    use nix::sys::signal::killpg;
+    use nix::sys::signal::Signal;
+    use nix::sys::wait::waitpid;
+    use nix::unistd::getpgid;
+    use std::time::Duration;
+
+    fn shell_request(script: &str) -> ExecRequest {
+        ExecRequest {
+            program: "/bin/sh".to_string(),
+            args: vec!["-c".to_string(), script.to_string()],
+            ..Default::default()
+        }
+    }
+
+    fn sleep_request(seconds: u64) -> ExecRequest {
+        ExecRequest {
+            program: "/bin/sleep".to_string(),
+            args: vec![seconds.to_string()],
+            ..Default::default()
+        }
+    }
+
+    fn reap(handle: &ExecHandle) {
+        let _ = waitpid(handle.pid(), None);
+    }
+
+    #[test]
+    fn spawn_with_pipes_starts_process_group_leader() {
+        let req = sleep_request(60);
+        let handle = spawn_with_pipes(&req).expect("spawn shell");
+
+        let pgid = getpgid(Some(handle.pid())).expect("child process group");
+        handle.kill(Signal::SIGKILL).expect("kill process");
+        reap(&handle);
+
+        assert_eq!(pgid, handle.pid());
+    }
+
+    #[tokio::test]
+    async fn kill_process_group_closes_pipes_held_by_descendants() {
+        let req = shell_request("sleep 2");
+        let mut handle = spawn_with_pipes(&req).expect("spawn shell");
+        let mut stdout = handle.stdout().expect("stdout stream");
+        let pgid = getpgid(Some(handle.pid())).expect("child process group");
+
+        if pgid == handle.pid() {
+            killpg(pgid, Signal::SIGKILL).expect("kill process group");
+        } else {
+            handle.kill(Signal::SIGKILL).expect("kill process");
+        }
+        reap(&handle);
+
+        assert_eq!(pgid, handle.pid());
+
+        let next = tokio::time::timeout(Duration::from_secs(1), stdout.next())
+            .await
+            .expect("stdout should reach EOF after group kill");
+        assert!(next.is_none());
+    }
+}
