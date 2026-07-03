@@ -8,6 +8,7 @@ import goIcon from '@/assets/go.svg'
 import pythonIcon from '@/assets/python.svg'
 import rustIcon from '@/assets/rust.svg'
 import typescriptIcon from '@/assets/typescript.svg'
+import { CopyButton } from '@/components/CopyButton'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { KeyRound, Server, Terminal } from '@/components/ui/icon'
 import { useApi } from '@/hooks/useApi'
@@ -110,7 +111,7 @@ function PrimaryBtn({ children, onClick }: { children: React.ReactNode; onClick:
   )
 }
 
-type CopyTarget = 'api-key' | 'install'
+type CopyTarget = 'install'
 
 export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: OnboardingGuideDialogProps) {
   const { apiKeyApi } = useApi()
@@ -378,18 +379,11 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
                       />
                     )}
                     {createdKey ? (
-                      <button
-                        type="button"
-                        onClick={() => copyText(createdKey.value, 'api-key')}
-                        className={cn(
-                          'flex-none border px-[11px] py-[6px] text-[10px] uppercase tracking-[1px] transition-colors',
-                          copiedTarget === 'api-key'
-                            ? 'border-success text-success'
-                            : 'border-border text-muted-foreground hover:text-foreground',
-                        )}
-                      >
-                        {copiedTarget === 'api-key' ? '✓ Copied' : 'Copy'}
-                      </button>
+                      <CopyButton
+                        value={createdKey.value}
+                        variant="ghost"
+                        className="flex-none bg-background/80 p-2 text-muted-foreground shadow-sm ring-1 ring-border/70 backdrop-blur hover:bg-muted hover:text-foreground"
+                      />
                     ) : null}
                   </div>
                   {!createdKey && (
