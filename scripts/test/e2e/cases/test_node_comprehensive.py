@@ -249,3 +249,24 @@ def test_node_get_nonexistent(node_env):
     r = _run(node_env, "get_nonexistent")
     assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
     assert "GET_NONEXISTENT=ok" in r.stdout
+
+
+def test_node_resize_tty(node_env):
+    """resizeTty on a tty exec must succeed through napi-rs."""
+    r = _run(node_env, "resize_tty")
+    assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
+    assert "RESIZE_TTY=ok" in r.stdout
+
+
+def test_node_resize_non_tty(node_env):
+    """resizeTty on a non-tty exec must reject through napi-rs."""
+    r = _run(node_env, "resize_non_tty")
+    assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
+    assert "RESIZE_NON_TTY=ok" in r.stdout
+
+
+def test_node_box_name(node_env):
+    """box.name() must return the name the box was created with."""
+    r = _run(node_env, "box_name")
+    assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
+    assert "BOX_NAME=ok" in r.stdout

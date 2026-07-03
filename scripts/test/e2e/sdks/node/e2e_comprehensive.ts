@@ -62,6 +62,7 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
   const NO_SHARED = new Set([
     'lifecycle_stop_start', 'box_info', 'two_boxes_isolated', 'list_info',
     'custom_cpus', 'get_returns_box', 'remove_idempotent', 'get_nonexistent',
+    'box_name',
   ]);
   const wantsShared = TEST === 'all' || !NO_SHARED.has(TEST);
 
@@ -252,6 +253,35 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
       if (rc.exitCode !== 0) die(`exec_tty: exit=${rc.exitCode}`);
       if (!stdout.includes('tty-hello')) die(`tty stdout missing: ${JSON.stringify(stdout)}`);
       console.log('EXEC_TTY=ok');
+    }
+
+    // ── resize a tty exec ─────────────────────────────────────────
+    if (TEST === 'all' || TEST === 'resize_tty') {
+      const ex = await box.exec('sh', ['-c', 'sleep 1; echo tty-done'], null, true);
+      await ex.resizeTty(40, 100);
+      const stdout = await drainStream(await ex.stdout());
+      const rc = await ex.wait();
+      if (rc.exitCode !== 0) die(`resize_tty: exit=${rc.exitCode}`);
+      if (!stdout.includes('tty-done')) die(`resize_tty: missing output`);
+      console.log('RESIZE_TTY=ok');
+    }
+
+    // ── resizeTty on a non-tty exec must reject ───────────────────
+    if (TEST === 'all' || TEST === 'resize_non_tty') {
+      const ex = await box.exec('sh', ['-c', 'sleep 1'], null, false);
+      let threw = false;
+      try { await ex.resizeTty(40, 100); } catch { threw = true; }
+      await ex.wait();
+      if (!threw) die(`resizeTty on a non-tty exec did not reject`);
+      console.log('RESIZE_NON_TTY=ok');
+    }
+
+    // ── box.name() getter ─────────────────────────────────────────
+    if (TEST === 'box_name') {
+      const name = `node-name-${Date.now()}`;
+      const b = await newBox(true, name);
+      if (b.name() !== name) die(`box.name() mismatch: ${b.name()} != ${name}`);
+      console.log('BOX_NAME=ok');
     }
 
     // ── copyOut of a missing path must reject ─────────────────────
