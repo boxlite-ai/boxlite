@@ -26,11 +26,7 @@ func TestDefaultInteractiveShellRespectsImageWorkdir(t *testing.T) {
 	if strings.Contains(launcher, "cd /workspace") {
 		t.Fatalf("launcher %q forces /workspace over the image WORKDIR", launcher)
 	}
-	// A broken cwd (deleted dir) must be rescued...
-	if !strings.Contains(launcher, `[ -d "$PWD" ]`) {
-		t.Fatalf("launcher %q does not validate the starting cwd", launcher)
-	}
-	// ...and a bare "/" landing (image with no WORKDIR) kicks to HOME.
+	// A bare "/" landing (image with no WORKDIR) kicks to HOME.
 	if !strings.Contains(launcher, `[ "$PWD" = "/" ]`) {
 		t.Fatalf("launcher %q does not redirect a bare / landing to HOME", launcher)
 	}

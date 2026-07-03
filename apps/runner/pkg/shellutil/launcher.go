@@ -18,7 +18,6 @@ package shellutil
 // directory (the image WORKDIR — standard BoxLite images declare
 // /workspace there) and execs the best available shell as a login shell:
 //
-//	[ -d "$PWD" ] || cd "${HOME:-/root}" 2>/dev/null || cd /;
 //	[ "$PWD" = "/" ] && { cd "${HOME:-/root}" 2>/dev/null || true; };
 //	exec $(command -v bash || command -v ash || command -v sh) -l
 //
@@ -31,10 +30,9 @@ package shellutil
 //     BoxLite images land in /workspace via their own Dockerfile. We do NOT
 //     create or force /workspace here: custom images may not have it, and
 //     inventing directories the image author didn't declare breaks the
-//     image's own layout. `[ -d "$PWD" ]` only rescues a broken cwd
-//     (deleted directory), and the `$PWD = /` kick gives images with no
+//     image's own layout. The `$PWD = /` kick gives images with no
 //     declared WORKDIR an ssh-like landing in `${HOME:-/root}` instead of
-//     bare `/`.
+//     bare `/` — the one UX half-step we take beyond plain `docker exec`.
 //   - `command -v` is POSIX and works on busybox/alpine (the default
 //     BoxLite snapshot), bash-only distros, and everything in between.
 //     Trying bash first, then ash, then sh matches user preference for
@@ -59,8 +57,7 @@ package shellutil
 // resolve in that case.
 func DefaultInteractiveShell() (command string, args []string) {
 	return "/bin/sh", []string{"-c",
-		`[ -d "$PWD" ] || cd "${HOME:-/root}" 2>/dev/null || cd /; ` +
-			`[ "$PWD" = "/" ] && { cd "${HOME:-/root}" 2>/dev/null || true; }; ` +
+		`[ "$PWD" = "/" ] && { cd "${HOME:-/root}" 2>/dev/null || true; }; ` +
 			`export PROMPT_COMMAND='printf "\033]7;file://boxlite%s\007" "$PWD"'; ` +
 			`exec $(command -v bash || command -v ash || command -v sh) -l`,
 	}
