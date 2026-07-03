@@ -48,11 +48,20 @@ def node_env():
 
 def _run(node_env, test_name: str) -> subprocess.CompletedProcess:
     env = {**node_env, "BOXLITE_E2E_NODE_TEST": test_name}
-    return subprocess.run(
+    r = subprocess.run(
         ["npx", "--yes", "tsx", str(DRIVER)],
         env=env, timeout=180, capture_output=True, text=True,
         cwd=str(NODE_SDK),
     )
+    # Echo the driver output so each Node case is visible in the CI log even
+    # on success (pytest runs with -s). Without this the subprocess output is
+    # swallowed and the log only shows the pytest PASSED line.
+    print(f"\n──── node driver: {test_name} (exit={r.returncode}) ────")
+    if r.stdout:
+        print(r.stdout.rstrip())
+    if r.stderr:
+        print(f"[stderr] {r.stderr.rstrip()}")
+    return r
 
 
 def test_node_stderr_isolation(node_env):

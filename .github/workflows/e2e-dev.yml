@@ -150,7 +150,7 @@ jobs:
               --ignore=scripts/test/e2e/cases/test_go_coverage.py \
               --ignore=scripts/test/e2e/cases/test_node_entry.py \
               --ignore=scripts/test/e2e/cases/test_exec_timeout.py \
-              -v --tb=short --no-header -p no:cacheprovider \
+              -v -s --tb=short --no-header -p no:cacheprovider \
               --timeout=180 --timeout-method=thread \
               --junit-xml=pytest-junit.xml
 
