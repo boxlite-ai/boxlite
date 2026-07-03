@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   getOnboardingCodeExamples,
+  getOnboardingInterfaces,
   renderOnboardingCodeExample,
-  type OnboardingInterface,
 } from './onboarding-code-examples'
 
 describe('onboarding code examples', () => {
@@ -10,6 +10,24 @@ describe('onboarding code examples', () => {
     const examples = getOnboardingCodeExamples()
 
     expect(Object.keys(examples).sort()).toEqual(['c', 'cli', 'go', 'python', 'rest', 'rust', 'typescript'])
+  })
+
+  it('is driven by registry entries that all render templates', () => {
+    const interfaces = getOnboardingInterfaces()
+    const examples = getOnboardingCodeExamples()
+
+    expect(interfaces.map((item) => item.id)).toEqual(['python', 'typescript', 'go', 'rust', 'c', 'cli', 'rest'])
+
+    for (const item of interfaces) {
+      const example = examples[item.id]
+      expect(example).toBeDefined()
+      expect(example.id).toBe(item.id)
+      expect(example.label).toBe(item.label)
+      expect(example.install).not.toContain('{{')
+      expect(example.run).not.toContain('{{')
+      expect(example.example).not.toContain('{{')
+      expect(example.executionDescription.length).toBeGreaterThan(20)
+    }
   })
 
   it('reads API keys from environment variables instead of interactive prompts', () => {
@@ -81,7 +99,7 @@ command -v jq`)
 
   it('injects the generated API key into rendered quickstart examples', () => {
     const apiKey = 'blk_test_generated_key'
-    const interfaces: OnboardingInterface[] = ['python', 'typescript', 'go', 'rust', 'c', 'cli', 'rest']
+    const interfaces = getOnboardingInterfaces().map((item) => item.id)
 
     for (const selectedInterface of interfaces) {
       expect(

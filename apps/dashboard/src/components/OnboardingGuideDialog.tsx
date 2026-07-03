@@ -18,9 +18,11 @@ import { handleApiError } from '@/lib/error-handling'
 import { createApiKeyWithFallbackName, DEFAULT_QUICKSTART_API_KEY_NAME } from '@/lib/quickstart-api-key'
 import {
   getOnboardingCodeExamples,
+  getOnboardingInterfaces,
   renderOnboardingCodeExample,
   type OnboardingInterface,
 } from '@/lib/onboarding-code-examples'
+import type { QuickstartIconName, QuickstartInterfaceDefinition } from '@/lib/quickstart/types'
 import { setLocalStorageItem } from '@/lib/local-storage'
 import { cn } from '@/lib/utils'
 import type { OnboardingProgress } from '@/lib/onboarding-progress'
@@ -64,22 +66,37 @@ const SCENARIOS = [
 
 type ScenarioId = (typeof SCENARIOS)[number]['id']
 
-const LANGS: {
-  value: OnboardingInterface
-  label: string
-  ariaLabel?: string
-  iconSrc?: string
-  badge?: string
-  Icon?: React.ComponentType<{ className?: string }>
-}[] = [
-  { value: 'python', label: 'Python', iconSrc: pythonIcon },
-  { value: 'typescript', label: 'Node', iconSrc: typescriptIcon },
-  { value: 'go', label: 'Go', iconSrc: goIcon },
-  { value: 'rust', label: 'Rust', iconSrc: rustIcon },
-  { value: 'c', label: 'SDK', ariaLabel: 'C SDK', badge: 'C' },
-  { value: 'cli', label: 'CLI', Icon: Terminal },
-  { value: 'rest', label: 'REST', Icon: Server },
-]
+const QUICKSTART_INTERFACES = getOnboardingInterfaces()
+const DEFAULT_INTERFACE = QUICKSTART_INTERFACES[0]?.id ?? 'python'
+const ICON_ASSETS: Partial<Record<QuickstartIconName, string>> = {
+  go: goIcon,
+  python: pythonIcon,
+  rust: rustIcon,
+  typescript: typescriptIcon,
+}
+const ICON_COMPONENTS: Partial<Record<QuickstartIconName, React.ComponentType<{ className?: string }>>> = {
+  server: Server,
+  terminal: Terminal,
+}
+
+function QuickstartInterfaceIcon({ item }: { item: QuickstartInterfaceDefinition }) {
+  const iconSrc = ICON_ASSETS[item.icon]
+  const Icon = ICON_COMPONENTS[item.icon]
+  if (iconSrc) {
+    return <img src={iconSrc} alt="" className="size-3.5" />
+  }
+  if (Icon) {
+    return <Icon className="size-3.5" />
+  }
+  return (
+    <span
+      aria-hidden="true"
+      className="flex size-3.5 items-center justify-center border border-current text-[9px] leading-none"
+    >
+      {item.badge}
+    </span>
+  )
+}
 
 function PrimaryBtn({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {
   return (
@@ -105,43 +122,19 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
   const [scenario, setScenario] = useState<ScenarioId | null>(null)
   const [step, setStep] = useState(0)
   const [done, setDone] = useState<[boolean, boolean, boolean]>([false, false, false])
-  const [language, setLanguage] = useState<OnboardingInterface>('python')
+  const [language, setLanguage] = useState<OnboardingInterface>(DEFAULT_INTERFACE)
   const [createdKey, setCreatedKey] = useState<ApiKeyResponse | null>(null)
   const [keyName, setKeyName] = useState('')
   const [creating, setCreating] = useState(false)
   const [copiedTarget, setCopiedTarget] = useState<CopyTarget | null>(null)
 
   const codeExamples = getOnboardingCodeExamples()
-  const activeExample = codeExamples[language]
-  const activeInterface = LANGS.find((l) => l.value === language)
+  const activeExample = codeExamples[language] ?? codeExamples[DEFAULT_INTERFACE]
+  const activeInterface = QUICKSTART_INTERFACES.find((item) => item.id === language) ?? QUICKSTART_INTERFACES[0]
   const renderedExample = useMemo(
     () => renderOnboardingCodeExample(language, { apiKey: createdKey?.value, restApiUrl }),
     [createdKey?.value, language, restApiUrl],
   )
-  const executionDescription =
-    language === 'c' ? (
-      <>
-        What it does: compiles a C program that reads your <span className="text-foreground">BOXLITE_API_KEY</span>,
-        creates a Box, runs a command inside it, prints stdout, then removes the Box.
-      </>
-    ) : language === 'cli' ? (
-      <>
-        What it does: reads your <span className="text-foreground">BOXLITE_API_KEY</span> and{' '}
-        <span className="text-foreground">BOXLITE_REST_URL</span>, runs one command in a disposable Box, then removes
-        it.
-      </>
-    ) : language === 'rest' ? (
-      <>
-        What it does: reads your <span className="text-foreground">BOXLITE_API_KEY</span>, calls the REST API to create
-        and start a Box, executes a command, prints execution status, then removes the Box.
-      </>
-    ) : (
-      <>
-        What it does: reads your <span className="text-foreground">BOXLITE_API_KEY</span> from the environment, creates
-        a Box, runs a command inside it, prints the output, then removes the Box.
-      </>
-    )
-
   const apiKeyPermissions = useMemo(() => {
     if (!canCreateApiKey) return []
     const permissions: CreateApiKeyPermissionsEnum[] = [CreateApiKeyPermissionsEnum.WRITE_BOXES]
@@ -228,7 +221,12 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[88vh] flex-col gap-0 overflow-hidden p-0 font-mono sm:max-w-[620px]">
+      <DialogContent
+        className={cn(
+          'flex max-h-[88vh] flex-col gap-0 overflow-hidden p-0 font-mono sm:max-w-[860px]',
+          scenario !== null && step === 2 && 'h-[88vh]',
+        )}
+      >
         {scenario === null ? (
           <>
             <DialogHeader className="shrink-0 px-5 pb-2 pt-[18px]">
@@ -237,7 +235,7 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
                 {SCENARIOS.length} scenario{SCENARIOS.length === 1 ? '' : 's'} available
               </DialogDescription>
             </DialogHeader>
-            <div className="min-h-0 flex-1 overflow-y-auto border-t border-border px-5 pb-3 pt-[24px] scrollbar-thin scrollbar-thumb-border scrollbar-track-transparent">
+            <div className="scrollbar-elevated min-h-0 flex-1 overflow-y-auto border-t border-border px-5 pb-3 pt-[24px]">
               <div className="grid grid-cols-2 gap-[20px]">
                 {SCENARIOS.map((sc) => (
                   <button
@@ -347,7 +345,12 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
             </div>
 
             {/* body */}
-            <div className="min-h-0 flex-1 overflow-y-auto border-t border-border scrollbar-thin scrollbar-thumb-border scrollbar-track-transparent">
+            <div
+              className={cn(
+                'scrollbar-elevated min-h-0 flex-1 border-t border-border',
+                step === 2 ? 'overflow-hidden' : 'overflow-y-auto',
+              )}
+            >
               {step === 0 && (
                 <div className="px-5 py-[18px]" style={{ animation: 'stat-in .25s ease' }}>
                   <div className="mb-[9px] text-[9px] uppercase tracking-[1.5px] text-muted-foreground">
@@ -430,15 +433,14 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
               {step === 1 && (
                 <div className="px-5 py-[18px]" style={{ animation: 'stat-in .25s ease' }}>
                   <div className="mb-[14px] grid grid-cols-2 gap-2 sm:grid-cols-4">
-                    {LANGS.map((l) => {
-                      const on = language === l.value
-                      const Icon = l.Icon
+                    {QUICKSTART_INTERFACES.map((item) => {
+                      const on = language === item.id
                       return (
                         <button
-                          key={l.value}
+                          key={item.id}
                           type="button"
-                          aria-label={l.ariaLabel}
-                          onClick={() => setLanguage(l.value)}
+                          aria-label={item.ariaLabel}
+                          onClick={() => setLanguage(item.id)}
                           className={cn(
                             'flex min-h-[34px] items-center justify-center gap-2 border px-[10px] py-[7px] text-[12px] transition-colors',
                             on
@@ -446,19 +448,8 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
                               : 'border-border text-muted-foreground hover:border-brand/70 hover:text-foreground',
                           )}
                         >
-                          {l.iconSrc ? (
-                            <img src={l.iconSrc} alt="" className="size-3.5" />
-                          ) : Icon ? (
-                            <Icon className="size-3.5" />
-                          ) : (
-                            <span
-                              aria-hidden="true"
-                              className="flex size-3.5 items-center justify-center border border-current text-[9px] leading-none"
-                            >
-                              {l.badge}
-                            </span>
-                          )}
-                          {l.label}
+                          <QuickstartInterfaceIcon item={item} />
+                          {item.label}
                         </button>
                       )
                     })}
@@ -468,7 +459,7 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
                   </div>
                   <div className="flex items-start gap-3 border border-border bg-[hsl(var(--code-background))] px-[14px] py-3">
                     <span className="flex-none pt-[1px] text-success">$</span>
-                    <pre className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-foreground">
+                    <pre className="scrollbar-elevated min-w-0 flex-1 overflow-x-auto whitespace-pre text-[13px] leading-relaxed text-foreground">
                       {activeExample.install}
                     </pre>
                     <button
@@ -505,17 +496,16 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
               )}
 
               {step === 2 && (
-                <div className="px-5 py-[18px]" style={{ animation: 'stat-in .25s ease' }}>
+                <div className="flex h-full min-h-0 flex-col px-5 py-[18px]" style={{ animation: 'stat-in .25s ease' }}>
                   <div className="mb-[14px] grid grid-cols-2 gap-2 sm:grid-cols-4">
-                    {LANGS.map((l) => {
-                      const on = language === l.value
-                      const Icon = l.Icon
+                    {QUICKSTART_INTERFACES.map((item) => {
+                      const on = language === item.id
                       return (
                         <button
-                          key={l.value}
+                          key={item.id}
                           type="button"
-                          aria-label={l.ariaLabel}
-                          onClick={() => setLanguage(l.value)}
+                          aria-label={item.ariaLabel}
+                          onClick={() => setLanguage(item.id)}
                           className={cn(
                             'flex min-h-[34px] items-center justify-center gap-2 border px-[10px] py-[7px] text-[12px] transition-colors',
                             on
@@ -523,19 +513,8 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
                               : 'border-border text-muted-foreground hover:border-brand/70 hover:text-foreground',
                           )}
                         >
-                          {l.iconSrc ? (
-                            <img src={l.iconSrc} alt="" className="size-3.5" />
-                          ) : Icon ? (
-                            <Icon className="size-3.5" />
-                          ) : (
-                            <span
-                              aria-hidden="true"
-                              className="flex size-3.5 items-center justify-center border border-current text-[9px] leading-none"
-                            >
-                              {l.badge}
-                            </span>
-                          )}
-                          {l.label}
+                          <QuickstartInterfaceIcon item={item} />
+                          {item.label}
                         </button>
                       )
                     })}
@@ -543,25 +522,28 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
                   <div className="mb-[9px] text-[9px] uppercase tracking-[1.5px] text-muted-foreground">
                     Run this from your local machine
                   </div>
-                  <Suspense
-                    fallback={
-                      <pre className="overflow-auto whitespace-pre-wrap break-words rounded-none p-3 text-[11.5px] leading-relaxed">
-                        {renderedExample}
-                      </pre>
-                    }
-                  >
-                    <CodeBlock
-                      code={renderedExample}
-                      language={activeExample.codeLanguage}
-                      showCopy
-                      className="rounded-none"
-                      codeAreaClassName="whitespace-pre-wrap break-words text-[11.5px] leading-relaxed"
-                    />
-                  </Suspense>
+                  <div className="min-h-0 flex-1">
+                    <Suspense
+                      fallback={
+                        <pre className="scrollbar-elevated h-full overflow-auto whitespace-pre rounded-none p-3 text-[11.5px] leading-relaxed">
+                          {renderedExample}
+                        </pre>
+                      }
+                    >
+                      <CodeBlock
+                        code={renderedExample}
+                        language={activeExample.codeLanguage}
+                        showCopy
+                        className="h-full rounded-none"
+                        codeAreaClassName="h-full overflow-auto whitespace-pre text-[11.5px] leading-relaxed"
+                      />
+                    </Suspense>
+                  </div>
                   <div className="mt-[12px] flex items-start gap-2 text-[11.5px] leading-relaxed text-muted-foreground">
                     <span className="flex-none text-brand">ⓘ</span>
                     <span>
-                      {executionDescription} Run it in your terminal with the install command from the previous step.
+                      {activeExample.executionDescription} Run it in your terminal with the install command from the
+                      previous step.
                     </span>
                   </div>
                   <div className="mt-4 flex items-center justify-end">
