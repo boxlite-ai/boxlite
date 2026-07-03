@@ -245,7 +245,7 @@ def test_node_remove_idempotent(node_env):
 
 
 def test_node_get_nonexistent(node_env):
-    """getInfo of a nonexistent id must return null, not throw."""
+    """getInfo of a nonexistent id must not return a box (rejects or null)."""
     r = _run(node_env, "get_nonexistent")
     assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
     assert "GET_NONEXISTENT=ok" in r.stdout

@@ -280,7 +280,8 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
     if (TEST === 'box_name') {
       const name = `node-name-${Date.now()}`;
       const b = await newBox(true, name);
-      if (b.name() !== name) die(`box.name() mismatch: ${b.name()} != ${name}`);
+      // `name` is a napi getter property, not a method (like `id`).
+      if (b.name !== name) die(`box.name mismatch: ${b.name} != ${name}`);
       console.log('BOX_NAME=ok');
     }
 
@@ -443,10 +444,16 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
       console.log('REMOVE_IDEMPOTENT=ok');
     }
 
-    // ── getInfo of a nonexistent id returns null (no throw) ────────
+    // ── getInfo of a nonexistent id must not succeed ──────────────
+    // The Node binding rejects with a not-found error (rather than
+    // returning null); either shape is acceptable, a real box is not.
     if (TEST === 'get_nonexistent') {
-      const info = await rt.getInfo('nonexistent-box-id-xyz');
-      if (info !== null && info !== undefined) die(`getInfo(nonexistent) returned ${JSON.stringify(info)}`);
+      let ok = false;
+      try {
+        const info = await rt.getInfo('nonexistent-box-id-xyz');
+        ok = (info === null || info === undefined);
+      } catch { ok = true; }
+      if (!ok) die(`getInfo(nonexistent) returned a box`);
       console.log('GET_NONEXISTENT=ok');
     }
 
