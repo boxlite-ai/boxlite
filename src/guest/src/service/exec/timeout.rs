@@ -34,7 +34,14 @@ pub(super) fn start_timeout_watcher(
         use nix::sys::signal::Signal;
 
         // Stage 1: SIGTERM — polite termination request.
-        if !exec_state.kill(Signal::SIGTERM).await {
+        //
+        // Signal the whole process GROUP, not just the direct child. A
+        // shell like `sh -c "sleep 300"` forks a `sleep` grandchild that
+        // survives a kill of the shell alone and keeps the stdout/stderr
+        // pipe write-end open. That hangs the attach forwarding tasks (they
+        // never see EOF), the drain-folded Execution.Wait never returns, and
+        // the exec appears to run forever. See ExecHandle::kill_process_group.
+        if !exec_state.kill_group(Signal::SIGTERM).await {
             // Process already exited on its own; nothing more to do.
             return;
         }
@@ -51,7 +58,7 @@ pub(super) fn start_timeout_watcher(
 
         // Stage 3: SIGKILL fallback. Returns false if SIGTERM was honored
         // during the grace window (clean exit, no escalation needed).
-        if exec_state.kill(Signal::SIGKILL).await {
+        if exec_state.kill_group(Signal::SIGKILL).await {
             warn!(
                 execution_id = %exec_id,
                 "SIGKILL after grace expired; workload did not exit on SIGTERM"

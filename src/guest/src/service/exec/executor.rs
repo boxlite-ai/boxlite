@@ -150,6 +150,22 @@ fn spawn_with_pipes(req: &ExecRequest) -> BoxliteResult<ExecHandle> {
         cmd.stderr(std::process::Stdio::from_raw_fd(stderr_write.into_raw_fd()));
     }
 
+    // Put the child in its own session/process group (it becomes the group
+    // leader, so pgid == pid). This lets the timeout watcher / kill path
+    // signal the whole tree via killpg — otherwise a forked grandchild
+    // (e.g. `sh -c "sleep 300"`) outlives a single-pid kill, keeps the
+    // stdout/stderr pipe open, and hangs the exec's completion forever.
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            cmd.pre_exec(|| {
+                nix::unistd::setsid()
+                    .map(|_| ())
+                    .map_err(std::io::Error::other)
+            });
+        }
+    }
+
     let child = cmd
         .spawn()
         .map_err(|e| BoxliteError::Internal(format!("Failed to spawn '{}': {}", req.program, e)))?;
