@@ -35,7 +35,8 @@ export function BoxSearchCommands() {
 
   const { data } = useQuery({
     queryKey: ['command-palette-boxes', selectedOrganization?.id, debounced],
-    queryFn: async () => (await boxApi.listBoxesPaginated(selectedOrganization!.id, 1, 6, undefined, debounced)).data,
+    queryFn: async () =>
+      (await boxApi.listBoxesPaginated(selectedOrganization!.id, 1, 6, undefined, debounced)).data,
     enabled,
     staleTime: 15_000,
   })

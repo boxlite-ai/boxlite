@@ -60,16 +60,15 @@ export default function EmailVerify() {
               <Loader2 className="size-7 animate-spin text-muted-foreground" />
             </div>
             <div className="text-[16px] font-bold tracking-[-0.3px]">Verifying your email</div>
-            <p className="mt-2 text-[12.5px] text-muted-foreground">Please wait while we verify your email address…</p>
+            <p className="mt-2 text-[12.5px] text-muted-foreground">
+              Please wait while we verify your email address…
+            </p>
           </>
         )}
         {verificationStatus === 'success' && (
           <>
             <div className="mb-4 flex justify-center">
-              <span
-                className="flex size-12 items-center justify-center rounded-full"
-                style={{ background: 'hsl(var(--success) / 0.15)' }}
-              >
+              <span className="flex size-12 items-center justify-center rounded-full" style={{ background: 'hsl(var(--success) / 0.15)' }}>
                 <Check className="size-6 text-success" strokeWidth={2.5} />
               </span>
             </div>
@@ -82,10 +81,7 @@ export default function EmailVerify() {
         {verificationStatus === 'error' && (
           <>
             <div className="mb-4 flex justify-center">
-              <span
-                className="flex size-12 items-center justify-center rounded-full"
-                style={{ background: 'hsl(var(--destructive) / 0.15)' }}
-              >
+              <span className="flex size-12 items-center justify-center rounded-full" style={{ background: 'hsl(var(--destructive) / 0.15)' }}>
                 <X className="size-6 text-destructive" strokeWidth={2.5} />
               </span>
             </div>
