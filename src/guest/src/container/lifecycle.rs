@@ -47,6 +47,9 @@ pub struct Container {
     env: HashMap<String, String>,
     /// Resolved (uid, gid) from image USER directive, propagated to exec commands.
     user: (u32, u32),
+    /// Image working directory (OCI config WORKDIR), propagated to exec
+    /// commands so an exec lands where `docker exec` / `kubectl exec` would.
+    workdir: PathBuf,
     /// Stdio pipes that keep init process alive.
     /// Dropping this closes pipes → init gets EOF → init exits.
     #[allow(dead_code)]
@@ -179,6 +182,7 @@ impl Container {
             bundle_path,
             env: env_map,
             user: (uid, gid),
+            workdir: workdir.to_path_buf(),
             stdio,
             is_shutdown: std::sync::atomic::AtomicBool::new(false),
         })
@@ -260,13 +264,22 @@ impl Container {
     /// # }
     /// ```
     pub fn cmd(&self) -> ContainerCommand {
-        ContainerCommand::new(
+        let cmd = ContainerCommand::new(
             self.id.clone(),
             self.state_root.clone(),
             self.env.clone(),
             self.user,
             self.bundle_path.join("rootfs"),
-        )
+        );
+        // Default exec cwd to the image WORKDIR (`docker exec` parity) so
+        // shells and commands land where the image author intended. Callers
+        // can still override via current_dir(); an unset/empty workdir keeps
+        // the builder default ("/").
+        if self.workdir.as_os_str().is_empty() {
+            cmd
+        } else {
+            cmd.current_dir(self.workdir.to_string_lossy())
+        }
     }
 
     /// Drain init process stdout and stderr.
