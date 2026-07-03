@@ -57,10 +57,13 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
     pathPrefix: prefix,
   }));
 
-  // Lifecycle cases manage their own boxes; everything else shares one box
-  // created lazily below.
-  const LIFECYCLE = new Set(['lifecycle_stop_start', 'box_info', 'two_boxes_isolated', 'list_info']);
-  const wantsShared = TEST === 'all' || !LIFECYCLE.has(TEST);
+  // These cases manage their own boxes (or need none); everything else
+  // shares one box created lazily below.
+  const NO_SHARED = new Set([
+    'lifecycle_stop_start', 'box_info', 'two_boxes_isolated', 'list_info',
+    'custom_cpus', 'get_returns_box', 'remove_idempotent', 'get_nonexistent',
+  ]);
+  const wantsShared = TEST === 'all' || !NO_SHARED.has(TEST);
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'boxlite-node-e2e-'));
   const trackIds: string[] = [];
@@ -208,6 +211,59 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
       console.log('CONCURRENT=ok');
     }
 
+    // ── stdin → exec ──────────────────────────────────────────────
+    if (TEST === 'all' || TEST === 'exec_stdin') {
+      const ex = await box.exec('cat', [], null, false);
+      const stdin = await ex.stdin();
+      await stdin.writeString('line-from-stdin\n');
+      await stdin.close();
+      const stdout = await drainStream(await ex.stdout());
+      const rc = await ex.wait();
+      if (rc.exitCode !== 0) die(`exec_stdin: exit=${rc.exitCode}`);
+      if (!stdout.includes('line-from-stdin')) die(`stdin not echoed: ${JSON.stringify(stdout)}`);
+      console.log('EXEC_STDIN=ok');
+    }
+
+    // ── kill a running exec ───────────────────────────────────────
+    if (TEST === 'all' || TEST === 'exec_kill') {
+      // Direct `sleep` (no shell fork) so the single tracked pid is the one
+      // killed — a clean reap that returns from wait().
+      const ex = await box.exec('sleep', ['300'], null, false);
+      await ex.kill();
+      const rc = await ex.wait();
+      if (rc.exitCode === 0) die(`exec_kill: killed exec returned 0`);
+      console.log(`EXEC_KILL=ok code=${rc.exitCode}`);
+    }
+
+    // ── signal a running exec ─────────────────────────────────────
+    if (TEST === 'all' || TEST === 'exec_signal') {
+      const ex = await box.exec('sleep', ['300'], null, false);
+      await ex.signal(15); // SIGTERM
+      const rc = await ex.wait();
+      if (rc.exitCode === 0) die(`exec_signal: signalled exec returned 0`);
+      console.log(`EXEC_SIGNAL=ok code=${rc.exitCode}`);
+    }
+
+    // ── tty (PTY) exec ────────────────────────────────────────────
+    if (TEST === 'all' || TEST === 'exec_tty') {
+      const ex = await box.exec('sh', ['-c', 'echo tty-hello'], null, true);
+      const stdout = await drainStream(await ex.stdout());
+      const rc = await ex.wait();
+      if (rc.exitCode !== 0) die(`exec_tty: exit=${rc.exitCode}`);
+      if (!stdout.includes('tty-hello')) die(`tty stdout missing: ${JSON.stringify(stdout)}`);
+      console.log('EXEC_TTY=ok');
+    }
+
+    // ── copyOut of a missing path must reject ─────────────────────
+    if (TEST === 'all' || TEST === 'copyout_missing') {
+      let threw = false;
+      try {
+        await box.copyOut('/tmp/does-not-exist-xyz', path.join(tmpDir, 'nope'));
+      } catch { threw = true; }
+      if (!threw) die(`copyOut of a missing path did not reject`);
+      console.log('COPYOUT_MISSING=ok');
+    }
+
     // ── file copy roundtrip (text) ────────────────────────────────
     if (TEST === 'all' || TEST === 'copy_roundtrip') {
       const src = path.join(tmpDir, 'rt-in.txt');
@@ -321,6 +377,47 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
       const infos = await rt.listInfo();
       if (!infos.some((i: any) => i.id === b.id)) die(`created box ${b.id} not in listInfo`);
       console.log('LIST_INFO=ok');
+    }
+
+    // ── custom cpu count is honoured in the guest ─────────────────
+    if (TEST === 'custom_cpus') {
+      const b = await rt.create({ image, autoRemove: true, cpus: 2 });
+      trackIds.push(b.id);
+      const ex = await b.exec('nproc', [], null, false);
+      const stdout = await drainStream(await ex.stdout());
+      const rc = await ex.wait();
+      if (rc.exitCode !== 0) die(`custom_cpus: nproc exit=${rc.exitCode}`);
+      if (parseInt(stdout.trim(), 10) !== 2) die(`expected 2 cpus, guest sees ${stdout.trim()}`);
+      console.log('CUSTOM_CPUS=ok');
+    }
+
+    // ── rt.get returns a usable box handle ────────────────────────
+    if (TEST === 'get_returns_box') {
+      const created = await newBox(true);
+      const fetched = await rt.get(created.id);
+      if (!fetched) die(`rt.get returned null for ${created.id}`);
+      const ex = await fetched.exec('echo', ['from-get'], null, false);
+      const stdout = await drainStream(await ex.stdout());
+      await ex.wait();
+      if (!stdout.includes('from-get')) die(`exec via rt.get handle failed: ${JSON.stringify(stdout)}`);
+      console.log('GET_RETURNS_BOX=ok');
+    }
+
+    // ── removing an already-removed box rejects ───────────────────
+    if (TEST === 'remove_idempotent') {
+      const b = await rt.create({ image, autoRemove: true });
+      await rt.remove(b.id, true);
+      let threw = false;
+      try { await rt.remove(b.id, true); } catch { threw = true; }
+      if (!threw) die(`second remove did not reject`);
+      console.log('REMOVE_IDEMPOTENT=ok');
+    }
+
+    // ── getInfo of a nonexistent id returns null (no throw) ────────
+    if (TEST === 'get_nonexistent') {
+      const info = await rt.getInfo('nonexistent-box-id-xyz');
+      if (info !== null && info !== undefined) die(`getInfo(nonexistent) returned ${JSON.stringify(info)}`);
+      console.log('GET_NONEXISTENT=ok');
     }
 
   } catch (e: any) {

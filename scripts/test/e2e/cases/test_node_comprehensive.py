@@ -186,3 +186,66 @@ def test_node_list_info(node_env):
     r = _run(node_env, "list_info")
     assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
     assert "LIST_INFO=ok" in r.stdout
+
+
+def test_node_exec_stdin(node_env):
+    """Writing to exec stdin and closing must echo through `cat`."""
+    r = _run(node_env, "exec_stdin")
+    assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
+    assert "EXEC_STDIN=ok" in r.stdout
+
+
+def test_node_exec_kill(node_env):
+    """ex.kill() must terminate a running exec (nonzero exit)."""
+    r = _run(node_env, "exec_kill")
+    assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
+    assert "EXEC_KILL=ok" in r.stdout
+
+
+def test_node_exec_signal(node_env):
+    """ex.signal(SIGTERM) must terminate a running exec."""
+    r = _run(node_env, "exec_signal")
+    assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
+    assert "EXEC_SIGNAL=ok" in r.stdout
+
+
+def test_node_exec_tty(node_env):
+    """Exec with tty=true (PTY path) must return output."""
+    r = _run(node_env, "exec_tty")
+    assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
+    assert "EXEC_TTY=ok" in r.stdout
+
+
+def test_node_copyout_missing(node_env):
+    """copyOut of a missing path must reject through napi-rs."""
+    r = _run(node_env, "copyout_missing")
+    assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
+    assert "COPYOUT_MISSING=ok" in r.stdout
+
+
+def test_node_custom_cpus(node_env):
+    """A box created with cpus=2 must see 2 CPUs in the guest."""
+    r = _run(node_env, "custom_cpus")
+    assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
+    assert "CUSTOM_CPUS=ok" in r.stdout
+
+
+def test_node_get_returns_box(node_env):
+    """rt.get(id) must return a usable box handle."""
+    r = _run(node_env, "get_returns_box")
+    assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
+    assert "GET_RETURNS_BOX=ok" in r.stdout
+
+
+def test_node_remove_idempotent(node_env):
+    """Removing an already-removed box must reject."""
+    r = _run(node_env, "remove_idempotent")
+    assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
+    assert "REMOVE_IDEMPOTENT=ok" in r.stdout
+
+
+def test_node_get_nonexistent(node_env):
+    """getInfo of a nonexistent id must return null, not throw."""
+    r = _run(node_env, "get_nonexistent")
+    assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
+    assert "GET_NONEXISTENT=ok" in r.stdout
