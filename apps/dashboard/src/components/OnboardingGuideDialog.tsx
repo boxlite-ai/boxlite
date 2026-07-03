@@ -8,7 +8,6 @@ import goIcon from '@/assets/go.svg'
 import pythonIcon from '@/assets/python.svg'
 import rustIcon from '@/assets/rust.svg'
 import typescriptIcon from '@/assets/typescript.svg'
-import { CopyButton } from '@/components/CopyButton'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { KeyRound, Server, Terminal } from '@/components/ui/icon'
 import { useApi } from '@/hooks/useApi'
@@ -111,7 +110,36 @@ function PrimaryBtn({ children, onClick }: { children: React.ReactNode; onClick:
   )
 }
 
-type CopyTarget = 'install'
+function QuickstartCopyButton({
+  copied,
+  onClick,
+  className,
+}: {
+  copied: boolean
+  onClick: () => void
+  className?: string
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        boxShadow: copied ? '3px 3px 0 hsl(var(--success) / 0.35)' : '3px 3px 0 hsl(var(--border))',
+      }}
+      className={cn(
+        'flex h-7 min-w-[76px] flex-none items-center justify-center border-2 bg-[hsl(var(--code-background))] px-[10px] text-[10px] font-semibold uppercase tracking-[1px] transition-[color,border-color,background-color,transform,box-shadow] active:translate-x-px active:translate-y-px active:shadow-none',
+        copied
+          ? 'border-success bg-[hsl(var(--success)/0.14)] text-success'
+          : 'border-border text-muted-foreground hover:border-brand hover:text-foreground',
+        className,
+      )}
+    >
+      {copied ? '✓ Copied' : 'Copy'}
+    </button>
+  )
+}
+
+type CopyTarget = 'api-key' | 'install' | 'code'
 
 export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: OnboardingGuideDialogProps) {
   const { apiKeyApi } = useApi()
@@ -379,10 +407,9 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
                       />
                     )}
                     {createdKey ? (
-                      <CopyButton
-                        value={createdKey.value}
-                        variant="ghost"
-                        className="flex-none bg-background/80 p-2 text-muted-foreground shadow-sm ring-1 ring-border/70 backdrop-blur hover:bg-muted hover:text-foreground"
+                      <QuickstartCopyButton
+                        copied={copiedTarget === 'api-key'}
+                        onClick={() => copyText(createdKey.value, 'api-key')}
                       />
                     ) : null}
                   </div>
@@ -456,18 +483,10 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
                     <pre className="scrollbar-elevated min-w-0 flex-1 overflow-x-auto whitespace-pre text-[13px] leading-relaxed text-foreground">
                       {activeExample.install}
                     </pre>
-                    <button
-                      type="button"
+                    <QuickstartCopyButton
+                      copied={copiedTarget === 'install'}
                       onClick={() => copyText(activeExample.install, 'install')}
-                      className={cn(
-                        'flex-none border px-[11px] py-[6px] text-[10px] uppercase tracking-[1px] transition-colors',
-                        copiedTarget === 'install'
-                          ? 'border-success text-success'
-                          : 'border-border text-muted-foreground hover:text-foreground',
-                      )}
-                    >
-                      {copiedTarget === 'install' ? '✓ Copied' : 'Copy'}
-                    </button>
+                    />
                   </div>
                   <div className="mt-[11px] flex items-start gap-2 text-[11.5px] leading-relaxed text-muted-foreground">
                     <span className="flex-none text-brand">ⓘ</span>
@@ -516,10 +535,10 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
                   <div className="mb-[9px] text-[9px] uppercase tracking-[1.5px] text-muted-foreground">
                     Run this from your local machine
                   </div>
-                  <div className="min-h-0 flex-1">
+                  <div className="relative min-h-0 flex-1">
                     <Suspense
                       fallback={
-                        <pre className="scrollbar-elevated h-full overflow-auto whitespace-pre rounded-none p-3 text-[11.5px] leading-relaxed">
+                        <pre className="scrollbar-elevated h-full overflow-auto whitespace-pre rounded-none p-3 pr-24 text-[11.5px] leading-relaxed">
                           {renderedExample}
                         </pre>
                       }
@@ -527,11 +546,16 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
                       <CodeBlock
                         code={renderedExample}
                         language={activeExample.codeLanguage}
-                        showCopy
+                        showCopy={false}
                         className="h-full rounded-none"
-                        codeAreaClassName="h-full overflow-auto whitespace-pre text-[11.5px] leading-relaxed"
+                        codeAreaClassName="h-full overflow-auto whitespace-pre pr-24 text-[11.5px] leading-relaxed"
                       />
                     </Suspense>
+                    <QuickstartCopyButton
+                      copied={copiedTarget === 'code'}
+                      onClick={() => copyText(renderedExample, 'code')}
+                      className="absolute right-2 top-2.5"
+                    />
                   </div>
                   <div className="mt-[12px] flex items-start gap-2 text-[11.5px] leading-relaxed text-muted-foreground">
                     <span className="flex-none text-brand">ⓘ</span>
