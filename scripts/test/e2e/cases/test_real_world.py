@@ -150,10 +150,10 @@ async def test_git_workflow(box):
         "git log --oneline"
     )
     ex = await box.exec("sh", ["-c", cmds])
-    out, _ = await drain(ex)
+    out, err = await drain(ex)
     rc = await asyncio.wait_for(ex.wait(), timeout=60)
     # git may not be installed; skip gracefully
-    if rc.exit_code != 0 and "git" in (out + _).lower() and "not found" in (out + _).lower():
+    if rc.exit_code != 0 and "git" in (out + err).lower() and "not found" in (out + err).lower():
         pytest.skip("git not installed in base image")
     assert rc.exit_code == 0, f"git workflow failed: rc={rc.exit_code}\n{out}"
     assert "init" in out, f"commit not in log: {out!r}"
@@ -260,17 +260,18 @@ async def test_process_listing_and_kill(box):
     assert rc.exit_code == 0
     assert "PID" in out or "pid" in out, f"ps output not valid: {out!r}"
 
-    # Start a process, immediately kill it by name, verify it's gone
+    # Start a process, kill it, and prove it is actually gone: `kill -0`
+    # after the wait must fail (no such pid), so ALIVE is never printed.
     ex = await box.exec(
         "sh", ["-c",
                "sleep 999 & SPID=$! && "
-               "kill $SPID 2>/dev/null && "
+               "kill $SPID && "
                "wait $SPID 2>/dev/null; "
-               "echo DONE"],
+               "if kill -0 $SPID 2>/dev/null; then echo ALIVE; else echo KILLED; fi"],
     )
     out, _ = await drain(ex)
     rc = await asyncio.wait_for(ex.wait(), timeout=10)
-    assert "DONE" in out, f"kill workflow failed: {out!r}"
+    assert "KILLED" in out and "ALIVE" not in out, f"process not terminated: {out!r}"
 
 
 # ── Multi-user file permissions ────────────────────────────────────

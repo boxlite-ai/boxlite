@@ -22,9 +22,11 @@ function env(k: string, def: string): string {
   return v && v.length ? v : def;
 }
 
+// Throw rather than process.exit() here: an immediate exit skips the
+// finally block below, leaking every box this run created. The outer
+// catch records the failure, cleanup runs in finally, then we exit(2).
 function die(msg: string): never {
-  console.error(`FATAL: ${msg}`);
-  process.exit(2);
+  throw new Error(msg);
 }
 
 async function drainStream(stream: any): Promise<string> {
@@ -72,6 +74,7 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
   }
 
   let box: any = null;
+  let failure: string | null = null;
   try {
     if (wantsShared) {
       box = await newBox(true);
@@ -321,7 +324,7 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
     }
 
   } catch (e: any) {
-    die(`error: ${e.message ?? e}`);
+    failure = e?.message ?? String(e);
   } finally {
     for (const id of trackIds) {
       try { await rt.remove(id, true); } catch { /* best-effort */ }
@@ -329,5 +332,9 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 
+  if (failure !== null) {
+    console.error(`FATAL: ${failure}`);
+    process.exit(2);
+  }
   console.log('OK');
 })();
