@@ -1,19 +1,21 @@
 // Node SDK comprehensive e2e driver.
 // Called by cases/test_node_comprehensive.py.
 //
-// Tests exec edge cases through the Node napi-rs binding:
-//   - stderr isolation
-//   - exit code propagation (0, 1, 42, 127)
-//   - large stdout (~4000 lines)
-//   - env var passing
-//   - working directory
-//   - concurrent execs
-//   - empty output
-//   - copy_in + verify
+// Exercises the napi-rs binding across exec edge cases, file I/O, and
+// lifecycle. Selected per-case via BOXLITE_E2E_NODE_TEST so failures are
+// reported per test on the Python side.
+//
+// File-I/O cases verify via copyOut (host-side byte comparison) rather than
+// an exec that reads the file back, to stay independent of the Node exec
+// stdout drain race (#563).
 
 import {
   JsBoxlite, BoxliteRestOptions, ApiKeyCredential,
 } from '../../../../../sdks/node';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import * as crypto from 'crypto';
 
 function env(k: string, def: string): string {
   const v = process.env[k];
@@ -35,6 +37,10 @@ async function drainStream(stream: any): Promise<string> {
   return result;
 }
 
+function sha256(buf: Buffer): string {
+  return crypto.createHash('sha256').update(buf).digest('hex');
+}
+
 const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
 
 (async () => {
@@ -49,11 +55,28 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
     pathPrefix: prefix,
   }));
 
-  let boxId: string | null = null;
+  // Lifecycle cases manage their own boxes; everything else shares one box
+  // created lazily below.
+  const LIFECYCLE = new Set(['lifecycle_stop_start', 'box_info', 'two_boxes_isolated', 'list_info']);
+  const wantsShared = TEST === 'all' || !LIFECYCLE.has(TEST);
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'boxlite-node-e2e-'));
+  const trackIds: string[] = [];
+
+  async function newBox(autoRemove: boolean, name?: string): Promise<any> {
+    const b = name
+      ? await rt.create({ image, autoRemove }, name)
+      : await rt.create({ image, autoRemove });
+    trackIds.push(b.id);
+    return b;
+  }
+
+  let box: any = null;
   try {
-    const box = await rt.create({ image, autoRemove: true });
-    boxId = box.id;
-    console.log(`BOX_ID=${boxId}`);
+    if (wantsShared) {
+      box = await newBox(true);
+      console.log(`BOX_ID=${box.id}`);
+    }
 
     // ── stderr isolation ──────────────────────────────────────────
     if (TEST === 'all' || TEST === 'stderr') {
@@ -78,6 +101,16 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
       console.log('EXIT_CODES=ok');
     }
 
+    // ── signal exit code ──────────────────────────────────────────
+    if (TEST === 'all' || TEST === 'signal_exit') {
+      const ex = await box.exec('sh', ['-c', 'kill -9 $$'], null, false);
+      const rc = await ex.wait();
+      // Signal death surfaces as a negative code (-9) or 128+signal (137).
+      if (rc.exitCode === 0) die(`signal_exit: expected nonzero, got 0`);
+      if (!(rc.exitCode < 0 || rc.exitCode > 128)) die(`signal_exit: unexpected code ${rc.exitCode}`);
+      console.log(`SIGNAL_EXIT=ok code=${rc.exitCode}`);
+    }
+
     // ── large stdout ──────────────────────────────────────────────
     if (TEST === 'all' || TEST === 'large_stdout') {
       const ex = await box.exec('seq', ['1', '4000'], null, false);
@@ -89,6 +122,17 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
       console.log(`LARGE_STDOUT=ok lines=${lines.length}`);
     }
 
+    // ── large stderr ──────────────────────────────────────────────
+    if (TEST === 'all' || TEST === 'large_stderr') {
+      const ex = await box.exec('sh', ['-c', 'seq 1 4000 >&2'], null, false);
+      const stderr = await drainStream(await ex.stderr());
+      const rc = await ex.wait();
+      if (rc.exitCode !== 0) die(`large stderr: exit=${rc.exitCode}`);
+      const lines = stderr.trim().split('\n');
+      if (lines.length < 3900) die(`large stderr truncated: ${lines.length}/4000`);
+      console.log(`LARGE_STDERR=ok lines=${lines.length}`);
+    }
+
     // ── env vars ──────────────────────────────────────────────────
     if (TEST === 'all' || TEST === 'env_vars') {
       const ex = await box.exec('sh', ['-c', 'echo $MY_VAR'],
@@ -98,6 +142,29 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
       if (rc.exitCode !== 0) die(`env vars: exit=${rc.exitCode}`);
       if (!stdout.includes('node-e2e-val')) die(`env var not propagated: ${stdout}`);
       console.log('ENV_VARS=ok');
+    }
+
+    // ── many env vars ─────────────────────────────────────────────
+    if (TEST === 'all' || TEST === 'many_env') {
+      const pairs: string[][] = [];
+      for (let i = 0; i < 50; i++) pairs.push([`E2E_VAR_${i}`, `val_${i}`]);
+      const ex = await box.exec('sh', ['-c', 'echo "$E2E_VAR_0:$E2E_VAR_25:$E2E_VAR_49"'],
+        pairs, false);
+      const stdout = await drainStream(await ex.stdout());
+      const rc = await ex.wait();
+      if (rc.exitCode !== 0) die(`many env: exit=${rc.exitCode}`);
+      if (!stdout.includes('val_0:val_25:val_49')) die(`many env not propagated: ${stdout}`);
+      console.log('MANY_ENV=ok');
+    }
+
+    // ── unicode / multiline ───────────────────────────────────────
+    if (TEST === 'all' || TEST === 'unicode') {
+      const ex = await box.exec('printf', ['%s\\n%s\\n', 'héllo-☃', '世界'], null, false);
+      const stdout = await drainStream(await ex.stdout());
+      const rc = await ex.wait();
+      if (rc.exitCode !== 0) die(`unicode: exit=${rc.exitCode}`);
+      if (!stdout.includes('héllo-☃') || !stdout.includes('世界')) die(`unicode mangled: ${JSON.stringify(stdout)}`);
+      console.log('UNICODE=ok');
     }
 
     // ── working directory ─────────────────────────────────────────
@@ -138,12 +205,128 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
       console.log('CONCURRENT=ok');
     }
 
+    // ── file copy roundtrip (text) ────────────────────────────────
+    if (TEST === 'all' || TEST === 'copy_roundtrip') {
+      const src = path.join(tmpDir, 'rt-in.txt');
+      const dst = path.join(tmpDir, 'rt-out.txt');
+      const content = 'hello-from-node-copy\nline2\n';
+      fs.writeFileSync(src, content);
+      await box.copyIn(src, '/tmp/rt.txt');
+      await box.copyOut('/tmp/rt.txt', dst);
+      const got = fs.readFileSync(dst, 'utf-8');
+      if (got !== content) die(`copy roundtrip mismatch: ${JSON.stringify(got)}`);
+      console.log('COPY_ROUNDTRIP=ok');
+    }
+
+    // ── binary file integrity (all 256 byte values) ───────────────
+    if (TEST === 'all' || TEST === 'copy_binary') {
+      const src = path.join(tmpDir, 'bin-in');
+      const dst = path.join(tmpDir, 'bin-out');
+      const buf = Buffer.alloc(256);
+      for (let i = 0; i < 256; i++) buf[i] = i;
+      fs.writeFileSync(src, buf);
+      await box.copyIn(src, '/tmp/bin');
+      await box.copyOut('/tmp/bin', dst);
+      const got = fs.readFileSync(dst);
+      if (sha256(got) !== sha256(buf)) die(`binary mismatch: ${got.length} bytes, sha ${sha256(got)}`);
+      console.log('COPY_BINARY=ok');
+    }
+
+    // ── large file integrity (1 MiB, sha256) ──────────────────────
+    if (TEST === 'all' || TEST === 'copy_large') {
+      const src = path.join(tmpDir, 'big-in');
+      const dst = path.join(tmpDir, 'big-out');
+      const buf = crypto.randomBytes(1024 * 1024);
+      fs.writeFileSync(src, buf);
+      await box.copyIn(src, '/tmp/big');
+      await box.copyOut('/tmp/big', dst);
+      const got = fs.readFileSync(dst);
+      if (got.length !== buf.length) die(`large file size mismatch: ${got.length} != ${buf.length}`);
+      if (sha256(got) !== sha256(buf)) die(`large file sha mismatch`);
+      console.log('COPY_LARGE=ok');
+    }
+
+    // ── copy into a deeply nested dir ─────────────────────────────
+    if (TEST === 'all' || TEST === 'copy_nested') {
+      const src = path.join(tmpDir, 'nested-in.txt');
+      const dst = path.join(tmpDir, 'nested-out.txt');
+      const content = 'nested-payload\n';
+      fs.writeFileSync(src, content);
+      // Create the destination tree first (copyIn does not mkdir -p).
+      const mk = await box.exec('mkdir', ['-p', '/tmp/a/b/c/d'], null, false);
+      await mk.wait();
+      await box.copyIn(src, '/tmp/a/b/c/d/f.txt');
+      await box.copyOut('/tmp/a/b/c/d/f.txt', dst);
+      if (fs.readFileSync(dst, 'utf-8') !== content) die(`nested copy mismatch`);
+      console.log('COPY_NESTED=ok');
+    }
+
+    // ── lifecycle: stop/start preserves rootfs ────────────────────
+    if (TEST === 'lifecycle_stop_start') {
+      const b = await newBox(false);
+      try {
+        const src = path.join(tmpDir, 'persist-in.txt');
+        const dst = path.join(tmpDir, 'persist-out.txt');
+        fs.writeFileSync(src, 'persist-me\n');
+        await b.copyIn(src, '/root/marker.txt');
+        await b.stop();
+        await new Promise((r) => setTimeout(r, 1000));
+        await b.start();
+        await new Promise((r) => setTimeout(r, 2000));
+        await b.copyOut('/root/marker.txt', dst);
+        if (fs.readFileSync(dst, 'utf-8') !== 'persist-me\n') die(`rootfs data lost across stop/start`);
+        console.log('LIFECYCLE_STOP_START=ok');
+      } finally {
+        try { await rt.remove(b.id, true); } catch { /* best-effort */ }
+      }
+    }
+
+    // ── box info carries id + name ────────────────────────────────
+    if (TEST === 'box_info') {
+      const name = `node-e2e-${Date.now()}`;
+      const b = await newBox(true, name);
+      const info = b.info();
+      if (info.id !== b.id) die(`info.id mismatch: ${info.id} != ${b.id}`);
+      if (info.name !== name) die(`info.name mismatch: ${info.name} != ${name}`);
+      const fetched = await rt.getInfo(b.id);
+      if (!fetched || fetched.id !== b.id) die(`getInfo did not return the box`);
+      console.log('BOX_INFO=ok');
+    }
+
+    // ── two boxes are isolated ────────────────────────────────────
+    if (TEST === 'two_boxes_isolated') {
+      const b1 = await newBox(true);
+      const b2 = await newBox(true);
+      const s1 = path.join(tmpDir, 'iso1.txt');
+      const s2 = path.join(tmpDir, 'iso2.txt');
+      const o1 = path.join(tmpDir, 'iso1-out.txt');
+      const o2 = path.join(tmpDir, 'iso2-out.txt');
+      fs.writeFileSync(s1, 'BOX_ONE\n');
+      fs.writeFileSync(s2, 'BOX_TWO\n');
+      await b1.copyIn(s1, '/root/who.txt');
+      await b2.copyIn(s2, '/root/who.txt');
+      await b1.copyOut('/root/who.txt', o1);
+      await b2.copyOut('/root/who.txt', o2);
+      if (fs.readFileSync(o1, 'utf-8') !== 'BOX_ONE\n') die(`box1 wrong data`);
+      if (fs.readFileSync(o2, 'utf-8') !== 'BOX_TWO\n') die(`box2 wrong data (leak?)`);
+      console.log('TWO_BOXES_ISOLATED=ok');
+    }
+
+    // ── listInfo includes a created box ───────────────────────────
+    if (TEST === 'list_info') {
+      const b = await newBox(true);
+      const infos = await rt.listInfo();
+      if (!infos.some((i: any) => i.id === b.id)) die(`created box ${b.id} not in listInfo`);
+      console.log('LIST_INFO=ok');
+    }
+
   } catch (e: any) {
     die(`error: ${e.message ?? e}`);
   } finally {
-    if (boxId) {
-      try { await rt.remove(boxId, true); } catch { /* best-effort */ }
+    for (const id of trackIds) {
+      try { await rt.remove(id, true); } catch { /* best-effort */ }
     }
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 
   console.log('OK');

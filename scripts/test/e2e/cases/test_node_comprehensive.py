@@ -102,3 +102,87 @@ def test_node_concurrent_exec(node_env):
     r = _run(node_env, "concurrent")
     assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
     assert "CONCURRENT=ok" in r.stdout
+
+
+def test_node_signal_exit(node_env):
+    """A signal-killed process reports a nonzero (signal) exit code."""
+    r = _run(node_env, "signal_exit")
+    assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
+    assert "SIGNAL_EXIT=ok" in r.stdout
+
+
+def test_node_large_stderr(node_env):
+    """4000 lines of stderr must arrive intact through napi-rs."""
+    r = _run(node_env, "large_stderr")
+    assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
+    assert "LARGE_STDERR=ok" in r.stdout
+
+
+def test_node_many_env(node_env):
+    """50 env vars must all propagate through napi-rs exec."""
+    r = _run(node_env, "many_env")
+    assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
+    assert "MANY_ENV=ok" in r.stdout
+
+
+def test_node_unicode(node_env):
+    """Unicode/multibyte stdout must survive the napi-rs boundary."""
+    r = _run(node_env, "unicode")
+    assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
+    assert "UNICODE=ok" in r.stdout
+
+
+def test_node_copy_roundtrip(node_env):
+    """copyIn then copyOut must return identical text content."""
+    r = _run(node_env, "copy_roundtrip")
+    assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
+    assert "COPY_ROUNDTRIP=ok" in r.stdout
+
+
+def test_node_copy_binary(node_env):
+    """A binary file (all 256 byte values) must survive copyIn/copyOut."""
+    r = _run(node_env, "copy_binary")
+    assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
+    assert "COPY_BINARY=ok" in r.stdout
+
+
+def test_node_copy_large(node_env):
+    """A 1 MiB file must copy in and out with a matching sha256."""
+    r = _run(node_env, "copy_large")
+    assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
+    assert "COPY_LARGE=ok" in r.stdout
+
+
+def test_node_copy_nested(node_env):
+    """copyIn/copyOut into a deeply nested directory path."""
+    r = _run(node_env, "copy_nested")
+    assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
+    assert "COPY_NESTED=ok" in r.stdout
+
+
+def test_node_lifecycle_stop_start(node_env):
+    """Data written before stop must survive a stop/start cycle."""
+    r = _run(node_env, "lifecycle_stop_start")
+    assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
+    assert "LIFECYCLE_STOP_START=ok" in r.stdout
+
+
+def test_node_box_info(node_env):
+    """box.info() and rt.getInfo() must carry the box id and name."""
+    r = _run(node_env, "box_info")
+    assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
+    assert "BOX_INFO=ok" in r.stdout
+
+
+def test_node_two_boxes_isolated(node_env):
+    """Two boxes must have independent filesystems."""
+    r = _run(node_env, "two_boxes_isolated")
+    assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
+    assert "TWO_BOXES_ISOLATED=ok" in r.stdout
+
+
+def test_node_list_info(node_env):
+    """rt.listInfo() must include a freshly created box."""
+    r = _run(node_env, "list_info")
+    assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
+    assert "LIST_INFO=ok" in r.stdout
