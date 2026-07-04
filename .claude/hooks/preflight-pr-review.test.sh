@@ -74,6 +74,9 @@ run "chained with &&"                   "cd x && gh pr create -t foo"       "den
 run "chained with ;"                    "echo done; gh pr create -t foo"    "deny"
 run "command substitution"              "out=\$(gh pr create -t foo)"       "deny"
 run "env var prefix"                    "FOO=bar gh pr create -t foo"       "deny"
+# Newline-before-verb: multi-line Bash with the gh invocation on line 2. Before the
+# newline-as-separator fix this SILENTLY PASSED THROUGH (the bypass); must deny now.
+run "newline before pr create"          $'cd x\ngh pr create -t foo'         "deny"
 
 echo
 echo "## Gate logic: marker file states"
