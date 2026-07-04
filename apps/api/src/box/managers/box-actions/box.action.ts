@@ -10,6 +10,7 @@ import { RunnerAdapterFactory } from '../../runner-adapter/runnerAdapter'
 import { Box } from '../../entities/box.entity'
 import { BoxRepository } from '../../repositories/box.repository'
 import { BoxState } from '../../enums/box-state.enum'
+import { BoxDesiredState } from '../../enums/box-desired-state.enum'
 import { getStateChangeLockKey } from '../../utils/lock-key.util'
 import { LockCode, RedisLockProvider } from '../../common/redis-lock.provider'
 
@@ -65,6 +66,10 @@ export abstract class BoxAction {
 
     const updateData: Partial<Box> = {
       state,
+    }
+
+    if (state === BoxState.ERROR && box.desiredState === BoxDesiredState.STARTED) {
+      updateData.desiredState = BoxDesiredState.STOPPED
     }
 
     if (runnerId !== undefined) {
