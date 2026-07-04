@@ -10,7 +10,6 @@
   <a href="https://pypi.org/project/boxlite/"><img alt="PyPI" src="https://img.shields.io/pypi/v/boxlite?logo=pypi&amp;logoColor=white&amp;label=pip"></a>
   <a href="https://www.npmjs.com/package/@boxlite-ai/boxlite"><img alt="npm" src="https://img.shields.io/npm/v/@boxlite-ai/boxlite?logo=npm&amp;label=npm"></a>
   <a href="https://crates.io/crates/boxlite"><img alt="crates.io" src="https://img.shields.io/crates/v/boxlite?logo=rust&amp;logoColor=white&amp;label=crates"></a>
-  <a href="https://github.com/boxlite-ai/boxlite/actions/workflows/build-wheels.yml"><img alt="Build" src="https://github.com/boxlite-ai/boxlite/actions/workflows/build-wheels.yml/badge.svg"></a>
   <a href="https://codecov.io/gh/boxlite-ai/boxlite"><img alt="codecov" src="https://codecov.io/gh/boxlite-ai/boxlite/branch/main/graph/badge.svg"></a>
   <a href="https://go.boxlite.ai/discord"><img alt="Discord" src="https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&amp;logoColor=white"></a>
   <a href="https://github.com/boxlite-ai/boxlite"><img alt="GitHub stars" src="https://img.shields.io/github/stars/boxlite-ai/boxlite?style=social"></a>
@@ -168,6 +167,14 @@ Needs an AWS account, a Cloudflare-managed domain, and Docker. Full guide → [`
 | **Images** | pull + cache any OCI image · custom & private [registries](./docs/guides/image-registry-configuration.md) · custom rootfs |
 | **Observability** | per-box & runtime metrics — CPU, memory, network, boot time, commands · console logs · live `stats` |
 | **Interfaces** | Python · Node.js · Go · Rust · C SDKs · the `boxlite` CLI · a REST API (WebSocket exec, optional auth) |
+
+## Ecosystem
+
+Agent frameworks run on BoxLite:
+
+- **[Databricks Omnigent](https://github.com/omnigent-ai/omnigent)** — sandbox option in their agent meta-harness
+- **[Alibaba AgentScope Runtime](https://runtime.agentscope.io/en/sandbox/sandbox.html)** — sandbox backend (`CONTAINER_DEPLOYMENT=boxlite`)
+- **[ByteDance deer-flow](https://github.com/bytedance/deer-flow/tree/main/backend/packages/harness/deerflow/community/boxlite)** — sandbox provider in their research agent
 
 ## Architecture
 
