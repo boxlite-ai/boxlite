@@ -35,7 +35,6 @@ type SSHGateway struct {
 	apiClient  *apiclient.APIClient
 	hostKey    ssh.Signer
 	privateKey ssh.Signer
-	publicKey  ssh.PublicKey
 }
 
 func main() {
@@ -104,7 +103,6 @@ func main() {
 		apiClient:  apiClient,
 		hostKey:    hostKey,
 		privateKey: privateKey,
-		publicKey:  publicKey,
 	}
 
 	log.Printf("Host key loaded from SSH_HOST_KEY environment variable (base64 decoded)")
@@ -442,16 +440,6 @@ func parsePrivateKey(privateKeyPEM string) (ssh.Signer, error) {
 	}
 
 	return signer, nil
-}
-
-// GetPublicKeyString returns the public key in authorized_keys format
-func (g *SSHGateway) GetPublicKeyString() string {
-	return string(ssh.MarshalAuthorizedKey(g.publicKey))
-}
-
-// GetPublicKey returns the SSH public key
-func (g *SSHGateway) GetPublicKey() ssh.PublicKey {
-	return g.publicKey
 }
 
 func getEnv(key, defaultValue string) string {

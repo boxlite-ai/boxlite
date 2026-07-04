@@ -138,18 +138,6 @@ func (c *Config) GetOtelHeaders() map[string]string {
 	return headers
 }
 
-func GetContainerRuntime() string {
-	return config.ContainerRuntime
-}
-
-func GetContainerNetwork() string {
-	return config.ContainerNetwork
-}
-
 func GetEnvironment() string {
 	return config.Environment
-}
-
-func GetBuildEngine() string {
-	return config.BuildEngine
 }
