@@ -365,6 +365,9 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
             errorReason,
             recoverable,
           }
+          if (box.desiredState === BoxDesiredState.STARTED) {
+            updateData.desiredState = BoxDesiredState.STOPPED
+          }
 
           // Update box to error state without safeguards
           await this.boxRepository.updateWhere(boxId, { updateData, whereCondition: {} })
