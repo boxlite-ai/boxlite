@@ -21,7 +21,7 @@ package shellutil
 //	export TERM="${TERM:-xterm-256color}";
 //	shell=$(command -v bash || command -v ash || command -v sh);
 //	rc="/tmp/.boxlite-shellrc.$$";
-//	... write profile sourcing + color aliases ...
+//	... write profile sourcing + theme prompt ...
 //	exec "$shell" --rcfile "$rc" -i    # bash
 //	export ENV="$rc"; exec "$shell" -i # ash/sh
 //
@@ -40,9 +40,13 @@ package shellutil
 //     Trying bash first, then ash, then sh matches user preference for
 //     bash where it exists while falling through cleanly on minimal images.
 //   - The generated rc sources /etc/profile, ~/.profile, and (for bash)
-//     ~/.bashrc before adding BoxLite's fallback aliases. This keeps normal
-//     image/user initialization while filling the common "minimal image has
-//     no colored ls alias" gap. Existing user aliases win.
+//     ~/.bashrc before applying BoxLite's default prompt. This keeps normal
+//     image/user initialization while making a plain minimal shell look like
+//     the BoxLite terminal surface.
+//   - The rc sets a BoxLite-themed prompt for the default terminal surface:
+//     user/host stays green while the cwd segment uses the brand-blue ANSI
+//     256-color slot (38;5;39, close to #00B0F0). Set BOXLITE_KEEP_PS1=1 in
+//     the image/user rc if a custom image wants to keep its own prompt.
 //   - `exec` replaces the launcher sh in-place — no extra PID hangs around
 //     and the chosen shell becomes pid 1 of the SSH/terminal session.
 //   - `export TERM="${TERM:-xterm-256color}"` gives color-aware programs a
@@ -50,10 +54,6 @@ package shellutil
 //     git/less/prompts render monochrome even though the client (xterm.js
 //     or the SSH terminal) can display color. The `:-` fallback preserves a
 //     real SSH client's own TERM when one is already present.
-//   - `ls` is different from tools such as Claude or git: GNU ls does not emit
-//     color just because TERM is set. It needs `--color=auto` (usually from a
-//     distro shell alias), so the rc adds that alias only after probing support
-//     and only when the user/image did not already define one.
 //
 // This follows the kubectl exec convention for unknown container images
 // (see https://kubernetes.io/docs/reference/kubectl/generated/kubectl_exec/),
@@ -74,19 +74,15 @@ cat > "$rc" <<'BOXLITE_RC'
 [ -r /etc/profile ] && . /etc/profile
 [ -r "$HOME/.profile" ] && . "$HOME/.profile"
 [ -n "$BASH_VERSION" ] && [ -r "$HOME/.bashrc" ] && . "$HOME/.bashrc"
-if alias ls >/dev/null 2>&1; then
-  :
-elif command ls --color=auto / >/dev/null 2>&1; then
-  alias ls='ls --color=auto'
-elif command ls -G / >/dev/null 2>&1; then
-  alias ls='ls -G'
-fi
-if alias ll >/dev/null 2>&1; then
-  :
-elif command ls --color=auto / >/dev/null 2>&1; then
-  alias ll='ls -la --color=auto'
-elif command ls -G / >/dev/null 2>&1; then
-  alias ll='ls -la -G'
+if [ -z "$BOXLITE_KEEP_PS1" ]; then
+  boxlite_green="$(printf '\033[1;32m')"
+  boxlite_blue="$(printf '\033[38;5;39m')"
+  boxlite_reset="$(printf '\033[0m')"
+  if [ -n "$BASH_VERSION" ]; then
+    PS1='\[\033[1;32m\]\u@\h:\[\033[38;5;39m\]\w\[\033[0m\]\$ '
+  else
+    PS1="${boxlite_green}\u@\h:${boxlite_blue}\w${boxlite_reset}\$ "
+  fi
 fi
 BOXLITE_RC
 case "$shell" in

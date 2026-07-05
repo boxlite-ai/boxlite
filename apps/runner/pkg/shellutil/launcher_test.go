@@ -28,7 +28,7 @@ func TestDefaultInteractiveShellExportsTERM(t *testing.T) {
 	}
 }
 
-func TestDefaultInteractiveShellConfiguresLsColor(t *testing.T) {
+func TestDefaultInteractiveShellUsesBoxLitePromptColors(t *testing.T) {
 	_, args := DefaultInteractiveShell()
 	script := strings.Join(args, " ")
 
@@ -41,16 +41,16 @@ func TestDefaultInteractiveShellConfiguresLsColor(t *testing.T) {
 	if !strings.Contains(script, "ENV=\"$rc\"") {
 		t.Fatalf("ash/sh must load the BoxLite startup rc through ENV; got: %s", script)
 	}
-	if !strings.Contains(script, "--color=auto") {
-		t.Fatalf("interactive shell launcher must configure ls color; got: %s", script)
+	if !strings.Contains(script, "BOXLITE_KEEP_PS1") {
+		t.Fatalf("prompt customization must have an opt-out; got: %s", script)
 	}
-	if !strings.Contains(script, "alias ls=") {
-		t.Fatalf("interactive shell launcher must expose a colored ls alias; got: %s", script)
+	if !strings.Contains(script, "38;5;39") {
+		t.Fatalf("prompt cwd must use the BoxLite brand-blue ANSI color; got: %s", script)
 	}
-	if !strings.Contains(script, "alias ls >/dev/null") {
-		t.Fatalf("interactive shell launcher must preserve an existing ls alias; got: %s", script)
+	if !strings.Contains(script, `\u@\h:`) || !strings.Contains(script, `\w`) {
+		t.Fatalf("prompt must include user/host and cwd; got: %s", script)
 	}
-	if !strings.Contains(script, "alias ll >/dev/null") {
-		t.Fatalf("interactive shell launcher must preserve an existing ll alias; got: %s", script)
+	if !strings.Contains(script, `\[\033[38;5;39m\]\w`) {
+		t.Fatalf("bash prompt must wrap the brand-blue cwd escape for cursor accounting; got: %s", script)
 	}
 }
