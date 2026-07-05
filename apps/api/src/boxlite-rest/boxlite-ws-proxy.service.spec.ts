@@ -119,7 +119,7 @@ describe('BoxliteWsProxyService', () => {
     expect(organizationUserService.findOne).toHaveBeenCalledWith('org-1', 'user-1')
   })
 
-  it('keeps refreshing activity while an attach websocket remains open', async () => {
+  function buildUpgradeHarness() {
     jest.useFakeTimers()
     const upgrade = jest.fn()
     jest.mocked(createProxyMiddleware).mockReturnValue({ upgrade } as never)
@@ -152,6 +152,12 @@ describe('BoxliteWsProxyService', () => {
     }
     socket.destroy = jest.fn()
     socket.write = jest.fn()
+
+    return { service, boxService, upgrade, socket }
+  }
+
+  it('refreshes activity on inbound client bytes, throttled to one write per window', async () => {
+    const { service, boxService, upgrade, socket } = buildUpgradeHarness()
 
     await service.upgrade(authRequest('blk_live_test'), socket as never, Buffer.alloc(0))
     await Promise.resolve()
@@ -159,65 +165,36 @@ describe('BoxliteWsProxyService', () => {
     expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
     expect(upgrade).toHaveBeenCalled()
 
+    // Bytes right after connect fall into the upgrade touch's throttle window.
+    socket.emit('data', Buffer.from([0x8a, 0x00]))
+    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
+
+    // A Pong (or keystroke) after the window refreshes the ledger…
     jest.advanceTimersByTime(30_000)
-    await Promise.resolve()
+    socket.emit('data', Buffer.from([0x8a, 0x00]))
     expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(2)
 
-    socket.emit('close')
-    jest.advanceTimersByTime(30_000)
-    await Promise.resolve()
+    // …and a burst within the same window still costs a single write.
+    socket.emit('data', Buffer.from('ls\n'))
+    socket.emit('data', Buffer.from('top\n'))
     expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(2)
+
+    jest.advanceTimersByTime(30_000)
+    socket.emit('data', Buffer.from([0x8a, 0x00]))
+    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(3)
   })
 
-  it('stops the heartbeat if the socket already closed during the awaited setup', async () => {
-    jest.useFakeTimers()
-    const upgrade = jest.fn()
-    jest.mocked(createProxyMiddleware).mockReturnValue({ upgrade } as never)
-
-    const boxService = {
-      findOneByIdOrName: jest.fn().mockResolvedValue({
-        id: 'box-uuid',
-        runnerId: 'runner-1',
-      }),
-      updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
-    }
-    const runnerService = {
-      findOne: jest.fn().mockResolvedValue({
-        apiUrl: 'http://runner.local',
-        apiKey: 'runner-key',
-      }),
-    }
-    const service = new BoxliteWsProxyService(
-      {} as never,
-      {} as never,
-      boxService as never,
-      runnerService as never,
-      {} as never,
-    )
-    jest.spyOn(service as any, 'authenticate').mockResolvedValue({ organizationId: 'org-1' })
-
-    // Simulate a client that aborted while authenticate/findOne were awaited:
-    // the socket is already destroyed by the time the heartbeat is armed, so
-    // the close/end/error events that would normally stop it have already fired
-    // and our listeners (attached only here) will never see them.
-    const socket = new EventEmitter() as EventEmitter & {
-      destroy: jest.Mock
-      write: jest.Mock
-      destroyed: boolean
-    }
-    socket.destroy = jest.fn()
-    socket.write = jest.fn()
-    socket.destroyed = true
+  it('stops refreshing when the client goes silent (dead or half-open peer)', async () => {
+    const { service, boxService, socket } = buildUpgradeHarness()
 
     await service.upgrade(authRequest('blk_live_test'), socket as never, Buffer.alloc(0))
     await Promise.resolve()
 
-    // Immediate touch still happens; not worth racing it.
     expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
 
-    // But the heartbeat must not keep firing — otherwise the dead session
-    // would refresh lastActivityAt every 30s forever and defeat auto-stop.
-    jest.advanceTimersByTime(60_000)
+    // A half-open TCP peer emits neither 'data' nor 'close' — the ledger must
+    // go stale on silence alone, or a dead session defeats auto-stop.
+    jest.advanceTimersByTime(10 * 60_000)
     await Promise.resolve()
     expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
   })
