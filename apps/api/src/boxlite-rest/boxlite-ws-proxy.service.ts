@@ -23,6 +23,7 @@ type RunnerUpgradeRequest = IncomingMessage & {
 // /api/v1/<tenant>/boxes/<id>/executions/<id>/attach shape with optional query string.
 // Named groups: `tenant` (optional org id / path prefix) and `boxId`.
 const ATTACH_PATH = /^\/api\/v1\/(?:(?<tenant>[^/]+)\/)?boxes\/(?<boxId>[^/]+)\/executions\/[^/]+\/attach(?:\?.*)?$/
+const ATTACH_ACTIVITY_THROTTLE_MS = 30_000
 
 /**
  * Singleton WebSocket proxy for `/attach` upgrades.
@@ -114,12 +115,9 @@ export class BoxliteWsProxyService {
         this.respondAndClose(socket, 404, 'Not Found')
         return
       }
-      // Mirror legacy toolbox path — opening a WS attach is user activity,
-      // so the autostop cron does not reap a session that's still connected.
-      // Best-effort: do not fail the upgrade if this errors.
-      this.boxService
-        .updateLastActivityAt(box.id, new Date())
-        .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${box.id}: ${err}`))
+      // Mirror legacy toolbox path — an open WS attach is user activity, so the
+      // autostop cron does not reap a terminal session that's still connected.
+      this.touchAttachActivity(box.id)
       const runner = await this.runnerService.findOne(box.runnerId)
       if (!runner) {
         this.respondAndClose(socket, 404, 'Not Found')
@@ -132,6 +130,9 @@ export class BoxliteWsProxyService {
           upgrade: (req: IncomingMessage, socket: Socket, head: Buffer) => void
         }
       ).upgrade(req, socket, head)
+      // After the proxy wires its piping — a 'data' listener switches the socket
+      // to flowing mode, so attaching earlier could drop pre-pipe client bytes.
+      this.trackAttachActivity(box.id, socket)
     } catch (err) {
       this.logger.warn(`upgrade failed for ${req.url}: ${(err as Error).message}`)
       this.respondAndClose(socket, 404, 'Not Found')
@@ -210,5 +211,31 @@ export class BoxliteWsProxyService {
       // Socket may already be torn down — ignore.
     }
     socket.destroy()
+  }
+
+  private touchAttachActivity(boxId: string): void {
+    this.boxService
+      .updateLastActivityAt(boxId, new Date())
+      .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${boxId}: ${err}`))
+  }
+
+  /**
+   * Touch the box's lastActivityAt on inbound client bytes (throttled to one
+   * write per window). Idle-but-alive clients keep emitting bytes because they
+   * Pong the runner's 15s keepalive (boxlite_exec_attach.go `runKeepalive`) —
+   * if that ping is ever removed, idle terminals lose their byte source and
+   * get reaped. Client→runner direction only: runner output (stdout of a
+   * chatty process) must not keep an abandoned box alive. No teardown needed —
+   * a closed socket emits no 'data'.
+   */
+  private trackAttachActivity(boxId: string, socket: Socket): void {
+    // Seeded from now: upgrade already touched.
+    let lastTouchAt = Date.now()
+    socket.on('data', () => {
+      const now = Date.now()
+      if (now - lastTouchAt < ATTACH_ACTIVITY_THROTTLE_MS) return
+      lastTouchAt = now
+      this.touchAttachActivity(boxId)
+    })
   }
 }
