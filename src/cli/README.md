@@ -370,6 +370,15 @@ Run a command in a running box.
 boxlite exec -it mybox /bin/sh
 ```
 
+An interactive (`-it`) session sets `TERM=xterm-256color`, so color-aware tools
+(git, `ls`, shell prompts) render in color. To opt out — plain, "retro" output —
+pass your own `TERM`, or use the [`NO_COLOR`](https://no-color.org) convention:
+
+```bash
+boxlite exec -it mybox -e TERM=dumb  /bin/sh   # disable color
+boxlite exec -it mybox -e NO_COLOR=1 /bin/sh   # same, via the NO_COLOR standard
+```
+
 ### `boxlite list` (alias: `ls`, `ps`)
 
 List boxes.
