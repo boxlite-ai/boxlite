@@ -77,19 +77,27 @@ describe('CreateBoxDialog per-org resource cap', () => {
   async function renderOpen() {
     const host = document.createElement('div')
     document.body.appendChild(host)
-    await act(async () => {
-      root = createRoot(host)
-      root.render(<CreateBoxDialog open onOpenChange={() => {}} />)
-    })
-    await flush()
+    await rerenderOpen(host)
     // Reveal the CPU/Memory/Disk steppers (advanced options are collapsed by default).
     const advanced = [...document.querySelectorAll('button')].find((b) => /Advanced Options/i.test(b.textContent ?? ''))
     await act(async () => advanced?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     await flush()
   }
 
+  async function rerenderOpen(host = document.body.firstElementChild ?? document.body.appendChild(document.createElement('div'))) {
+    await act(async () => {
+      root ??= createRoot(host)
+      root.render(<CreateBoxDialog open onOpenChange={() => {}} />)
+    })
+    await flush()
+  }
+
   function cpuInput() {
     return document.querySelectorAll<HTMLInputElement>('input[aria-label="value"]')[0]
+  }
+
+  function nameInput() {
+    return document.querySelector<HTMLInputElement>('input[placeholder="my-new-box"]')
   }
 
   it('clamps an over-max CPU input to the org maximum and shows a red contact-support hint', async () => {
@@ -146,6 +154,27 @@ describe('CreateBoxDialog per-org resource cap', () => {
 
     expect(input.value).toBe('123123')
     expect(document.body.textContent).not.toContain('support@boxlite.ai')
+  })
+
+  it('preserves open form state when an org change only tightens resource caps', async () => {
+    await renderOpen()
+    const name = nameInput()
+    const input = cpuInput()
+
+    expect(name).toBeTruthy()
+    if (!name) throw new Error('expected name input to be rendered')
+    await act(async () => typeInto(name, 'kept-name'))
+    await act(async () => typeInto(input, '4'))
+    await act(async () => input.dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
+    await flush()
+
+    state.org = makeOrg({ maxCpuPerBox: 2, maxMemoryPerBox: 8, maxDiskPerBox: 10 })
+    await rerenderOpen()
+
+    expect(nameInput()?.value).toBe('kept-name')
+    expect(document.querySelectorAll<HTMLInputElement>('input[aria-label="value"]').length).toBe(3)
+    expect(cpuInput().value).toBe('2')
+    expect(document.body.textContent).toMatch(/CPU\s*2\s*vCPU/)
   })
 
   it('caps each of the three resource fields independently against its own max', async () => {

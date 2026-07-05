@@ -13,7 +13,7 @@ import { handleApiError } from '@/lib/error-handling'
 import { cn } from '@/lib/utils'
 import type { Box } from '@boxlite-ai/api-client'
 import { ChevronDown, Plus } from '@/components/ui/icon'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { generatePath, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 
@@ -200,6 +200,7 @@ export const CreateBoxDialog = ({
 }) => {
   const navigate = useNavigate()
   const [internalOpen, setInternalOpen] = useState(false)
+  const wasOpenRef = useRef(false)
   const open = controlledOpen ?? internalOpen
   const setOpen = onOpenChange ?? setInternalOpen
 
@@ -234,17 +235,37 @@ export const CreateBoxDialog = ({
   }
 
   useEffect(() => {
-    if (open) {
-      setName('')
-      setImageRef(defaultImage.ref)
-      setCpu(initialCpu)
-      setMemory(initialMemory)
-      setDisk(initialDisk)
-      setAdvancedOpen(false)
-      setSubmitting(false)
-      setCapped({ cpu: false, memory: false, disk: false })
-    }
+    const wasOpen = wasOpenRef.current
+    wasOpenRef.current = open
+    if (!open || wasOpen) return
+
+    setName('')
+    setImageRef(defaultImage.ref)
+    setCpu(initialCpu)
+    setMemory(initialMemory)
+    setDisk(initialDisk)
+    setAdvancedOpen(false)
+    setSubmitting(false)
+    setCapped({ cpu: false, memory: false, disk: false })
   }, [open, defaultImage.ref, initialCpu, initialMemory, initialDisk])
+
+  useEffect(() => {
+    if (!open) return
+
+    const nextCpu = limits.cpu == null ? cpu : Math.min(cpu, limits.cpu)
+    const nextMemory = limits.memory == null ? memory : Math.min(memory, limits.memory)
+    const nextDisk = limits.disk == null ? disk : Math.min(disk, limits.disk)
+
+    if (nextCpu !== cpu) setCpu(nextCpu)
+    if (nextMemory !== memory) setMemory(nextMemory)
+    if (nextDisk !== disk) setDisk(nextDisk)
+
+    setCapped((current) => ({
+      cpu: limits.cpu != null && (nextCpu !== cpu || (current.cpu && nextCpu >= limits.cpu)),
+      memory: limits.memory != null && (nextMemory !== memory || (current.memory && nextMemory >= limits.memory)),
+      disk: limits.disk != null && (nextDisk !== disk || (current.disk && nextDisk >= limits.disk)),
+    }))
+  }, [open, cpu, memory, disk, limits.cpu, limits.memory, limits.disk])
 
   const selectedImage = SUPPORTED_BOX_IMAGES.find((i) => i.ref === imageRef) ?? defaultImage
   const nameValid = !name || NAME_REGEX.test(name)
