@@ -54,3 +54,9 @@ pub mod mount_tags {
     /// Tag for shared container directory (contains overlayfs/ and rootfs/)
     pub const SHARED: &str = "BoxLiteShared";
 }
+
+/// File transfer constants
+pub mod files {
+    /// Maximum tar/archive payload accepted by host REST upload/import and guest gRPC upload.
+    pub const MAX_UPLOAD_BYTES: u64 = 512 * 1024 * 1024;
+}

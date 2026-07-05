@@ -102,6 +102,7 @@ test\:changed\:rust:
 	@$(MAKE) test:integration:rust
 
 test\:changed\:cli:
+	@$(MAKE) test:unit:cli
 	@$(MAKE) test:integration:cli
 
 test\:changed\:ffi:
@@ -167,10 +168,10 @@ test\:stress:
 	@echo ""
 	@echo "✅ Stress test matrix passed"
 
-# Core unit suites: Rust unit + FFI unit.
+# Core unit suites: Rust unit + CLI unit + FFI unit.
 test\:unit\:core:
-	@echo "── Core unit suites (rust, ffi) ──"
-	$(call run_suites,test:unit:rust test:unit:ffi)
+	@echo "── Core unit suites (rust, cli, ffi) ──"
+	$(call run_suites,test:unit:rust test:unit:cli test:unit:ffi)
 
 # Core integration suites: Rust integration + CLI integration.
 test\:integration\:core:
@@ -205,6 +206,15 @@ test\:unit\:rust:
 		cargo test -p boxlite-shared --lib -- --test-threads=1 $(CARGOTEST_FILTER) || rc=$$?; \
 	fi; \
 	exit $$rc
+
+# CLI unit tests (binary crate source tests).
+test\:unit\:cli:
+	@echo "🧪 Running CLI unit tests..."
+	@if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run --no-tests=warn -p boxlite-cli --bins $(NEXTEST_FILTER); \
+	else \
+		cargo test -p boxlite-cli --bins -- --test-threads=1 $(CARGOTEST_FILTER); \
+	fi
 
 # Pre-warm Rust integration test image cache (internal helper, still callable).
 test\:warm-cache\:rust: $(if $(SETUP_DONE),,runtime\:debug)

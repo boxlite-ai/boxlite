@@ -17,7 +17,7 @@ use tonic::{Request, Response, Status, Streaming};
 use tracing::info;
 
 const CHUNK_SIZE: usize = 1 << 20; // 1 MiB
-const MAX_UPLOAD_BYTES: u64 = 512 * 1024 * 1024; // 512 MiB safety cap
+const MAX_UPLOAD_BYTES: u64 = boxlite_shared::constants::files::MAX_UPLOAD_BYTES;
 
 #[tonic::async_trait]
 impl Files for GuestServer {

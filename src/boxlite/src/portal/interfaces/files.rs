@@ -2,6 +2,9 @@
 //!
 //! Provides tar-based upload/download to the guest container rootfs.
 
+use std::io;
+use std::sync::{Arc, Mutex};
+
 use boxlite_shared::{BoxliteError, BoxliteResult, DownloadRequest, FilesClient, UploadChunk};
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -31,51 +34,31 @@ impl FilesInterface {
         mkdir_parents: bool,
         overwrite: bool,
     ) -> BoxliteResult<()> {
-        let dest = dest_path.to_string();
-        let cid = container_id.unwrap_or_default().to_string();
-
-        // Read entire tar file and build chunks
-        // Note: For very large files, consider streaming with async_stream crate
-        let mut file = File::open(tar_path)
+        let file = File::open(tar_path)
             .await
             .map_err(|e| BoxliteError::Storage(format!("Failed to open tar file: {}", e)))?;
 
-        let mut chunks = Vec::new();
-        let mut buf = vec![0u8; CHUNK_SIZE];
-        let mut first = true;
+        let read_error = Arc::new(Mutex::new(None));
+        let outbound = upload_chunks(
+            file,
+            UploadChunkFields {
+                dest_path: dest_path.to_string(),
+                container_id: container_id.unwrap_or_default().to_string(),
+                mkdir_parents,
+                overwrite,
+            },
+            Arc::clone(&read_error),
+        );
 
-        loop {
-            match file.read(&mut buf).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    let chunk = UploadChunk {
-                        dest_path: if first { dest.clone() } else { String::new() },
-                        container_id: cid.clone(),
-                        data: buf[..n].to_vec(),
-                        mkdir_parents,
-                        overwrite,
-                    };
-                    first = false;
-                    chunks.push(chunk);
-                }
-                Err(e) => {
-                    return Err(BoxliteError::Storage(format!(
-                        "Failed to read tar file: {}",
-                        e
-                    )));
-                }
-            }
+        let upload_result = self.client.upload(outbound).await;
+
+        if let Some(e) = read_error.lock().expect("read error mutex poisoned").take() {
+            return Err(BoxliteError::Storage(format!(
+                "Failed to read tar file during upload: {e}"
+            )));
         }
 
-        // Use futures::stream::iter for the upload stream
-        let stream = futures::stream::iter(chunks);
-
-        let response = self
-            .client
-            .upload(stream)
-            .await
-            .map_err(map_tonic_err)?
-            .into_inner();
+        let response = upload_result.map_err(map_tonic_err)?.into_inner();
 
         if response.success {
             Ok(())
@@ -134,6 +117,119 @@ impl FilesInterface {
     }
 }
 
+struct UploadChunkFields {
+    dest_path: String,
+    container_id: String,
+    mkdir_parents: bool,
+    overwrite: bool,
+}
+
+fn upload_chunks(
+    mut file: File,
+    fields: UploadChunkFields,
+    read_error: Arc<Mutex<Option<io::Error>>>,
+) -> impl futures::Stream<Item = UploadChunk> + Send + 'static {
+    async_stream::stream! {
+        let mut buf = vec![0u8; CHUNK_SIZE];
+        let mut is_first_chunk = true;
+
+        loop {
+            let n = match file.read(&mut buf).await {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(e) => {
+                    *read_error.lock().expect("read error mutex poisoned") = Some(e);
+                    break;
+                }
+            };
+
+            yield UploadChunk {
+                dest_path: if is_first_chunk {
+                    fields.dest_path.clone()
+                } else {
+                    String::new()
+                },
+                container_id: fields.container_id.clone(),
+                data: buf[..n].to_vec(),
+                mkdir_parents: fields.mkdir_parents,
+                overwrite: fields.overwrite,
+            };
+
+            is_first_chunk = false;
+        }
+    }
+}
+
 fn map_tonic_err(err: tonic::Status) -> BoxliteError {
     BoxliteError::Internal(err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::StreamExt;
+
+    #[tokio::test]
+    async fn upload_chunks_records_source_read_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = File::open(dir.path()).await.unwrap();
+        let read_error = Arc::new(Mutex::new(None));
+        let mut stream = Box::pin(upload_chunks(
+            file,
+            UploadChunkFields {
+                dest_path: "/workspace".to_string(),
+                container_id: "container-1".to_string(),
+                mkdir_parents: true,
+                overwrite: false,
+            },
+            Arc::clone(&read_error),
+        ));
+
+        assert!(stream.next().await.is_none());
+        assert!(
+            read_error
+                .lock()
+                .expect("read error mutex poisoned")
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_chunks_streams_file_with_metadata_only_on_first_chunk() {
+        let dir = tempfile::tempdir().unwrap();
+        let tar_path = dir.path().join("payload.tar");
+        let payload = vec![b'a'; CHUNK_SIZE + 7];
+        tokio::fs::write(&tar_path, &payload).await.unwrap();
+
+        let file = File::open(&tar_path).await.unwrap();
+        let mut stream = Box::pin(upload_chunks(
+            file,
+            UploadChunkFields {
+                dest_path: "/workspace".to_string(),
+                container_id: "container-1".to_string(),
+                mkdir_parents: true,
+                overwrite: false,
+            },
+            Arc::new(Mutex::new(None)),
+        ));
+
+        let mut received = Vec::new();
+        let mut chunk_index = 0;
+        while let Some(chunk) = stream.next().await {
+            if chunk_index == 0 {
+                assert_eq!(chunk.dest_path, "/workspace");
+                assert_eq!(chunk.container_id, "container-1");
+                assert!(chunk.mkdir_parents);
+                assert!(!chunk.overwrite);
+            } else {
+                assert_eq!(chunk.dest_path, "");
+                assert_eq!(chunk.container_id, "container-1");
+            }
+            received.extend_from_slice(&chunk.data);
+            chunk_index += 1;
+        }
+
+        assert!(chunk_index > 0);
+        assert_eq!(received, payload);
+    }
 }

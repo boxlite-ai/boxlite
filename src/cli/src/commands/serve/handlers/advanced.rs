@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use axum::Json;
-use axum::body::Bytes;
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -14,6 +14,7 @@ use super::super::types::{CloneRequest, ImportQuery};
 use super::super::{
     AppState, box_info_to_response, error_from_boxlite, error_response, get_or_fetch_box,
 };
+use super::payload::{BodyWriteError, stream_file_body, write_body_to_file};
 
 pub(in crate::commands::serve) async fn clone_box(
     State(state): State<Arc<AppState>>,
@@ -67,8 +68,8 @@ pub(in crate::commands::serve) async fn export_box(
         .await
     {
         Ok(archive) => {
-            let bytes = match std::fs::read(archive.path()) {
-                Ok(b) => b,
+            let body = match stream_file_body(archive.path(), vec![temp_dir]).await {
+                Ok(body) => body,
                 Err(e) => {
                     return error_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -82,7 +83,7 @@ pub(in crate::commands::serve) async fn export_box(
             Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/octet-stream")
-                .body(axum::body::Body::from(bytes))
+                .body(body)
                 .unwrap()
         }
         Err(e) => error_from_boxlite(&e),
@@ -92,7 +93,7 @@ pub(in crate::commands::serve) async fn export_box(
 pub(in crate::commands::serve) async fn import_box(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ImportQuery>,
-    body: Bytes,
+    body: Body,
 ) -> Response {
     let temp_dir = match tempfile::tempdir() {
         Ok(d) => d,
@@ -107,13 +108,21 @@ pub(in crate::commands::serve) async fn import_box(
     };
 
     let archive_path = temp_dir.path().join("import.boxlite");
-    if let Err(e) = std::fs::write(&archive_path, &body) {
-        return error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to write archive: {e}"),
-            "InternalError",
-            "internal",
-        );
+    if let Err(e) = write_body_to_file(body, &archive_path).await {
+        return match e {
+            BodyWriteError::BodyTooLarge => error_response(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "request body too large".to_string(),
+                "PayloadTooLargeError",
+                "payload_too_large",
+            ),
+            BodyWriteError::Io(e) => error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to write archive: {e}"),
+                "InternalError",
+                "internal",
+            ),
+        };
     }
 
     let archive = BoxArchive::new(archive_path);
