@@ -48,14 +48,14 @@ describe('resolvePerBoxLimits', () => {
     expect(limits).toEqual({ cpu: 4, memory: 8, disk: 10 })
   })
 
-  it('falls back to the built-in ceiling when a max is unset (<= 0) — backend treats <=0 as unlimited', () => {
+  it('leaves a resource uncapped when a max is unset (<= 0) — backend treats <=0 as unlimited', () => {
     const limits = resolvePerBoxLimits(makeOrg({ maxCpuPerBox: 0, maxMemoryPerBox: undefined, maxDiskPerBox: -1 }))
-    expect(limits).toEqual({ cpu: 8, memory: 32, disk: 50 })
+    expect(limits).toEqual({ cpu: undefined, memory: undefined, disk: undefined })
   })
 
-  it('falls back entirely when no organization is loaded', () => {
-    expect(resolvePerBoxLimits(null)).toEqual({ cpu: 8, memory: 32, disk: 50 })
-    expect(resolvePerBoxLimits(undefined)).toEqual({ cpu: 8, memory: 32, disk: 50 })
+  it('leaves resources uncapped when no organization is loaded', () => {
+    expect(resolvePerBoxLimits(null)).toEqual({ cpu: undefined, memory: undefined, disk: undefined })
+    expect(resolvePerBoxLimits(undefined)).toEqual({ cpu: undefined, memory: undefined, disk: undefined })
   })
 })
 
@@ -101,7 +101,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
     await act(async () => input.dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
     await flush()
 
-    // auto-corrected to the org max (4), NOT the built-in ceiling (8)
+    // auto-corrected to the org max (4), not any dashboard-local ceiling.
     expect(input.value).toBe('4')
     // the amber cap note names the capped resource + its max and the support mailbox
     expect(document.body.textContent).toContain('support@boxlite.ai')
@@ -133,6 +133,19 @@ describe('CreateBoxDialog per-org resource cap', () => {
     expect(input.value).toBe('4')
     expect(document.body.textContent).toContain('support@boxlite.ai')
     expect(document.body.textContent).toMatch(/CPU\s*4\s*vCPU/)
+  })
+
+  it('does not pin the input to a dashboard-local ceiling when the org max is unset', async () => {
+    state.org = makeOrg({ maxCpuPerBox: 0, maxMemoryPerBox: undefined, maxDiskPerBox: -1 })
+    await renderOpen()
+    const input = cpuInput()
+
+    await act(async () => typeInto(input, '123123'))
+    await act(async () => input.dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
+    await flush()
+
+    expect(input.value).toBe('123123')
+    expect(document.body.textContent).not.toContain('support@boxlite.ai')
   })
 
   it('caps each of the three resource fields independently against its own max', async () => {

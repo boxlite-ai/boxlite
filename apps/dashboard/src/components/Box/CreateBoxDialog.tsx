@@ -26,9 +26,6 @@ const SUPPORTED_BOX_IMAGES = [
 ] as const
 
 const DEFAULTS = { cpu: 1, memory: 1, disk: 10 }
-// Built-in ceilings, used only as a fallback when the organization does not
-// carry a per-box limit (see resolvePerBoxLimits).
-const LIMITS = { cpu: 8, memory: 32, disk: 50 }
 
 const SUPPORT_EMAIL = 'support@boxlite.ai'
 
@@ -40,15 +37,14 @@ type OrgPerBoxLimits = {
 
 // The organization carries per-box ceilings (maxCpuPerBox / maxMemoryPerBox /
 // maxDiskPerBox) and the backend rejects a create that exceeds them. A value
-// <= 0 means "unset / unlimited" there, so we fall back to the built-in ceiling
-// to keep the stepper bounded instead of exposing an unlimited input.
+// <= 0 means "unset / unlimited" there, so the dashboard leaves the stepper
+// uncapped instead of inventing a local ceiling.
 export function resolvePerBoxLimits(org: OrgPerBoxLimits | null | undefined) {
-  const pick = (value: number | null | undefined, fallback: number) =>
-    typeof value === 'number' && value > 0 ? value : fallback
+  const pick = (value: number | null | undefined) => (typeof value === 'number' && value > 0 ? value : undefined)
   return {
-    cpu: pick(org?.maxCpuPerBox, LIMITS.cpu),
-    memory: pick(org?.maxMemoryPerBox, LIMITS.memory),
-    disk: pick(org?.maxDiskPerBox, LIMITS.disk),
+    cpu: pick(org?.maxCpuPerBox),
+    memory: pick(org?.maxMemoryPerBox),
+    disk: pick(org?.maxDiskPerBox),
   }
 }
 
@@ -156,8 +152,8 @@ function ResourceField({
   unit: string
   value: number
   onChange: (v: number) => void
-  max: number
-  onExceed: () => void
+  max?: number
+  onExceed?: () => void
 }) {
   return (
     <div className="flex flex-col gap-[9px]">
@@ -216,10 +212,10 @@ export const CreateBoxDialog = ({
 
   // A DEFAULT value can exceed a stricter per-org cap (e.g. DEFAULTS.disk=10
   // vs an org's maxDiskPerBox=3), which would otherwise send an over-limit
-  // create the moment the dialog opens. Clamp on read.
-  const initialCpu = Math.min(DEFAULTS.cpu, limits.cpu)
-  const initialMemory = Math.min(DEFAULTS.memory, limits.memory)
-  const initialDisk = Math.min(DEFAULTS.disk, limits.disk)
+  // create the moment the dialog opens. Clamp only when the org provides a cap.
+  const initialCpu = limits.cpu == null ? DEFAULTS.cpu : Math.min(DEFAULTS.cpu, limits.cpu)
+  const initialMemory = limits.memory == null ? DEFAULTS.memory : Math.min(DEFAULTS.memory, limits.memory)
+  const initialDisk = limits.disk == null ? DEFAULTS.disk : Math.min(DEFAULTS.disk, limits.disk)
 
   const [name, setName] = useState('')
   const [imageRef, setImageRef] = useState<string>(defaultImage.ref)
@@ -233,7 +229,8 @@ export const CreateBoxDialog = ({
   // Clear a field's "hit the cap" hint once its value is back under the max.
   const changeResource = (key: 'cpu' | 'memory' | 'disk', set: (v: number) => void) => (v: number) => {
     set(v)
-    if (v < limits[key]) setCapped((c) => (c[key] ? { ...c, [key]: false } : c))
+    const limit = limits[key]
+    if (limit != null && v < limit) setCapped((c) => (c[key] ? { ...c, [key]: false } : c))
   }
 
   useEffect(() => {
@@ -392,9 +389,9 @@ export const CreateBoxDialog = ({
                 </div>
                 <CappedResourcesNote
                   items={[
-                    capped.cpu && { label: 'CPU', unit: 'vCPU', max: limits.cpu },
-                    capped.memory && { label: 'Memory', unit: 'GiB', max: limits.memory },
-                    capped.disk && { label: 'Disk', unit: 'GiB', max: limits.disk },
+                    capped.cpu && limits.cpu != null && { label: 'CPU', unit: 'vCPU', max: limits.cpu },
+                    capped.memory && limits.memory != null && { label: 'Memory', unit: 'GiB', max: limits.memory },
+                    capped.disk && limits.disk != null && { label: 'Disk', unit: 'GiB', max: limits.disk },
                   ].filter((r): r is { label: string; unit: string; max: number } => Boolean(r))}
                 />
               </div>
