@@ -40,14 +40,15 @@ command="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""')"
 # segment (after &&, ||, ;, |, &, $(, (, `). Same shape as the git matcher in
 # preflight-commit-push.sh so chained invocations are caught.
 #
-# Scan only the FIRST physical line of the command. Multi-line commands almost
-# always put the gh invocation on the first line; this excludes heredoc bodies
-# (e.g. a `git commit -m "$(cat <<EOF ... gh pr create ... EOF)"` where the
-# trigger phrase legitimately appears in commit-message prose) from matching.
-# Trade-off: a chained `foo \\\n  && gh pr create` would no longer gate, but
-# that form is rare for gh invocations.
-first_line="${command%%$'\n'*}"
-work="${first_line#"${first_line%%[![:space:]]*}"}"
+# Treat a newline as a command separator (same as `;`), so a `gh pr create` at the
+# start of a later line (`cd foo\ngh pr create ...`) is caught. An earlier version
+# scanned only the first physical line to dodge heredoc bodies (e.g. `gh pr create`
+# appearing in commit-message prose), but that left the newline bypass OPEN — a real
+# `gh pr create` on line 2 slipped past unaudited. Closing the bypass wins: the cost
+# is that a `gh pr create|edit|ready` token on its own line inside a heredoc/message
+# body may falsely gate an unrelated command (fails CLOSED — safe), which is rare.
+normalized="${command//$'\n'/;}"
+work="${normalized#"${normalized%%[![:space:]]*}"}"
 if [[ "$work" =~ (^|[[:space:]]*(\&\&|\|\||;|\||\&|\$\(|\(|\`)[[:space:]]*)([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)*gh[[:space:]]+pr[[:space:]]+(create|edit|ready)([[:space:]]|$) ]]; then
   subcmd="${BASH_REMATCH[4]}"
 else

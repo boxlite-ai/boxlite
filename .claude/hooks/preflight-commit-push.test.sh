@@ -75,6 +75,10 @@ run "chained with ;"                    "echo done; $GC"              "deny"
 run "env var prefix"                    "FOO=bar $GC -m x"            "deny"
 run "command substitution"              "out=\$($GC -m foo)"          "deny"
 run "push after &&"                     "cat x && $GP origin main"    "deny"
+# Newline-before-verb: multi-line Bash where the verb starts line 2. Before the
+# newline-as-separator fix these SILENTLY PASSED THROUGH (the bypass); must deny now.
+run "newline before commit"             $'cd x\n'"$GC -m wip"          "deny"
+run "newline before push"               $'cd x\n'"$GP origin main"     "deny"
 
 echo
 echo "## Gate logic: audit file states"

@@ -626,45 +626,6 @@ paths:
       tags:
         - box
   /boxes/{boxId}/network-settings:
-    get:
-      description: Get box network settings
-      operationId: GetNetworkSettings
-      parameters:
-        - description: Box ID
-          in: path
-          name: boxId
-          required: true
-          type: string
-      produces:
-        - application/json
-      responses:
-        '200':
-          description: Network settings
-          schema:
-            $ref: '#/definitions/UpdateNetworkSettingsDTO'
-        '400':
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        '401':
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        '404':
-          description: Not Found
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        '409':
-          description: Conflict
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        '500':
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-      summary: Get box network settings
-      tags:
-        - box
     post:
       description: Update box network settings
       operationId: UpdateNetworkSettings

@@ -7,7 +7,6 @@ package errors
 import (
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -65,10 +64,6 @@ func (e *NotFoundError) Error() string {
 	return e.Message
 }
 
-func IsNotFoundError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "not found")
-}
-
 type InvalidBodyRequestError struct {
 	Message string
 }
@@ -81,10 +76,6 @@ func NewInvalidBodyRequestError(err error) error {
 	return &InvalidBodyRequestError{
 		Message: fmt.Sprintf("invalid body request: %s", err.Error()),
 	}
-}
-
-func IsInvalidBodyRequestError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "invalid body request")
 }
 
 type UnauthorizedError struct {
@@ -101,26 +92,12 @@ func NewUnauthorizedError(err error) error {
 	}
 }
 
-func IsUnauthorizedError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "unauthorized")
-}
-
 type ConflictError struct {
 	Message string
 }
 
 func (e *ConflictError) Error() string {
 	return e.Message
-}
-
-func NewConflictError(err error) error {
-	return &ConflictError{
-		Message: fmt.Sprintf("conflict: %s", err.Error()),
-	}
-}
-
-func IsConflictError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "conflict")
 }
 
 type BadRequestError struct {
@@ -137,26 +114,12 @@ func NewBadRequestError(err error) error {
 	}
 }
 
-func IsBadRequestError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "bad request")
-}
-
 type ForbiddenError struct {
 	Message string
 }
 
 func (e *ForbiddenError) Error() string {
 	return e.Message
-}
-
-func NewForbiddenError(err error) error {
-	return &ForbiddenError{
-		Message: fmt.Sprintf("forbidden: %s", err.Error()),
-	}
-}
-
-func IsForbiddenError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "forbidden")
 }
 
 type RequestTimeoutError struct {
@@ -167,32 +130,12 @@ func (e *RequestTimeoutError) Error() string {
 	return e.Message
 }
 
-func NewRequestTimeoutError(err error) error {
-	return &RequestTimeoutError{
-		Message: fmt.Sprintf("request timeout: %s", err.Error()),
-	}
-}
-
-func IsRequestTimeoutError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "request timeout")
-}
-
 type GoneError struct {
 	Message string
 }
 
 func (e *GoneError) Error() string {
 	return e.Message
-}
-
-func NewGoneError(err error) error {
-	return &GoneError{
-		Message: fmt.Sprintf("gone: %s", err.Error()),
-	}
-}
-
-func IsGoneError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "gone")
 }
 
 type InternalServerError struct {
@@ -209,20 +152,10 @@ func NewInternalServerError(err error) error {
 	}
 }
 
-func IsInternalServerError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "internal server error")
-}
-
 type UnprocessableEntityError struct {
 	Message string
 }
 
 func (e *UnprocessableEntityError) Error() string {
 	return e.Message
-}
-
-func NewUnprocessableEntityError(err error) error {
-	return &UnprocessableEntityError{
-		Message: fmt.Sprintf("unprocessable entity: %s", err.Error()),
-	}
 }
