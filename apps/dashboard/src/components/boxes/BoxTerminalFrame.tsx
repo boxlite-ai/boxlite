@@ -35,12 +35,17 @@ export function BoxTerminalFrame({ sessionUrl, fullscreenHref, className }: BoxT
   }, [])
 
   return (
-    <div className={cn('relative min-h-0 bg-black', className)}>
+    <div className={cn('relative min-h-0 bg-[#0c0e12]', className)}>
+      {/* An 8px border — colored to match the terminal bg — keeps the content
+          off the edge without touching the layout. The iframe must keep
+          inset-0 + h/w-full (it's a replaced element, so left/right insets
+          alone don't stretch it), and its border shrinks the inner viewport so
+          xterm's FitAddon reflows columns to the padded area. */}
       <iframe
         title="Box terminal"
         src={iframeSrc}
         onLoad={handleLoad}
-        className="absolute inset-0 h-full w-full border-0 bg-black"
+        className="absolute inset-0 h-full w-full border-8 border-[#0c0e12]"
       />
       {/* Native Cmd/Ctrl+V pastes into the terminal, so no dedicated paste button. */}
       {fullscreenHref && (

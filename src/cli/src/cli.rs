@@ -36,6 +36,27 @@ where
     }
 }
 
+/// TERM to inject for an interactive (tty) exec so color-aware programs inside
+/// the box light up. The box VM ships no TERM by default, which makes git,
+/// `ls`, and shell prompts render monochrome even though the CLI's own terminal
+/// can display color.
+///
+/// Returns `None` when tty is off, or when the user already supplied their own
+/// TERM (via `-e TERM=...`). Falls back to `xterm-256color` when the host has
+/// no TERM to inherit.
+fn interactive_term(tty: bool, user_env: &[String], host_term: Option<String>) -> Option<String> {
+    if !tty {
+        return None;
+    }
+    let user_specified_term = user_env
+        .iter()
+        .any(|e| e == "TERM" || e.starts_with("TERM="));
+    if user_specified_term {
+        return None;
+    }
+    Some(host_term.unwrap_or_else(|| "xterm-256color".to_string()))
+}
+
 // ============================================================================
 // CLI Definition
 // ============================================================================
@@ -379,6 +400,13 @@ impl ProcessFlags {
 
         if self.tty {
             cmd = cmd.tty(true);
+        }
+
+        // A tty exec renders in an ANSI-capable terminal, but the box VM ships
+        // no TERM, so color-aware tools stay monochrome. Inject one (inheriting
+        // the host's, or xterm-256color) unless the user set TERM explicitly.
+        if let Some(term) = interactive_term(self.tty, &self.env, std::env::var("TERM").ok()) {
+            cmd = cmd.env("TERM", term);
         }
 
         if let Some(ref user) = self.user {
@@ -811,6 +839,50 @@ mod tests {
         );
 
         assert!(!opts.env.iter().any(|(k, _)| k == "NON_EXISTENT_VAR"));
+    }
+
+    #[test]
+    fn interactive_term_none_when_not_tty() {
+        // Non-tty exec is typically piped; color-aware tools suppress color on
+        // their own (isatty), so there is nothing to unlock by setting TERM.
+        assert_eq!(
+            interactive_term(false, &[], Some("xterm-256color".to_string())),
+            None
+        );
+    }
+
+    #[test]
+    fn interactive_term_inherits_host_term_when_tty() {
+        // The CLI renders in the host terminal, so the box should match the
+        // host's terminal type when one is known.
+        assert_eq!(
+            interactive_term(true, &[], Some("screen-256color".to_string())),
+            Some("screen-256color".to_string())
+        );
+    }
+
+    #[test]
+    fn interactive_term_falls_back_when_host_unset() {
+        assert_eq!(
+            interactive_term(true, &[], None),
+            Some("xterm-256color".to_string())
+        );
+    }
+
+    #[test]
+    fn interactive_term_respects_user_provided_term() {
+        // Explicit `-e TERM=dumb` must win — never override the user.
+        let explicit = vec!["TERM=dumb".to_string()];
+        assert_eq!(
+            interactive_term(true, &explicit, Some("xterm-256color".to_string())),
+            None
+        );
+        // Bare `-e TERM` (inherit-from-host request) also counts as specified.
+        let bare = vec!["TERM".to_string()];
+        assert_eq!(
+            interactive_term(true, &bare, Some("xterm-256color".to_string())),
+            None
+        );
     }
 
     #[test]
