@@ -18,6 +18,7 @@ package shellutil
 // execs the best available shell as a login shell:
 //
 //	cd "${HOME:-/root}" 2>/dev/null || cd /;
+//	export TERM="${TERM:-xterm-256color}";
 //	exec $(command -v bash || command -v ash || command -v sh) -l
 //
 // Why this shape:
@@ -39,6 +40,11 @@ package shellutil
 //   - `-l` makes it a *login* shell: /etc/profile and ~/.profile are
 //     sourced, PATH is populated. Pairs with the cd above to match what
 //     `ssh user@host` users expect when they land at a prompt.
+//   - `export TERM="${TERM:-xterm-256color}"` gives color-aware programs a
+//     terminal type to key off. The box VM ships no TERM, so without it
+//     git/ls/less/prompts render monochrome even though the client (xterm.js
+//     or the SSH terminal) can display color. The `:-` fallback preserves a
+//     real SSH client's own TERM when one is already present.
 //
 // This follows the kubectl exec convention for unknown container images
 // (see https://kubernetes.io/docs/reference/kubectl/generated/kubectl_exec/),
@@ -52,6 +58,7 @@ package shellutil
 func DefaultInteractiveShell() (command string, args []string) {
 	return "/bin/sh", []string{"-c",
 		`cd "${HOME:-/root}" 2>/dev/null || cd /; ` +
+			`export TERM="${TERM:-xterm-256color}"; ` +
 			`exec $(command -v bash || command -v ash || command -v sh) -l`,
 	}
 }
