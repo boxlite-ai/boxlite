@@ -42,7 +42,7 @@ package shellutil
 //   - The generated rc sources /etc/profile, ~/.profile, and (for bash)
 //     ~/.bashrc before adding BoxLite's fallback aliases. This keeps normal
 //     image/user initialization while filling the common "minimal image has
-//     no colored ls alias" gap.
+//     no colored ls alias" gap. Existing user aliases win.
 //   - `exec` replaces the launcher sh in-place — no extra PID hangs around
 //     and the chosen shell becomes pid 1 of the SSH/terminal session.
 //   - `export TERM="${TERM:-xterm-256color}"` gives color-aware programs a
@@ -52,7 +52,8 @@ package shellutil
 //     real SSH client's own TERM when one is already present.
 //   - `ls` is different from tools such as Claude or git: GNU ls does not emit
 //     color just because TERM is set. It needs `--color=auto` (usually from a
-//     distro shell alias), so the rc adds that alias only after probing support.
+//     distro shell alias), so the rc adds that alias only after probing support
+//     and only when the user/image did not already define one.
 //
 // This follows the kubectl exec convention for unknown container images
 // (see https://kubernetes.io/docs/reference/kubectl/generated/kubectl_exec/),
@@ -73,11 +74,18 @@ cat > "$rc" <<'BOXLITE_RC'
 [ -r /etc/profile ] && . /etc/profile
 [ -r "$HOME/.profile" ] && . "$HOME/.profile"
 [ -n "$BASH_VERSION" ] && [ -r "$HOME/.bashrc" ] && . "$HOME/.bashrc"
-if command ls --color=auto / >/dev/null 2>&1; then
+if alias ls >/dev/null 2>&1; then
+  :
+elif command ls --color=auto / >/dev/null 2>&1; then
   alias ls='ls --color=auto'
-  alias ll='ls -la --color=auto'
 elif command ls -G / >/dev/null 2>&1; then
   alias ls='ls -G'
+fi
+if alias ll >/dev/null 2>&1; then
+  :
+elif command ls --color=auto / >/dev/null 2>&1; then
+  alias ll='ls -la --color=auto'
+elif command ls -G / >/dev/null 2>&1; then
   alias ll='ls -la -G'
 fi
 BOXLITE_RC
