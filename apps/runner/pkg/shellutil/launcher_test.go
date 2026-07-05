@@ -47,4 +47,10 @@ func TestDefaultInteractiveShellConfiguresLsColor(t *testing.T) {
 	if !strings.Contains(script, "alias ls=") {
 		t.Fatalf("interactive shell launcher must expose a colored ls alias; got: %s", script)
 	}
+	if !strings.Contains(script, "alias ls >/dev/null") {
+		t.Fatalf("interactive shell launcher must preserve an existing ls alias; got: %s", script)
+	}
+	if !strings.Contains(script, "alias ll >/dev/null") {
+		t.Fatalf("interactive shell launcher must preserve an existing ll alias; got: %s", script)
+	}
 }
