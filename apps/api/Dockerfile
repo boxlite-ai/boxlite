@@ -7,16 +7,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends bash curl pytho
   rm -rf /var/lib/apt/lists/*
 RUN npm install -g corepack && corepack enable
 
+# Yarn global cache persisted across builds via a BuildKit cache mount (both installs below)
+ENV YARN_ENABLE_GLOBAL_CACHE=1 YARN_GLOBAL_FOLDER=/root/.yarn
+
 WORKDIR /boxlite/apps
 
 FROM base AS deps
 COPY apps/package.json apps/yarn.lock apps/.yarnrc.yml ./
-RUN yarn install --immutable
+RUN --mount=type=cache,target=/root/.yarn/berry/cache yarn install --immutable
 
 FROM base AS runtime-deps
 ENV NODE_ENV=production
 COPY apps/package.json apps/yarn.lock apps/.yarnrc.yml ./
-RUN yarn workspaces focus --all --production
+RUN --mount=type=cache,target=/root/.yarn/berry/cache yarn workspaces focus --all --production
 
 FROM deps AS build
 COPY apps/nx.json apps/tsconfig.base.json apps/NOTICE ./

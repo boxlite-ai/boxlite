@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM node:22-alpine AS build
 
 ENV CI=true
@@ -12,9 +13,10 @@ RUN apk add --no-cache git build-base python3
 
 WORKDIR /boxlite/apps
 
-# Yarn caching layer
+# Yarn caching layer — global cache persisted across builds via a BuildKit cache mount
 COPY apps/package.json apps/yarn.lock apps/.yarnrc.yml ./
-RUN yarn install --immutable
+ENV YARN_ENABLE_GLOBAL_CACHE=1 YARN_GLOBAL_FOLDER=/root/.yarn
+RUN --mount=type=cache,target=/root/.yarn/berry/cache yarn install --immutable
 
 # Nx config
 COPY apps/nx.json ./
@@ -28,13 +30,15 @@ RUN head -1 go.work > go.work.tmp && printf '\nuse (\n\t./ssh-gateway\n\t./api-c
 ENV NX_DAEMON=false
 ENV GOWORK=/boxlite/apps/go.work
 
-RUN go -C ssh-gateway mod download && go -C api-client-go mod download
+RUN --mount=type=cache,target=/root/go/pkg/mod \
+    go -C ssh-gateway mod download && go -C api-client-go mod download
 
 # Go source
 COPY apps/ssh-gateway/ ssh-gateway/
 COPY apps/api-client-go/ api-client-go/
 
-RUN yarn nx build ssh-gateway --configuration=production --nxBail=true
+RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/root/go/pkg/mod \
+    yarn nx build ssh-gateway --configuration=production --nxBail=true
 
 FROM alpine:3.18 AS ssh-gateway
 
