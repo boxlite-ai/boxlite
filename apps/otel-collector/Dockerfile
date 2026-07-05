@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM node:22-alpine AS build
 
 ENV CI=true
@@ -12,9 +13,10 @@ RUN apk add --no-cache git build-base python3
 
 WORKDIR /boxlite/apps
 
-# Yarn caching layer
+# Yarn caching layer — global cache persisted across builds via a BuildKit cache mount
 COPY apps/package.json apps/yarn.lock apps/.yarnrc.yml ./
-RUN yarn install --immutable
+ENV YARN_ENABLE_GLOBAL_CACHE=1
+RUN --mount=type=cache,target=/root/.yarn/berry/cache yarn install --immutable
 
 # Nx config
 COPY apps/nx.json ./
@@ -29,7 +31,8 @@ RUN head -1 go.work > go.work.tmp && printf '\nuse (\n\t./otel-collector/exporte
 ENV NX_DAEMON=false
 ENV GOWORK=/boxlite/apps/go.work
 
-RUN go -C otel-collector/exporter mod download && \
+RUN --mount=type=cache,target=/root/go/pkg/mod \
+    go -C otel-collector/exporter mod download && \
     go -C api-client-go mod download && \
     go -C common-go mod download
 
@@ -39,7 +42,8 @@ COPY apps/api-client-go/ api-client-go/
 COPY apps/common-go/ common-go/
 RUN mkdir -p dist/apps/otel-collector
 
-RUN yarn nx build otel-collector --configuration=production --nxBail=true
+RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/root/go/pkg/mod \
+    yarn nx build otel-collector --configuration=production --nxBail=true
 
 FROM alpine:3.18 AS otel-collector
 

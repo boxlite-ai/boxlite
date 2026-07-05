@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM node:22-alpine AS build
 
 ENV CI=true
@@ -12,9 +13,10 @@ RUN apk add --no-cache git build-base python3
 
 WORKDIR /boxlite/apps
 
-# Yarn caching layer
+# Yarn caching layer — global cache persisted across builds via a BuildKit cache mount
 COPY apps/package.json apps/yarn.lock apps/.yarnrc.yml ./
-RUN yarn install --immutable
+ENV YARN_ENABLE_GLOBAL_CACHE=1
+RUN --mount=type=cache,target=/root/.yarn/berry/cache yarn install --immutable
 
 # Nx config
 COPY apps/nx.json ./
@@ -29,7 +31,8 @@ RUN head -1 go.work > go.work.tmp && printf '\nuse (\n\t./proxy\n\t./common-go\n
 ENV NX_DAEMON=false
 ENV GOWORK=/boxlite/apps/go.work
 
-RUN go -C proxy mod download && go -C common-go mod download && go -C api-client-go mod download
+RUN --mount=type=cache,target=/root/go/pkg/mod \
+    go -C proxy mod download && go -C common-go mod download && go -C api-client-go mod download
 
 # Go source
 COPY apps/proxy/ proxy/
@@ -37,7 +40,7 @@ COPY apps/common-go/ common-go/
 COPY apps/api-client-go/ api-client-go/
 
 ARG VERSION=0.0.1
-RUN --mount=type=cache,target=/root/.cache/go-build \
+RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/root/go/pkg/mod \
   VERSION=$VERSION yarn nx build proxy --configuration=production --nxBail=true
 
 FROM alpine:3.18 AS proxy
