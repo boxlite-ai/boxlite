@@ -14,12 +14,16 @@ package shellutil
 // boxlite.Client.StartExecution when the caller wants an interactive shell
 // session and the user has NOT supplied a specific command.
 //
-// Strategy: a POSIX `/bin/sh -c` launcher cd's to the user's home and
-// execs the best available shell as a login shell:
+// Strategy: a POSIX `/bin/sh -c` launcher cd's to the user's home, writes a
+// small interactive-shell rc file, and execs the best available shell:
 //
 //	cd "${HOME:-/root}" 2>/dev/null || cd /;
 //	export TERM="${TERM:-xterm-256color}";
-//	exec $(command -v bash || command -v ash || command -v sh) -l
+//	shell=$(command -v bash || command -v ash || command -v sh);
+//	rc="/tmp/.boxlite-shellrc.$$";
+//	... write profile sourcing + color aliases ...
+//	exec "$shell" --rcfile "$rc" -i    # bash
+//	export ENV="$rc"; exec "$shell" -i # ash/sh
 //
 // Why this shape:
 //
@@ -35,16 +39,20 @@ package shellutil
 //     BoxLite snapshot), bash-only distros, and everything in between.
 //     Trying bash first, then ash, then sh matches user preference for
 //     bash where it exists while falling through cleanly on minimal images.
+//   - The generated rc sources /etc/profile, ~/.profile, and (for bash)
+//     ~/.bashrc before adding BoxLite's fallback aliases. This keeps normal
+//     image/user initialization while filling the common "minimal image has
+//     no colored ls alias" gap.
 //   - `exec` replaces the launcher sh in-place — no extra PID hangs around
 //     and the chosen shell becomes pid 1 of the SSH/terminal session.
-//   - `-l` makes it a *login* shell: /etc/profile and ~/.profile are
-//     sourced, PATH is populated. Pairs with the cd above to match what
-//     `ssh user@host` users expect when they land at a prompt.
 //   - `export TERM="${TERM:-xterm-256color}"` gives color-aware programs a
 //     terminal type to key off. The box VM ships no TERM, so without it
-//     git/ls/less/prompts render monochrome even though the client (xterm.js
+//     git/less/prompts render monochrome even though the client (xterm.js
 //     or the SSH terminal) can display color. The `:-` fallback preserves a
 //     real SSH client's own TERM when one is already present.
+//   - `ls` is different from tools such as Claude or git: GNU ls does not emit
+//     color just because TERM is set. It needs `--color=auto` (usually from a
+//     distro shell alias), so the rc adds that alias only after probing support.
 //
 // This follows the kubectl exec convention for unknown container images
 // (see https://kubernetes.io/docs/reference/kubectl/generated/kubectl_exec/),
@@ -56,10 +64,27 @@ package shellutil
 // `/bin/sh` with `-c <command>` directly — there is no ambiguity to
 // resolve in that case.
 func DefaultInteractiveShell() (command string, args []string) {
-	return "/bin/sh", []string{"-c",
-		`cd "${HOME:-/root}" 2>/dev/null || cd /; ` +
-			`export TERM="${TERM:-xterm-256color}"; ` +
-			`exec $(command -v bash || command -v ash || command -v sh) -l`,
+	return "/bin/sh", []string{"-c", `cd "${HOME:-/root}" 2>/dev/null || cd /
+export TERM="${TERM:-xterm-256color}"
+shell=$(command -v bash || command -v ash || command -v sh)
+rc="/tmp/.boxlite-shellrc.$$"
+umask 077
+cat > "$rc" <<'BOXLITE_RC'
+[ -r /etc/profile ] && . /etc/profile
+[ -r "$HOME/.profile" ] && . "$HOME/.profile"
+[ -n "$BASH_VERSION" ] && [ -r "$HOME/.bashrc" ] && . "$HOME/.bashrc"
+if command ls --color=auto / >/dev/null 2>&1; then
+  alias ls='ls --color=auto'
+  alias ll='ls -la --color=auto'
+elif command ls -G / >/dev/null 2>&1; then
+  alias ls='ls -G'
+  alias ll='ls -la -G'
+fi
+BOXLITE_RC
+case "$shell" in
+  *bash) exec "$shell" --rcfile "$rc" -i ;;
+  *) export ENV="$rc"; exec "$shell" -i ;;
+esac`,
 	}
 }
 
