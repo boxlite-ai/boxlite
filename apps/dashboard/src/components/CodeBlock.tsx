@@ -6,7 +6,7 @@
 
 import { useTheme } from '@/contexts/ThemeContext'
 import { cn } from '@/lib/utils'
-import { Highlight, themes, type PrismTheme, type Token } from 'prism-react-renderer'
+import { Highlight, Prism, themes, type PrismTheme, type Token } from 'prism-react-renderer'
 import type { Key } from 'react'
 import { CopyButton } from './CopyButton'
 
@@ -41,8 +41,73 @@ const oneLight = {
   },
 }
 
+const languageAliases: Record<string, string> = {
+  sh: 'bash',
+  shell: 'bash',
+}
+
+function registerBashGrammar() {
+  const languages = Prism.languages as typeof Prism.languages & {
+    bash?: unknown
+    sh?: unknown
+    shell?: unknown
+  }
+  if (languages.bash) {
+    return
+  }
+
+  languages.bash = {
+    shebang: {
+      pattern: /^#!\s*\/.*/,
+      alias: 'important',
+    },
+    comment: {
+      pattern: /(^|[^"{\\$])#.*/,
+      lookbehind: true,
+    },
+    string: [
+      {
+        pattern: /"(?:\\[\s\S]|\$\([^)]+\)|\$(?!\()|`[^`]+`|[^"\\`$])*"/,
+        greedy: true,
+        inside: {
+          variable: /\$(?:\w+|[#?*!@$]|\{[^}]+\})/,
+        },
+      },
+      {
+        pattern: /'[^']*'/,
+        greedy: true,
+      },
+    ],
+    variable: /\$(?:\w+|[#?*!@$]|\{[^}]+\})/,
+    function: {
+      pattern: /(^|[\s;|&])(?:bash|boxlite|cc|command|curl|date|echo|jq|mv|printf|read|stty|tar)(?=$|[\s;|&])/,
+      lookbehind: true,
+    },
+    keyword: {
+      pattern: /(^|[\s;|&])(?:case|do|done|elif|else|esac|fi|for|function|if|in|select|then|until|while)(?=$|[\s;|&])/,
+      lookbehind: true,
+    },
+    builtin: {
+      pattern: /(^|[\s;|&])(?:export|set|test|trap|type)(?=$|[\s;|&])/,
+      lookbehind: true,
+      alias: 'class-name',
+    },
+    boolean: {
+      pattern: /(^|[\s;|&])(?:false|true)(?=$|[\s;|&])/,
+      lookbehind: true,
+    },
+    operator: /\d?<>|>\||\+=|=[=~]?|!=?|<<[<-]?|[&\d]?>>|\d[<>]&?|[<>][&=]?|&[>&]?|\|[&|]?/,
+    punctuation: /\$?\(\(?|\)\)?|\.\.|[{}[\];\\]/,
+  }
+  languages.sh = languages.bash
+  languages.shell = languages.bash
+}
+
+registerBashGrammar()
+
 const CodeBlock: React.FC<CodeBlockProps> = ({ code, language, showCopy = true, codeAreaClassName, className }) => {
   const { resolvedTheme } = useTheme()
+  const highlightLanguage = languageAliases[language] ?? language
 
   return (
     <div
@@ -54,11 +119,14 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ code, language, showCopy = true, 
       <Highlight
         theme={(resolvedTheme === 'dark' ? oneDark : oneLight) as PrismTheme}
         code={code.trim()}
-        language={language}
+        language={highlightLanguage}
       >
         {({ style, tokens, getLineProps, getTokenProps }: HighlightProps) => (
           <pre
-            className={cn('overflow-x-auto rounded-lg p-4 pr-12 text-[13px] leading-6', codeAreaClassName)}
+            className={cn(
+              'scrollbar-elevated overflow-x-auto rounded-lg p-4 pr-12 text-[13px] leading-6',
+              codeAreaClassName,
+            )}
             style={style}
           >
             {tokens.map((line, i) => {
