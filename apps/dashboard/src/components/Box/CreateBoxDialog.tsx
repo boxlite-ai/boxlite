@@ -13,7 +13,7 @@ import { handleApiError } from '@/lib/error-handling'
 import { cn } from '@/lib/utils'
 import type { Box } from '@boxlite-ai/api-client'
 import { ChevronDown, Plus } from '@/components/ui/icon'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { generatePath, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 
@@ -26,20 +26,44 @@ const SUPPORTED_BOX_IMAGES = [
 ] as const
 
 const DEFAULTS = { cpu: 1, memory: 1, disk: 10 }
-const LIMITS = { cpu: 8, memory: 32, disk: 50 }
 
-// Stepper: − / editable value / + . Accepts any integer ≥ min (the backend takes arbitrary
-// cpu/memory/disk); click +/− or type directly (commits/clamps on blur or Enter).
+const SUPPORT_EMAIL = 'support@boxlite.ai'
+
+type OrgPerBoxLimits = {
+  maxCpuPerBox?: number | null
+  maxMemoryPerBox?: number | null
+  maxDiskPerBox?: number | null
+}
+
+// The organization carries per-box ceilings (maxCpuPerBox / maxMemoryPerBox /
+// maxDiskPerBox) and the backend rejects a create that exceeds them. A value
+// <= 0 means "unset / unlimited" there, so the dashboard leaves the stepper
+// uncapped instead of inventing a local ceiling.
+export function resolvePerBoxLimits(org: OrgPerBoxLimits | null | undefined) {
+  const pick = (value: number | null | undefined) => (typeof value === 'number' && value > 0 ? value : undefined)
+  return {
+    cpu: pick(org?.maxCpuPerBox),
+    memory: pick(org?.maxMemoryPerBox),
+    disk: pick(org?.maxDiskPerBox),
+  }
+}
+
+// Stepper: − / editable value / + . Enforces the ceiling at both edges — the
+// input is pinned at max the moment the typed value would overshoot (so the box
+// never visually holds an over-limit value), and blur/Enter normalizes an empty
+// or shortened entry (parseInt("") → NaN → min).
 function Stepper({
   value,
   onChange,
   min = 1,
   max,
+  onExceed,
 }: {
   value: number
   onChange: (v: number) => void
   min?: number
   max?: number
+  onExceed?: () => void
 }) {
   const [text, setText] = useState(String(value))
   useEffect(() => {
@@ -49,9 +73,32 @@ function Stepper({
     const v = Math.max(min, n)
     return max != null ? Math.min(max, v) : v
   }
+  // Handle a keystroke or paste: clamp the raw text to max so the input can
+  // never display an out-of-range value (defeats the earlier bug where blur
+  // wouldn't re-sync `text` when the clamped result equalled the previous
+  // parent value, leaving a stale typed number in the box).
+  const handleTyped = (raw: string) => {
+    const digits = raw.replace(/[^0-9]/g, '')
+    if (digits === '') {
+      setText('')
+      return
+    }
+    const n = parseInt(digits, 10)
+    if (max != null && n > max) {
+      onExceed?.()
+      setText(String(max))
+      return
+    }
+    setText(digits)
+  }
+  // On blur / Enter, normalize the text and forward the value to the parent.
+  // Text sync is unconditional so `text` stays consistent even when the parent
+  // value doesn't change (e.g., already at max).
   const commit = (raw: string) => {
     const n = parseInt(raw, 10)
-    onChange(Number.isFinite(n) ? clamp(n) : min)
+    const next = Number.isFinite(n) ? clamp(n) : min
+    onChange(next)
+    setText(String(next))
   }
   const btn =
     'flex size-11 flex-none items-center justify-center font-mono text-[15px] text-muted-foreground transition-colors enabled:hover:bg-accent enabled:hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 sm:size-9'
@@ -70,7 +117,7 @@ function Stepper({
         value={text}
         inputMode="numeric"
         aria-label="value"
-        onChange={(e) => setText(e.target.value.replace(/[^0-9]/g, ''))}
+        onChange={(e) => handleTyped(e.target.value)}
         onBlur={(e) => commit(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
@@ -90,6 +137,54 @@ function Stepper({
   )
 }
 
+// One resource control: label + stepper. The over-limit note is rendered once,
+// full-width below the grid (see CappedResourcesNote) rather than cramped under
+// each narrow column.
+function ResourceField({
+  label,
+  unit,
+  value,
+  onChange,
+  max,
+  onExceed,
+}: {
+  label: string
+  unit: string
+  value: number
+  onChange: (v: number) => void
+  max?: number
+  onExceed?: () => void
+}) {
+  return (
+    <div className="flex flex-col gap-[9px]">
+      <div className="font-mono text-[10px] uppercase tracking-[1px]">
+        {label} <span className="text-muted-foreground">({unit})</span>
+      </div>
+      <Stepper value={value} onChange={onChange} max={max} onExceed={onExceed} />
+    </div>
+  )
+}
+
+// A single amber "we adjusted your input to the org limit" note, shown full-width
+// below the resource grid when one or more fields were capped. It is informational
+// (the value was corrected to a valid maximum), not an error — hence the warning
+// color and the still-enabled Create button.
+function CappedResourcesNote({ items }: { items: { label: string; unit: string; max: number }[] }) {
+  if (items.length === 0) return null
+  return (
+    <div className="border-l-2 border-warning/60 bg-warning-background/40 px-3 py-2 font-mono text-[11px] leading-relaxed text-warning-foreground">
+      Adjusted to your organization&apos;s max: {items.map((r) => `${r.label} ${r.max} ${r.unit}`).join(' · ')}. Need
+      more?{' '}
+      <a
+        href={`mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent('Increase box resource limits')}`}
+        className="underline underline-offset-2"
+      >
+        {SUPPORT_EMAIL}
+      </a>
+    </div>
+  )
+}
+
 export const CreateBoxDialog = ({
   className,
   triggerClassName,
@@ -105,6 +200,7 @@ export const CreateBoxDialog = ({
 }) => {
   const navigate = useNavigate()
   const [internalOpen, setInternalOpen] = useState(false)
+  const wasOpenRef = useRef(false)
   const open = controlledOpen ?? internalOpen
   const setOpen = onOpenChange ?? setInternalOpen
 
@@ -112,25 +208,64 @@ export const CreateBoxDialog = ({
   const createBoxMutation = useCreateBoxMutation()
   const defaultImage = SUPPORTED_BOX_IMAGES.find((i) => i.isDefault) ?? SUPPORTED_BOX_IMAGES[0]
 
+  // Per-box ceilings for the current org (backend rejects a create above these).
+  const limits = resolvePerBoxLimits(selectedOrganization)
+
+  // A DEFAULT value can exceed a stricter per-org cap (e.g. DEFAULTS.disk=10
+  // vs an org's maxDiskPerBox=3), which would otherwise send an over-limit
+  // create the moment the dialog opens. Clamp only when the org provides a cap.
+  const initialCpu = limits.cpu == null ? DEFAULTS.cpu : Math.min(DEFAULTS.cpu, limits.cpu)
+  const initialMemory = limits.memory == null ? DEFAULTS.memory : Math.min(DEFAULTS.memory, limits.memory)
+  const initialDisk = limits.disk == null ? DEFAULTS.disk : Math.min(DEFAULTS.disk, limits.disk)
+
   const [name, setName] = useState('')
   const [imageRef, setImageRef] = useState<string>(defaultImage.ref)
-  const [cpu, setCpu] = useState(DEFAULTS.cpu)
-  const [memory, setMemory] = useState(DEFAULTS.memory)
-  const [disk, setDisk] = useState(DEFAULTS.disk)
+  const [cpu, setCpu] = useState(initialCpu)
+  const [memory, setMemory] = useState(initialMemory)
+  const [disk, setDisk] = useState(initialDisk)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [capped, setCapped] = useState({ cpu: false, memory: false, disk: false })
+
+  // Clear a field's "hit the cap" hint once its value is back under the max.
+  const changeResource = (key: 'cpu' | 'memory' | 'disk', set: (v: number) => void) => (v: number) => {
+    set(v)
+    const limit = limits[key]
+    if (limit != null && v < limit) setCapped((c) => (c[key] ? { ...c, [key]: false } : c))
+  }
 
   useEffect(() => {
-    if (open) {
-      setName('')
-      setImageRef(defaultImage.ref)
-      setCpu(DEFAULTS.cpu)
-      setMemory(DEFAULTS.memory)
-      setDisk(DEFAULTS.disk)
-      setAdvancedOpen(false)
-      setSubmitting(false)
-    }
-  }, [open, defaultImage.ref])
+    const wasOpen = wasOpenRef.current
+    wasOpenRef.current = open
+    if (!open || wasOpen) return
+
+    setName('')
+    setImageRef(defaultImage.ref)
+    setCpu(initialCpu)
+    setMemory(initialMemory)
+    setDisk(initialDisk)
+    setAdvancedOpen(false)
+    setSubmitting(false)
+    setCapped({ cpu: false, memory: false, disk: false })
+  }, [open, defaultImage.ref, initialCpu, initialMemory, initialDisk])
+
+  useEffect(() => {
+    if (!open) return
+
+    const nextCpu = limits.cpu == null ? cpu : Math.min(cpu, limits.cpu)
+    const nextMemory = limits.memory == null ? memory : Math.min(memory, limits.memory)
+    const nextDisk = limits.disk == null ? disk : Math.min(disk, limits.disk)
+
+    if (nextCpu !== cpu) setCpu(nextCpu)
+    if (nextMemory !== memory) setMemory(nextMemory)
+    if (nextDisk !== disk) setDisk(nextDisk)
+
+    setCapped((current) => ({
+      cpu: limits.cpu != null && (nextCpu !== cpu || (current.cpu && nextCpu >= limits.cpu)),
+      memory: limits.memory != null && (nextMemory !== memory || (current.memory && nextMemory >= limits.memory)),
+      disk: limits.disk != null && (nextDisk !== disk || (current.disk && nextDisk >= limits.disk)),
+    }))
+  }, [open, cpu, memory, disk, limits.cpu, limits.memory, limits.disk])
 
   const selectedImage = SUPPORTED_BOX_IMAGES.find((i) => i.ref === imageRef) ?? defaultImage
   const nameValid = !name || NAME_REGEX.test(name)
@@ -246,25 +381,40 @@ export const CreateBoxDialog = ({
               )}
             </button>
             {advancedOpen && (
-              <div className="grid grid-cols-1 gap-[14px] sm:grid-cols-3">
-                <div className="flex flex-col gap-[9px]">
-                  <div className="font-mono text-[10px] uppercase tracking-[1px]">
-                    CPU <span className="text-muted-foreground">(vCPU)</span>
-                  </div>
-                  <Stepper value={cpu} onChange={setCpu} max={LIMITS.cpu} />
+              <div className="flex flex-col gap-[14px]">
+                <div className="grid grid-cols-1 gap-[14px] sm:grid-cols-3">
+                  <ResourceField
+                    label="CPU"
+                    unit="vCPU"
+                    value={cpu}
+                    onChange={changeResource('cpu', setCpu)}
+                    max={limits.cpu}
+                    onExceed={() => setCapped((c) => ({ ...c, cpu: true }))}
+                  />
+                  <ResourceField
+                    label="Memory"
+                    unit="GiB"
+                    value={memory}
+                    onChange={changeResource('memory', setMemory)}
+                    max={limits.memory}
+                    onExceed={() => setCapped((c) => ({ ...c, memory: true }))}
+                  />
+                  <ResourceField
+                    label="Disk"
+                    unit="GiB"
+                    value={disk}
+                    onChange={changeResource('disk', setDisk)}
+                    max={limits.disk}
+                    onExceed={() => setCapped((c) => ({ ...c, disk: true }))}
+                  />
                 </div>
-                <div className="flex flex-col gap-[9px]">
-                  <div className="font-mono text-[10px] uppercase tracking-[1px]">
-                    Memory <span className="text-muted-foreground">(GiB)</span>
-                  </div>
-                  <Stepper value={memory} onChange={setMemory} max={LIMITS.memory} />
-                </div>
-                <div className="flex flex-col gap-[9px]">
-                  <div className="font-mono text-[10px] uppercase tracking-[1px]">
-                    Disk <span className="text-muted-foreground">(GiB)</span>
-                  </div>
-                  <Stepper value={disk} onChange={setDisk} max={LIMITS.disk} />
-                </div>
+                <CappedResourcesNote
+                  items={[
+                    capped.cpu && limits.cpu != null && { label: 'CPU', unit: 'vCPU', max: limits.cpu },
+                    capped.memory && limits.memory != null && { label: 'Memory', unit: 'GiB', max: limits.memory },
+                    capped.disk && limits.disk != null && { label: 'Disk', unit: 'GiB', max: limits.disk },
+                  ].filter((r): r is { label: string; unit: string; max: number } => Boolean(r))}
+                />
               </div>
             )}
           </div>
