@@ -12,8 +12,9 @@ import { getBoxRouteId } from '@/lib/box-identity'
 import { handleApiError } from '@/lib/error-handling'
 import { cn } from '@/lib/utils'
 import type { Box } from '@boxlite-ai/api-client'
-import { ChevronDown, Plus } from '@/components/ui/icon'
+import { ChevronDown, Plus, RefreshCw } from '@/components/ui/icon'
 import { useEffect, useRef, useState } from 'react'
+import { useGeneratedBoxName } from './useGeneratedBoxName'
 import { generatePath, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 
@@ -234,10 +235,18 @@ export const CreateBoxDialog = ({
     if (limit != null && v < limit) setCapped((c) => (c[key] ? { ...c, [key]: false } : c))
   }
 
+  const { display: generatedName, isGenerating, generate, reset: resetName } = useGeneratedBoxName(setName)
+
+  // Hand the user a fresh generated name each time the dialog opens (it lands
+  // in the editable field via the reveal animation); clear on close.
   useEffect(() => {
     const wasOpen = wasOpenRef.current
     wasOpenRef.current = open
-    if (!open || wasOpen) return
+    if (!open) {
+      resetName()
+      return
+    }
+    if (wasOpen) return
 
     setName('')
     setImageRef(defaultImage.ref)
@@ -247,7 +256,8 @@ export const CreateBoxDialog = ({
     setAdvancedOpen(false)
     setSubmitting(false)
     setCapped({ cpu: false, memory: false, disk: false })
-  }, [open, defaultImage.ref, initialCpu, initialMemory, initialDisk])
+    generate()
+  }, [open, defaultImage.ref, initialCpu, initialMemory, initialDisk, generate, resetName])
 
   useEffect(() => {
     if (!open) return
@@ -295,7 +305,14 @@ export const CreateBoxDialog = ({
         navigate(generatePath(RoutePath.BOX_DETAILS, { boxId }))
       }
     } catch (error) {
-      handleApiError(error, 'Failed to create box')
+      // Name already taken in this org (client-side generation can collide) —
+      // deal a fresh name into the field so the next click succeeds.
+      if ((error as { response?: { status?: number } })?.response?.status === 409) {
+        toast.error('That name is already taken — here is a fresh one.')
+        generate()
+      } else {
+        handleApiError(error, 'Failed to create box')
+      }
     } finally {
       setSubmitting(false)
     }
@@ -331,13 +348,34 @@ export const CreateBoxDialog = ({
           {/* name */}
           <div className="flex flex-col gap-[9px]">
             <div className="font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground">Name</div>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="my-new-box"
-              aria-invalid={!nameValid}
-              className="w-full border border-border bg-card px-[13px] py-[11px] font-mono text-[13px] text-foreground outline-none focus:border-brand aria-[invalid=true]:border-destructive"
-            />
+            <div
+              className={cn(
+                'flex items-stretch border border-border bg-card focus-within:border-brand',
+                !nameValid && 'border-destructive',
+              )}
+            >
+              <input
+                value={isGenerating ? generatedName : name}
+                onChange={(e) => setName(e.target.value)}
+                readOnly={isGenerating}
+                placeholder="my-new-box"
+                aria-invalid={!nameValid}
+                className={cn(
+                  'min-w-0 flex-1 bg-transparent px-[13px] py-[11px] font-mono text-[13px] text-foreground outline-none',
+                  isGenerating && 'text-brand',
+                )}
+              />
+              <button
+                type="button"
+                onClick={() => generate()}
+                disabled={isGenerating}
+                title="Suggest another name"
+                aria-label="Suggest another name"
+                className="flex w-11 flex-none items-center justify-center border-l border-border text-muted-foreground transition-colors enabled:hover:text-foreground disabled:opacity-40 sm:w-10"
+              >
+                <RefreshCw className={cn('size-3.5', isGenerating && 'animate-spin')} />
+              </button>
+            </div>
           </div>
 
           {/* image */}
@@ -440,7 +478,7 @@ export const CreateBoxDialog = ({
           <button
             type="button"
             onClick={handleCreate}
-            disabled={submitting || !selectedOrganization?.id || !nameValid}
+            disabled={submitting || isGenerating || !selectedOrganization?.id || !nameValid}
             className="bg-primary px-5 py-[11px] text-[13px] font-semibold text-primary-foreground transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:cursor-not-allowed disabled:opacity-50 sm:py-[10px]"
           >
             {submitting ? 'Creating…' : 'Create Box'}
