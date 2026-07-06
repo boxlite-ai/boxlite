@@ -17,9 +17,9 @@ describe('Box entity public identity', () => {
     expect(box.name).toBe('data-loader')
   })
 
-  it('defaults auto-stop to 60 minutes for newly constructed boxes', () => {
+  it('defaults auto-stop to 15 minutes for newly constructed boxes', () => {
     const box = new Box('us', 'data-loader')
 
-    expect(box.autoStopInterval).toBe(60)
+    expect(box.autoStopInterval).toBe(15)
   })
 })
