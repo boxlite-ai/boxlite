@@ -164,6 +164,12 @@ describe('BoxDetails refresh', () => {
     await flushReactWork()
   }
 
+  it('shows the box name on the detail page identity area', async () => {
+    await renderBoxDetails()
+
+    expect(document.body.textContent).toContain('box-one')
+  })
+
   it('reconnects an active terminal when the detail refresh button is clicked', async () => {
     await renderBoxDetails()
 

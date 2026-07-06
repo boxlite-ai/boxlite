@@ -28,7 +28,7 @@ import { useConfig } from '@/hooks/useConfig'
 import { useRegions } from '@/hooks/useRegions'
 import { useBoxWsSync } from '@/hooks/useBoxWsSync'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { getBoxPublicId, getBoxPublicIdLabel } from '@/lib/box-identity'
+import { getBoxDisplayName, getBoxPublicId, getBoxPublicIdLabel } from '@/lib/box-identity'
 import { handleApiError } from '@/lib/error-handling'
 import { setLocalStorageItem } from '@/lib/local-storage'
 import {
@@ -273,7 +273,7 @@ export default function BoxDetails() {
           boxes
         </button>
         <span className="text-border">/</span>
-        <span className="text-foreground">{box ? getBoxPublicIdLabel(box).toLowerCase() : boxId?.toLowerCase()}</span>
+        <span className="text-foreground">{box ? getBoxDisplayName(box) : boxId?.toLowerCase()}</span>
       </div>
 
       {isNotFound ? (
@@ -311,7 +311,7 @@ export default function BoxDetails() {
           <div className="flex flex-none flex-col gap-4 border-b border-dashed border-border pb-[14px] lg:flex-row lg:items-center lg:gap-[18px]">
             <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-center sm:gap-[14px]">
               <span className="max-w-full truncate text-[20px] font-medium tracking-[-0.4px] sm:max-w-[360px] sm:text-[22px]">
-                {getBoxPublicIdLabel(box)}
+                {getBoxDisplayName(box)}
               </span>
               <span className="flex flex-none items-center gap-2 text-[13px]">
                 <span
@@ -458,7 +458,7 @@ export default function BoxDetails() {
                   <span className="size-[6px] flex-none bg-brand" />
                   shell
                   <span className="ml-0.5 tracking-[0.5px] text-muted-foreground normal-case">
-                    {getBoxPublicIdLabel(box)}
+                    {getBoxDisplayName(box)}
                   </span>
                 </span>
               </div>
