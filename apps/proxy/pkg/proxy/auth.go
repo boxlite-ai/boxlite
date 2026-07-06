@@ -101,6 +101,84 @@ func (p *Proxy) Authenticate(ctx *gin.Context, boxIdOrSignedToken string, port f
 	return boxIdOrSignedToken, true, common_errors.NewUnauthorizedError(errors.New(errorMsg))
 }
 
+func (p *Proxy) AuthenticateTerminal(ctx *gin.Context, boxIdOrSignedToken string) (boxId string, didRedirect bool, err error) {
+	var authErrors []string
+
+	bearerToken := p.getBearerToken(ctx)
+	if bearerToken != "" {
+		isValid, err := p.getBoxBearerTokenValid(ctx, boxIdOrSignedToken, bearerToken)
+		if err != nil {
+			authErrors = append(authErrors, fmt.Sprintf("Bearer token validation error: %v", err))
+		} else if isValid != nil && *isValid {
+			return boxIdOrSignedToken, false, nil
+		} else {
+			authErrors = append(authErrors, "Bearer token is invalid")
+		}
+	}
+
+	authKey := ctx.Request.Header.Get(BOX_AUTH_KEY_HEADER)
+	if authKey != "" {
+		ctx.Request.Header.Del(BOX_AUTH_KEY_HEADER)
+		isValid, err := p.getBoxAuthKeyValid(ctx, boxIdOrSignedToken, authKey)
+		if err != nil {
+			authErrors = append(authErrors, fmt.Sprintf("Auth key header validation error: %v", err))
+		} else if isValid != nil && *isValid {
+			return boxIdOrSignedToken, false, nil
+		} else {
+			authErrors = append(authErrors, "Auth key header is invalid")
+		}
+	}
+
+	queryAuthKey := ctx.Query(BOX_AUTH_KEY_QUERY_PARAM)
+	if queryAuthKey != "" {
+		isValid, err := p.getBoxAuthKeyValid(ctx, boxIdOrSignedToken, queryAuthKey)
+		if err != nil {
+			authErrors = append(authErrors, fmt.Sprintf("Auth key query param validation error: %v", err))
+		} else if isValid != nil && *isValid {
+			newQuery := ctx.Request.URL.Query()
+			newQuery.Del(BOX_AUTH_KEY_QUERY_PARAM)
+			ctx.Request.URL.RawQuery = newQuery.Encode()
+			return boxIdOrSignedToken, false, nil
+		} else {
+			authErrors = append(authErrors, "Auth key query parameter is invalid")
+		}
+	}
+
+	cookieBoxId, err := ctx.Cookie(BOX_AUTH_COOKIE_NAME + boxIdOrSignedToken)
+	if err == nil && cookieBoxId != "" {
+		decodedValue := ""
+		err = p.secureCookie.Decode(BOX_AUTH_COOKIE_NAME+boxIdOrSignedToken, cookieBoxId, &decodedValue)
+		if err != nil {
+			authErrors = append(authErrors, fmt.Sprintf("Cookie decoding error: %v", err))
+		} else {
+			return decodedValue, false, nil
+		}
+	}
+
+	cookieDomain := p.getCookieDomain(ctx.Request.Host)
+	boxId, err = p.getBoxIdFromSignedTerminalPreviewUrlToken(ctx, boxIdOrSignedToken, cookieDomain)
+	if err == nil {
+		return boxId, false, nil
+	}
+	authErrors = append(authErrors, err.Error())
+
+	authUrl, err := p.getAuthUrl(ctx, boxIdOrSignedToken)
+	if err != nil {
+		return boxIdOrSignedToken, false, fmt.Errorf("failed to get auth URL: %w", err)
+	}
+
+	ctx.Redirect(http.StatusTemporaryRedirect, authUrl)
+
+	var errorMsg string
+	if len(authErrors) > 0 {
+		errorMsg = fmt.Sprintf("authentication failed: %s", strings.Join(authErrors, ","))
+	} else {
+		errorMsg = "missing authentication: provide a terminal access token (via header, query parameter, or cookie) or use an API key or JWT"
+	}
+
+	return boxIdOrSignedToken, true, common_errors.NewUnauthorizedError(errors.New(errorMsg))
+}
+
 func (p *Proxy) getBearerToken(ctx *gin.Context) string {
 	authHeader := ctx.Request.Header.Get("Authorization")
 	if authHeader != "" && strings.HasPrefix(authHeader, "Bearer ") {
@@ -113,6 +191,33 @@ func (p *Proxy) getBoxIdFromSignedPreviewUrlToken(ctx *gin.Context, boxIdOrSigne
 	var boxId string
 	err := utils.RetryWithExponentialBackoff(ctx.Request.Context(), "getBoxIdFromSignedPreviewUrlToken", proxyMaxRetries, proxyBaseDelay, proxyMaxDelay, func() error {
 		s, _, e := p.apiclient.PreviewAPI.GetBoxIdFromSignedPreviewUrlToken(ctx.Request.Context(), boxIdOrSignedToken, port).Execute()
+		boxId = s
+		openapiErr := common_errors.ConvertOpenAPIError(e)
+
+		if openapiErr != nil && !common_errors.IsRetryableOpenAPIError(openapiErr) {
+			return &utils.NonRetryableError{Err: openapiErr}
+		}
+
+		return openapiErr
+	})
+	if err != nil {
+		return "", err
+	}
+
+	encoded, err := p.secureCookie.Encode(BOX_AUTH_COOKIE_NAME+boxIdOrSignedToken, boxId)
+	if err != nil {
+		return "", fmt.Errorf("failed to encode cookie: %w", err)
+	}
+
+	ctx.SetCookie(BOX_AUTH_COOKIE_NAME+boxIdOrSignedToken, encoded, 3600, "/", cookieDomain, p.config.EnableTLS, true)
+
+	return boxId, nil
+}
+
+func (p *Proxy) getBoxIdFromSignedTerminalPreviewUrlToken(ctx *gin.Context, boxIdOrSignedToken string, cookieDomain string) (string, error) {
+	var boxId string
+	err := utils.RetryWithExponentialBackoff(ctx.Request.Context(), "getBoxIdFromSignedTerminalPreviewUrlToken", proxyMaxRetries, proxyBaseDelay, proxyMaxDelay, func() error {
+		s, _, e := p.apiclient.PreviewAPI.GetBoxIdFromSignedTerminalPreviewUrlToken(ctx.Request.Context(), boxIdOrSignedToken).Execute()
 		boxId = s
 		openapiErr := common_errors.ConvertOpenAPIError(e)
 

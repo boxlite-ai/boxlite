@@ -8,7 +8,6 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from './queryKeys'
 
-const TERMINAL_PORT = 22222
 const SESSION_DURATION_SECONDS = 300
 
 export type TerminalSession = {
@@ -25,9 +24,8 @@ export const useTerminalSessionQuery = (boxId: string, enabled: boolean) => {
   const query = useQuery({
     queryKey,
     queryFn: async (): Promise<TerminalSession> => {
-      const url = (
-        await boxApi.getSignedPortPreviewUrl(boxId, TERMINAL_PORT, selectedOrganization?.id, SESSION_DURATION_SECONDS)
-      ).data.url
+      const url = (await boxApi.getSignedTerminalPreviewUrl(boxId, selectedOrganization?.id, SESSION_DURATION_SECONDS))
+        .data.url
       return { url, expiresAt: Date.now() + SESSION_DURATION_SECONDS * 1000 }
     },
     enabled: enabled && !!boxId && !!selectedOrganization?.id,

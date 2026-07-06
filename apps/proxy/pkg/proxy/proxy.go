@@ -39,7 +39,6 @@ const BOX_AUTH_KEY_QUERY_PARAM = "BOXLITE_BOX_AUTH_KEY"
 const BOX_AUTH_COOKIE_NAME = "boxlite-box-auth-"
 const SKIP_LAST_ACTIVITY_UPDATE_HEADER = "X-BoxLite-Skip-Last-Activity-Update"
 const ACTIVITY_POLL_STOP_KEY = "boxlite-activity-poll-stop"
-const TERMINAL_PORT = "22222"
 
 // stopActivityPoll retrieves and calls the activity poll stop function from the gin context.
 // This ensures the polling goroutine is stopped when the request (including WebSocket) finishes.

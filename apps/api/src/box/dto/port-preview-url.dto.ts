@@ -62,3 +62,51 @@ export class SignedPortPreviewUrlDto {
   @IsString()
   url: string
 }
+
+@ApiSchema({ name: 'TerminalPreviewUrl' })
+export class TerminalPreviewUrlDto {
+  @ApiProperty({
+    description: 'ID of the box',
+    example: '123456',
+  })
+  @IsString()
+  boxId: string
+
+  @ApiProperty({
+    description: 'Terminal preview url',
+    example: 'https://terminal-{boxId}.{proxyDomain}',
+  })
+  @IsString()
+  url: string
+
+  @ApiProperty({
+    description: 'Access token',
+    example: 'ul67qtv-jl6wb9z5o3eii-ljqt9qed6l',
+  })
+  @IsString()
+  token: string
+}
+
+@ApiSchema({ name: 'SignedTerminalPreviewUrl' })
+export class SignedTerminalPreviewUrlDto {
+  @ApiProperty({
+    description: 'ID of the box',
+    example: '123456',
+  })
+  @IsString()
+  boxId: string
+
+  @ApiProperty({
+    description: 'Token of the signed terminal preview URL',
+    example: 'jl6wb9z5o3eii',
+  })
+  @IsString()
+  token: string
+
+  @ApiProperty({
+    description: 'Signed terminal preview url',
+    example: 'https://terminal-{token}.{proxyDomain}',
+  })
+  @IsString()
+  url: string
+}

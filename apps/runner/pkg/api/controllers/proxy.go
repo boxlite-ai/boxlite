@@ -37,9 +37,8 @@ const (
 	terminalWriteDeadline     = 20 * time.Second
 )
 
-// ProxyRequest handles the terminal preview endpoint. Legacy in-box toolbox
-// endpoints are no longer available because boxes do not run the old daemon.
-func ProxyRequest(logger *slog.Logger) gin.HandlerFunc {
+// TerminalRequest handles the BoxLite web terminal endpoint.
+func TerminalRequest(logger *slog.Logger) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		r, err := runner.GetInstance(nil)
 		if err != nil {
@@ -48,24 +47,21 @@ func ProxyRequest(logger *slog.Logger) gin.HandlerFunc {
 		}
 
 		boxId := ctx.Param("boxId")
-		path := normalizeToolboxPath(ctx.Param("path"))
 
 		if strings.EqualFold(ctx.Request.Header.Get("Upgrade"), "websocket") {
-			if isTerminalToolboxPath(path) {
-				handleWebSocketTerminal(ctx, r, boxId, logger)
-				return
-			}
-
-			legacyToolboxUnavailable(ctx, logger, boxId, path)
+			handleWebSocketTerminal(ctx, r, boxId, logger)
 			return
 		}
 
-		if isTerminalToolboxPath(path) {
-			ctx.Data(http.StatusOK, "text/html; charset=utf-8", []byte(terminalHTML))
-			return
-		}
+		ctx.Data(http.StatusOK, "text/html; charset=utf-8", []byte(terminalHTML))
+	}
+}
 
-		legacyToolboxUnavailable(ctx, logger, boxId, path)
+// ProxyRequest rejects legacy in-box toolbox endpoints because boxes do not run
+// the old daemon.
+func ProxyRequest(logger *slog.Logger) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		legacyToolboxUnavailable(ctx, logger, ctx.Param("boxId"), normalizeToolboxPath(ctx.Param("path")))
 	}
 }
 
@@ -77,11 +73,6 @@ func normalizeToolboxPath(path string) string {
 		return "/" + path
 	}
 	return path
-}
-
-func isTerminalToolboxPath(path string) bool {
-	path = normalizeToolboxPath(path)
-	return path == "/" || path == "/proxy/22222" || strings.HasPrefix(path, "/proxy/22222/")
 }
 
 func legacyToolboxUnavailable(ctx *gin.Context, logger *slog.Logger, boxId string, path string) {

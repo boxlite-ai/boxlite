@@ -149,6 +149,27 @@ export class PreviewController {
     return true
   }
 
+  @Get('terminal/:signedPreviewToken/box-id')
+  @ApiOperation({
+    summary: 'Get box ID from signed terminal preview URL token',
+    operationId: 'getBoxIdFromSignedTerminalPreviewUrlToken',
+  })
+  @ApiParam({
+    name: 'signedPreviewToken',
+    description: 'Signed terminal preview URL token',
+    type: 'string',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Box ID from signed terminal preview URL token',
+    type: String,
+  })
+  async getBoxIdFromSignedTerminalPreviewUrlToken(
+    @Param('signedPreviewToken') signedPreviewToken: string,
+  ): Promise<string> {
+    return this.boxService.getBoxIdFromSignedTerminalPreviewUrlToken(signedPreviewToken)
+  }
+
   @Get(':signedPreviewToken/:port/box-id')
   @ApiOperation({
     summary: 'Get box ID from signed preview URL token',
