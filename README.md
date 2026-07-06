@@ -20,7 +20,6 @@
   <strong>The compute substrate for AI agents</strong> — light enough to embed on your laptop, elastic enough to power an agentic cloud.
 </p>
 
-
 ## What is BoxLite?
 
 A **Box** is a hardware-isolated micro-VM that runs any OCI image — and it persists. Agents install packages, write files, and resume across turns, never from cold.
