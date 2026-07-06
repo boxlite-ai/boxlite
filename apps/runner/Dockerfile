@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM node:22-alpine AS build
 
 ENV CI=true
@@ -12,9 +13,10 @@ RUN apk add --no-cache git build-base
 
 WORKDIR /boxlite
 
-# Yarn caching layer
+# Yarn caching layer — global cache persisted across builds via a BuildKit cache mount
 COPY apps/package.json apps/yarn.lock apps/.yarnrc.yml ./
-RUN yarn install --immutable
+ENV YARN_ENABLE_GLOBAL_CACHE=1
+RUN --mount=type=cache,target=/root/.yarn/berry/cache yarn install --immutable
 
 # Nx config
 COPY apps/nx.json ./
@@ -31,7 +33,8 @@ RUN head -1 apps/go.work > apps/go.work.tmp && printf '\nuse (\n\t./runner\n\t./
 
 ENV NX_DAEMON=false
 
-RUN go -C apps/runner mod download \
+RUN --mount=type=cache,target=/root/go/pkg/mod \
+  go -C apps/runner mod download \
   && go -C apps/common-go mod download \
   && go -C apps/api-client-go mod download
 
@@ -49,7 +52,7 @@ COPY apps/common-go/ apps/common-go/
 COPY apps/api-client-go/ apps/api-client-go/
 
 ARG VERSION=0.0.1
-RUN --mount=type=cache,target=/root/.cache/go-build \
+RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/root/go/pkg/mod \
   CGO_ENABLED=1 VERSION=$VERSION yarn nx build runner --configuration=production --nxBail=true
 
 # Runtime — lightweight Linux with KVM support
