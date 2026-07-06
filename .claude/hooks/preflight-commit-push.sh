@@ -64,6 +64,27 @@ else
 fi
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+# Delegate to the git-level gate when installed: with core.hooksPath pointing at
+# .githooks, the same contract is enforced by .githooks/pre-commit|pre-push for
+# EVERY process (any agent, any harness — and humans stay exempt there), so this
+# PreToolUse layer steps aside to keep the audit artifact single-consumer.
+# GITHOOK_DELEGATED marks the call coming FROM that git-level gate — the one
+# caller that must not be deferred, or the two layers would defer to each other
+# and everything would silently pass.
+# Defer ONLY when the delegate hook actually exists at this checkout: git skips
+# missing hooks silently, so hooksPath-configured + delegate-absent (old ref,
+# broken install) would otherwise stand BOTH layers down — a silent bypass.
+# Closed-over-open: when in doubt, gate here.
+if [[ -z "${GITHOOK_DELEGATED:-}" ]]; then
+  hooks_path="$(git config core.hooksPath 2>/dev/null || true)"
+  if [[ "$hooks_path" == *".githooks" ]]; then
+    [[ "$hooks_path" != /* ]] && hooks_path="$repo_root/$hooks_path"
+    if [[ -x "$hooks_path/pre-$kind" ]]; then
+      exit 0
+    fi
+  fi
+fi
 project_dir="${CLAUDE_PROJECT_DIR:-$repo_root}"
 branch="$(git -C "$repo_root" branch --show-current 2>/dev/null || echo '?')"
 head="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo '?')"

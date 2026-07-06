@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Universal (agent-agnostic) push gate — pre-commit's sibling for `git push`.
+# See .githooks/pre-commit for the design. git feeds the ref list on stdin;
+# nothing here reads it (the gate call pipes its own payload), so it flows
+# byte-exact to the chained framework hook (prek's test matrix needs it).
+#
+# Tests: bash .githooks/githooks.test.sh
+set -uo pipefail
+
+# Named harness markers only — see pre-commit for why no prefix wildcards.
+is_agent=0
+[[ -n "${CLAUDECODE:-}" || -n "${CODEX_SANDBOX:-}" || -n "${AGENT_GATED:-}" ]] && is_agent=1
+
+if [[ "$is_agent" == 1 ]]; then
+  repo_root="$(git rev-parse --show-toplevel)"
+  out="$(printf '{"tool_input":{"command":"git push"}}' \
+        | GITHOOK_DELEGATED=1 bash "$repo_root/.claude/hooks/preflight-commit-push.sh" 2>/dev/null || true)"
+  if printf '%s' "$out" | jq -e '.hookSpecificOutput.permissionDecision == "deny"' >/dev/null 2>&1; then
+    printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason' >&2
+    exit 1
+  fi
+fi
+
+# --git-common-dir, not --git-path: see pre-commit (self-exec recursion).
+chained="$(git rev-parse --git-common-dir)/hooks/pre-push"
+if [[ -x "$chained" && "$(realpath "$chained" 2>/dev/null)" != "$(realpath "$0" 2>/dev/null)" ]]; then
+  exec "$chained" "$@"
+fi
+exit 0
