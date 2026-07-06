@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Tests for .claude/hooks/preflight-verdict-check.sh (the Stop-stage verdict gate).
 #
-# This hook VALIDATES a self-declared dossier (.claude/.last-verdict.json); it is verdict-
-# scoped and loop-free — it never forces an audit:
-#   - no dossier                                -> allow (no verdict declared this turn)
-#   - present, PASS/IN_PROGRESS, matching+fresh -> allow (PASS is consumed)
-#   - present, stale / mismatched / FAIL        -> block (hard) or nudge (soft)
+# The hook is delta-triggered + self-declared (loop-free):
+#   - no dossier, no baseline / baseline == tree -> allow (no work, or no baseline hook)
+#   - no dossier, tree CHANGED since turn start  -> block: audit the verdict (delta trigger)
+#   - present, PASS/IN_PROGRESS, matching+fresh  -> allow (PASS is consumed)
+#   - present, stale / mismatched / FAIL         -> block (hard) or nudge (soft)
 # Each case builds a throwaway git repo, optionally writes a dossier, and runs the
 # hook there (cwd + CLAUDE_PROJECT_DIR pointed at it), asserting allow vs block.
 #
@@ -37,10 +37,11 @@ setup() {
   git -C "$d" config user.name tester
   mkdir -p "$d/src"
   printf 'pub fn base() {}\n' > "$d/src/lib.rs"
-  # Mirror the real repo: the dossier is gitignored, so it never enters the
-  # working-tree hash. Without this the hook's `git add -A` would fold the
-  # dossier into the hash and never match what the auditor computed.
-  printf '.claude/.last-verdict.json\n' > "$d/.gitignore"
+  # Mirror the real repo: the dossier and turn baseline are gitignored, so they
+  # never enter the working-tree hash. Without this the hook's `git add -A` would
+  # fold them into the hash — the dossier would never match what the auditor
+  # computed, and writing the baseline would itself register as a turn delta.
+  printf '.claude/.last-verdict.json\n.claude/.turn-baseline\n' > "$d/.gitignore"
   git -C "$d" add -A
   git -C "$d" commit -qm base
   printf '%s' "$d"
@@ -53,6 +54,13 @@ tree_hash_of() {
   GIT_INDEX_FILE="$idx" git -C "$repo" add -A >/dev/null 2>&1
   GIT_INDEX_FILE="$idx" git -C "$repo" write-tree 2>/dev/null
   rm -f "$idx"
+}
+
+# Record the turn-start baseline the way turn-baseline.sh does (current tree hash).
+write_baseline() {
+  local repo="$1"
+  mkdir -p "$repo/.claude"
+  tree_hash_of "$repo" > "$repo/.claude/.turn-baseline"
 }
 
 # Write a dossier; tree_hash defaults to the repo's current working-tree hash.
@@ -99,12 +107,34 @@ check_consumed() {  # desc  repo
   fi
 }
 
-echo "## No dossier → allow (self-declared: no verdict was rendered this turn)"
-R="$(setup)";                                    check "clean tree, no dossier → allow"   "$R" "allow"; rm -rf "$R"
-# Loop-free: even after a code change, a turn with no dossier passes — the AGENT, not the
-# hook, decides an edit is a verdict worth auditing. This is what stops an audit-completion
-# re-invoke from demanding another audit.
-R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"; check "prod change, no dossier → allow"  "$R" "allow"; rm -rf "$R"
+echo "## No dossier, no baseline → allow (fallback: harness without the baseline hook)"
+R="$(setup)";                                    check "clean tree, no baseline → allow"  "$R" "allow"; rm -rf "$R"
+R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"; check "prod change, no baseline → allow" "$R" "allow"; rm -rf "$R"
+
+echo
+echo "## No dossier, baseline present → the turn delta decides"
+R="$(setup)"; write_baseline "$R"
+check "no delta since turn start → allow"                "$R" "allow"; rm -rf "$R"
+
+# The delta trigger: work happened this turn and no verdict was audited → block.
+R="$(setup)"; write_baseline "$R"; printf 'fix\n' >> "$R/src/lib.rs"
+check "tracked file changed this turn → block"           "$R" "block"; rm -rf "$R"
+
+R="$(setup)"; write_baseline "$R"; printf 'x' > "$R/src/new.rs"
+check "untracked file added this turn → block"           "$R" "block"; rm -rf "$R"
+
+# Dirty-before-turn is NOT a delta: the baseline captured the dirty state at turn
+# start, so a conversational turn over a dirty tree still ends freely.
+R="$(setup)"; printf 'wip\n' >> "$R/src/lib.rs"; write_baseline "$R"
+check "tree dirty before turn, unchanged during → allow" "$R" "allow"; rm -rf "$R"
+
+# Corrupt baseline fails open to the self-declared fallback (never trap on bad state).
+R="$(setup)"; mkdir -p "$R/.claude"; printf 'not a hash' > "$R/.claude/.turn-baseline"; printf 'fix\n' >> "$R/src/lib.rs"
+check "corrupt baseline → allow (fail-open)"             "$R" "allow"; rm -rf "$R"
+
+R="$(setup)"; write_baseline "$R"; printf 'fix\n' >> "$R/src/lib.rs"; write_verdict "$R" "PASS" "[]"
+check "delta + matching PASS dossier → allow"            "$R" "allow"
+check_consumed "delta-path PASS dossier consumed"        "$R"; rm -rf "$R"
 
 echo
 echo "## Present dossier → validate verdict"
@@ -147,7 +177,7 @@ printf 'more\n' >> "$R/src/lib.rs"
 check "tree changed after audit → block"         "$R" "block"; rm -rf "$R"
 
 echo
-echo "## Soft mode (default): a block condition becomes a non-blocking nudge"
+echo "## Soft mode (VERDICT_GATE_HARD_BLOCK unset/0): block conditions become nudges"
 R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"; write_verdict "$R" "FAIL" '["no reproducer"]'
 soft_out="$(printf '%s' "$PAYLOAD" | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" bash "$HOOK" ) 2>/dev/null)"
 if printf '%s' "$soft_out" | jq -e '(.decision // "") != "block" and .continue == true and (.systemMessage | type) == "string"' >/dev/null 2>&1; then
@@ -157,7 +187,16 @@ else
 fi
 rm -rf "$R"
 
-R="$(setup)"  # no dossier → allow (empty output) in BOTH soft and hard — the loop-safety guarantee
+R="$(setup)"; write_baseline "$R"; printf 'fix\n' >> "$R/src/lib.rs"
+soft_delta="$(printf '%s' "$PAYLOAD" | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" bash "$HOOK" ) 2>/dev/null)"
+if printf '%s' "$soft_delta" | jq -e '(.decision // "") != "block" and .continue == true and (.systemMessage | type) == "string"' >/dev/null 2>&1; then
+  pass=$((pass + 1)); printf '  PASS  %s\n' "delta without dossier → nudge in soft mode, not block"
+else
+  fail=$((fail + 1)); printf '  FAIL  %s  (out=%s)\n' "soft-mode delta nudge" "$soft_delta"
+fi
+rm -rf "$R"
+
+R="$(setup)"  # no dossier, no baseline → allow (empty output) in BOTH soft and hard — the fallback guarantee
 soft_nodossier="$(printf '%s' "$PAYLOAD" | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" bash "$HOOK" ) 2>/dev/null)"
 hard_nodossier="$(printf '%s' "$PAYLOAD" | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 bash "$HOOK" ) 2>/dev/null)"
 if [[ -z "$soft_nodossier" && -z "$hard_nodossier" ]]; then

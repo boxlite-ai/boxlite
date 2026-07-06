@@ -1,8 +1,19 @@
 {
   "env": {
-    "VERDICT_GATE_HARD_BLOCK": "0"
+    "VERDICT_GATE_HARD_BLOCK": "1"
   },
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/turn-baseline.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",

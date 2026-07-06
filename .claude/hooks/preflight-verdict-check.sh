@@ -1,21 +1,24 @@
 #!/usr/bin/env bash
-# Stop hook: VALIDATE a self-declared verdict before the agent ends its turn
+# Stop hook: gate the end of a turn on an audited verdict
 # (see .claude/agents/verdict-auditor.md).
 #
-# Self-declared, verdict-scoped: the hook does NOT force an audit and does NOT detect
-# verdicts. The agent invokes the verdict-auditor subagent ONLY when it renders a verdict
-# (per CLAUDE.md's Verify rule); that writes .claude/.last-verdict.json, which this hook
-# validates. A turn with NO dossier means no verdict was declared, and is allowed. This
-# hook calls no model and reads no transcript. It is loop-free by construction (see the
-# no-dossier branch): a background audit's completion re-invokes a non-verdict turn, which
-# has no dossier and passes, so no further audit is triggered.
+# Delta-triggered + self-declared: the hook does NOT parse prose to detect a verdict.
+# The trigger is the TURN DELTA — turn-baseline.sh (UserPromptSubmit) snapshots the
+# working-tree hash at turn start; if the tree changed by turn end, work happened and
+# the turn must end with a fresh dossier (.claude/.last-verdict.json, written by the
+# verdict-auditor subagent). A no-delta turn with no dossier ends freely. Verdicts that
+# change no files (pure investigation) remain self-declared per CLAUDE.md's Verify rule,
+# nudged by the reminder turn-baseline.sh injects while the tree is dirty. This hook
+# calls no model and reads no transcript.
 #
 # Flow:
-#   1. When the agent renders a verdict, it invokes the verdict-auditor subagent, which
+#   1. turn-baseline.sh records the tree hash at turn start (.claude/.turn-baseline).
+#   2. When the agent renders a verdict, it invokes the verdict-auditor subagent, which
 #      writes .claude/.last-verdict.json.
-#   2. Hook validates: a fresh, matching PASS/IN_PROGRESS dossier -> allow (consumed).
-#   3. NO dossier -> allow: the agent declared no verdict this turn (no forced audit).
-#   4. A stale / mismatched / FAIL dossier -> block (hard) or nudge (soft).
+#   3. Hook validates: a fresh, matching PASS/IN_PROGRESS dossier -> allow (consumed).
+#   4. NO dossier: tree unchanged since turn start (or no/corrupt baseline) -> allow;
+#      tree CHANGED -> block with the re-audit instruction.
+#   5. A stale / mismatched / FAIL dossier -> block (hard) or nudge (soft).
 # After a block the agent re-audits and ends again. The subagent's own completion is a
 # SubagentStop event, not Stop, so it does not re-trigger this hook (no recursion).
 #
@@ -23,34 +26,38 @@
 #
 # Design notes
 # ------------
-# * No detection, self-declared: a Stop hook fires whenever the agent ends a turn, with no
-#   "did I render a verdict?" signal. The hook cannot know without either parsing the
-#   message prose (rejected — brittle) or forcing an audit on EVERY turn (default-deny —
-#   which loops: each audit's completion re-invokes a turn that then demands another
-#   audit). So the agent self-declares: it invokes the auditor only on a verdict, and a
-#   no-dossier turn is allowed. Trade-off: the hook can't force "audit your verdict"; that
-#   is the agent's CLAUDE.md duty, and the auditor still catches wrong claims when invoked.
+# * Why the delta, not detection: a Stop hook fires with no "did I render a verdict?"
+#   signal. Parsing the message prose is brittle (rejected), and demanding a dossier on
+#   EVERY turn (default-deny, #892) loops: each audit's completion re-invokes a turn that
+#   then demands another audit. The tree delta keys the demand to evidence of work, which
+#   no-op acknowledgment turns never have: dossier and baseline are gitignored, so the
+#   gate's own artifacts are never a delta, and audit-completion turns end freely — the
+#   audit -> completion -> audit cycle cannot form. Conversational turns over an
+#   already-dirty tree are also delta-free (the baseline captured the dirty state at turn
+#   start). The harness's 8-consecutive-block cap backstops any residual cycle.
 #
-# * Tree-hash binding (present-dossier only): at stop time the work is usually
-#   UNCOMMITTED (HEAD has not moved), so HEAD alone can't tell "audited" from
-#   "changed since audit". We bind the dossier to a content-addressed hash of the
+# * Missing/corrupt baseline falls back to self-declared (allow on no dossier): the
+#   UserPromptSubmit hook may not have run (other harnesses, first turn after adoption),
+#   and a gate must not trap on its own absent state.
+#
+# * Tree-hash binding: at stop time the work is usually UNCOMMITTED (HEAD has not
+#   moved), so HEAD alone can't tell "audited" from "changed since audit". We bind
+#   the dossier — and the turn-start baseline — to a content-addressed hash of the
 #   full working tree, computed via a throwaway index + `git write-tree`
 #   (deterministic; no timestamps; never touches the real index). The verdict-auditor
-#   computes it the SAME way. Computed only when a dossier exists — the no-dossier
-#   (allow) path does no git tree work.
+#   and turn-baseline.sh compute it the SAME way. The hash is computed when a dossier
+#   or a valid baseline exists; only the bare fallback path does no git tree work.
 #
-# * Loop-safety: no-dossier turns are allowed, so a background audit's completion (which
-#   re-invokes a NON-verdict turn) never demands another audit — the cycle can't form. Any
-#   block (present FAIL / stale dossier) is satisfiable by a fresh PASS / IN_PROGRESS
-#   dossier, so we never depend on the (undocumented) stop_hook_active.
+# * Every block is satisfiable by a fresh PASS / IN_PROGRESS dossier, so we never depend
+#   on stop_hook_active.
 #
 # * One-shot consumption: the dossier is `rm -f`'d on the allow path so the next
 #   verdict re-audits (a stale PASS can't rubber-stamp a later, different claim).
 #
-# * Present-dossier enforcement: a no-dossier turn is allowed (self-declared), but a
-#   dossier that is present and stale / mismatched / FAIL blocks (hard) or nudges (soft)
-#   with an instruction to re-invoke the verdict-auditor. So a declared-but-failing verdict
-#   still has teeth; only the "no verdict declared" case is trusted to the agent.
+# * Soft mode is NOT enforcement: the Stop hook's systemMessage is shown to the HUMAN
+#   only — the model never sees it (documented hook contract; only a block's `reason`
+#   reaches the model). Soft mode exists as telemetry / emergency rollback (flip
+#   VERDICT_GATE_HARD_BLOCK=0 in settings env; it propagates mid-session). Default: hard.
 #
 # Threat model & accepted limitations (this gate catches HONEST mistakes, not a malicious
 # parent — the parent and the auditor share one filesystem + toolset):
@@ -73,14 +80,15 @@ project_dir="${CLAUDE_PROJECT_DIR:-$repo_root}"
 branch="$(git -C "$repo_root" branch --show-current 2>/dev/null || echo '?')"
 head="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo '?')"
 verdict_file="$project_dir/.claude/.last-verdict.json"
+baseline_file="$project_dir/.claude/.turn-baseline"
 max_age_seconds=600
 
 allow()           { exit 0; }                                              # let the turn end
 allow_with_note() { jq -nc --arg m "$1" '{continue:true, systemMessage:$m}'; exit 0; }
-# Soft mode (default): emit a non-blocking nudge instead of hard-blocking, so the
-# gate does not trap conversational turn-ends while the working tree is dirty. The
-# hard proof checkpoint belongs at the commit/push boundary (preflight-commit-push.sh).
-# Set VERDICT_GATE_HARD_BLOCK=1 to restore turn-end blocking.
+# Hard mode (default, set in settings.json env): block conditions block. Soft mode
+# (VERDICT_GATE_HARD_BLOCK=0) demotes them to a user-visible nudge the MODEL never
+# sees — rollback/telemetry only, see design notes. Conversational turns over a dirty
+# tree don't need soft mode: they are delta-free and end freely either way.
 block() {
   if [[ "${VERDICT_GATE_HARD_BLOCK:-0}" == "1" ]]; then
     jq -nc --arg r "$1" '{decision:"block", reason:$r}'
@@ -92,7 +100,8 @@ block() {
 
 # Content-addressed hash of the full working tree (tracked + untracked, full
 # content), via a throwaway index. Deterministic and read-only w.r.t. the real
-# index/tree. Keep IDENTICAL to the snippet in verdict-auditor.md.
+# index/tree. Keep IDENTICAL to the snippets in turn-baseline.sh and
+# verdict-auditor.md — a desynced baseline hash reads as a phantom delta.
 compute_tree_hash() {
   local idx; idx="$(mktemp)"
   GIT_INDEX_FILE="$idx" git -C "$repo_root" read-tree HEAD >/dev/null 2>&1
@@ -129,22 +138,25 @@ if a claim genuinely cannot be proven here, it can mark that proof 'blocked' wit
 residual risk. Then end your turn again."
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ── No dossier → the agent declared no verdict this turn → allow ─────────────
-# Self-declared, verdict-scoped: the hook does NOT force an audit. The agent invokes the
-# verdict-auditor ONLY when it renders a verdict (per CLAUDE.md's Verify rule), so a
-# missing dossier means "no verdict declared" and the turn is allowed. This is what makes
-# the gate LOOP-FREE: a background audit's completion re-invokes the agent into a
-# non-verdict acknowledgment turn, which produces no dossier and is allowed here — so no
-# new audit fires and the audit -> completion -> audit cycle cannot form. (Default-deny,
-# which demanded a dossier on EVERY turn, looped for exactly this reason.)
-#
-# The cost: the hook cannot force "you must audit your verdict" — detecting a verdict would
-# need prose-parsing (rejected: brittle) or an audit on every turn (loops). So skipping an
-# audit is the agent's failure to follow CLAUDE.md, not something the hook catches. When
-# the agent DOES audit, the independent verdict-auditor still catches honest-but-wrong
-# claims, and a present FAIL / stale dossier still blocks below.
+# ── No dossier → the turn delta decides ──────────────────────────────────────
+# Delta-triggered: turn-baseline.sh snapshotted the tree hash at turn start. If the tree
+# changed during the turn, work happened — ending without an audited dossier is blocked.
+# No delta means a conversational / acknowledgment turn (including the turns the gate
+# itself spawns: audit acks, background-audit completions — the gate's own artifacts are
+# gitignored and never register as a delta), which ends freely; that is the loop-safety
+# guarantee. A missing or corrupt baseline falls back to self-declared: allow, per
+# CLAUDE.md's Verify rule. Verdicts that change no files also land here as no-delta —
+# auditing those remains the agent's CLAUDE.md duty, prompted by turn-baseline.sh's
+# dirty-tree reminder.
 if [[ ! -r "$verdict_file" ]]; then
-  allow
+  baseline="$(head -n1 "$baseline_file" 2>/dev/null || true)"
+  [[ "$baseline" =~ ^[0-9a-f]{40}$ ]] || allow
+  cur_tree="$(compute_tree_hash)"
+  if [[ "$cur_tree" == "$baseline" ]]; then
+    allow
+  fi
+  block "This turn changed the working tree (turn-start ${baseline:0:12} → now ${cur_tree:0:12}) and is ending without an audited verdict.
+${verdict_instruction}"
 fi
 
 # ── Validate the present dossier ─────────────────────────────────────────────
