@@ -165,11 +165,14 @@ strip_code() {
 # VERDICT_CLASSIFIER_CMD overrides the whole classifier invocation (stdin = message,
 # stdout = YES/NO); tests stub it, `false` forces UNKNOWN.
 triage_prompt='You are the applicability triage for a verdict-proof gate. Input: an
-assistant message that just ended a turn. Answer YES if it asserts, as established
-fact, a verifiable outcome of work — a fix that works, tests that pass, a root cause
-identified, a system/deploy judged healthy, a task declared complete, "no issues
-found". Answer NO if it merely asks a question, explains or discusses concepts,
-quotes such phrases while talking ABOUT them, or narrates work still in progress.
+assistant message that just ended a turn. Answer YES only if it reports, as NEWS,
+the outcome of work — something just fixed, tested, diagnosed, shipped, measured,
+or judged ("the fix works", "tests pass", "root cause is X", "deploy is healthy",
+"done"). Answer NO if it asks a question, narrates work still in progress, quotes
+verdict phrases while talking ABOUT them, or explains and teaches — describing how
+a system works, walking through architecture or behavior, or recapping facts that
+were already established and verified earlier in the session. Confident register
+alone is not a verdict; only fresh outcome-reporting is.
 Reply with exactly one word: YES or NO.'
 should_audit() {  # stdin-less; uses $1 as the stripped message; echoes YES/NO/UNKNOWN
   local msg="$1" out=""
