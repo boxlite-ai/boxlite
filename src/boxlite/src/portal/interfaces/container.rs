@@ -117,6 +117,7 @@ impl ContainerInterface {
                 read_only: m.read_only,
                 owner_uid: m.owner_uid,
                 owner_gid: m.owner_gid,
+                subpath: m.subpath.unwrap_or_default(),
             })
             .collect();
 
