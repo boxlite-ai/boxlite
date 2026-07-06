@@ -24,8 +24,9 @@ export const useTerminalSessionQuery = (boxId: string, enabled: boolean) => {
   const query = useQuery({
     queryKey,
     queryFn: async (): Promise<TerminalSession> => {
-      const url = (await boxApi.getSignedTerminalPreviewUrl(boxId, selectedOrganization?.id, SESSION_DURATION_SECONDS))
-        .data.url
+      const url = (
+        await boxApi.getSignedTerminalPreviewUrl(boxId, selectedOrganization?.id, SESSION_DURATION_SECONDS)
+      ).data.url
       return { url, expiresAt: Date.now() + SESSION_DURATION_SECONDS * 1000 }
     },
     enabled: enabled && !!boxId && !!selectedOrganization?.id,
