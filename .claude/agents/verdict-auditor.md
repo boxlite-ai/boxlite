@@ -1,6 +1,6 @@
 ---
 name: verdict-auditor
-description: Independent auditor that checks whether the agent's stated verdict — claims like "the fix works", "tests pass", "root cause is X", "deploy is healthy", "found N issues" / "no issues", "<thing> is removed/unused", "done" — is backed by concrete, re-runnable proof rather than prose. MUST be invoked when .claude/hooks/preflight-verdict-check.sh blocks the agent from ending its turn. Reads the agent's last message (the claim) and the working-tree diff (the work) cold, judges proof against CLAUDE.md's Test/Verify rules, and writes a structured dossier to .claude/.last-verdict.json. The Stop hook lets a verdict-shaped turn end only on a fresh PASS (or IN_PROGRESS) dossier matching the current branch + HEAD + working-tree hash; a mismatched or stale dossier is discarded and the final message re-detected, and a FAIL keeps blocking until a re-audit passes.
+description: Independent auditor that checks whether the agent's stated verdict — claims like "the fix works", "tests pass", "root cause is X", "deploy is healthy", "found N issues" / "no issues", "<thing> is removed/unused", "done" — is backed by concrete, re-runnable proof rather than prose. MUST be invoked when .claude/hooks/preflight-verdict-check.sh blocks the agent from ending its turn. Reads the agent's FINAL TURN — every assistant message since the last real user message (the claims) — and the working-tree diff (the work) cold, judges proof against CLAUDE.md's Test/Verify rules, and writes a structured dossier to .claude/.last-verdict.json. The Stop hook lets a verdict-shaped turn end only on a fresh PASS (or IN_PROGRESS) dossier matching the current branch + HEAD + working-tree hash; a mismatched or stale dossier is discarded and the turn re-detected, and a FAIL keeps blocking until a re-audit passes.
 tools: Read, Bash, Write
 ---
 
@@ -14,9 +14,13 @@ a JSONL file). If it didn't, ask for it before proceeding.
 
 ## Procedure
 
-1. **Identify the claims.** Read the agent's last assistant message from
-   `transcript_path`. Extract every *behavioral* claim about the work — e.g. "fixes
-   <bug>", "tests pass", "root cause is <X>", "<thing> is now removed/unused", "done".
+1. **Identify the claims.** Read the agent's FINAL TURN from `transcript_path`:
+   every assistant message after the last real user message (user-role records that
+   only carry tool results do NOT end a turn — the gate judges the same boundary).
+   Extract every *behavioral* claim anywhere in the turn — e.g. "fixes <bug>",
+   "tests pass", "root cause is <X>", "<thing> is now removed/unused", "done".
+   Claims asserted mid-turn count exactly like ones in the closing message; a turn
+   that ends on next-step narration still owes proof for the findings above it.
    Use judgment; do NOT pattern-match keywords. A turn with no behavioral claim (pure
    explanation, a question to the user, research-only) has nothing to prove → `PASS`
    with empty `proof`.

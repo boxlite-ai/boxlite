@@ -2,13 +2,15 @@
 # Stop hook: gate the end of a turn on an audited verdict
 # (see .claude/agents/verdict-auditor.md).
 #
-# DETECTION-TRIGGERED, finding-driven loops only. The trigger is the turn's FINAL
-# ASSISTANT MESSAGE, read deterministically from the transcript (no model call): if it
-# asserts a verdict — "root cause is X", "tests pass", "prod looks healthy", "done" —
-# the turn must end with a fresh dossier (.claude/.last-verdict.json, written by the
-# verdict-auditor subagent). Chat, questions, and neutral discussion end freely. This
-# covers file-less verdicts (pure investigation / ops findings), which the delta design
-# it replaces could not see.
+# DETECTION-TRIGGERED, finding-driven loops only. The trigger is the WHOLE FINAL
+# TURN — every assistant text since the last real user message, read deterministically
+# from the transcript: if it states facts, findings, or outcomes that should be
+# double-checked ("root cause is X", "tests pass", investigation conclusions), the
+# turn must end with a fresh dossier (.claude/.last-verdict.json, written by the
+# verdict-auditor subagent). Chat, questions, and in-progress narration end freely.
+# Turn-level, not last-fragment: findings asserted mid-turn cannot hide behind a
+# closing "let me check X" (that miss shipped once, caught by a sibling session's
+# decision log).
 #
 # Flow:
 #   1. Dossier present, binding fresh + matching:
@@ -22,10 +24,12 @@
 #        "the binding moved" is not a finding, and blocking on it was the
 #        meaningless-loop class (e.g. a commit moving HEAD out from under a
 #        dossier written seconds earlier).
-#   3. No dossier: TRIAGE the final message — "does this assert a verifiable verdict?"
-#      A fast model (haiku) answers YES/NO; when no model is reachable the static
-#      pattern list below decides (deterministic fallback, e.g. Codex sessions).
-#      YES -> block with the audit instruction; NO -> allow. No transcript -> allow.
+#   3. No dossier: TRIAGE the turn text — "does it state facts, findings, or outcomes
+#      that should be double-checked before anyone relies on them?" A fast model
+#      (haiku) answers YES/NO; when no model is reachable the static pattern list
+#      below decides (deterministic fallback, e.g. sessions without a model CLI).
+#      YES -> block with the audit instruction; NO -> allow (announced to the human
+#      via systemMessage, invisible to the model). No transcript -> allow.
 #   4. Flush-race guard: the harness can fire Stop before appending the turn's final
 #      message, leaving the PREVIOUS (already-gated) message last in the transcript.
 #      The hook records the uuid it judged; if the newest uuid equals it, the hook
@@ -111,7 +115,11 @@ log_decision() {  # rung outcome
   } 2>/dev/null || true
 }
 
-allow()           { exit 0; }                                              # let the turn end
+allow()           { exit 0; }                                              # let the turn end, silently
+# User-visible, model-invisible allow: a Stop hook systemMessage is shown to the
+# HUMAN in the terminal only — the model never sees it (documented hook contract).
+# Announcing triage results this way keeps the agent's context clean and the gate
+# loop-inert while the human still sees every decision live.
 allow_with_note() { jq -nc --arg m "$1" '{continue:true, systemMessage:$m}'; exit 0; }
 # Hard mode (default, set in settings.json env): block conditions block. Soft mode
 # (VERDICT_GATE_HARD_BLOCK=0) demotes them to a user-visible nudge the MODEL never
@@ -136,17 +144,25 @@ compute_tree_hash() {
   rm -f "$idx"
 }
 
-# Last assistant message with text content, from the session transcript (JSONL).
-# HARNESS-AGNOSTIC by convention, not by schema list: a record is an assistant
-# message if ANY object inside it has role=="assistant" or type=="assistant"; its
-# text is every string under a `text` key inside blocks whose type mentions "text"
-# (covers Claude Code `text`, Codex `output_text`, and any future agent following
-# the same conventions), falling back to all `text`-key strings if that yields
-# nothing. New coding agents need ZERO code here — at most set
-# VERDICT_EXTRACTOR_CMD in their own hook wiring for a truly alien format
-# (invoked with the transcript path as $1; stdout = the final message text).
-# Message identity is a checksum of the text — content-derived, no per-harness ids —
-# used by the never-judge-twice race guard.
+# ALL assistant text of the FINAL TURN — every text block emitted since the last
+# real user message — from the session transcript (JSONL). Turn-level, not
+# last-fragment: a finding asserted mid-turn ("no auto-start in the proxy")
+# followed by closing narration ("let me check X") must still reach triage;
+# judging only the trailing fragment let exactly that class slip (observed live
+# in a sibling session's decision log).
+#
+# HARNESS-AGNOSTIC by convention, not by schema list: an assistant record is one
+# where ANY object inside has role/type=="assistant"; a REAL user record (turn
+# boundary) is one with role/type=="user" carrying actual text — tool results
+# riding user-role records do not end a turn. Text is every string under a
+# `text` key inside blocks whose type mentions "text" (Claude Code `text`,
+# Codex `output_text`, any future agent following the conventions), falling
+# back to all `text`-key strings if that yields nothing. New coding agents need
+# ZERO code here — at most set VERDICT_EXTRACTOR_CMD in their own hook wiring
+# for a truly alien format (invoked with the transcript path as $1; stdout =
+# the turn text to judge).
+# Turn identity is a checksum of the joined text — content-derived, no
+# per-harness ids — used by the never-judge-twice race guard.
 # Empty text (no/unreadable transcript) means detection cannot run → the caller
 # falls back to allow (fail-open, never trap on absent state).
 FINAL_ID=""
@@ -157,12 +173,29 @@ extract_final_message() {
   if [[ -n "${VERDICT_EXTRACTOR_CMD:-}" ]]; then
     FINAL_TEXT="$(bash -c "$VERDICT_EXTRACTOR_CMD \"\$1\"" _ "$transcript_path" 2>/dev/null || true)"
   else
-    FINAL_TEXT="$(jq -rs '[.[]
-            | select([.. | objects | select((.role? == "assistant") or (.type? == "assistant"))] | length > 0)
-            | ([.. | objects | select((.type? // "" | tostring) | test("text")) | .text? // empty | strings] | join("\n")) as $typed
-            | (if ($typed | length) > 0 then $typed
-               else ([.. | objects | .text? // empty | strings] | join("\n")) end)
-            | select(length > 0)] | last // ""' "$transcript_path" 2>/dev/null || true)"
+    FINAL_TEXT="$(jq -rs '
+      def is_assistant: [.. | objects | select((.role? == "assistant") or (.type? == "assistant"))] | length > 0;
+      def is_real_user:
+        # A REAL user record carries a text-typed block at the TOP LEVEL of the
+        # role-object own content (or plain string content). Tool results ride
+        # user-role records with text nested INSIDE a tool_result block —
+        # recursing into them (an earlier version did) turned every Read/Agent/
+        # MCP result into a fake turn boundary and mid-turn findings escaped.
+        ((.type? == "user") and
+          ((.message.content? | type) == "string"
+           or ([.message.content[]? | select((.type? // "") == "text")] | length) > 0))
+        or ([.. | objects | select((.role? // "") == "user")
+             | [.content[]? | select((.type? // "" | tostring) | test("text"))] | length]
+            | any(. > 0));
+      . as $r
+      | ([$r[] | is_real_user] | rindex(true)) as $lastu
+      | $r[(if $lastu == null then 0 else $lastu + 1 end):]
+      | [.[] | select(is_assistant) | (
+          ([.. | objects | select((.type? // "" | tostring) | test("text")) | .text? // empty | strings] | join("\n")) as $typed
+          | (if ($typed | length) > 0 then $typed
+             else ([.. | objects | .text? // empty | strings] | join("\n")) end)
+        ) | select(length > 0)]
+      | join("\n\n")' "$transcript_path" 2>/dev/null || true)"
   fi
   [[ -n "$FINAL_TEXT" ]] || return 0
   FINAL_ID="cksum-$(printf '%s' "$FINAL_TEXT" | cksum | tr ' \t' '--')"
@@ -174,19 +207,15 @@ strip_code() {
   awk 'BEGIN{fence=0} /^[[:space:]]*```/{fence=!fence; next} !fence' | sed -E 's/`[^`]*`//g'
 }
 
-# Triage: ask a small fast model whether the message asserts a verifiable verdict.
+# Triage: ask a small fast model whether the turn states facts, findings, or
+# outcomes that should be double-checked before anyone relies on them.
 # Echoes YES / NO / UNKNOWN. UNKNOWN (no CLI, timeout, garbage) → regex fallback.
-# VERDICT_CLASSIFIER_CMD overrides the whole classifier invocation (stdin = message,
-# stdout = YES/NO); tests stub it, `false` forces UNKNOWN.
-triage_prompt='You are the applicability triage for a verdict-proof gate. Input: an
-assistant message that just ended a turn. Answer YES only if it reports, as NEWS,
-the outcome of work — something just fixed, tested, diagnosed, shipped, measured,
-or judged ("the fix works", "tests pass", "root cause is X", "deploy is healthy",
-"done"). Answer NO if it asks a question, narrates work still in progress, quotes
-verdict phrases while talking ABOUT them, or explains and teaches — describing how
-a system works, walking through architecture or behavior, or recapping facts that
-were already established and verified earlier in the session. Confident register
-alone is not a verdict; only fresh outcome-reporting is.
+# VERDICT_CLASSIFIER_CMD overrides the whole classifier invocation (stdin = turn
+# text, stdout = YES/NO); tests stub it, `false` forces UNKNOWN.
+triage_prompt='The assistant text of a just-ended turn follows. Decide one thing:
+does it state facts, findings, or outcomes as established that should be
+double-checked before anyone relies on them? If yes, answer YES — an independent
+audit will verify them. If there is nothing to check, answer NO.
 Reply with exactly one word: YES or NO.'
 should_audit() {  # stdin-less; uses $1 as the stripped message; echoes YES/NO/UNKNOWN
   local msg="$1" out=""
@@ -248,7 +277,8 @@ must exist before you end), via WHICHEVER of these your harness supports:
 Claude Code:
   Task(subagent_type='verdict-auditor',
        description='verdict proof check',
-       prompt='Audit my last message: each claim it presents as established must have
+       prompt='Audit my final turn — every assistant message since the last real user
+               message: each claim it presents as established, mid-turn or closing, must have
                concrete, direct proof in the evidence — the working-tree diff, the
                commands and their output in the transcript, or cited files/logs. A claim
                backed only by guessing or indirect inference is NOT proven. A turn that
@@ -283,7 +313,7 @@ if [[ -r "$verdict_file" ]]; then
      [[ "$v_tree" != "$cur_tree" ]] || \
      (( age > max_age_seconds )); then
     # Bookkeeping mismatch (branch/HEAD/tree moved, or dossier aged out) → discard
-    # and fall through to detection. The current turn's OWN final message decides
+    # and fall through to detection. The current turn's OWN text decides
     # below whether a FRESH audit is demanded; the mismatch itself never blocks.
     log_decision dossier discard-stale
     rm -f "$verdict_file"
@@ -292,7 +322,7 @@ if [[ -r "$verdict_file" ]]; then
       PASS)
         log_decision dossier PASS-allow
         rm -f "$verdict_file"   # consume; the next verdict re-audits
-        allow
+        allow_with_note "[verdict-gate] dossier PASS → consumed, turn ends"
         ;;
       IN_PROGRESS)
         remaining="$(jq -r '.findings[]? | "  - " + .' "$verdict_file" 2>/dev/null || echo '')"
@@ -319,7 +349,7 @@ ${verdict_instruction}"
   fi
 fi
 
-# ── No (usable) dossier → triage: does the final message assert a verdict? ───
+# ── No (usable) dossier → triage: does the turn assert a verdict? ───────────
 extract_final_message
 if [[ -z "$FINAL_TEXT" ]]; then
   log_decision extract empty-allow
@@ -339,7 +369,7 @@ if [[ -n "$FINAL_ID" && -n "$recorded_id" && "$FINAL_ID" == "$recorded_id" ]]; t
   done
   if [[ -z "$FINAL_TEXT" || "$FINAL_ID" == "$recorded_id" ]]; then
     log_decision race stale-allow
-    allow
+    allow_with_note "[verdict-gate] transcript unchanged since last judgment → allow"
   fi
 fi
 
@@ -350,11 +380,11 @@ printf '%s' "$FINAL_ID" > "$last_uuid_file" 2>/dev/null || true   # judged now, 
 triage="$(should_audit "$stripped")"
 if [[ "$triage" == "NO" ]]; then
   log_decision triage NO-allow
-  allow
+  allow_with_note "[verdict-gate] triage: NO — nothing to double-check → allow"
 fi
 if [[ "$triage" == "YES" ]]; then
   log_decision triage YES-block
-  block "Your final message asserts a verdict (triage: YES) but no audited
+  block "This turn asserts a verdict (triage: YES) but no audited
 dossier backs it. A claim stated as established needs proof attached.
 ${verdict_instruction}"
 fi
@@ -363,10 +393,10 @@ fi
 matched="$(printf '%s\n' "$stripped" | grep -Eio "$verdict_patterns" 2>/dev/null | head -n1 || true)"
 if [[ -z "$matched" ]]; then
   log_decision regex none-allow
-  allow
+  allow_with_note "[verdict-gate] triage unavailable, fallback patterns: no match → allow"
 fi
 
 log_decision regex match-block
-block "Your final message asserts a verdict (matched: \"${matched}\") but no audited
+block "This turn asserts a verdict (matched: \"${matched}\") but no audited
 dossier backs it. A claim stated as established needs proof attached.
 ${verdict_instruction}"

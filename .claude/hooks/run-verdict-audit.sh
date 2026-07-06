@@ -7,7 +7,8 @@
 #
 # Feeds the procedure in .claude/agents/verdict-auditor.md (frontmatter stripped)
 # as the system prompt to a model CLI with Read/Bash/Write tools, which audits the
-# transcript's last assistant message against the working tree and writes the
+# transcript's final turn (all assistant text since the last real user message,
+# mid-turn claims included) against the working tree and writes the
 # dossier (.claude/.last-verdict.json). Succeeds only if the dossier lands.
 #
 # Model resolution (same seam pattern as the triage classifier):
@@ -33,7 +34,8 @@ verdict_file="$project_dir/.claude/.last-verdict.json"
 audit_timeout_seconds="${VERDICT_AUDITOR_TIMEOUT:-600}"
 auditor_model="${VERDICT_AUDITOR_MODEL:-claude-sonnet-5}"
 
-audit_prompt="Audit the last assistant message in the session transcript: each claim
+audit_prompt="Audit the final turn in the session transcript — every assistant
+message since the last real user message: each claim
 it presents as established must have concrete, direct proof in the evidence — the
 working-tree diff, the commands and their output in the transcript, or cited
 files/logs. A claim backed only by guessing or indirect inference is NOT proven. A

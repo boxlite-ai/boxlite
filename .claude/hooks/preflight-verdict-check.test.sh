@@ -2,7 +2,7 @@
 # Tests for .claude/hooks/preflight-verdict-check.sh (the Stop-stage verdict gate).
 #
 # The hook is DETECTION-TRIGGERED, with finding-driven loops only:
-#   - no dossier + final message asserts a verdict ("root cause is X",
+#   - no dossier + the turn asserts a verdict ("root cause is X",
 #     "tests pass", "prod looks healthy", "done")      -> block: audit it
 #   - no dossier + chat / question / no transcript     -> allow
 #   - present PASS/IN_PROGRESS, fresh + matching       -> allow (consumed)
@@ -14,8 +14,10 @@
 # dossier, runs the hook there (cwd + CLAUDE_PROJECT_DIR pointed at it), and
 # asserts allow vs block.
 #
-# Stop contract: allow = empty stdout (exit 0); block = stdout {"decision":"block"};
-# soft nudge / IN_PROGRESS = {"continue":true,...} (non-empty, no block = allow).
+# Stop contract: block = stdout {"decision":"block"}; allow = exit 0 with either
+# empty stdout or {"continue":true, systemMessage:...} — the systemMessage is the
+# human-only triage announcement (the model never sees it; documented hook
+# contract). decide() treats any non-block output as allow.
 #
 # Run with:  bash .claude/hooks/preflight-verdict-check.test.sh
 # Exits non-zero on any failure.
@@ -102,6 +104,28 @@ write_future_agent_transcript() {
 # The content-derived message identity the hook records (keep formula in sync).
 cksum_of() { printf 'cksum-%s' "$(printf '%s' "$1" | cksum | tr ' \t' '--')"; }
 
+# Append records to an existing fixture transcript: a REAL user message (turn
+# boundary) or a further assistant text (same turn as its neighbors).
+append_user() {
+  jq -nc --arg t "$2" '{type:"user", message:{content:[{type:"text",text:$t}]}}' >> "$1/transcript.jsonl"
+}
+append_assistant() {
+  jq -nc --arg t "$2" '{type:"assistant", message:{content:[{type:"text",text:$t}]}}' >> "$1/transcript.jsonl"
+}
+# Tool results ride user-role records. The array shape (produced by Read, Agent,
+# ToolSearch, MCP tools) nests text-typed blocks INSIDE the tool_result — it must
+# NOT read as a turn boundary.
+append_tool_result_array() {
+  jq -nc --arg t "$2" \
+    '{type:"user", message:{role:"user", content:[{type:"tool_result", tool_use_id:"tu1", content:[{type:"text", text:$t}]}]}}' \
+    >> "$1/transcript.jsonl"
+}
+append_tool_result_string() {
+  jq -nc --arg t "$2" \
+    '{type:"user", message:{role:"user", content:[{type:"tool_result", tool_use_id:"tu1", content:$t}]}}' \
+    >> "$1/transcript.jsonl"
+}
+
 # Write a dossier; tree_hash defaults to the repo's current working-tree hash.
 write_verdict() {
   local repo="$1" verdict="$2" findings="$3" tree="${4:-$(tree_hash_of "$1")}"
@@ -149,7 +173,7 @@ check_gone() {  # desc  repo
   fi
 }
 
-echo "## Detection: no dossier → the final assistant message decides"
+echo "## Detection: no dossier → the turn text decides"
 R="$(setup)"; write_transcript "$R" "The root cause is a race between gvproxy startup and the socket bind."
 check "'root cause is X' → block (verdict asserted, unaudited)"   "$R" "block"; rm -rf "$R"
 
@@ -173,10 +197,12 @@ check "question → allow"                                          "$R" "allow"
 R="$(setup)"; write_transcript "$R" "Here are three options for the retry policy, with trade-offs for each."
 check "neutral discussion → allow"                                "$R" "allow"; rm -rf "$R"
 
-# Detection reads only the LAST message — an old verdict earlier in the session
-# must not retrigger on a later chat turn.
-R="$(setup)"; write_transcript "$R" "What should I look at next?" "The root cause is the stale cache."
-check "earlier verdict, last msg is a question → allow"           "$R" "allow"; rm -rf "$R"
+# Detection reads only the FINAL TURN — a verdict in a PREVIOUS turn (separated
+# by a real user message) must not retrigger on a later chat turn.
+R="$(setup)"; write_transcript "$R" "The root cause is the stale cache."
+append_user "$R" "thanks — and what should I look at next?"
+append_assistant "$R" "What to look at next depends on the retry budget you want."
+check "previous-turn verdict, new chat turn → allow"              "$R" "allow"; rm -rf "$R"
 
 # Verdict phrasing quoted inside code spans/fences is documentation, not a claim.
 R="$(setup)"; write_transcript "$R" 'The matcher looks for phrases like `tests pass` and `root cause is` in prose:
@@ -249,10 +275,10 @@ fi; rm -rf "$R"
 R="$(setup)"; write_transcript "$R" "In prose people write things like tests pass or root cause is X when they conclude."
 out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
   | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 VERDICT_CLASSIFIER_CMD='cat >/dev/null; echo NO' bash "$HOOK" ) 2>/dev/null)"
-if [[ -z "$out" ]]; then
-  pass=$((pass+1)); printf '  PASS  %s\n' "classifier NO on regex-hit phrasing → allow (FP removed)"
+if printf '%s' "$out" | jq -e '(.decision // "") != "block" and .continue == true and (.systemMessage | test("triage: NO"))' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "classifier NO → allow, announced to the human only"
 else
-  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "classifier NO → allow" "$out"
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "classifier NO → announced allow" "$out"
 fi; rm -rf "$R"
 
 # Classifier unavailable / garbage → UNKNOWN → deterministic regex fallback still gates.
@@ -292,6 +318,75 @@ if [[ "$got" == "allow" && "$recorded" == "$(cksum_of "Anything else to adjust?"
   pass=$((pass+1)); printf '  PASS  %s\n' "detection allow records the judged identity"
 else
   fail=$((fail+1)); printf '  FAIL  %s  (got=%s recorded=%s)\n' "identity recorded on allow" "$got" "$recorded"
+fi; rm -rf "$R"
+
+echo
+echo "## Turn-level extraction: mid-turn findings cannot hide behind closing narration"
+# The classifier stub greps its stdin for the finding — proving the JOINED turn
+# text (not just the trailing fragment) is what triage judges. This is the class
+# a sibling session's decision log caught escaping: finding asserted mid-turn,
+# turn ends on "let me check X".
+GREP_STUB='text="$(cat)"; printf "%s" "$text" | grep -q "1:1 port" && echo YES || echo NO'
+
+R="$(setup)"; write_transcript "$R" "The activity service is a 1:1 port of upstream; there is no auto-start in the proxy."
+append_assistant "$R" "Let me check what the standalone proxy serves next."
+out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 VERDICT_CLASSIFIER_CMD="$GREP_STUB" bash "$HOOK" ) 2>/dev/null)"
+if printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "mid-turn finding + closing narration → block (joined text judged)"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "mid-turn finding → block" "$out"
+fi; rm -rf "$R"
+
+# The dominant real-transcript shape: a tool call sits between the finding and
+# the closing narration. ARRAY-shaped tool_results nest text blocks inside the
+# tool_result — they must not split the turn (that miss shipped once).
+R="$(setup)"; write_transcript "$R" "The activity service is a 1:1 port of upstream; there is no auto-start in the proxy."
+append_tool_result_array "$R" "src/proxy.go: 200 lines, no timer, no activity import"
+append_assistant "$R" "Let me check what the standalone proxy serves next."
+out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 VERDICT_CLASSIFIER_CMD="$GREP_STUB" bash "$HOOK" ) 2>/dev/null)"
+if printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "array tool_result mid-turn does not split the turn → block"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "array tool_result mid-turn" "$out"
+fi; rm -rf "$R"
+
+R="$(setup)"; write_transcript "$R" "The activity service is a 1:1 port of upstream; there is no auto-start in the proxy."
+append_tool_result_string "$R" "ok"
+append_assistant "$R" "Let me check what the standalone proxy serves next."
+out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 VERDICT_CLASSIFIER_CMD="$GREP_STUB" bash "$HOOK" ) 2>/dev/null)"
+if printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "string tool_result mid-turn does not split the turn → block"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "string tool_result mid-turn" "$out"
+fi; rm -rf "$R"
+
+# Same finding but in a PREVIOUS turn (real user message between): the final
+# turn is narration only — must not retrigger.
+R="$(setup)"; write_transcript "$R" "The activity service is a 1:1 port of upstream; there is no auto-start in the proxy."
+append_user "$R" "ok — check the proxy then"
+append_assistant "$R" "Let me check what the standalone proxy serves next."
+out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 VERDICT_CLASSIFIER_CMD="$GREP_STUB" bash "$HOOK" ) 2>/dev/null)"
+if ! printf '%s' "$out" | jq -e '(.decision // "") == "block"' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "same finding in a previous turn → allow (turn boundary respected)"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "previous-turn finding → allow" "$out"
+fi; rm -rf "$R"
+
+# Codex rollout shape, same semantics: user boundary + two assistant texts join.
+R="$(setup)"
+jq -nc '{type:"response_item", payload:{type:"message", role:"user", content:[{type:"input_text", text:"compare with upstream"}]}}' > "$R/transcript.jsonl"
+jq -nc '{type:"response_item", payload:{type:"message", role:"assistant", content:[{type:"output_text", text:"The activity service is a 1:1 port of upstream."}]}}' >> "$R/transcript.jsonl"
+jq -nc '{type:"response_item", payload:{type:"message", role:"assistant", content:[{type:"output_text", text:"Let me check the proxy next."}]}}' >> "$R/transcript.jsonl"
+out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 VERDICT_CLASSIFIER_CMD="$GREP_STUB" bash "$HOOK" ) 2>/dev/null)"
+if printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "codex shape: mid-turn finding joined across records → block"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "codex turn-level" "$out"
 fi; rm -rf "$R"
 
 echo
@@ -382,8 +477,12 @@ soft_chat="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_eve
   | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" bash "$HOOK" ) 2>/dev/null)"
 hard_chat="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
   | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 bash "$HOOK" ) 2>/dev/null)"
-if [[ -z "$soft_chat" && -z "$hard_chat" ]]; then
-  pass=$((pass + 1)); printf '  PASS  %s\n' "chat turn → allow (empty) in soft AND hard"
+chat_ok=yes
+for o in "$soft_chat" "$hard_chat"; do
+  if [[ -n "$o" ]] && printf '%s' "$o" | jq -e '(.decision // "") == "block"' >/dev/null 2>&1; then chat_ok=no; fi
+done
+if [[ "$chat_ok" == "yes" ]]; then
+  pass=$((pass + 1)); printf '  PASS  %s\n' "chat turn → allow (never blocks) in soft AND hard"
 else
   fail=$((fail + 1)); printf '  FAIL  %s  (soft=%s hard=%s)\n' "chat allow" "$soft_chat" "$hard_chat"
 fi
