@@ -156,7 +156,7 @@ describe('BoxliteWsProxyService', () => {
     return { service, boxService, upgrade, socket }
   }
 
-  it('refreshes activity on inbound client bytes, throttled to one write per window', async () => {
+  it('does not refresh activity from proxied websocket bytes after the upgrade touch', async () => {
     const { service, boxService, upgrade, socket } = buildUpgradeHarness()
 
     await service.upgrade(authRequest('blk_live_test'), socket as never, Buffer.alloc(0))
@@ -165,23 +165,20 @@ describe('BoxliteWsProxyService', () => {
     expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
     expect(upgrade).toHaveBeenCalled()
 
-    // Bytes right after connect fall into the upgrade touch's throttle window.
     socket.emit('data', Buffer.from([0x8a, 0x00]))
     expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
 
-    // A Pong (or keystroke) after the window refreshes the ledger…
     jest.advanceTimersByTime(30_000)
     socket.emit('data', Buffer.from([0x8a, 0x00]))
-    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(2)
+    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
 
-    // …and a burst within the same window still costs a single write.
     socket.emit('data', Buffer.from('ls\n'))
     socket.emit('data', Buffer.from('top\n'))
-    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(2)
+    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
 
     jest.advanceTimersByTime(30_000)
     socket.emit('data', Buffer.from([0x8a, 0x00]))
-    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(3)
+    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
   })
 
   it('stops refreshing when the client goes silent (dead or half-open peer)', async () => {

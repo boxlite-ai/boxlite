@@ -156,7 +156,7 @@ func BoxliteExecAttach(ctx *gin.Context) {
 		return
 	}
 
-	runAttachLoop(ctx.Request.Context(), conn, target)
+	runAttachLoop(ctx.Request.Context(), conn, target, boxId)
 }
 
 // runAttachLoop owns the WebSocket lifecycle: spawns reader/writer/keepalive
@@ -167,8 +167,12 @@ func BoxliteExecAttach(ctx *gin.Context) {
 // unbounded allocation.
 const maxAttachFrameBytes = 1 * 1024 * 1024 // 1 MiB
 
-func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachExec) {
+func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachExec, boxID string) {
 	conn.SetReadLimit(maxAttachFrameBytes)
+
+	loopCtx, cancel := context.WithCancel(parentCtx)
+	defer cancel()
+	activityToucher := newBoxActivityToucher(boxID, nil)
 
 	// Detect a dead client via Pong liveness: a tiny Ping write fits in
 	// the kernel send buffer and returns success even when the peer is
@@ -179,11 +183,9 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 	pongWait := 3 * keepaliveInterval()
 	_ = conn.SetReadDeadline(time.Now().Add(pongWait))
 	conn.SetPongHandler(func(string) error {
+		activityToucher.Touch(loopCtx)
 		return conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
-
-	loopCtx, cancel := context.WithCancel(parentCtx)
-	defer cancel()
 
 	var (
 		writeMu   sync.Mutex     // serializes ALL writes to the WebSocket
