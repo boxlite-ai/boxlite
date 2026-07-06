@@ -22,19 +22,31 @@
 #        "the binding moved" is not a finding, and blocking on it was the
 #        meaningless-loop class (e.g. a commit moving HEAD out from under a
 #        dossier written seconds earlier).
-#   3. No dossier: detect. Verdict-shaped final message -> block with the audit
-#      instruction; anything else -> allow. No transcript / no text -> allow.
+#   3. No dossier: TRIAGE the final message — "does this assert a verifiable verdict?"
+#      A fast model (haiku) answers YES/NO; when no model is reachable the static
+#      pattern list below decides (deterministic fallback, e.g. Codex sessions).
+#      YES -> block with the audit instruction; NO -> allow. No transcript -> allow.
+#   4. Flush-race guard: the harness can fire Stop before appending the turn's final
+#      message, leaving the PREVIOUS (already-gated) message last in the transcript.
+#      The hook records the uuid it judged; if the newest uuid equals it, the hook
+#      waits briefly for the fresh message and, failing that, allows — a message is
+#      never judged twice.
 #
 # Wired in .claude/settings.json under hooks.Stop (no matcher — fires every turn end).
 #
 # Design notes
 # ------------
-# * Why prose detection is safe HERE: false negatives (a creatively-worded verdict) are
-#   accepted — the threat model is honest mistakes, and an unmatched verdict just falls
-#   back to the agent's CLAUDE.md duty. A false positive costs ONE synchronous audit
-#   that trivially PASSes ("turn asserts nothing verifiable") — a tax, not a loop.
-#   Code spans and fenced blocks are stripped before matching so documentation ABOUT
-#   verdicts does not trigger (a session discussing this very gate stays quiet).
+# * Triage is the auditor's applicability judgment, extracted: the full verdict-auditor
+#   already begins by deciding whether the message asserts anything verifiable. The
+#   hook runs that ONE question on a small fast model (~seconds, message-only context)
+#   so the expensive audit is spawned only when the answer is YES. Any classifier
+#   failure — CLI absent, timeout, garbage output — degrades to the static pattern
+#   list, and a pattern miss degrades further to the agent's CLAUDE.md duty: every
+#   failure moves toward #915's honor system, never toward a trap. A false positive
+#   costs ONE synchronous audit that trivially PASSes — a tax, not a loop. Code spans
+#   and fenced blocks are stripped before triage so documentation ABOUT verdicts does
+#   not trigger. VERDICT_CLASSIFIER_CMD overrides the classifier (tests use stubs;
+#   set it to `false` to force the regex path).
 #
 # * Why no loop can form: the audit is mandated SYNCHRONOUS (the block instruction
 #   says run_in_background: false), so audit and verdict share one turn — there is no
@@ -81,7 +93,9 @@ project_dir="${CLAUDE_PROJECT_DIR:-$repo_root}"
 branch="$(git -C "$repo_root" branch --show-current 2>/dev/null || echo '?')"
 head="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo '?')"
 verdict_file="$project_dir/.claude/.last-verdict.json"
+last_uuid_file="$project_dir/.claude/.verdict-last-uuid"
 max_age_seconds=600
+classifier_timeout_seconds=20
 
 allow()           { exit 0; }                                              # let the turn end
 allow_with_note() { jq -nc --arg m "$1" '{continue:true, systemMessage:$m}'; exit 0; }
@@ -109,13 +123,35 @@ compute_tree_hash() {
 }
 
 # Last assistant message with text content, from the session transcript (JSONL).
-# Empty output (no/unreadable transcript, no text) means detection cannot run →
-# the caller falls back to allow (fail-open, never trap on absent state).
+# HARNESS-AGNOSTIC by convention, not by schema list: a record is an assistant
+# message if ANY object inside it has role=="assistant" or type=="assistant"; its
+# text is every string under a `text` key inside blocks whose type mentions "text"
+# (covers Claude Code `text`, Codex `output_text`, and any future agent following
+# the same conventions), falling back to all `text`-key strings if that yields
+# nothing. New coding agents need ZERO code here — at most set
+# VERDICT_EXTRACTOR_CMD in their own hook wiring for a truly alien format
+# (invoked with the transcript path as $1; stdout = the final message text).
+# Message identity is a checksum of the text — content-derived, no per-harness ids —
+# used by the never-judge-twice race guard.
+# Empty text (no/unreadable transcript) means detection cannot run → the caller
+# falls back to allow (fail-open, never trap on absent state).
+FINAL_ID=""
+FINAL_TEXT=""
 extract_final_message() {
+  FINAL_ID=""; FINAL_TEXT=""
   [[ -n "$transcript_path" && -r "$transcript_path" ]] || return 0
-  jq -rs '[.[] | select(.type=="assistant") | .message.content
-           | if type=="array" then (map(select(.type=="text") | .text) | join("\n")) else tostring end
-           | select(length>0)] | last // ""' "$transcript_path" 2>/dev/null || true
+  if [[ -n "${VERDICT_EXTRACTOR_CMD:-}" ]]; then
+    FINAL_TEXT="$(bash -c "$VERDICT_EXTRACTOR_CMD \"\$1\"" _ "$transcript_path" 2>/dev/null || true)"
+  else
+    FINAL_TEXT="$(jq -rs '[.[]
+            | select([.. | objects | select((.role? == "assistant") or (.type? == "assistant"))] | length > 0)
+            | ([.. | objects | select((.type? // "" | tostring) | test("text")) | .text? // empty | strings] | join("\n")) as $typed
+            | (if ($typed | length) > 0 then $typed
+               else ([.. | objects | .text? // empty | strings] | join("\n")) end)
+            | select(length > 0)] | last // ""' "$transcript_path" 2>/dev/null || true)"
+  fi
+  [[ -n "$FINAL_TEXT" ]] || return 0
+  FINAL_ID="cksum-$(printf '%s' "$FINAL_TEXT" | cksum | tr ' \t' '--')"
 }
 
 # Remove fenced code blocks and inline code spans: verdict phrasing inside code is
@@ -124,9 +160,39 @@ strip_code() {
   awk 'BEGIN{fence=0} /^[[:space:]]*```/{fence=!fence; next} !fence' | sed -E 's/`[^`]*`//g'
 }
 
-# Curated claim patterns (ERE, matched case-insensitively). Targets how verdicts are
-# actually phrased; tune here. A miss degrades to self-declared, a spurious hit costs
-# one trivial-PASS audit.
+# Triage: ask a small fast model whether the message asserts a verifiable verdict.
+# Echoes YES / NO / UNKNOWN. UNKNOWN (no CLI, timeout, garbage) → regex fallback.
+# VERDICT_CLASSIFIER_CMD overrides the whole classifier invocation (stdin = message,
+# stdout = YES/NO); tests stub it, `false` forces UNKNOWN.
+triage_prompt='You are the applicability triage for a verdict-proof gate. Input: an
+assistant message that just ended a turn. Answer YES if it asserts, as established
+fact, a verifiable outcome of work — a fix that works, tests that pass, a root cause
+identified, a system/deploy judged healthy, a task declared complete, "no issues
+found". Answer NO if it merely asks a question, explains or discusses concepts,
+quotes such phrases while talking ABOUT them, or narrates work still in progress.
+Reply with exactly one word: YES or NO.'
+should_audit() {  # stdin-less; uses $1 as the stripped message; echoes YES/NO/UNKNOWN
+  local msg="$1" out=""
+  if [[ -n "${VERDICT_CLASSIFIER_CMD:-}" ]]; then
+    out="$(printf '%s' "$msg" | bash -c "$VERDICT_CLASSIFIER_CMD" 2>/dev/null | tail -n1 | tr -dc 'A-Za-z' | tr '[:lower:]' '[:upper:]')"
+  elif command -v claude >/dev/null 2>&1; then
+    # perl alarm = portable timeout (macOS has no coreutils `timeout`).
+    # disableAllHooks guards nested-hook recursion from inside a hook.
+    out="$(printf '%s\n\n<message>\n%s\n</message>\n' "$triage_prompt" "$msg" \
+      | perl -e 'alarm shift; exec @ARGV' "$classifier_timeout_seconds" \
+          claude -p --model claude-haiku-4-5-20251001 --settings '{"disableAllHooks":true}' 2>/dev/null \
+      | tail -n1 | tr -dc 'A-Za-z' | tr '[:lower:]' '[:upper:]')"
+  fi
+  case "$out" in
+    YES) echo YES ;;
+    NO)  echo NO ;;
+    *)   echo UNKNOWN ;;
+  esac
+}
+
+# Fallback claim patterns (ERE, matched case-insensitively) for when the classifier
+# is unreachable. Targets how verdicts are actually phrased; tune here. A miss
+# degrades to self-declared, a spurious hit costs one trivial-PASS audit.
 verdict_patterns='root cause (is|was|confirmed|:)'
 verdict_patterns+='|(all |the )?(tests?|suites?|checks?|builds?) (now |all |still )?(pass(es|ed|ing)?|green)'
 verdict_patterns+='|[0-9]+/[0-9]+ (tests? )?(pass|passing|green)'
@@ -138,6 +204,13 @@ verdict_patterns+='|(verified|confirmed)([;,.!]| that| the| it| locally| e2e| en
 verdict_patterns+='|^[[:space:]]*(verified|confirmed) [a-z]'
 verdict_patterns+='|deploy(ment|ed)? (is |looks? )?(healthy|live|successful|stable)'
 verdict_patterns+='|^[[:space:]]*done[.! ]*$'
+# Chinese claim phrasings (conservative set — the classifier handles languages the
+# list never will; these keep the FALLBACK useful in bilingual sessions).
+verdict_patterns+='|根因(是|为|：|:)'
+verdict_patterns+='|(测试|用例)(全部|都|均)?(通过|绿)'
+verdict_patterns+='|没有(问题|异常|回归)'
+verdict_patterns+='|已(修复|解决|完成|验证)'
+verdict_patterns+='|(部署|服务|线上)(正常|健康|稳定)'
 
 # ── Shared re-audit instruction (used by every block path) ───────────────────
 # The block `reason`s below are the gate's UX + anti-cheating contract — what Claude
@@ -219,11 +292,42 @@ ${verdict_instruction}"
   fi
 fi
 
-# ── No (usable) dossier → detect: does the final message assert a verdict? ───
-final_message="$(extract_final_message)"
-[[ -z "$final_message" ]] && allow
+# ── No (usable) dossier → triage: does the final message assert a verdict? ───
+extract_final_message
+[[ -z "$FINAL_TEXT" ]] && allow
 
-matched="$(printf '%s\n' "$final_message" | strip_code | grep -Eio "$verdict_patterns" 2>/dev/null | head -n1 || true)"
+# Flush-race guard: if the newest transcript message is the one already judged, the
+# harness fired Stop before appending this turn's final text. Wait briefly for the
+# fresh message; if none arrives there is nothing new to judge → allow. A message
+# is never judged twice.
+recorded_id="$(cat "$last_uuid_file" 2>/dev/null || echo '')"
+if [[ -n "$FINAL_ID" && -n "$recorded_id" && "$FINAL_ID" == "$recorded_id" ]]; then
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    sleep 0.2
+    extract_final_message
+    [[ "$FINAL_ID" != "$recorded_id" ]] && break
+  done
+  if [[ -z "$FINAL_TEXT" || "$FINAL_ID" == "$recorded_id" ]]; then
+    allow
+  fi
+fi
+
+stripped="$(printf '%s\n' "$FINAL_TEXT" | strip_code)"
+mkdir -p "$(dirname "$last_uuid_file")" 2>/dev/null || true
+printf '%s' "$FINAL_ID" > "$last_uuid_file" 2>/dev/null || true   # judged now, allow or block
+
+triage="$(should_audit "$stripped")"
+if [[ "$triage" == "NO" ]]; then
+  allow
+fi
+if [[ "$triage" == "YES" ]]; then
+  block "Your final message asserts a verdict (triage: YES) but no audited
+dossier backs it. A claim stated as established needs proof attached.
+${verdict_instruction}"
+fi
+
+# Triage UNKNOWN (no model reachable) → deterministic pattern fallback.
+matched="$(printf '%s\n' "$stripped" | grep -Eio "$verdict_patterns" 2>/dev/null | head -n1 || true)"
 [[ -z "$matched" ]] && allow
 
 block "Your final message asserts a verdict (matched: \"${matched}\") but no audited
