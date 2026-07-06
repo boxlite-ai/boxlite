@@ -94,8 +94,22 @@ branch="$(git -C "$repo_root" branch --show-current 2>/dev/null || echo '?')"
 head="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo '?')"
 verdict_file="$project_dir/.claude/.last-verdict.json"
 last_uuid_file="$project_dir/.claude/.verdict-last-uuid"
+decision_log="$project_dir/.claude/.verdict-decisions.log"
 max_age_seconds=600
 classifier_timeout_seconds=20
+
+# One line per Stop decision (gitignored): timestamp, message identity, deciding
+# rung, outcome — so "why did/didn't the gate fire?" is answerable with tail
+# instead of fixture reconstruction. Best-effort: logging must never fail the
+# hook. Rotated in place to stay bounded.
+log_decision() {  # rung outcome
+  { mkdir -p "$(dirname "$decision_log")"
+    printf '%s %s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${FINAL_ID:--}" "$1" "$2" >> "$decision_log"
+    if [[ "$(wc -l < "$decision_log")" -gt 1000 ]]; then
+      tail -n 500 "$decision_log" > "$decision_log.tmp" && mv "$decision_log.tmp" "$decision_log"
+    fi
+  } 2>/dev/null || true
+}
 
 allow()           { exit 0; }                                              # let the turn end
 allow_with_note() { jq -nc --arg m "$1" '{continue:true, systemMessage:$m}'; exit 0; }
@@ -228,8 +242,10 @@ verdict_patterns+='|(部署|服务|线上)(正常|健康|稳定)'
 #   • After the auditor reports, end the turn again; this hook re-checks.
 #
 # Variables available: ${transcript_path} ${branch} ${head} ${verdict_file}
-verdict_instruction="Audit before ending: invoke the verdict-auditor subagent
-SYNCHRONOUSLY (run_in_background: false — the dossier must exist before you end).
+verdict_instruction="Audit before ending — run the audit SYNCHRONOUSLY (the dossier
+must exist before you end), via WHICHEVER of these your harness supports:
+
+Claude Code:
   Task(subagent_type='verdict-auditor',
        description='verdict proof check',
        prompt='Audit my last message: each claim it presents as established must have
@@ -237,6 +253,10 @@ SYNCHRONOUSLY (run_in_background: false — the dossier must exist before you en
                commands and their output in the transcript, or cited files/logs. A claim
                backed only by guessing or indirect inference is NOT proven. A turn that
                asserts nothing verifiable is a PASS. transcript_path: ${transcript_path}')
+       (run_in_background: false)
+
+Any other agent (no Task tool):
+  bash .claude/hooks/run-verdict-audit.sh '${transcript_path}'
 
 The AUDITOR — not you — writes ${verdict_file}; do not write it yourself. If you are
 pausing or asking the user something, have it record IN_PROGRESS with what remains;
@@ -265,20 +285,24 @@ if [[ -r "$verdict_file" ]]; then
     # Bookkeeping mismatch (branch/HEAD/tree moved, or dossier aged out) → discard
     # and fall through to detection. The current turn's OWN final message decides
     # below whether a FRESH audit is demanded; the mismatch itself never blocks.
+    log_decision dossier discard-stale
     rm -f "$verdict_file"
   else
     case "$v_verdict" in
       PASS)
+        log_decision dossier PASS-allow
         rm -f "$verdict_file"   # consume; the next verdict re-audits
         allow
         ;;
       IN_PROGRESS)
         remaining="$(jq -r '.findings[]? | "  - " + .' "$verdict_file" 2>/dev/null || echo '')"
+        log_decision dossier IN_PROGRESS-allow
         rm -f "$verdict_file"
         allow_with_note "Verdict: IN_PROGRESS — proof deferred, work not yet complete:
 ${remaining}"
         ;;
       *)
+        log_decision dossier FAIL-block
         # FAIL (or unexpected): the finding-driven block. The dossier is KEPT so
         # ending again without addressing the findings re-blocks — this is the one
         # loop the gate is ALLOWED to have. A fix that changes the tree invalidates
@@ -297,7 +321,10 @@ fi
 
 # ── No (usable) dossier → triage: does the final message assert a verdict? ───
 extract_final_message
-[[ -z "$FINAL_TEXT" ]] && allow
+if [[ -z "$FINAL_TEXT" ]]; then
+  log_decision extract empty-allow
+  allow
+fi
 
 # Flush-race guard: if the newest transcript message is the one already judged, the
 # harness fired Stop before appending this turn's final text. Wait briefly for the
@@ -311,6 +338,7 @@ if [[ -n "$FINAL_ID" && -n "$recorded_id" && "$FINAL_ID" == "$recorded_id" ]]; t
     [[ "$FINAL_ID" != "$recorded_id" ]] && break
   done
   if [[ -z "$FINAL_TEXT" || "$FINAL_ID" == "$recorded_id" ]]; then
+    log_decision race stale-allow
     allow
   fi
 fi
@@ -321,9 +349,11 @@ printf '%s' "$FINAL_ID" > "$last_uuid_file" 2>/dev/null || true   # judged now, 
 
 triage="$(should_audit "$stripped")"
 if [[ "$triage" == "NO" ]]; then
+  log_decision triage NO-allow
   allow
 fi
 if [[ "$triage" == "YES" ]]; then
+  log_decision triage YES-block
   block "Your final message asserts a verdict (triage: YES) but no audited
 dossier backs it. A claim stated as established needs proof attached.
 ${verdict_instruction}"
@@ -331,8 +361,12 @@ fi
 
 # Triage UNKNOWN (no model reachable) → deterministic pattern fallback.
 matched="$(printf '%s\n' "$stripped" | grep -Eio "$verdict_patterns" 2>/dev/null | head -n1 || true)"
-[[ -z "$matched" ]] && allow
+if [[ -z "$matched" ]]; then
+  log_decision regex none-allow
+  allow
+fi
 
+log_decision regex match-block
 block "Your final message asserts a verdict (matched: \"${matched}\") but no audited
 dossier backs it. A claim stated as established needs proof attached.
 ${verdict_instruction}"

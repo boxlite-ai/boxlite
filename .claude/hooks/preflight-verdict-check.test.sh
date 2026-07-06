@@ -340,6 +340,32 @@ R="$(setup)"; write_transcript "$R" "接下来你想先看哪个模块？我可�
 check "中文 chat → allow"                                         "$R" "allow"; rm -rf "$R"
 
 echo
+echo "## Decision log: every Stop decision leaves one greppable line"
+R="$(setup)"; write_transcript "$R" "Deploy is healthy."
+decide "$R" >/dev/null
+if grep -q ' regex match-block$' "$R/.claude/.verdict-decisions.log" 2>/dev/null; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "block decision logged (rung + outcome)"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (log=%s)\n' "block logged" "$(cat "$R/.claude/.verdict-decisions.log" 2>/dev/null || echo MISSING)"
+fi; rm -rf "$R"
+
+R="$(setup)"; write_transcript "$R" "Anything else to adjust?"
+decide "$R" >/dev/null
+if grep -q ' regex none-allow$' "$R/.claude/.verdict-decisions.log" 2>/dev/null; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "allow decision logged"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (log=%s)\n' "allow logged" "$(cat "$R/.claude/.verdict-decisions.log" 2>/dev/null || echo MISSING)"
+fi; rm -rf "$R"
+
+R="$(setup)"; write_transcript "$R" "Fix verified; tests pass."; write_verdict "$R" "PASS" "[]"
+decide "$R" >/dev/null
+if grep -q ' dossier PASS-allow$' "$R/.claude/.verdict-decisions.log" 2>/dev/null; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "dossier consumption logged"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (log=%s)\n' "dossier logged" "$(cat "$R/.claude/.verdict-decisions.log" 2>/dev/null || echo MISSING)"
+fi; rm -rf "$R"
+
+echo
 echo "## Soft mode (VERDICT_GATE_HARD_BLOCK unset/0): block conditions become nudges"
 R="$(setup)"; write_transcript "$R" "The root cause is the stale index."
 soft_out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
