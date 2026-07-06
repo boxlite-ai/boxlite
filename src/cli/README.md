@@ -480,10 +480,10 @@ Copy files or directories between host and box.
 **Examples:**
 
 ```bash
-boxlite cp ./local.txt mybox:/tmp/
-boxlite cp mybox:/app/out ./output
+# Standard BoxLite images start in /workspace; custom images keep their own WORKDIR
+boxlite cp ./local.txt mybox:/path/to/your/project/
+boxlite cp mybox:/path/to/your/project/out ./output
 ```
-
 
 ### `boxlite info`
 

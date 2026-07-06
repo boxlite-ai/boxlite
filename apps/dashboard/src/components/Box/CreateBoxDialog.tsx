@@ -13,7 +13,7 @@ import { handleApiError } from '@/lib/error-handling'
 import { cn } from '@/lib/utils'
 import type { Box } from '@boxlite-ai/api-client'
 import { ChevronDown, Plus, RefreshCw } from '@/components/ui/icon'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useGeneratedBoxName } from './useGeneratedBoxName'
 import { generatePath, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -21,9 +21,9 @@ import { toast } from 'sonner'
 const NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
 
 const SUPPORTED_BOX_IMAGES = [
-  { id: 'base', name: 'Base', ref: 'ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3', isDefault: true },
-  { id: 'python', name: 'Python', ref: 'ghcr.io/boxlite-ai/boxlite-agent-python:20260605-p0-r3', isDefault: false },
-  { id: 'node', name: 'Node.js', ref: 'ghcr.io/boxlite-ai/boxlite-agent-node:20260605-p0-r3', isDefault: false },
+  { id: 'base', name: 'Base', ref: 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0', isDefault: true },
+  { id: 'python', name: 'Python', ref: 'ghcr.io/boxlite-ai/boxlite-agent-python:v0.1.0', isDefault: false },
+  { id: 'node', name: 'Node.js', ref: 'ghcr.io/boxlite-ai/boxlite-agent-node:v0.1.0', isDefault: false },
 ] as const
 
 const DEFAULTS = { cpu: 1, memory: 1, disk: 10 }
@@ -204,6 +204,7 @@ export const CreateBoxDialog = ({
   const wasOpenRef = useRef(false)
   const open = controlledOpen ?? internalOpen
   const setOpen = onOpenChange ?? setInternalOpen
+  const userEditedNameDuringGenerationRef = useRef(false)
 
   const { selectedOrganization } = useSelectedOrganization()
   const createBoxMutation = useCreateBoxMutation()
@@ -235,7 +236,17 @@ export const CreateBoxDialog = ({
     if (limit != null && v < limit) setCapped((c) => (c[key] ? { ...c, [key]: false } : c))
   }
 
-  const { display: generatedName, isGenerating, generate, reset: resetName } = useGeneratedBoxName(setName)
+  const { display: generatedName, isGenerating, generate, reset: resetName } = useGeneratedBoxName((nextName) => {
+    if (!userEditedNameDuringGenerationRef.current) {
+      setName(nextName)
+    }
+  })
+  const showingGeneratedName = isGenerating && !userEditedNameDuringGenerationRef.current
+
+  const startNameGeneration = useCallback(() => {
+    userEditedNameDuringGenerationRef.current = false
+    generate()
+  }, [generate])
 
   // Hand the user a fresh generated name each time the dialog opens (it lands
   // in the editable field via the reveal animation); clear on close.
@@ -244,6 +255,7 @@ export const CreateBoxDialog = ({
     wasOpenRef.current = open
     if (!open) {
       resetName()
+      userEditedNameDuringGenerationRef.current = false
       return
     }
     if (wasOpen) return
@@ -256,8 +268,8 @@ export const CreateBoxDialog = ({
     setAdvancedOpen(false)
     setSubmitting(false)
     setCapped({ cpu: false, memory: false, disk: false })
-    generate()
-  }, [open, defaultImage.ref, initialCpu, initialMemory, initialDisk, generate, resetName])
+    startNameGeneration()
+  }, [open, defaultImage.ref, initialCpu, initialMemory, initialDisk, startNameGeneration, resetName])
 
   useEffect(() => {
     if (!open) return
@@ -309,7 +321,7 @@ export const CreateBoxDialog = ({
       // deal a fresh name into the field so the next click succeeds.
       if ((error as { response?: { status?: number } })?.response?.status === 409) {
         toast.error('That name is already taken — here is a fresh one.')
-        generate()
+        startNameGeneration()
       } else {
         handleApiError(error, 'Failed to create box')
       }
@@ -355,19 +367,21 @@ export const CreateBoxDialog = ({
               )}
             >
               <input
-                value={isGenerating ? generatedName : name}
-                onChange={(e) => setName(e.target.value)}
-                readOnly={isGenerating}
+                value={showingGeneratedName ? generatedName : name}
+                onChange={(e) => {
+                  userEditedNameDuringGenerationRef.current = true
+                  setName(e.target.value)
+                }}
                 placeholder="my-new-box"
                 aria-invalid={!nameValid}
                 className={cn(
                   'min-w-0 flex-1 bg-transparent px-[13px] py-[11px] font-mono text-[13px] text-foreground outline-none',
-                  isGenerating && 'text-brand',
+                  showingGeneratedName && 'text-brand',
                 )}
               />
               <button
                 type="button"
-                onClick={() => generate()}
+                onClick={() => startNameGeneration()}
                 disabled={isGenerating}
                 title="Suggest another name"
                 aria-label="Suggest another name"

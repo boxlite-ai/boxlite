@@ -124,7 +124,30 @@ fitAddon.fit();
 var proto=location.protocol==='https:'?'wss:':'ws:';
 var ws=new WebSocket(proto+'//'+location.host+location.pathname+location.search);
 ws.onopen=function(){term.focus();};
-ws.onmessage=function(e){term.write(e.data);};
+function postCwd(path){
+  if(!path||path.charAt(0)!=='/')return;
+  parent.postMessage({source:'boxlite-terminal',type:'cwd',value:path},'*');
+}
+function scanCwd(data){
+  var text=String(data);
+  var re=/\x1b\]7;file:\/\/[^/]*(\/[^\x07\x1b]*)(?:\x07|\x1b\\)/g;
+  var match;
+  while((match=re.exec(text))!==null){
+    var path=match[1];
+    try{path=decodeURI(path);}catch(_){}
+    postCwd(path);
+  }
+}
+var parentOrigin='';
+try{parentOrigin=new URL(document.referrer).origin;}catch(_){}
+window.addEventListener('message',function(event){
+  if(event.source!==parent)return;
+  if(parentOrigin&&event.origin!==parentOrigin)return;
+  var msg=event.data||{};
+  if(msg.source!=='boxlite-dashboard'||msg.type!=='command'||msg.command!=='ls')return;
+  if(ws.readyState===WebSocket.OPEN)ws.send('ls\r');
+});
+ws.onmessage=function(e){scanCwd(e.data);term.write(e.data);};
 ws.onclose=function(){term.write('\r\n[Connection closed]\r\n');};
 ws.onerror=function(){term.write('\r\n[Connection error]\r\n');};
 term.onData(function(data){if(ws.readyState===WebSocket.OPEN)ws.send(data);});

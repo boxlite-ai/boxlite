@@ -37,6 +37,14 @@ describe('BoxliteWsProxyService', () => {
     } as IncomingMessage
   }
 
+  function queryAuthRequest(token: string, url = '/api/v1/org-1/boxes/public-box/executions/exec-1/attach') {
+    const separator = url.includes('?') ? '&' : '?'
+    return {
+      url: `${url}${separator}access_token=${encodeURIComponent(token)}`,
+      headers: {},
+    } as IncomingMessage
+  }
+
   function buildAuthHarness() {
     const apiKeyService = {
       getApiKeyByValue: jest.fn().mockRejectedValue(new Error('api key not found')),
@@ -96,6 +104,17 @@ describe('BoxliteWsProxyService', () => {
     organizationUserService.findOne.mockResolvedValue({ organizationId: 'org-1', userId: 'user-1' })
 
     await expect(service.authenticate(authRequest(jwt), 'org-1')).resolves.toEqual({ organizationId: 'org-1' })
+    expect(jwtStrategy.verifyToken).toHaveBeenCalledWith(jwt)
+    expect(organizationUserService.findOne).toHaveBeenCalledWith('org-1', 'user-1')
+  })
+
+  it('authenticates JWT query tokens for browser websocket attach', async () => {
+    const { service, organizationUserService, jwtStrategy } = buildAuthHarness()
+    const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyXzEifQ.signature'
+    jwtStrategy.verifyToken.mockResolvedValue({ sub: 'user-1', email: 'dev@acme.test' })
+    organizationUserService.findOne.mockResolvedValue({ organizationId: 'org-1', userId: 'user-1' })
+
+    await expect(service.authenticate(queryAuthRequest(jwt), 'org-1')).resolves.toEqual({ organizationId: 'org-1' })
     expect(jwtStrategy.verifyToken).toHaveBeenCalledWith(jwt)
     expect(organizationUserService.findOne).toHaveBeenCalledWith('org-1', 'user-1')
   })

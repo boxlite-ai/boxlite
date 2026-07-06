@@ -7,7 +7,6 @@ import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
-import { RoutePath } from '@/enums/RoutePath'
 import { useStartBoxMutation } from '@/hooks/mutations/useStartBoxMutation'
 import { useTerminalSessionQuery } from '@/hooks/queries/useTerminalSessionQuery'
 import { useBoxSessionContext } from '@/hooks/useBoxSessionContext'
@@ -21,7 +20,13 @@ import { Play, RefreshCw, TerminalSquare } from '@/components/ui/icon'
 import { toast } from 'sonner'
 import { BoxTerminalFrame } from './BoxTerminalFrame'
 
-export function BoxTerminalTab({ box, refreshSignal = 0 }: { box: Box; refreshSignal?: number }) {
+interface BoxTerminalTabProps {
+  box: Box
+  refreshSignal?: number
+  onCurrentDirChange?: (path: string) => void
+}
+
+export function BoxTerminalTab({ box, refreshSignal = 0, onCurrentDirChange }: BoxTerminalTabProps) {
   const running = isStoppable(box)
   const { isTerminalActivated, activateTerminal } = useBoxSessionContext()
   const { authenticatedUserHasPermission } = useSelectedOrganization()
@@ -153,15 +158,15 @@ export function BoxTerminalTab({ box, refreshSignal = 0 }: { box: Box; refreshSi
   }
 
   // Active session
-  const fullscreenHref = RoutePath.BOX_TERMINAL.replace(':boxId', getBoxRouteId(box))
   return (
     <div className="flex-1 flex flex-col">
       <div className="relative flex-1 min-h-0 bg-black overflow-hidden">
         <BoxTerminalFrame
           key={session.url}
           sessionUrl={session.url}
-          fullscreenHref={fullscreenHref}
+          expandable
           className="h-full"
+          onCurrentDirChange={onCurrentDirChange}
         />
       </div>
     </div>
