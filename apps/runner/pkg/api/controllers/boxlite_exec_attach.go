@@ -134,6 +134,7 @@ var attachUpgrader = websocket.Upgrader{
 func BoxliteExecAttach(ctx *gin.Context) {
 	boxId := ctx.Param("boxId")
 	execId := ctx.Param("execId")
+	noStdin := ctx.Query("stdin") == "false"
 
 	target, ok := resolveAttachExec(execId, boxId)
 	if !ok {
@@ -141,7 +142,7 @@ func BoxliteExecAttach(ctx *gin.Context) {
 		return
 	}
 
-	if !target.MarkConnected() {
+	if !noStdin && !target.MarkConnected() {
 		// Refuse BEFORE upgrade so the client gets a real HTTP 409.
 		ctx.JSON(http.StatusConflict, gin.H{
 			"error": fmt.Sprintf("execution %s already attached", execId),
@@ -152,11 +153,17 @@ func BoxliteExecAttach(ctx *gin.Context) {
 	conn, err := attachUpgrader.Upgrade(ctx.Writer, ctx.Request, nil)
 	if err != nil {
 		// Upgrade already wrote an error response on its own.
-		target.MarkDisconnected()
+		if !noStdin {
+			target.MarkDisconnected()
+		}
 		return
 	}
 
-	runAttachLoop(ctx.Request.Context(), conn, target)
+	runAttachLoop(ctx.Request.Context(), conn, target, attachLoopOptions{noStdin: noStdin})
+}
+
+type attachLoopOptions struct {
+	noStdin bool
 }
 
 // runAttachLoop owns the WebSocket lifecycle: spawns reader/writer/keepalive
@@ -167,7 +174,7 @@ func BoxliteExecAttach(ctx *gin.Context) {
 // unbounded allocation.
 const maxAttachFrameBytes = 1 * 1024 * 1024 // 1 MiB
 
-func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachExec) {
+func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachExec, opts attachLoopOptions) {
 	conn.SetReadLimit(maxAttachFrameBytes)
 
 	// Detect a dead client via Pong liveness: a tiny Ping write fits in
@@ -222,7 +229,9 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 		// chunks into now-dead channels; then release the single-attach
 		// slot for the next client (or the Phase 4 reaper).
 		unsubscribe()
-		exec.MarkDisconnected()
+		if !opts.noStdin {
+			exec.MarkDisconnected()
+		}
 	}()
 
 	// stdout pump (channel-backed; no race with prior attaches because the
@@ -247,7 +256,7 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 	sideWg.Add(1)
 	go func() {
 		defer sideWg.Done()
-		readClientFrames(loopCtx, conn, exec, &writeMu, pongWait, fail)
+		readClientFrames(loopCtx, conn, exec, &writeMu, pongWait, opts, fail)
 	}()
 
 	// keepalive ping ticker
@@ -340,7 +349,7 @@ func pumpSubscriberChannel(ctx context.Context, conn *websocket.Conn, writeMu *s
 // runAttachLoop; we additionally bump the deadline on every successful
 // data/control read so an active session stays alive without depending on
 // the pong cadence alone.
-func readClientFrames(ctx context.Context, conn *websocket.Conn, exec attachExec, writeMu *sync.Mutex, pongWait time.Duration, fail func(error)) {
+func readClientFrames(ctx context.Context, conn *websocket.Conn, exec attachExec, writeMu *sync.Mutex, pongWait time.Duration, opts attachLoopOptions, fail func(error)) {
 	for {
 		if ctx.Err() != nil {
 			return
@@ -357,19 +366,22 @@ func readClientFrames(ctx context.Context, conn *websocket.Conn, exec attachExec
 
 		switch mt {
 		case websocket.BinaryMessage:
+			if opts.noStdin {
+				continue
+			}
 			if _, werr := exec.WriteStdin(data); werr != nil {
 				_ = writeErrorFrame(conn, writeMu, fmt.Sprintf("stdin write failed: %s", werr))
 				continue
 			}
 		case websocket.TextMessage:
-			handleControlFrame(conn, writeMu, exec, data)
+			handleControlFrame(conn, writeMu, exec, data, opts)
 		default:
 			// Ignore other message types (close handled by ReadMessage err).
 		}
 	}
 }
 
-func handleControlFrame(conn *websocket.Conn, writeMu *sync.Mutex, exec attachExec, data []byte) {
+func handleControlFrame(conn *websocket.Conn, writeMu *sync.Mutex, exec attachExec, data []byte, opts attachLoopOptions) {
 	var msg struct {
 		Type string `json:"type"`
 		Cols int    `json:"cols"`
@@ -394,6 +406,10 @@ func handleControlFrame(conn *websocket.Conn, writeMu *sync.Mutex, exec attachEx
 			_ = writeErrorFrame(conn, writeMu, fmt.Sprintf("signal delivery failed: %s", err))
 		}
 	case "stdin_eof":
+		if opts.noStdin {
+			_ = writeErrorFrame(conn, writeMu, "stdin close disabled for no-stdin attach")
+			return
+		}
 		if err := exec.CloseStdin(); err != nil {
 			_ = writeErrorFrame(conn, writeMu, fmt.Sprintf("stdin close failed: %s", err))
 		}

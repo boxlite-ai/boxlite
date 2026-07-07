@@ -149,6 +149,52 @@ func TestBoxliteGetExecutionNotFound(t *testing.T) {
 	}
 }
 
+func TestBoxliteListExecutionsReturnsOnlyBoxExecutions(t *testing.T) {
+	mgr := withFreshExecManager(t)
+	running := seedManagedExecForBox(mgr, "exec-running", "box-A", &signalCapturingExec{})
+	running.Command = []string{"/bin/sh", "-lc", "sleep 30"}
+	exited := seedManagedExecForBox(mgr, "exec-exited", "box-A", &signalCapturingExec{})
+	exited.Command = []string{"echo", "done"}
+	exited.ExitCode = 0
+	close(exited.Done)
+	seedManagedExecForBox(mgr, "exec-other-box", "box-B", &signalCapturingExec{})
+
+	if !running.MarkConnected() {
+		t.Fatal("expected running exec attach slot claim to succeed")
+	}
+
+	w := runHandler(http.MethodGet,
+		"/v1/boxes/:boxId/executions",
+		"/v1/boxes/box-A/executions",
+		nil, BoxliteListExecutions)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	var infos []ExecutionInfoResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &infos); err != nil {
+		t.Fatalf("unmarshal failed: %v body=%s", err, w.Body.String())
+	}
+	if len(infos) != 2 {
+		t.Fatalf("expected 2 executions for box-A, got %d: %+v", len(infos), infos)
+	}
+
+	byID := map[string]ExecutionInfoResponse{}
+	for _, info := range infos {
+		byID[info.ExecutionID] = info
+	}
+
+	if got := byID["exec-running"]; got.Status != "running" || !got.Attached || got.Command != "/bin/sh -lc sleep 30" {
+		t.Fatalf("running exec info mismatch: %+v", got)
+	}
+	if got := byID["exec-exited"]; got.Status != "completed" || got.Attached || got.Command != "echo done" || got.ExitCode == nil || *got.ExitCode != 0 {
+		t.Fatalf("exited exec info mismatch: %+v", got)
+	}
+	if _, ok := byID["exec-other-box"]; ok {
+		t.Fatalf("cross-box execution leaked into list: %+v", infos)
+	}
+}
+
 // Phase 2.3: SIGKILL (9) and STOP/CONT variants must be rejected with 400
 // while a whitelisted signal (15) succeeds with 204.
 func TestBoxliteExecSignalRejectsKILL(t *testing.T) {

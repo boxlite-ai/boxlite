@@ -168,6 +168,16 @@ struct WaitState {
 /// Unique identifier for an execution.
 pub type ExecutionId = String;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExecutionInfo {
+    pub execution_id: ExecutionId,
+    pub command: Option<String>,
+    pub status: String,
+    pub attached: bool,
+    pub exit_code: Option<i32>,
+    pub error_message: Option<String>,
+}
+
 impl Execution {
     /// Create a new Execution (internal use).
     pub(crate) fn new(

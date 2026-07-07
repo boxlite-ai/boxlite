@@ -394,8 +394,13 @@ pub(crate) struct ExecResponse {
 /// callers still observe the real exit code.
 #[derive(Debug, Deserialize)]
 pub(crate) struct ExecutionStatusResponse {
+    pub execution_id: String,
+    pub command: Option<String>,
     pub status: String,
+    #[serde(default)]
+    pub attached: bool,
     pub exit_code: Option<i32>,
+    pub error_message: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

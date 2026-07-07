@@ -13,7 +13,9 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use crate::BoxInfo;
 use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
-use crate::litebox::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution};
+use crate::litebox::{
+    BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionInfo,
+};
 use crate::metrics::BoxMetrics;
 use crate::runtime::backend::{BoxBackend, SnapshotBackend};
 use crate::runtime::id::BoxID;
@@ -107,7 +109,7 @@ impl BoxBackend for RestBox {
                 &ws_client,
                 &ws_box_id,
                 &ws_exec_id,
-                stdin_rx,
+                Some(stdin_rx),
                 stdout_tx,
                 stderr_tx,
                 result_tx,
@@ -129,6 +131,13 @@ impl BoxBackend for RestBox {
             Some(stdout),
             Some(stderr),
         ))
+    }
+
+    async fn list_executions(&self) -> BoxliteResult<Vec<ExecutionInfo>> {
+        let box_id = self.box_id_str();
+        let path = format!("/boxes/{}/executions", box_id);
+        let resp: Vec<ExecutionStatusResponse> = self.client.get(&path).await?;
+        Ok(resp.into_iter().map(execution_info_from_response).collect())
     }
 
     async fn attach(&self, execution_id: &str) -> BoxliteResult<Execution> {
@@ -164,8 +173,9 @@ impl BoxBackend for RestBox {
                 &ws_client,
                 &ws_box_id,
                 &ws_exec_id,
+                path,
                 stream,
-                stdin_rx,
+                Some(stdin_rx),
                 stdout_tx,
                 stderr_tx,
                 result_tx,
@@ -183,6 +193,56 @@ impl BoxBackend for RestBox {
             Box::new(control),
             result_rx,
             Some(stdin),
+            Some(stdout),
+            Some(stderr),
+        ))
+    }
+
+    async fn attach_no_stdin(&self, execution_id: &str) -> BoxliteResult<Execution> {
+        let box_id = self.box_id_str();
+        let path = format!(
+            "/boxes/{}/executions/{}/attach?stdin=false",
+            box_id, execution_id
+        );
+        let stream = self.client.connect_ws(&path).await.map_err(|e| match e {
+            BoxliteError::NotFound(msg) => BoxliteError::SessionReaped(format!(
+                "session {} not found — likely reaped after disconnect timeout: {}",
+                execution_id, msg
+            )),
+            other => other,
+        })?;
+
+        let (stdout_tx, stdout_rx) = mpsc::unbounded_channel::<String>();
+        let (stderr_tx, stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (result_tx, result_rx) = mpsc::unbounded_channel::<ExecResult>();
+
+        let ws_client = self.client.clone();
+        let ws_box_id = box_id.clone();
+        let ws_exec_id = execution_id.to_string();
+        tokio::spawn(async move {
+            attach_ws_pump(
+                &ws_client,
+                &ws_box_id,
+                &ws_exec_id,
+                path,
+                stream,
+                None,
+                stdout_tx,
+                stderr_tx,
+                result_tx,
+            )
+            .await;
+        });
+
+        let control = RestExecControl::new(self.client.clone(), box_id);
+        let stdout = ExecStdout::new(stdout_rx);
+        let stderr = ExecStderr::new(stderr_rx);
+
+        Ok(Execution::new(
+            execution_id.to_string(),
+            Box::new(control),
+            result_rx,
+            None,
             Some(stdout),
             Some(stderr),
         ))
@@ -485,6 +545,19 @@ const WS_RECONNECT_BUDGET: std::time::Duration = std::time::Duration::from_secs(
 const WS_RECONNECT_BACKOFF_INITIAL: std::time::Duration = std::time::Duration::from_secs(15);
 const WS_RECONNECT_BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(30);
 
+#[derive(Clone, Copy)]
+struct AttachWsPumpConfig {
+    reconnect_backoff_initial: std::time::Duration,
+}
+
+impl Default for AttachWsPumpConfig {
+    fn default() -> Self {
+        Self {
+            reconnect_backoff_initial: WS_RECONNECT_BACKOFF_INITIAL,
+        }
+    }
+}
+
 /// How often the client sends its own WebSocket Ping on an established,
 /// otherwise-idle session.
 ///
@@ -518,7 +591,7 @@ async fn attach_ws(
     client: &ApiClient,
     box_id: &str,
     execution_id: &str,
-    stdin_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    stdin_rx: Option<mpsc::UnboundedReceiver<Vec<u8>>>,
     stdout_tx: mpsc::UnboundedSender<String>,
     stderr_tx: mpsc::UnboundedSender<String>,
     result_tx: mpsc::UnboundedSender<ExecResult>,
@@ -546,6 +619,7 @@ async fn attach_ws(
         client,
         box_id,
         execution_id,
+        path,
         stream,
         stdin_rx,
         stdout_tx,
@@ -569,19 +643,48 @@ async fn attach_ws_pump(
     client: &ApiClient,
     box_id: &str,
     execution_id: &str,
+    reconnect_path: String,
     initial_stream: tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
-    mut stdin_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    stdin_rx: Option<mpsc::UnboundedReceiver<Vec<u8>>>,
     stdout_tx: mpsc::UnboundedSender<String>,
     stderr_tx: mpsc::UnboundedSender<String>,
     result_tx: mpsc::UnboundedSender<ExecResult>,
 ) {
+    attach_ws_pump_with_config(
+        client,
+        box_id,
+        execution_id,
+        reconnect_path,
+        initial_stream,
+        stdin_rx,
+        stdout_tx,
+        stderr_tx,
+        result_tx,
+        AttachWsPumpConfig::default(),
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn attach_ws_pump_with_config(
+    client: &ApiClient,
+    box_id: &str,
+    execution_id: &str,
+    reconnect_path: String,
+    initial_stream: tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    mut stdin_rx: Option<mpsc::UnboundedReceiver<Vec<u8>>>,
+    stdout_tx: mpsc::UnboundedSender<String>,
+    stderr_tx: mpsc::UnboundedSender<String>,
+    result_tx: mpsc::UnboundedSender<ExecResult>,
+    config: AttachWsPumpConfig,
+) {
     use futures::{SinkExt, StreamExt};
     use std::time::Instant;
     use tokio_tungstenite::tungstenite::Message;
-
-    let path = format!("/boxes/{}/executions/{}/attach", box_id, execution_id);
 
     // State persisted across reconnects:
     //
@@ -634,7 +737,12 @@ async fn attach_ws_pump(
                 // Forward stdin bytes from the SDK consumer to the WS sink.
                 // Disabled once we've observed stdin EOF — the WS reader is
                 // still running so we keep waiting for the exit frame.
-                stdin_msg = stdin_rx.recv(), if !user_closed_stdin => {
+                stdin_msg = async {
+                    match stdin_rx.as_mut() {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                }, if stdin_rx.is_some() && !user_closed_stdin => {
                     match stdin_msg {
                         Some(bytes) => {
                             if sink.send(Message::Binary(bytes)).await.is_err() {
@@ -773,7 +881,7 @@ async fn attach_ws_pump(
         }
 
         // Reconnect attempt loop with exponential backoff.
-        let mut backoff = WS_RECONNECT_BACKOFF_INITIAL;
+        let mut backoff = config.reconnect_backoff_initial;
         let reconnect_start = Instant::now();
         loop {
             if reconnect_budget.is_zero() {
@@ -791,7 +899,7 @@ async fn attach_ws_pump(
             tokio::time::sleep(sleep_for).await;
             reconnect_budget = reconnect_budget.saturating_sub(sleep_for);
 
-            match client.connect_ws(&path).await {
+            match client.connect_ws(&reconnect_path).await {
                 Ok(new_stream) => {
                     tracing::info!(
                         box_id,
@@ -890,6 +998,17 @@ fn parse_control_frame(text: &str) -> ControlFrame {
             ControlFrame::Error { message }
         }
         _ => ControlFrame::Unknown,
+    }
+}
+
+fn execution_info_from_response(resp: ExecutionStatusResponse) -> ExecutionInfo {
+    ExecutionInfo {
+        execution_id: resp.execution_id,
+        command: resp.command,
+        status: resp.status,
+        attached: resp.attached,
+        exit_code: resp.exit_code,
+        error_message: resp.error_message,
     }
 }
 
@@ -1146,6 +1265,8 @@ mod tests {
     /// Recorded behavior of the in-process test server.
     #[derive(Default)]
     struct ServerState {
+        /// Request targets observed by the test server.
+        request_targets: Vec<String>,
         /// Binary frames the server received from the client (stdin bytes).
         received_stdin: Vec<Vec<u8>>,
         /// Whether `GET /executions/{id}` was hit and what we replied with.
@@ -1176,6 +1297,15 @@ mod tests {
             }
         }
         buf
+    }
+
+    fn request_target(head: &[u8]) -> String {
+        String::from_utf8_lossy(head)
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .unwrap_or("")
+            .to_string()
     }
 
     /// Build an `ApiClient` pointed at `127.0.0.1:{port}`.
@@ -1276,6 +1406,10 @@ mod tests {
             let head = read_request_head(&mut stream).await;
             let head_str = String::from_utf8_lossy(&head);
             let is_upgrade = head_str.to_ascii_lowercase().contains("upgrade: websocket");
+            {
+                let mut s = state.lock().await;
+                s.request_targets.push(request_target(&head));
+            }
             if is_upgrade {
                 if let Some(handler) = ws_handler.take() {
                     let chained = ChainedStream {
@@ -1344,7 +1478,13 @@ mod tests {
 
         let attach = tokio::spawn(async move {
             attach_ws(
-                &client, "box1", "exec1", stdin_rx, stdout_tx, stderr_tx, result_tx,
+                &client,
+                "box1",
+                "exec1",
+                Some(stdin_rx),
+                stdout_tx,
+                stderr_tx,
+                result_tx,
             )
             .await;
         });
@@ -1407,7 +1547,13 @@ mod tests {
 
         let attach = tokio::spawn(async move {
             attach_ws(
-                &client, "box1", "exec1", stdin_rx, stdout_tx, stderr_tx, result_tx,
+                &client,
+                "box1",
+                "exec1",
+                Some(stdin_rx),
+                stdout_tx,
+                stderr_tx,
+                result_tx,
             )
             .await;
         });
@@ -1432,6 +1578,124 @@ mod tests {
         server.abort();
     }
 
+    // ─── ws_no_stdin_reconnect_preserves_attach_query ───────────────────
+    //
+    // `attach_no_stdin()` initially connects to `/attach?stdin=false`. The
+    // reconnect loop must reuse that exact path; rebuilding the default
+    // `/attach` path turns a no-stdin attach into a stdin-capable attach after
+    // a transient disconnect.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ws_no_stdin_reconnect_preserves_attach_query() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let state: SharedState = Arc::new(Mutex::new(ServerState::default()));
+        let server_state = state.clone();
+        let server = tokio::spawn(async move {
+            let mut ws_connections = 0;
+            loop {
+                let (mut stream, _) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(_) => return,
+                };
+                let head = read_request_head(&mut stream).await;
+                let target = request_target(&head);
+                let head_str = String::from_utf8_lossy(&head);
+                let is_upgrade = head_str.to_ascii_lowercase().contains("upgrade: websocket");
+                {
+                    let mut s = server_state.lock().await;
+                    s.request_targets.push(target);
+                }
+
+                if is_upgrade {
+                    let chained = ChainedStream {
+                        head,
+                        head_pos: 0,
+                        inner: stream,
+                    };
+                    let mut ws = match tokio_tungstenite::accept_async(chained).await {
+                        Ok(ws) => ws,
+                        Err(_) => continue,
+                    };
+                    ws_connections += 1;
+                    if ws_connections == 1 {
+                        ws.send(Message::Binary(vec![0x01, b'o', b'n']))
+                            .await
+                            .unwrap();
+                        let _ = ws.close(None).await;
+                    } else {
+                        ws.send(Message::Text(r#"{"type":"exit","exit_code":0}"#.into()))
+                            .await
+                            .unwrap();
+                        let _ = ws.close(None).await;
+                        return;
+                    }
+                } else {
+                    let mut s = server_state.lock().await;
+                    s.status_calls += 1;
+                    drop(s);
+                    write_status_response(
+                        &mut stream,
+                        r#"{"execution_id":"exec1","status":"running"}"#,
+                    )
+                    .await;
+                }
+            }
+        });
+
+        let client = client_for(port);
+        let attach_path = "/boxes/box1/executions/exec1/attach?stdin=false".to_string();
+        let stream = client.connect_ws(&attach_path).await.unwrap();
+        let (stdout_tx, _stdout_rx) = mpsc::unbounded_channel::<String>();
+        let (stderr_tx, _stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (result_tx, mut result_rx) = mpsc::unbounded_channel::<ExecResult>();
+
+        let attach = tokio::spawn(async move {
+            attach_ws_pump_with_config(
+                &client,
+                "box1",
+                "exec1",
+                attach_path,
+                stream,
+                None,
+                stdout_tx,
+                stderr_tx,
+                result_tx,
+                AttachWsPumpConfig {
+                    reconnect_backoff_initial: Duration::from_millis(10),
+                },
+            )
+            .await;
+        });
+
+        let res = tokio::time::timeout(Duration::from_secs(3), result_rx.recv())
+            .await
+            .expect("result channel timed out")
+            .expect("result channel closed without value");
+        assert_eq!(res.exit_code, 0);
+        assert!(res.error_message.is_none());
+        attach.await.unwrap();
+
+        let s = state.lock().await;
+        let attach_targets: Vec<_> = s
+            .request_targets
+            .iter()
+            .filter(|target| target.contains("/attach"))
+            .cloned()
+            .collect();
+        assert_eq!(
+            attach_targets,
+            vec![
+                "/v1/boxes/box1/executions/exec1/attach?stdin=false".to_string(),
+                "/v1/boxes/box1/executions/exec1/attach?stdin=false".to_string(),
+            ],
+            "no-stdin reconnect must preserve the stdin=false query; all targets: {:?}",
+            s.request_targets
+        );
+        assert!(s.status_calls >= 1, "reconnect path never probed status");
+        drop(s);
+        server.abort();
+    }
+
     // ─── ws_watchdog_fires_when_idle ─────────────────────────────────────
     //
     // Server accepts the upgrade and then goes silent. The cfg(test)
@@ -1449,8 +1713,10 @@ mod tests {
                 // Hold the connection open without sending anything.
                 // Wait long enough for the client watchdog to fire and
                 // close the WS from its side.
-                let _kept_alive = ws;
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                tokio::spawn(async move {
+                    let _kept_alive = ws;
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                });
             })
             .await;
         });
@@ -1463,7 +1729,13 @@ mod tests {
 
         let attach = tokio::spawn(async move {
             attach_ws(
-                &client, "box1", "exec1", stdin_rx, stdout_tx, stderr_tx, result_tx,
+                &client,
+                "box1",
+                "exec1",
+                Some(stdin_rx),
+                stdout_tx,
+                stderr_tx,
+                result_tx,
             )
             .await;
         });
@@ -1535,7 +1807,13 @@ mod tests {
 
         let attach = tokio::spawn(async move {
             attach_ws(
-                &client, "box1", "exec1", stdin_rx, stdout_tx, stderr_tx, result_tx,
+                &client,
+                "box1",
+                "exec1",
+                Some(stdin_rx),
+                stdout_tx,
+                stderr_tx,
+                result_tx,
             )
             .await;
         });
@@ -1589,7 +1867,13 @@ mod tests {
 
         let attach = tokio::spawn(async move {
             attach_ws(
-                &client, "box1", "exec1", stdin_rx, stdout_tx, stderr_tx, result_tx,
+                &client,
+                "box1",
+                "exec1",
+                Some(stdin_rx),
+                stdout_tx,
+                stderr_tx,
+                result_tx,
             )
             .await;
         });

@@ -206,16 +206,16 @@ impl<'a> StreamManager<'a> {
                         break status.exit_code;
                     }
                 }
-                _ = sigint.recv() => {
+                Some(_) = sigint.recv() => {
                     let _ = self.execution.signal(Signal::SIGINT as i32).await;
                 }
-                _ = sigterm.recv() => {
+                Some(_) = sigterm.recv() => {
                     let _ = self.execution.signal(Signal::SIGTERM as i32).await;
                 }
-                _ = sighup.recv() => {
+                Some(_) = sighup.recv() => {
                     let _ = self.execution.signal(Signal::SIGHUP as i32).await;
                 }
-                _ = sigquit.recv() => {
+                Some(_) = sigquit.recv() => {
                     let _ = self.execution.signal(Signal::SIGQUIT as i32).await;
                 }
                 Some(_) = async {

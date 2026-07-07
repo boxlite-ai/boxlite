@@ -56,6 +56,10 @@ pub enum Commands {
     Run(crate::commands::run::RunArgs),
     /// Execute a command in a running box
     Exec(crate::commands::exec::ExecArgs),
+    /// Attach to an existing execution
+    Attach(crate::commands::attach::AttachArgs),
+    /// Display running executions in a box
+    Top(crate::commands::top::TopArgs),
     /// Create a new box
     Create(crate::commands::create::CreateArgs),
 

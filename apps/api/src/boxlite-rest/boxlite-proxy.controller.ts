@@ -62,6 +62,24 @@ export class BoxliteProxyController {
     return this.proxyToRunner(authContext, boxId, (runnerBoxId) => `/v1/boxes/${runnerBoxId}/exec`, req, res, next)
   }
 
+  @Get(':boxId/executions')
+  async proxyExecutions(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    return this.proxyToRunner(
+      authContext,
+      boxId,
+      (runnerBoxId) => `/v1/boxes/${runnerBoxId}/executions`,
+      req,
+      res,
+      next,
+    )
+  }
+
   @All(':boxId/executions/:execId/signal')
   async proxyExecSignal(
     @AuthContext() authContext: OrganizationAuthContext,

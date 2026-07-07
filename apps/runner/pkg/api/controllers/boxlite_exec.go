@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	sdkboxlite "github.com/boxlite-ai/boxlite/sdks/go"
@@ -182,6 +183,24 @@ func BoxliteGetExecution(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, executionInfoFromManagedExec(exec))
 }
 
+// BoxliteListExecutions returns executions registered for a box.
+//
+//	@Summary	List executions for a box
+//	@Tags		boxlite
+//	@Produce	json
+//	@Param		boxId	path	string	true	"Box ID"
+//	@Success	200		{array}	ExecutionInfoResponse
+//	@Router		/v1/boxes/{boxId}/executions [get]
+func BoxliteListExecutions(ctx *gin.Context) {
+	boxId := ctx.Param("boxId")
+	execs := execManager.ListForBox(boxId)
+	resp := make([]ExecutionInfoResponse, 0, len(execs))
+	for _, exec := range execs {
+		resp = append(resp, executionInfoFromManagedExec(exec))
+	}
+	ctx.JSON(http.StatusOK, resp)
+}
+
 // ExecutionInfoResponse describes an execution's current state.
 // Field names match the OpenAPI ExecutionInfo schema:
 // execution_id, status, exit_code, error_message. Statuses are
@@ -193,13 +212,19 @@ func BoxliteGetExecution(ctx *gin.Context) {
 // code 0".
 type ExecutionInfoResponse struct {
 	ExecutionID  string `json:"execution_id"`
+	Command      string `json:"command,omitempty"`
 	Status       string `json:"status"`
+	Attached     bool   `json:"attached"`
 	ExitCode     *int   `json:"exit_code,omitempty"`
 	ErrorMessage string `json:"error_message,omitempty"`
 }
 
 func executionInfoFromManagedExec(exec *boxlite.ManagedExec) ExecutionInfoResponse {
-	resp := ExecutionInfoResponse{ExecutionID: exec.ID}
+	resp := ExecutionInfoResponse{
+		ExecutionID: exec.ID,
+		Command:     strings.Join(exec.Command, " "),
+		Attached:    exec.IsConnected(),
+	}
 	select {
 	case <-exec.Done:
 		resp.Status = "completed"

@@ -150,6 +150,7 @@ func (a *ApiServer) Start(ctx context.Context) error {
 	boxliteApi := protected.Group("/v1/boxes")
 	{
 		boxliteApi.POST("/:boxId/exec", controllers.BoxliteExec)
+		boxliteApi.GET("/:boxId/executions", controllers.BoxliteListExecutions)
 		boxliteApi.GET("/:boxId/executions/:execId", controllers.BoxliteGetExecution)
 		boxliteApi.DELETE("/:boxId/executions/:execId", controllers.BoxliteExecKill)
 		boxliteApi.GET("/:boxId/executions/:execId/attach", controllers.BoxliteExecAttach)
