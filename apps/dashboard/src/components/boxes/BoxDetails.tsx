@@ -29,7 +29,7 @@ import { useConfig } from '@/hooks/useConfig'
 import { useRegions } from '@/hooks/useRegions'
 import { useBoxWsSync } from '@/hooks/useBoxWsSync'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { DEFAULT_BOX_UPLOAD_DIR, type BoxUploadItem } from '@/lib/box-upload'
+import { DEFAULT_BOX_UPLOAD_DIR, getBoxUploadDestinationBlockedReason, type BoxUploadItem } from '@/lib/box-upload'
 import { getBoxPublicId, getBoxPublicIdLabel } from '@/lib/box-identity'
 import { handleApiError } from '@/lib/error-handling'
 import { setLocalStorageItem } from '@/lib/local-storage'
@@ -44,17 +44,7 @@ import { getRelativeTimeString } from '@/lib/utils'
 import { isRecoverable, isStartable, isStoppable, isTransitioning } from '@/lib/utils/box'
 import { Box, BoxState, OrganizationRolePermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { isAxiosError } from 'axios'
-import {
-  Check,
-  Container,
-  Copy,
-  MoreVertical,
-  Pause,
-  Play,
-  RefreshCw,
-  RotateCcw,
-  Trash2,
-} from '@/components/ui/icon'
+import { Check, Container, Copy, MoreVertical, Pause, Play, RefreshCw, RotateCcw, Trash2 } from '@/components/ui/icon'
 import { Icon as IconifyIcon } from '@iconify/react'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useAuth } from 'react-oidc-context'
@@ -202,17 +192,18 @@ export default function BoxDetails() {
   const anyMutating =
     startMutation.isPending || stopMutation.isPending || recoverMutation.isPending || deleteMutation.isPending
   const actionsDisabled = anyMutating || transitioning
+  const hasFilesCurrentDir = filesCurrentDir !== null
+  const uploadDestinationDir = filesCurrentDir ?? DEFAULT_BOX_UPLOAD_DIR
+  const uploadDestinationBlockedReason = getBoxUploadDestinationBlockedReason(uploadDestinationDir)
   const uploadDisabledReason = !writePermitted
     ? 'You need write access to upload files'
     : actionsDisabled
       ? 'Wait for the current box action to finish'
       : !box || !isStoppable(box)
         ? 'Start the box before uploading files'
-        : undefined
+        : uploadDestinationBlockedReason
   const canUpload = uploadDisabledReason === undefined
-  const hasFilesCurrentDir = filesCurrentDir !== null
   const canDragUpload = canUpload && hasFilesCurrentDir
-  const uploadDestinationDir = filesCurrentDir ?? DEFAULT_BOX_UPLOAD_DIR
 
   useEffect(() => {
     setFilesCurrentDir(null)
@@ -283,11 +274,7 @@ export default function BoxDetails() {
         destinationDir: uploadDestinationDir,
         items,
       })
-      toast.success(
-        items.length === 1
-          ? `Uploaded ${items[0].name}`
-          : `Uploaded ${items.length} items`,
-      )
+      toast.success(items.length === 1 ? `Uploaded ${items[0].name}` : `Uploaded ${items.length} items`)
       sendActiveTerminalListCommand()
     } catch (error) {
       handleApiError(error, 'Failed to upload files')

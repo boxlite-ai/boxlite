@@ -116,13 +116,21 @@ export async function uploadBoxItemViaBoxApi(
   destinationDir: string,
 ): Promise<string> {
   const remotePath = buildBoxUploadPath(destinationDir, item)
-  const archive = await createBoxUploadTar(item)
 
   try {
-    await api.axiosInstance.put(`${boxesBasePath(organizationId)}/${boxId}/files`, archive, {
-      headers: { 'Content-Type': 'application/x-tar' },
-      params: { path: remotePath },
-    })
+    if (item.kind === 'directory') {
+      for (const entry of item.files) {
+        await uploadBoxArchive(
+          api,
+          organizationId,
+          boxId,
+          createSingleEntryUploadItem(entry),
+          `${remotePath}/${entry.relativePath}`,
+        )
+      }
+    } else {
+      await uploadBoxArchive(api, organizationId, boxId, item, remotePath)
+    }
   } catch (error) {
     throw new Error(`Failed to upload Box item to ${remotePath} (org=${organizationId}, box=${boxId})`, {
       cause: error,
@@ -130,4 +138,25 @@ export async function uploadBoxItemViaBoxApi(
   }
 
   return remotePath
+}
+
+function createSingleEntryUploadItem(entry: BoxUploadItem['files'][number]): BoxUploadItem {
+  return {
+    kind: 'file',
+    name: entry.relativePath.split('/').filter(Boolean).pop() ?? 'upload',
+    files: [entry],
+  }
+}
+
+async function uploadBoxArchive(
+  api: ApiClient,
+  organizationId: string,
+  boxId: string,
+  item: BoxUploadItem,
+  remotePath: string,
+): Promise<void> {
+  await api.axiosInstance.put(`${boxesBasePath(organizationId)}/${boxId}/files`, await createBoxUploadTar(item), {
+    headers: { 'Content-Type': 'application/x-tar' },
+    params: { path: remotePath },
+  })
 }

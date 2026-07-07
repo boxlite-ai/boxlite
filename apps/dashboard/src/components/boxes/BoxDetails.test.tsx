@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   setSearchParams: vi.fn(),
   mutateAsync: vi.fn(),
+  uploadMutateAsync: vi.fn(),
+  terminalCwd: null as string | null,
 }))
 
 vi.mock('react-router-dom', () => ({
@@ -106,8 +108,29 @@ vi.mock('@/hooks/mutations/useDeleteBoxMutation', () => ({
   useDeleteBoxMutation: () => ({ isPending: false, mutateAsync: mocks.mutateAsync }),
 }))
 
+vi.mock('@/hooks/mutations/useUploadBoxFilesMutation', () => ({
+  useUploadBoxFilesMutation: () => ({ isPending: false, mutateAsync: mocks.uploadMutateAsync }),
+}))
+
 vi.mock('./BoxTerminalFrame', () => ({
-  BoxTerminalFrame: ({ sessionUrl }: { sessionUrl: string }) => <div data-testid="terminal-frame">{sessionUrl}</div>,
+  BoxTerminalFrame: ({
+    onCurrentDirChange,
+    sessionUrl,
+  }: {
+    onCurrentDirChange?: (path: string) => void
+    sessionUrl: string
+  }) => (
+    <div data-testid="terminal-frame">
+      {sessionUrl}
+      <button
+        type="button"
+        data-testid="set-terminal-cwd"
+        onClick={() => onCurrentDirChange?.(mocks.terminalCwd ?? '/')}
+      >
+        set cwd
+      </button>
+    </div>
+  ),
 }))
 
 function makeRunningBox(): Box {
@@ -140,6 +163,7 @@ describe('BoxDetails refresh', () => {
 
   beforeEach(() => {
     mocks.box = makeRunningBox()
+    mocks.terminalCwd = null
     vi.clearAllMocks()
   })
 
@@ -182,5 +206,22 @@ describe('BoxDetails refresh', () => {
     expect(mocks.boxRefetch).toHaveBeenCalledTimes(1)
     expect(mocks.terminalRefetch).toHaveBeenCalledTimes(1)
     expect(document.querySelector('[data-testid="terminal-frame"]')).toBe(frameBeforeRefresh)
+  })
+
+  it('disables uploads when the terminal cwd is tmpfs-backed', async () => {
+    mocks.terminalCwd = '/tmp'
+    await renderBoxDetails()
+
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('[data-testid="set-terminal-cwd"]')?.click()
+    })
+    await flushReactWork()
+
+    const uploadButton = Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((button) =>
+      button.textContent?.includes('Upload Files'),
+    )
+    expect(uploadButton).toBeTruthy()
+    expect(uploadButton?.disabled).toBe(true)
+    expect(uploadButton?.title).toContain('/tmp')
   })
 })

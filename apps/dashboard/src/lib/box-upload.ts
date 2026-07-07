@@ -7,6 +7,7 @@
 export const DEFAULT_BOX_UPLOAD_DIR = '/root'
 
 const TAR_BLOCK_SIZE = 512
+const TMPFS_UPLOAD_DESTINATIONS = ['/tmp', '/dev/shm']
 
 export interface BoxUploadFileEntry {
   file: File
@@ -30,6 +31,13 @@ export function buildBoxUploadPath(destinationDir: string, item: BoxUploadItem):
 
 export async function createSingleFileTar(file: File): Promise<Blob> {
   return createBoxUploadTar(createBoxUploadFileItem(file))
+}
+
+export function getBoxUploadDestinationBlockedReason(destinationDir: string): string | undefined {
+  const normalizedDir = normalizeDestinationDir(destinationDir)
+  const blockedDir = TMPFS_UPLOAD_DESTINATIONS.find((dir) => isPathOrChild(normalizedDir, dir))
+  if (!blockedDir) return undefined
+  return `Uploads to ${blockedDir} are not supported because that path is tmpfs-backed`
 }
 
 export function buildBoxUploadItems(files: File[]): BoxUploadItem[] {
@@ -130,6 +138,10 @@ function normalizeDestinationDir(destinationDir: string): string {
   if (destinationDir.trim().startsWith('/') && !trimmed) return '/'
   if (!trimmed) return DEFAULT_BOX_UPLOAD_DIR
   return trimmed.startsWith('/') ? trimmed : `/${trimmed}`
+}
+
+function isPathOrChild(path: string, parent: string): boolean {
+  return path === parent || path.startsWith(`${parent}/`)
 }
 
 function sanitizeFileName(fileName: string): string {
