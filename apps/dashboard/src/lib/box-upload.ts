@@ -25,7 +25,7 @@ export function buildBoxFileUploadPath(destinationDir: string, file: File): stri
 
 export function buildBoxUploadPath(destinationDir: string, item: BoxUploadItem): string {
   const dir = normalizeDestinationDir(destinationDir)
-  return `${dir}/${item.name}`
+  return dir === '/' ? `/${item.name}` : `${dir}/${item.name}`
 }
 
 export async function createSingleFileTar(file: File): Promise<Blob> {
@@ -127,6 +127,7 @@ async function readFileBytes(file: File): Promise<Uint8Array> {
 
 function normalizeDestinationDir(destinationDir: string): string {
   const trimmed = destinationDir.trim().replace(/\/+$/, '')
+  if (destinationDir.trim().startsWith('/') && !trimmed) return '/'
   if (!trimmed) return DEFAULT_BOX_UPLOAD_DIR
   return trimmed.startsWith('/') ? trimmed : `/${trimmed}`
 }
