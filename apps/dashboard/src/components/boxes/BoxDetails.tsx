@@ -628,7 +628,7 @@ export default function BoxDetails() {
                   {hasFilesCurrentDir && (
                     <span
                       title={`Drag files or folders into the shell area to upload to ${uploadDestinationDir}`}
-                      className="inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] text-muted-foreground sm:mr-2"
+                      className="inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] text-muted-foreground sm:mr-5"
                     >
                       <IconifyIcon icon="pixelarticons:drag-and-drop" className="size-4 flex-none text-foreground" />
                       <span className="flex-none">Drag files/folders to</span>
