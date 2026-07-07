@@ -55,3 +55,37 @@ describe('JwtStrategy.validate — auto-created user', () => {
     )
   })
 })
+
+describe('JwtStrategy.validate — email verification sync', () => {
+  it('updates an existing unverified user from the trusted JWT claim', async () => {
+    const { strategy, userService } = buildStrategy()
+    const request = { get: jest.fn().mockReturnValue(undefined) } as unknown as Request
+    ;(userService.findOne as jest.Mock).mockResolvedValueOnce({
+      id: 'user-1',
+      role: 'user',
+      email: 'new@boxlite.dev',
+      emailVerified: false,
+    })
+
+    await strategy.validate(request, { sub: 'user-1', email: 'new@boxlite.dev', email_verified: true })
+
+    expect(userService.update).toHaveBeenCalledWith('user-1', { emailVerified: true })
+    expect(userService.create).not.toHaveBeenCalled()
+  })
+
+  it('does not emit another verification update for an already verified user', async () => {
+    const { strategy, userService } = buildStrategy()
+    const request = { get: jest.fn().mockReturnValue(undefined) } as unknown as Request
+    ;(userService.findOne as jest.Mock).mockResolvedValueOnce({
+      id: 'user-1',
+      role: 'user',
+      email: 'new@boxlite.dev',
+      emailVerified: true,
+    })
+
+    await strategy.validate(request, { sub: 'user-1', email: 'new@boxlite.dev', email_verified: true })
+
+    expect(userService.update).not.toHaveBeenCalledWith('user-1', { emailVerified: true })
+    expect(userService.create).not.toHaveBeenCalled()
+  })
+})

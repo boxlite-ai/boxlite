@@ -25,6 +25,7 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useSuspensionBanner } from '@/hooks/useSuspensionBanner'
 import { cn } from '@/lib/utils'
 import { BookOpen, BookSearchIcon, MessageCircle, SunMoon } from '@/components/ui/icon'
+import { DashboardBannerSlot } from '@/components/PageLayout'
 
 function useDashboardCommands() {
   const { theme, setTheme } = useTheme()
@@ -140,6 +141,7 @@ const Dashboard: React.FC = () => {
       <SidebarProvider isBannerVisible={false} defaultOpen={true} className="flex-col">
         <Sidebar isBannerVisible={isBannerVisible} billingEnabled={!!config.billingApiUrl} version={config.version} />
         <SidebarInset className="min-h-0 overflow-visible">
+          <DashboardBannerSlot />
           <div className="w-full min-h-[var(--app-content-height,calc(100svh_-_60px))] overscroll-none">
             {/* Lazy route components (Admin/Billing/Settings/box-details) suspend
                 here so only the content area shows a fallback — the sidebar/shell

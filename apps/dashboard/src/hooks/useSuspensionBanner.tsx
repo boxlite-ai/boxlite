@@ -6,11 +6,17 @@
 
 import { useBanner } from '@/components/Banner'
 import { RoutePath } from '@/enums/RoutePath'
+import { ApiClient } from '@/api/apiClient'
+import { useConfig } from '@/hooks/useConfig'
+import { useOrganizations } from '@/hooks/useOrganizations'
+import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { Organization } from '@boxlite-ai/api-client'
 import { addHours, formatDistanceToNow } from 'date-fns'
 import { CreditCardIcon, MailIcon } from '@/components/ui/icon'
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useAuth } from 'react-oidc-context'
 import { useLocation, useNavigate } from 'react-router-dom'
+import { toast } from 'sonner'
 
 const SUSPENSION_BANNER_ID = 'suspension-banner'
 
@@ -36,8 +42,62 @@ export function useSuspensionBanner(suspension?: Suspension | null) {
   const { addBanner, removeBanner } = useBanner()
   const navigate = useNavigate()
   const location = useLocation()
+  const config = useConfig()
+  const { signinSilent, removeUser, signinRedirect } = useAuth()
+  const { refreshOrganizations } = useOrganizations()
+  const { selectedOrganization, refreshOrganizationMembers } = useSelectedOrganization()
   const path = location?.pathname
   const previousSuspendedRef = useRef<boolean | undefined>(undefined)
+  const [isCheckingVerification, setIsCheckingVerification] = useState(false)
+
+  const redirectToFreshLogin = useCallback(async () => {
+    await removeUser()
+    await signinRedirect({
+      state: {
+        returnTo: `${location.pathname}${location.search}`,
+      },
+    })
+  }, [location.pathname, location.search, removeUser, signinRedirect])
+
+  const handleVerifyEmailRefresh = useCallback(async () => {
+    if (isCheckingVerification) {
+      return
+    }
+
+    setIsCheckingVerification(true)
+    try {
+      let freshUser
+      try {
+        freshUser = await signinSilent()
+      } catch {
+        await redirectToFreshLogin()
+        return
+      }
+
+      if (!freshUser?.access_token || freshUser.profile.email_verified !== true) {
+        toast.error('We could not confirm verification yet. Try again in a moment.')
+        await redirectToFreshLogin()
+        return
+      }
+
+      const api = new ApiClient(config, freshUser.access_token)
+      await api.userApi.getAuthenticatedUser()
+      await refreshOrganizations(selectedOrganization?.id)
+      await refreshOrganizationMembers()
+    } catch {
+      toast.error('We could not refresh your account. Try again in a moment.')
+    } finally {
+      setIsCheckingVerification(false)
+    }
+  }, [
+    config,
+    isCheckingVerification,
+    redirectToFreshLogin,
+    refreshOrganizationMembers,
+    refreshOrganizations,
+    selectedOrganization?.id,
+    signinSilent,
+  ])
 
   useEffect(() => {
     const wasSuspended = previousSuspendedRef.current
@@ -81,6 +141,11 @@ export function useSuspensionBanner(suspension?: Suspension | null) {
           title: 'Verification Required',
           description: 'Please verify your email address to access all features.',
           icon: <MailIcon className="h-4 w-4 flex-shrink-0 text-current" />,
+          action: {
+            label: isCheckingVerification ? 'Checking...' : 'I verified my email',
+            onClick: handleVerifyEmailRefresh,
+            disabled: isCheckingVerification,
+          },
           isDismissible: false,
         })
       }
@@ -137,5 +202,5 @@ export function useSuspensionBanner(suspension?: Suspension | null) {
       description: reason ? `${reason}. ${cleanupText}` : cleanupText,
       isDismissible: false,
     })
-  }, [suspension, addBanner, removeBanner, navigate, path])
+  }, [suspension, addBanner, handleVerifyEmailRefresh, isCheckingVerification, removeBanner, navigate, path])
 }
