@@ -108,9 +108,11 @@ applied per runner.
 
 > **Note:** `CLOUDFRONT_DOMAIN` is no longer needed — SST Router resolves
 > it automatically via your `STACK_DOMAIN`. The dashboard's API base URL
-> is likewise derived: `DASHBOARD_BASE_API_URL` defaults to
-> `https://api.<STACK_DOMAIN>` and is substituted into the bundled JS at
-> container start (see `apps/api/src/main.ts`).
+> is substituted into the bundled JS at container start (see
+> `apps/api/src/main.ts`). Dev defaults `DASHBOARD_BASE_API_URL` to
+> `https://<STACK_DOMAIN>` so the dashboard consumes same-host `/api`; prod
+> keeps `https://api.<STACK_DOMAIN>` until the `boxlite.ai/api` facade is
+> proven and explicitly configured.
 
 ## Public hostnames
 
@@ -120,21 +122,20 @@ Five public DNS names, four different fronting layers:
 |--------------------------------|------------------------|-------------------------------------------------------------------|
 | `<STACK_DOMAIN>`               | CloudFront Router      | Dashboard SPA + static assets (cache-friendly, edge-served)       |
 | `api.<STACK_DOMAIN>`           | Api ALB (direct)       | REST API, WebSocket `/attach`, build-log streaming, file transfer |
-| `proxy.<STACK_DOMAIN>`         | Proxy ALB (direct)     | Port-preview wildcard `<port>-<boxId>.proxy.<domain>`         |
-| `*.proxy.<STACK_DOMAIN>`       | Proxy ALB (direct)     | Wildcard alias of the above (per-box preview hosts)           |
-| `ssh.<STACK_DOMAIN>`           | SshGateway NLB (TCP)   | `ssh -p 2222 <token>@ssh.<STACK_DOMAIN>` to a box             |
+| `proxy.<STACK_DOMAIN>`         | Proxy ALB (direct)     | Port-preview wildcard `<port>-<boxId>.proxy.<domain>`             |
+| `*.proxy.<STACK_DOMAIN>`       | Proxy ALB (direct)     | Wildcard alias of the above (per-box preview hosts)               |
+| `ssh.<STACK_DOMAIN>`           | SshGateway NLB (TCP)   | `ssh -p 2222 <token>@ssh.<STACK_DOMAIN>` to a box                 |
 
-**Why `/api/*` bypasses CloudFront.** CloudFront imposes a non-configurable
-10-minute idle cap on WebSocket connections — even with WS Ping frames and
-ALB-level keepalive tuning, a session through CF dies at 10 minutes. Origin
-read timeout is configurable up to 60 seconds without an AWS Support case
-(we set 60 s in `sst.config.ts`'s Router transform), so SSE streams with
-multi-minute no-byte gaps also fail under CF. Only the dashboard SPA
-(immutable hashed assets) benefits from CDN caching, so only that path is
-CF-fronted. The dashboard's bundled JS picks up
-`DASHBOARD_BASE_API_URL=https://api.<STACK_DOMAIN>` at container start (see
-`apps/api/src/main.ts::replaceInDirectory`) so all its `/api/*` fetches go
-direct to the Api ALB.
+**API URL lanes.** Dashboard browser traffic, public SDK/CLI examples, and
+runner control-plane traffic are configured separately:
+
+- `DASHBOARD_BASE_API_URL` is the browser runtime API base without `/api`; the
+  API container writes it into the bundled dashboard JS at startup.
+- `PUBLIC_REST_API_BASE_URL` includes `/api` and is returned from `/api/config`
+  for quickstart snippets.
+- `CONTROL_PLANE_API_BASE_URL` includes `/api` and is reserved for runner and
+  collector machine traffic. Do not move it with the dashboard path; roll it
+  with a runner canary and rollback plan.
 
 **Why SSH has its own friendly subdomain.** The SshGateway NLB has an
 auto-generated AWS DNS name (`SshGatewayLoadB-…elb.amazonaws.com`) that's

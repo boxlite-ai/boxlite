@@ -26,7 +26,8 @@ const STAGE_REGIONS: Record<string, string> = {
   prod: 'us-west-2',
   production: 'us-west-2',
 }
-const regionForStage = (stage = 'dev') => process.env.BOXLITE_AWS_REGION || process.env.AWS_REGION || STAGE_REGIONS[stage] || DEFAULT_REGION
+const regionForStage = (stage = 'dev') =>
+  process.env.BOXLITE_AWS_REGION || process.env.AWS_REGION || STAGE_REGIONS[stage] || DEFAULT_REGION
 const isProductionStage = (stage = '') => stage === 'prod' || stage === 'production'
 const ACCOUNT_ID = '064212132677'
 const IAM_ROLE_BOUNDARY_ARN = `arn:aws:iam::${ACCOUNT_ID}:policy/boxlite-role-boundary`
@@ -97,8 +98,7 @@ const requireEnv = (key: string, why: string) => {
 
 // Runner endpoint default — localhost. v2 runners self-report their address via
 // healthcheck, so the DEFAULT_RUNNER_* override is rarely needed.
-const runnerEndpoint = (override: string, port: number, scheme: string) =>
-  envOr(override, `${scheme}localhost:${port}`)
+const runnerEndpoint = (override: string, port: number, scheme: string) => envOr(override, `${scheme}localhost:${port}`)
 
 // ── app config ───────────────────────────────────────────────────────────────
 export default $config({
@@ -144,10 +144,14 @@ export default $config({
     const clickHouseReaderHost = process.env.CLICKHOUSE_READER_HOST || process.env.CLICKHOUSE_HOST
     const clickHouseExporterEnabled = process.env.CLICKHOUSE_EXPORTER_ENABLED === 'true'
     if (clickHouseExporterEnabled && !clickHouseWriterEndpoint) {
-      throw new Error('CLICKHOUSE_WRITER_ENDPOINT or CLICKHOUSE_ENDPOINT is required when CLICKHOUSE_EXPORTER_ENABLED=true')
+      throw new Error(
+        'CLICKHOUSE_WRITER_ENDPOINT or CLICKHOUSE_ENDPOINT is required when CLICKHOUSE_EXPORTER_ENABLED=true',
+      )
     }
     if (clickHouseExporterEnabled && !clickHouseWriterPassword) {
-      throw new Error('CLICKHOUSE_WRITER_PASSWORD or CLICKHOUSE_PASSWORD is required when CLICKHOUSE_EXPORTER_ENABLED=true')
+      throw new Error(
+        'CLICKHOUSE_WRITER_PASSWORD or CLICKHOUSE_PASSWORD is required when CLICKHOUSE_EXPORTER_ENABLED=true',
+      )
     }
     const collectorExporters = clickHouseExporterEnabled ? '[boxlite_exporter,clickhouse]' : '[boxlite_exporter]'
 
@@ -235,10 +239,12 @@ export default $config({
     // object-level overwrite/delete (which `removal` never covers). Redis is a
     // transient cache, so it needs neither.
     const isProd = isProductionStage($app.stage)
-    const serviceImageCache = envOr(
-      'SERVICE_IMAGE_CACHE',
-      $app.stage === 'prod' || $app.stage === 'production' ? 'false' : 'true',
-    ) === 'true'
+    const serviceImageCache =
+      envOr('SERVICE_IMAGE_CACHE', $app.stage === 'prod' || $app.stage === 'production' ? 'false' : 'true') === 'true'
+    const directApiBaseUrl = `https://api.${stackDomain}`
+    const dashboardBaseApiUrl = envOr('DASHBOARD_BASE_API_URL', isProd ? directApiBaseUrl : `https://${stackDomain}`)
+    const publicRestApiUrl = envOr('PUBLIC_REST_API_BASE_URL', `${dashboardBaseApiUrl.replace(/\/+$/, '')}/api`)
+    const controlPlaneApiBaseUrl = envOr('CONTROL_PLANE_API_BASE_URL', `${directApiBaseUrl}/api`)
     // Unique-but-stable suffix for the DB final snapshot: a fixed name would collide
     // with the snapshot a prior teardown of the same stage already created (RDS requires
     // unique final-snapshot ids). RandomId is stable across deploys (no drift) and is
@@ -384,7 +390,7 @@ export default $config({
         CLICKHOUSE_PASSWORD: clickHouseWriterPassword || 'unused',
         CLICKHOUSE_CREATE_SCHEMA: envOr('CLICKHOUSE_CREATE_SCHEMA', 'false'),
         CLICKHOUSE_COMPRESS: envOr('CLICKHOUSE_COMPRESS', 'none'),
-        BOXLITE_API_URL: envOr('BOXLITE_API_URL', `https://api.${stackDomain}/api`),
+        BOXLITE_API_URL: envOr('BOXLITE_API_URL', controlPlaneApiBaseUrl),
         BOXLITE_API_KEY: envOr(
           'BOXLITE_API_KEY',
           envOr('OTEL_COLLECTOR_API_KEY', envOr('ADMIN_API_KEY', adminApiKey.result)),
@@ -432,9 +438,7 @@ export default $config({
           // observability reader defaults to this region
           // (ADMIN_OBSERVABILITY_CLOUDWATCH_REGION).
           actions: ['logs:DescribeLogGroups'],
-          resources: [
-            $interpolate`arn:aws:logs:${region}:${aws.getCallerIdentityOutput().accountId}:log-group:*`,
-          ],
+          resources: [$interpolate`arn:aws:logs:${region}:${aws.getCallerIdentityOutput().accountId}:log-group:*`],
         },
         {
           // Admin observability S3 reader + VolumeManager boot probe are
@@ -544,7 +548,10 @@ export default $config({
           // throw (Output values can't be guarded at config-build time).
           OIDC_MANAGEMENT_API_CLIENT_ID: oidcMgmtClientId.value,
           OIDC_MANAGEMENT_API_CLIENT_SECRET: oidcMgmtClientSecret.value,
-          OIDC_MANAGEMENT_API_AUDIENCE: requireEnv('OIDC_MANAGEMENT_API_AUDIENCE', 'when OIDC_MANAGEMENT_API_ENABLED=true'),
+          OIDC_MANAGEMENT_API_AUDIENCE: requireEnv(
+            'OIDC_MANAGEMENT_API_AUDIENCE',
+            'when OIDC_MANAGEMENT_API_ENABLED=true',
+          ),
         }),
         // RP-initiated logout fallback. Safe to set unconditionally: the API
         // probes the IdP's discovery doc at startup and only exposes this URL
@@ -636,16 +643,19 @@ export default $config({
           ADMIN_OBSERVABILITY_CLICKSTACK_METRIC_SOURCE_ID: process.env.ADMIN_OBSERVABILITY_CLICKSTACK_METRIC_SOURCE_ID,
         }),
 
-        // Dashboard — point its API client at the direct `api.<stackDomain>`
-        // ALB hostname so long-lived /attach WS, build-log SSE, and file
-        // uploads bypass CloudFront (CF imposes a 10-min hard WS cap and a
-        // 60s origin-read timeout that breaks streaming). Static SPA assets
-        // (index.html + /assets/*) still serve through the CF Router at the
-        // root domain. The API pins CORS to DASHBOARD_URL (apps/api main.ts),
-        // so this cross-origin dashboard→API path is explicitly allowed.
+        // URL contract split:
+        // - DASHBOARD_BASE_API_URL is the browser runtime API origin/path base
+        //   used to rewrite the bundled dashboard placeholder at API startup.
+        //   Dev defaults to same-host /api for the path-migration canary; prod
+        //   stays on the legacy direct API host until prod parallel is proven.
+        // - PUBLIC_REST_API_BASE_URL is what /api/config exposes for SDK/CLI
+        //   quickstarts. It can move to boxlite.ai/api independently.
+        // - CONTROL_PLANE_API_BASE_URL is for runner/collector machine traffic
+        //   and must only move by explicit canary.
         DASHBOARD_URL: envOr('DASHBOARD_URL', `https://${stackDomain}`),
         APP_URL: envOr('APP_URL', ''),
-        DASHBOARD_BASE_API_URL: envOr('DASHBOARD_BASE_API_URL', `https://api.${stackDomain}`),
+        DASHBOARD_BASE_API_URL: dashboardBaseApiUrl,
+        PUBLIC_REST_API_BASE_URL: publicRestApiUrl,
 
         // Default runner — the API auto-seeds it at boot; v2 runners self-report
         DEFAULT_RUNNER_NAME: envOr('DEFAULT_RUNNER_NAME', 'default'),
@@ -927,12 +937,18 @@ export default $config({
     }
 
     const runnerUserData = $resolve([
-      api.url,
       defaultRunnerApiKey.result,
       otelCollectorOtlpHttpUrl,
       ghcrSecret ? ghcrSecret.arn : '',
-    ]).apply(([apiUrl, token, otelEndpoint, ghcrSecretArn]) =>
-      buildRunnerUserData({ apiUrl, token, otelEndpoint, ghcrSecretArn: ghcrSecretArn || undefined, ghcrUsername, region }),
+    ]).apply(([token, otelEndpoint, ghcrSecretArn]) =>
+      buildRunnerUserData({
+        controlPlaneApiBaseUrl,
+        token,
+        otelEndpoint,
+        ghcrSecretArn: ghcrSecretArn || undefined,
+        ghcrUsername,
+        region,
+      }),
     )
 
     // Runners hold load-bearing box state (/var/lib/boxlite + in-memory libkrun VMs).
@@ -1001,9 +1017,16 @@ export default $config({
       const instance = makeRunner(
         `Runner-${name}`,
         `boxlite-runner-${index}`,
-        $resolve([api.url, apiKey.result, otelCollectorOtlpHttpUrl, ghcrSecret ? ghcrSecret.arn : '']).apply(
-          ([apiUrl, token, otelEndpoint, ghcrSecretArn]) =>
-            buildRunnerUserData({ apiUrl, token, otelEndpoint, ghcrSecretArn: ghcrSecretArn || undefined, ghcrUsername, region }),
+        $resolve([apiKey.result, otelCollectorOtlpHttpUrl, ghcrSecret ? ghcrSecret.arn : '']).apply(
+          ([token, otelEndpoint, ghcrSecretArn]) =>
+            buildRunnerUserData({
+              controlPlaneApiBaseUrl,
+              token,
+              otelEndpoint,
+              ghcrSecretArn: ghcrSecretArn || undefined,
+              ghcrUsername,
+              region,
+            }),
         ),
       )
       return { name, apiKey, instance }
@@ -1039,7 +1062,7 @@ export default $config({
 // EC2 user-data: downloads prebuilt runner binary from GitHub Releases
 // and runs it directly with BoxLite VM isolation.
 async function buildRunnerUserData(input: {
-  apiUrl: string
+  controlPlaneApiBaseUrl: string
   token: string
   otelEndpoint: string
   ghcrSecretArn?: string
@@ -1154,7 +1177,7 @@ RestartSec=5
 # internally via Client.Shutdown(); 60s here leaves headroom for in-flight
 # HTTP handlers + the deferred Close).
 TimeoutStopSec=60
-Environment=BOXLITE_API_URL=${input.apiUrl.replace(/\/$/, '')}/api
+Environment=BOXLITE_API_URL=${input.controlPlaneApiBaseUrl.replace(/\/$/, '')}
 Environment=BOXLITE_RUNNER_TOKEN=${input.token}
 Environment=API_VERSION=2
 Environment=API_PORT=${PORTS.RUNNER}
@@ -1163,10 +1186,14 @@ Environment=BOXLITE_HOME_DIR=/var/lib/boxlite
 Environment=AWS_REGION=${input.region}
 Environment=OTEL_LOGGING_ENABLED=true
 Environment=OTEL_TRACING_ENABLED=true
-Environment=OTEL_EXPORTER_OTLP_ENDPOINT=${input.otelEndpoint}${input.ghcrSecretArn ? `
+Environment=OTEL_EXPORTER_OTLP_ENDPOINT=${input.otelEndpoint}${
+    input.ghcrSecretArn
+      ? `
 # ghcr: username + secret ARN are non-secret; the start-wrapper fetches the TOKEN at runtime.
 Environment=GHCR_USERNAME=${input.ghcrUsername ?? ''}
-Environment=GHCR_SECRET_ARN=${input.ghcrSecretArn}` : ''}
+Environment=GHCR_SECRET_ARN=${input.ghcrSecretArn}`
+      : ''
+  }
 
 [Install]
 WantedBy=multi-user.target

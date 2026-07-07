@@ -44,6 +44,10 @@ export function buildMockConfig(billingApiUrl: string): BoxliteConfiguration {
       clientId: 'mock-client',
       audience: 'https://mock.local/api',
     },
+    urls: {
+      publicRestApiUrl: 'http://localhost:3000/api',
+      dashboardApiUrl: 'http://localhost:3000/api',
+    },
     linkedAccountsEnabled: false,
     announcements: {},
     proxyTemplateUrl: 'https://mock.local',

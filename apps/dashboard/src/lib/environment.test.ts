@@ -19,7 +19,11 @@ describe('getRestApiUrl', () => {
 
   it('uses a pinned URL for environments that define one', () => {
     expect(getRestApiUrl(fallback, 'dev.boxlite.ai')).toBe('https://dev.boxlite.ai/api')
-    expect(getRestApiUrl(fallback, 'app.boxlite.ai')).toBe('https://api.boxlite.ai/api')
+    expect(getRestApiUrl(fallback, 'app.boxlite.ai')).toBe('https://api.app.boxlite.ai/api')
+  })
+
+  it('prefers the server-provided URL contract over frontend environment fallbacks', () => {
+    expect(getRestApiUrl(fallback, 'app.boxlite.ai', 'https://boxlite.ai/api')).toBe('https://boxlite.ai/api')
   })
 
   it('falls back when the environment has no pinned URL (e.g. local)', () => {

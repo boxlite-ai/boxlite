@@ -127,6 +127,24 @@ export class OidcConfig {
   endSessionEndpoint?: string
 }
 
+@ApiSchema({ name: 'UrlConfig' })
+export class UrlConfig {
+  @ApiProperty({
+    description: 'Public REST API URL including the /api prefix. SDK and CLI quickstarts should use this URL.',
+    example: 'https://dev.boxlite.ai/api',
+  })
+  @IsString()
+  publicRestApiUrl: string
+
+  @ApiProperty({
+    description:
+      'Dashboard runtime API URL including the /api prefix. This is the endpoint the bundled dashboard is configured to call.',
+    example: 'https://dev.boxlite.ai/api',
+  })
+  @IsString()
+  dashboardApiUrl: string
+}
+
 @ApiExtraModels(Announcement)
 @ApiSchema({ name: 'BoxliteConfiguration' })
 export class ConfigurationDto {
@@ -148,6 +166,13 @@ export class ConfigurationDto {
     type: OidcConfig,
   })
   oidc: OidcConfig
+
+  @ApiPropertyOptional({
+    description: 'Canonical public URLs for first-party clients and generated examples.',
+    type: UrlConfig,
+  })
+  @IsOptional()
+  urls?: UrlConfig
 
   @ApiProperty({
     description: 'Whether linked accounts are enabled',
@@ -263,6 +288,10 @@ export class ConfigurationDto {
         options.endSessionState === 'absent'
           ? validatedEndSessionEndpoint(configService.get('oidc.endSessionEndpoint'))
           : undefined,
+    }
+    this.urls = {
+      publicRestApiUrl: configService.getOrThrow('urls.publicRestApiUrl'),
+      dashboardApiUrl: configService.getOrThrow('urls.dashboardApiUrl'),
     }
     this.linkedAccountsEnabled = configService.get('oidc.managementApi.enabled')
     this.proxyTemplateUrl = configService.getOrThrow('proxy.templateUrl')

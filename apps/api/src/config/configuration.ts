@@ -72,7 +72,11 @@ const configuration = {
   },
   dashboardUrl: process.env.DASHBOARD_URL,
   // Default to empty string - dashboard will then hit '/api'
-  dashboardBaseApiUrl: process.env.DASHBOARD_BASE_API_URL || '',
+  dashboardBaseApiUrl: normalizeDashboardApiBaseUrl(process.env.DASHBOARD_BASE_API_URL || ''),
+  urls: {
+    publicRestApiUrl: process.env.PUBLIC_REST_API_BASE_URL || appendApiPath(process.env.DASHBOARD_BASE_API_URL || ''),
+    dashboardApiUrl: appendApiPath(process.env.DASHBOARD_BASE_API_URL || ''),
+  },
   // Currently unconsumed (Daytona-port residue): nothing reads `systemSourceRegistry`.
   // Box images are a fixed curated set of digest-pinned ghcr.io refs pulled directly by
   // the runner (see box/constants/curated-images.constant.ts), not mirrored from a source
@@ -341,3 +345,13 @@ const configuration = {
 }
 
 export { configuration }
+
+function appendApiPath(baseUrl: string): string {
+  const normalized = normalizeDashboardApiBaseUrl(baseUrl)
+  return normalized ? `${normalized}/api` : '/api'
+}
+
+function normalizeDashboardApiBaseUrl(baseUrl: string): string {
+  const normalized = baseUrl.replace(/\/+$/, '')
+  return normalized.endsWith('/api') ? normalized.slice(0, -4) : normalized
+}

@@ -79,8 +79,8 @@ function PrimaryBtn({ children, onClick }: { children: React.ReactNode; onClick:
 
 export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange, progress }: OnboardingGuideDialogProps) {
   const { apiKeyApi } = useApi()
-  const { apiUrl } = useConfig()
-  const restApiUrl = getRestApiUrl(apiUrl)
+  const config = useConfig()
+  const restApiUrl = getRestApiUrl(config.apiUrl, undefined, config.urls?.publicRestApiUrl)
   const { selectedOrganization, authenticatedUserHasPermission } = useSelectedOrganization()
   const canCreateApiKey = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
 

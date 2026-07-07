@@ -6,10 +6,8 @@
 /**
  * Frontend environment + public API URL resolution.
  *
- * Short-term shim: the dashboard pins the public REST API URL per environment
- * here, on the frontend, so the Quickstart snippets point at the right backend
- * without a backend change. The long-term fix is to read a server-provided
- * `restApiUrl` from /api/config; until then this file is the single place to edit.
+ * Fallback public REST API URL resolution for old API deployments that do not
+ * yet return `urls.publicRestApiUrl` from /api/config.
  *
  * Detection uses the hostname, NOT `config.environment`: the dev stage reports
  * `environment: "production"` (it's a production *build* of the dev stage), so
@@ -18,11 +16,10 @@
  */
 export type AppEnvironment = 'local' | 'development' | 'production'
 
-// ⚠️ EDIT HERE — the public REST API base each environment's SDK/CLI should target.
 // `local` is intentionally omitted: it falls back to the dashboard's own /api.
 const REST_API_URL_BY_ENV: Partial<Record<AppEnvironment, string>> = {
   development: 'https://dev.boxlite.ai/api',
-  production: 'https://api.boxlite.ai/api',
+  production: 'https://api.app.boxlite.ai/api',
 }
 
 /** Resolve the current environment from the hostname. */
@@ -35,6 +32,7 @@ export function resolveEnvironment(
 }
 
 /** The public REST API URL to show in SDK/CLI snippets for the current environment. */
-export function getRestApiUrl(fallback: string, hostname?: string): string {
+export function getRestApiUrl(fallback: string, hostname?: string, configuredRestApiUrl?: string): string {
+  if (configuredRestApiUrl) return configuredRestApiUrl
   return REST_API_URL_BY_ENV[resolveEnvironment(hostname)] ?? fallback
 }

@@ -103,6 +103,7 @@ export * from './update-organization-member-access';
 export * from './update-organization-name';
 export * from './update-organization-role';
 export * from './update-region';
+export * from './url-config';
 export * from './user';
 export * from './user-public-key';
 export * from './volume-dto';
