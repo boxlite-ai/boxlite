@@ -17,6 +17,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const testTerminalKeepaliveInterval = 50 * time.Millisecond
+
 func TestIsTerminalToolboxPath(t *testing.T) {
 	tests := []struct {
 		path string
@@ -43,9 +45,6 @@ func TestIsTerminalToolboxPath(t *testing.T) {
 }
 
 func TestTerminalPongRefreshesBoxActivity(t *testing.T) {
-	restore := setTerminalKeepaliveIntervalForTest(50 * time.Millisecond)
-	defer restore()
-
 	touches := make(chan struct{}, 1)
 	toucher := &boxActivityToucher{
 		boxID:       "box",
@@ -60,7 +59,7 @@ func TestTerminalPongRefreshesBoxActivity(t *testing.T) {
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	srv := newTerminalKeepaliveServer(t, toucher)
+	srv := newTerminalKeepaliveServer(t, toucher, testTerminalKeepaliveInterval)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(strings.Replace(srv.URL, "http://", "ws://", 1), nil)
@@ -90,11 +89,8 @@ func TestTerminalPongRefreshesBoxActivity(t *testing.T) {
 }
 
 func TestTerminalPongTimeoutEndsReadLoop(t *testing.T) {
-	restore := setTerminalKeepaliveIntervalForTest(50 * time.Millisecond)
-	defer restore()
-
 	handlerErr := make(chan error, 1)
-	srv := newTerminalKeepaliveServerWithReadResult(t, nil, handlerErr)
+	srv := newTerminalKeepaliveServerWithReadResult(t, nil, handlerErr, testTerminalKeepaliveInterval)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(strings.Replace(srv.URL, "http://", "ws://", 1), nil)
@@ -124,12 +120,12 @@ func TestTerminalPongTimeoutEndsReadLoop(t *testing.T) {
 	}
 }
 
-func newTerminalKeepaliveServer(t *testing.T, toucher *boxActivityToucher) *httptest.Server {
+func newTerminalKeepaliveServer(t *testing.T, toucher *boxActivityToucher, interval time.Duration) *httptest.Server {
 	t.Helper()
-	return newTerminalKeepaliveServerWithReadResult(t, toucher, make(chan error, 1))
+	return newTerminalKeepaliveServerWithReadResult(t, toucher, make(chan error, 1), interval)
 }
 
-func newTerminalKeepaliveServerWithReadResult(t *testing.T, toucher *boxActivityToucher, handlerErr chan<- error) *httptest.Server {
+func newTerminalKeepaliveServerWithReadResult(t *testing.T, toucher *boxActivityToucher, handlerErr chan<- error, interval time.Duration) *httptest.Server {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -144,8 +140,8 @@ func newTerminalKeepaliveServerWithReadResult(t *testing.T, toucher *boxActivity
 		defer cancel()
 
 		var writeMu sync.Mutex
-		configureTerminalPongLiveness(ctx, conn, 3*terminalKeepaliveDuration(), toucher)
-		go runTerminalKeepalive(ctx, conn, &writeMu, logger)
+		configureTerminalPongLiveness(ctx, conn, 3*interval, toucher)
+		go runTerminalKeepalive(ctx, conn, &writeMu, logger, interval)
 
 		for {
 			if _, _, err := conn.ReadMessage(); err != nil {

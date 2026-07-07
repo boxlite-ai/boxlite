@@ -33,31 +33,9 @@ var upgrader = websocket.Upgrader{
 // Mirrors the pattern in boxlite_exec_attach.go::runKeepalive (PR #505) so
 // both WS handlers in this package follow the same shape.
 const (
-	terminalWriteDeadline = 20 * time.Second
+	terminalKeepaliveInterval = 15 * time.Second
+	terminalWriteDeadline     = 20 * time.Second
 )
-
-var (
-	terminalKeepaliveInterval   = 15 * time.Second
-	terminalKeepaliveIntervalMu sync.RWMutex
-)
-
-func terminalKeepaliveDuration() time.Duration {
-	terminalKeepaliveIntervalMu.RLock()
-	defer terminalKeepaliveIntervalMu.RUnlock()
-	return terminalKeepaliveInterval
-}
-
-func setTerminalKeepaliveIntervalForTest(d time.Duration) (restore func()) {
-	terminalKeepaliveIntervalMu.Lock()
-	prev := terminalKeepaliveInterval
-	terminalKeepaliveInterval = d
-	terminalKeepaliveIntervalMu.Unlock()
-	return func() {
-		terminalKeepaliveIntervalMu.Lock()
-		terminalKeepaliveInterval = prev
-		terminalKeepaliveIntervalMu.Unlock()
-	}
-}
 
 // ProxyRequest handles the terminal preview endpoint. Legacy in-box toolbox
 // endpoints are no longer available because boxes do not run the old daemon.
@@ -166,8 +144,8 @@ func handleWebSocketTerminal(ctx *gin.Context, r *runner.Runner, boxId string, l
 	keepaliveCtx, cancelKeepalive := context.WithCancel(ctx.Request.Context())
 	defer cancelKeepalive()
 	activityToucher := newBoxActivityToucher(boxId, logger)
-	configureTerminalPongLiveness(keepaliveCtx, ws, 3*terminalKeepaliveDuration(), activityToucher)
-	go runTerminalKeepalive(keepaliveCtx, ws, &writeMu, logger)
+	configureTerminalPongLiveness(keepaliveCtx, ws, 3*terminalKeepaliveInterval, activityToucher)
+	go runTerminalKeepalive(keepaliveCtx, ws, &writeMu, logger, terminalKeepaliveInterval)
 
 	shellCmd, shellArgs := shellutil.DefaultInteractiveShell()
 	execution, err := r.Boxlite.StartExecution(ctx.Request.Context(), boxId, shellCmd, shellArgs, wsWriter, wsWriter, true)
@@ -213,14 +191,13 @@ func configureTerminalPongLiveness(ctx context.Context, conn *websocket.Conn, po
 	})
 }
 
-// runTerminalKeepalive sends a WebSocket Ping every terminalKeepaliveInterval
-// to keep the connection alive through any intermediate hop with an idle
-// timer. Mirrors apps/runner/pkg/api/controllers/boxlite_exec_attach.go's
-// runKeepalive — see that file's commentary on AWS ALB HTTP 408 troubleshooting.
+// runTerminalKeepalive sends a WebSocket Ping every interval to keep the
+// connection alive through any intermediate hop with an idle timer. Mirrors
+// apps/runner/pkg/api/controllers/boxlite_exec_attach.go's runKeepalive — see
+// that file's commentary on AWS ALB HTTP 408 troubleshooting.
 //
 // Exits cleanly when ctx is cancelled or when a ping write fails.
-func runTerminalKeepalive(ctx context.Context, conn *websocket.Conn, writeMu *sync.Mutex, logger *slog.Logger) {
-	interval := terminalKeepaliveDuration()
+func runTerminalKeepalive(ctx context.Context, conn *websocket.Conn, writeMu *sync.Mutex, logger *slog.Logger, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
