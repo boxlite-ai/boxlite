@@ -95,6 +95,7 @@ import { BoxStateWaiterService } from './services/box-state-waiter.service'
   ],
   exports: [
     BoxService,
+    BoxWarmPoolService,
     RunnerService,
     RedisLockProvider,
     VolumeService,

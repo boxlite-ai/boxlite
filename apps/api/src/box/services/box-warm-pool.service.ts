@@ -12,7 +12,7 @@ import { RedisLockProvider } from '../common/redis-lock.provider'
 import { BoxRepository } from '../repositories/box.repository'
 import { Box } from '../entities/box.entity'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
-import { WarmPool } from '../entities/warm-pool.entity'
+import { ScheduleConfig, ScheduleWindow, WarmPool } from '../entities/warm-pool.entity'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
 import { BoxEvents } from '../constants/box-events.constants'
 import { BoxOrganizationUpdatedEvent } from '../events/box-organization-updated.event'
@@ -134,6 +134,47 @@ export class BoxWarmPoolService {
     return null
   }
 
+  async listWarmPools(): Promise<WarmPool[]> {
+    return this.warmPoolRepository.find()
+  }
+
+  async findWarmPool(id: string): Promise<WarmPool | null> {
+    return this.warmPoolRepository.findOne({ where: { id } })
+  }
+
+  async updateSchedule(
+    id: string,
+    scheduleConfig: ScheduleConfig | null,
+    timezone: string,
+  ): Promise<WarmPool> {
+    await this.warmPoolRepository.update(id, { scheduleConfig, timezone })
+    return this.warmPoolRepository.findOneOrFail({ where: { id } })
+  }
+
+  private computeTargetPoolSize(item: WarmPool): number {
+    if (!item.scheduleConfig) return item.pool
+
+    const tz = item.timezone ?? 'UTC'
+    const now = new Date()
+    const hour = parseInt(
+      new Intl.DateTimeFormat('en', { hour: 'numeric', hour12: false, timeZone: tz }).format(now),
+    )
+    const day = new Date(now.toLocaleString('en', { timeZone: tz })).getDay()
+
+    for (const w of (item.scheduleConfig as ScheduleConfig).windows) {
+      const dayMatch = !w.days || w.days.includes(day)
+      const hourMatch =
+        w.startHour == null || w.endHour == null
+          ? true // no hours specified = all day
+          : w.startHour <= w.endHour
+            ? hour >= w.startHour && hour < w.endHour
+            : hour >= w.startHour || hour < w.endHour // spans midnight
+      if (dayMatch && hourMatch) return w.pool
+    }
+
+    return item.pool
+  }
+
   //  todo: make frequency configurable or more efficient
   @Cron(CronExpression.EVERY_10_SECONDS, { name: 'warm-pool-check' })
   @LogExecution('warm-pool-check')
@@ -165,7 +206,8 @@ export class BoxWarmPoolService {
           },
         })
 
-        const missingCount = warmPoolItem.pool - boxCount
+        const target = this.computeTargetPoolSize(warmPoolItem)
+        const missingCount = target - boxCount
         if (missingCount > 0) {
           const promises = []
           this.logger.debug(`Creating ${missingCount} boxes for warm pool id ${warmPoolItem.id}`)
@@ -178,6 +220,40 @@ export class BoxWarmPoolService {
 
           // Wait for all promises to settle before releasing the lock. Otherwise, another worker could start creating boxes
           await Promise.allSettled(promises)
+        }
+
+        const excessCount = boxCount - target
+        if (excessCount > 0) {
+          const candidates = await this.boxRepository.find({
+            where: {
+              organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+              image: warmPoolItem.image,
+              class: warmPoolItem.class,
+              cpu: warmPoolItem.cpu,
+              mem: warmPoolItem.mem,
+              disk: warmPoolItem.disk,
+              gpu: warmPoolItem.gpu,
+              osUser: warmPoolItem.osUser,
+              env: warmPoolItem.env,
+              region: warmPoolItem.target,
+              state: BoxState.STARTED,
+              desiredState: BoxDesiredState.STARTED,
+            },
+            take: excessCount,
+          })
+
+          this.logger.debug(`Scaling down ${candidates.length} excess boxes for warm pool id ${warmPoolItem.id}`)
+
+          for (const box of candidates) {
+            const lockKey = `box-warm-pool-${box.id}`
+            if (!(await this.redisLockProvider.lock(lockKey, 30))) {
+              continue // being claimed right now, skip
+            }
+            await this.boxRepository.update(box.id, {
+              desiredState: BoxDesiredState.DESTROYED,
+              pending: true,
+            })
+          }
         }
 
         await this.redisLockProvider.unlock(lockKey)

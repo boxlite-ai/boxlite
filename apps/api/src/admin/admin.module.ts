@@ -9,6 +9,7 @@ import { AdminObservabilityController } from './controllers/observability.contro
 import { AdminOverviewController } from './controllers/overview.controller'
 import { AdminRunnerController } from './controllers/runner.controller'
 import { AdminBoxController } from './controllers/box.controller'
+import { AdminWarmPoolController } from './controllers/warm-pool.controller'
 import {
   ADMIN_AUDIT_LOG_READER,
   ADMIN_CLOUDWATCH_LOG_READER,
@@ -28,7 +29,7 @@ import { AuditService } from '../audit/services/audit.service'
 
 @Module({
   imports: [BoxModule, RegionModule, OrganizationModule, UserModule, AuditModule],
-  controllers: [AdminRunnerController, AdminBoxController, AdminOverviewController, AdminObservabilityController],
+  controllers: [AdminRunnerController, AdminBoxController, AdminOverviewController, AdminObservabilityController, AdminWarmPoolController],
   providers: [
     AdminOverviewService,
     AdminObservabilityService,
