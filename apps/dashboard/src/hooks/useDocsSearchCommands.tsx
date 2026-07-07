@@ -38,7 +38,9 @@ const getAlgoliaClient = (): Promise<AlgoliaLiteClient | null> => {
     return Promise.resolve(null)
   }
   if (!clientPromise) {
-    clientPromise = import('algoliasearch/lite').then(({ liteClient }) => liteClient(ALGOLIA_APP_ID, ALGOLIA_API_KEY))
+    clientPromise = import('algoliasearch/lite').then(({ liteClient }) =>
+      liteClient(ALGOLIA_APP_ID, ALGOLIA_API_KEY),
+    )
   }
   return clientPromise
 }

@@ -45,7 +45,6 @@ import { isRecoverable, isStartable, isStoppable, isTransitioning } from '@/lib/
 import { Box, BoxState, OrganizationRolePermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { isAxiosError } from 'axios'
 import {
-  ArrowDown,
   Check,
   Container,
   Copy,
@@ -56,13 +55,14 @@ import {
   RotateCcw,
   Trash2,
 } from '@/components/ui/icon'
+import { Icon as IconifyIcon } from '@iconify/react'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { BoxFileUploadControl, buildDroppedUploadItems } from './BoxFileUploadControl'
 import { BoxTerminalTab } from './BoxTerminalTab'
-import { sendActiveTerminalListCommand } from './terminalIframeSrc'
+import { sendActiveTerminalListCommand, TERMINAL_FILE_DRAG_EVENT } from './terminalIframeSrc'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 const STATUS = { running: '#5ad67d', idle: '#e0b341', stopped: '#8C919C', error: '#e0564a', dim: '#5b616e' } as const
@@ -136,9 +136,8 @@ export default function BoxDetails() {
   const [terminalRefreshSignal, setTerminalRefreshSignal] = useState(0)
   const refreshRef = useRef<HTMLSpanElement>(null)
   const shellDropRef = useRef<HTMLDivElement>(null)
-  const [isFileDragging, setIsFileDragging] = useState(false)
   const [isShellDragging, setIsShellDragging] = useState(false)
-  const [filesCurrentDir, setFilesCurrentDir] = useState(DEFAULT_BOX_UPLOAD_DIR)
+  const [filesCurrentDir, setFilesCurrentDir] = useState<string | null>(null)
 
   const updateOnboardingProgress = useCallback(
     (progress: OnboardingProgress) => {
@@ -210,6 +209,19 @@ export default function BoxDetails() {
       : !box || !isStoppable(box)
         ? 'Start the box before uploading files'
         : undefined
+  const canUpload = uploadDisabledReason === undefined
+  const hasFilesCurrentDir = filesCurrentDir !== null
+  const canDragUpload = canUpload && hasFilesCurrentDir
+  const uploadDestinationDir = filesCurrentDir ?? DEFAULT_BOX_UPLOAD_DIR
+
+  useEffect(() => {
+    setFilesCurrentDir(null)
+    setIsShellDragging(false)
+  }, [box?.id, box?.state])
+
+  const handleCurrentDirChange = useCallback((path: string) => {
+    setFilesCurrentDir(path)
+  }, [])
 
   const handleStart = async () => {
     if (!box) return
@@ -263,12 +275,12 @@ export default function BoxDetails() {
   }
 
   const handleUploadFiles = async (items: BoxUploadItem[]) => {
-    if (!box || items.length === 0) return
+    if (!box || !canUpload || items.length === 0) return
     try {
       await uploadMutation.mutateAsync({
         boxId: box.id,
         detailRef: boxId,
-        destinationDir: filesCurrentDir,
+        destinationDir: uploadDestinationDir,
         items,
       })
       toast.success(
@@ -286,7 +298,7 @@ export default function BoxDetails() {
     handleApiError(error, 'Failed to prepare upload')
   }
 
-  const isInsideShellDropTarget = useCallback((event: DragEvent) => {
+  const isInsideShellDropTarget = useCallback((event: Pick<DragEvent, 'clientX' | 'clientY'>) => {
     const rect = shellDropRef.current?.getBoundingClientRect()
     return Boolean(
       rect &&
@@ -309,26 +321,21 @@ export default function BoxDetails() {
         handleUploadInputError(error)
       }
     },
-    [filesCurrentDir, handleUploadFiles, handleUploadInputError],
+    [handleUploadFiles, handleUploadInputError],
   )
 
   useEffect(() => {
-    const resetShellDragging = () => {
-      setIsFileDragging(false)
-      setIsShellDragging(false)
-    }
+    const resetShellDragging = () => setIsShellDragging(false)
 
     const hasDraggedFiles = (dataTransfer: DataTransfer) => Array.from(dataTransfer.types ?? []).includes('Files')
 
     const updateShellDragState = (event: DragEvent) => {
-      if (uploadDisabledReason !== undefined || !event.dataTransfer || !hasDraggedFiles(event.dataTransfer)) {
-        setIsFileDragging(false)
-        setIsShellDragging(false)
+      if (!canDragUpload || !event.dataTransfer || !hasDraggedFiles(event.dataTransfer)) {
+        resetShellDragging()
         return
       }
-      setIsFileDragging(true)
       if (!isInsideShellDropTarget(event)) {
-        setIsShellDragging(false)
+        resetShellDragging()
         return
       }
       event.preventDefault()
@@ -348,7 +355,7 @@ export default function BoxDetails() {
     }
 
     const handleWindowDrop = async (event: DragEvent) => {
-      if (uploadDisabledReason !== undefined || !event.dataTransfer || !isInsideShellDropTarget(event)) {
+      if (!canDragUpload || !event.dataTransfer || !isInsideShellDropTarget(event)) {
         resetShellDragging()
         return
       }
@@ -357,11 +364,22 @@ export default function BoxDetails() {
       await handleDroppedDataTransfer(event.dataTransfer)
     }
 
+    const handleTerminalFileDrag = (event: Event) => {
+      if (!canDragUpload) {
+        resetShellDragging()
+        return
+      }
+
+      const active = Boolean((event as CustomEvent<{ active?: boolean }>).detail?.active)
+      setIsShellDragging(active)
+    }
+
     window.addEventListener('dragenter', updateShellDragState, { capture: true })
     window.addEventListener('dragover', updateShellDragState, { capture: true })
     window.addEventListener('drop', handleWindowDrop)
     window.addEventListener('dragleave', handleWindowDragLeave)
     window.addEventListener('dragend', resetShellDragging)
+    window.addEventListener(TERMINAL_FILE_DRAG_EVENT, handleTerminalFileDrag)
 
     return () => {
       window.removeEventListener('dragenter', updateShellDragState, { capture: true })
@@ -369,8 +387,9 @@ export default function BoxDetails() {
       window.removeEventListener('drop', handleWindowDrop)
       window.removeEventListener('dragleave', handleWindowDragLeave)
       window.removeEventListener('dragend', resetShellDragging)
+      window.removeEventListener(TERMINAL_FILE_DRAG_EVENT, handleTerminalFileDrag)
     }
-  }, [handleDroppedDataTransfer, isInsideShellDropTarget, uploadDisabledReason])
+  }, [canDragUpload, handleDroppedDataTransfer, isInsideShellDropTarget])
 
   const handleRefresh = () => {
     refetch()
@@ -606,20 +625,22 @@ export default function BoxDetails() {
                   </span>
                 </span>
                 <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">
-                  <span
-                    title={`Drag files or folders into the shell area to upload to ${filesCurrentDir}`}
-                    className="inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] text-muted-foreground"
-                  >
-                    <ArrowDown className="size-3.5 flex-none" />
-                    <span className="flex-none">Upload to</span>
-                    <span className="min-w-0 max-w-[min(36vw,360px)] truncate font-medium text-foreground">
-                      {filesCurrentDir}
+                  {hasFilesCurrentDir && (
+                    <span
+                      title={`Drag files or folders into the shell area to upload to ${uploadDestinationDir}`}
+                      className="inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] text-muted-foreground"
+                    >
+                      <IconifyIcon icon="pixelarticons:drag-and-drop" className="size-4 flex-none text-foreground" />
+                      <span className="flex-none">Drag files/folders to</span>
+                      <span className="min-w-0 max-w-[min(36vw,360px)] truncate font-medium text-foreground">
+                        {uploadDestinationDir}
+                      </span>
                     </span>
-                  </span>
+                  )}
                   <BoxFileUploadControl
-                    disabled={uploadDisabledReason !== undefined}
+                    disabled={!canUpload}
                     disabledReason={uploadDisabledReason}
-                    destinationDir={filesCurrentDir}
+                    destinationDir={uploadDestinationDir}
                     isUploading={uploadMutation.isPending}
                     onError={handleUploadInputError}
                     onUpload={handleUploadFiles}
@@ -630,32 +651,28 @@ export default function BoxDetails() {
                 <BoxTerminalTab
                   box={box}
                   refreshSignal={terminalRefreshSignal}
-                  onCurrentDirChange={setFilesCurrentDir}
+                  onCurrentDirChange={handleCurrentDirChange}
                 />
               </div>
-              {isFileDragging && uploadDisabledReason === undefined && (
+              {isShellDragging && canDragUpload && (
                 <div
-                  className={[
-                    'absolute inset-0 z-20 flex items-center justify-center border text-[13px] transition-colors',
-                    isShellDragging
-                      ? 'border-brand bg-background/75 text-foreground backdrop-blur-[1px]'
-                      : 'border-transparent bg-transparent text-transparent',
-                  ].join(' ')}
+                  className="absolute inset-0 z-20 flex items-center justify-center border border-brand bg-background/75 text-[13px] text-foreground backdrop-blur-[1px] transition-colors"
                   onDragOver={(event) => {
                     event.preventDefault()
                     event.dataTransfer.dropEffect = 'copy'
                     setIsShellDragging(true)
                   }}
-                  onDragLeave={() => setIsShellDragging(false)}
+                  onDragLeave={(event) => {
+                    if (!isInsideShellDropTarget(event.nativeEvent)) setIsShellDragging(false)
+                  }}
                   onDrop={async (event) => {
                     event.preventDefault()
                     event.stopPropagation()
-                    setIsFileDragging(false)
                     setIsShellDragging(false)
                     await handleDroppedDataTransfer(event.dataTransfer)
                   }}
                 >
-                  {isShellDragging ? `Drop to upload into ${filesCurrentDir}` : null}
+                  {`Drop to upload into ${uploadDestinationDir}`}
                 </div>
               )}
             </div>

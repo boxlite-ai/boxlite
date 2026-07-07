@@ -99,7 +99,7 @@ const terminalHTML = `<!DOCTYPE html>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
 <style>
 html,body{margin:0;padding:0;height:100%;background:#1e1e1e;overflow:hidden}
-#terminal{box-sizing:border-box;height:100%;width:100%;padding:8px}
+#terminal{height:100%;width:100%}
 </style>
 </head>
 <body>
@@ -116,9 +116,16 @@ fitAddon.fit();
 var proto=location.protocol==='https:'?'wss:':'ws:';
 var ws=new WebSocket(proto+'//'+location.host+location.pathname+location.search);
 ws.onopen=function(){term.focus();};
+var parentOrigin='';
+try{parentOrigin=new URL(document.referrer).origin;}catch(_){}
+function postParent(message){
+  parent.postMessage(message,parentOrigin||'*');
+}
+var lastCwd='';
 function postCwd(path){
   if(!path||path.charAt(0)!=='/')return;
-  parent.postMessage({source:'boxlite-terminal',type:'cwd',value:path},'*');
+  lastCwd=path;
+  postParent({source:'boxlite-terminal',type:'cwd',value:path});
 }
 function scanCwd(data){
   var text=String(data);
@@ -130,14 +137,44 @@ function scanCwd(data){
     postCwd(path);
   }
 }
-var parentOrigin='';
-try{parentOrigin=new URL(document.referrer).origin;}catch(_){}
 window.addEventListener('message',function(event){
   if(event.source!==parent)return;
   if(parentOrigin&&event.origin!==parentOrigin)return;
   var msg=event.data||{};
-  if(msg.source!=='boxlite-dashboard'||msg.type!=='command'||msg.command!=='ls')return;
-  if(ws.readyState===WebSocket.OPEN)ws.send('ls\r');
+  if(msg.source!=='boxlite-dashboard')return;
+  if(msg.type==='cwd-request'){
+    if(lastCwd)postCwd(lastCwd);
+    return;
+  }
+  if(msg.type==='command'&&msg.command==='ls'&&ws.readyState===WebSocket.OPEN)ws.send('ls\r');
+});
+function hasDraggedFiles(event){
+  var types=event.dataTransfer&&event.dataTransfer.types;
+  return types&&Array.prototype.indexOf.call(types,'Files')!==-1;
+}
+function postFileDrag(active){
+  postParent({source:'boxlite-terminal',type:'file-drag',value:active?'active':'idle'});
+}
+window.addEventListener('dragenter',function(event){
+  if(!hasDraggedFiles(event))return;
+  event.preventDefault();
+  postFileDrag(true);
+});
+window.addEventListener('dragover',function(event){
+  if(!hasDraggedFiles(event))return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect='copy';
+  postFileDrag(true);
+});
+window.addEventListener('dragleave',function(event){
+  if(event.clientX<=0||event.clientY<=0||event.clientX>=window.innerWidth||event.clientY>=window.innerHeight){
+    postFileDrag(false);
+  }
+});
+window.addEventListener('drop',function(event){
+  if(!hasDraggedFiles(event))return;
+  event.preventDefault();
+  postFileDrag(false);
 });
 ws.onmessage=function(e){scanCwd(e.data);term.write(e.data);};
 ws.onclose=function(){term.write('\r\n[Connection closed]\r\n');};

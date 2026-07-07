@@ -12,6 +12,7 @@
  */
 
 const FONT_SIZE_KEY = 'boxlite.terminal.fontSize'
+export const TERMINAL_FILE_DRAG_EVENT = 'boxlite.terminal-file-drag'
 
 function readNumber(key: string, min: number, max: number): number | null {
   try {
@@ -75,6 +76,13 @@ export function registerActiveTerminalFrame(
     origin,
   })
   currentTerminalFrame = frame
+  frame.postMessage(
+    {
+      source: 'boxlite-dashboard',
+      type: 'cwd-request',
+    },
+    origin,
+  )
   return () => {
     if (activeTerminalFrames.get(frame)?.origin === origin) activeTerminalFrames.delete(frame)
     if (currentTerminalFrame === frame) currentTerminalFrame = null
@@ -139,6 +147,15 @@ function ensureTerminalPrefListener() {
       return
     }
 
+    if (msg.type === 'file-drag') {
+      window.dispatchEvent(
+        new CustomEvent(TERMINAL_FILE_DRAG_EVENT, {
+          detail: { active: msg.value === 'active' },
+        }),
+      )
+      return
+    }
+
     if (msg.type === 'ready') {
       // Handshake ping only; no user-supplied terminal data is sent back.
       return
@@ -149,5 +166,13 @@ function ensureTerminalPrefListener() {
 }
 
 function isSafeAbsoluteBoxPath(value: string): boolean {
-  return value.startsWith('/') && value.length <= 4096 && !/[\u0000-\u001f\u007f]/.test(value)
+  return value.startsWith('/') && value.length <= 4096 && !hasControlCharacter(value)
+}
+
+function hasControlCharacter(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i)
+    if (code <= 31 || code === 127) return true
+  }
+  return false
 }

@@ -3,12 +3,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-// Initial upload destination before the terminal reports a cwd. This is the
-// WORKDIR that standard BoxLite images declare (images/agent-runtime); it is
-// NOT guaranteed to exist in custom images — the platform no longer creates
-// or forces it. Once the terminal emits an OSC 7 cwd update, uploads follow
-// the user's actual directory instead (see BoxDetails.filesCurrentDir).
-export const DEFAULT_BOX_UPLOAD_DIR = '/workspace'
+// Initial upload destination before the terminal reports a cwd.
+export const DEFAULT_BOX_UPLOAD_DIR = '/root'
 
 const TAR_BLOCK_SIZE = 512
 

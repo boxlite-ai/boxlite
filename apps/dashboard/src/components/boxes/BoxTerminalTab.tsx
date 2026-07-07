@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
+import { RoutePath } from '@/enums/RoutePath'
 import { useStartBoxMutation } from '@/hooks/mutations/useStartBoxMutation'
 import { useTerminalSessionQuery } from '@/hooks/queries/useTerminalSessionQuery'
 import { useBoxSessionContext } from '@/hooks/useBoxSessionContext'
@@ -158,13 +159,14 @@ export function BoxTerminalTab({ box, refreshSignal = 0, onCurrentDirChange }: B
   }
 
   // Active session
+  const fullscreenHref = RoutePath.BOX_TERMINAL.replace(':boxId', getBoxRouteId(box))
   return (
     <div className="flex-1 flex flex-col">
       <div className="relative flex-1 min-h-0 bg-black overflow-hidden">
         <BoxTerminalFrame
           key={session.url}
           sessionUrl={session.url}
-          expandable
+          fullscreenHref={fullscreenHref}
           className="h-full"
           onCurrentDirChange={onCurrentDirChange}
         />

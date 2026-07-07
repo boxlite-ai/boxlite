@@ -4,7 +4,6 @@
  */
 
 import { Button } from '@/components/ui/button'
-import { Upload } from '@/components/ui/icon'
 import { Spinner } from '@/components/ui/spinner'
 import {
   buildBoxUploadItems,
@@ -13,6 +12,7 @@ import {
   type BoxUploadFileEntry,
   type BoxUploadItem,
 } from '@/lib/box-upload'
+import { Icon as IconifyIcon } from '@iconify/react'
 import { useRef } from 'react'
 
 interface BoxFileUploadControlProps {
@@ -89,11 +89,11 @@ export function BoxFileUploadControl({
         variant="outline"
         size="sm"
         disabled={isDisabled}
-        title={disabledReason ?? `Upload files to ${destinationDir}; drag folders into the shell area`}
+        title={disabledReason ?? `Upload files to ${destinationDir}`}
         onClick={openFilePicker}
         className="h-7 gap-2 px-2.5 font-mono text-[12px]"
       >
-        {isUploading ? <Spinner className="size-4" /> : <Upload className="size-4" />}
+        {isUploading ? <Spinner className="size-4" /> : <IconifyIcon icon="pixelarticons:files" className="size-4" />}
         {isUploading ? 'Uploading' : 'Upload Files'}
       </Button>
       <Button
@@ -105,7 +105,7 @@ export function BoxFileUploadControl({
         onClick={openDirectoryPicker}
         className="h-7 gap-2 px-2.5 font-mono text-[12px]"
       >
-        <Upload className="size-4" />
+        <IconifyIcon icon="pixelarticons:folder" className="size-4" />
         Folder
       </Button>
     </div>

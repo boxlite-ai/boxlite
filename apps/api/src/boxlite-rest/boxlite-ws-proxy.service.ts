@@ -164,7 +164,10 @@ export class BoxliteWsProxyService {
    */
   private async authenticate(req: IncomingMessage, urlTenant?: string): Promise<{ organizationId: string } | null> {
     try {
-      const token = this.readBearerToken(req)
+      const header = req.headers['authorization']
+      const headerValue = Array.isArray(header) ? header[0] : header
+      if (!headerValue || !/^bearer\s+/i.test(headerValue)) return null
+      const token = headerValue.replace(/^bearer\s+/i, '').trim()
       if (!token) return null
 
       // 1. API key — org comes from the key itself; the URL tenant is ignored, as
@@ -198,17 +201,6 @@ export class BoxliteWsProxyService {
       // would leak a hung socket.
       return null
     }
-  }
-
-  private readBearerToken(req: IncomingMessage): string | null {
-    const header = req.headers['authorization']
-    const headerValue = Array.isArray(header) ? header[0] : header
-    if (headerValue && /^bearer\s+/i.test(headerValue)) {
-      return headerValue.replace(/^bearer\s+/i, '').trim() || null
-    }
-
-    const token = new URL(req.url ?? '', 'http://boxlite.local').searchParams.get('access_token')
-    return token?.trim() || null
   }
 
   private respondAndClose(socket: Socket, status: number, reason: string): void {
