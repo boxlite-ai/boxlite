@@ -299,6 +299,7 @@
     "jsonc-eslint-parser": "^2.1.0",
     "lint-staged": "^15.5.0",
     "markdownlint-cli2": "^0.17.2",
+    "node-gyp": "12.3.0",
     "nx": "21.4.1",
     "pino-pretty": "^13.1.2",
     "postcss": "8.5.10",
