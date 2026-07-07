@@ -7,7 +7,11 @@ use clap::Args;
 pub struct CreateArgs {
     /// Image to create from
     #[arg(index = 1)]
-    pub image: String,
+    pub image: Option<String>,
+
+    /// Path to an already prepared rootfs
+    #[arg(long = "rootfs", value_name = "PATH")]
+    pub rootfs: Option<String>,
 
     #[command(flatten)]
     pub management: crate::cli::ManagementFlags,
@@ -39,8 +43,8 @@ pub struct CreateArgs {
 }
 
 pub async fn execute(args: CreateArgs, global: &GlobalFlags) -> anyhow::Result<()> {
-    let rt = global.create_runtime()?;
     let box_options = args.to_box_options(global)?;
+    let rt = global.create_runtime()?;
 
     let litebox = rt.create(box_options, args.management.name.clone()).await?;
     println!("{}", litebox.id());
@@ -61,7 +65,70 @@ impl CreateArgs {
             options.entrypoint = Some(vec![exec.clone()]);
         }
         crate::cli::apply_env_vars(&self.env, &mut options);
-        options.rootfs = RootfsSpec::Image(self.image.clone());
+        options.rootfs = self.rootfs_spec()?;
         Ok(options)
+    }
+
+    fn rootfs_spec(&self) -> anyhow::Result<RootfsSpec> {
+        match (self.image.as_ref(), self.rootfs.as_ref()) {
+            (Some(image), None) => Ok(RootfsSpec::Image(image.clone())),
+            (None, Some(path)) => Ok(RootfsSpec::RootfsPath(path.clone())),
+            (None, None) => anyhow::bail!("provide IMAGE or --rootfs PATH"),
+            (Some(_), Some(_)) => anyhow::bail!("provide either IMAGE or --rootfs PATH, not both"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::{Cli, Commands};
+    use clap::Parser;
+
+    #[test]
+    fn create_rootfs_flag_sets_rootfs_path() {
+        let cli = Cli::try_parse_from(["boxlite", "create", "--rootfs", "/tmp/rootfs"])
+            .expect("create --rootfs should parse");
+        let Commands::Create(args) = cli.command else {
+            panic!("expected create command");
+        };
+
+        let opts = args
+            .to_box_options(&cli.global)
+            .expect("rootfs options should build");
+
+        match opts.rootfs {
+            RootfsSpec::RootfsPath(path) => assert_eq!(path, "/tmp/rootfs"),
+            other => panic!("expected RootfsPath, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn create_requires_image_or_rootfs() {
+        let cli = Cli::try_parse_from(["boxlite", "create"]).expect("create should parse");
+        let Commands::Create(args) = cli.command else {
+            panic!("expected create command");
+        };
+
+        let err = args
+            .to_box_options(&cli.global)
+            .expect_err("missing source must be rejected");
+
+        assert!(err.to_string().contains("IMAGE or --rootfs"));
+    }
+
+    #[test]
+    fn create_rejects_image_and_rootfs_together() {
+        let cli = Cli::try_parse_from(["boxlite", "create", "--rootfs", "/tmp/rootfs", "alpine"])
+            .expect("create image and rootfs should parse");
+        let Commands::Create(args) = cli.command else {
+            panic!("expected create command");
+        };
+
+        let err = args
+            .to_box_options(&cli.global)
+            .expect_err("competing sources must be rejected");
+
+        assert!(err.to_string().contains("either IMAGE or --rootfs"));
     }
 }

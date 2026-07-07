@@ -231,11 +231,18 @@ Credential:      API key (from BOXLITE_API_KEY env var)
 
 ### `boxlite run`
 
-**Synopsis:** `boxlite run [OPTIONS] IMAGE [COMMAND...]`
+**Synopsis:**
 
-Create a box from an image and run a command. If `COMMAND` is omitted, the box runs `sh` (`src/cli/src/commands/run.rs:138`).
+- `boxlite run [OPTIONS] IMAGE [COMMAND...]`
+- `boxlite run [OPTIONS] --rootfs PATH [COMMAND...]`
 
-**Options:** Uses [`ProcessFlags`](#processflags) + [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`ManagementFlags`](#managementflags).
+Create a box from an image or prepared rootfs and run a command. If `COMMAND` is omitted, the box runs `sh`.
+
+**Options:** Uses [`ProcessFlags`](#processflags) + [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`ManagementFlags`](#managementflags), plus:
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--rootfs PATH` | — | Use a prepared rootfs path instead of pulling/resolving an image |
 
 **Exit behavior:**
 
@@ -251,6 +258,7 @@ boxlite run -it --rm alpine:latest /bin/sh
 boxlite run -d --name web -p 8080:80 nginx:alpine
 boxlite run -v $(pwd):/work -w /work alpine:latest ls -la
 boxlite run --cpus 4 --memory 4096 python:slim python -c "print(2+2)"
+boxlite run --rootfs /path/to/rootfs /bin/sh
 ```
 
 ---
@@ -281,14 +289,18 @@ boxlite exec -e DEBUG=1 -w /app mybox -- pytest tests/
 
 ### `boxlite create`
 
-**Synopsis:** `boxlite create [OPTIONS] IMAGE`
+**Synopsis:**
 
-Create a box without running a command. Prints the new box's ID to stdout.
+- `boxlite create [OPTIONS] IMAGE`
+- `boxlite create [OPTIONS] --rootfs PATH`
+
+Create a box from an image or prepared rootfs without running a command. Prints the new box's ID to stdout.
 
 **Options:**
 
 | Flag | Short | Description |
 |------|-------|-------------|
+| `--rootfs PATH` | — | Use a prepared rootfs path instead of pulling/resolving an image |
 | `--env KEY=VALUE` | `-e` | Set environment variables (repeatable) |
 | `--workdir PATH` | `-w` | Working directory inside the box |
 
@@ -301,6 +313,7 @@ Also uses [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + 
 ```bash
 boxlite create --name mybox alpine:latest
 boxlite create -p 8080:80 -v /data:/app/data --name web nginx:alpine
+boxlite create --rootfs /path/to/rootfs --name local-rootfs
 ```
 
 ---
