@@ -230,6 +230,10 @@ message BindMount {
   // guest applies mount_setattr(MOUNT_ATTR_IDMAP) to remap transparently.
   uint32 owner_uid = 4;
   uint32 owner_gid = 5;
+  // For a single-file mount, the file name within the shared volume dir; the
+  // guest bind-mounts {volume_dir}/{subpath} rather than the whole dir. Empty
+  // for a whole-directory mount.
+  string subpath = 6;
 }
 
 message ContainerInitResponse {

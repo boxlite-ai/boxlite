@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Universal (agent-agnostic) commit gate: enforces the same audited-dossier
+# contract as .claude/hooks/preflight-commit-push.sh, but from git's own hook
+# interface — it fires for ANY process that runs `git commit`, whichever coding
+# agent drives it, including agents with no hook system of their own. Install:
+# .githooks/install.sh (sets core.hooksPath). The PreToolUse gate detects the
+# installation and delegates, so the audit artifact keeps exactly one consumer.
+#
+# Humans are not gated: enforcement binds only when a harness marker is present
+# in the environment — CLAUDECODE (Claude Code shells), CODEX_SANDBOX (Codex
+# exec shells), or explicit AGENT_GATED=1 (any other agent: one env line in its
+# wiring). Named markers, not prefix wildcards: plugin artifacts like
+# CODEX_COMPANION_* must not gate a session that is not Codex-driven. An agent
+# could unset its marker — same honest-mistakes threat model as the rest of the
+# gate stack. git's native --no-verify bypass also applies (existing repo
+# culture: allowed with evidence).
+#
+# After the gate, chains to the framework-managed hook (prek installs into
+# .git/hooks/pre-commit) so fmt/lint still run.
+#
+# Tests: bash .githooks/githooks.test.sh
+set -uo pipefail
+
+is_agent=0
+[[ -n "${CLAUDECODE:-}" || -n "${CODEX_SANDBOX:-}" || -n "${AGENT_GATED:-}" ]] && is_agent=1
+
+if [[ "$is_agent" == 1 ]]; then
+  repo_root="$(git rev-parse --show-toplevel)"
+  # GITHOOK_DELEGATED tells the PreToolUse script this call IS the git-level
+  # gate — without it the script's delegation guard would defer right back to
+  # us and everything would silently pass.
+  out="$(printf '{"tool_input":{"command":"git commit"}}' \
+        | GITHOOK_DELEGATED=1 bash "$repo_root/.claude/hooks/preflight-commit-push.sh" 2>/dev/null || true)"
+  if printf '%s' "$out" | jq -e '.hookSpecificOutput.permissionDecision == "deny"' >/dev/null 2>&1; then
+    printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason' >&2
+    exit 1
+  fi
+fi
+
+# Chain via --git-common-dir, NOT --git-path: --git-path honors core.hooksPath
+# and would resolve to THIS script — self-exec recursion (infinite for humans,
+# double-consume for agents). The framework (prek) installs into the common
+# hooks dir, which is also what all worktrees share. realpath guard as a belt.
+chained="$(git rev-parse --git-common-dir)/hooks/pre-commit"
+if [[ -x "$chained" && "$(realpath "$chained" 2>/dev/null)" != "$(realpath "$0" 2>/dev/null)" ]]; then
+  exec "$chained" "$@"
+fi
+exit 0

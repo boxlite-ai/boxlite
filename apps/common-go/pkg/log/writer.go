@@ -7,13 +7,6 @@ import (
 	"log/slog"
 )
 
-type DebugLogWriter struct{}
-
-func (w *DebugLogWriter) Write(p []byte) (n int, err error) {
-	slog.Debug(string(p))
-	return len(p), nil
-}
-
 type InfoLogWriter struct{}
 
 func (w *InfoLogWriter) Write(p []byte) (n int, err error) {

@@ -39,11 +39,20 @@ command="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""')"
 
 # Match when the command actually IS a `git commit` / `git push` invocation —
 # at the start of the command OR at the start of any chain segment (after &&,
-# ||, ;, |, &, $(, (, `). This catches the chained-command case
-# (`cat foo && git commit ...`) that an anchor-only matcher misses, while still
-# rejecting literal mentions of "git commit" inside string arguments (e.g.
-# `echo "git commit"`), which don't sit at the start of a chain segment.
-work="${command#"${command%%[![:space:]]*}"}"
+# ||, ;, |, &, $(, (, `, or a NEWLINE). This catches the chained-command case
+# (`cat foo && git commit ...`) AND the multi-line case (`cd foo\ngit commit ...`)
+# that an anchor-only matcher misses, while still rejecting literal mentions of
+# "git commit" inside string arguments (e.g. `echo "git commit"`), which don't sit
+# at the start of a chain segment.
+#
+# Newline handling: a verb at the start of a physical line runs as a real top-level
+# command, exactly like `;`/`&&`. Normalizing newlines to `;` makes the existing
+# separator logic catch it. Without this the verb on its own line slips past the
+# matcher unaudited (fails OPEN — a silent bypass). Cost: a `git commit`/`git push`
+# token on its own line inside a heredoc/message body may falsely match (fails
+# CLOSED — a spurious re-audit, never a bypass). Closed-over-open is the right trade.
+normalized="${command//$'\n'/;}"
+work="${normalized#"${normalized%%[![:space:]]*}"}"
 if [[ "$work" =~ (^|[[:space:]]*(\&\&|\|\||;|\||\&|\$\(|\(|\`)[[:space:]]*)([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)*git[[:space:]]+(commit|push)([[:space:]]|$) ]]; then
   case "${BASH_REMATCH[4]}" in
     commit) kind="commit" ;;
@@ -55,6 +64,27 @@ else
 fi
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+# Delegate to the git-level gate when installed: with core.hooksPath pointing at
+# .githooks, the same contract is enforced by .githooks/pre-commit|pre-push for
+# EVERY process (any agent, any harness — and humans stay exempt there), so this
+# PreToolUse layer steps aside to keep the audit artifact single-consumer.
+# GITHOOK_DELEGATED marks the call coming FROM that git-level gate — the one
+# caller that must not be deferred, or the two layers would defer to each other
+# and everything would silently pass.
+# Defer ONLY when the delegate hook actually exists at this checkout: git skips
+# missing hooks silently, so hooksPath-configured + delegate-absent (old ref,
+# broken install) would otherwise stand BOTH layers down — a silent bypass.
+# Closed-over-open: when in doubt, gate here.
+if [[ -z "${GITHOOK_DELEGATED:-}" ]]; then
+  hooks_path="$(git config core.hooksPath 2>/dev/null || true)"
+  if [[ "$hooks_path" == *".githooks" ]]; then
+    [[ "$hooks_path" != /* ]] && hooks_path="$repo_root/$hooks_path"
+    if [[ -x "$hooks_path/pre-$kind" ]]; then
+      exit 0
+    fi
+  fi
+fi
 project_dir="${CLAUDE_PROJECT_DIR:-$repo_root}"
 branch="$(git -C "$repo_root" branch --show-current 2>/dev/null || echo '?')"
 head="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo '?')"

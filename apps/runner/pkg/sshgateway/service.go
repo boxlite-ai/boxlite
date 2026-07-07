@@ -38,11 +38,6 @@ func NewService(logger *slog.Logger, boxlite *blclient.Client) *Service {
 	return service
 }
 
-// GetPort returns the port the SSH gateway is configured to use
-func (s *Service) GetPort() int {
-	return s.port
-}
-
 // Start starts the SSH gateway server
 func (s *Service) Start(ctx context.Context) error {
 	// Get the public key from configuration

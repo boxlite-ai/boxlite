@@ -183,41 +183,6 @@ func UpdateNetworkSettings(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, "Network settings updated")
 }
 
-// GetNetworkSettings godoc
-//
-//	@Tags			box
-//	@Summary		Get box network settings
-//	@Description	Get box network settings
-//	@Produce		json
-//	@Param			boxId	path		string							true	"Box ID"
-//	@Success		200			{object}	dto.UpdateNetworkSettingsDTO	"Network settings"
-//	@Failure		400			{object}	common_errors.ErrorResponse
-//	@Failure		401			{object}	common_errors.ErrorResponse
-//	@Failure		404			{object}	common_errors.ErrorResponse
-//	@Failure		409			{object}	common_errors.ErrorResponse
-//	@Failure		500			{object}	common_errors.ErrorResponse
-//	@Router			/boxes/{boxId}/network-settings [get]
-//
-//	@id				GetNetworkSettings
-func GetNetworkSettings(ctx *gin.Context) {
-	// TODO: Implement GetNetworkSettings in Docker client
-	// boxId := ctx.Param("boxId")
-	// runner := runner.GetInstance(nil)
-	// networkSettings, err := runner.Boxlite.GetNetworkSettings(ctx.Request.Context(), boxId)
-	// if err != nil {
-	// 	ctx.Error(err)
-	// 	return
-	// }
-
-	// For now, return empty settings
-	networkSettings := dto.UpdateNetworkSettingsDTO{
-		NetworkBlockAll:  nil,
-		NetworkAllowList: nil,
-	}
-
-	ctx.JSON(http.StatusOK, networkSettings)
-}
-
 // Start 			godoc
 //
 //	@Tags			box
