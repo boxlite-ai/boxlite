@@ -62,6 +62,8 @@ For local development, use `Boxlite.default()`. For cloud/production, use `Boxli
 For SDK-specific code patterns, see:
 - **[references/python.md](references/python.md)** — Python SDK patterns (SimpleBox, CodeBox, REST client, timeout handling)
 - **[references/node.md](references/node.md)** — Node.js SDK patterns (SimpleBox, CodeBox, TypeScript async disposal)
+- **[references/go.md](references/go.md)** — Go SDK patterns (NewRuntime, box lifecycle, timeout, LLM tool call struct)
+- **[references/c.md](references/c.md)** — C SDK patterns (Simple API vs Native API, memory management, thread safety)
 - **[references/patterns.md](references/patterns.md)** — Lifecycle, timeout/zombie prevention, concurrency, file transfer
 
 Read only the reference file that matches the project's language.
@@ -105,8 +107,10 @@ Tell the user what to configure before running:
 **Local (default runtime):**
 ```bash
 # No env vars needed — BoxLite.default() uses local runtime
-pip install boxlite          # Python
-npm install @boxlite-ai/boxlite  # Node.js
+pip install boxlite                          # Python
+npm install @boxlite-ai/boxlite              # Node.js
+go get github.com/boxlite-ai/boxlite/sdks/go # Go (+ run setup step, see references/go.md)
+cargo build --release -p boxlite-c           # C (build from source, see references/c.md)
 ```
 
 **Cloud / REST API:**

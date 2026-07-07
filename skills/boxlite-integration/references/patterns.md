@@ -92,9 +92,13 @@ box = await runtime.create(options)
 try:
     # ... work ...
 finally:
-    await box.stop()
-    await runtime.remove(box.id, force=True)
+    try:
+        await box.stop()
+    finally:
+        await runtime.remove(box.id, force=True)
 ```
+
+`stop()` and `remove()` are in nested `finally` blocks so `remove()` runs even if `stop()` raises.
 
 **Node.js — try/finally:**
 ```javascript
@@ -137,16 +141,29 @@ async def execute_code(code: str) -> str:
 
 **After BoxLite (safe):**
 ```python
+import asyncio
 import boxlite
 
-_box = None  # module-level, reused across calls
+_box = None
+_runtime = None
 
 async def get_box():
-    global _box
+    global _box, _runtime
     if _box is None:
-        async with boxlite.SimpleBox(image="python:slim") as box:
-            _box = box
+        _runtime = boxlite.Boxlite.default()
+        _box = await _runtime.create(boxlite.BoxOptions(image="python:slim"))
+        await _box.start()
     return _box
+
+async def shutdown():
+    """Call at process exit to clean up the long-lived box."""
+    global _box, _runtime
+    if _box is not None:
+        try:
+            await _box.stop()
+        finally:
+            await _runtime.remove(_box.id)
+            _box = None
 
 async def execute_code(code: str, timeout: int = 30) -> str:
     box = await get_box()
@@ -158,6 +175,8 @@ async def execute_code(code: str, timeout: int = 30) -> str:
         await execution.kill()
         return "Error: execution timed out"
 ```
+
+Note: do **not** use `async with SimpleBox(...) as box` and then assign `box` to a module-level variable — the context manager closes the box when it exits, so the cached reference is already stopped.
 
 For per-request isolation (safer for multi-user):
 ```python
