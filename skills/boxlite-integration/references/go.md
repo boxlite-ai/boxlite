@@ -3,11 +3,11 @@
 ## Install
 
 ```bash
-go get github.com/boxlite-ai/boxlite/sdks/go
-go run github.com/boxlite-ai/boxlite/sdks/go/cmd/setup
+go get github.com/boxlite-ai/boxlite/sdks/go@v0.9.0
+go run github.com/boxlite-ai/boxlite/sdks/go/cmd/setup@v0.9.0
 ```
 
-Requires Go 1.24+ with CGO enabled. The setup step downloads the prebuilt native library (one-time). Set `GITHUB_TOKEN` to avoid rate limits.
+Requires Go 1.24+ with CGO enabled. The setup step downloads the prebuilt native library (one-time). Set `GITHUB_TOKEN` to avoid rate limits. Pin to an explicit release tag in production — avoid floating `@latest`.
 
 ---
 
@@ -39,7 +39,8 @@ func main() {
         log.Fatal(err)
     }
     defer func() {
-        rt.Remove(ctx, box.ID(), false)
+        box.Stop(ctx)
+        rt.Remove(ctx, box.ID(), true) // force=true ensures removal even if stop fails
     }()
 
     if err := box.Start(ctx); err != nil {
@@ -185,7 +186,11 @@ func NewCodeRunner(ctx context.Context) (*CodeRunner, error) {
 func (r *CodeRunner) Run(ctx context.Context, code string) (string, error) {
     r.mu.Lock()
     defer r.mu.Unlock()
-    return safeExec(ctx, r.box, "python", []string{"-c", code}, 30*time.Second)
+    result, err := safeExec(ctx, r.box, "python", []string{"-c", code}, 30*time.Second)
+    if err != nil {
+        return "", err
+    }
+    return result.Stdout, nil
 }
 
 func (r *CodeRunner) Close(ctx context.Context) {
@@ -201,8 +206,8 @@ func (r *CodeRunner) Close(ctx context.Context) {
 
 ```bash
 # Local (default)
-go get github.com/boxlite-ai/boxlite/sdks/go
-go run github.com/boxlite-ai/boxlite/sdks/go/cmd/setup
+go get github.com/boxlite-ai/boxlite/sdks/go@v0.9.0
+go run github.com/boxlite-ai/boxlite/sdks/go/cmd/setup@v0.9.0
 
 # Cloud / REST
 export BOXLITE_API_KEY="your-api-key"

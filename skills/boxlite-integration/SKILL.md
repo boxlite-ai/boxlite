@@ -22,6 +22,7 @@ Before writing any code, do these in order:
 
 1. **Find the execution point** — grep for patterns like `subprocess`, `exec(`, `os.system`, `child_process`, `eval(`, `execSync(`, shell tool calls. This is where BoxLite wraps in.
 2. **Flag dangerous patterns explicitly** — if you see `eval(user_code)`, `subprocess.run(..., shell=True)`, or `execSync(\`python -c "${code}"\`)`, point it out before proceeding. These run untrusted code on the host and are security vulnerabilities. BoxLite fixes this by moving execution into an isolated VM.
+3. **Validate inputs before sandbox handoff** — sandboxing isolates execution from the host, but it does not validate what gets executed. Before passing anything to `box.exec()`, check that the command name is in an allowlist and that arguments don't contain shell metacharacters or path traversal sequences. Never construct commands by concatenating untrusted strings.
 3. **Identify the lifecycle** — is this a short-lived script, a long-running server, or a per-request handler? This determines whether to create one box (reuse across calls) or one box per invocation.
 4. **Check environment** — does the project already have `BOXLITE_API_KEY` / `BOXLITE_REST_URL` set?
 
@@ -78,8 +79,8 @@ async def safe_exec(box, cmd, args=None, timeout=30):
     execution = await box.exec(cmd, args or [])
     try:
         return await asyncio.wait_for(execution.wait(), timeout=timeout)
-    except asyncio.TimeoutError:
-        await execution.kill()  # kills the guest process — not optional
+    except BaseException:
+        await execution.kill()  # kill on timeout, cancellation, or any error
         raise
 ```
 
@@ -147,7 +148,10 @@ async with boxlite.CodeBox() as box:
 import { CodeBox } from '@boxlite-ai/boxlite';
 
 const box = new CodeBox();
-const result = await box.run("print('hello')");
-console.log(result.stdout);
-await box.stop();
+try {
+  const result = await box.run("print('hello')");
+  console.log(result.stdout);
+} finally {
+  await box.stop();
+}
 ```
