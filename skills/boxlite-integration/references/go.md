@@ -3,8 +3,8 @@
 ## Install
 
 ```bash
-go get github.com/boxlite-ai/boxlite/sdks/go@v0.9.0
-go run github.com/boxlite-ai/boxlite/sdks/go/cmd/setup@v0.9.0
+go get github.com/boxlite-ai/boxlite/sdks/go@v0.9.7
+go run github.com/boxlite-ai/boxlite/sdks/go/cmd/setup@v0.9.7
 ```
 
 Requires Go 1.24+ with CGO enabled. The setup step downloads the prebuilt native library (one-time). Set `GITHUB_TOKEN` to avoid rate limits. Pin to an explicit release tag in production — avoid floating `@latest`.
@@ -204,8 +204,8 @@ func (r *CodeRunner) Close(ctx context.Context) {
 
 ```bash
 # Local (default)
-go get github.com/boxlite-ai/boxlite/sdks/go@v0.9.0
-go run github.com/boxlite-ai/boxlite/sdks/go/cmd/setup@v0.9.0
+go get github.com/boxlite-ai/boxlite/sdks/go@v0.9.7
+go run github.com/boxlite-ai/boxlite/sdks/go/cmd/setup@v0.9.7
 
 # Cloud / REST
 export BOXLITE_API_KEY="your-api-key"

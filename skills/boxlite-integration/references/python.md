@@ -30,7 +30,7 @@ async with boxlite.CodeBox() as box:
     # Install packages inside the sandbox
     await box.install_package("requests")
     
-    # run() returns stdout as a plain string; raises ExecError on non-zero exit
+    # run() returns stdout as a plain string regardless of exit code — check result if needed
     stdout = await box.run("""
 import requests
 r = requests.get('https://api.github.com/zen')
