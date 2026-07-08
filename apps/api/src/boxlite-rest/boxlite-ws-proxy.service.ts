@@ -114,9 +114,12 @@ export class BoxliteWsProxyService {
         this.respondAndClose(socket, 404, 'Not Found')
         return
       }
-      // Mirror legacy toolbox path — an open WS attach is user activity, so the
-      // autostop cron does not reap a terminal session that's still connected.
-      this.touchAttachActivity(box.id)
+      // Mirror legacy toolbox path — opening a WS attach is user activity,
+      // so the autostop cron does not reap a session that's still connected.
+      // Best-effort: do not fail the upgrade if this errors.
+      this.boxService
+        .updateLastActivityAt(box.id, new Date())
+        .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${box.id}: ${err}`))
       const runner = await this.runnerService.findOne(box.runnerId)
       if (!runner) {
         this.respondAndClose(socket, 404, 'Not Found')
@@ -207,11 +210,5 @@ export class BoxliteWsProxyService {
       // Socket may already be torn down — ignore.
     }
     socket.destroy()
-  }
-
-  private touchAttachActivity(boxId: string): void {
-    this.boxService
-      .updateLastActivityAt(boxId, new Date())
-      .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${boxId}: ${err}`))
   }
 }
