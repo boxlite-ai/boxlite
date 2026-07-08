@@ -8,7 +8,10 @@
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use futures::stream::TryStreamExt;
-use std::net::Ipv4Addr;
+use std::{net::Ipv4Addr, time::Duration};
+
+const INTERFACE_WAIT_ATTEMPTS: usize = 50;
+const INTERFACE_WAIT_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Configure guest network interface
 ///
@@ -194,21 +197,7 @@ pub async fn configure_network_from_config(
 
     // 2. Find interface
     tracing::info!("  🔍 Finding {} interface", interface);
-    let mut links = handle
-        .link()
-        .get()
-        .match_name(interface.to_string())
-        .execute();
-
-    let link = links
-        .try_next()
-        .await
-        .map_err(|e| {
-            BoxliteError::Internal(format!("Failed to get {} interface: {}", interface, e))
-        })?
-        .ok_or_else(|| BoxliteError::Internal(format!("{} interface not found", interface)))?;
-
-    let if_index = link.header.index;
+    let if_index = wait_for_interface_index(&handle, interface).await?;
     tracing::debug!("  ✓ Found {} with index {}", interface, if_index);
 
     // 3. Bring up interface
@@ -277,6 +266,50 @@ pub async fn configure_network_from_config(
 
     tracing::info!("✅ Network configured: {} is UP", interface);
     Ok(())
+}
+
+async fn wait_for_interface_index(
+    handle: &rtnetlink::Handle,
+    interface: &str,
+) -> BoxliteResult<u32> {
+    let mut last_error = None;
+
+    for attempt in 1..=INTERFACE_WAIT_ATTEMPTS {
+        let mut links = handle
+            .link()
+            .get()
+            .match_name(interface.to_string())
+            .execute();
+
+        match links.try_next().await {
+            Ok(Some(link)) => return Ok(link.header.index),
+            Ok(None) => {}
+            Err(e) => {
+                last_error = Some(e.to_string());
+            }
+        }
+
+        if attempt < INTERFACE_WAIT_ATTEMPTS {
+            tracing::debug!(
+                interface,
+                attempt,
+                max_attempts = INTERFACE_WAIT_ATTEMPTS,
+                "network interface not ready yet"
+            );
+            tokio::time::sleep(INTERFACE_WAIT_INTERVAL).await;
+        }
+    }
+
+    match last_error {
+        Some(error) => Err(BoxliteError::Internal(format!(
+            "Failed to get {} interface after waiting: {}",
+            interface, error
+        ))),
+        None => Err(BoxliteError::Internal(format!(
+            "{} interface not found after waiting",
+            interface
+        ))),
+    }
 }
 
 /// Parse IP address with optional prefix (e.g., "192.168.127.2/24" or "192.168.127.2")
