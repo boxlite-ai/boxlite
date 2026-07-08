@@ -1,0 +1,19 @@
+name: boxlite-review
+on:
+  pull_request: { types: [opened, synchronize, reopened, ready_for_review] }
+  issue_comment: { types: [created] }
+permissions: { contents: read, pull-requests: write, checks: write, id-token: write }
+jobs:
+  review:
+    if: >-
+      (github.event_name == 'pull_request' && !github.event.pull_request.draft) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+       contains(github.event.comment.body, '@boxlite-agent review'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: boxlite-ai/pr-review-agent@v1
+        with:
+          boxlite-api-key: ${{ secrets.BOXLITE_API_KEY }}
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          broker-url: https://boxlite-token-broker.xingzhengde72.workers.dev
+          trigger-phrase: '@boxlite-agent review'
