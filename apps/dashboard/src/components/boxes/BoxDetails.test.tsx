@@ -208,8 +208,16 @@ describe('BoxDetails refresh', () => {
     expect(document.querySelector('[data-testid="terminal-frame"]')).toBe(frameBeforeRefresh)
   })
 
-  it('disables uploads when the terminal cwd is tmpfs-backed', async () => {
-    mocks.terminalCwd = '/tmp'
+  it.each([
+    ['/tmp', '/tmp'],
+    ['/etc/nginx', '/etc'],
+    ['//etc//nginx', '/etc'],
+    ['/root/.ssh', '/root/.ssh'],
+    ['/root//.ssh/authorized_keys', '/root/.ssh'],
+    ['/home/app/../../etc', '/etc'],
+    ['/proc/self', '/proc'],
+  ])('disables uploads when the terminal cwd is blocked: %s', async (cwd, blockedPath) => {
+    mocks.terminalCwd = cwd
     await renderBoxDetails()
 
     await act(async () => {
@@ -222,6 +230,6 @@ describe('BoxDetails refresh', () => {
     )
     expect(uploadButton).toBeTruthy()
     expect(uploadButton?.disabled).toBe(true)
-    expect(uploadButton?.title).toContain('/tmp')
+    expect(uploadButton?.title).toContain(blockedPath)
   })
 })

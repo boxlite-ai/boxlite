@@ -7,7 +7,16 @@
 export const DEFAULT_BOX_UPLOAD_DIR = '/root'
 
 const TAR_BLOCK_SIZE = 512
-const TMPFS_UPLOAD_DESTINATIONS = ['/tmp', '/dev/shm']
+const BLOCKED_UPLOAD_DESTINATIONS = [
+  { path: '/tmp', reason: 'that path is tmpfs-backed' },
+  { path: '/dev/shm', reason: 'that path is tmpfs-backed' },
+  { path: '/proc', reason: 'that path is managed by the system' },
+  { path: '/sys', reason: 'that path is managed by the system' },
+  { path: '/dev', reason: 'that path is managed by the system' },
+  { path: '/run', reason: 'that path is managed by the system' },
+  { path: '/etc', reason: 'that path stores system configuration' },
+  { path: '/root/.ssh', reason: 'that path stores SSH credentials' },
+] as const
 
 export interface BoxUploadFileEntry {
   file: File
@@ -35,9 +44,9 @@ export async function createSingleFileTar(file: File): Promise<Blob> {
 
 export function getBoxUploadDestinationBlockedReason(destinationDir: string): string | undefined {
   const normalizedDir = normalizeDestinationDir(destinationDir)
-  const blockedDir = TMPFS_UPLOAD_DESTINATIONS.find((dir) => isPathOrChild(normalizedDir, dir))
-  if (!blockedDir) return undefined
-  return `Uploads to ${blockedDir} are not supported because that path is tmpfs-backed`
+  const blockedDestination = BLOCKED_UPLOAD_DESTINATIONS.find(({ path }) => isPathOrChild(normalizedDir, path))
+  if (!blockedDestination) return undefined
+  return `Uploads to ${blockedDestination.path} are disabled because ${blockedDestination.reason}`
 }
 
 export function buildBoxUploadItems(files: File[]): BoxUploadItem[] {
@@ -134,10 +143,22 @@ async function readFileBytes(file: File): Promise<Uint8Array> {
 }
 
 function normalizeDestinationDir(destinationDir: string): string {
-  const trimmed = destinationDir.trim().replace(/\/+$/, '')
-  if (destinationDir.trim().startsWith('/') && !trimmed) return '/'
+  const trimmed = destinationDir.trim()
   if (!trimmed) return DEFAULT_BOX_UPLOAD_DIR
-  return trimmed.startsWith('/') ? trimmed : `/${trimmed}`
+
+  const absolutePath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`
+  const normalizedSegments: string[] = []
+
+  for (const segment of splitPathSegments(absolutePath)) {
+    if (segment === '.') continue
+    if (segment === '..') {
+      normalizedSegments.pop()
+      continue
+    }
+    normalizedSegments.push(segment)
+  }
+
+  return normalizedSegments.length > 0 ? `/${normalizedSegments.join('/')}` : '/'
 }
 
 function isPathOrChild(path: string, parent: string): boolean {
