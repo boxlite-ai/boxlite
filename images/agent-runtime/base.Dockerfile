@@ -49,6 +49,14 @@ RUN apt-get update \
 # Create the default workspace for user and agent workloads.
 RUN mkdir -p /workspace && chown boxlite:boxlite /workspace
 
+# Brand the default interactive prompt (green user@host, brand-blue cwd) in the
+# image rather than at exec time, so it never overrides a prompt a user baked
+# into their own image — the same split E2B/Gitpod/Codespaces use. Appended
+# last so it wins over Debian's default when the login shell sources ~/.bashrc.
+# printf '%s' passes the value through verbatim (no backslash interpretation),
+# so the ANSI escapes reach .bashrc intact.
+RUN printf '\n%s\n' 'PS1='\''\[\033[1;32m\]\u@\h\[\033[0m\]:\[\033[38;5;39m\]\w\[\033[0m\]\$ '\''' >> /home/boxlite/.bashrc
+
 # Users and agent commands start in /workspace.
 WORKDIR /workspace
 # Run workloads as an unprivileged user by default; sudo remains available when needed.

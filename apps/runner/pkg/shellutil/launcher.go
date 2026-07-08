@@ -14,16 +14,12 @@ package shellutil
 // boxlite.Client.StartExecution when the caller wants an interactive shell
 // session and the user has NOT supplied a specific command.
 //
-// Strategy: a POSIX `/bin/sh -c` launcher cd's to the user's home, writes a
-// small interactive-shell rc file, and execs the best available shell:
+// Strategy: a POSIX `/bin/sh -c` launcher cd's to the user's home, exports a
+// usable TERM, and execs the best available shell as a login shell:
 //
 //	cd "${HOME:-/root}" 2>/dev/null || cd /;
 //	export TERM="${TERM:-xterm-256color}";
-//	shell=$(command -v bash || command -v ash || command -v sh);
-//	rc="/tmp/.boxlite-shellrc.$$";
-//	... write profile sourcing + theme prompt ...
-//	exec "$shell" --rcfile "$rc" -i    # bash
-//	export ENV="$rc"; exec "$shell" -i # ash/sh
+//	exec $(command -v bash || command -v ash || command -v sh) -l
 //
 // Why this shape:
 //
@@ -39,21 +35,24 @@ package shellutil
 //     BoxLite snapshot), bash-only distros, and everything in between.
 //     Trying bash first, then ash, then sh matches user preference for
 //     bash where it exists while falling through cleanly on minimal images.
-//   - The generated rc sources /etc/profile, ~/.profile, and (for bash)
-//     ~/.bashrc before applying BoxLite's default prompt. This keeps normal
-//     image/user initialization while making a plain minimal shell look like
-//     the BoxLite terminal surface.
-//   - The rc sets a BoxLite-themed prompt for the default terminal surface:
-//     user/host stays green while the cwd segment uses the brand-blue ANSI
-//     256-color slot (38;5;39, close to #00B0F0). Set BOXLITE_KEEP_PS1=1 in
-//     the image/user rc if a custom image wants to keep its own prompt.
 //   - `exec` replaces the launcher sh in-place — no extra PID hangs around
 //     and the chosen shell becomes pid 1 of the SSH/terminal session.
+//   - `-l` makes it a *login* shell: /etc/profile, /etc/profile.d/*, and the
+//     user's ~/.profile/~/.bashrc are sourced, PATH is populated. Pairs with
+//     the cd above to match what `ssh user@host` users expect when they land
+//     at a prompt.
 //   - `export TERM="${TERM:-xterm-256color}"` gives color-aware programs a
 //     terminal type to key off. The box VM ships no TERM, so without it
 //     git/less/prompts render monochrome even though the client (xterm.js
 //     or the SSH terminal) can display color. The `:-` fallback preserves a
 //     real SSH client's own TERM when one is already present.
+//
+// The launcher deliberately sets *only* TERM — the color enabler that every
+// image needs — and never injects a prompt. A branded prompt is a per-image
+// concern: BoxLite's curated images bake it into their shell rc (see
+// images/agent-runtime/base.Dockerfile), matching how E2B, Gitpod, and
+// Codespaces ship prompts. This keeps arbitrary user images untouched and
+// avoids overriding a prompt a user configured in their own image.
 //
 // This follows the kubectl exec convention for unknown container images
 // (see https://kubernetes.io/docs/reference/kubectl/generated/kubectl_exec/),
@@ -65,30 +64,10 @@ package shellutil
 // `/bin/sh` with `-c <command>` directly — there is no ambiguity to
 // resolve in that case.
 func DefaultInteractiveShell() (command string, args []string) {
-	return "/bin/sh", []string{"-c", `cd "${HOME:-/root}" 2>/dev/null || cd /
-export TERM="${TERM:-xterm-256color}"
-shell=$(command -v bash || command -v ash || command -v sh)
-rc="/tmp/.boxlite-shellrc.$$"
-umask 077
-cat > "$rc" <<'BOXLITE_RC'
-[ -r /etc/profile ] && . /etc/profile
-[ -r "$HOME/.profile" ] && . "$HOME/.profile"
-[ -n "$BASH_VERSION" ] && [ -r "$HOME/.bashrc" ] && . "$HOME/.bashrc"
-if [ -z "$BOXLITE_KEEP_PS1" ]; then
-  boxlite_green="$(printf '\033[1;32m')"
-  boxlite_blue="$(printf '\033[38;5;39m')"
-  boxlite_reset="$(printf '\033[0m')"
-  if [ -n "$BASH_VERSION" ]; then
-    PS1='\[\033[1;32m\]\u@\h:\[\033[38;5;39m\]\w\[\033[0m\]\$ '
-  else
-    PS1="${boxlite_green}\u@\h:${boxlite_blue}\w${boxlite_reset}\$ "
-  fi
-fi
-BOXLITE_RC
-case "$shell" in
-  *bash) exec "$shell" --rcfile "$rc" -i ;;
-  *) export ENV="$rc"; exec "$shell" -i ;;
-esac`,
+	return "/bin/sh", []string{"-c",
+		`cd "${HOME:-/root}" 2>/dev/null || cd /; ` +
+			`export TERM="${TERM:-xterm-256color}"; ` +
+			`exec $(command -v bash || command -v ash || command -v sh) -l`,
 	}
 }
 
