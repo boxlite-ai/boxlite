@@ -34,6 +34,8 @@ pub(super) struct CreateBoxRequest {
     #[serde(default)]
     pub user: Option<String>,
     #[serde(default)]
+    pub volumes: Vec<VolumeSpec>,
+    #[serde(default)]
     pub network: Option<NetworkSpec>,
     #[serde(default)]
     pub auto_remove: Option<bool>,
@@ -47,6 +49,15 @@ pub(super) struct CreateBoxRequest {
     // serde_json::from_str — there is no quiet fall-through. See
     // `build_box_options_rejects_client_supplied_security_*` tests
     // below for the wire-shape pin.
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct VolumeSpec {
+    pub host_path: String,
+    pub guest_path: String,
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 #[derive(Deserialize)]

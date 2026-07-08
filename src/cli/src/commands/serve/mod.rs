@@ -23,7 +23,7 @@ use tokio::sync::RwLock;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 
-use boxlite::runtime::options::{NetworkConfig, NetworkMode};
+use boxlite::runtime::options::{NetworkConfig, NetworkMode, VolumeSpec as RuntimeVolumeSpec};
 use boxlite::{
     BoxCommand, BoxInfo, BoxOptions, BoxliteRuntime, ExecStdin, Execution, LiteBox, NetworkSpec,
     RootfsSpec,
@@ -655,6 +655,15 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         })?,
         None => NetworkSpec::default(),
     };
+    let volumes = req
+        .volumes
+        .iter()
+        .map(|volume| RuntimeVolumeSpec {
+            host_path: volume.host_path.clone(),
+            guest_path: volume.guest_path.clone(),
+            read_only: volume.read_only,
+        })
+        .collect();
 
     // SecurityOptions is deliberately NOT client-configurable over
     // REST: sandbox security is the operator's policy. The server
@@ -670,6 +679,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         disk_size_gb: req.disk_size_gb,
         working_dir: req.working_dir.clone(),
         env,
+        volumes,
         network,
         entrypoint: req.entrypoint.clone(),
         cmd: req.cmd.clone(),
@@ -1022,6 +1032,39 @@ mod tests {
         assert!(!constant_time_eq(b"abc", b"abd"));
         assert!(!constant_time_eq(b"abc", b"abcd"));
         assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn build_box_options_maps_rest_volumes() {
+        let req: CreateBoxRequest = serde_json::from_value(serde_json::json!({
+            "name": "dev-box",
+            "image": "alpine:latest",
+            "volumes": [
+                {
+                    "host_path": "/host/session",
+                    "guest_path": "/workspace"
+                },
+                {
+                    "host_path": "/host/shared",
+                    "guest_path": "/shared",
+                    "read_only": true
+                }
+            ]
+        }))
+        .unwrap();
+
+        let options = build_box_options(&req).unwrap();
+
+        assert_eq!(options.volumes.len(), 2);
+        assert_eq!(options.volumes[0].host_path, "/host/session");
+        assert_eq!(options.volumes[0].guest_path, "/workspace");
+        assert!(
+            !options.volumes[0].read_only,
+            "read_only should default to false for REST volumes"
+        );
+        assert_eq!(options.volumes[1].host_path, "/host/shared");
+        assert_eq!(options.volumes[1].guest_path, "/shared");
+        assert!(options.volumes[1].read_only);
     }
 
     // ============================================================
