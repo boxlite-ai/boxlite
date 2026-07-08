@@ -1,6 +1,6 @@
 import { ApiProperty, ApiSchema } from '@nestjs/swagger'
 import { Type } from 'class-transformer'
-import { IsArray, IsInt, IsOptional, IsString, Max, Min, ValidateNested } from 'class-validator'
+import { IsArray, IsInt, IsOptional, IsString, IsTimeZone, Max, Min, ValidateNested } from 'class-validator'
 import { ScheduleConfig, ScheduleWindow, WarmPool } from '../../box/entities/warm-pool.entity'
 
 export class ScheduleWindowDto implements ScheduleWindow {
@@ -49,7 +49,7 @@ export class UpdateWarmPoolScheduleDto {
   scheduleConfig: ScheduleConfigDto | null
 
   @ApiProperty({ description: 'IANA timezone, e.g. Asia/Shanghai', example: 'UTC', default: 'UTC' })
-  @IsString()
+  @IsTimeZone()
   timezone: string
 }
 
