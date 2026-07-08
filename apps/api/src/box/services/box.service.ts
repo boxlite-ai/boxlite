@@ -710,9 +710,6 @@ export class BoxService {
     if (port < 1 || port > 65535) {
       throw new BadRequestError('Invalid port')
     }
-    if (port !== TERMINAL_PREVIEW_PORT) {
-      throw new BadRequestError(`Signed port preview is only supported for terminal port ${TERMINAL_PREVIEW_PORT}`)
-    }
 
     if (expiresInSeconds < 1 || expiresInSeconds > 60 * 60 * 24) {
       throw new BadRequestError('expiresInSeconds must be between 1 second and 24 hours')

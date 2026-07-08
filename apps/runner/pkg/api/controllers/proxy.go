@@ -6,12 +6,19 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	common_proxy "github.com/boxlite-ai/common-go/pkg/proxy"
+	"github.com/boxlite-ai/runner/internal/constants"
 	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/boxlite-ai/runner/pkg/shellutil"
 	"github.com/gin-gonic/gin"
@@ -48,20 +55,25 @@ func ProxyRequest(logger *slog.Logger) gin.HandlerFunc {
 		}
 
 		boxId := ctx.Param("boxId")
-		path := normalizeToolboxPath(ctx.Param("path"))
+		path := toolboxEscapedPath(ctx.Request, boxId, ctx.Param("path"))
 
-		if strings.EqualFold(ctx.Request.Header.Get("Upgrade"), "websocket") {
-			if isTerminalToolboxPath(path) {
+		if isTerminalToolboxPath(path) {
+			if strings.EqualFold(ctx.Request.Header.Get("Upgrade"), "websocket") {
 				handleWebSocketTerminal(ctx, r, boxId, logger)
 				return
 			}
 
-			legacyToolboxUnavailable(ctx, logger, boxId, path)
+			ctx.Data(http.StatusOK, "text/html; charset=utf-8", []byte(terminalHTML))
 			return
 		}
 
-		if isTerminalToolboxPath(path) {
-			ctx.Data(http.StatusOK, "text/html; charset=utf-8", []byte(terminalHTML))
+		port, targetPath, ok, err := parseGuestPortProxyPath(path)
+		if err != nil {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if ok {
+			handleGuestPortProxy(ctx, r, boxId, port, targetPath, logger)
 			return
 		}
 
@@ -79,9 +91,93 @@ func normalizeToolboxPath(path string) string {
 	return path
 }
 
+func toolboxEscapedPath(req *http.Request, boxId string, fallbackPath string) string {
+	if req != nil && req.URL != nil {
+		prefix := "/boxes/" + url.PathEscape(boxId) + "/toolbox"
+		if path := req.URL.EscapedPath(); strings.HasPrefix(path, prefix) {
+			return normalizeToolboxPath(strings.TrimPrefix(path, prefix))
+		}
+	}
+	return normalizeToolboxPath(fallbackPath)
+}
+
 func isTerminalToolboxPath(path string) bool {
 	path = normalizeToolboxPath(path)
 	return path == "/" || path == "/proxy/22222" || strings.HasPrefix(path, "/proxy/22222/")
+}
+
+func parseGuestPortProxyPath(path string) (uint16, string, bool, error) {
+	path = normalizeToolboxPath(path)
+	if !strings.HasPrefix(path, "/proxy/") {
+		return 0, "", false, nil
+	}
+
+	rest := strings.TrimPrefix(path, "/proxy/")
+	rawPort, targetPath, _ := strings.Cut(rest, "/")
+	if rawPort == "" {
+		return 0, "", true, fmt.Errorf("target port is required")
+	}
+	port, err := strconv.ParseUint(rawPort, 10, 16)
+	if err != nil {
+		return 0, "", true, fmt.Errorf("invalid target port %q", rawPort)
+	}
+	if port == 0 {
+		return 0, "", true, fmt.Errorf("target port must be in range 1-65535")
+	}
+	if targetPath == "" {
+		targetPath = "/"
+	} else {
+		targetPath = "/" + targetPath
+	}
+	return uint16(port), targetPath, true, nil
+}
+
+func setEscapedURLPath(target *url.URL, escapedPath string) {
+	parsed, err := url.Parse("http://boxlite.invalid" + normalizeToolboxPath(escapedPath))
+	if err != nil {
+		target.Path = normalizeToolboxPath(escapedPath)
+		target.RawPath = ""
+		return
+	}
+	target.Path = parsed.Path
+	target.RawPath = parsed.RawPath
+}
+
+func handleGuestPortProxy(ctx *gin.Context, r *runner.Runner, boxId string, port uint16, targetPath string, logger *slog.Logger) {
+	forwarded := common_proxy.ForwardedRequestInfoFromHeaders(ctx.Request.Header)
+	target := &url.URL{
+		Scheme: "http",
+		Host:   net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))),
+	}
+	setEscapedURLPath(target, targetPath)
+	transport := r.Boxlite.NewGuestPortTransport(boxId, port, logger)
+	defer transport.CloseIdleConnections()
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(req *httputil.ProxyRequest) {
+			configureGuestPortProxyRequest(req.Out, target, forwarded)
+		},
+		Transport: transport,
+		ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {
+			logger.WarnContext(req.Context(), "guest port proxy failed", "box", boxId, "port", port, "error", err)
+			http.Error(w, "guest port proxy failed: "+err.Error(), http.StatusBadGateway)
+		},
+	}
+	proxy.ServeHTTP(ctx.Writer, ctx.Request)
+}
+
+func configureGuestPortProxyRequest(req *http.Request, target *url.URL, forwarded common_proxy.ForwardedRequestInfo) {
+	externalHost := target.Host
+	if forwarded.Host != "" {
+		externalHost = forwarded.Host
+	}
+	req.Host = externalHost
+	req.URL.Scheme = target.Scheme
+	req.URL.Host = target.Host
+	req.URL.Path = target.Path
+	req.URL.RawPath = target.RawPath
+	req.Header.Del(constants.BOXLITE_AUTHORIZATION_HEADER)
+
+	common_proxy.ApplyTrustedForwardedHeaders(req.Header, forwarded)
 }
 
 func legacyToolboxUnavailable(ctx *gin.Context, logger *slog.Logger, boxId string, path string) {

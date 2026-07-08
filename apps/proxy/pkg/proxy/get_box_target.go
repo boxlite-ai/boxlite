@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
+	common_proxy "github.com/boxlite-ai/common-go/pkg/proxy"
 	"github.com/boxlite-ai/common-go/pkg/utils"
 	"github.com/gin-gonic/gin"
 
@@ -33,7 +35,7 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, e
 		ctx.Error(common_errors.NewBadRequestError(err))
 		return nil, nil, err
 	}
-	targetPath = ctx.Param("path")
+	targetPath = requestEscapedPath(ctx.Request.URL, ctx.Param("path"))
 
 	if targetPort == "" {
 		ctx.Error(common_errors.NewBadRequestError(errors.New("target port is required")))
@@ -88,13 +90,6 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, e
 	// Build the target URL
 	targetURL := fmt.Sprintf("%s/boxes/%s/toolbox/proxy/%s", runnerInfo.ApiUrl, boxId, targetPort)
 
-	// Ensure path always has a leading slash but not duplicate slashes
-	if targetPath == "" {
-		targetPath = "/"
-	} else if !strings.HasPrefix(targetPath, "/") {
-		targetPath = "/" + targetPath
-	}
-
 	// Create the complete target URL with path
 	target, err := url.Parse(fmt.Sprintf("%s%s", targetURL, targetPath))
 	if err != nil {
@@ -102,10 +97,51 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, e
 		return nil, nil, fmt.Errorf("failed to parse target URL: %w", err)
 	}
 
+	forwardedProto := p.forwardedProto()
+	forwardedHost := ctx.Request.Host
+	forwardedPort := forwardedPortFromHost(forwardedHost, forwardedProto)
+
 	return target, map[string]string{
 		"X-BoxLite-Authorization": fmt.Sprintf("Bearer %s", runnerInfo.ApiKey),
-		"X-Forwarded-Host":        ctx.Request.Host,
+		"X-Forwarded-Host":        forwardedHost,
+		"X-Forwarded-Proto":       forwardedProto,
+		"X-Forwarded-Port":        forwardedPort,
+		"Forwarded":               common_proxy.FormatForwardedHeader(forwardedHost, forwardedProto),
 	}, nil
+}
+
+func requestEscapedPath(requestURL *url.URL, fallbackPath string) string {
+	path := fallbackPath
+	if requestURL != nil && requestURL.EscapedPath() != "" {
+		path = requestURL.EscapedPath()
+	}
+	if path == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(path, "/") {
+		return "/" + path
+	}
+	return path
+}
+
+func (p *Proxy) forwardedProto() string {
+	if p.config != nil && p.config.ProxyProtocol != "" {
+		return p.config.ProxyProtocol
+	}
+	return "http"
+}
+
+func forwardedPortFromHost(host string, proto string) string {
+	if _, port, err := net.SplitHostPort(host); err == nil {
+		return port
+	}
+	if strings.EqualFold(proto, "https") {
+		return "443"
+	}
+	if strings.EqualFold(proto, "http") {
+		return "80"
+	}
+	return ""
 }
 
 func (p *Proxy) getBoxRunnerInfo(ctx context.Context, boxId string) (*RunnerInfo, error) {

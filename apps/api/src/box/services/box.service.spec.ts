@@ -57,6 +57,60 @@ const stoppedBox = {
   pending: false,
 }
 
+function makePreviewUrlService() {
+  const configService = {
+    getOrThrow: jest.fn((key: string) => {
+      if (key === 'proxy.domain') return 'proxy.example.test'
+      if (key === 'proxy.protocol') return 'https'
+      throw new Error(`unexpected config key ${key}`)
+    }),
+  } as any
+  const redis = { setex: jest.fn() } as any
+  const regionService = { findOne: jest.fn().mockResolvedValue(null) } as any
+  const noop = {} as any
+  const service = new BoxService(
+    noop, // boxRepository
+    noop, // runnerRepository
+    noop, // sshAccessRepository
+    noop, // runnerService
+    noop, // volumeService
+    configService, // configService
+    noop, // warmPoolService
+    noop, // eventEmitter
+    noop, // organizationService
+    noop, // runnerAdapterFactory
+    noop, // redisLockProvider
+    redis, // redis
+    regionService, // regionService
+    noop, // boxLookupCacheInvalidationService
+    noop, // boxActivityService
+  )
+  jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
+    id: 'MixedCaseBox',
+    authToken: 'preview-token',
+    region: 'region-1',
+  } as any)
+
+  return { service, redis }
+}
+
+describe('BoxService preview URLs', () => {
+  it('creates signed preview URLs for service ports', async () => {
+    const { service, redis } = makePreviewUrlService()
+
+    const result = await service.getSignedPortPreviewUrl('MixedCaseBox', 'org-1', 3000, 120)
+
+    expect(result.boxId).toBe('MixedCaseBox')
+    expect(result.port).toBe(3000)
+    expect(result.url).toMatch(/^https:\/\/3000-[a-z0-9]+\.proxy\.example\.test$/)
+    expect(redis.setex).toHaveBeenCalledWith(
+      `box:signed-preview-url-token:3000:${result.token}`,
+      120,
+      'MixedCaseBox',
+    )
+  })
+})
+
 describe('BoxService.ensureStartedForProxy', () => {
   // The control plane never writes box.state directly; like start(), it flips
   // desiredState and lets the runner's reported state catch up. The proxied
