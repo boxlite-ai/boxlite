@@ -81,15 +81,16 @@ async def main():
         memory_mib=1024,
         working_dir="/workspace",
         volumes=[
-            ("/host/data", "/mnt/data", "ro"),  # read-only input
+            ("/host/data", "/mnt/data", True),  # read-only mount
         ],
-        security=boxlite.SecurityOptions.maximum(),  # for untrusted AI code
+        advanced=boxlite.AdvancedBoxOptions(security=boxlite.SecurityOptions.maximum()),
     ))
     
     try:
         execution = await box.exec("python", ["-c", "print('secure exec')"])
         result = await execution.wait()
-        print(result.stdout)
+        print(f"exit code: {result.exit_code}")
+        # stdout requires draining execution.stdout() stream — use SimpleBox for buffered output
     finally:
         await box.stop()
         await runtime.remove(box.id)
@@ -122,8 +123,8 @@ async def exec_with_timeout(box, cmd, args=None, timeout=30):
     execution = await box.exec(cmd, args or [])
     try:
         return await asyncio.wait_for(execution.wait(), timeout=timeout)
-    except asyncio.TimeoutError:
-        await execution.kill()  # kills the guest process
+    except BaseException:
+        await execution.kill()  # kills the guest process — BaseException catches CancelledError too
         raise
 ```
 
@@ -141,7 +142,11 @@ security = boxlite.SecurityOptions.maximum()
 # Disable network access (macOS):
 security.network_enabled = False
 
-options = boxlite.BoxOptions(image="python:slim", security=security)
+# security lives under the advanced field, not directly in BoxOptions
+options = boxlite.BoxOptions(
+    image="python:slim",
+    advanced=boxlite.AdvancedBoxOptions(security=security),
+)
 ```
 
 | Preset | Use Case |

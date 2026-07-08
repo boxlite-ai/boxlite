@@ -74,8 +74,8 @@ The Native API is asynchronous. Lifecycle operations (`create`, `start`, `stop`,
 #include <stdio.h>
 #include "boxlite.h"
 
-void on_stdout(const char* data, void* user_data) {
-    printf("%s", data);
+void on_stdout(const uint8_t* data, size_t len, void* user_data) {
+    fwrite(data, 1, len, stdout);
 }
 
 void on_exit(int exit_code, CBoxliteError* err, void* user_data) {
@@ -137,7 +137,12 @@ int main() {
     }
 
     CBoxliteOptions* opts = NULL;
-    boxlite_options_new("python:slim", &opts, &error);
+    if (boxlite_options_new("python:slim", &opts, &error) != Ok) {
+        fprintf(stderr, "options error: %s\n", error.message);
+        boxlite_error_free(&error);
+        boxlite_runtime_free(runtime);
+        return 1;
+    }
 
     // boxlite_create_box is async — result arrives in on_create callback
     boxlite_create_box(runtime, opts, on_create, NULL, &error);
@@ -158,7 +163,7 @@ int main() {
 | `boxlite_start_box` | Async | callback `CBoxliteError*` |
 | `boxlite_stop_box` | Async | callback `CBoxliteError*` |
 | `boxlite_remove` | Async | callback `CBoxliteError*` |
-| `boxlite_execution_wait` | Async | callback `int exit_code` |
+| `boxlite_execution_wait` | Async | callback `int exit_code`, `CBoxliteError*` |
 | `boxlite_execution_kill` | Async | callback `CBoxliteError*` |
 
 ---

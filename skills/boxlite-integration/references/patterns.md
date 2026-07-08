@@ -84,7 +84,7 @@ results = await asyncio.gather(
 )
 ```
 
-This is safe — the VM provides isolation from the host. Concurrent processes inside the VM share the VM's resources, so set appropriate CPU/memory limits.
+This is safe from a **host-isolation** perspective. However, concurrent processes inside the same VM share its filesystem, PIDs, network, and injected secrets — they are not isolated from *each other*. Use this pattern only for trusted/cooperative tasks (e.g., your own agent running independent calculations). For untrusted or multi-user code, use per-request boxes instead.
 
 ---
 
