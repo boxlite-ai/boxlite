@@ -173,6 +173,30 @@ check_gone() {  # desc  repo
   fi
 }
 
+# ── Real-repo invariant: every gate-written .claude/ state file is gitignored ──
+# compute_tree_hash() folds the whole working tree into the dossier binding via
+# `git add -A`, which SKIPS gitignored paths. So every file the gates write under
+# .claude/ MUST be gitignored — otherwise writing it perturbs the very tree hash
+# the dossier is keyed to and self-invalidates a just-passed audit (the class of
+# bug that hit .pr-reviewed.json: a fresh PASS discarded as "stale" the instant
+# the PR-review ack was written). setup() emulates this per synthetic repo (only
+# .last-verdict.json); this case guards the REAL .gitignore for the whole class,
+# so a new marker added without a matching ignore line fails here.
+echo "## Invariant: gate state files are gitignored (never enter the tree hash)"
+for f in \
+  .claude/.last-audit.json \
+  .claude/.last-verdict.json \
+  .claude/.pr-reviewed.json \
+  .claude/.verdict-last-uuid \
+  .claude/.verdict-decisions.log; do
+  if git -C "$REPO_ROOT" check-ignore -q "$f"; then
+    pass=$((pass + 1)); printf '  PASS  %s gitignored\n' "$f"
+  else
+    fail=$((fail + 1)); printf '  FAIL  %s NOT gitignored → would perturb compute_tree_hash\n' "$f"
+  fi
+done
+
+echo
 echo "## Detection: no dossier → the turn text decides"
 R="$(setup)"; write_transcript "$R" "The root cause is a race between gvproxy startup and the socket bind."
 check "'root cause is X' → block (verdict asserted, unaudited)"   "$R" "block"; rm -rf "$R"
