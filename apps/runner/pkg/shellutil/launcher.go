@@ -48,11 +48,12 @@ package shellutil
 //     real SSH client's own TERM when one is already present.
 //
 // The launcher deliberately sets *only* TERM — the color enabler that every
-// image needs — and never injects a prompt. A branded prompt is a per-image
-// concern: BoxLite's curated images bake it into their shell rc (see
-// images/agent-runtime/base.Dockerfile), matching how E2B, Gitpod, and
-// Codespaces ship prompts. This keeps arbitrary user images untouched and
-// avoids overriding a prompt a user configured in their own image.
+// image needs — and never injects a prompt. Color-aware tools (git, ls, pip)
+// light up from TERM alone; the shell prompt stays whatever the image ships.
+// This matches how sandbox peers treat the prompt: E2B, Modal, and Daytona
+// set TERM at exec time and leave the prompt to the image (none force a
+// branded prompt). It keeps arbitrary user images untouched and avoids
+// overriding a prompt a user configured in their own image.
 //
 // This follows the kubectl exec convention for unknown container images
 // (see https://kubernetes.io/docs/reference/kubectl/generated/kubectl_exec/),
