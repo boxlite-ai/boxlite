@@ -135,6 +135,20 @@ export class BoxWarmPoolService {
     return null
   }
 
+  private async hasAvailableRunnerForRegion(region: string): Promise<boolean> {
+    const availabilityScoreThreshold = this.configService.getOrThrow<number>('runnerScore.thresholds.availability')
+    const count = await this.runnerRepository.count({
+      where: {
+        region,
+        state: RunnerState.READY,
+        unschedulable: Not(true),
+        draining: Not(true),
+        availabilityScore: MoreThanOrEqual(availabilityScoreThreshold),
+      },
+    })
+    return count > 0
+  }
+
   //  todo: make frequency configurable or more efficient
   @Cron(CronExpression.EVERY_10_SECONDS, { name: 'warm-pool-check' })
   @LogExecution('warm-pool-check')
@@ -168,17 +182,7 @@ export class BoxWarmPoolService {
 
         const missingCount = warmPoolItem.pool - boxCount
         if (missingCount > 0) {
-          const availabilityScoreThreshold = this.configService.getOrThrow<number>('runnerScore.thresholds.availability')
-          const availableRunnerCount = await this.runnerRepository.count({
-            where: {
-              region: warmPoolItem.target,
-              state: RunnerState.READY,
-              unschedulable: Not(true),
-              draining: Not(true),
-              availabilityScore: MoreThanOrEqual(availabilityScoreThreshold),
-            },
-          })
-          if (availableRunnerCount === 0) {
+          if (!(await this.hasAvailableRunnerForRegion(warmPoolItem.target))) {
             this.logger.debug(
               `Skipping warm pool top-up for ${warmPoolItem.id}: no available runners in region ${warmPoolItem.target}`,
             )
@@ -248,17 +252,7 @@ export class BoxWarmPoolService {
       return
     }
 
-    const availabilityScoreThreshold = this.configService.getOrThrow<number>('runnerScore.thresholds.availability')
-    const availableRunnerCount = await this.runnerRepository.count({
-      where: {
-        region: warmPoolItem.target,
-        state: RunnerState.READY,
-        unschedulable: Not(true),
-        draining: Not(true),
-        availabilityScore: MoreThanOrEqual(availabilityScoreThreshold),
-      },
-    })
-    if (availableRunnerCount === 0) {
+    if (!(await this.hasAvailableRunnerForRegion(warmPoolItem.target))) {
       this.logger.debug(
         `Skipping warm pool top-up for ${warmPoolItem.id}: no available runners in region ${warmPoolItem.target}`,
       )

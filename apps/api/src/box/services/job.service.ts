@@ -460,14 +460,26 @@ export class JobService {
 
       for (const job of stalePendingJobs) {
         try {
-          await this.updateJobStatus(
-            job.id,
-            JobStatus.FAILED,
-            `Job expired — not claimed by any runner within ${PENDING_STALE_TIMEOUT_MINUTES} minutes`,
+          const errorMessage = `Job expired — not claimed by any runner within ${PENDING_STALE_TIMEOUT_MINUTES} minutes`
+          const result = await this.jobRepository.update(
+            { id: job.id, status: JobStatus.PENDING, createdAt: LessThan(pendingThreshold) },
+            { status: JobStatus.FAILED, errorMessage, completedAt: new Date() },
           )
+
+          if (!result.affected) {
+            continue
+          }
+
           this.logger.warn(
             `Expired pending job ${job.id} (type: ${job.type}, resource: ${job.resourceType} ${job.resourceId})`,
           )
+
+          const updatedJob = await this.findOne(job.id)
+          if (updatedJob) {
+            this.jobStateHandlerService.handleJobCompletion(updatedJob).catch((error) => {
+              this.logger.error(`Error handling job completion for job ${job.id}:`, error)
+            })
+          }
         } catch (error) {
           this.logger.error(`Error expiring pending job ${job.id}: ${error.message}`, error.stack)
         }
