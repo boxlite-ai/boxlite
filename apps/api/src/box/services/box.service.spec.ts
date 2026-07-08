@@ -95,6 +95,16 @@ function makePreviewUrlService() {
 }
 
 describe('BoxService preview URLs', () => {
+  it('creates case-safe direct preview URLs for service ports', async () => {
+    const { service } = makePreviewUrlService()
+
+    const result = await service.getPortPreviewUrl('MixedCaseBox', 'org-1', 3000)
+
+    expect(result.boxId).toBe('MixedCaseBox')
+    expect(result.url).toBe('https://3000-4d6978656443617365426f78.proxy.example.test')
+    expect(result.token).toBe('preview-token')
+  })
+
   it('creates signed preview URLs for service ports', async () => {
     const { service, redis } = makePreviewUrlService()
 

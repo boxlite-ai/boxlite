@@ -28,6 +28,45 @@ func TestRequestEscapedPathUsesFallbackWhenRequestPathIsEmpty(t *testing.T) {
 	}
 }
 
+func TestDecodeDirectPreviewBoxID(t *testing.T) {
+	got, ok, err := decodeDirectPreviewBoxID("35334d4f5a336a70355a7531")
+	if err != nil {
+		t.Fatalf("decodeDirectPreviewBoxID returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("decodeDirectPreviewBoxID did not recognize encoded direct box ID")
+	}
+	if got != "53MOZ3jp5Zu1" {
+		t.Fatalf("decodeDirectPreviewBoxID = %q, want %q", got, "53MOZ3jp5Zu1")
+	}
+}
+
+func TestDecodeDirectPreviewBoxIDKeepsLegacyRawValue(t *testing.T) {
+	got, ok, err := decodeDirectPreviewBoxID("legacyboxid")
+	if err != nil {
+		t.Fatalf("decodeDirectPreviewBoxID returned error: %v", err)
+	}
+	if ok {
+		t.Fatal("decodeDirectPreviewBoxID unexpectedly recognized legacy raw value")
+	}
+	if got != "legacyboxid" {
+		t.Fatalf("decodeDirectPreviewBoxID = %q, want %q", got, "legacyboxid")
+	}
+}
+
+func TestDecodeDirectPreviewBoxIDKeepsSignedTokenValue(t *testing.T) {
+	got, ok, err := decodeDirectPreviewBoxID("abcdef0123456789")
+	if err != nil {
+		t.Fatalf("decodeDirectPreviewBoxID returned error: %v", err)
+	}
+	if ok {
+		t.Fatal("decodeDirectPreviewBoxID unexpectedly recognized signed token value")
+	}
+	if got != "abcdef0123456789" {
+		t.Fatalf("decodeDirectPreviewBoxID = %q, want %q", got, "abcdef0123456789")
+	}
+}
+
 func TestForwardedPortFromHost(t *testing.T) {
 	tests := []struct {
 		name  string

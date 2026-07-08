@@ -6,6 +6,7 @@ package proxy
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -23,6 +24,8 @@ import (
 
 	log "github.com/sirupsen/logrus"
 )
+
+const encodedDirectPreviewBoxIDLength = 24
 
 func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, error) {
 	var targetPort, targetPath, boxIdOrSignedToken string
@@ -48,6 +51,13 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, e
 	}
 
 	boxId := boxIdOrSignedToken
+	if decodedBoxId, ok, decodeErr := decodeDirectPreviewBoxID(boxIdOrSignedToken); decodeErr != nil {
+		ctx.Error(common_errors.NewBadRequestError(decodeErr))
+		return nil, nil, decodeErr
+	} else if ok {
+		boxId = decodedBoxId
+		boxIdOrSignedToken = decodedBoxId
+	}
 
 	isPublic, err := p.getBoxPublic(ctx, boxIdOrSignedToken)
 	if err != nil {
@@ -323,6 +333,22 @@ func (p *Proxy) parseHost(host string) (targetPort string, boxIdOrSignedToken st
 	baseHost = strings.Join(parts[1:], ".")
 
 	return targetPort, boxIdOrSignedToken, baseHost, nil
+}
+
+func decodeDirectPreviewBoxID(value string) (string, bool, error) {
+	if len(value) != encodedDirectPreviewBoxIDLength {
+		return value, false, nil
+	}
+
+	decoded, err := hex.DecodeString(value)
+	if err != nil {
+		return value, false, nil
+	}
+	if len(decoded) == 0 {
+		return "", true, errors.New("invalid direct preview box ID: empty decoded box ID")
+	}
+
+	return string(decoded), true, nil
 }
 
 // updateLastActivity updates the last activity timestamp for a box.
