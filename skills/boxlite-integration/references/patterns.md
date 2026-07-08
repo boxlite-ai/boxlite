@@ -18,35 +18,48 @@ The key decision is **how long a box lives**:
 
 ## Timeout + Zombie Prevention (critical)
 
-When you cancel `asyncio.wait_for()` (Python) or a Promise timeout (Node), the **host-side coroutine cancels but the guest process keeps running**. You must kill it explicitly.
+The right pattern depends on which API level you're using.
 
-### Python
+### Python — SimpleBox (high-level)
+
+`SimpleBox.exec(cmd, *args, timeout=N)` is variadic, blocks until done, and returns `ExecResult` directly. The SDK handles timeout and kill internally — no manual wrapper needed:
+
+```python
+result = await box.exec("python", "-c", code, timeout=30)
+return result.stdout
+```
+
+### Python — lower-level Box (from `Boxlite.default().create()`)
+
+The lower-level `Box.exec(cmd, args_list)` returns an execution handle. Use `asyncio.wait_for` + explicit kill:
 
 ```python
 async def safe_exec(box, cmd, args=None, timeout=30):
     execution = await box.exec(cmd, args or [])
     try:
-        return await asyncio.wait_for(execution.wait(), timeout=timeout)
-    except asyncio.TimeoutError:
-        try:
-            await execution.kill()
-        except Exception:
-            pass
-        raise
-    except Exception:
-        try:
-            await execution.kill()
-        except Exception:
-            pass
+        result = await asyncio.wait_for(execution.wait(), timeout=timeout)
+        return result
+    except BaseException:
+        await execution.kill()  # kill guest process on timeout, cancel, or any error
         raise
 ```
 
-### Node.js
+### Node.js — SimpleBox (high-level)
+
+`SimpleBox.exec()` accepts timeout via options and never throws on non-zero exit:
 
 ```javascript
-async function safeExec(box, cmd, args = [], timeoutMs = 30_000) {
-  const execution = await box.exec(cmd, args);
-  const timer = setTimeout(() => execution.kill().catch(() => {}), timeoutMs);
+const result = await box.exec('python', ['-c', code], undefined, { timeoutSecs: 30 });
+```
+
+### Node.js — JsBoxlite low-level
+
+`JsBoxlite box.exec()` returns a `JsExecution` handle — use explicit kill:
+
+```javascript
+async function safeExec(box, cmd, args = [], timeoutSecs = 30) {
+  const execution = await box.exec(cmd, args, null, null, null, timeoutSecs);
+  const timer = setTimeout(() => execution.kill().catch(() => {}), timeoutSecs * 1000);
   try {
     return await execution.wait();
   } finally {
@@ -55,7 +68,7 @@ async function safeExec(box, cmd, args = [], timeoutMs = 30_000) {
 }
 ```
 
-**Rule of thumb:** Any `exec()` that runs LLM-generated or user-provided code needs this wrapper.
+**Rule of thumb:** Any `exec()` that runs LLM-generated or user-provided code needs a timeout.
 
 ---
 
@@ -167,13 +180,14 @@ async def shutdown():
 
 async def execute_code(code: str, timeout: int = 30) -> str:
     box = await get_box()
+    # lower-level Box from runtime.create() — exec() takes a list and returns an execution handle
     execution = await box.exec("python", ["-c", code])
     try:
         result = await asyncio.wait_for(execution.wait(), timeout=timeout)
         return result.stdout
-    except asyncio.TimeoutError:
+    except BaseException:
         await execution.kill()
-        return "Error: execution timed out"
+        return "Error: execution timed out or cancelled"
 ```
 
 Note: do **not** use `async with SimpleBox(...) as box` and then assign `box` to a module-level variable — the context manager closes the box when it exits, so the cached reference is already stopped.
@@ -182,11 +196,7 @@ For per-request isolation (safer for multi-user):
 ```python
 async def execute_code(code: str, timeout: int = 30) -> str:
     async with boxlite.SimpleBox(image="python:slim") as box:
-        execution = await box.exec("python", ["-c", code])
-        try:
-            result = await asyncio.wait_for(execution.wait(), timeout=timeout)
-            return result.stdout
-        except asyncio.TimeoutError:
-            await execution.kill()
-            return "Error: execution timed out"
+        # SimpleBox.exec is variadic; timeout is a keyword arg — returns ExecResult directly
+        result = await box.exec("python", "-c", code, timeout=timeout)
+        return result.stdout
 ```

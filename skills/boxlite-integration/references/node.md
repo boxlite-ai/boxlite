@@ -14,21 +14,23 @@ Requirements: Node.js 18+
 
 | Class | Use When |
 |-------|----------|
-| `CodeBox` | Agent runs Python/shell code snippets |
-| `SimpleBox` | Agent runs arbitrary commands |
-| `JsBoxlite` + `BoxOptions` | Full control (resources, security, volumes) |
+| `CodeBox` | Agent runs Python code snippets — returns stdout string directly |
+| `SimpleBox` | Agent runs arbitrary commands — returns `{ exitCode, stdout, stderr }` |
+| `JsBoxlite` + `BoxOptions` | Full control (resources, security, volumes, streaming) |
 
 ---
 
-## CodeBox — for running code
+## CodeBox — for running Python code
+
+`CodeBox.run()` returns a `Promise<string>` (stdout). It throws `ExecError` on non-zero exit.
 
 ```javascript
 import { CodeBox } from '@boxlite-ai/boxlite';
 
 const box = new CodeBox();
 try {
-  const result = await box.run("print('hello from sandbox')");
-  console.log(result.stdout);
+  const stdout = await box.run("print('hello from sandbox')");
+  console.log(stdout);
 } finally {
   await box.stop();
 }
@@ -40,14 +42,16 @@ TypeScript 5.2+ with async disposal:
 import { CodeBox } from '@boxlite-ai/boxlite';
 
 await using box = new CodeBox();
-const result = await box.run("print('hello')");
-console.log(result.stdout);
+const stdout = await box.run("print('hello')");
+console.log(stdout);
 // box.stop() called automatically
 ```
 
 ---
 
 ## SimpleBox — for shell commands
+
+`SimpleBox.exec()` returns `Promise<ExecResult>` = `{ exitCode, stdout, stderr }`. It **never throws** on non-zero exit — check `exitCode` manually.
 
 ```javascript
 import { SimpleBox } from '@boxlite-ai/boxlite';
@@ -56,6 +60,7 @@ const box = new SimpleBox({ image: 'python:slim' });
 try {
   const result = await box.exec('python', '-c', "print('hello')");
   console.log(result.stdout);
+  if (result.exitCode !== 0) console.error(result.stderr);
 } finally {
   await box.stop();
 }
@@ -74,9 +79,17 @@ try {
 }
 ```
 
+Timeout is passed as an options object in the last argument:
+
+```javascript
+const result = await box.exec('python', ['-c', code], undefined, { timeoutSecs: 30 });
+```
+
 ---
 
 ## Full Control — JsBoxlite
+
+`JsBoxlite` is the low-level runtime. `box.exec()` here returns a `JsExecution` handle with `.wait()`, `.kill()`, `.stdout()`, `.stderr()` — useful for streaming output.
 
 ```javascript
 import { JsBoxlite } from '@boxlite-ai/boxlite';
@@ -90,8 +103,18 @@ const box = await runtime.create({
 });
 
 try {
-  const execution = await box.exec('python', ['-c', "print('secure')"], { timeout: 30 });
-  console.log(execution.stdout);
+  // args?, env?, tty?, user?, timeoutSecs?, workingDir?
+  const execution = await box.exec('python', ['-c', "print('secure')"], null, null, null, 30);
+  const execResult = await execution.wait(); // { exitCode, errorMessage }
+  // collect stdout via stream
+  const stdoutStream = await execution.stdout();
+  let out = '';
+  while (true) {
+    const chunk = await stdoutStream.next();
+    if (chunk === null) break;
+    out += chunk;
+  }
+  console.log(out);
 } finally {
   await box.stop();
   await runtime.remove(box.id);
@@ -102,23 +125,33 @@ try {
 
 ## REST API (cloud / production)
 
-```javascript
-import { JsBoxlite } from '@boxlite-ai/boxlite';
+Use `JsBoxlite.rest()` — the constructor does not accept `url`/`apiKey`.
 
-const runtime = new JsBoxlite({
+```javascript
+import { JsBoxlite, BoxliteRestOptions, ApiKeyCredential } from '@boxlite-ai/boxlite';
+
+const runtime = JsBoxlite.rest(new BoxliteRestOptions({
   url: process.env.BOXLITE_REST_URL ?? 'https://api.boxlite.ai/api',
-  apiKey: process.env.BOXLITE_API_KEY,
-});
+  credential: new ApiKeyCredential(process.env.BOXLITE_API_KEY),
+}));
+
+// Use runtime.create() / box.exec() as normal
 ```
 
 ---
 
 ## Timeout Handling
 
+For `SimpleBox`, pass `timeoutSecs` in the options object. For `JsBoxlite`, pass as the 6th positional arg or use a low-level `JsExecution` handle:
+
 ```javascript
-async function execWithTimeout(box, cmd, args = [], timeoutMs = 30000) {
-  const execution = await box.exec(cmd, args);
-  const timer = setTimeout(() => execution.kill(), timeoutMs);
+// SimpleBox — timeout via options
+const result = await box.exec(cmd, [arg], undefined, { timeoutSecs: 30 });
+
+// JsBoxlite low-level — explicit kill on timeout
+async function safeExec(box, cmd, args = [], timeoutSecs = 30) {
+  const execution = await box.exec(cmd, args, null, null, null, timeoutSecs);
+  const timer = setTimeout(() => execution.kill().catch(() => {}), timeoutSecs * 1000);
   try {
     return await execution.wait();
   } finally {
@@ -131,17 +164,24 @@ async function execWithTimeout(box, cmd, args = [], timeoutMs = 30000) {
 
 ## Error Handling
 
-```javascript
-import { ExecError, TimeoutError } from '@boxlite-ai/boxlite';
+`SimpleBox.exec()` never throws on non-zero exit — check `result.exitCode`. Only `CodeBox.run()` throws `ExecError` on failure:
 
+```javascript
+import { ExecError } from '@boxlite-ai/boxlite';
+
+// CodeBox — throws on non-zero exit
 try {
-  const result = await box.exec('python', ['-c', 'raise ValueError("bad")']);
+  const stdout = await box.run('raise ValueError("bad")');
 } catch (err) {
   if (err instanceof ExecError) {
     console.error('Exit code:', err.exitCode);
     console.error('Stderr:', err.stderr);
-  } else if (err instanceof TimeoutError) {
-    console.error('Timed out');
   }
+}
+
+// SimpleBox — never throws, check exitCode
+const result = await box.exec('python', ['-c', 'raise ValueError("bad")']);
+if (result.exitCode !== 0) {
+  console.error('Failed:', result.stderr);
 }
 ```

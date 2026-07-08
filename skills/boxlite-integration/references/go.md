@@ -40,18 +40,15 @@ func main() {
     }
     defer func() {
         box.Stop(ctx)
-        rt.Remove(ctx, box.ID(), true) // force=true ensures removal even if stop fails
+        rt.ForceRemove(ctx, box.ID())
     }()
 
     if err := box.Start(ctx); err != nil {
         log.Fatal(err)
     }
 
-    exec, err := box.Exec(ctx, "python", []string{"-c", "print('hello')"})
-    if err != nil {
-        log.Fatal(err)
-    }
-    result, err := exec.Wait(ctx)
+    // Exec is variadic and blocks until the process exits — returns *ExecResult directly.
+    result, err := box.Exec(ctx, "python", "-c", "print('hello')")
     if err != nil {
         log.Fatal(err)
     }
@@ -84,7 +81,7 @@ func getBox(ctx context.Context) (*boxlite.Box, error) {
         return nil, err
     }
     if err := box.Start(ctx); err != nil {
-        rt.Remove(ctx, box.ID(), true)
+        rt.ForceRemove(ctx, box.ID())
         rt.Close()
         return nil, err
     }
@@ -98,7 +95,7 @@ func shutdown(ctx context.Context) {
     defer boxMu.Unlock()
     if globalBox != nil {
         globalBox.Stop(ctx)
-        globalRuntime.Remove(ctx, globalBox.ID(), true)
+        globalRuntime.ForceRemove(ctx, globalBox.ID())
         globalBox = nil
     }
     if globalRuntime != nil {
@@ -112,24 +109,29 @@ func shutdown(ctx context.Context) {
 
 ## Timeout + Zombie Prevention
 
-Cancelling a `context.Context` stops the Go-side wait but **does not kill the process inside the VM**. Kill explicitly:
+`box.Exec` blocks until exit and returns `*ExecResult` — there is no separate `.Wait()` or `.Kill()` on the result. For timeout control with explicit kill, use `box.StartExecution()` which returns a streaming `*Execution` handle that has `.Wait(ctx)` and `.Kill(ctx)`:
 
 ```go
-func safeExec(ctx context.Context, box *boxlite.Box, cmd string, args []string, timeout time.Duration) (*boxlite.ExecResult, error) {
-    exec, err := box.Exec(ctx, cmd, args)
+func safeExec(ctx context.Context, box *boxlite.Box, cmd string, args []string, timeout time.Duration) (string, error) {
+    var stdout, stderr bytes.Buffer
+    execution, err := box.StartExecution(ctx, cmd, args, &boxlite.ExecutionOptions{
+        Stdout: &stdout,
+        Stderr: &stderr,
+    })
     if err != nil {
-        return nil, err
+        return "", err
     }
+    defer execution.Close()
 
     execCtx, cancel := context.WithTimeout(ctx, timeout)
     defer cancel()
 
-    result, err := exec.Wait(execCtx)
+    _, err = execution.Wait(execCtx)
     if err != nil {
-        exec.Kill(ctx) // kill guest process — not optional
-        return nil, fmt.Errorf("exec timed out or failed: %w", err)
+        execution.Kill(ctx) // kill guest process — not optional
+        return "", fmt.Errorf("exec timed out or failed: %w", err)
     }
-    return result, nil
+    return stdout.String(), nil
 }
 ```
 
@@ -176,7 +178,7 @@ func NewCodeRunner(ctx context.Context) (*CodeRunner, error) {
         return nil, err
     }
     if err := box.Start(ctx); err != nil {
-        rt.Remove(ctx, box.ID(), true)
+        rt.ForceRemove(ctx, box.ID())
         rt.Close()
         return nil, err
     }
@@ -186,16 +188,12 @@ func NewCodeRunner(ctx context.Context) (*CodeRunner, error) {
 func (r *CodeRunner) Run(ctx context.Context, code string) (string, error) {
     r.mu.Lock()
     defer r.mu.Unlock()
-    result, err := safeExec(ctx, r.box, "python", []string{"-c", code}, 30*time.Second)
-    if err != nil {
-        return "", err
-    }
-    return result.Stdout, nil
+    return safeExec(ctx, r.box, "python", []string{"-c", code}, 30*time.Second)
 }
 
 func (r *CodeRunner) Close(ctx context.Context) {
     r.box.Stop(ctx)
-    r.runtime.Remove(ctx, r.box.ID(), true)
+    r.runtime.ForceRemove(ctx, r.box.ID())
     r.runtime.Close()
 }
 ```

@@ -30,14 +30,13 @@ async with boxlite.CodeBox() as box:
     # Install packages inside the sandbox
     await box.install_package("requests")
     
-    # Run Python code — fully isolated
-    result = await box.run("""
+    # run() returns stdout as a plain string; raises ExecError on non-zero exit
+    stdout = await box.run("""
 import requests
 r = requests.get('https://api.github.com/zen')
 print(r.text)
 """)
-    print(result.stdout)
-    # result.stderr, result.exit_code also available
+    print(stdout)
 ```
 
 `CodeBox` automatically handles: image selection, box creation, cleanup.

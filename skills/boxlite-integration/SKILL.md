@@ -73,14 +73,21 @@ Read only the reference file that matches the project's language.
 
 This is the most commonly missed step. When a timeout fires, cancelling the coroutine or promise does **not** kill the process running inside the VM — it keeps running and leaks resources. Always kill explicitly:
 
-**Python:**
+**Python — SimpleBox** (high-level, most common): pass `timeout` directly, SDK handles kill internally:
+```python
+result = await box.exec("python", "-c", code, timeout=30)
+return result.stdout
+```
+
+**Python — lower-level Box** (from `Boxlite.default().create()`): exec returns a handle, kill explicitly:
 ```python
 async def safe_exec(box, cmd, args=None, timeout=30):
     execution = await box.exec(cmd, args or [])
     try:
-        return await asyncio.wait_for(execution.wait(), timeout=timeout)
+        result = await asyncio.wait_for(execution.wait(), timeout=timeout)
+        return result
     except BaseException:
-        await execution.kill()  # kill on timeout, cancellation, or any error
+        await execution.kill()  # kill guest process on timeout, cancel, or any error
         raise
 ```
 
@@ -139,8 +146,8 @@ After applying the integration, check:
 import boxlite
 
 async with boxlite.CodeBox() as box:
-    result = await box.run("print('hello from sandbox')")
-    print(result.stdout)
+    stdout = await box.run("print('hello from sandbox')")  # returns str directly
+    print(stdout)
 ```
 
 **Node.js (simplest path):**
