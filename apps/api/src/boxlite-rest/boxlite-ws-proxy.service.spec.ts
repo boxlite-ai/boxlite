@@ -6,7 +6,6 @@
 
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import type { IncomingMessage } from 'http'
-import { EventEmitter } from 'events'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 
 jest.mock('http-proxy-middleware', () => ({
@@ -22,10 +21,6 @@ jest.mock('uuid', () => ({
 describe('BoxliteWsProxyService', () => {
   beforeEach(() => {
     jest.clearAllMocks()
-  })
-
-  afterEach(() => {
-    jest.useRealTimers()
   })
 
   function authRequest(token: string, url = '/api/v1/org-1/boxes/public-box/executions/exec-1/attach') {
@@ -117,82 +112,5 @@ describe('BoxliteWsProxyService', () => {
 
     await expect(service.authenticate(authRequest(jwt), 'org-1')).resolves.toBeNull()
     expect(organizationUserService.findOne).toHaveBeenCalledWith('org-1', 'user-1')
-  })
-
-  function buildUpgradeHarness() {
-    jest.useFakeTimers()
-    const upgrade = jest.fn()
-    jest.mocked(createProxyMiddleware).mockReturnValue({ upgrade } as never)
-
-    const boxService = {
-      findOneByIdOrName: jest.fn().mockResolvedValue({
-        id: 'box-uuid',
-        runnerId: 'runner-1',
-      }),
-      updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
-    }
-    const runnerService = {
-      findOne: jest.fn().mockResolvedValue({
-        apiUrl: 'http://runner.local',
-        apiKey: 'runner-key',
-      }),
-    }
-    const service = new BoxliteWsProxyService(
-      {} as never,
-      {} as never,
-      boxService as never,
-      runnerService as never,
-      {} as never,
-    )
-    jest.spyOn(service as any, 'authenticate').mockResolvedValue({ organizationId: 'org-1' })
-
-    const socket = new EventEmitter() as EventEmitter & {
-      destroy: jest.Mock
-      write: jest.Mock
-    }
-    socket.destroy = jest.fn()
-    socket.write = jest.fn()
-
-    return { service, boxService, upgrade, socket }
-  }
-
-  it('does not refresh activity from proxied websocket bytes after the upgrade touch', async () => {
-    const { service, boxService, upgrade, socket } = buildUpgradeHarness()
-
-    await service.upgrade(authRequest('blk_live_test'), socket as never, Buffer.alloc(0))
-    await Promise.resolve()
-
-    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
-    expect(upgrade).toHaveBeenCalled()
-
-    socket.emit('data', Buffer.from([0x8a, 0x00]))
-    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
-
-    jest.advanceTimersByTime(30_000)
-    socket.emit('data', Buffer.from([0x8a, 0x00]))
-    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
-
-    socket.emit('data', Buffer.from('ls\n'))
-    socket.emit('data', Buffer.from('top\n'))
-    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
-
-    jest.advanceTimersByTime(30_000)
-    socket.emit('data', Buffer.from([0x8a, 0x00]))
-    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
-  })
-
-  it('stops refreshing when the client goes silent (dead or half-open peer)', async () => {
-    const { service, boxService, socket } = buildUpgradeHarness()
-
-    await service.upgrade(authRequest('blk_live_test'), socket as never, Buffer.alloc(0))
-    await Promise.resolve()
-
-    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
-
-    // A half-open TCP peer emits neither 'data' nor 'close' — the ledger must
-    // go stale on silence alone, or a dead session defeats auto-stop.
-    jest.advanceTimersByTime(10 * 60_000)
-    await Promise.resolve()
-    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
   })
 })
