@@ -41,7 +41,7 @@ export class AdminWarmPoolController {
   ): Promise<AdminWarmPoolDto> {
     const item = await this.warmPoolService.findWarmPool(id)
     if (!item) throw new NotFoundException('Warm pool not found')
-    const updated = await this.warmPoolService.updateSchedule(id, dto.scheduleConfig ?? null, dto.timezone)
+    const updated = await this.warmPoolService.updateSchedule(id, dto.scheduleConfig, dto.timezone)
     return AdminWarmPoolDto.fromEntity(updated)
   }
 }

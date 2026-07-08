@@ -144,10 +144,14 @@ export class BoxWarmPoolService {
 
   async updateSchedule(
     id: string,
-    scheduleConfig: ScheduleConfig | null,
+    scheduleConfig: ScheduleConfig | null | undefined,
     timezone: string,
   ): Promise<WarmPool> {
-    await this.warmPoolRepository.update(id, { scheduleConfig, timezone })
+    const patch: Partial<WarmPool> = { timezone }
+    if (scheduleConfig !== undefined) {
+      patch.scheduleConfig = scheduleConfig
+    }
+    await this.warmPoolRepository.update(id, patch)
     return this.warmPoolRepository.findOneOrFail({ where: { id } })
   }
 
@@ -156,10 +160,15 @@ export class BoxWarmPoolService {
 
     const tz = item.timezone ?? 'UTC'
     const now = new Date()
-    const hour = parseInt(
-      new Intl.DateTimeFormat('en', { hour: 'numeric', hour12: false, timeZone: tz }).format(now),
-    )
-    const day = new Date(now.toLocaleString('en', { timeZone: tz })).getDay()
+    const parts = new Intl.DateTimeFormat('en', {
+      hour: 'numeric',
+      hour12: false,
+      weekday: 'short',
+      timeZone: tz,
+    }).formatToParts(now)
+    const hour = parseInt(parts.find((p) => p.type === 'hour')?.value ?? '0', 10) % 24
+    const weekday = parts.find((p) => p.type === 'weekday')?.value ?? 'Sun'
+    const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(weekday)
 
     for (const w of (item.scheduleConfig as ScheduleConfig).windows) {
       const dayMatch = !w.days || w.days.includes(day)
@@ -189,74 +198,76 @@ export class BoxWarmPoolService {
           return
         }
 
-        const boxCount = await this.boxRepository.count({
-          where: {
-            organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
-            image: warmPoolItem.image,
-            class: warmPoolItem.class,
-            osUser: warmPoolItem.osUser,
-            env: warmPoolItem.env,
-            region: warmPoolItem.target,
-            cpu: warmPoolItem.cpu,
-            gpu: warmPoolItem.gpu,
-            mem: warmPoolItem.mem,
-            disk: warmPoolItem.disk,
-            desiredState: BoxDesiredState.STARTED,
-            state: Not(In([BoxState.ERROR])),
-          },
-        })
-
-        const target = this.computeTargetPoolSize(warmPoolItem)
-        const missingCount = target - boxCount
-        if (missingCount > 0) {
-          const promises = []
-          this.logger.debug(`Creating ${missingCount} boxes for warm pool id ${warmPoolItem.id}`)
-
-          for (let i = 0; i < missingCount; i++) {
-            promises.push(
-              this.eventEmitter.emitAsync(WarmPoolEvents.TOPUP_REQUESTED, new WarmPoolTopUpRequested(warmPoolItem)),
-            )
-          }
-
-          // Wait for all promises to settle before releasing the lock. Otherwise, another worker could start creating boxes
-          await Promise.allSettled(promises)
-        }
-
-        const excessCount = boxCount - target
-        if (excessCount > 0) {
-          const candidates = await this.boxRepository.find({
+        try {
+          const boxCount = await this.boxRepository.count({
             where: {
               organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
               image: warmPoolItem.image,
               class: warmPoolItem.class,
-              cpu: warmPoolItem.cpu,
-              mem: warmPoolItem.mem,
-              disk: warmPoolItem.disk,
-              gpu: warmPoolItem.gpu,
               osUser: warmPoolItem.osUser,
               env: warmPoolItem.env,
               region: warmPoolItem.target,
-              state: BoxState.STARTED,
+              cpu: warmPoolItem.cpu,
+              gpu: warmPoolItem.gpu,
+              mem: warmPoolItem.mem,
+              disk: warmPoolItem.disk,
               desiredState: BoxDesiredState.STARTED,
+              state: Not(In([BoxState.ERROR])),
             },
-            take: excessCount,
           })
 
-          this.logger.debug(`Scaling down ${candidates.length} excess boxes for warm pool id ${warmPoolItem.id}`)
+          const target = this.computeTargetPoolSize(warmPoolItem)
+          const missingCount = target - boxCount
+          if (missingCount > 0) {
+            const promises = []
+            this.logger.debug(`Creating ${missingCount} boxes for warm pool id ${warmPoolItem.id}`)
 
-          for (const box of candidates) {
-            const lockKey = `box-warm-pool-${box.id}`
-            if (!(await this.redisLockProvider.lock(lockKey, 30))) {
-              continue // being claimed right now, skip
+            for (let i = 0; i < missingCount; i++) {
+              promises.push(
+                this.eventEmitter.emitAsync(WarmPoolEvents.TOPUP_REQUESTED, new WarmPoolTopUpRequested(warmPoolItem)),
+              )
             }
-            await this.boxRepository.update(box.id, {
-              desiredState: BoxDesiredState.DESTROYED,
-              pending: true,
-            })
-          }
-        }
 
-        await this.redisLockProvider.unlock(lockKey)
+            // Wait for all promises to settle before releasing the lock. Otherwise, another worker could start creating boxes
+            await Promise.allSettled(promises)
+          }
+
+          const excessCount = boxCount - target
+          if (excessCount > 0) {
+            const candidates = await this.boxRepository.find({
+              where: {
+                organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+                image: warmPoolItem.image,
+                class: warmPoolItem.class,
+                cpu: warmPoolItem.cpu,
+                mem: warmPoolItem.mem,
+                disk: warmPoolItem.disk,
+                gpu: warmPoolItem.gpu,
+                osUser: warmPoolItem.osUser,
+                env: warmPoolItem.env,
+                region: warmPoolItem.target,
+                state: BoxState.STARTED,
+                desiredState: BoxDesiredState.STARTED,
+              },
+              take: excessCount,
+            })
+
+            this.logger.debug(`Scaling down ${candidates.length} excess boxes for warm pool id ${warmPoolItem.id}`)
+
+            for (const box of candidates) {
+              const lockKey = `box-warm-pool-${box.id}`
+              if (!(await this.redisLockProvider.lock(lockKey, 30))) {
+                continue // being claimed right now, skip
+              }
+              await this.boxRepository.update(box.id, {
+                desiredState: BoxDesiredState.DESTROYED,
+                pending: true,
+              })
+            }
+          }
+        } finally {
+          await this.redisLockProvider.unlock(lockKey)
+        }
       }),
     )
   }
