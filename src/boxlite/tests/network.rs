@@ -35,6 +35,22 @@ fn spec_carries_unique_socket_path_across_serde() {
     assert_eq!(deserialized.port_mappings, spec.port_mappings);
 }
 
+#[test]
+fn spec_deserializes_legacy_payload_with_default_control_fields() {
+    let json = r#"{"port_mappings":[[8080,80]],"socket_path":"/boxes/box-a/sockets/net.sock"}"#;
+    let spec: NetworkBackendSpec = serde_json::from_str(json).unwrap();
+
+    assert_eq!(spec.port_mappings, vec![(8080, 80)]);
+    assert_eq!(
+        spec.socket_path,
+        PathBuf::from("/boxes/box-a/sockets/net.sock")
+    );
+    assert!(spec.allow_net.is_empty());
+    assert!(spec.secrets.is_empty());
+    assert!(spec.ca_cert_pem.is_none());
+    assert!(spec.ca_key_pem.is_none());
+}
+
 #[cfg(feature = "gvproxy")]
 #[test]
 fn factory_creates_backend_whose_spec_reflects_config() {
@@ -52,6 +68,66 @@ fn factory_creates_backend_whose_spec_reflects_config() {
     assert_eq!(spec.port_mappings, config.port_mappings);
     // No secrets configured → no CA is minted.
     assert!(spec.ca_cert_pem.is_none());
+}
+
+#[cfg(feature = "gvproxy")]
+#[test]
+fn factory_backend_carries_allowlist_and_secret_metadata_in_spec() {
+    use boxlite::net::{NetworkBackendFactory, default_factory};
+    use boxlite::runtime::options::Secret;
+
+    let ca_dir = tempfile::tempdir().unwrap();
+    let mut config = test_config(PathBuf::from("/tmp/factory-allowlist/net.sock"));
+    config.ca_dir = ca_dir.path().to_path_buf();
+    config.allow_net = vec!["api.openai.com".to_string(), "example.com".to_string()];
+    config.secrets = vec![Secret {
+        name: "openai".to_string(),
+        hosts: vec!["api.openai.com".to_string()],
+        placeholder: "<BOXLITE_SECRET:openai>".to_string(),
+        value: "sk-test-not-a-real-key".to_string(),
+    }];
+
+    let factory: std::sync::Arc<dyn NetworkBackendFactory> = default_factory();
+    let backend = factory.create(&config).expect("gvproxy backend");
+    let spec = backend.spec();
+    assert_eq!(spec.allow_net, config.allow_net);
+    assert_eq!(spec.secrets.len(), 1);
+    assert_eq!(spec.secrets[0].name, "openai");
+    assert_eq!(spec.secrets[0].hosts, vec!["api.openai.com"]);
+    assert_eq!(spec.secrets[0].placeholder, "<BOXLITE_SECRET:openai>");
+}
+
+#[cfg(feature = "gvproxy")]
+#[test]
+fn factory_backend_with_secrets_mints_ca_in_spec() {
+    // Public-API path: with secrets configured, the created backend's spec()
+    // mints an ephemeral MITM CA into ca_dir — the create → spec-with-CA flow
+    // the core relies on to hand the shim a usable CA.
+    use boxlite::net::{NetworkBackendFactory, default_factory};
+    use boxlite::runtime::options::Secret;
+
+    let ca_dir = tempfile::tempdir().unwrap();
+    let mut config = test_config(PathBuf::from("/tmp/factory-secrets/net.sock"));
+    config.ca_dir = ca_dir.path().to_path_buf();
+    config.secrets = vec![Secret {
+        name: "openai".to_string(),
+        hosts: vec!["api.openai.com".to_string()],
+        placeholder: "<BOXLITE_SECRET:openai>".to_string(),
+        value: "sk-test-not-a-real-key".to_string(),
+    }];
+
+    let factory: std::sync::Arc<dyn NetworkBackendFactory> = default_factory();
+    let backend = factory.create(&config).expect("gvproxy backend");
+    let spec = backend.spec();
+    assert!(
+        spec.ca_cert_pem
+            .as_deref()
+            .unwrap()
+            .contains("BEGIN CERTIFICATE"),
+        "secrets should mint a CA cert on the wire spec"
+    );
+    assert!(spec.ca_key_pem.is_some(), "CA key should be present");
+    assert_eq!(spec.secrets.len(), 1, "secrets stay enabled with a CA");
 }
 
 #[cfg(not(feature = "gvproxy"))]

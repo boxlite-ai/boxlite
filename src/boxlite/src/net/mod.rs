@@ -497,6 +497,104 @@ mod tests {
         );
     }
 
+    /// The redaction above is `Debug`-only: serde MUST still carry the CA to the
+    /// shim (it cannot run MITM injection without it). Guards against "fixing" the
+    /// Debug leak by dropping the fields from the wire format too.
+    #[test]
+    fn spec_serde_carries_ca_pems_that_debug_redacts() {
+        let spec = NetworkBackendSpec {
+            port_mappings: vec![(8080, 80)],
+            socket_path: PathBuf::from("/tmp/net.sock"),
+            allow_net: Vec::new(),
+            secrets: Vec::new(),
+            ca_cert_pem: Some("CERTDATA".to_string()),
+            ca_key_pem: Some("KEYDATA".to_string()),
+        };
+        let json = serde_json::to_string(&spec).unwrap();
+        let back: NetworkBackendSpec = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.ca_cert_pem.as_deref(), Some("CERTDATA"));
+        assert_eq!(back.ca_key_pem.as_deref(), Some("KEYDATA"));
+    }
+
+    #[test]
+    fn spec_serde_defaults_new_optional_fields_for_legacy_payloads() {
+        let json = r#"{"port_mappings":[[8080,80]],"socket_path":"/tmp/net.sock"}"#;
+        let spec: NetworkBackendSpec = serde_json::from_str(json).unwrap();
+
+        assert_eq!(spec.port_mappings, vec![(8080, 80)]);
+        assert_eq!(spec.socket_path, PathBuf::from("/tmp/net.sock"));
+        assert!(spec.allow_net.is_empty());
+        assert!(spec.secrets.is_empty());
+        assert!(spec.ca_cert_pem.is_none());
+        assert!(spec.ca_key_pem.is_none());
+    }
+
+    #[derive(Debug)]
+    struct UnsupportedBackend;
+
+    #[async_trait::async_trait]
+    impl NetworkBackend for UnsupportedBackend {
+        fn name(&self) -> &'static str {
+            "unsupported-test"
+        }
+
+        fn spec(&self) -> NetworkBackendSpec {
+            NetworkBackendSpec {
+                port_mappings: Vec::new(),
+                socket_path: PathBuf::from("/tmp/net.sock"),
+                allow_net: Vec::new(),
+                secrets: Vec::new(),
+                ca_cert_pem: None,
+                ca_key_pem: None,
+            }
+        }
+    }
+
+    fn assert_unsupported<T: std::fmt::Debug>(result: BoxliteResult<T>, op: &str) {
+        let err = result.unwrap_err();
+        let err = format!("{err}");
+        assert!(err.contains("runtime control"), "err: {err}");
+        assert!(err.contains(op), "err: {err}");
+    }
+
+    #[tokio::test]
+    async fn default_control_methods_report_unsupported_operation() {
+        let backend = UnsupportedBackend;
+        let target: SocketAddr = "192.168.127.2:8080".parse().unwrap();
+        let zone = DnsZoneSpec {
+            name: "svc.local.".to_string(),
+            records: vec![DnsRecordSpec {
+                name: "api".to_string(),
+                ip: "192.168.127.10".to_string(),
+            }],
+            default_ip: None,
+        };
+
+        assert_unsupported(
+            backend
+                .expose(
+                    "127.0.0.1:18080",
+                    "192.168.127.2:80",
+                    TransportProtocol::Tcp,
+                )
+                .await,
+            "expose",
+        );
+        assert_unsupported(
+            backend
+                .unexpose("127.0.0.1:18080", TransportProtocol::Tcp)
+                .await,
+            "unexpose",
+        );
+        assert_unsupported(backend.list_forwards().await, "list_forwards");
+        assert_unsupported(backend.add_dns_zone(zone).await, "add_dns_zone");
+        assert_unsupported(backend.dns_zones().await, "dns_zones");
+        assert_unsupported(backend.dhcp_leases().await, "dhcp_leases");
+        assert_unsupported(backend.cam().await, "cam");
+        assert_unsupported(backend.stats().await, "stats");
+        assert_unsupported(backend.tunnel(target).await, "tunnel");
+    }
+
     #[tokio::test]
     async fn box_tunnel_pipes_bytes_and_carries_peer() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

@@ -440,6 +440,461 @@ mod tests {
         );
     }
 
+    #[test]
+    fn parse_stats_rejects_malformed_body() {
+        // The /stats parser fails loudly (echoing the body) on junk rather than
+        // silently zeroing counters.
+        let err = parse_stats("{ not json").unwrap_err();
+        assert!(
+            format!("{err}").contains("/stats parse failed"),
+            "err: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_stats_rejects_partial_stats() {
+        // gvproxy's NetworkStats has no serde defaults, so a body missing the TCP
+        // group is an error, not a partially-zeroed struct.
+        assert!(parse_stats(r#"{"BytesSent":1,"BytesReceived":2}"#).is_err());
+    }
+
+    fn test_secret() -> crate::runtime::options::Secret {
+        crate::runtime::options::Secret {
+            name: "openai".to_string(),
+            hosts: vec!["api.openai.com".to_string()],
+            placeholder: "<BOXLITE_SECRET:openai>".to_string(),
+            value: "sk-test-not-a-real-key".to_string(),
+        }
+    }
+
+    #[derive(Debug)]
+    struct CapturedRequest {
+        request_line: String,
+        body: String,
+    }
+
+    fn test_backend(
+        dir: &tempfile::TempDir,
+    ) -> (GvproxyBackend, std::path::PathBuf, NetworkBackendConfig) {
+        let net_sock = dir.path().join("net.sock");
+        let config = NetworkBackendConfig {
+            port_mappings: Vec::new(),
+            socket_path: net_sock.clone(),
+            allow_net: Vec::new(),
+            secrets: Vec::new(),
+            ca_dir: dir.path().to_path_buf(),
+        };
+        (
+            GvproxyBackend::from_config(&config),
+            super::super::control_socket_path(&net_sock),
+            config,
+        )
+    }
+
+    fn spawn_services_response(
+        ctl: &std::path::Path,
+        status: u16,
+        body: impl Into<String>,
+    ) -> tokio::task::JoinHandle<CapturedRequest> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::UnixListener;
+
+        let body = body.into();
+        let _ = std::fs::remove_file(ctl);
+        let listener = UnixListener::bind(ctl).unwrap();
+        tokio::spawn(async move {
+            let (mut conn, _) = listener.accept().await.unwrap();
+            let mut headers = Vec::new();
+            let mut byte = [0u8; 1];
+            while !headers.ends_with(b"\r\n\r\n") {
+                conn.read_exact(&mut byte).await.unwrap();
+                headers.push(byte[0]);
+            }
+
+            let headers_text = String::from_utf8_lossy(&headers);
+            let content_len = headers_text
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap_or(0);
+            let mut request_body = vec![0u8; content_len];
+            if content_len > 0 {
+                conn.read_exact(&mut request_body).await.unwrap();
+            }
+
+            let response = format!(
+                "HTTP/1.1 {status} OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            conn.write_all(response.as_bytes()).await.unwrap();
+
+            CapturedRequest {
+                request_line: headers_text.lines().next().unwrap().to_string(),
+                body: String::from_utf8_lossy(&request_body).into_owned(),
+            }
+        })
+    }
+
+    fn json_body(req: &CapturedRequest) -> Value {
+        serde_json::from_str(&req.body).unwrap()
+    }
+
+    #[test]
+    fn spec_with_secrets_mints_a_ca_from_ca_dir() {
+        // With secrets configured, spec() mints an ephemeral MITM CA into ca_dir
+        // and threads the PEMs (and the secrets) onto the wire spec.
+        let ca_dir = tempfile::tempdir().unwrap();
+        let config = NetworkBackendConfig {
+            port_mappings: Vec::new(),
+            socket_path: PathBuf::from("/tmp/bl-box/net.sock"),
+            allow_net: Vec::new(),
+            secrets: vec![test_secret()],
+            ca_dir: ca_dir.path().to_path_buf(),
+        };
+        let spec = GvproxyBackend::from_config(&config).spec();
+        assert!(
+            spec.ca_cert_pem
+                .as_deref()
+                .unwrap()
+                .contains("BEGIN CERTIFICATE"),
+            "expected a minted CA cert"
+        );
+        assert!(
+            spec.ca_key_pem.as_deref().unwrap().contains("PRIVATE KEY"),
+            "expected a minted CA key"
+        );
+        assert_eq!(spec.secrets.len(), 1, "secrets flow onto the wire spec");
+        // The CA was persisted under ca_dir (load_or_generate wrote it).
+        assert!(ca_dir.path().join("cert.pem").exists());
+    }
+
+    #[tokio::test]
+    async fn expose_posts_forwarder_payload_to_services_socket() {
+        let dir = tempfile::Builder::new()
+            .prefix("bl-svctest-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let (backend, ctl, _) = test_backend(&dir);
+        let server = spawn_services_response(&ctl, 204, "");
+
+        backend
+            .expose(
+                "127.0.0.1:18080",
+                "192.168.127.2:80",
+                TransportProtocol::Udp,
+            )
+            .await
+            .unwrap();
+
+        let req = server.await.unwrap();
+        assert_eq!(req.request_line, "POST /services/forwarder/expose HTTP/1.1");
+        let body = json_body(&req);
+        assert_eq!(body["local"], "127.0.0.1:18080");
+        assert_eq!(body["remote"], "192.168.127.2:80");
+        assert_eq!(body["protocol"], "udp");
+    }
+
+    #[tokio::test]
+    async fn unexpose_posts_local_and_protocol_to_services_socket() {
+        let dir = tempfile::Builder::new()
+            .prefix("bl-svctest-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let (backend, ctl, _) = test_backend(&dir);
+        let server = spawn_services_response(&ctl, 200, "");
+
+        backend
+            .unexpose("127.0.0.1:18080", TransportProtocol::Tcp)
+            .await
+            .unwrap();
+
+        let req = server.await.unwrap();
+        assert_eq!(
+            req.request_line,
+            "POST /services/forwarder/unexpose HTTP/1.1"
+        );
+        let body = json_body(&req);
+        assert_eq!(body["local"], "127.0.0.1:18080");
+        assert_eq!(body["protocol"], "tcp");
+        assert!(body.get("remote").is_none());
+    }
+
+    #[tokio::test]
+    async fn add_dns_zone_posts_gvproxy_zone_wire_shape() {
+        let dir = tempfile::Builder::new()
+            .prefix("bl-svctest-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let (backend, ctl, _) = test_backend(&dir);
+        let server = spawn_services_response(&ctl, 200, "");
+
+        backend
+            .add_dns_zone(DnsZoneSpec {
+                name: "svc.local.".to_string(),
+                records: vec![DnsRecordSpec {
+                    name: "api".to_string(),
+                    ip: "192.168.127.50".to_string(),
+                }],
+                default_ip: Some("192.168.127.254".to_string()),
+            })
+            .await
+            .unwrap();
+
+        let req = server.await.unwrap();
+        assert_eq!(req.request_line, "POST /services/dns/add HTTP/1.1");
+        let body = json_body(&req);
+        assert_eq!(body["Name"], "svc.local.");
+        assert_eq!(body["DefaultIP"], "192.168.127.254");
+        assert_eq!(body["Records"][0]["Name"], "api");
+        assert_eq!(body["Records"][0]["IP"], "192.168.127.50");
+        assert!(body.get("default_ip").is_none());
+    }
+
+    #[tokio::test]
+    async fn list_forwards_gets_and_parses_forwarder_all() {
+        let dir = tempfile::Builder::new()
+            .prefix("bl-svctest-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let (backend, ctl, _) = test_backend(&dir);
+        let body = r#"[{"local":"127.0.0.1:2222","remote":"192.168.127.2:22","protocol":"tcp"}]"#;
+        let server = spawn_services_response(&ctl, 200, body);
+
+        let forwards = backend.list_forwards().await.unwrap();
+
+        let req = server.await.unwrap();
+        assert_eq!(req.request_line, "GET /services/forwarder/all HTTP/1.1");
+        assert_eq!(
+            forwards,
+            vec![Forward {
+                local: "127.0.0.1:2222".to_string(),
+                remote: "192.168.127.2:22".to_string(),
+                protocol: "tcp".to_string(),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn json_read_endpoints_get_expected_paths_and_parse_bodies() {
+        let dir = tempfile::Builder::new()
+            .prefix("bl-svctest-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let (backend, ctl, _) = test_backend(&dir);
+
+        let server = spawn_services_response(&ctl, 200, r#"{"Zones":["svc.local."]}"#);
+        assert_eq!(backend.dns_zones().await.unwrap()["Zones"][0], "svc.local.");
+        assert_eq!(
+            server.await.unwrap().request_line,
+            "GET /services/dns/all HTTP/1.1"
+        );
+
+        let server = spawn_services_response(&ctl, 200, r#"{"Leases":[{"IP":"192.168.127.2"}]}"#);
+        assert_eq!(
+            backend.dhcp_leases().await.unwrap()["Leases"][0]["IP"],
+            "192.168.127.2"
+        );
+        assert_eq!(
+            server.await.unwrap().request_line,
+            "GET /services/dhcp/leases HTTP/1.1"
+        );
+
+        let server = spawn_services_response(&ctl, 200, r#"{"Table":{"aa:bb":"tap0"}}"#);
+        assert_eq!(backend.cam().await.unwrap()["Table"]["aa:bb"], "tap0");
+        assert_eq!(server.await.unwrap().request_line, "GET /cam HTTP/1.1");
+    }
+
+    #[tokio::test]
+    async fn stats_gets_and_maps_services_socket_response() {
+        let dir = tempfile::Builder::new()
+            .prefix("bl-svctest-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let (backend, ctl, _) = test_backend(&dir);
+        let body = r#"{"BytesSent":7,"BytesReceived":11,"TCP":{"ForwardMaxInFlightDrop":13,"CurrentEstablished":17,"FailedConnectionAttempts":19,"Retransmits":23,"Timeouts":29}}"#;
+        let server = spawn_services_response(&ctl, 200, body);
+
+        let stats = backend.stats().await.unwrap();
+
+        assert_eq!(server.await.unwrap().request_line, "GET /stats HTTP/1.1");
+        assert_eq!(stats.bytes_sent(), 7);
+        assert_eq!(stats.bytes_received(), 11);
+        assert_eq!(stats.tcp_established(), 17);
+        assert_eq!(stats.tcp_failed_connections(), 19);
+        assert_eq!(stats.tcp_retransmits(), 23);
+        assert_eq!(stats.tcp_timeouts(), 29);
+        assert_eq!(stats.tcp_forward_max_inflight_drop(), 13);
+    }
+
+    #[tokio::test]
+    async fn non_success_control_response_includes_path_status_and_body() {
+        let dir = tempfile::Builder::new()
+            .prefix("bl-svctest-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let (backend, ctl, _) = test_backend(&dir);
+        let server = spawn_services_response(&ctl, 409, "proxy already running");
+
+        let err = backend
+            .expose(
+                "127.0.0.1:18080",
+                "192.168.127.2:80",
+                TransportProtocol::Tcp,
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            server.await.unwrap().request_line,
+            "POST /services/forwarder/expose HTTP/1.1"
+        );
+        let err = format!("{err}");
+        assert!(err.contains("/services/forwarder/expose"), "err: {err}");
+        assert!(err.contains("409"), "err: {err}");
+        assert!(err.contains("proxy already running"), "err: {err}");
+    }
+
+    #[tokio::test]
+    async fn list_forwards_rejects_malformed_json_response() {
+        let dir = tempfile::Builder::new()
+            .prefix("bl-svctest-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let (backend, ctl, _) = test_backend(&dir);
+        let server = spawn_services_response(&ctl, 200, "not-json");
+
+        let err = backend.list_forwards().await.unwrap_err();
+
+        assert_eq!(
+            server.await.unwrap().request_line,
+            "GET /services/forwarder/all HTTP/1.1"
+        );
+        let err = format!("{err}");
+        assert!(err.contains("/services/forwarder/all parse failed"));
+        assert!(err.contains("not-json"));
+    }
+
+    #[tokio::test]
+    async fn json_read_endpoints_reject_malformed_json_response() {
+        let dir = tempfile::Builder::new()
+            .prefix("bl-svctest-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let (backend, ctl, _) = test_backend(&dir);
+        let server = spawn_services_response(&ctl, 200, "not-json");
+
+        let err = backend.cam().await.unwrap_err();
+
+        assert_eq!(server.await.unwrap().request_line, "GET /cam HTTP/1.1");
+        let err = format!("{err}");
+        assert!(err.contains("/cam parse failed"));
+        assert!(err.contains("not-json"));
+    }
+
+    /// The raw-hijack `/tunnel` client, exercised without a live gvproxy: a fake
+    /// control server speaks the `POST /tunnel` + `"OK"` handshake, then echoes —
+    /// proving the request wire format, the ack, and that the returned tunnel is a
+    /// live bidirectional pipe carrying the target as its peer.
+    #[tokio::test]
+    async fn tunnel_speaks_raw_hijack_and_returns_a_live_pipe() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::UnixListener;
+
+        // Short socket dir (sun_path budget), auto-removed on drop.
+        let dir = tempfile::Builder::new()
+            .prefix("bl-tuntest-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let net_sock = dir.path().join("net.sock");
+        // Bind the fake server at the exact control socket the backend will dial.
+        let ctl = super::super::control_socket_path(&net_sock);
+        let listener = UnixListener::bind(&ctl).unwrap();
+
+        let server = tokio::spawn(async move {
+            let (mut conn, _) = listener.accept().await.unwrap();
+            // Read the request line + headers up to the blank line.
+            let mut req = Vec::new();
+            let mut b = [0u8; 1];
+            while !req.ends_with(b"\r\n\r\n") {
+                conn.read_exact(&mut b).await.unwrap();
+                req.push(b[0]);
+            }
+            conn.write_all(b"OK").await.unwrap();
+            // Prove the socket is a live pipe after the handshake.
+            let mut msg = [0u8; 4];
+            conn.read_exact(&mut msg).await.unwrap();
+            conn.write_all(&msg).await.unwrap();
+            String::from_utf8_lossy(&req).into_owned()
+        });
+
+        let config = NetworkBackendConfig {
+            port_mappings: Vec::new(),
+            socket_path: net_sock,
+            allow_net: Vec::new(),
+            secrets: Vec::new(),
+            ca_dir: dir.path().to_path_buf(),
+        };
+        let target: SocketAddr = "192.168.127.2:8080".parse().unwrap();
+        let mut tunnel = GvproxyBackend::from_config(&config)
+            .tunnel(target)
+            .await
+            .expect("handshake ok");
+
+        assert_eq!(tunnel.peer_addr(), target);
+        tunnel.write_all(b"ping").await.unwrap();
+        let mut echoed = [0u8; 4];
+        tunnel.read_exact(&mut echoed).await.unwrap();
+        assert_eq!(&echoed, b"ping");
+
+        let req = server.await.unwrap();
+        assert!(
+            req.starts_with("POST /tunnel?ip=192.168.127.2&port=8080 HTTP/1.1"),
+            "unexpected request line: {req}"
+        );
+    }
+
+    /// A non-`"OK"` ack must surface as an error, not a half-open tunnel.
+    #[tokio::test]
+    async fn tunnel_errors_when_ack_is_not_ok() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::UnixListener;
+
+        let dir = tempfile::Builder::new()
+            .prefix("bl-tuntest-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let net_sock = dir.path().join("net.sock");
+        let ctl = super::super::control_socket_path(&net_sock);
+        let listener = UnixListener::bind(&ctl).unwrap();
+        tokio::spawn(async move {
+            let (mut conn, _) = listener.accept().await.unwrap();
+            let mut b = [0u8; 1];
+            let mut req = Vec::new();
+            while !req.ends_with(b"\r\n\r\n") {
+                conn.read_exact(&mut b).await.unwrap();
+                req.push(b[0]);
+            }
+            conn.write_all(b"NO").await.unwrap(); // reject
+        });
+
+        let config = NetworkBackendConfig {
+            port_mappings: Vec::new(),
+            socket_path: net_sock,
+            allow_net: Vec::new(),
+            secrets: Vec::new(),
+            ca_dir: dir.path().to_path_buf(),
+        };
+        let target: SocketAddr = "192.168.127.2:8080".parse().unwrap();
+        let err = GvproxyBackend::from_config(&config)
+            .tunnel(target)
+            .await
+            .unwrap_err();
+        assert!(format!("{err}").contains(r#"expected "OK""#), "err: {err}");
+    }
+
     /// End-to-end over a live gvproxy instance: the core dials the services
     /// socket to expose a forward, sees it in `/all`, unexposes it, and sees it
     /// gone. No VM is needed — the ServicesMux answers independently of the tap.
