@@ -140,8 +140,10 @@ func newTerminalKeepaliveServerWithReadResult(t *testing.T, toucher *boxActivity
 		defer cancel()
 
 		var writeMu sync.Mutex
-		configureTerminalPongLiveness(ctx, conn, 3*interval, toucher)
-		go runTerminalKeepalive(ctx, conn, &writeMu, logger, interval)
+		configurePongLiveness(ctx, conn, 3*interval, toucher.Touch)
+		go runWebSocketKeepalive(ctx, conn, &writeMu, interval, terminalWriteDeadline, func(err error) {
+			logger.Debug("terminal keepalive ping failed", "error", err)
+		})
 
 		for {
 			if _, _, err := conn.ReadMessage(); err != nil {
