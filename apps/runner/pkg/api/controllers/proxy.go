@@ -146,7 +146,6 @@ window.addEventListener('message',function(event){
     if(lastCwd)postCwd(lastCwd);
     return;
   }
-  if(msg.type==='command'&&msg.command==='ls'&&ws.readyState===WebSocket.OPEN)ws.send('ls\r');
 });
 function hasDraggedFiles(event){
   var types=event.dataTransfer&&event.dataTransfer.types;

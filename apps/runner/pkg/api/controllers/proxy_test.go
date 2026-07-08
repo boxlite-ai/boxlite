@@ -3,7 +3,10 @@
 
 package controllers
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestIsTerminalToolboxPath(t *testing.T) {
 	tests := []struct {
@@ -27,5 +30,22 @@ func TestIsTerminalToolboxPath(t *testing.T) {
 				t.Fatalf("isTerminalToolboxPath(%q) = %v, want %v", tt.path, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestTerminalHTMLDoesNotAcceptDashboardShellCommands(t *testing.T) {
+	if !strings.Contains(terminalHTML, "msg.type==='cwd-request'") {
+		t.Fatal("terminalHTML should still allow the dashboard to request terminal metadata")
+	}
+
+	forbidden := []string{
+		"msg.type==='command'",
+		"msg.command==='ls'",
+		"ws.send('ls\\r')",
+	}
+	for _, needle := range forbidden {
+		if strings.Contains(terminalHTML, needle) {
+			t.Fatalf("terminalHTML must not inject shell input from dashboard messages; found %q", needle)
+		}
 	}
 }

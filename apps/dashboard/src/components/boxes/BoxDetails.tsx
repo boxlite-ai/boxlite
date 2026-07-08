@@ -52,7 +52,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { BoxFileUploadControl, buildDroppedUploadItems } from './BoxFileUploadControl'
 import { BoxTerminalTab } from './BoxTerminalTab'
-import { sendActiveTerminalListCommand, TERMINAL_FILE_DRAG_EVENT } from './terminalIframeSrc'
+import { TERMINAL_FILE_DRAG_EVENT } from './terminalIframeSrc'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 const STATUS = { running: '#5ad67d', idle: '#e0b341', stopped: '#8C919C', error: '#e0564a', dim: '#5b616e' } as const
@@ -275,7 +275,6 @@ export default function BoxDetails() {
         items,
       })
       toast.success(items.length === 1 ? `Uploaded ${items[0].name}` : `Uploaded ${items.length} items`)
-      sendActiveTerminalListCommand()
     } catch (error) {
       handleApiError(error, 'Failed to upload files')
     }

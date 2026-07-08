@@ -7,8 +7,7 @@
  * Bridge for the box-controlled terminal iframe.
  *
  * Only the bounded font-size scalar is forwarded on the iframe URL. The
- * parent page may send the fixed "ls" command to a registered terminal frame
- * after file uploads so the visible shell refreshes in its current directory.
+ * parent page may request terminal metadata, but does not send shell input.
  */
 
 const FONT_SIZE_KEY = 'boxlite.terminal.fontSize'
@@ -56,7 +55,6 @@ interface ActiveTerminalFrame {
 }
 
 const activeTerminalFrames = new Map<Window, ActiveTerminalFrame>()
-let currentTerminalFrame: Window | null = null
 
 export function registerActiveTerminalFrame(
   frame: Window,
@@ -75,7 +73,6 @@ export function registerActiveTerminalFrame(
     onCurrentDirChange: options.onCurrentDirChange,
     origin,
   })
-  currentTerminalFrame = frame
   frame.postMessage(
     {
       source: 'boxlite-dashboard',
@@ -85,28 +82,7 @@ export function registerActiveTerminalFrame(
   )
   return () => {
     if (activeTerminalFrames.get(frame)?.origin === origin) activeTerminalFrames.delete(frame)
-    if (currentTerminalFrame === frame) currentTerminalFrame = null
   }
-}
-
-export function sendActiveTerminalListCommand(): boolean {
-  if (typeof window === 'undefined') return false
-
-  const frame = currentTerminalFrame
-  if (!frame) return false
-
-  const registeredFrame = activeTerminalFrames.get(frame)
-  if (!registeredFrame) return false
-
-  frame.postMessage(
-    {
-      source: 'boxlite-dashboard',
-      type: 'command',
-      command: 'ls',
-    },
-    registeredFrame.origin,
-  )
-  return true
 }
 
 function ensureTerminalPrefListener() {
