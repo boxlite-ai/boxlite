@@ -16901,6 +16901,7 @@ __metadata:
     pino: "npm:^9.13.1"
     pino-http: "npm:^10.5.0"
     pino-pretty: "npm:^13.1.2"
+    playwright-core: "npm:^1.61.1"
     postcss: "npm:8.5.10"
     posthog-js: "npm:^1.217.6"
     posthog-node: "npm:^4.10.1"
@@ -30956,6 +30957,15 @@ __metadata:
     pvutils: "npm:^1.1.3"
     tslib: "npm:^2.8.1"
   checksum: 10c0/33cfab9283702782ae228bd2d4a51b1e9b2e0d6e2141207f29ee95716101ac4fe6e6821882da5f5eca28c74be3964b181b09e95cbbb757b2bd9dca918a5765fd
+  languageName: node
+  linkType: hard
+
+"playwright-core@npm:^1.61.1":
+  version: 1.61.1
+  resolution: "playwright-core@npm:1.61.1"
+  bin:
+    playwright-core: cli.js
+  checksum: 10c0/c28896ba82a602182e240ed4f9c467fb0dd9cb57d510f8aba9f25183fe1cde3a0105725a29baffa4157fe885bbb11e228032a2aad0424111584fde45303f07bd
   languageName: node
   linkType: hard
 
