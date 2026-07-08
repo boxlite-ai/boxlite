@@ -32,6 +32,10 @@ class FakeRepo {
     const open = this.rows.filter((r) => r.boxId === opts.where.boxId && r.periodEnd == null)
     return open.length ? open[open.length - 1] : null
   }
+
+  async count(opts: { where: { boxId: string } }): Promise<number> {
+    return this.rows.filter((r) => r.boxId === opts.where.boxId).length
+  }
 }
 
 function box(state: BoxState): Box {
@@ -94,5 +98,34 @@ describe('UsageService.applyTransition', () => {
     await svc.applyTransition(box(BoxState.DESTROYED), BoxState.DESTROYED, t1)
     expect(repo.rows).toHaveLength(1)
     expect(repo.rows[0].periodEnd).toEqual(t1)
+  })
+})
+
+describe('UsageService.handleBoxCreated', () => {
+  let repo: FakeRepo
+  let svc: UsageService
+
+  beforeEach(() => {
+    repo = new FakeRepo()
+    svc = new UsageService(repo as never)
+  })
+
+  it('opens the first period from the CREATED snapshot when the ledger is empty', async () => {
+    await svc.handleBoxCreated({ box: box(BoxState.STARTED) } as never)
+    expect(repo.rows).toHaveLength(1)
+    expect(repo.rows[0].kind).toBe('running')
+  })
+
+  it('ignores a stale CREATED snapshot when a racing STATE_UPDATED already ledgered the box', async () => {
+    // STATE_UPDATED won the race: the box is already ledgered as running.
+    await svc.applyTransition(box(BoxState.STARTED), BoxState.STARTED, new Date('2026-06-25T12:00:00Z'))
+
+    // CREATED arrives late with its insert-time snapshot (CREATING → stopped);
+    // applying it would close the live running period and flip it to stopped.
+    await svc.handleBoxCreated({ box: box(BoxState.CREATING) } as never)
+
+    expect(repo.rows).toHaveLength(1)
+    expect(repo.rows[0].kind).toBe('running')
+    expect(repo.rows[0].periodEnd).toBeNull()
   })
 })

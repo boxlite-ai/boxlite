@@ -25,6 +25,12 @@ describe('planTransition', () => {
   it('no open period → DESTROYED is a no-op', () => {
     expect(planTransition(null, BoxState.DESTROYED)).toEqual({ closeOpen: false, openKind: null })
   })
+  it('RESIZING is transient: a hot resize keeps the running period open (no cpu/ram gap)', () => {
+    expect(planTransition('running', BoxState.RESIZING)).toEqual({ closeOpen: false, openKind: null })
+  })
+  it('RESIZING is transient: a disk resize on a stopped box stays disk-only (no cpu/ram billing)', () => {
+    expect(planTransition('stopped', BoxState.RESIZING)).toEqual({ closeOpen: false, openKind: null })
+  })
 })
 
 describe('billingPeriodKind', () => {

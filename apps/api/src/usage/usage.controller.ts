@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common'
+import { BadRequestException, Controller, Get, Param, Query, UseGuards } from '@nestjs/common'
 import { ApiOAuth2, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
@@ -37,6 +37,14 @@ export class UsageController {
   ): Promise<BoxUsageResult> {
     const toDate = to ? new Date(to) : new Date()
     const fromDate = from ? new Date(from) : new Date(toDate.getTime() - DEFAULT_RANGE_MS)
+    // Fail fast at the boundary: an unparsable ISO string becomes Invalid Date,
+    // which would otherwise surface as an opaque DB error or silently-zero totals.
+    if (isNaN(fromDate.getTime()) || isNaN(toDate.getTime())) {
+      throw new BadRequestException('from/to must be valid ISO-8601 timestamps')
+    }
+    if (fromDate > toDate) {
+      throw new BadRequestException('from must not be after to')
+    }
     return this.usageService.getBoxUsage(boxId, fromDate, toDate)
   }
 }

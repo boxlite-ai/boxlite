@@ -48,6 +48,15 @@ export class UsageService {
     // the initial period here, or the running time before the first transition
     // is lost.
     try {
+      // CREATED's only job is the very first segment. Its payload is a snapshot
+      // taken at insert time, and the emitter doesn't await this listener — so a
+      // racing STATE_UPDATED may have ledgered a fresher state already. If any
+      // segment exists, applying the stale snapshot would flip the ledger
+      // backwards (e.g. close a live running period); skip instead.
+      const alreadyLedgered = await this.periods.count({ where: { boxId: event.box.id } })
+      if (alreadyLedgered > 0) {
+        return
+      }
       await this.applyTransition(event.box, event.box.state, new Date())
     } catch (err) {
       // Metering must never break the box state machine — the CREATED emitter
@@ -91,7 +100,7 @@ export class UsageService {
       where: { boxId: box.id, periodEnd: IsNull() },
       order: { periodStart: 'DESC' },
     })
-    const openKind = open ? (open.kind as 'running' | 'stopped') : null
+    const openKind = open ? open.kind : null
     const plan = planTransition(openKind, newState)
 
     if (plan.closeOpen && open) {
@@ -127,7 +136,7 @@ export class UsageService {
     const billable: BillablePeriod[] = rows.map((r) => ({
       startAt: r.periodStart,
       endAt: r.periodEnd,
-      kind: r.kind as 'running' | 'stopped',
+      kind: r.kind,
       allocCpu: r.allocCpu,
       allocMemGib: r.allocMemGib,
       allocDiskGib: r.allocDiskGib,

@@ -30,7 +30,7 @@ export function billingPeriodKind(state: BoxState): BillingPeriodKind {
       return 'gone'
     default:
       // creating / restoring / starting / stopping / stopped / error /
-      // unknown / archived / archiving / resizing: rootfs exists → Disk bills,
+      // unknown / archived / archiving: rootfs exists → Disk bills,
       // but CPU/RAM do not (box isn't executing).
       return 'stopped'
   }
@@ -53,6 +53,15 @@ export interface TransitionPlan {
  * one continuous period is kept rather than fragmenting the ledger.
  */
 export function planTransition(openKind: 'running' | 'stopped' | null, newState: BoxState): TransitionPlan {
+  // RESIZING is a transient in-place state: a resize can start from STARTED
+  // (hot — workload keeps executing) or STOPPED (disk resize), and the box
+  // returns to that state when it completes. Mapping it to either kind would
+  // mis-bill one of the two cases (close a still-running period, or bill
+  // CPU/RAM for a stopped box), so the ledger simply keeps the open period.
+  if (newState === BoxState.RESIZING) {
+    return { closeOpen: false, openKind: null }
+  }
+
   const kind = billingPeriodKind(newState)
 
   if (kind === 'gone') {

@@ -42,7 +42,7 @@ export class UsagePeriod {
   organizationId: string
 
   @Column({ nullable: true })
-  region: string
+  region: string | null
 
   @Column({ type: 'timestamptz' })
   periodStart: Date
@@ -51,9 +51,13 @@ export class UsagePeriod {
   @Column({ type: 'timestamptz', nullable: true })
   periodEnd: Date | null
 
-  /** Billing kind: `running` (cpu+ram+disk) or `stopped` (disk only). */
+  /**
+   * Billing kind: `running` (cpu+ram+disk) or `stopped` (disk only). Stored as
+   * a plain varchar holding these literal strings — downstream rating compares
+   * `kind === 'running'` literally, so the persisted values must never change.
+   */
   @Column()
-  kind: string
+  kind: 'running' | 'stopped'
 
   // ---- allocated quantities (the billing basis, snapshotted from the box spec) ----
   @Column({ type: 'int' })
