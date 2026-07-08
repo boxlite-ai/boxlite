@@ -20,6 +20,7 @@ export enum RoutePath {
   KEYS = '/dashboard/keys',
   BOXES = '/dashboard/boxes',
   BILLING = '/dashboard/billing',
+  METERING = '/dashboard/metering',
   PRICING = '/dashboard/pricing',
   ADMIN = '/dashboard/admin',
   IMAGES = '/dashboard/images',

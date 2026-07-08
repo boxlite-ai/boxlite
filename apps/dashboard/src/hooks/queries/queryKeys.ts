@@ -33,6 +33,8 @@ export const queryKeys = {
       current: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'usage', 'current'] as const,
       past: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'usage', 'past'] as const,
     },
+    metering: (organizationId: string, params: object) =>
+      [...queryKeys.organization.all, organizationId, 'metering', params] as const,
 
     tier: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'tier'] as const,
     wallet: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'wallet'] as const,

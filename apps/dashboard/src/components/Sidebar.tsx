@@ -182,6 +182,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
     () => [
       { label: 'Boxes', path: RoutePath.BOXES },
       { label: 'Billing', path: RoutePath.BILLING },
+      { label: 'Usage', path: RoutePath.METERING },
       ...(canViewAdmin ? [{ label: 'Admin', path: RoutePath.ADMIN }] : []),
     ],
     [canViewAdmin],

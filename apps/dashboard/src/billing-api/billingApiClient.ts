@@ -9,6 +9,8 @@ import axios, { AxiosInstance } from 'axios'
 import {
   AutomaticTopUp,
   OrganizationEmail,
+  OrganizationMetering,
+  OrganizationMeteringParams,
   OrganizationTier,
   OrganizationUsage,
   OrganizationWallet,
@@ -48,6 +50,29 @@ export class BillingApiClient {
 
   public async getPastOrganizationUsage(organizationId: string, periods?: number): Promise<OrganizationUsage[]> {
     const response = await this.axiosInstance.get(`/organization/${organizationId}/usage/past?periods=${periods || 12}`)
+    return response.data
+  }
+
+  public async getOrganizationMetering(
+    organizationId: string,
+    params: OrganizationMeteringParams = {},
+  ): Promise<OrganizationMetering> {
+    const searchParams = new URLSearchParams()
+    if (params.from) {
+      searchParams.set('from', params.from)
+    }
+    if (params.to) {
+      searchParams.set('to', params.to)
+    }
+    if (params.limit !== undefined) {
+      searchParams.set('limit', String(params.limit))
+    }
+    if (params.boxId) {
+      searchParams.set('boxId', params.boxId)
+    }
+
+    const query = searchParams.toString()
+    const response = await this.axiosInstance.get(`/organization/${organizationId}/metering${query ? `?${query}` : ''}`)
     return response.data
   }
 
