@@ -1,5 +1,6 @@
 //! Runtime backend trait — internal abstraction for local vs REST execution.
 
+use std::net::SocketAddr;
 use std::path::Path;
 
 use async_trait::async_trait;
@@ -8,6 +9,7 @@ use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{BoxCommand, Execution, LiteBox};
 use crate::metrics::{BoxMetrics, RuntimeMetrics};
+use crate::net::BoxTunnel;
 use crate::runtime::options::{
     BoxArchive, BoxOptions, CloneOptions, ExportOptions, SnapshotOptions,
 };
@@ -109,6 +111,12 @@ pub(crate) trait BoxBackend: Send + Sync {
         host_dst: &Path,
         opts: CopyOptions,
     ) -> BoxliteResult<()>;
+
+    async fn tunnel(&self, _target: SocketAddr) -> BoxliteResult<BoxTunnel> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support guest port tunnels".into(),
+        ))
+    }
 
     async fn clone_box(
         &self,

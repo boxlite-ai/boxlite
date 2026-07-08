@@ -6,6 +6,8 @@
 //! later from `boxlite_runtime_drain` on the user's thread.
 
 use std::ffi::CString;
+use std::net::SocketAddr;
+use std::os::fd::IntoRawFd;
 use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;
 use std::sync::Arc;
@@ -118,6 +120,33 @@ pub unsafe extern "C" fn boxlite_box_id(handle: *mut CBoxHandle) -> *mut c_char 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_box_free(handle: *mut CBoxHandle) {
     box_free(handle)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_box_tunnel(
+    handle: *mut CBoxHandle,
+    target_ip: *const c_char,
+    target_port: u16,
+    out_fd: *mut c_int,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    box_tunnel(handle, target_ip, target_port, out_fd, out_error)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_box_tunnel_guest_port(
+    handle: *mut CBoxHandle,
+    target_port: u16,
+    out_fd: *mut c_int,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    box_tunnel_addr(
+        handle,
+        boxlite::net::constants::GUEST_IP,
+        target_port,
+        out_fd,
+        out_error,
+    )
 }
 
 unsafe fn create_box(
@@ -430,6 +459,89 @@ unsafe fn box_free(handle: *mut BoxHandle) {
     if !handle.is_null() {
         unsafe {
             drop(Box::from_raw(handle));
+        }
+    }
+}
+
+unsafe fn box_tunnel(
+    handle: *mut BoxHandle,
+    target_ip: *const c_char,
+    target_port: u16,
+    out_fd: *mut c_int,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if handle.is_null() {
+            write_error(out_error, null_pointer_error("handle"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        if out_fd.is_null() {
+            write_error(out_error, null_pointer_error("out_fd"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+
+        let ip = match c_str_to_string(target_ip) {
+            Ok(s) => s,
+            Err(e) => {
+                write_error(out_error, e);
+                return BoxliteErrorCode::InvalidArgument;
+            }
+        };
+        box_tunnel_addr(handle, &ip, target_port, out_fd, out_error)
+    }
+}
+
+unsafe fn box_tunnel_addr(
+    handle: *mut BoxHandle,
+    target_ip: &str,
+    target_port: u16,
+    out_fd: *mut c_int,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if handle.is_null() {
+            write_error(out_error, null_pointer_error("handle"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        if out_fd.is_null() {
+            write_error(out_error, null_pointer_error("out_fd"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+
+        let target: SocketAddr = match format!("{target_ip}:{target_port}").parse() {
+            Ok(target) => target,
+            Err(e) => {
+                write_error(
+                    out_error,
+                    BoxliteError::InvalidArgument(format!("invalid tunnel target: {e}")),
+                );
+                return BoxliteErrorCode::InvalidArgument;
+            }
+        };
+
+        let handle_ref = &*handle;
+        match handle_ref
+            .tokio_rt
+            .block_on(handle_ref.handle.tunnel(target))
+        {
+            Ok(tunnel) => match tunnel.into_fd() {
+                Some(fd) => {
+                    *out_fd = fd.into_raw_fd();
+                    BoxliteErrorCode::Ok
+                }
+                None => {
+                    write_error(
+                        out_error,
+                        BoxliteError::Unsupported("tunnel has no local file descriptor".into()),
+                    );
+                    BoxliteErrorCode::Unsupported
+                }
+            },
+            Err(e) => {
+                let code = crate::error::error_to_code(&e);
+                write_error(out_error, e);
+                code
+            }
         }
     }
 }

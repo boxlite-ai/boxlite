@@ -27,10 +27,12 @@ pub(crate) use box_impl::SharedBoxImpl;
 pub(crate) use init::BoxBuilder;
 pub(crate) use local_snapshot::LocalSnapshotBackend;
 
+use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 
 use crate::metrics::BoxMetrics;
+use crate::net::BoxTunnel;
 use crate::runtime::backend::{BoxBackend, SnapshotBackend};
 use crate::runtime::options::{BoxArchive, CloneOptions, ExportOptions};
 use crate::{BoxID, BoxInfo};
@@ -138,6 +140,11 @@ impl LiteBox {
         self.box_backend
             .copy_out(container_src.as_ref(), host_dst.as_ref(), opts)
             .await
+    }
+
+    /// Open a raw byte tunnel to a guest address through the box network backend.
+    pub async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
+        self.box_backend.tunnel(target).await
     }
 
     /// Get a snapshot handle for snapshot operations.

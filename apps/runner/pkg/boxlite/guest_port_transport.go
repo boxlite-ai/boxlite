@@ -6,12 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"time"
-
-	"github.com/containers/gvisor-tap-vsock/pkg/transport"
 )
-
-const gvproxyTunnelTimeout = 10 * time.Second
 
 func (c *Client) NewGuestPortTransport(boxId string, port uint16, logger *slog.Logger) *http.Transport {
 	if logger == nil {
@@ -36,43 +31,14 @@ func (c *Client) NewGuestPortTransport(boxId string, port uint16, logger *slog.L
 }
 
 func (c *Client) DialGuestPort(ctx context.Context, boxId string, port uint16) (net.Conn, error) {
-	servicesSocketPath, guestIP, err := c.GvproxyServicesEndpoint(ctx, boxId)
+	bx, err := c.getOrFetchBox(ctx, boxId)
 	if err != nil {
 		return nil, err
 	}
 
-	return dialGvproxyTunnel(ctx, servicesSocketPath, guestIP, port)
-}
-
-func dialGvproxyTunnel(ctx context.Context, servicesSocketPath string, guestIP string, port uint16) (net.Conn, error) {
-	if guestIP == "" {
-		return nil, fmt.Errorf("guest IP is required")
-	}
-
-	dialer := net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "unix", servicesSocketPath)
+	conn, err := bx.TunnelGuestPort(ctx, port)
 	if err != nil {
-		return nil, fmt.Errorf("dial gvproxy tunnel socket %s: %w", servicesSocketPath, err)
+		return nil, fmt.Errorf("open guest port tunnel to %s:%d: %w", boxId, port, err)
 	}
-
-	deadline := time.Now().Add(gvproxyTunnelTimeout)
-	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
-		deadline = ctxDeadline
-	}
-	if err := conn.SetDeadline(deadline); err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-
-	if err := transport.Tunnel(conn, guestIP, int(port)); err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("open gvproxy tunnel to %s:%d: %w", guestIP, port, err)
-	}
-
-	if err := conn.SetDeadline(time.Time{}); err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-
 	return conn, nil
 }

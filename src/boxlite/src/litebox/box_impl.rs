@@ -4,6 +4,7 @@
 // IMPORTS
 // ============================================================================
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
@@ -26,7 +27,7 @@ use crate::fs::BindMountHandle;
 use crate::litebox::copy::CopyOptions;
 use crate::lock::LockGuard;
 use crate::metrics::{BoxMetrics, BoxMetricsStorage};
-use crate::net::NetworkBackend;
+use crate::net::{BoxTunnel, NetworkBackend};
 use crate::portal::GuestSession;
 use crate::portal::interfaces::GuestInterface;
 use crate::runtime::layout::BoxFilesystemLayout;
@@ -1142,6 +1143,10 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         opts: CopyOptions,
     ) -> BoxliteResult<()> {
         self.copy_out(container_src, host_dst, opts).await
+    }
+
+    async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
+        self.network().await?.tunnel(target).await
     }
 
     async fn clone_box(

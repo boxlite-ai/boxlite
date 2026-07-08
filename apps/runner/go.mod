@@ -6,7 +6,6 @@ require (
 	github.com/boxlite-ai/boxlite/libs/api-client-go v0.149.0
 	github.com/boxlite-ai/boxlite/sdks/go v0.9.0
 	github.com/containerd/errdefs v1.0.0
-	github.com/containers/gvisor-tap-vsock v0.8.7
 	github.com/docker/go-units v0.5.0
 	github.com/gin-gonic/gin v1.10.1
 	github.com/go-playground/validator/v10 v10.27.0
