@@ -156,8 +156,8 @@ import { CodeBox } from '@boxlite-ai/boxlite';
 
 const box = new CodeBox();
 try {
-  const result = await box.run("print('hello')");
-  console.log(result.stdout);
+  const stdout = await box.run("print('hello')");
+  console.log(stdout);
 } finally {
   await box.stop();
 }
