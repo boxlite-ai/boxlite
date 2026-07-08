@@ -83,7 +83,6 @@ async def main():
         volumes=[
             ("/host/data", "/mnt/data", True),  # read-only mount
         ],
-        advanced=boxlite.AdvancedBoxOptions(security=boxlite.SecurityOptions.maximum()),
     ))
     
     try:
@@ -142,10 +141,12 @@ security = boxlite.SecurityOptions.maximum()
 # Disable network access (macOS):
 security.network_enabled = False
 
-# security lives under the advanced field, not directly in BoxOptions
+# AdvancedBoxOptions is not re-exported from the top-level boxlite package.
+# Access it via the native extension:
+from boxlite.boxlite import AdvancedBoxOptions
 options = boxlite.BoxOptions(
     image="python:slim",
-    advanced=boxlite.AdvancedBoxOptions(security=security),
+    advanced=AdvancedBoxOptions(security=security),
 )
 ```
 

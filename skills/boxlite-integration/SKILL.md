@@ -91,7 +91,7 @@ async def safe_exec(box, cmd, args=None, timeout=30):
         raise
 ```
 
-**Node.js:**
+**Node.js — JsBoxlite low-level only** (`SimpleBox.exec()` returns `ExecResult` with no `.wait()`/`.kill()` — use `{ timeoutSecs }` option instead):
 ```javascript
 async function safeExec(box, cmd, args = [], timeoutMs = 30_000) {
   const execution = await box.exec(cmd, args);
@@ -104,7 +104,7 @@ async function safeExec(box, cmd, args = [], timeoutMs = 30_000) {
 }
 ```
 
-Use these wrappers instead of bare `execution.wait()` whenever the code being run is user-supplied or LLM-generated.
+Use this wrapper for `JsBoxlite` low-level boxes. For `SimpleBox`, pass `{ timeoutSecs }` directly to `exec()`.
 
 ---
 

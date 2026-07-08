@@ -131,7 +131,7 @@ try {
 |--------|-----------|----------|
 | `box.copy_in(src, dst)` | Host → Guest | Scripts, config files |
 | `box.copy_out(src, dst)` | Guest → Host | Results, artifacts |
-| `volumes=[("/host/path", "/mnt/data", "ro")]` | Both | Shared datasets, large files |
+| `volumes=[("/host/path", "/mnt/data", True)]` | Both | Shared datasets, large files |
 
 ```python
 await box.copy_in("/host/analysis.py", "/workspace/analysis.py")
