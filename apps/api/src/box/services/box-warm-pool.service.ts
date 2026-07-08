@@ -12,7 +12,8 @@ import { RedisLockProvider } from '../common/redis-lock.provider'
 import { BoxRepository } from '../repositories/box.repository'
 import { Box } from '../entities/box.entity'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
-import { ScheduleConfig, ScheduleWindow, WarmPool } from '../entities/warm-pool.entity'
+import { ScheduleConfig, WarmPool } from '../entities/warm-pool.entity'
+import { resolveWarmPoolTarget } from './warm-pool-schedule'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
 import { BoxEvents } from '../constants/box-events.constants'
 import { BoxOrganizationUpdatedEvent } from '../events/box-organization-updated.event'
@@ -145,43 +146,25 @@ export class BoxWarmPoolService {
   async updateSchedule(
     id: string,
     scheduleConfig: ScheduleConfig | null | undefined,
-    timezone: string,
+    timezone: string | undefined,
   ): Promise<WarmPool> {
-    const patch: Partial<WarmPool> = { timezone }
+    // Both fields are independently optional: omitting one leaves it unchanged,
+    // so a caller can retune the schedule without restating the timezone.
+    const patch: Partial<WarmPool> = {}
     if (scheduleConfig !== undefined) {
       patch.scheduleConfig = scheduleConfig
     }
-    await this.warmPoolRepository.update(id, patch)
+    if (timezone !== undefined) {
+      patch.timezone = timezone
+    }
+    if (Object.keys(patch).length > 0) {
+      await this.warmPoolRepository.update(id, patch)
+    }
     return this.warmPoolRepository.findOneOrFail({ where: { id } })
   }
 
   private computeTargetPoolSize(item: WarmPool): number {
-    if (!item.scheduleConfig) return item.pool
-
-    const tz = item.timezone ?? 'UTC'
-    const now = new Date()
-    const parts = new Intl.DateTimeFormat('en', {
-      hour: 'numeric',
-      hour12: false,
-      weekday: 'short',
-      timeZone: tz,
-    }).formatToParts(now)
-    const hour = parseInt(parts.find((p) => p.type === 'hour')?.value ?? '0', 10) % 24
-    const weekday = parts.find((p) => p.type === 'weekday')?.value ?? 'Sun'
-    const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(weekday)
-
-    for (const w of (item.scheduleConfig as ScheduleConfig).windows) {
-      const dayMatch = !w.days || w.days.includes(day)
-      const hourMatch =
-        w.startHour == null || w.endHour == null
-          ? true // no hours specified = all day
-          : w.startHour <= w.endHour
-            ? hour >= w.startHour && hour < w.endHour
-            : hour >= w.startHour || hour < w.endHour // spans midnight
-      if (dayMatch && hourMatch) return w.pool
-    }
-
-    return item.pool
+    return resolveWarmPoolTarget(item.scheduleConfig, item.timezone, item.pool, new Date())
   }
 
   //  todo: make frequency configurable or more efficient
@@ -255,13 +238,17 @@ export class BoxWarmPoolService {
             this.logger.debug(`Scaling down ${candidates.length} excess boxes for warm pool id ${warmPoolItem.id}`)
 
             for (const box of candidates) {
-              const lockKey = `box-warm-pool-${box.id}`
-              if (!(await this.redisLockProvider.lock(lockKey, 30))) {
+              // Distinct name from the outer warm-pool tick lock (`lockKey`) to
+              // avoid shadowing. Held for its full 30s TTL (not released here):
+              // that window blocks a concurrent user claim from grabbing a box
+              // we've just marked for destruction. Same key `fetchWarmPoolBox`
+              // uses, so claim and scale-down are mutually exclusive.
+              const boxLockKey = `box-warm-pool-${box.id}`
+              if (!(await this.redisLockProvider.lock(boxLockKey, 30))) {
                 continue // being claimed right now, skip
               }
               await this.boxRepository.update(box.id, {
-                desiredState: BoxDesiredState.DESTROYED,
-                pending: true,
+                updateData: { desiredState: BoxDesiredState.DESTROYED, pending: true },
               })
             }
           }

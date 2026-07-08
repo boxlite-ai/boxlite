@@ -48,9 +48,14 @@ export class UpdateWarmPoolScheduleDto {
   @IsOptional()
   scheduleConfig: ScheduleConfigDto | null
 
-  @ApiProperty({ description: 'IANA timezone, e.g. Asia/Shanghai', example: 'UTC', default: 'UTC' })
+  @ApiProperty({
+    description: 'IANA timezone, e.g. Asia/Shanghai. Omit to leave the current timezone unchanged.',
+    example: 'UTC',
+    required: false,
+  })
   @IsTimeZone()
-  timezone: string
+  @IsOptional()
+  timezone?: string
 }
 
 @ApiSchema({ name: 'AdminWarmPool' })
