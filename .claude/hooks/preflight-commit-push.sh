@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
-# PreToolUse hook: gate `git commit` / `git push` on a fresh verdict from the
-# commit-push-auditor subagent (see .claude/agents/commit-push-auditor.md).
+# PreToolUse hook: gate `git commit` / `git push` on a fresh audit verdict.
 #
-# The hook itself does not call any model; it only reads the verdict artifact
-# the subagent writes at .claude/.last-audit.json and checks that the verdict
-# is PASS, recent, and bound to the current branch + HEAD.
+# Claude Code produces that verdict through the commit-push-auditor subagent
+# (see .claude/agents/commit-push-auditor.md). Codex produces the same artifact
+# by running .claude/hooks/run-commit-push-audit.sh, whose default mode invokes
+# `codex exec` with hooks disabled.
 #
 # Flow on a denied attempt:
 #   1. Hook denies the git tool call.
-#   2. Reason text instructs the parent agent to invoke the commit-push-auditor
-#      subagent via the Task tool, then retry the same git command.
-#   3. Subagent writes .claude/.last-audit.json.
+#   2. Reason text instructs the parent agent to run the right audit producer.
+#   3. The producer writes .claude/.last-audit.json.
 #   4. Parent retries -> hook reads the artifact and allows on PASS.
 #
 # Wired in .claude/settings.json under hooks.PreToolUse with matcher "Bash".
@@ -66,15 +65,217 @@ fi
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 project_dir="${CLAUDE_PROJECT_DIR:-$repo_root}"
 audit_file="$project_dir/.claude/.last-audit.json"
+handoff_file="$project_dir/.claude/.last-audit-handoff.json"
+branch="$(git -C "$repo_root" branch --show-current 2>/dev/null || echo '?')"
+head="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo '?')"
+max_age_seconds=600
 
-# Codex has no Claude Code subagent and should not shell out to the Claude CLI to
-# manufacture the audit artifact. When Codex calls this as a PreToolUse hook, run
-# the local deterministic auditor first; the git-level hook then consumes the
-# same .last-audit.json contract below.
+hash_stdin() {
+  shasum -a 256 | awk '{print $1}'
+}
+
+command_field() {
+  local key="$1"
+  printf '%s' "$command" | sed -n "s/.* ${key}=\\([0-9a-f][0-9a-f]*\\).*/\\1/p" | head -1
+}
+
+push_diff_hash_from_command=""
+if [[ "$kind" == "push" ]]; then
+  push_diff_hash_from_command="$(command_field pushed_diff_sha256)"
+fi
+
+current_diff_hash() {
+  case "$kind" in
+    commit)
+      git -C "$repo_root" diff --cached --no-ext-diff | hash_stdin
+      ;;
+    push)
+      if [[ "$push_diff_hash_from_command" =~ ^[0-9a-f]{64}$ ]]; then
+        printf '%s' "$push_diff_hash_from_command"
+        return
+      fi
+      {
+        git -C "$repo_root" diff --no-ext-diff origin/main...HEAD 2>/dev/null ||
+          git -C "$repo_root" diff --no-ext-diff HEAD~1...HEAD 2>/dev/null ||
+          true
+      } | hash_stdin
+      ;;
+    *)
+      printf 'unknown' | hash_stdin
+      ;;
+  esac
+}
+
+diff_hash="$(current_diff_hash)"
+command_hash="$(printf '%s' "$command" | hash_stdin)"
+
+deny() {
+  jq -nc --arg r "$1" '{
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: $r
+    }
+  }'
+  exit 0
+}
+
+write_command_handoff() {
+  jq -nc \
+    --arg branch "$branch" \
+    --arg head "$head" \
+    --arg command_kind "$kind" \
+    --arg diff_hash "$diff_hash" \
+    --arg command_hash "$command_hash" \
+    '{branch:$branch, head:$head, command_kind:$command_kind, diff_hash:$diff_hash, command_hash:$command_hash}' \
+    > "$handoff_file"
+}
+
+valid_handoff_command_hash() {
+  [[ -r "$handoff_file" ]] || return 1
+
+  local handoff_branch handoff_head handoff_kind handoff_diff_hash handoff_command_hash handoff_mtime now_epoch handoff_age
+  handoff_branch="$(jq -r '.branch // ""' "$handoff_file" 2>/dev/null || echo '')"
+  handoff_head="$(jq -r '.head // ""' "$handoff_file" 2>/dev/null || echo '')"
+  handoff_kind="$(jq -r '.command_kind // ""' "$handoff_file" 2>/dev/null || echo '')"
+  handoff_diff_hash="$(jq -r '.diff_hash // ""' "$handoff_file" 2>/dev/null || echo '')"
+  handoff_command_hash="$(jq -r '.command_hash // ""' "$handoff_file" 2>/dev/null || echo '')"
+  handoff_mtime="$(stat -f '%m' "$handoff_file" 2>/dev/null || stat -c '%Y' "$handoff_file" 2>/dev/null || echo 0)"
+  now_epoch="$(date +%s)"
+  handoff_age=$(( now_epoch - handoff_mtime ))
+
+  if [[ "$handoff_branch" == "$branch" ]] && \
+     [[ "$handoff_head" == "$head" ]] && \
+     [[ "$handoff_kind" == "$kind" ]] && \
+     [[ "$handoff_diff_hash" == "$diff_hash" ]] && \
+     [[ -n "$handoff_command_hash" ]] && \
+     (( handoff_age <= max_age_seconds )); then
+    printf '%s' "$handoff_command_hash"
+    return 0
+  fi
+
+  return 1
+}
+
+claude_invoke_instruction="Invoke the commit-push-auditor subagent now:
+  Task(subagent_type='commit-push-auditor',
+       description='CLAUDE.md audit',
+       prompt='Audit the exact blocked Bash tool_input.command for this git ${kind} on branch ${branch}; copy the command from the tool input, do not paraphrase it.')
+The subagent will write its verdict to .claude/.last-audit.json. Retry the
+same git command after it reports PASS."
+
+codex_invoke_instruction="Run the Codex audit producer now:
+  CODEX_COMMIT_PUSH_AUDIT_MODE=agentic bash .claude/hooks/run-commit-push-audit.sh ${kind} '<target command>'
+The producer invokes codex exec with hooks disabled and writes its verdict to
+.claude/.last-audit.json. Retry the same git command after it reports PASS.
+Set CODEX_BIN to a working Codex CLI binary if the default codex command is not usable."
+
+invoke_instruction="$claude_invoke_instruction"
+if [[ -n "${CODEX_SANDBOX:-}" ]]; then
+  invoke_instruction="$codex_invoke_instruction"
+fi
+
+validate_audit() {
+  local consume_on_pass="${1:-consume}"
+
+  if [[ ! -r "$audit_file" ]]; then
+    deny "No CLAUDE.md audit found for this change.
+
+${invoke_instruction}"
+  fi
+
+  local audit_branch audit_head audit_kind audit_diff_hash audit_command_hash audit_commit_subject_hash audit_verdict audit_mtime now_epoch age
+  audit_branch="$(jq -r '.branch // ""' "$audit_file" 2>/dev/null || echo '')"
+  audit_head="$(jq -r '.head // ""' "$audit_file" 2>/dev/null || echo '')"
+  audit_kind="$(jq -r '.command_kind // ""' "$audit_file" 2>/dev/null || echo '')"
+  audit_diff_hash="$(jq -r '.diff_hash // ""' "$audit_file" 2>/dev/null || echo '')"
+  audit_command_hash="$(jq -r '.command_hash // ""' "$audit_file" 2>/dev/null || echo '')"
+  audit_commit_subject_hash="$(jq -r '.commit_subject_hash // ""' "$audit_file" 2>/dev/null || echo '')"
+  audit_verdict="$(jq -r '.verdict // ""' "$audit_file" 2>/dev/null || echo '')"
+
+  if [[ "$kind" == "push" && ! "$push_diff_hash_from_command" =~ ^[0-9a-f]{64}$ ]]; then
+    deny "Push audits must be bound to git pre-push ref-update stdin via pushed_diff_sha256.
+
+Retry the push through the git-level pre-push gate so it can produce the exact ref-update audit command."
+  fi
+
+  # File mtime as freshness signal: portable across BSD (stat -f %m) and GNU
+  # (stat -c %Y) without parsing self-reported timestamps.
+  audit_mtime="$(stat -f '%m' "$audit_file" 2>/dev/null || stat -c '%Y' "$audit_file" 2>/dev/null || echo 0)"
+  now_epoch="$(date +%s)"
+  age=$(( now_epoch - audit_mtime ))
+
+  local command_bound=0 handoff_command_hash=""
+  if [[ "$audit_command_hash" == "$command_hash" ]]; then
+    command_bound=1
+  elif [[ -n "${GITHOOK_DELEGATED:-}" && "$kind" == "commit" ]]; then
+    # Only commits may bridge from the PreToolUse command to git's later hooks:
+    # commit-msg verifies the final subject before consuming the audit. Pushes
+    # must bind to the detailed pre-push command, including ref-update stdin.
+    handoff_command_hash="$(valid_handoff_command_hash 2>/dev/null || true)"
+    if [[ -n "$handoff_command_hash" && "$audit_command_hash" == "$handoff_command_hash" ]]; then
+      command_bound=1
+    elif [[ "$kind" == "commit" && -n "$audit_commit_subject_hash" ]]; then
+      # Git exposes the real commit message later. The commit-msg hook compares
+      # this audited subject hash against the message file before consuming.
+      command_bound=1
+    fi
+  fi
+
+  if [[ "$audit_branch" != "$branch" ]] || \
+     [[ "$audit_head" != "$head" ]] || \
+     [[ "$audit_kind" != "$kind" ]] || \
+     [[ "$audit_diff_hash" != "$diff_hash" ]] || \
+     [[ "$command_bound" != 1 ]] || \
+     (( age > max_age_seconds )); then
+    deny "Existing audit does not match current state:
+  audit.branch=${audit_branch}  current=${branch}
+  audit.head=${audit_head}      current=${head}
+  audit.command_kind=${audit_kind}  current=${kind}
+  audit.diff_hash=${audit_diff_hash}  current=${diff_hash}
+  audit.command_hash=${audit_command_hash}  current=${command_hash}
+  handoff.command_hash=${handoff_command_hash:-none}
+  audit age: ${age}s (max ${max_age_seconds}s)
+
+Re-audit is required.
+${invoke_instruction}"
+  fi
+
+  if [[ "$audit_verdict" != "PASS" ]]; then
+    findings="$(jq -r '.findings[]? | "  - " + .' "$audit_file" 2>/dev/null || echo '')"
+    deny "CLAUDE.md audit FAILED on branch '${branch}':
+
+${findings}
+
+Address each finding, then re-run the audit producer before retrying git ${kind}."
+  fi
+
+  if [[ "$consume_on_pass" == "consume" ]]; then
+    rm -f "$audit_file" "$handoff_file"
+  fi
+}
+
+# Codex should not shell out to the Claude CLI to manufacture the audit
+# artifact. When Codex calls this as a PreToolUse hook, run the Codex audit
+# producer first; the git-level hook then consumes the same .last-audit.json
+# contract below.
+codex_pretool_audit=0
 if [[ -n "${CODEX_SANDBOX:-}" && -z "${GITHOOK_DELEGATED:-}" ]]; then
-  local_auditor="$repo_root/.claude/hooks/run-commit-push-audit.sh"
-  if [[ -r "$local_auditor" ]]; then
-    bash "$local_auditor" "$kind" "$command" >/dev/null 2>&1 || true
+  defer_push_to_git_hook=0
+  if [[ "$kind" == "push" ]]; then
+    hooks_path_for_codex="$(git config core.hooksPath 2>/dev/null || true)"
+    if [[ "$hooks_path_for_codex" == *".githooks" ]]; then
+      [[ "$hooks_path_for_codex" != /* ]] && hooks_path_for_codex="$repo_root/$hooks_path_for_codex"
+      [[ -x "$hooks_path_for_codex/pre-push" ]] && defer_push_to_git_hook=1
+    fi
+  fi
+
+  if [[ "$defer_push_to_git_hook" != 1 ]]; then
+    codex_pretool_audit=1
+    codex_auditor="$repo_root/.claude/hooks/run-commit-push-audit.sh"
+    if [[ -r "$codex_auditor" ]]; then
+      bash "$codex_auditor" "$kind" "$command" >/dev/null 2>&1 || true
+    fi
   fi
 fi
 
@@ -94,74 +295,29 @@ if [[ -z "${GITHOOK_DELEGATED:-}" ]]; then
   if [[ "$hooks_path" == *".githooks" ]]; then
     [[ "$hooks_path" != /* ]] && hooks_path="$repo_root/$hooks_path"
     if [[ -x "$hooks_path/pre-$kind" ]]; then
+      if [[ "$codex_pretool_audit" == 1 ]]; then
+        # Validate without consuming: the git-level hook is the single consumer.
+        validate_audit keep
+      fi
+      write_command_handoff
       exit 0
     fi
   fi
 fi
-branch="$(git -C "$repo_root" branch --show-current 2>/dev/null || echo '?')"
-head="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo '?')"
-max_age_seconds=600
 
-deny() {
-  jq -nc --arg r "$1" '{
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: $r
-    }
-  }'
-  exit 0
-}
-
-invoke_instruction="Invoke the commit-push-auditor subagent now:
-  Task(subagent_type='commit-push-auditor',
-       description='CLAUDE.md audit',
-       prompt='Audit the pending \`${command}\` on branch ${branch}.')
-The subagent will write its verdict to .claude/.last-audit.json. Retry the
-same git command after it reports PASS."
-
-if [[ ! -r "$audit_file" ]]; then
-  deny "No CLAUDE.md audit found for this change.
-
-${invoke_instruction}"
-fi
-
-audit_branch="$(jq -r '.branch // ""' "$audit_file" 2>/dev/null || echo '')"
-audit_head="$(jq -r '.head // ""' "$audit_file" 2>/dev/null || echo '')"
-audit_kind="$(jq -r '.command_kind // ""' "$audit_file" 2>/dev/null || echo '')"
-audit_verdict="$(jq -r '.verdict // ""' "$audit_file" 2>/dev/null || echo '')"
-
-# File mtime as freshness signal — portable across BSD (stat -f %m) and GNU
-# (stat -c %Y) without parsing self-reported timestamps.
-audit_mtime="$(stat -f '%m' "$audit_file" 2>/dev/null || stat -c '%Y' "$audit_file" 2>/dev/null || echo 0)"
-now_epoch="$(date +%s)"
-age=$(( now_epoch - audit_mtime ))
-
-if [[ "$audit_branch" != "$branch" ]] || \
-   [[ "$audit_head" != "$head" ]] || \
-   [[ "$audit_kind" != "$kind" ]] || \
-   (( age > max_age_seconds )); then
-  deny "Existing audit does not match current state:
-  audit.branch=${audit_branch}  current=${branch}
-  audit.head=${audit_head}      current=${head}
-  audit.command_kind=${audit_kind}  current=${kind}
-  audit age: ${age}s (max ${max_age_seconds}s)
-
-Re-audit is required.
-${invoke_instruction}"
-fi
-
-if [[ "$audit_verdict" != "PASS" ]]; then
-  findings="$(jq -r '.findings[]? | "  - " + .' "$audit_file" 2>/dev/null || echo '')"
-  deny "CLAUDE.md audit FAILED on branch '${branch}':
-
-${findings}
-
-Address each finding, then re-invoke commit-push-auditor before retrying \`${command}\`."
+if [[ -n "${CODEX_SANDBOX:-}" && -n "${GITHOOK_DELEGATED:-}" && "$kind" == "push" ]]; then
+  codex_auditor="$repo_root/.claude/hooks/run-commit-push-audit.sh"
+  if [[ -r "$codex_auditor" ]]; then
+    bash "$codex_auditor" "$kind" "$command" >/dev/null 2>&1 || true
+  fi
 fi
 
 # Verdict is PASS, recent, and matches current state — let the git command run.
 # Consume the audit file so the next commit/push always re-audits, even if HEAD
 # hasn't changed (e.g., user re-stages different content before the next commit).
-rm -f "$audit_file"
+if [[ -n "${GITHOOK_KEEP_AUDIT:-}" ]]; then
+  validate_audit keep
+else
+  validate_audit consume
+fi
 exit 0

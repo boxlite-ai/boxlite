@@ -15,8 +15,8 @@
 # gate stack. git's native --no-verify bypass also applies (existing repo
 # culture: allowed with evidence).
 #
-# After the gate, chains to the framework-managed hook (prek installs into
-# .git/hooks/pre-commit) so fmt/lint still run.
+# Runs the framework-managed hook first (prek installs into .git/hooks/pre-commit),
+# then validates the final staged index against the audit.
 #
 # Tests: bash .githooks/githooks.test.sh
 set -uo pipefail
@@ -24,18 +24,7 @@ set -uo pipefail
 is_agent=0
 [[ -n "${CLAUDECODE:-}" || -n "${CODEX_SANDBOX:-}" || -n "${AGENT_GATED:-}" ]] && is_agent=1
 
-if [[ "$is_agent" == 1 ]]; then
-  repo_root="$(git rev-parse --show-toplevel)"
-  # GITHOOK_DELEGATED tells the PreToolUse script this call IS the git-level
-  # gate — without it the script's delegation guard would defer right back to
-  # us and everything would silently pass.
-  out="$(printf '{"tool_input":{"command":"git commit"}}' \
-        | GITHOOK_DELEGATED=1 bash "$repo_root/.claude/hooks/preflight-commit-push.sh" 2>/dev/null || true)"
-  if printf '%s' "$out" | jq -e '.hookSpecificOutput.permissionDecision == "deny"' >/dev/null 2>&1; then
-    printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason' >&2
-    exit 1
-  fi
-fi
+repo_root="$(git rev-parse --show-toplevel)"
 
 # Chain via --git-common-dir, NOT --git-path: --git-path honors core.hooksPath
 # and would resolve to THIS script — self-exec recursion (infinite for humans,
@@ -43,6 +32,30 @@ fi
 # hooks dir, which is also what all worktrees share. realpath guard as a belt.
 chained="$(git rev-parse --git-common-dir)/hooks/pre-commit"
 if [[ -x "$chained" && "$(realpath "$chained" 2>/dev/null)" != "$(realpath "$0" 2>/dev/null)" ]]; then
-  exec "$chained" "$@"
+  "$chained" "$@" || exit $?
 fi
+
+if [[ "$is_agent" == 1 ]]; then
+  # GITHOOK_DELEGATED tells the PreToolUse script this call IS the git-level
+  # gate — without it the script's delegation guard would defer right back to
+  # us and everything would silently pass.
+  if ! out="$(printf '{"tool_input":{"command":"git commit"}}' \
+        | GITHOOK_DELEGATED=1 GITHOOK_KEEP_AUDIT=1 bash "$repo_root/.claude/hooks/preflight-commit-push.sh" 2>&1)"; then
+    printf 'commit-push-auditor delegated preflight failed\n%s\n' "$out" >&2
+    exit 1
+  fi
+  if [[ -n "$out" ]]; then
+    if ! decision="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision' 2>/dev/null)"; then
+      printf 'commit-push-auditor delegated preflight returned invalid output\n%s\n' "$out" >&2
+      exit 1
+    fi
+    if [[ "$decision" == "deny" ]]; then
+      printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason' >&2
+      exit 1
+    fi
+    printf 'commit-push-auditor delegated preflight returned invalid output\n%s\n' "$out" >&2
+    exit 1
+  fi
+fi
+
 exit 0

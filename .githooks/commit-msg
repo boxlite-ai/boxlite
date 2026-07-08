@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Completes the agent-gated commit audit at the point where git exposes the
+# actual commit message. See .githooks/pre-commit for the broader gate design.
+set -uo pipefail
+
+is_agent=0
+[[ -n "${CLAUDECODE:-}" || -n "${CODEX_SANDBOX:-}" || -n "${AGENT_GATED:-}" ]] && is_agent=1
+
+chained="$(git rev-parse --git-common-dir)/hooks/commit-msg"
+if [[ -x "$chained" && "$(realpath "$chained" 2>/dev/null)" != "$(realpath "$0" 2>/dev/null)" ]]; then
+  "$chained" "$@" || exit $?
+fi
+
+if [[ "$is_agent" == 1 ]]; then
+  repo_root="$(git rev-parse --show-toplevel)"
+  audit_file="$repo_root/.claude/.last-audit.json"
+  handoff_file="$repo_root/.claude/.last-audit-handoff.json"
+  if [[ ! -r "$audit_file" ]]; then
+    printf 'No commit audit remained for commit-msg validation.\n' >&2
+    exit 1
+  fi
+
+  audit_kind="$(jq -r '.command_kind // ""' "$audit_file" 2>/dev/null || echo '')"
+  expected_diff_hash="$(jq -r '.diff_hash // ""' "$audit_file" 2>/dev/null || echo '')"
+  expected_subject_hash="$(jq -r '.commit_subject_hash // ""' "$audit_file" 2>/dev/null || echo '')"
+  if [[ "$audit_kind" == "commit" ]]; then
+    actual_diff_hash="$(git -C "$repo_root" diff --cached --no-ext-diff | shasum -a 256 | awk '{print $1}')"
+    if [[ "$actual_diff_hash" != "$expected_diff_hash" ]]; then
+      printf 'Staged content changed after the audited pre-commit gate.\n' >&2
+      exit 1
+    fi
+  fi
+
+  if [[ "$audit_kind" == "commit" && -n "$expected_subject_hash" ]]; then
+    actual_subject="$(sed -n '1p' "$1")"
+    actual_subject_hash="$(printf '%s' "$actual_subject" | shasum -a 256 | awk '{print $1}')"
+    if [[ "$actual_subject_hash" != "$expected_subject_hash" ]]; then
+      printf 'Commit message does not match the audited commit command.\n' >&2
+      exit 1
+    fi
+  elif [[ "$audit_kind" == "commit" ]]; then
+    printf 'Commit audit did not bind a commit subject.\n' >&2
+    exit 1
+  fi
+
+  rm -f "$audit_file" "$handoff_file"
+fi
+
+exit 0

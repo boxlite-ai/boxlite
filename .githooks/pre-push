@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Universal (agent-agnostic) push gate — pre-commit's sibling for `git push`.
-# See .githooks/pre-commit for the design. git feeds the ref list on stdin;
-# nothing here reads it (the gate call pipes its own payload), so it flows
-# byte-exact to the chained framework hook (prek's test matrix needs it).
+# See .githooks/pre-commit for the design. Git feeds the ref list on stdin; the
+# gate hashes that exact update list and the resulting pushed diff, then replays
+# the original stdin to any chained framework hook.
 #
 # Tests: bash .githooks/githooks.test.sh
 set -uo pipefail
@@ -11,19 +11,122 @@ set -uo pipefail
 is_agent=0
 [[ -n "${CLAUDECODE:-}" || -n "${CODEX_SANDBOX:-}" || -n "${AGENT_GATED:-}" ]] && is_agent=1
 
+repo_root="$(git rev-parse --show-toplevel)"
+stdin_file="$(mktemp)"
+pushed_diff_file="$(mktemp)"
+push_context_dir="$(git -C "$repo_root" rev-parse --git-path codex-audit)"
+[[ "$push_context_dir" != /* ]] && push_context_dir="$repo_root/$push_context_dir"
+push_context_meta_file="$push_context_dir/last-push-audit-context.json"
+push_context_diff_file="$push_context_dir/last-push-audit-context.diff"
+trap 'rm -f "$stdin_file" "$pushed_diff_file"' EXIT
+cat > "$stdin_file"
+
+hash_file() {
+  shasum -a 256 "$1" | awk '{print $1}'
+}
+
+hash_stdin() {
+  shasum -a 256 | awk '{print $1}'
+}
+
+is_zero_sha() {
+  [[ "$1" =~ ^0+$ ]]
+}
+
+new_ref_base_sha() {
+  local local_sha="$1" candidate
+  while IFS= read -r candidate; do
+    [[ -n "$candidate" ]] || continue
+    if git -C "$repo_root" merge-base --is-ancestor "$candidate" "$local_sha" 2>/dev/null; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done < <(git -C "$repo_root" for-each-ref --format='%(objectname)' "refs/remotes/${remote_name}" 2>/dev/null)
+  return 1
+}
+
+write_pushed_diff() {
+  local empty_tree local_ref local_sha remote_ref remote_sha base_sha
+  empty_tree="$(git -C "$repo_root" hash-object -t tree /dev/null)"
+  while read -r local_ref local_sha remote_ref remote_sha; do
+    [[ -n "${local_ref:-}" ]] || continue
+    printf '## ref-update %s %s %s %s\n' "$local_ref" "$local_sha" "$remote_ref" "$remote_sha"
+    if is_zero_sha "$local_sha"; then
+      printf 'deleted %s at %s\n' "$remote_ref" "$remote_sha"
+    elif is_zero_sha "$remote_sha"; then
+      base_sha="$(new_ref_base_sha "$local_sha" || true)"
+      if [[ -n "$base_sha" ]]; then
+        git -C "$repo_root" log --format='commit-subject %H %s' "$base_sha..$local_sha" 2>/dev/null || true
+        git -C "$repo_root" diff --no-ext-diff "$base_sha" "$local_sha" 2>/dev/null || true
+      else
+        git -C "$repo_root" log --format='commit-subject %H %s' "$local_sha" || true
+        git -C "$repo_root" diff --no-ext-diff "$empty_tree" "$local_sha" || true
+      fi
+    else
+      git -C "$repo_root" log --format='commit-subject %H %s' "$remote_sha..$local_sha" 2>/dev/null || true
+      git -C "$repo_root" diff --no-ext-diff "$remote_sha" "$local_sha" 2>/dev/null || true
+    fi
+  done < "$stdin_file"
+}
+
+write_push_audit_context() {
+  local audit_command_hash="$1" ref_updates_hash="$2" pushed_diff_hash="$3" remote_name="$4" remote_url_hash="$5"
+  local branch head
+  branch="$(git -C "$repo_root" branch --show-current 2>/dev/null || echo '?')"
+  head="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo '?')"
+  mkdir -p "$push_context_dir"
+  cp "$pushed_diff_file" "$push_context_diff_file"
+  jq -nc \
+    --arg branch "$branch" \
+    --arg head "$head" \
+    --arg command_hash "$audit_command_hash" \
+    --arg ref_updates_hash "$ref_updates_hash" \
+    --arg pushed_diff_hash "$pushed_diff_hash" \
+    --arg remote_name "$remote_name" \
+    --arg remote_url_hash "$remote_url_hash" \
+    '{branch:$branch, head:$head, command_hash:$command_hash, ref_updates_hash:$ref_updates_hash, pushed_diff_hash:$pushed_diff_hash, remote_name:$remote_name, remote_url_hash:$remote_url_hash}' \
+    > "$push_context_meta_file"
+}
+
+cleanup_push_audit_context() {
+  rm -f "$push_context_meta_file" "$push_context_diff_file"
+}
+
 if [[ "$is_agent" == 1 ]]; then
-  repo_root="$(git rev-parse --show-toplevel)"
-  out="$(printf '{"tool_input":{"command":"git push"}}' \
-        | GITHOOK_DELEGATED=1 bash "$repo_root/.claude/hooks/preflight-commit-push.sh" 2>/dev/null || true)"
-  if printf '%s' "$out" | jq -e '.hookSpecificOutput.permissionDecision == "deny"' >/dev/null 2>&1; then
-    printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason' >&2
+  remote_name="${1:-?}"
+  remote_url="${2:-}"
+  remote_url_hash="$(printf '%s' "$remote_url" | shasum -a 256 | awk '{print $1}')"
+  ref_updates_hash="$(hash_file "$stdin_file")"
+  write_pushed_diff > "$pushed_diff_file"
+  pushed_diff_hash="$(hash_file "$pushed_diff_file")"
+  audit_command="git push --pre-push-hook remote=${remote_name} remote_url_sha256=${remote_url_hash} ref_updates_sha256=${ref_updates_hash} pushed_diff_sha256=${pushed_diff_hash}"
+  audit_command_hash="$(printf '%s' "$audit_command" | hash_stdin)"
+  write_push_audit_context "$audit_command_hash" "$ref_updates_hash" "$pushed_diff_hash" "$remote_name" "$remote_url_hash"
+  if ! out="$(jq -nc --arg command "$audit_command" '{tool_input:{command:$command}}' \
+        | GITHOOK_DELEGATED=1 bash "$repo_root/.claude/hooks/preflight-commit-push.sh" 2>&1)"; then
+    printf 'commit-push-auditor delegated preflight failed\n%s\n' "$out" >&2
     exit 1
   fi
+  if [[ -n "$out" ]]; then
+    if ! decision="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision' 2>/dev/null)"; then
+      printf 'commit-push-auditor delegated preflight returned invalid output\n%s\n' "$out" >&2
+      exit 1
+    fi
+    if [[ "$decision" == "deny" ]]; then
+      printf 'Synthetic pre-push audit command:\n%s\n\n' "$audit_command" >&2
+      printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason' >&2
+      exit 1
+    fi
+    printf 'commit-push-auditor delegated preflight returned invalid output\n%s\n' "$out" >&2
+    exit 1
+  fi
+  cleanup_push_audit_context
 fi
 
 # --git-common-dir, not --git-path: see pre-commit (self-exec recursion).
 chained="$(git rev-parse --git-common-dir)/hooks/pre-push"
 if [[ -x "$chained" && "$(realpath "$chained" 2>/dev/null)" != "$(realpath "$0" 2>/dev/null)" ]]; then
-  exec "$chained" "$@"
+  "$chained" "$@" < "$stdin_file"
+  exit $?
 fi
 exit 0
