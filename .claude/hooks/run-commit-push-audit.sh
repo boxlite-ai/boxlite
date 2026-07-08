@@ -66,8 +66,8 @@ check_diff_text() {
   slack_pattern+="[baprs]-"
   local github_pattern="ghp"
   github_pattern+="_[A-Za-z0-9_]{20,}"
-  local private_key_pattern="BEGIN (RSA |EC |OPENSSH |PRIVATE )?PRIVATE "
-  private_key_pattern+="KEY"
+  local private_key_pattern="-{5}BEGIN (RSA |EC |OPENSSH |PRIVATE )?PRIVATE "
+  private_key_pattern+="KEY-{5}"
   local secret_pattern="(${openai_live_pattern}|${slack_pattern}|${github_pattern}|${private_key_pattern})"
   if [[ -z "$diff" ]]; then
     add_finding "Verify: no diff found for ${kind}"
