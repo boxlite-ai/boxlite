@@ -19,6 +19,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"runtime"
 	"runtime/debug"
@@ -198,6 +199,10 @@ type GvproxyConfig struct {
 	Secrets          []SecretConfig `json:"secrets,omitempty"`
 	CACertPEM        string         `json:"ca_cert_pem,omitempty"`
 	CAKeyPEM         string         `json:"ca_key_pem,omitempty"`
+	// ControlSocketPath, when set, binds gvproxy's ServicesMux (dynamic port
+	// forwarding / DNS / DHCP leases / stats / cam) to a host unix socket the
+	// boxlite core dials. Empty => the services API is not exposed.
+	ControlSocketPath string `json:"control_socket_path,omitempty"`
 }
 
 // GvproxyInstance tracks a running gvisor-tap-vsock instance
@@ -461,6 +466,30 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 		instance.vn = vn
 		instance.vnMu.Unlock()
 
+		// Bind gvproxy's ServicesMux to a host unix socket so the boxlite core
+		// can drive dynamic port forwarding / DNS / leases on the running box.
+		// ServicesMux (not Mux) excludes the raw L2 /connect, so the VM's NIC
+		// can never be attached through this socket.
+		var controlListener net.Listener
+		if config.ControlSocketPath != "" {
+			// Remove a stale socket from a previous crash (path is unique per box).
+			if rmErr := os.Remove(config.ControlSocketPath); rmErr != nil && !os.IsNotExist(rmErr) {
+				logrus.WithFields(logrus.Fields{"error": rmErr, "path": config.ControlSocketPath}).Warn("Failed to remove existing services socket")
+			}
+			l, lErr := net.Listen("unix", config.ControlSocketPath)
+			if lErr != nil {
+				logrus.WithFields(logrus.Fields{"error": lErr, "path": config.ControlSocketPath}).Error("Failed to bind gvproxy services socket")
+			} else {
+				controlListener = l
+				logrus.WithField("path", config.ControlSocketPath).Info("Serving gvproxy ServicesMux")
+				go func() {
+					if sErr := http.Serve(l, vn.ServicesMux()); sErr != nil && ctx.Err() == nil {
+						logrus.WithError(sErr).Error("gvproxy services HTTP server exited")
+					}
+				}()
+			}
+		}
+
 		// Platform-specific packet handling
 		if runtime.GOOS == "darwin" {
 			// macOS: Handle VFKit datagram packets
@@ -519,6 +548,11 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 		<-ctx.Done()
 
 		// Cleanup
+		if controlListener != nil {
+			// Closing the listener unblocks the http.Serve goroutine.
+			controlListener.Close()
+			os.Remove(config.ControlSocketPath)
+		}
 		if runtime.GOOS == "darwin" && conn != nil {
 			conn.Close()
 		} else if listener != nil {

@@ -1,13 +1,13 @@
-//! Transport types for host-guest communication.
+//! BoxTransport types for host-guest communication.
 
 use std::path::PathBuf;
 
-/// Transport mechanism for host-guest communication.
+/// BoxTransport mechanism for host-guest communication.
 ///
 /// Represents the underlying connection type used by both host (to connect)
 /// and guest (to listen).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub enum Transport {
+pub enum BoxTransport {
     /// TCP transport
     Tcp { port: u16 },
 
@@ -18,7 +18,7 @@ pub enum Transport {
     Vsock { port: u32 },
 }
 
-impl Transport {
+impl BoxTransport {
     /// Create a TCP transport.
     pub fn tcp(port: u16) -> Self {
         Self::Tcp { port }
@@ -37,9 +37,9 @@ impl Transport {
     /// Get the URI representation of this transport.
     pub fn to_uri(&self) -> String {
         match self {
-            Transport::Tcp { port } => format!("tcp://127.0.0.1:{}", port),
-            Transport::Unix { socket_path } => format!("unix://{}", socket_path.display()),
-            Transport::Vsock { port } => format!("vsock://{}", port),
+            BoxTransport::Tcp { port } => format!("tcp://127.0.0.1:{}", port),
+            BoxTransport::Unix { socket_path } => format!("unix://{}", socket_path.display()),
+            BoxTransport::Vsock { port } => format!("vsock://{}", port),
         }
     }
 
@@ -69,13 +69,13 @@ impl Transport {
     }
 }
 
-impl std::fmt::Display for Transport {
+impl std::fmt::Display for BoxTransport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_uri())
     }
 }
 
-impl std::str::FromStr for Transport {
+impl std::str::FromStr for BoxTransport {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {

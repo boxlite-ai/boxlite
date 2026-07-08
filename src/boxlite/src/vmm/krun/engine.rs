@@ -69,8 +69,8 @@ impl Krun {
     ///
     /// Replaces `--{arg_name} unix://...` with `--{arg_name} vsock://PORT`
     fn transform_shell_arg_unix_to_vsock(input: &str, arg_name: &str, vsock_port: u32) -> String {
-        use boxlite_shared::Transport;
-        let vsock_uri = Transport::vsock(vsock_port).to_uri();
+        use boxlite_shared::BoxTransport;
+        let vsock_uri = BoxTransport::vsock(vsock_port).to_uri();
         let pattern = format!("--{} unix://", arg_name);
 
         let mut result = String::new();
@@ -116,8 +116,8 @@ impl Krun {
     /// 1. Separate arguments: ["--{arg_name}", "unix://..."]
     /// 2. Shell command string: ["-c", "... --{arg_name} unix://... "]
     fn transform_arg_unix_to_vsock(guest_args: &mut [String], arg_name: &str, vsock_port: u32) {
-        use boxlite_shared::Transport;
-        let vsock_uri = Transport::vsock(vsock_port).to_uri();
+        use boxlite_shared::BoxTransport;
+        let vsock_uri = BoxTransport::vsock(vsock_port).to_uri();
         let pattern = format!("--{} unix://", arg_name);
 
         for i in 0..guest_args.len() {
@@ -416,7 +416,7 @@ impl Vmm for Krun {
             // Configure gRPC communication channel (Unix socket bridged to vsock)
             // listen=true: libkrun creates socket, host connects, guest accepts via vsock
             let grpc_socket_path = match &config.transport {
-                boxlite_shared::Transport::Unix { socket_path } => socket_path
+                boxlite_shared::BoxTransport::Unix { socket_path } => socket_path
                     .to_str()
                     .ok_or_else(|| BoxliteError::Engine("invalid gRPC socket path".into()))?,
                 _ => {
@@ -435,7 +435,7 @@ impl Vmm for Krun {
             // Configure ready notification channel (Unix socket bridged to vsock)
             // listen=false: host creates socket and listens, guest connects via vsock
             let ready_socket_path = match &config.ready_transport {
-                boxlite_shared::Transport::Unix { socket_path } => socket_path
+                boxlite_shared::BoxTransport::Unix { socket_path } => socket_path
                     .to_str()
                     .ok_or_else(|| BoxliteError::Engine("invalid ready socket path".into()))?,
                 _ => {

@@ -299,6 +299,9 @@ pub struct InitPipelineContext {
     pub rootfs_init: Option<ContainerRootfsInitConfig>,
     pub container_mounts: Option<Vec<ContainerMount>>,
     pub guest_session: Option<GuestSession>,
+    /// The box's one network backend (set by vmm_spawn on first start/restart, or
+    /// by vmm_attach on reattach; moved into LiveState for runtime control).
+    pub network_backend: Option<Box<dyn crate::net::NetworkBackend>>,
     /// MITM CA cert PEM (set by vmm_spawn, read by guest_init for Container.Init gRPC).
     pub ca_cert_pem: Option<String>,
 
@@ -328,6 +331,7 @@ impl InitPipelineContext {
             rootfs_init: None,
             container_mounts: None,
             guest_session: None,
+            network_backend: None,
             ca_cert_pem: None,
             #[cfg(target_os = "linux")]
             bind_mount: None,

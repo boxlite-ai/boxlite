@@ -266,10 +266,16 @@ impl BoxBuilder {
             placeholder.disarm();
             let guard = std::mem::replace(&mut ctx.guard, placeholder);
 
+            // Own the box's one network backend beside guest_session — created by
+            // vmm_spawn (which also used it to produce the wire spec) or, on the
+            // reattach path, by vmm_attach; both thread it here for runtime control.
+            let network = ctx.network_backend.take();
+
             // Build LiveState
             let live_state = LiveState::new(
                 handler,
                 guest_session,
+                network,
                 metrics,
                 container_disk,
                 guest_disk,

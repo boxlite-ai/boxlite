@@ -332,7 +332,7 @@ impl VmmController for ShimController {
             transport: config.transport.clone(),
             ready_transport: config.ready_transport.clone(),
             guest_rootfs: config.guest_rootfs.clone(),
-            network_config: config.network_config.clone(), // Pass port mappings to subprocess (shim creates gvproxy)
+            network_backend_spec: config.network_backend_spec.clone(), // provisioning spec passed to the shim (stands up gvproxy)
             network_backend_endpoint: None, // Will be populated by shim (not serialized)
             disable_network: config.disable_network,
             home_dir: config.home_dir.clone(),
@@ -347,7 +347,7 @@ impl VmmController for ShimController {
 
         // Clean up stale socket file if it exists (defense in depth)
         // Only relevant for Unix sockets
-        if let boxlite_shared::Transport::Unix { socket_path } = &config.transport
+        if let boxlite_shared::BoxTransport::Unix { socket_path } = &config.transport
             && socket_path.exists()
         {
             tracing::warn!("Removing stale Unix socket: {}", socket_path.display());

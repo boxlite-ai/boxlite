@@ -166,15 +166,15 @@ pub struct InstanceSpec {
     /// Guest agent entrypoint (e.g., /boxlite/bin/boxlite-guest)
     pub guest_entrypoint: Entrypoint,
     /// Host-side transport for gRPC communication
-    pub transport: boxlite_shared::Transport,
+    pub transport: boxlite_shared::BoxTransport,
     /// Host-side transport for ready notification (host listens, guest connects when ready)
-    pub ready_transport: boxlite_shared::Transport,
+    pub ready_transport: boxlite_shared::BoxTransport,
     /// Resolved guest rootfs path and assembly strategy
     pub guest_rootfs: GuestRootfs,
-    /// Network configuration (port mappings) passed to shim subprocess.
-    /// The shim creates the network backend (gvproxy) from this config,
-    /// ensuring networking survives detach operations.
-    pub network_config: Option<crate::net::NetworkBackendConfig>,
+    /// Network provisioning spec passed to the shim subprocess. The shim stands
+    /// up the network backend (gvproxy) from this spec, ensuring networking
+    /// survives detach operations.
+    pub network_backend_spec: Option<crate::net::NetworkBackendSpec>,
     /// Network backend endpoint (socket path) - populated by shim after creating gvproxy.
     /// This is not serialized; it's set in-process by the shim before calling the engine.
     #[serde(skip)]

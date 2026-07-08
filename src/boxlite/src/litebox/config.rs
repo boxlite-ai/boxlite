@@ -1,7 +1,7 @@
 use crate::BoxID;
 use crate::net::socket_path::BoxSockets;
 use crate::runtime::types::ContainerID;
-use boxlite_shared::Transport;
+use boxlite_shared::BoxTransport;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -60,14 +60,14 @@ impl BoxConfig {
         )
     }
 
-    /// Transport for guest gRPC communication (Unix socket via the
+    /// BoxTransport for guest gRPC communication (Unix socket via the
     /// short binding path).
-    pub fn transport(&self) -> Transport {
-        Transport::unix(self.sockets().box_sock())
+    pub fn transport(&self) -> BoxTransport {
+        BoxTransport::unix(self.sockets().box_sock())
     }
 
-    /// Transport for the guest-ready notification socket.
-    pub fn ready_transport(&self) -> Transport {
-        Transport::unix(self.sockets().ready_sock())
+    /// BoxTransport for the guest-ready notification socket.
+    pub fn ready_transport(&self) -> BoxTransport {
+        BoxTransport::unix(self.sockets().ready_sock())
     }
 }

@@ -15,6 +15,7 @@
 
 use super::{InitCtx, task_start};
 use crate::litebox::CrashReport;
+use crate::net::NetworkBackendConfig;
 use crate::pipeline::PipelineTask;
 use crate::runtime::rt_impl::stash_exit_file;
 use crate::util::{PidFileReader, ProcessIdentity};
@@ -31,9 +32,16 @@ impl PipelineTask<InitCtx> for VmmAttachTask {
         let task_name = self.name();
         let box_id = task_start(&ctx, task_name).await;
 
-        let (runtime, config_id) = {
+        let (runtime, config_id, network) = {
             let ctx = ctx.lock().await;
-            (ctx.runtime.clone(), ctx.config.id.clone())
+            // Reattach still owns a control backend for the box's live gvproxy.
+            let network = match &ctx.config.options.network {
+                crate::runtime::options::NetworkSpec::Enabled { allow_net } => {
+                    Some((allow_net.clone(), ctx.config.options.secrets.clone()))
+                }
+                crate::runtime::options::NetworkSpec::Disabled => None,
+            };
+            (ctx.runtime.clone(), ctx.config.id.clone(), network)
         };
 
         let layout = runtime.layout.box_layout(config_id.as_str(), false)?;
@@ -77,8 +85,24 @@ impl PipelineTask<InitCtx> for VmmAttachTask {
 
         let handler = ShimHandler::from_pid(pid, config_id);
 
+        // The box's one network backend on the reattach path: control over the
+        // live gvproxy. Forwards are already established in the running instance
+        // (so no port mappings), and no wire spec is produced on reattach — the
+        // box is already provisioned. Threaded into LiveState like the spawn path.
+        let network_backend = network.and_then(|(allow_net, secrets)| {
+            let config = NetworkBackendConfig {
+                port_mappings: Vec::new(),
+                socket_path: layout.net_backend_socket_path(),
+                allow_net,
+                secrets,
+                ca_dir: layout.ca_dir(),
+            };
+            runtime.network_factory.create(&config)
+        });
+
         let mut ctx = ctx.lock().await;
         ctx.guard.set_handler(Box::new(handler));
+        ctx.network_backend = network_backend;
 
         tracing::info!(
             box_id = %box_id,

@@ -4,7 +4,6 @@
 //! Instances are automatically cleaned up when dropped.
 
 use std::path::{Path, PathBuf};
-use std::sync::Weak;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
@@ -68,8 +67,12 @@ impl GvproxyInstance {
         // Initialize logging callback (one-time setup)
         logging::init_logging();
 
+        // Derive gvproxy's control socket as a sibling of the data socket, so the
+        // path is never plumbed through neutral config/layout/socket types.
+        let control_socket_path = super::control_socket_path(&socket_path);
         let mut config =
             super::config::GvproxyConfig::new(socket_path.clone(), port_mappings.to_vec())
+                .with_control_socket_path(control_socket_path)
                 .with_allow_net(allow_net)
                 .with_secrets(secrets);
 
@@ -91,21 +94,24 @@ impl GvproxyInstance {
         &self.socket_path
     }
 
-    /// Create a GvproxyInstance from a NetworkBackendConfig and return the endpoint.
+    /// Create a GvproxyInstance from a [`NetworkBackendSpec`] and return the endpoint.
     ///
-    /// This is the primary constructor — takes the full network config, creates the
-    /// gvproxy instance, and returns the platform-specific endpoint for the VM.
+    /// This is the primary constructor — takes the wire spec the core produced,
+    /// creates the gvproxy instance, and returns the platform-specific endpoint
+    /// for the VM.
+    ///
+    /// [`NetworkBackendSpec`]: super::super::NetworkBackendSpec
     pub fn from_config(
-        config: &super::super::NetworkBackendConfig,
+        spec: &super::super::NetworkBackendSpec,
     ) -> BoxliteResult<(Self, super::super::NetworkBackendEndpoint)> {
-        let secrets = config.secrets.iter().map(Into::into).collect();
+        let secrets = spec.secrets.iter().map(Into::into).collect();
         let instance = Self::new(
-            config.socket_path.clone(),
-            &config.port_mappings,
-            config.allow_net.clone(),
+            spec.socket_path.clone(),
+            &spec.port_mappings,
+            spec.allow_net.clone(),
             secrets,
-            config.ca_cert_pem.as_deref(),
-            config.ca_key_pem.as_deref(),
+            spec.ca_cert_pem.as_deref(),
+            spec.ca_key_pem.as_deref(),
         )?;
 
         let connection_type = if cfg!(target_os = "macos") {
@@ -116,7 +122,7 @@ impl GvproxyInstance {
 
         use crate::net::constants::GUEST_MAC;
         let endpoint = super::super::NetworkBackendEndpoint::UnixSocket {
-            path: config.socket_path.clone(),
+            path: spec.socket_path.clone(),
             connection_type,
             mac_address: GUEST_MAC,
         };
@@ -199,71 +205,6 @@ impl Drop for GvproxyInstance {
 
 // The CGO layer handles synchronization internally, so it's safe to send between threads
 unsafe impl Send for GvproxyInstance {}
-
-/// Starts a background task to periodically log network statistics
-///
-/// This function spawns a tokio task that logs network stats every 30 seconds.
-/// The task holds a weak reference to the instance and will automatically exit
-/// when the instance is dropped.
-///
-/// # Arguments
-///
-/// * `instance` - Weak reference to the GvproxyInstance to monitor
-///
-/// # Design
-///
-/// - Uses Weak<GvproxyInstance> to avoid keeping instance alive
-/// - Logs at INFO level every 30 seconds
-/// - Automatically exits when instance is dropped (weak ref upgrade fails)
-/// - Highlights critical metrics like forward_max_inflight_drop
-pub(super) fn start_stats_logging(instance: Weak<GvproxyInstance>) {
-    tokio::spawn(async move {
-        // Wait 30 seconds before first log to let instance stabilize
-        tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-
-        loop {
-            // Try to upgrade weak reference
-            let Some(instance) = instance.upgrade() else {
-                tracing::debug!("Stats logging task exiting (instance dropped)");
-                break;
-            };
-
-            // Get stats and log
-            match instance.get_stats() {
-                Ok(stats) => {
-                    tracing::info!(
-                        bytes_sent = stats.bytes_sent,
-                        bytes_received = stats.bytes_received,
-                        tcp_established = stats.tcp.current_established,
-                        tcp_failed = stats.tcp.failed_connection_attempts,
-                        tcp_retransmits = stats.tcp.retransmits,
-                        tcp_timeouts = stats.tcp.timeouts,
-                        "Network statistics"
-                    );
-
-                    // Highlight critical drop counter
-                    if stats.tcp.forward_max_inflight_drop > 0 {
-                        tracing::warn!(
-                            drops = stats.tcp.forward_max_inflight_drop,
-                            "TCP connections dropped due to maxInFlight limit"
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::debug!(error = %e, "Failed to get stats (instance may be shutting down)");
-                }
-            }
-
-            // Drop the Arc before sleeping to avoid holding ref
-            drop(instance);
-
-            // Sleep 30 seconds before next log
-            tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-        }
-    });
-
-    tracing::debug!("Started background stats logging task");
-}
 
 #[cfg(test)]
 mod tests {

@@ -132,6 +132,11 @@ pub struct RuntimeImpl {
     /// across multiple processes. Similar to Podman's lock manager.
     pub(crate) lock_manager: Arc<dyn LockManager>,
 
+    /// Abstract factory for boxes' network control backends (the one place a
+    /// concrete backend is chosen). Boxes create their backend through this, so
+    /// no call site names a concrete backend — see [`crate::net::NetworkBackendFactory`].
+    pub(crate) network_factory: Arc<dyn crate::net::NetworkBackendFactory>,
+
     /// Runtime filesystem lock (held for lifetime). Prevent from multiple process run on same
     /// BOXLITE_HOME directory
     pub(crate) _runtime_lock: RuntimeLock,
@@ -277,6 +282,7 @@ impl RuntimeImpl {
             base_disk_mgr,
             snapshot_mgr,
             lock_manager,
+            network_factory: crate::net::default_factory(),
             _runtime_lock: runtime_lock,
             shutdown_token: CancellationToken::new(),
         });

@@ -26,6 +26,7 @@ use crate::fs::BindMountHandle;
 use crate::litebox::copy::CopyOptions;
 use crate::lock::LockGuard;
 use crate::metrics::{BoxMetrics, BoxMetricsStorage};
+use crate::net::NetworkBackend;
 use crate::portal::GuestSession;
 use crate::portal::interfaces::GuestInterface;
 use crate::runtime::layout::BoxFilesystemLayout;
@@ -54,6 +55,13 @@ pub(crate) struct LiveState {
     handler: std::sync::Mutex<Box<dyn VmmHandler>>,
     guest_session: GuestSession,
 
+    /// Host-side network control backend (gvproxy ServicesMux client), owned
+    /// beside `guest_session`. `None` when the box was created network-disabled.
+    /// Read via [`BoxImpl::network`]; the first caller lands with the outer
+    /// (SDK/CLI) layer — held now so the box owns the abstraction from birth.
+    #[allow(dead_code)]
+    network: Option<Box<dyn NetworkBackend>>,
+
     // Metrics
     metrics: BoxMetricsStorage,
 
@@ -73,6 +81,7 @@ impl LiveState {
     pub(crate) fn new(
         handler: Box<dyn VmmHandler>,
         guest_session: GuestSession,
+        network: Option<Box<dyn NetworkBackend>>,
         metrics: BoxMetricsStorage,
         container_rootfs_disk: Disk,
         guest_rootfs_disk: Option<Disk>,
@@ -81,6 +90,7 @@ impl LiveState {
         Self {
             handler: std::sync::Mutex::new(handler),
             guest_session,
+            network,
             metrics,
             _container_rootfs_disk: container_rootfs_disk,
             guest_rootfs_disk,
@@ -616,6 +626,20 @@ impl BoxImpl {
     /// Get LiveState, lazily initializing it if needed.
     async fn live_state(&self) -> BoxliteResult<&LiveState> {
         self.live.get_or_try_init(|| self.init_live_state()).await
+    }
+
+    /// The box's network control backend (gvproxy ServicesMux client), owned in
+    /// `LiveState` beside `guest_session`. Lazily starts the box like any live
+    /// operation. `Unsupported` when the box was created network-disabled.
+    ///
+    /// The owner accessor; the first caller lands with the outer SDK/CLI layer.
+    #[allow(dead_code)]
+    pub(crate) async fn network(&self) -> BoxliteResult<&dyn NetworkBackend> {
+        self.live_state()
+            .await?
+            .network
+            .as_deref()
+            .ok_or_else(|| BoxliteError::Unsupported("box networking is disabled".into()))
     }
 
     /// Initialize LiveState via BoxBuilder.
