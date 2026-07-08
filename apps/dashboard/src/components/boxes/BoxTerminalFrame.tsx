@@ -33,16 +33,16 @@ export function BoxTerminalFrame({ sessionUrl, fullscreenHref, className }: BoxT
   const iframeSrc = buildTerminalIframeSrc(sessionUrl)
   const [retro, setRetro] = useState(readRetroPref)
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(RETRO_STORAGE_KEY, retro ? '1' : '0')
+    } catch {
+      /* localStorage may be blocked; the toggle still works for this session. */
+    }
+  }, [retro])
+
   const toggleRetro = useCallback(() => {
-    setRetro((prev) => {
-      const next = !prev
-      try {
-        window.localStorage.setItem(RETRO_STORAGE_KEY, next ? '1' : '0')
-      } catch {
-        /* localStorage may be blocked; the toggle still works for this session. */
-      }
-      return next
-    })
+    setRetro((prev) => !prev)
   }, [])
 
   const handleLoad = (event: SyntheticEvent<HTMLIFrameElement>) => {
@@ -87,10 +87,9 @@ export function BoxTerminalFrame({ sessionUrl, fullscreenHref, className }: BoxT
           size="icon-sm"
           onClick={toggleRetro}
           aria-pressed={retro}
+          aria-label={retro ? 'Turn retro monochrome mode off' : 'Turn retro monochrome mode on'}
           title={
-            retro
-              ? 'Retro mode on — monochrome (click for color)'
-              : 'Retro mode off — color (click for monochrome)'
+            retro ? 'Retro mode on — monochrome (click for color)' : 'Retro mode off — color (click for monochrome)'
           }
           className={cn('opacity-60 hover:opacity-100', retro && 'text-brand opacity-100')}
         >
