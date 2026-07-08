@@ -115,7 +115,18 @@ runtime = boxlite.Boxlite.rest(boxlite.BoxliteRestOptions(
 
 ## Timeout + Zombie Prevention
 
-`asyncio.wait_for()` cancels the Python coroutine but does **not** kill the process inside the VM. Always kill explicitly:
+### SimpleBox (high-level)
+
+`SimpleBox.exec` takes `timeout=` directly — the SDK enforces it inside the guest and SIGKILLs the process if it exceeds the limit. No wrapper needed:
+
+```python
+result = await box.exec("python", "-c", code, timeout=30)
+return result.stdout
+```
+
+### Lower-level Box (from `Boxlite.default().create()`)
+
+`Box.exec()` returns an execution handle. `asyncio.wait_for()` cancels the coroutine but does **not** kill the process inside the VM — always kill explicitly. Use `except BaseException` to also catch `CancelledError` (e.g. server shutdown):
 
 ```python
 async def exec_with_timeout(box, cmd, args=None, timeout=30):
@@ -126,8 +137,6 @@ async def exec_with_timeout(box, cmd, args=None, timeout=30):
         await execution.kill()  # kills the guest process — BaseException catches CancelledError too
         raise
 ```
-
-Use this wrapper instead of bare `await execution.wait()` for any user-provided or LLM-generated code.
 
 ---
 
