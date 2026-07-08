@@ -215,8 +215,7 @@ message CACert {
   string pem = 1;  // PEM-encoded X.509 certificate
 }
 
-// Bind mount from guest volume to container path
-// Uses convention-based paths: /run/boxlite/shared/containers/{container_id}/volumes/{volume_name}
+// Bind mount from guest volume to container path.
 message BindMount {
   // Volume name (used with container_id to construct guest path)
   // Guest constructs: /run/boxlite/shared/containers/{container_id}/volumes/{volume_name}
@@ -234,6 +233,9 @@ message BindMount {
   // guest bind-mounts {volume_dir}/{subpath} rather than the whole dir. Empty
   // for a whole-directory mount.
   string subpath = 6;
+  // Optional explicit source path in the guest. When empty, the guest falls
+  // back to the convention-based shared path above.
+  string source = 7;
 }
 
 message ContainerInitResponse {

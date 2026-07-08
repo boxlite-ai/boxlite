@@ -62,9 +62,9 @@ pub fn create_oci_spec(
     // Add user-specified bind mounts
     for user_mount in user_mounts {
         let options = if user_mount.read_only {
-            vec!["bind".to_string(), "ro".to_string()]
+            vec!["rbind".to_string(), "ro".to_string()]
         } else {
-            vec!["bind".to_string(), "rw".to_string()]
+            vec!["rbind".to_string(), "rw".to_string()]
         };
 
         mounts.push(
@@ -583,6 +583,41 @@ fn build_standard_mounts(bundle_path: &Path) -> BoxliteResult<Vec<Mount>> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn create_oci_spec_uses_recursive_bind_for_user_mounts() {
+        let bundle = tempfile::tempdir().unwrap();
+        let spec = create_oci_spec(
+            "test-container",
+            "/rootfs",
+            &["/bin/sh".to_string()],
+            &[],
+            "/",
+            0,
+            0,
+            bundle.path(),
+            &[UserMount {
+                source: "/run/boxlite/shared/containers/test/volumes/uservol0".to_string(),
+                destination: "/data".to_string(),
+                read_only: false,
+                owner_uid: 0,
+                owner_gid: 0,
+            }],
+        )
+        .unwrap();
+
+        let mounts = spec.mounts().as_ref().expect("spec should include mounts");
+        let user_mount = mounts
+            .iter()
+            .find(|mount| mount.destination() == Path::new("/data"))
+            .expect("user mount should be present");
+
+        assert_eq!(user_mount.typ().as_deref(), Some("bind"));
+        assert_eq!(
+            user_mount.options().as_ref().map(Vec::as_slice),
+            Some(["rbind".to_string(), "rw".to_string()].as_slice())
+        );
+    }
 
     /// Create a temp rootfs with /etc/passwd and /etc/group for testing.
     ///

@@ -118,6 +118,7 @@ impl ContainerInterface {
                 owner_uid: m.owner_uid,
                 owner_gid: m.owner_gid,
                 subpath: m.subpath.unwrap_or_default(),
+                source: m.source.unwrap_or_default(),
             })
             .collect();
 

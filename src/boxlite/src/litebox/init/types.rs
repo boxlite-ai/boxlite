@@ -303,7 +303,7 @@ pub struct InitPipelineContext {
     pub ca_cert_pem: Option<String>,
 
     #[cfg(target_os = "linux")]
-    pub bind_mount: Option<BindMountHandle>,
+    pub bind_mounts: Vec<BindMountHandle>,
 }
 
 impl InitPipelineContext {
@@ -330,7 +330,7 @@ impl InitPipelineContext {
             guest_session: None,
             ca_cert_pem: None,
             #[cfg(target_os = "linux")]
-            bind_mount: None,
+            bind_mounts: Vec::new(),
         }
     }
 }

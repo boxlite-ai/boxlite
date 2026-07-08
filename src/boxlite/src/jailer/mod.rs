@@ -293,6 +293,14 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
         });
     }
 
+    let user_volumes_dir = layout.user_volumes_dir();
+    if user_volumes_dir.exists() {
+        paths.push(PathAccess {
+            path: user_volumes_dir,
+            writable: true,
+        });
+    }
+
     // Bases directory: shared backing files (snapshots, clone bases, rootfs cache).
     // The qcow2 overlay references backing files in bases/ directly.
     // Disk images are data (read by the hypervisor, not executed on the host).
@@ -950,6 +958,27 @@ mod tests {
         let shared = paths.iter().find(|p| p.path == layout.shared_dir());
         assert!(shared.is_some(), "shared_dir should be in path access");
         assert!(shared.unwrap().writable, "shared_dir must be writable");
+    }
+
+    /// user-volumes/ is a virtio-fs share root for aggregate user bind mounts.
+    #[test]
+    fn test_build_path_access_user_volumes_dir_is_writable() {
+        let dir = tempdir().unwrap();
+        let layout = test_layout(dir.path().to_path_buf());
+
+        std::fs::create_dir_all(layout.user_volumes_dir()).unwrap();
+
+        let paths = build_path_access(&layout, &[]);
+
+        let user_volumes = paths.iter().find(|p| p.path == layout.user_volumes_dir());
+        assert!(
+            user_volumes.is_some(),
+            "user_volumes_dir should be in path access"
+        );
+        assert!(
+            user_volumes.unwrap().writable,
+            "user_volumes_dir must be writable"
+        );
     }
 
     /// After pre-creating files (as Jailer::command() does), all appear in path access as writable.

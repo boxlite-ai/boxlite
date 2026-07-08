@@ -53,4 +53,7 @@ pub mod mount_tags {
 
     /// Tag for shared container directory (contains overlayfs/ and rootfs/)
     pub const SHARED: &str = "BoxLiteShared";
+
+    /// Tag for the aggregate user volume directory.
+    pub const USER_VOLUMES: &str = "BoxLiteUserVolumes";
 }

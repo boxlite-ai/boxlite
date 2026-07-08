@@ -49,7 +49,9 @@ impl PipelineTask<InitCtx> for FilesystemTask {
         ctx.layout = Some(layout);
         #[cfg(target_os = "linux")]
         {
-            ctx.bind_mount = bind_mount;
+            if let Some(bind_mount) = bind_mount {
+                ctx.bind_mounts.push(bind_mount);
+            }
         }
 
         Ok(())

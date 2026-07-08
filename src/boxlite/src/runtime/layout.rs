@@ -448,6 +448,11 @@ impl BoxFilesystemLayout {
         self.box_dir.join(shared_dirs::SHARED)
     }
 
+    /// User volume aggregate directory exposed to the guest as one virtio-fs share.
+    pub fn user_volumes_dir(&self) -> PathBuf {
+        self.box_dir.join("user-volumes")
+    }
+
     // BIN AND LOGS (jailer isolation)
     // ========================================================================
 

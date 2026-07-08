@@ -6,6 +6,8 @@
 use super::guest_entrypoint::GuestEntrypointBuilder;
 use super::{InitCtx, log_task_error, task_start};
 use crate::disk::DiskFormat;
+#[cfg(target_os = "linux")]
+use crate::fs::{BindMountConfig, BindMountHandle, create_bind_mount};
 use crate::images::ContainerImageConfig;
 use crate::litebox::init::types::resolve_user_volumes;
 use crate::net::NetworkBackendConfig;
@@ -26,10 +28,26 @@ use crate::volumes::{
 use async_trait::async_trait;
 use boxlite_shared::Transport;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+#[cfg(target_os = "linux")]
+use boxlite_shared::layout::GUEST_BASE;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
 
 pub struct VmmSpawnTask;
+
+#[cfg(target_os = "linux")]
+const USER_VOLUMES_GUEST_PATH: &str = "/run/boxlite/user-volumes";
+
+struct BuiltConfig {
+    instance_spec: InstanceSpec,
+    volume_mgr: GuestVolumeManager,
+    rootfs_init: crate::portal::interfaces::ContainerRootfsInitConfig,
+    container_mounts: Vec<ContainerMount>,
+    #[cfg(target_os = "linux")]
+    user_volume_bind_mounts: Vec<BindMountHandle>,
+}
 
 #[async_trait]
 impl PipelineTask<InitCtx> for VmmSpawnTask {
@@ -77,7 +95,7 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
         };
 
         // Build config and get outputs
-        let (instance_spec, volume_mgr, rootfs_init, container_mounts) = build_config(
+        let built = build_config(
             &box_id,
             &options,
             &layout,
@@ -92,20 +110,25 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
         .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
         // Spawn VM
-        let handler = spawn_vm(&box_id, &instance_spec, &options, &layout)
+        let handler = spawn_vm(&box_id, &built.instance_spec, &options, &layout)
             .await
             .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
         let mut ctx = ctx.lock().await;
         ctx.guard.set_handler(handler);
-        ctx.volume_mgr = Some(volume_mgr);
-        ctx.rootfs_init = Some(rootfs_init);
-        ctx.container_mounts = Some(container_mounts);
+        ctx.volume_mgr = Some(built.volume_mgr);
+        ctx.rootfs_init = Some(built.rootfs_init);
+        ctx.container_mounts = Some(built.container_mounts);
         // Store CA cert PEM for Container.Init gRPC (passed as CACert proto field)
-        ctx.ca_cert_pem = instance_spec
+        ctx.ca_cert_pem = built
+            .instance_spec
             .network_config
             .as_ref()
             .and_then(|nc| nc.ca_cert_pem.clone());
+        #[cfg(target_os = "linux")]
+        {
+            ctx.bind_mounts.extend(built.user_volume_bind_mounts);
+        }
         Ok(())
     }
 
@@ -126,12 +149,7 @@ async fn build_config(
     container_id: &ContainerID,
     runtime: &SharedRuntimeImpl,
     reuse_rootfs: bool,
-) -> BoxliteResult<(
-    InstanceSpec,
-    GuestVolumeManager,
-    crate::portal::interfaces::ContainerRootfsInitConfig,
-    Vec<ContainerMount>,
-)> {
+) -> BoxliteResult<BuiltConfig> {
     // Transport setup
     let transport = Transport::unix(layout.socket_path());
     let ready_transport = Transport::unix(layout.ready_socket_path());
@@ -173,31 +191,80 @@ async fn build_config(
         need_resize,        // Only on fresh start with custom disk size
     };
 
+    #[cfg(target_os = "linux")]
+    let mut user_volume_bind_mounts = Vec::with_capacity(user_volumes.len());
+
+    #[cfg(target_os = "linux")]
+    let user_volumes_root = prepare_user_volumes_root(layout, !user_volumes.is_empty())?;
+
+    #[cfg(target_os = "linux")]
+    if let Some(root) = &user_volumes_root {
+        volume_mgr.add_fs_share(
+            mount_tags::USER_VOLUMES,
+            root.clone(),
+            Some(USER_VOLUMES_GUEST_PATH),
+            false,
+            None,
+        );
+    }
+
     // Add user volumes via ContainerVolumeManager
     let mut container_mgr = ContainerVolumeManager::new(&mut volume_mgr);
+
     for vol in &user_volumes {
-        // Single-file volume: stage the file into a dedicated dir under the box's
-        // shared tree (already granted to the VMM sandbox) and share that dir, so
-        // virtio-fs never exposes the file's host siblings. Directories share as-is.
-        let share_dir = match &vol.subpath {
-            None => vol.host_path.clone(),
-            Some(file_name) => {
-                let staging_dir = layout.shared_dir().join("user-volumes").join(&vol.tag);
-                stage_single_file(&staging_dir, &vol.host_path, file_name, vol.read_only)?;
-                staging_dir
+        #[cfg(target_os = "linux")]
+        {
+            let user_volumes_root = user_volumes_root
+                .as_ref()
+                .ok_or_else(|| BoxliteError::Internal("user volume root not prepared".into()))?;
+            let target_dir = user_volumes_root.join(&vol.tag);
+            match &vol.subpath {
+                None => {
+                    let bind_mount =
+                        bind_user_volume_dir(&vol.host_path, &target_dir, vol.read_only)?;
+                    user_volume_bind_mounts.push(bind_mount);
+                }
+                Some(file_name) => {
+                    stage_single_file(&target_dir, &vol.host_path, file_name, vol.read_only)?;
+                }
             }
-        };
-        container_mgr.add_volume(
-            container_id.as_str(),
-            &vol.tag,
-            &vol.tag,
-            share_dir,
-            &vol.guest_path,
-            vol.read_only,
-            vol.owner_uid,
-            vol.owner_gid,
-            vol.subpath.clone(),
-        );
+
+            container_mgr.add_bind_volume(
+                &vol.tag,
+                Some(guest_user_volume_source(&vol.tag)),
+                &vol.guest_path,
+                vol.read_only,
+                vol.owner_uid,
+                vol.owner_gid,
+                vol.subpath.clone(),
+            );
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            // Single-file volume: stage the file into a dedicated dir under the box's
+            // shared tree (already granted to the VMM sandbox) and share that dir, so
+            // virtio-fs never exposes the file's host siblings. Directories share as-is.
+            let share_dir = match &vol.subpath {
+                None => vol.host_path.clone(),
+                Some(file_name) => {
+                    let staging_dir = layout.shared_dir().join("user-volumes").join(&vol.tag);
+                    stage_single_file(&staging_dir, &vol.host_path, file_name, vol.read_only)?;
+                    staging_dir
+                }
+            };
+            container_mgr.add_volume(
+                container_id.as_str(),
+                &vol.tag,
+                &vol.tag,
+                share_dir,
+                &vol.guest_path,
+                vol.read_only,
+                vol.owner_uid,
+                vol.owner_gid,
+                vol.subpath.clone(),
+            );
+        }
     }
     let container_mounts = container_mgr.build_container_mounts();
 
@@ -249,7 +316,56 @@ async fn build_config(
         detach: options.detach,
     };
 
-    Ok((instance_spec, volume_mgr, rootfs_init, container_mounts))
+    Ok(BuiltConfig {
+        instance_spec,
+        volume_mgr,
+        rootfs_init,
+        container_mounts,
+        #[cfg(target_os = "linux")]
+        user_volume_bind_mounts,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn prepare_user_volumes_root(
+    layout: &BoxFilesystemLayout,
+    needed: bool,
+) -> BoxliteResult<Option<PathBuf>> {
+    if !needed {
+        return Ok(None);
+    }
+
+    let root = layout.user_volumes_dir();
+    std::fs::create_dir_all(&root).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to create user volume aggregate directory {}: {}",
+            root.display(),
+            e
+        ))
+    })?;
+    Ok(Some(root))
+}
+
+#[cfg(target_os = "linux")]
+fn guest_user_volume_source(tag: &str) -> String {
+    PathBuf::from(GUEST_BASE)
+        .join("user-volumes")
+        .join(tag)
+        .to_string_lossy()
+        .to_string()
+}
+
+#[cfg(target_os = "linux")]
+fn bind_user_volume_dir(
+    source_dir: &Path,
+    target_dir: &Path,
+    read_only: bool,
+) -> BoxliteResult<BindMountHandle> {
+    let mut config = BindMountConfig::new(source_dir, target_dir);
+    if read_only {
+        config = config.read_only();
+    }
+    create_bind_mount(&config)
 }
 
 /// Configure guest rootfs with device path from volume manager.
