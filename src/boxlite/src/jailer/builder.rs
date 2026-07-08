@@ -1,7 +1,7 @@
 //! JailerBuilder for constructing a [`Jailer`](super::Jailer).
 
 use super::Jailer;
-use super::sandbox::{PlatformSandbox, Sandbox};
+use super::sandbox::{PlatformSandbox, Sandbox, SandboxBindMount};
 use crate::runtime::advanced_options::{ResourceLimits, SecurityOptions};
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::options::VolumeSpec;
@@ -26,6 +26,7 @@ use std::path::PathBuf;
 pub struct JailerBuilder {
     security: SecurityOptions,
     volumes: Vec<VolumeSpec>,
+    bind_mounts: Vec<SandboxBindMount>,
     box_id: Option<String>,
     layout: Option<BoxFilesystemLayout>,
     preserved_fds: Vec<(RawFd, i32)>,
@@ -44,6 +45,7 @@ impl JailerBuilder {
         Self {
             security: SecurityOptions::default(),
             volumes: Vec::new(),
+            bind_mounts: Vec::new(),
             box_id: None,
             layout: None,
             preserved_fds: Vec::new(),
@@ -81,6 +83,16 @@ impl JailerBuilder {
     /// Add a single volume mount.
     pub fn with_volume(mut self, volume: VolumeSpec) -> Self {
         self.volumes.push(volume);
+        self
+    }
+
+    /// Set bind mounts that should be installed by namespace sandboxes.
+    ///
+    /// These are distinct from `volumes`: `volumes` describe user intent and
+    /// path-access policy, while sandbox bind mounts name exact source/target
+    /// pairs that bwrap should mount inside its private namespace.
+    pub fn with_bind_mounts(mut self, bind_mounts: Vec<SandboxBindMount>) -> Self {
+        self.bind_mounts = bind_mounts;
         self
     }
 
@@ -324,6 +336,7 @@ impl JailerBuilder {
             sandbox,
             security: self.security,
             volumes: self.volumes,
+            bind_mounts: self.bind_mounts,
             box_id,
             layout,
             preserved_fds: self.preserved_fds,
@@ -571,7 +584,8 @@ mod tests {
             .expect("should build dev");
         assert!(!dev.security().jailer_enabled);
 
-        // Maximum → strict: jailer + seccomp on, namespaces on.
+        // Maximum → strict profile. Seccomp is Linux-only, matching
+        // SecurityOptions::default().
         let max = JailerBuilder::new()
             .with_box_id("test-box")
             .with_layout(test_layout("/tmp/box"))
@@ -579,7 +593,7 @@ mod tests {
             .build()
             .expect("should build max");
         assert!(max.security().jailer_enabled);
-        assert!(max.security().seccomp_enabled);
+        assert_eq!(max.security().seccomp_enabled, cfg!(target_os = "linux"));
 
         // Standard is the recommended default; just confirm it
         // overrides whatever the chain set before.

@@ -4,6 +4,7 @@ use std::{path::PathBuf, process::Child, sync::Mutex, time::Instant};
 
 use crate::{
     BoxID,
+    jailer::SandboxBindMount,
     runtime::layout::BoxFilesystemLayout,
     vmm::{InstanceSpec, VmmKind},
 };
@@ -257,6 +258,8 @@ pub struct ShimController {
     options: crate::runtime::options::BoxOptions,
     /// Box filesystem layout (provides paths for stderr, sockets, etc.)
     layout: BoxFilesystemLayout,
+    /// Bind mounts installed by the jailer namespace before the shim starts.
+    bind_mounts: Vec<SandboxBindMount>,
 }
 
 impl ShimController {
@@ -278,6 +281,7 @@ impl ShimController {
         box_id: BoxID,
         options: crate::runtime::options::BoxOptions,
         layout: BoxFilesystemLayout,
+        bind_mounts: Vec<SandboxBindMount>,
     ) -> BoxliteResult<Self> {
         // Verify that the shim binary exists
         if !binary_path.exists() {
@@ -293,6 +297,7 @@ impl ShimController {
             box_id,
             options,
             layout,
+            bind_mounts,
         })
     }
 }
@@ -370,6 +375,7 @@ impl VmmController for ShimController {
             &self.layout,
             self.box_id.as_str(),
             &self.options,
+            &self.bind_mounts,
         );
         let spawned = spawner.spawn(&config_json, config.detach)?;
         // spawn_duration: time to create Box subprocess

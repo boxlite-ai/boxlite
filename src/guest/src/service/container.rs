@@ -208,8 +208,9 @@ impl ContainerService for GuestServer {
             }
         }
 
-        // Convert proto BindMount to UserMount for OCI spec
-        // Construct full source path from convention: /run/boxlite/shared/containers/{id}/volumes/{name}
+        // Convert proto BindMount to UserMount for OCI spec.
+        // Construct full source path from convention:
+        // /run/boxlite/shared/containers/{id}/volumes/{name}
         let guest_layout = boxlite_shared::layout::SharedGuestLayout::new("/run/boxlite/shared");
         let container_layout = guest_layout.container(&container_id);
 

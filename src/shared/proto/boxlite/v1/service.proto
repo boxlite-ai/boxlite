@@ -215,7 +215,7 @@ message CACert {
   string pem = 1;  // PEM-encoded X.509 certificate
 }
 
-// Bind mount from guest volume to container path
+// Bind mount from guest volume to container path.
 // Uses convention-based paths: /run/boxlite/shared/containers/{container_id}/volumes/{volume_name}
 message BindMount {
   // Volume name (used with container_id to construct guest path)

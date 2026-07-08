@@ -119,6 +119,23 @@ impl Sandbox for BwrapSandbox {
             bwrap_cmd.ro_bind(&pa.path, &pa.path);
             tracing::debug!(path = %pa.path.display(), "bwrap: ro-bind");
         }
+        for mount in &ctx.bind_mounts {
+            if mount.writable {
+                bwrap_cmd.bind(&mount.source, &mount.target);
+                tracing::debug!(
+                    source = %mount.source.display(),
+                    target = %mount.target.display(),
+                    "bwrap: bind user volume"
+                );
+            } else {
+                bwrap_cmd.ro_bind(&mount.source, &mount.target);
+                tracing::debug!(
+                    source = %mount.source.display(),
+                    target = %mount.target.display(),
+                    "bwrap: ro-bind user volume"
+                );
+            }
+        }
 
         // =====================================================================
         // Environment sanitization
@@ -193,6 +210,7 @@ mod tests {
         let ctx = SandboxContext {
             id: "test-box",
             paths: vec![],
+            bind_mounts: vec![],
             resource_limits: limits,
             network_enabled: false,
             sandbox_profile: None,
@@ -237,6 +255,7 @@ mod tests {
             let ctx = SandboxContext {
                 id: "test-box",
                 paths: vec![],
+                bind_mounts: vec![],
                 resource_limits: limits,
                 network_enabled: false,
                 sandbox_profile: None,
@@ -254,6 +273,56 @@ mod tests {
         assert!(
             !has_die_with_parent(true),
             "detached box must not get --die-with-parent or it is killed when run -d returns"
+        );
+    }
+
+    #[test]
+    fn apply_emits_namespace_bind_mounts() {
+        if !bwrap::is_available() {
+            eprintln!("skipping apply_emits_namespace_bind_mounts: bwrap not available");
+            return;
+        }
+
+        let limits = Box::leak(Box::new(ResourceLimits::default()));
+        let ctx = SandboxContext {
+            id: "test-box",
+            paths: vec![],
+            bind_mounts: vec![
+                crate::jailer::SandboxBindMount::new(
+                    "/host/rw",
+                    "/box/shared/containers/main/volumes/rw",
+                    true,
+                ),
+                crate::jailer::SandboxBindMount::new(
+                    "/host/ro",
+                    "/box/shared/containers/main/volumes/ro",
+                    false,
+                ),
+            ],
+            resource_limits: limits,
+            network_enabled: false,
+            sandbox_profile: None,
+            detached: false,
+        };
+
+        let mut cmd = Command::new("/var/lib/boxlite/boxes/abc/bin/boxlite-shim");
+        BwrapSandbox::new().apply(&ctx, &mut cmd);
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+
+        assert!(
+            args.windows(3).any(|w| w[0] == "--bind"
+                && w[1] == "/host/rw"
+                && w[2] == "/box/shared/containers/main/volumes/rw"),
+            "writable sandbox bind mount must be emitted"
+        );
+        assert!(
+            args.windows(3).any(|w| w[0] == "--ro-bind"
+                && w[1] == "/host/ro"
+                && w[2] == "/box/shared/containers/main/volumes/ro"),
+            "read-only sandbox bind mount must be emitted"
         );
     }
 }

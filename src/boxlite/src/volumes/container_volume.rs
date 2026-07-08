@@ -37,6 +37,7 @@ pub struct ContainerMount {
 /// Holds a reference to GuestVolumeManager and tracks bind mounts
 /// from guest VM paths into container namespace.
 pub struct ContainerVolumeManager<'a> {
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     guest: &'a mut GuestVolumeManager,
     container_mounts: Vec<ContainerMount>,
 }
@@ -69,6 +70,7 @@ impl<'a> ContainerVolumeManager<'a> {
     /// * `container_path` - Mount point in container (user-specified)
     /// * `read_only` - Whether the mount is read-only
     #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     pub fn add_volume(
         &mut self,
         container_id: &str,
@@ -105,16 +107,9 @@ impl<'a> ContainerVolumeManager<'a> {
     /// Add a container bind mount directly.
     ///
     /// Use when guest path already exists (e.g., from block device mount).
-    #[allow(dead_code)]
-    pub fn add_bind(&mut self, volume_name: &str, container_path: &str, read_only: bool) {
-        self.container_mounts.push(ContainerMount {
-            volume_name: volume_name.to_string(),
-            destination: container_path.to_string(),
-            read_only,
-            owner_uid: 0,
-            owner_gid: 0,
-            subpath: None,
-        });
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn add_bind_volume(&mut self, mount: ContainerMount) {
+        self.container_mounts.push(mount);
     }
 
     /// Build container mount configuration.
@@ -146,5 +141,35 @@ mod tests {
         let mounts = mgr.build_container_mounts();
         assert_eq!(mounts.len(), 1);
         assert_eq!(mounts[0].subpath, Some("app.conf".to_string()));
+    }
+
+    #[test]
+    fn add_bind_volume_does_not_create_guest_virtiofs_share() {
+        let mut guest = GuestVolumeManager::new();
+        let mut mgr = ContainerVolumeManager::new(&mut guest);
+        mgr.add_bind_volume(ContainerMount {
+            volume_name: "uservol0".to_string(),
+            destination: "/data".to_string(),
+            read_only: false,
+            owner_uid: 1000,
+            owner_gid: 1000,
+            subpath: Some("app.conf".to_string()),
+        });
+
+        let mounts = mgr.build_container_mounts();
+        assert_eq!(mounts.len(), 1);
+        assert_eq!(mounts[0].volume_name, "uservol0");
+        assert_eq!(mounts[0].subpath, Some("app.conf".to_string()));
+
+        drop(mgr);
+        let vmm_config = guest.build_vmm_config();
+        assert!(
+            vmm_config.fs_shares.shares().is_empty(),
+            "container mounts should not create per-volume virtiofs shares"
+        );
+        assert!(
+            guest.build_guest_mounts().is_empty(),
+            "bind-backed user volumes should not require guest virtiofs mounts"
+        );
     }
 }
