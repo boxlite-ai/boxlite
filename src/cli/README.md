@@ -15,8 +15,8 @@ The BoxLite CLI (`boxlite`) lets you create, run, and manage BoxLite boxes from 
 
 ### Key Features
 
-- **Run** — Create a box from an image and run a command (interactive, TTY, or detached); supports `-p` (publish ports) and `-v` (volumes)
-- **Create** — Create a box without running; supports `-p` and `-v`
+- **Run** — Create a box from an image or prepared rootfs and run a command (interactive, TTY, or detached); supports `-p` (publish ports) and `-v` (volumes)
+- **Create** — Create a box from an image or prepared rootfs without running; supports `-p` and `-v`
 - **Lifecycle** — Start, stop, restart, remove boxes
 - **Inspect** — Show detailed box info (JSON, YAML, or Go template)
 - **Exec** — Run commands inside a running box
@@ -296,12 +296,16 @@ Scopes:          box:read, box:write, box:exec, image:read, snapshot:read
 
 ### `boxlite run`
 
-Create a box from an image and run a command.
+Create a box from an image or prepared rootfs and run a command.
 
-**Usage:** `boxlite run [OPTIONS] IMAGE [COMMAND]...`
+**Usage:**
+
+- `boxlite run [OPTIONS] IMAGE [COMMAND]...`
+- `boxlite run [OPTIONS] --rootfs PATH [COMMAND]...`
 
 | Option | Short | Description |
 |--------|-------|-------------|
+| `--rootfs PATH` | | Use a prepared rootfs path instead of pulling/resolving an image |
 | `--interactive` | `-i` | Keep STDIN open |
 | `--tty` | `-t` | Allocate a pseudo-TTY |
 | `--env KEY=VALUE` | `-e` | Set environment variables (repeatable) |
@@ -321,16 +325,21 @@ boxlite run alpine:latest echo "Hello"
 boxlite run -it --rm alpine:latest /bin/sh
 boxlite run -d --name openclaw -p 18789:18789 ghcr.io/openclaw/openclaw:main
 boxlite run -v /host/data:/app/data alpine:latest cat /app/data/hello.txt
+boxlite run --rootfs /path/to/rootfs /bin/sh
 ```
 
 ### `boxlite create`
 
-Create a new box without running a command.
+Create a new box from an image or prepared rootfs without running a command.
 
-**Usage:** `boxlite create [OPTIONS] IMAGE`
+**Usage:**
+
+- `boxlite create [OPTIONS] IMAGE`
+- `boxlite create [OPTIONS] --rootfs PATH`
 
 | Option | Short | Description |
 |--------|-------|-------------|
+| `--rootfs PATH` | | Use a prepared rootfs path instead of pulling/resolving an image |
 | `--name NAME` | | Name the box |
 | `--env KEY=VALUE` | `-e` | Environment variables |
 | `--workdir PATH` | `-w` | Working directory |
@@ -346,6 +355,7 @@ Create a new box without running a command.
 ```bash
 boxlite create --name mybox alpine:latest
 boxlite create -p 18789:18789 -v /data:/app/data --name openclaw ghcr.io/openclaw/openclaw:main
+boxlite create --rootfs /path/to/rootfs --name local-rootfs
 boxlite start mybox
 boxlite start openclaw
 ```

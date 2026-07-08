@@ -31,7 +31,10 @@ export const useTerminalSessionQuery = (boxId: string, enabled: boolean) => {
       return { url, expiresAt: Date.now() + SESSION_DURATION_SECONDS * 1000 }
     },
     enabled: enabled && !!boxId && !!selectedOrganization?.id,
-    staleTime: Infinity,
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   })
 
   const existingSession = queryClient.getQueryData<TerminalSession>(queryKey)

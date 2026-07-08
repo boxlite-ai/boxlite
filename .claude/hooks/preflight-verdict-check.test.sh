@@ -1,30 +1,40 @@
 #!/usr/bin/env bash
 # Tests for .claude/hooks/preflight-verdict-check.sh (the Stop-stage verdict gate).
 #
-# This hook VALIDATES a self-declared dossier (.claude/.last-verdict.json); it is verdict-
-# scoped and loop-free — it never forces an audit:
-#   - no dossier                                -> allow (no verdict declared this turn)
-#   - present, PASS/IN_PROGRESS, matching+fresh -> allow (PASS is consumed)
-#   - present, stale / mismatched / FAIL        -> block (hard) or nudge (soft)
-# Each case builds a throwaway git repo, optionally writes a dossier, and runs the
-# hook there (cwd + CLAUDE_PROJECT_DIR pointed at it), asserting allow vs block.
+# The hook is DETECTION-TRIGGERED, with finding-driven loops only:
+#   - no dossier + the turn asserts a verdict ("root cause is X",
+#     "tests pass", "prod looks healthy", "done")      -> block: audit it
+#   - no dossier + chat / question / no transcript     -> allow
+#   - present PASS/IN_PROGRESS, fresh + matching       -> allow (consumed)
+#   - present FAIL, fresh + matching                   -> block with findings
+#     (the ONE legitimate loop: persists until re-audited clean)
+#   - present but stale / mismatched binding           -> DISCARD, re-detect
+#     (bookkeeping never blocks — that was the meaningless-loop class)
+# Each case builds a throwaway git repo with an optional fake transcript and
+# dossier, runs the hook there (cwd + CLAUDE_PROJECT_DIR pointed at it), and
+# asserts allow vs block.
 #
-# Stop contract: allow = empty stdout (exit 0); block = stdout {"decision":"block"};
-# soft nudge / IN_PROGRESS = {"continue":true,...} (non-empty, no block = allow).
+# Stop contract: block = stdout {"decision":"block"}; allow = exit 0 with either
+# empty stdout or {"continue":true, systemMessage:...} — the systemMessage is the
+# human-only triage announcement (the model never sees it; documented hook
+# contract). decide() treats any non-block output as allow.
 #
 # Run with:  bash .claude/hooks/preflight-verdict-check.test.sh
 # Exits non-zero on any failure.
 set -uo pipefail
 
 # Hermetic baseline: neutralize any ambient VERDICT_GATE_HARD_BLOCK so the soft-mode
-# cases below see it absent regardless of the caller's environment (a session or CI that
-# exports it to hard-block would otherwise turn their nudges into blocks). Hard-mode
-# cases set it explicitly in decide().
+# cases below see it absent regardless of the caller's environment. Hard-mode cases
+# set it explicitly in decide().
 unset VERDICT_GATE_HARD_BLOCK
+
+# Hermetic triage: force the classifier into UNKNOWN (command fails) so every case
+# below exercises the deterministic regex fallback unless a case overrides the stub.
+# Without this, a machine with the `claude` CLI would call a live model mid-suite.
+export VERDICT_CLASSIFIER_CMD='false'
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 HOOK="$REPO_ROOT/.claude/hooks/preflight-verdict-check.sh"
-PAYLOAD='{"transcript_path":"/dev/null","hook_event_name":"Stop"}'
 
 pass=0
 fail=0
@@ -55,6 +65,67 @@ tree_hash_of() {
   rm -f "$idx"
 }
 
+# Fake session transcript whose LAST assistant message is $2 (prior assistant
+# messages may follow as $3..; they are written first). Mirrors the real JSONL
+# shape: {"type":"assistant","uuid":..., "message":{"content":[{"type":"text",...}]}}.
+# The last message gets uuid "uuid-last", earlier ones "uuid-<n>".
+write_transcript() {
+  local repo="$1" last="$2"; shift 2
+  : > "$repo/transcript.jsonl"
+  local earlier n=0
+  for earlier in "$@"; do
+    n=$((n+1))
+    jq -nc --arg t "$earlier" --arg u "uuid-$n" \
+      '{type:"assistant", uuid:$u, message:{content:[{type:"text",text:$t}]}}' >> "$repo/transcript.jsonl"
+  done
+  jq -nc --arg t "$last" --arg u "uuid-last" \
+    '{type:"assistant", uuid:$u, message:{content:[{type:"text",text:$t}]}}' >> "$repo/transcript.jsonl"
+}
+
+# Codex-format transcript (rollout JSONL): response_item / payload.role=assistant /
+# content[].output_text, no per-record id. Same last-message-wins semantics.
+write_codex_transcript() {
+  local repo="$1" last="$2"
+  jq -nc --arg t "$last" \
+    '{type:"response_item", payload:{type:"message", role:"assistant", content:[{type:"output_text", text:$t}]}}' \
+    > "$repo/transcript.jsonl"
+}
+
+# An INVENTED schema no harness uses today — proves new agents work with zero hook
+# changes as long as they follow the conventions (role=assistant somewhere, text
+# under `text` keys in *text-typed blocks, JSONL).
+write_future_agent_transcript() {
+  local repo="$1" last="$2"
+  jq -nc --arg t "$last" \
+    '{kind:"turn", actor:{role:"assistant"}, output:{parts:[{type:"rich_text", text:$t}]}}' \
+    > "$repo/transcript.jsonl"
+}
+
+# The content-derived message identity the hook records (keep formula in sync).
+cksum_of() { printf 'cksum-%s' "$(printf '%s' "$1" | cksum | tr ' \t' '--')"; }
+
+# Append records to an existing fixture transcript: a REAL user message (turn
+# boundary) or a further assistant text (same turn as its neighbors).
+append_user() {
+  jq -nc --arg t "$2" '{type:"user", message:{content:[{type:"text",text:$t}]}}' >> "$1/transcript.jsonl"
+}
+append_assistant() {
+  jq -nc --arg t "$2" '{type:"assistant", message:{content:[{type:"text",text:$t}]}}' >> "$1/transcript.jsonl"
+}
+# Tool results ride user-role records. The array shape (produced by Read, Agent,
+# ToolSearch, MCP tools) nests text-typed blocks INSIDE the tool_result — it must
+# NOT read as a turn boundary.
+append_tool_result_array() {
+  jq -nc --arg t "$2" \
+    '{type:"user", message:{role:"user", content:[{type:"tool_result", tool_use_id:"tu1", content:[{type:"text", text:$t}]}]}}' \
+    >> "$1/transcript.jsonl"
+}
+append_tool_result_string() {
+  jq -nc --arg t "$2" \
+    '{type:"user", message:{role:"user", content:[{type:"tool_result", tool_use_id:"tu1", content:$t}]}}' \
+    >> "$1/transcript.jsonl"
+}
+
 # Write a dossier; tree_hash defaults to the repo's current working-tree hash.
 write_verdict() {
   local repo="$1" verdict="$2" findings="$3" tree="${4:-$(tree_hash_of "$1")}"
@@ -65,12 +136,15 @@ write_verdict() {
     > "$repo/.claude/.last-verdict.json"
 }
 
-# Run the hook inside repo and classify the decision.
+# Run the hook inside repo and classify the decision. Uses the repo's fake
+# transcript when present, /dev/null otherwise.
 decide() {
-  local repo="$1" out d
+  local repo="$1" out d tp="/dev/null"
+  [[ -f "$repo/transcript.jsonl" ]] && tp="$repo/transcript.jsonl"
+  local payload; payload="$(jq -nc --arg p "$tp" '{transcript_path:$p, hook_event_name:"Stop"}')"
   # Decision-logic cases run in HARD mode so a block condition is observable as
-  # decision:block. Soft mode (the default) is covered in its own section below.
-  out="$(printf '%s' "$PAYLOAD" | ( cd "$repo" && CLAUDE_PROJECT_DIR="$repo" VERDICT_GATE_HARD_BLOCK=1 bash "$HOOK" ) 2>/dev/null)"
+  # decision:block. Soft mode is covered in its own section below.
+  out="$(printf '%s' "$payload" | ( cd "$repo" && CLAUDE_PROJECT_DIR="$repo" VERDICT_GATE_HARD_BLOCK=1 bash "$HOOK" ) 2>/dev/null)"
   if [[ -z "$out" ]]; then
     printf 'allow'
   else
@@ -89,81 +163,328 @@ check() {  # desc  repo  expect
   fi
 }
 
-# Assert the dossier file was consumed (removed) by the hook's allow path.
-check_consumed() {  # desc  repo
+# Assert the dossier file is gone (consumed on allow, or discarded on mismatch).
+check_gone() {  # desc  repo
   local desc="$1" repo="$2"
   if [[ ! -e "$repo/.claude/.last-verdict.json" ]]; then
     pass=$((pass + 1)); printf '  PASS  %s\n' "$desc"
   else
-    fail=$((fail + 1)); printf '  FAIL  %s  (dossier still present after allow)\n' "$desc"
+    fail=$((fail + 1)); printf '  FAIL  %s  (dossier still present)\n' "$desc"
   fi
 }
 
-echo "## No dossier → allow (self-declared: no verdict was rendered this turn)"
-R="$(setup)";                                    check "clean tree, no dossier → allow"   "$R" "allow"; rm -rf "$R"
-# Loop-free: even after a code change, a turn with no dossier passes — the AGENT, not the
-# hook, decides an edit is a verdict worth auditing. This is what stops an audit-completion
-# re-invoke from demanding another audit.
-R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"; check "prod change, no dossier → allow"  "$R" "allow"; rm -rf "$R"
+echo "## Detection: no dossier → the turn text decides"
+R="$(setup)"; write_transcript "$R" "The root cause is a race between gvproxy startup and the socket bind."
+check "'root cause is X' → block (verdict asserted, unaudited)"   "$R" "block"; rm -rf "$R"
+
+R="$(setup)"; write_transcript "$R" "Rolled the canary back; prod looks healthy again, error rate is flat."
+check "'prod looks healthy' → block"                              "$R" "block"; rm -rf "$R"
+
+R="$(setup)"; write_transcript "$R" "All tests pass: 23/23 on the hook suite."
+check "'tests pass' → block"                                      "$R" "block"; rm -rf "$R"
+
+R="$(setup)"; write_transcript "$R" "Done."
+check "bare 'Done.' → block"                                      "$R" "block"; rm -rf "$R"
+
+# Sentence-initial assertion without a helper verb — caught a live false negative
+# in the transcript sweep ("Confirmed reachable from the open internet.").
+R="$(setup)"; write_transcript "$R" "Confirmed reachable from the open internet."
+check "sentence-initial 'Confirmed <adj>' → block"                "$R" "block"; rm -rf "$R"
+
+R="$(setup)"; write_transcript "$R" "Which of the two layouts do you prefer for the config module?"
+check "question → allow"                                          "$R" "allow"; rm -rf "$R"
+
+R="$(setup)"; write_transcript "$R" "Here are three options for the retry policy, with trade-offs for each."
+check "neutral discussion → allow"                                "$R" "allow"; rm -rf "$R"
+
+# Detection reads only the FINAL TURN — a verdict in a PREVIOUS turn (separated
+# by a real user message) must not retrigger on a later chat turn.
+R="$(setup)"; write_transcript "$R" "The root cause is the stale cache."
+append_user "$R" "thanks — and what should I look at next?"
+append_assistant "$R" "What to look at next depends on the retry budget you want."
+check "previous-turn verdict, new chat turn → allow"              "$R" "allow"; rm -rf "$R"
+
+# Verdict phrasing quoted inside code spans/fences is documentation, not a claim.
+R="$(setup)"; write_transcript "$R" 'The matcher looks for phrases like `tests pass` and `root cause is` in prose:
+```
+detector: "tests pass" -> block
+```
+Nothing is asserted here.'
+check "verdict phrases only inside code → allow"                  "$R" "allow"; rm -rf "$R"
+
+R="$(setup)"  # no transcript at all (payload points at /dev/null)
+check "no transcript → allow (fail-open)"                         "$R" "allow"; rm -rf "$R"
 
 echo
-echo "## Present dossier → validate verdict"
-R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"; write_verdict "$R" "PASS" "[]"
-check "code change + matching PASS → allow"      "$R" "allow"
-check_consumed "PASS dossier consumed on allow"  "$R"
-check "after consume (no dossier) → allow"       "$R" "allow"; rm -rf "$R"
+echo "## Present dossier, fresh + matching → the verdict decides"
+R="$(setup)"; write_transcript "$R" "Fix verified; tests pass."; write_verdict "$R" "PASS" "[]"
+check "PASS → allow"                                              "$R" "allow"
+check_gone "PASS dossier consumed on allow"                       "$R"; rm -rf "$R"
 
-# A verdict with NO file change (ops / investigation) still validates against the
-# clean-tree hash — this is the whole point of covering non-code verdicts.
-R="$(setup)"; write_verdict "$R" "PASS" "[]"
-check "no-file-change verdict + PASS → allow"    "$R" "allow"; rm -rf "$R"
+R="$(setup)"; write_transcript "$R" "Root cause confirmed; pausing here."; write_verdict "$R" "IN_PROGRESS" '["push pending"]'
+check "IN_PROGRESS → allow"                                       "$R" "allow"
+check_gone "IN_PROGRESS dossier consumed on allow"                "$R"; rm -rf "$R"
 
-R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"; write_verdict "$R" "FAIL" '["Test: no reproducer"]'
-check "FAIL verdict → block"                     "$R" "block"; rm -rf "$R"
-
-R="$(setup)"; write_verdict "$R" "FAIL" '["finding cites no command output"]'
-check "no-file-change verdict + FAIL → block"    "$R" "block"; rm -rf "$R"
-
-R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"; write_verdict "$R" "IN_PROGRESS" '["mid-task"]'
-check "IN_PROGRESS → allow"                      "$R" "allow"; rm -rf "$R"
+# Requirement: the gate MAY loop on real findings — FAIL persists until re-audited.
+R="$(setup)"; write_transcript "$R" "The fix works."; write_verdict "$R" "FAIL" '["Test: no reproducer for the claimed fix"]'
+check "FAIL → block (finding-driven loop)"                        "$R" "block"
+check "FAIL again (unaddressed) → still block"                    "$R" "block"; rm -rf "$R"
 
 echo
-echo "## Present dossier → binding (branch / head / tree_hash / freshness)"
-R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"; write_verdict "$R" "PASS" "[]" "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
-check "tree_hash mismatch → block"               "$R" "block"; rm -rf "$R"
+echo "## Present dossier, stale/mismatched binding → DISCARD + re-detect (never a bookkeeping block)"
+# Tree moved after the audit, but the turn ends on a chat message → the old
+# dossier is discarded and the turn ends freely. Under #915 this BLOCKED — that
+# was the meaningless re-audit class.
+R="$(setup)"; write_transcript "$R" "Noted — I'll wait for your call on the API shape."
+write_verdict "$R" "PASS" "[]"; printf 'more\n' >> "$R/src/lib.rs"
+check "tree moved + chat ending → allow"                          "$R" "allow"
+check_gone "mismatched dossier discarded"                         "$R"; rm -rf "$R"
 
-R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"; write_verdict "$R" "PASS" "[]"
+# Tree moved after the audit AND the turn still asserts a verdict → the discard
+# falls through to detection, which demands a FRESH audit of the current claim.
+R="$(setup)"; write_transcript "$R" "Applied the follow-up; the fix works and tests pass."
+write_verdict "$R" "PASS" "[]"; printf 'more\n' >> "$R/src/lib.rs"
+check "tree moved + verdict ending → block (fresh audit)"         "$R" "block"
+check_gone "mismatched dossier discarded before re-detect"        "$R"; rm -rf "$R"
+
+R="$(setup)"; write_transcript "$R" "Thanks, ending here."; write_verdict "$R" "FAIL" '["x"]'
 jq '.head="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"' "$R/.claude/.last-verdict.json" > "$R/.claude/x" \
   && mv "$R/.claude/x" "$R/.claude/.last-verdict.json"
-check "HEAD mismatch → block"                    "$R" "block"; rm -rf "$R"
+check "HEAD-mismatched FAIL + chat ending → allow (discarded)"    "$R" "allow"
+check_gone "HEAD-mismatched dossier discarded"                    "$R"; rm -rf "$R"
 
-R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"; write_verdict "$R" "PASS" "[]"
+R="$(setup)"; write_transcript "$R" "Deploy is healthy."; write_verdict "$R" "PASS" "[]"
 touch -t 202001010000 "$R/.claude/.last-verdict.json"
-check "stale mtime (>max_age) → block"           "$R" "block"; rm -rf "$R"
-
-R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"; write_verdict "$R" "PASS" "[]"
-# Change the tree AFTER auditing → dossier no longer matches.
-printf 'more\n' >> "$R/src/lib.rs"
-check "tree changed after audit → block"         "$R" "block"; rm -rf "$R"
+check "stale-mtime PASS + verdict ending → block (re-detect)"     "$R" "block"; rm -rf "$R"
 
 echo
-echo "## Soft mode (default): a block condition becomes a non-blocking nudge"
-R="$(setup)"; printf 'fix\n' >> "$R/src/lib.rs"; write_verdict "$R" "FAIL" '["no reproducer"]'
-soft_out="$(printf '%s' "$PAYLOAD" | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" bash "$HOOK" ) 2>/dev/null)"
-if printf '%s' "$soft_out" | jq -e '(.decision // "") != "block" and .continue == true and (.systemMessage | type) == "string"' >/dev/null 2>&1; then
-  pass=$((pass + 1)); printf '  PASS  %s\n' "FAIL dossier → nudge (continue:true + systemMessage), not block"
+echo "## Triage (intelligent trigger): classifier decides; regex is the fallback"
+# The classifier stub receives the stripped message on stdin and answers YES/NO.
+# YES on a message the regex would MISS → the intelligence adds recall.
+R="$(setup)"; write_transcript "$R" "The culprit was the stale socket path all along."
+out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 VERDICT_CLASSIFIER_CMD='cat >/dev/null; echo YES' bash "$HOOK" ) 2>/dev/null)"
+if printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "classifier YES on regex-miss phrasing → block"
 else
-  fail=$((fail + 1)); printf '  FAIL  %s  (out=%s)\n' "soft-mode nudge" "$soft_out"
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "classifier YES → block" "$out"
+fi; rm -rf "$R"
+
+# NO on a message the regex would HIT (quoting/discussion) → intelligence removes
+# the static false positive.
+R="$(setup)"; write_transcript "$R" "In prose people write things like tests pass or root cause is X when they conclude."
+out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 VERDICT_CLASSIFIER_CMD='cat >/dev/null; echo NO' bash "$HOOK" ) 2>/dev/null)"
+if printf '%s' "$out" | jq -e '(.decision // "") != "block" and .continue == true and (.systemMessage | test("triage: NO"))' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "classifier NO → allow, announced to the human only"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "classifier NO → announced allow" "$out"
+fi; rm -rf "$R"
+
+# Classifier unavailable / garbage → UNKNOWN → deterministic regex fallback still gates.
+R="$(setup)"; write_transcript "$R" "All tests pass: 23/23 on the hook suite."
+out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 VERDICT_CLASSIFIER_CMD='cat >/dev/null; echo MAYBE' bash "$HOOK" ) 2>/dev/null)"
+if printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "classifier garbage → regex fallback → block"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "garbage → regex fallback" "$out"
+fi; rm -rf "$R"
+
+echo
+echo "## Flush-race guard: never judge a message that was already judged"
+# The harness may fire Stop before appending the turn's final message; the last
+# transcript entry is then the PREVIOUS turn's (already gated) message. The hook
+# records the identity it judged (checksum of the text — harness-agnostic);
+# seeing the same identity again → allow, never re-block.
+R="$(setup)"; write_transcript "$R" "Fix verified; tests pass."   # verdict-shaped
+mkdir -p "$R/.claude"; cksum_of "Fix verified; tests pass." > "$R/.claude/.verdict-last-uuid"
+check "stale transcript (identity already judged) → allow"       "$R" "allow"; rm -rf "$R"
+
+# Normal path records the judged identity so the NEXT stale sighting is recognized.
+R="$(setup)"; write_transcript "$R" "Deploy is healthy."
+got="$(decide "$R")"
+recorded="$(cat "$R/.claude/.verdict-last-uuid" 2>/dev/null || echo MISSING)"
+if [[ "$got" == "block" && "$recorded" == "$(cksum_of "Deploy is healthy.")" ]]; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "detection block records the judged identity"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (got=%s recorded=%s)\n' "identity recorded on block" "$got" "$recorded"
+fi; rm -rf "$R"
+
+R="$(setup)"; write_transcript "$R" "Anything else to adjust?"
+got="$(decide "$R")"
+recorded="$(cat "$R/.claude/.verdict-last-uuid" 2>/dev/null || echo MISSING)"
+if [[ "$got" == "allow" && "$recorded" == "$(cksum_of "Anything else to adjust?")" ]]; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "detection allow records the judged identity"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (got=%s recorded=%s)\n' "identity recorded on allow" "$got" "$recorded"
+fi; rm -rf "$R"
+
+echo
+echo "## Turn-level extraction: mid-turn findings cannot hide behind closing narration"
+# The classifier stub greps its stdin for the finding — proving the JOINED turn
+# text (not just the trailing fragment) is what triage judges. This is the class
+# a sibling session's decision log caught escaping: finding asserted mid-turn,
+# turn ends on "let me check X".
+GREP_STUB='text="$(cat)"; printf "%s" "$text" | grep -q "1:1 port" && echo YES || echo NO'
+
+R="$(setup)"; write_transcript "$R" "The activity service is a 1:1 port of upstream; there is no auto-start in the proxy."
+append_assistant "$R" "Let me check what the standalone proxy serves next."
+out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 VERDICT_CLASSIFIER_CMD="$GREP_STUB" bash "$HOOK" ) 2>/dev/null)"
+if printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "mid-turn finding + closing narration → block (joined text judged)"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "mid-turn finding → block" "$out"
+fi; rm -rf "$R"
+
+# The dominant real-transcript shape: a tool call sits between the finding and
+# the closing narration. ARRAY-shaped tool_results nest text blocks inside the
+# tool_result — they must not split the turn (that miss shipped once).
+R="$(setup)"; write_transcript "$R" "The activity service is a 1:1 port of upstream; there is no auto-start in the proxy."
+append_tool_result_array "$R" "src/proxy.go: 200 lines, no timer, no activity import"
+append_assistant "$R" "Let me check what the standalone proxy serves next."
+out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 VERDICT_CLASSIFIER_CMD="$GREP_STUB" bash "$HOOK" ) 2>/dev/null)"
+if printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "array tool_result mid-turn does not split the turn → block"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "array tool_result mid-turn" "$out"
+fi; rm -rf "$R"
+
+R="$(setup)"; write_transcript "$R" "The activity service is a 1:1 port of upstream; there is no auto-start in the proxy."
+append_tool_result_string "$R" "ok"
+append_assistant "$R" "Let me check what the standalone proxy serves next."
+out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 VERDICT_CLASSIFIER_CMD="$GREP_STUB" bash "$HOOK" ) 2>/dev/null)"
+if printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "string tool_result mid-turn does not split the turn → block"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "string tool_result mid-turn" "$out"
+fi; rm -rf "$R"
+
+# Same finding but in a PREVIOUS turn (real user message between): the final
+# turn is narration only — must not retrigger.
+R="$(setup)"; write_transcript "$R" "The activity service is a 1:1 port of upstream; there is no auto-start in the proxy."
+append_user "$R" "ok — check the proxy then"
+append_assistant "$R" "Let me check what the standalone proxy serves next."
+out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 VERDICT_CLASSIFIER_CMD="$GREP_STUB" bash "$HOOK" ) 2>/dev/null)"
+if ! printf '%s' "$out" | jq -e '(.decision // "") == "block"' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "same finding in a previous turn → allow (turn boundary respected)"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "previous-turn finding → allow" "$out"
+fi; rm -rf "$R"
+
+# Codex rollout shape, same semantics: user boundary + two assistant texts join.
+R="$(setup)"
+jq -nc '{type:"response_item", payload:{type:"message", role:"user", content:[{type:"input_text", text:"compare with upstream"}]}}' > "$R/transcript.jsonl"
+jq -nc '{type:"response_item", payload:{type:"message", role:"assistant", content:[{type:"output_text", text:"The activity service is a 1:1 port of upstream."}]}}' >> "$R/transcript.jsonl"
+jq -nc '{type:"response_item", payload:{type:"message", role:"assistant", content:[{type:"output_text", text:"Let me check the proxy next."}]}}' >> "$R/transcript.jsonl"
+out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 VERDICT_CLASSIFIER_CMD="$GREP_STUB" bash "$HOOK" ) 2>/dev/null)"
+if printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "codex shape: mid-turn finding joined across records → block"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "codex turn-level" "$out"
+fi; rm -rf "$R"
+
+echo
+echo "## Harness-agnostic extraction: conventions, not schema lists"
+R="$(setup)"; write_codex_transcript "$R" "Root cause is the missing bind mount; all tests pass now."
+check "codex rollout schema, verdict → block"                    "$R" "block"
+recorded="$(cat "$R/.claude/.verdict-last-uuid" 2>/dev/null || echo MISSING)"
+if [[ "$recorded" == cksum-* ]]; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "codex record (no id) → checksum identity recorded"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (recorded=%s)\n' "checksum identity" "$recorded"
+fi; rm -rf "$R"
+
+R="$(setup)"; write_codex_transcript "$R" "Which retry policy do you prefer here?"
+check "codex rollout schema, chat → allow"                       "$R" "allow"; rm -rf "$R"
+
+# Race guard on content identity: same text → same checksum → stale.
+R="$(setup)"; write_codex_transcript "$R" "Deploy is healthy."
+mkdir -p "$R/.claude"; cksum_of "Deploy is healthy." > "$R/.claude/.verdict-last-uuid"
+check "codex stale (identity already judged) → allow"            "$R" "allow"; rm -rf "$R"
+
+# The acceptance test for "all kinds of coding agents": a schema NO harness uses
+# today must work with ZERO hook changes.
+R="$(setup)"; write_future_agent_transcript "$R" "Root cause is the stale DNS cache; fix verified."
+check "invented future-agent schema, verdict → block"            "$R" "block"; rm -rf "$R"
+
+R="$(setup)"; write_future_agent_transcript "$R" "Want me to sketch the two options first?"
+check "invented future-agent schema, chat → allow"               "$R" "allow"; rm -rf "$R"
+
+# VERDICT_EXTRACTOR_CMD: the escape hatch for a truly alien (non-JSONL) format.
+R="$(setup)"; printf 'PLAIN TEXT LOG. verdict: tests pass\n' > "$R/transcript.jsonl"
+out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 VERDICT_EXTRACTOR_CMD='tail -n1' bash "$HOOK" ) 2>/dev/null)"
+if printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "custom extractor (non-JSONL format) → block"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "custom extractor" "$out"
+fi; rm -rf "$R"
+
+echo
+echo "## Chinese fallback patterns"
+R="$(setup)"; write_transcript "$R" "排查结束：根因是 gvproxy 套接字路径冲突，已修复。"
+check "中文 verdict (根因是/已修复) → block"                       "$R" "block"; rm -rf "$R"
+
+R="$(setup)"; write_transcript "$R" "接下来你想先看哪个模块？我可以先画个调用图。"
+check "中文 chat → allow"                                         "$R" "allow"; rm -rf "$R"
+
+echo
+echo "## Decision log: every Stop decision leaves one greppable line"
+R="$(setup)"; write_transcript "$R" "Deploy is healthy."
+decide "$R" >/dev/null
+if grep -q ' regex match-block$' "$R/.claude/.verdict-decisions.log" 2>/dev/null; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "block decision logged (rung + outcome)"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (log=%s)\n' "block logged" "$(cat "$R/.claude/.verdict-decisions.log" 2>/dev/null || echo MISSING)"
+fi; rm -rf "$R"
+
+R="$(setup)"; write_transcript "$R" "Anything else to adjust?"
+decide "$R" >/dev/null
+if grep -q ' regex none-allow$' "$R/.claude/.verdict-decisions.log" 2>/dev/null; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "allow decision logged"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (log=%s)\n' "allow logged" "$(cat "$R/.claude/.verdict-decisions.log" 2>/dev/null || echo MISSING)"
+fi; rm -rf "$R"
+
+R="$(setup)"; write_transcript "$R" "Fix verified; tests pass."; write_verdict "$R" "PASS" "[]"
+decide "$R" >/dev/null
+if grep -q ' dossier PASS-allow$' "$R/.claude/.verdict-decisions.log" 2>/dev/null; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "dossier consumption logged"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (log=%s)\n' "dossier logged" "$(cat "$R/.claude/.verdict-decisions.log" 2>/dev/null || echo MISSING)"
+fi; rm -rf "$R"
+
+echo
+echo "## Soft mode (VERDICT_GATE_HARD_BLOCK unset/0): block conditions become nudges"
+R="$(setup)"; write_transcript "$R" "The root cause is the stale index."
+soft_out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" bash "$HOOK" ) 2>/dev/null)"
+if printf '%s' "$soft_out" | jq -e '(.decision // "") != "block" and .continue == true and (.systemMessage | type) == "string"' >/dev/null 2>&1; then
+  pass=$((pass + 1)); printf '  PASS  %s\n' "detected verdict → nudge in soft mode, not block"
+else
+  fail=$((fail + 1)); printf '  FAIL  %s  (out=%s)\n' "soft-mode detection nudge" "$soft_out"
 fi
 rm -rf "$R"
 
-R="$(setup)"  # no dossier → allow (empty output) in BOTH soft and hard — the loop-safety guarantee
-soft_nodossier="$(printf '%s' "$PAYLOAD" | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" bash "$HOOK" ) 2>/dev/null)"
-hard_nodossier="$(printf '%s' "$PAYLOAD" | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 bash "$HOOK" ) 2>/dev/null)"
-if [[ -z "$soft_nodossier" && -z "$hard_nodossier" ]]; then
-  pass=$((pass + 1)); printf '  PASS  %s\n' "no dossier → allow (empty output), never blocks/nudges in soft OR hard"
+R="$(setup)"; write_transcript "$R" "Anything else you want changed?"
+soft_chat="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" bash "$HOOK" ) 2>/dev/null)"
+hard_chat="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 bash "$HOOK" ) 2>/dev/null)"
+chat_ok=yes
+for o in "$soft_chat" "$hard_chat"; do
+  if [[ -n "$o" ]] && printf '%s' "$o" | jq -e '(.decision // "") == "block"' >/dev/null 2>&1; then chat_ok=no; fi
+done
+if [[ "$chat_ok" == "yes" ]]; then
+  pass=$((pass + 1)); printf '  PASS  %s\n' "chat turn → allow (never blocks) in soft AND hard"
 else
-  fail=$((fail + 1)); printf '  FAIL  %s  (soft=%s hard=%s)\n' "no-dossier allow" "$soft_nodossier" "$hard_nodossier"
+  fail=$((fail + 1)); printf '  FAIL  %s  (soft=%s hard=%s)\n' "chat allow" "$soft_chat" "$hard_chat"
 fi
 rm -rf "$R"
 

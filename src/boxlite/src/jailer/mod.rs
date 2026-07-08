@@ -170,6 +170,7 @@ pub trait Jail: Send + Sync {
 
 use crate::disk::read_backing_chain;
 use crate::runtime::layout::BoxFilesystemLayout;
+use crate::volumes::{VolumeShare, classify_volume_share};
 use std::path::PathBuf;
 
 // ============================================================================
@@ -320,12 +321,14 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
         }
     }
 
-    // User volumes
+    // User volumes. Directories are shared directly, so grant the VMM access.
+    // Single files are staged under shared_dir (granted above), so they need no
+    // grant here — this also keeps the file's host siblings out of the sandbox.
     for vol in volumes {
         let p = PathBuf::from(&vol.host_path);
-        if p.exists() {
+        if let Some(VolumeShare::Dir(dir)) = classify_volume_share(&p) {
             paths.push(PathAccess {
-                path: p,
+                path: dir,
                 writable: !vol.read_only,
             });
         }
@@ -856,6 +859,32 @@ mod tests {
         assert!(
             paths.iter().all(|p| p.path != Path::new("/does/not/exist")),
             "Nonexistent volume should be skipped"
+        );
+    }
+
+    #[test]
+    fn test_build_path_access_single_file_grants_no_host_dir() {
+        let dir = tempdir().unwrap();
+        let layout = test_layout(dir.path().to_path_buf());
+
+        let parent = dir.path().join("cfg");
+        std::fs::create_dir_all(&parent).unwrap();
+        let file = parent.join("app.conf");
+        std::fs::write(&file, "k=v\n").unwrap();
+
+        let volumes = vec![VolumeSpec {
+            host_path: file.to_string_lossy().to_string(),
+            guest_path: "/etc/app.conf".to_string(),
+            read_only: true,
+        }];
+
+        let paths = build_path_access(&layout, &volumes);
+
+        // A single file is staged under shared_dir, so it must not widen path
+        // access to the file or its parent (which would expose host siblings).
+        assert!(
+            paths.iter().all(|p| p.path != file && p.path != parent),
+            "single-file volume must not grant its host file or parent dir"
         );
     }
 

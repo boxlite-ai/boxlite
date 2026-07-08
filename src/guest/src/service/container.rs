@@ -217,7 +217,13 @@ impl ContainerService for GuestServer {
             .mounts
             .iter()
             .map(|m| {
-                let source = container_layout.volume_dir(&m.volume_name);
+                let volume_dir = container_layout.volume_dir(&m.volume_name);
+                // Single-file mount: bind just the one file within the shared dir.
+                let source = if m.subpath.is_empty() {
+                    volume_dir
+                } else {
+                    volume_dir.join(&m.subpath)
+                };
                 UserMount {
                     source: source.to_string_lossy().to_string(),
                     destination: m.destination.clone(),

@@ -180,6 +180,8 @@ Cargo.lock
 .claude/worktrees/
 .claude/.last-audit.json
 .claude/.last-verdict.json
+.claude/.verdict-last-uuid
+.claude/.verdict-decisions.log
 
 # ============================================================================
 # Local dev artifacts (apps/infra-local + dashboard E2E session)

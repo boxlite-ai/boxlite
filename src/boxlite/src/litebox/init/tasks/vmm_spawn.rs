@@ -20,7 +20,9 @@ use crate::runtime::types::ContainerID;
 use crate::util::find_binary;
 use crate::vmm::controller::{ShimController, VmmController, VmmHandler};
 use crate::vmm::{Entrypoint, InstanceSpec, VmmKind};
-use crate::volumes::{ContainerMount, ContainerVolumeManager, GuestVolumeManager};
+use crate::volumes::{
+    ContainerMount, ContainerVolumeManager, GuestVolumeManager, stage_single_file,
+};
 use async_trait::async_trait;
 use boxlite_shared::Transport;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -174,15 +176,27 @@ async fn build_config(
     // Add user volumes via ContainerVolumeManager
     let mut container_mgr = ContainerVolumeManager::new(&mut volume_mgr);
     for vol in &user_volumes {
+        // Single-file volume: stage the file into a dedicated dir under the box's
+        // shared tree (already granted to the VMM sandbox) and share that dir, so
+        // virtio-fs never exposes the file's host siblings. Directories share as-is.
+        let share_dir = match &vol.subpath {
+            None => vol.host_path.clone(),
+            Some(file_name) => {
+                let staging_dir = layout.shared_dir().join("user-volumes").join(&vol.tag);
+                stage_single_file(&staging_dir, &vol.host_path, file_name, vol.read_only)?;
+                staging_dir
+            }
+        };
         container_mgr.add_volume(
             container_id.as_str(),
             &vol.tag,
             &vol.tag,
-            vol.host_path.clone(),
+            share_dir,
             &vol.guest_path,
             vol.read_only,
             vol.owner_uid,
             vol.owner_gid,
+            vol.subpath.clone(),
         );
     }
     let container_mounts = container_mgr.build_container_mounts();

@@ -4,7 +4,7 @@ description: Independent auditor that judges a pending git commit or push agains
 tools: Read, Bash, Write
 ---
 
-You are the CLAUDE.md compliance auditor for the boxlite3 repository.
+You are the CLAUDE.md compliance auditor for the boxlite repository.
 
 The parent agent must tell you the exact git command they are about to retry
 (e.g. `git commit -m "..."` or `git push origin <branch>`). Treat that as the

@@ -29,12 +29,13 @@ pub struct RunArgs {
     #[command(flatten)]
     pub management: ManagementFlags,
 
-    #[arg(index = 1)]
-    pub image: String,
+    /// Path to an already prepared rootfs
+    #[arg(long = "rootfs", value_name = "PATH")]
+    pub rootfs: Option<String>,
 
-    /// Command to run inside the image
-    #[arg(index = 2, trailing_var_arg = true)]
-    pub command: Vec<String>,
+    /// Image and command, or command only when --rootfs is set
+    #[arg(index = 1, trailing_var_arg = true, value_name = "IMAGE|COMMAND")]
+    pub args: Vec<String>,
 }
 
 /// Entry point.
@@ -46,8 +47,10 @@ pub struct RunArgs {
 /// runs `shutdown_sync()` and stops the box's shim on every return path.
 /// `std::process::exit` would bypass that Drop chain and leak the shim (#622).
 pub async fn execute(args: RunArgs, global: &GlobalFlags) -> anyhow::Result<i32> {
+    let (rootfs, command_args) = args.rootfs_and_command()?;
+    let command_args = command_args.to_vec();
     let mut runner = BoxRunner::new(args, global)?;
-    runner.run().await
+    runner.run(rootfs, command_args).await
 }
 
 struct BoxRunner {
@@ -64,14 +67,14 @@ impl BoxRunner {
         Ok(Self { args, rt, home })
     }
 
-    async fn run(&mut self) -> anyhow::Result<i32> {
+    async fn run(&mut self, rootfs: RootfsSpec, command_args: Vec<String>) -> anyhow::Result<i32> {
         // Validate flags and environment
         self.validate_flags()?;
 
-        let litebox = self.create_box().await?;
+        let litebox = self.create_box(rootfs).await?;
 
         // Start execution
-        let cmd = self.prepare_command();
+        let cmd = self.prepare_command(&command_args);
         let mut execution = litebox.exec(cmd).await?;
 
         // Detach mode: Print ID and exit
@@ -104,7 +107,7 @@ impl BoxRunner {
         Ok(to_shell_exit_code(exit_code))
     }
 
-    async fn create_box(&self) -> anyhow::Result<LiteBox> {
+    async fn create_box(&self, rootfs: RootfsSpec) -> anyhow::Result<LiteBox> {
         let mut options = BoxOptions::default();
         self.args.resource.apply_to(&mut options);
         self.args.management.apply_to(&mut options)?;
@@ -120,7 +123,7 @@ impl BoxRunner {
             options.auto_remove = false;
         }
 
-        options.rootfs = RootfsSpec::Image(self.args.image.clone());
+        options.rootfs = rootfs;
 
         let litebox = self
             .rt
@@ -130,8 +133,8 @@ impl BoxRunner {
         Ok(litebox)
     }
 
-    fn prepare_command(&self) -> BoxCommand {
-        let (program, args) = parse_command_args(&self.args.command);
+    fn prepare_command(&self, command_args: &[String]) -> BoxCommand {
+        let (program, args) = parse_command_args(command_args);
         BoxCommand::new(program)
             .args(args)
             .tty(self.args.process.tty)
@@ -147,6 +150,27 @@ impl BoxRunner {
     }
 }
 
+impl RunArgs {
+    fn rootfs_and_command(&self) -> anyhow::Result<(RootfsSpec, &[String])> {
+        resolve_rootfs_and_command(self.rootfs.as_deref(), &self.args)
+    }
+}
+
+fn resolve_rootfs_and_command<'a>(
+    rootfs: Option<&str>,
+    args: &'a [String],
+) -> anyhow::Result<(RootfsSpec, &'a [String])> {
+    if let Some(path) = rootfs {
+        return Ok((RootfsSpec::RootfsPath(path.to_string()), args));
+    }
+
+    let Some((image, command)) = args.split_first() else {
+        anyhow::bail!("provide IMAGE or --rootfs PATH");
+    };
+
+    Ok((RootfsSpec::Image(image.clone()), command))
+}
+
 fn parse_command_args(input: &[String]) -> (&str, &[String]) {
     if input.is_empty() {
         ("sh", &[])
@@ -158,6 +182,8 @@ fn parse_command_args(input: &[String]) -> (&str, &[String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::{Cli, Commands};
+    use clap::Parser;
 
     #[test]
     fn test_parse_command_args_defaults() {
@@ -172,5 +198,76 @@ mod tests {
             parse_command_args(&input),
             ("echo", &["hello".to_string()] as &[String])
         );
+    }
+
+    #[test]
+    fn run_rootfs_flag_sets_rootfs_path_and_uses_trailing_command() {
+        let cli = Cli::try_parse_from(["boxlite", "run", "--rootfs", "/tmp/rootfs", "echo", "hi"])
+            .expect("run --rootfs should parse");
+        let Commands::Run(args) = cli.command else {
+            panic!("expected run command");
+        };
+
+        let (rootfs, command) = args
+            .rootfs_and_command()
+            .expect("rootfs command should resolve");
+
+        match rootfs {
+            RootfsSpec::RootfsPath(path) => assert_eq!(path, "/tmp/rootfs"),
+            other => panic!("expected RootfsPath, got {other:?}"),
+        }
+        assert_eq!(command, &["echo".to_string(), "hi".to_string()]);
+    }
+
+    #[test]
+    fn run_rootfs_without_command_defaults_to_shell() {
+        let cli = Cli::try_parse_from(["boxlite", "run", "--rootfs", "/tmp/rootfs"])
+            .expect("run --rootfs should parse");
+        let Commands::Run(args) = cli.command else {
+            panic!("expected run command");
+        };
+
+        let (rootfs, command) = args
+            .rootfs_and_command()
+            .expect("rootfs command should resolve");
+
+        match rootfs {
+            RootfsSpec::RootfsPath(path) => assert_eq!(path, "/tmp/rootfs"),
+            other => panic!("expected RootfsPath, got {other:?}"),
+        }
+        assert_eq!(parse_command_args(command), ("sh", &[] as &[String]));
+    }
+
+    #[test]
+    fn run_without_rootfs_preserves_image_and_command() {
+        let cli = Cli::try_parse_from(["boxlite", "run", "alpine:latest", "echo", "hi"])
+            .expect("run image command should parse");
+        let Commands::Run(args) = cli.command else {
+            panic!("expected run command");
+        };
+
+        let (rootfs, command) = args
+            .rootfs_and_command()
+            .expect("image command should resolve");
+
+        match rootfs {
+            RootfsSpec::Image(image) => assert_eq!(image, "alpine:latest"),
+            other => panic!("expected Image, got {other:?}"),
+        }
+        assert_eq!(command, &["echo".to_string(), "hi".to_string()]);
+    }
+
+    #[test]
+    fn run_requires_image_or_rootfs() {
+        let cli = Cli::try_parse_from(["boxlite", "run"]).expect("run should parse");
+        let Commands::Run(args) = cli.command else {
+            panic!("expected run command");
+        };
+
+        let err = args
+            .rootfs_and_command()
+            .expect_err("missing source must be rejected");
+
+        assert!(err.to_string().contains("IMAGE or --rootfs"));
     }
 }
