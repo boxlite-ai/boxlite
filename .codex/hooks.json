@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/env bash \"$(git rev-parse --show-toplevel)/.claude/hooks/preflight-commit-push.sh\"",
+            "command": "CODEX_SANDBOX=seatbelt /usr/bin/env bash \"$(git rev-parse --show-toplevel)/.claude/hooks/preflight-commit-push.sh\"",
             "statusMessage": "Checking CLAUDE.md audit"
           },
           {

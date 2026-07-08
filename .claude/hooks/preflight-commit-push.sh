@@ -64,6 +64,19 @@ else
 fi
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+project_dir="${CLAUDE_PROJECT_DIR:-$repo_root}"
+audit_file="$project_dir/.claude/.last-audit.json"
+
+# Codex has no Claude Code subagent and should not shell out to the Claude CLI to
+# manufacture the audit artifact. When Codex calls this as a PreToolUse hook, run
+# the local deterministic auditor first; the git-level hook then consumes the
+# same .last-audit.json contract below.
+if [[ -n "${CODEX_SANDBOX:-}" && -z "${GITHOOK_DELEGATED:-}" ]]; then
+  local_auditor="$repo_root/.claude/hooks/run-commit-push-audit.sh"
+  if [[ -r "$local_auditor" ]]; then
+    bash "$local_auditor" "$kind" "$command" >/dev/null 2>&1 || true
+  fi
+fi
 
 # Delegate to the git-level gate when installed: with core.hooksPath pointing at
 # .githooks, the same contract is enforced by .githooks/pre-commit|pre-push for
@@ -85,10 +98,8 @@ if [[ -z "${GITHOOK_DELEGATED:-}" ]]; then
     fi
   fi
 fi
-project_dir="${CLAUDE_PROJECT_DIR:-$repo_root}"
 branch="$(git -C "$repo_root" branch --show-current 2>/dev/null || echo '?')"
 head="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo '?')"
-audit_file="$project_dir/.claude/.last-audit.json"
 max_age_seconds=600
 
 deny() {

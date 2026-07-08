@@ -21,6 +21,7 @@ trap 'rm -rf "$TMP"' EXIT
 # branch/HEAD detection — that's fine, we read the same values for assertions.
 export CLAUDE_PROJECT_DIR="$TMP"
 mkdir -p "$TMP/.claude"
+unset CODEX_SANDBOX CLAUDECODE AGENT_GATED
 
 BRANCH="$(git -C "$REPO_ROOT" branch --show-current)"
 HEAD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
@@ -102,6 +103,30 @@ run "stale mtime (>max_age) → deny"     "$GC -m foo"                  "deny"
 
 write_audit "PASS" "[]" "commit"
 run "kind mismatch (commit vs push)"    "$GP origin main"             "deny"
+
+echo
+echo "## Codex: local deterministic audit writes the required artifact"
+CODEX_REPO="$(mktemp -d)"
+git -C "$CODEX_REPO" init -q
+git -C "$CODEX_REPO" config user.email t@t.test
+git -C "$CODEX_REPO" config user.name tester
+mkdir -p "$CODEX_REPO/.claude/hooks"
+cp "$HOOK" "$REPO_ROOT/.claude/hooks/run-commit-push-audit.sh" "$CODEX_REPO/.claude/hooks/"
+printf 'base\n' > "$CODEX_REPO/f"
+git -C "$CODEX_REPO" add -A
+git -C "$CODEX_REPO" commit -qm base
+printf 'change\n' >> "$CODEX_REPO/f"
+git -C "$CODEX_REPO" add -A
+out="$(printf '{"tool_input":{"command":"git commit -m '\''test(net): cover hook audit'\''"}}' \
+      | ( cd "$CODEX_REPO" && CLAUDE_PROJECT_DIR="$CODEX_REPO" CODEX_SANDBOX=seatbelt bash "$CODEX_REPO/.claude/hooks/preflight-commit-push.sh" ) 2>/dev/null)"
+if [[ -z "$out" && ! -e "$CODEX_REPO/.claude/.last-audit.json" ]]; then
+  pass=$((pass + 1))
+  printf '  PASS  Codex local audit allows and is consumed\n'
+else
+  fail=$((fail + 1))
+  printf '  FAIL  Codex local audit allows and is consumed  (out=%s audit_exists=%s)\n' "${out:-EMPTY}" "$([[ -e "$CODEX_REPO/.claude/.last-audit.json" ]] && echo yes || echo no)"
+fi
+rm -rf "$CODEX_REPO"
 
 echo
 echo "RESULT: $pass passed, $fail failed"
