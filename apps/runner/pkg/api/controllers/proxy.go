@@ -143,11 +143,6 @@ func handleWebSocketTerminal(ctx *gin.Context, r *runner.Runner, boxId string, l
 	// the terminal handler returns so the ticker doesn't leak.
 	keepaliveCtx, cancelKeepalive := context.WithCancel(ctx.Request.Context())
 	defer cancelKeepalive()
-	activityToucher := newBoxActivityToucher(boxId, logger)
-	configurePongLiveness(keepaliveCtx, ws, 3*terminalKeepaliveInterval, activityToucher.Touch)
-	go runWebSocketKeepalive(keepaliveCtx, ws, &writeMu, terminalKeepaliveInterval, terminalWriteDeadline, func(err error) {
-		logger.Debug("terminal keepalive ping failed", "error", err)
-	})
 
 	shellCmd, shellArgs := shellutil.DefaultInteractiveShell()
 	execution, err := r.Boxlite.StartExecution(ctx.Request.Context(), boxId, shellCmd, shellArgs, wsWriter, wsWriter, true)
@@ -163,6 +158,12 @@ func handleWebSocketTerminal(ctx *gin.Context, r *runner.Runner, boxId string, l
 		return
 	}
 	defer execution.Close()
+
+	activityToucher := newBoxActivityToucher(boxId, logger)
+	configurePongLiveness(keepaliveCtx, ws, 3*terminalKeepaliveInterval, activityToucher.Touch)
+	go runWebSocketKeepalive(keepaliveCtx, ws, &writeMu, terminalKeepaliveInterval, terminalWriteDeadline, func(err error) {
+		logger.Debug("terminal keepalive ping failed", "error", err)
+	})
 
 	// Read from WebSocket and write to execution stdin.
 	for {
