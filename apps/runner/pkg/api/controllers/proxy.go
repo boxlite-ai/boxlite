@@ -119,7 +119,8 @@ ws.onopen=function(){term.focus();};
 var parentOrigin='';
 try{parentOrigin=new URL(document.referrer).origin;}catch(_){}
 function postParent(message){
-  parent.postMessage(message,parentOrigin||'*');
+  if(!parentOrigin)return;
+  parent.postMessage(message,parentOrigin);
 }
 var lastCwd='';
 function postCwd(path){
@@ -139,7 +140,7 @@ function scanCwd(data){
 }
 window.addEventListener('message',function(event){
   if(event.source!==parent)return;
-  if(parentOrigin&&event.origin!==parentOrigin)return;
+  if(!parentOrigin||event.origin!==parentOrigin)return;
   var msg=event.data||{};
   if(msg.source!=='boxlite-dashboard')return;
   if(msg.type==='cwd-request'){

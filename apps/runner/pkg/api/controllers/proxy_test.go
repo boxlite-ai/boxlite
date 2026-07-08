@@ -49,3 +49,28 @@ func TestTerminalHTMLDoesNotAcceptDashboardShellCommands(t *testing.T) {
 		}
 	}
 }
+
+func TestTerminalHTMLRequiresTrustedParentOrigin(t *testing.T) {
+	required := []string{
+		"if(!parentOrigin)return;",
+		"parent.postMessage(message,parentOrigin);",
+		"if(!parentOrigin||event.origin!==parentOrigin)return;",
+	}
+	for _, needle := range required {
+		if !strings.Contains(terminalHTML, needle) {
+			t.Fatalf("terminalHTML should require a trusted parent origin; missing %q", needle)
+		}
+	}
+
+	forbidden := []string{
+		"parentOrigin||'*'",
+		"postMessage(message,'*')",
+		"postMessage(message, '*')",
+		"if(parentOrigin&&event.origin!==parentOrigin)return;",
+	}
+	for _, needle := range forbidden {
+		if strings.Contains(terminalHTML, needle) {
+			t.Fatalf("terminalHTML must not fall back to wildcard parent origin; found %q", needle)
+		}
+	}
+}
