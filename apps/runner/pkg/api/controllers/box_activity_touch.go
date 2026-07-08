@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	runnerapiclient "github.com/boxlite-ai/runner/pkg/apiclient"
 )
 
@@ -20,10 +21,19 @@ const (
 
 type updateBoxActivityFunc func(context.Context, string) error
 
-var updateBoxLastActivity updateBoxActivityFunc = func(ctx context.Context, boxID string) error {
-	apiClient, err := runnerapiclient.GetApiClient()
+type boxActivityUpdater struct {
+	mu     sync.Mutex
+	client *apiclient.APIClient
+}
+
+func newBoxActivityUpdater() *boxActivityUpdater {
+	return &boxActivityUpdater{}
+}
+
+func (u *boxActivityUpdater) UpdateLastActivity(ctx context.Context, boxID string) error {
+	apiClient, err := u.apiClient()
 	if err != nil {
-		return fmt.Errorf("get api client: %w", err)
+		return err
 	}
 
 	resp, err := apiClient.BoxAPI.UpdateLastActivity(ctx, boxID).Execute()
@@ -34,6 +44,21 @@ var updateBoxLastActivity updateBoxActivityFunc = func(ctx context.Context, boxI
 		return fmt.Errorf("update last activity for box %s: %w", boxID, err)
 	}
 	return nil
+}
+
+func (u *boxActivityUpdater) apiClient() (*apiclient.APIClient, error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.client != nil {
+		return u.client, nil
+	}
+
+	apiClient, err := runnerapiclient.GetApiClient()
+	if err != nil {
+		return nil, fmt.Errorf("get api client: %w", err)
+	}
+	u.client = apiClient
+	return apiClient, nil
 }
 
 type boxActivityToucher struct {
@@ -53,7 +78,7 @@ func newBoxActivityToucher(boxID string, logger *slog.Logger) *boxActivityTouche
 	return &boxActivityToucher{
 		boxID:       boxID,
 		minInterval: boxActivityTouchInterval,
-		update:      updateBoxLastActivity,
+		update:      newBoxActivityUpdater().UpdateLastActivity,
 		logger:      logger,
 	}
 }
