@@ -154,40 +154,28 @@ async def execute_code(code: str) -> str:
 
 **After BoxLite (safe):**
 ```python
-import asyncio
 import boxlite
 
 _box = None
-_runtime = None
 
 async def get_box():
-    global _box, _runtime
+    global _box
     if _box is None:
-        _runtime = boxlite.Boxlite.default()
-        _box = await _runtime.create(boxlite.BoxOptions(image="python:slim"))
-        await _box.start()
+        _box = boxlite.SimpleBox(image="python:slim")
+        await _box.start()  # create and start without context manager
     return _box
 
 async def shutdown():
     """Call at process exit to clean up the long-lived box."""
-    global _box, _runtime
+    global _box
     if _box is not None:
-        try:
-            await _box.stop()
-        finally:
-            await _runtime.remove(_box.id)
-            _box = None
+        await _box.stop()  # auto_remove=True by default
+        _box = None
 
 async def execute_code(code: str, timeout: int = 30) -> str:
     box = await get_box()
-    # lower-level Box from runtime.create() — exec() takes a list and returns an execution handle
-    execution = await box.exec("python", ["-c", code])
-    try:
-        result = await asyncio.wait_for(execution.wait(), timeout=timeout)
-        return result.stdout
-    except BaseException:
-        await execution.kill()
-        return "Error: execution timed out or cancelled"
+    result = await box.exec("python", "-c", code, timeout=timeout)
+    return result.stdout
 ```
 
 Note: do **not** use `async with SimpleBox(...) as box` and then assign `box` to a module-level variable — the context manager closes the box when it exits, so the cached reference is already stopped.
