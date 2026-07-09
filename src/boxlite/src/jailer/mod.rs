@@ -85,7 +85,8 @@ pub use crate::runtime::advanced_options::{ResourceLimits, SecurityOptions};
 pub use builder::JailerBuilder;
 pub use error::{ConfigError, IsolationError, JailerError, SystemError};
 pub use sandbox::{
-    CompositeSandbox, NoopSandbox, PathAccess, PlatformSandbox, Sandbox, SandboxContext,
+    CompositeSandbox, NoopSandbox, PathAccess, PlatformSandbox, Sandbox, SandboxBindMount,
+    SandboxContext,
 };
 
 // ============================================================================
@@ -321,9 +322,9 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
         }
     }
 
-    // User volumes. Directories are shared directly, so grant the VMM access.
-    // Single files are staged under shared_dir (granted above), so they need no
-    // grant here — this also keeps the file's host siblings out of the sandbox.
+    // Fallback user volumes. Direct directory virtio-fs shares need source
+    // access here. Volumes handled by SandboxBindMount skip this path, so the
+    // original host source is not also visible at its original path.
     for vol in volumes {
         let p = PathBuf::from(&vol.host_path);
         if let Some(VolumeShare::Dir(dir)) = classify_volume_share(&p) {
@@ -378,6 +379,8 @@ pub struct Jailer<S: Sandbox> {
     pub(crate) security: SecurityOptions,
     /// Volume mounts (for sandbox path restrictions).
     pub(crate) volumes: Vec<VolumeSpec>,
+    /// Bind mounts installed inside namespace sandboxes.
+    pub(crate) bind_mounts: Vec<SandboxBindMount>,
     /// Unique box identifier.
     pub(crate) box_id: String,
     /// Box filesystem layout (provides typed path accessors).
@@ -532,10 +535,16 @@ impl<S: Sandbox> Jailer<S> {
     ///
     /// Delegates to [`build_path_access`] for granular filesystem rules.
     fn context(&self) -> SandboxContext<'_> {
-        let paths = build_path_access(&self.layout, &self.volumes);
+        let path_volumes: &[VolumeSpec] = if self.bind_mounts.is_empty() {
+            self.volumes.as_slice()
+        } else {
+            &[]
+        };
+        let paths = build_path_access(&self.layout, path_volumes);
         tracing::debug!(
             box_id = %self.box_id,
             path_count = paths.len(),
+            bind_mount_count = self.bind_mounts.len(),
             paths = ?paths,
             "Built sandbox path access list"
         );
@@ -546,6 +555,7 @@ impl<S: Sandbox> Jailer<S> {
         SandboxContext {
             id: &self.box_id,
             paths,
+            bind_mounts: self.bind_mounts.clone(),
             resource_limits: &self.security.resource_limits,
             network_enabled: self.security.network_enabled,
             sandbox_profile: self.security.sandbox_profile.as_deref(),
@@ -841,6 +851,43 @@ mod tests {
 
         let rw_vol = vol_paths.iter().find(|p| p.path == vol_rw).unwrap();
         assert!(rw_vol.writable, "RW volume should be writable");
+    }
+
+    #[test]
+    fn test_context_with_sandbox_bind_mounts_does_not_expose_volume_source_path() {
+        let dir = tempdir().unwrap();
+        let layout = test_layout(dir.path().join("box"));
+
+        let host_volume = dir.path().join("host-data");
+        std::fs::create_dir_all(&host_volume).unwrap();
+        let sandbox_target = layout.shared_dir().join("containers/main/volumes/uservol0");
+
+        let jail = JailerBuilder::new()
+            .with_box_id("test-box")
+            .with_layout(layout)
+            .with_volumes(vec![VolumeSpec {
+                host_path: host_volume.to_string_lossy().to_string(),
+                guest_path: "/data".to_string(),
+                read_only: false,
+            }])
+            .with_bind_mounts(vec![SandboxBindMount::new(
+                host_volume.clone(),
+                sandbox_target.clone(),
+                true,
+            )])
+            .build()
+            .expect("jailer should build");
+
+        let ctx = jail.context();
+
+        assert!(
+            ctx.paths.iter().all(|p| p.path != host_volume),
+            "sandbox bind-backed volumes should not also expose the host source at its original path"
+        );
+        assert_eq!(ctx.bind_mounts.len(), 1);
+        assert_eq!(ctx.bind_mounts[0].source, host_volume);
+        assert_eq!(ctx.bind_mounts[0].target, sandbox_target);
+        assert!(ctx.bind_mounts[0].writable);
     }
 
     #[test]

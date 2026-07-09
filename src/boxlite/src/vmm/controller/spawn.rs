@@ -5,7 +5,7 @@ use std::{
     process::{Child, Stdio},
 };
 
-use crate::jailer::{Jail, JailerBuilder};
+use crate::jailer::{Jail, JailerBuilder, SandboxBindMount};
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::options::BoxOptions;
 use crate::util::configure_library_env;
@@ -38,6 +38,7 @@ pub struct ShimSpawner<'a> {
     layout: &'a BoxFilesystemLayout,
     box_id: &'a str,
     options: &'a BoxOptions,
+    bind_mounts: &'a [SandboxBindMount],
 }
 
 impl<'a> ShimSpawner<'a> {
@@ -46,12 +47,14 @@ impl<'a> ShimSpawner<'a> {
         layout: &'a BoxFilesystemLayout,
         box_id: &'a str,
         options: &'a BoxOptions,
+        bind_mounts: &'a [SandboxBindMount],
     ) -> Self {
         Self {
             binary_path,
             layout,
             box_id,
             options,
+            bind_mounts,
         }
     }
 
@@ -79,6 +82,7 @@ impl<'a> ShimSpawner<'a> {
             .with_layout(self.layout.clone())
             .with_security(self.options.advanced.security.clone())
             .with_volumes(self.options.volumes.clone())
+            .with_bind_mounts(self.bind_mounts.to_vec())
             .with_detach(detach);
 
         if let Some(ref setup) = child_setup {
@@ -203,6 +207,7 @@ mod tests {
             &layout,
             "test-box",
             &options,
+            &[],
         );
 
         // No CLI args — config is sent via stdin pipe
@@ -237,6 +242,7 @@ mod tests {
             &layout,
             "test-box",
             &options,
+            &[],
         );
 
         let mut cmd = std::process::Command::new("/usr/bin/true");
@@ -291,6 +297,7 @@ mod tests {
             &layout,
             "test-box",
             &options,
+            &[],
         );
 
         let mut cmd = std::process::Command::new("/usr/bin/true");
@@ -333,6 +340,7 @@ mod tests {
             &layout,
             "shimspawnertest",
             &options,
+            &[],
         );
 
         let spawned = spawner.spawn("", true).expect("spawn detached");
@@ -387,6 +395,7 @@ mod tests {
             &layout,
             "shimspawnertest",
             &options,
+            &[],
         );
 
         let spawned = spawner.spawn("", false).expect("spawn non-detached");

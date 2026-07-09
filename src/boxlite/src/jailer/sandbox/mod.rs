@@ -102,6 +102,28 @@ pub struct PathAccess {
     pub writable: bool,
 }
 
+/// A bind mount performed inside the sandbox mount namespace.
+///
+/// Unlike [`PathAccess`], source and target are intentionally distinct. The
+/// bwrap sandbox uses this for user volumes: host source paths are mounted onto
+/// the existing box shared tree that libkrun exports to the guest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxBindMount {
+    pub source: PathBuf,
+    pub target: PathBuf,
+    pub writable: bool,
+}
+
+impl SandboxBindMount {
+    pub fn new(source: impl Into<PathBuf>, target: impl Into<PathBuf>, writable: bool) -> Self {
+        Self {
+            source: source.into(),
+            target: target.into(),
+            writable,
+        }
+    }
+}
+
 // ============================================================================
 // SandboxContext
 // ============================================================================
@@ -119,6 +141,8 @@ pub struct SandboxContext<'a> {
     pub id: &'a str,
     /// Pre-computed filesystem path access rules.
     pub paths: Vec<PathAccess>,
+    /// Bind mounts to perform inside namespace sandboxes.
+    pub bind_mounts: Vec<SandboxBindMount>,
     /// Resource limits (for cgroup configuration).
     pub resource_limits: &'a ResourceLimits,
     /// Whether network access is enabled.
