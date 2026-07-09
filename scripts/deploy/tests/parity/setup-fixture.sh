@@ -55,6 +55,12 @@ printf 'guest-binary-v1' > "$FIXTURE_ROOT/target/x86_64-unknown-linux-musl/relea
 chmod +x "$FIXTURE_ROOT/target/x86_64-unknown-linux-musl/release/boxlite-guest"
 EOF
 
+cat > "$FIXTURE/scripts/build/fix-go-symbols.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "fix-go-symbols.sh $*" >> "$CALL_LOG"
+test -f "${1:?lib path required}"
+EOF
+
 chmod +x "$FIXTURE"/scripts/build/*.sh "$FIXTURE"/scripts/deploy/*.sh
 [ -f "$FIXTURE/scripts/deploy/build-runner-binary.mjs" ] && chmod +x "$FIXTURE"/scripts/deploy/*.mjs
 

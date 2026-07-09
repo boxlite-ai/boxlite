@@ -217,6 +217,11 @@ try {
 
   console.log(`==> Building libboxlite with runtime cache key v${RUNNER_VERSION}`)
   run('make', ['dist:c'])
+  console.log('==> Fixing libboxlite Go runtime symbols')
+  run('bash', [
+    path.join(ROOT_DIR, 'scripts', 'build', 'fix-go-symbols.sh'),
+    path.join(ROOT_DIR, 'target', 'release', 'libboxlite.a'),
+  ])
   const RUNTIME_DIR = findEmbeddedRuntimeDir(GUEST_SHA256)
   run('tar', ['czf', path.join(TMP_DIR, 'boxlite-runtime.tar.gz'), '-C', RUNTIME_DIR, '.'])
   console.log(`==> Wrote embedded runtime payload from ${RUNTIME_DIR}`)

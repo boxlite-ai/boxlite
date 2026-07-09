@@ -193,6 +193,8 @@ RUNNER_VERSION="${VERSION}-${RUNTIME_CACHE_SUFFIX}"
 
 echo "==> Building libboxlite with runtime cache key v${RUNNER_VERSION}"
 make dist:c
+echo "==> Fixing libboxlite Go runtime symbols"
+bash "$ROOT_DIR/scripts/build/fix-go-symbols.sh" "$ROOT_DIR/target/release/libboxlite.a"
 RUNTIME_DIR="$(find_embedded_runtime_dir "$GUEST_SHA256")"
 tar czf "$TMP_DIR/boxlite-runtime.tar.gz" -C "$RUNTIME_DIR" .
 echo "==> Wrote embedded runtime payload from $RUNTIME_DIR"
