@@ -390,11 +390,6 @@ enum BoxliteErrorCode boxlite_box_tunnel(CBoxHandle *handle,
                                          int *out_fd,
                                          CBoxliteError *out_error);
 
-enum BoxliteErrorCode boxlite_box_tunnel_guest_port(CBoxHandle *handle,
-                                                    uint16_t target_port,
-                                                    int *out_fd,
-                                                    CBoxliteError *out_error);
-
 enum BoxliteErrorCode boxlite_copy_into(CBoxHandle *handle,
                                         const char *host_src,
                                         const char *guest_dst,

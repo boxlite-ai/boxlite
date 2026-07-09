@@ -36,7 +36,7 @@ func (b *Box) TunnelTCP(ctx context.Context, targetIP string, targetPort uint16)
 
 // TunnelGuestPort opens a raw byte stream to port on the box's guest IP.
 func (b *Box) TunnelGuestPort(ctx context.Context, targetPort uint16) (net.Conn, error) {
-	return b.openTunnel(ctx, "", targetPort)
+	return b.openTunnel(ctx, guestIP, targetPort)
 }
 
 func (b *Box) openTunnel(ctx context.Context, targetIP string, targetPort uint16) (net.Conn, error) {
@@ -52,14 +52,12 @@ func (b *Box) openTunnel(ctx context.Context, targetIP string, targetPort uint16
 
 	var fd C.int
 	var cerr C.CBoxliteError
-	var code C.enum_BoxliteErrorCode
 	if targetIP == "" {
-		code = C.boxlite_box_tunnel_guest_port(b.handle, C.uint16_t(targetPort), &fd, &cerr)
-	} else {
-		cIP := C.CString(targetIP)
-		defer C.free(unsafe.Pointer(cIP))
-		code = C.boxlite_box_tunnel(b.handle, cIP, C.uint16_t(targetPort), &fd, &cerr)
+		return nil, fmt.Errorf("tunnel target IP is required")
 	}
+	cIP := C.CString(targetIP)
+	defer C.free(unsafe.Pointer(cIP))
+	code := C.boxlite_box_tunnel(b.handle, cIP, C.uint16_t(targetPort), &fd, &cerr)
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}

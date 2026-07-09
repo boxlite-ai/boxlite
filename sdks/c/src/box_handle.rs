@@ -133,22 +133,6 @@ pub unsafe extern "C" fn boxlite_box_tunnel(
     box_tunnel(handle, target_ip, target_port, out_fd, out_error)
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_box_tunnel_guest_port(
-    handle: *mut CBoxHandle,
-    target_port: u16,
-    out_fd: *mut c_int,
-    out_error: *mut CBoxliteError,
-) -> BoxliteErrorCode {
-    box_tunnel_addr(
-        handle,
-        boxlite::net::constants::GUEST_IP,
-        target_port,
-        out_fd,
-        out_error,
-    )
-}
-
 unsafe fn create_box(
     runtime: *mut RuntimeHandle,
     opts: *mut OptionsHandle,
