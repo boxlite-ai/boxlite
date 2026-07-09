@@ -45,6 +45,8 @@ import { ClickHouseModule } from './clickhouse/clickhouse.module'
 import { BoxTelemetryModule } from './box-telemetry/box-telemetry.module'
 import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
 
+const dashboardRootPath = join(__dirname, '..', 'dashboard')
+
 @Module({
   imports: [
     LoggerModule.forRootAsync({
@@ -113,13 +115,22 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
       },
     }),
     ServeStaticModule.forRoot({
-      rootPath: join(__dirname, '..', 'dashboard'),
+      rootPath: dashboardRootPath,
       exclude: ['/api/{*path}'],
       renderPath: '/',
       serveStaticOptions: {
         // Disable serve-static's own default Cache-Control; setHeaders applies a
         // content-addressed policy: hashed /assets/* immutable-forever, HTML
         // no-cache. Stops the ~600KB bundle re-downloading on every visit.
+        cacheControl: false,
+        setHeaders: setDashboardStaticHeaders,
+      },
+    }),
+    ServeStaticModule.forRoot({
+      rootPath: dashboardRootPath,
+      exclude: ['/api/{*path}'],
+      serveRoot: '/dashboard',
+      serveStaticOptions: {
         cacheControl: false,
         setHeaders: setDashboardStaticHeaders,
       },
