@@ -35,6 +35,7 @@ import { BoxliteWsProxyService } from './boxlite-rest/boxlite-ws-proxy.service'
 import { ObservabilityContextInterceptor } from './interceptors/observability-context.interceptor'
 import { parseUnprefixedApiHosts, rewriteUnprefixedApiUrlForHost } from './common/utils/api-prefix-rewrite'
 import { createApiPrefixRewriteMiddleware } from './common/middleware/api-prefix-rewrite.middleware'
+import { setDashboardStaticHeaders } from './serve-static-cache'
 
 // https options
 const httpsEnabled = process.env.CERT_PATH && process.env.CERT_KEY_PATH
@@ -49,6 +50,14 @@ async function bootstrap() {
   }
   const unprefixedApiHosts = parseUnprefixedApiHosts(process.env.UNPREFIXED_API_HOSTS)
   const expressApp = express()
+  const dashboardDir = join(__dirname, '..', 'dashboard')
+  expressApp.use(
+    express.static(dashboardDir, {
+      cacheControl: false,
+      index: false,
+      setHeaders: setDashboardStaticHeaders,
+    }),
+  )
   expressApp.use(createApiPrefixRewriteMiddleware(unprefixedApiHosts))
 
   const app = await NestFactory.create<NestExpressApplication>(AppModule, new ExpressAdapter(expressApp), {
@@ -153,7 +162,6 @@ async function bootstrap() {
 
   // Replace dashboard api url before serving
   if (configService.get('production')) {
-    const dashboardDir = join(__dirname, '..', 'dashboard')
     const dashboardTextExtensions = new Set(['.html', '.js', '.css'])
     const replaceInDirectory = (dir: string) => {
       for (const file of readdirSync(dir)) {
