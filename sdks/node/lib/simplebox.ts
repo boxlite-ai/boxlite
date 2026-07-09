@@ -503,8 +503,7 @@ export class SimpleBox {
     argsOrFirstArg?: string | string[],
     envOrSecondArg?: Record<string, string> | string,
     optionsOrThirdArg?:
-      | { cwd?: string; user?: string; timeoutSecs?: number }
-      | string,
+      { cwd?: string; user?: string; timeoutSecs?: number } | string,
     ...restArgs: string[]
   ): Promise<ExecResult> {
     // Parse overloaded arguments
