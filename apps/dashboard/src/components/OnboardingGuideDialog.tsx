@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { KeyRound, Server, Terminal } from '@/components/ui/icon'
 import { useApi } from '@/hooks/useApi'
 import { useConfig } from '@/hooks/useConfig'
-import { getRestApiUrl } from '@/lib/environment'
+import { getQuickstartRestApiUrl } from '@/lib/environment'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
 import { createApiKeyWithFallbackName, DEFAULT_QUICKSTART_API_KEY_NAME } from '@/lib/quickstart-api-key'
@@ -144,7 +144,7 @@ type CopyTarget = 'api-key' | 'install' | 'code'
 export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: OnboardingGuideDialogProps) {
   const { apiKeyApi } = useApi()
   const config = useConfig()
-  const restApiUrl = getRestApiUrl(config.apiUrl, undefined, config.oidc.issuer)
+  const restApiUrl = getQuickstartRestApiUrl(config)
   const { selectedOrganization, authenticatedUserHasPermission } = useSelectedOrganization()
   const canCreateApiKey = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
 

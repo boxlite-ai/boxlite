@@ -16,6 +16,7 @@
  * browser hostname is just `localhost`.
  */
 import { getDomainContract } from '@boxlite-ai/domain-contract'
+import type { DomainContract } from '@boxlite-ai/domain-contract'
 
 export type AppEnvironment = 'local' | 'development' | 'production'
 
@@ -42,4 +43,16 @@ export function resolveEnvironment(
 /** The public REST API URL to show in SDK/CLI snippets for the current environment. */
 export function getRestApiUrl(fallback: string, hostname?: string, oidcIssuer?: string): string {
   return REST_API_URL_BY_ENV[resolveEnvironment(hostname, oidcIssuer)] ?? fallback
+}
+
+type QuickstartRestApiConfig = {
+  apiUrl: string
+  oidc?: {
+    issuer?: string
+  }
+  publicEndpoints?: Partial<Pick<DomainContract, 'api'>>
+}
+
+export function getQuickstartRestApiUrl(config: QuickstartRestApiConfig): string {
+  return config.publicEndpoints?.api?.canonicalBaseUrl ?? getRestApiUrl(config.apiUrl, undefined, config.oidc?.issuer)
 }

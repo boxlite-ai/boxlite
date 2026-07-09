@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getRestApiUrl, resolveEnvironment } from './environment'
+import { getQuickstartRestApiUrl, getRestApiUrl, resolveEnvironment } from './environment'
 
 describe('resolveEnvironment', () => {
   it('maps known hosts to their environment', () => {
@@ -32,5 +32,26 @@ describe('getRestApiUrl', () => {
 
   it('falls back when the environment has no pinned URL (e.g. local)', () => {
     expect(getRestApiUrl(fallback, 'localhost')).toBe(fallback)
+  })
+})
+
+describe('getQuickstartRestApiUrl', () => {
+  it('prefers the API canonical base returned by /config', () => {
+    expect(
+      getQuickstartRestApiUrl({
+        apiUrl: 'https://dev.boxlite.ai/api',
+        oidc: { issuer: 'https://auth.dev.boxlite.ai' },
+        publicEndpoints: {
+          api: {
+            canonicalBaseUrl: 'https://api.dev.boxlite.ai',
+          },
+        },
+      }),
+    ).toBe('https://api.dev.boxlite.ai')
+  })
+
+  it('falls back to host and issuer detection when /config has no public endpoint contract', () => {
+    expect(getQuickstartRestApiUrl({ apiUrl: 'https://fallback.local/api', oidc: { issuer: 'https://auth.dev.boxlite.ai' } }))
+      .toBe('https://api.dev.boxlite.ai')
   })
 })

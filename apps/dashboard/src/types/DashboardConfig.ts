@@ -5,7 +5,9 @@
  */
 
 import { BoxliteConfiguration } from '@boxlite-ai/api-client'
+import type { DomainContract } from '@boxlite-ai/domain-contract'
 
 export type DashboardConfig = BoxliteConfiguration & {
   apiUrl: string
+  publicEndpoints?: DomainContract
 }

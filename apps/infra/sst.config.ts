@@ -6,9 +6,10 @@
 /// <reference path="./.sst/platform/config.d.ts" />
 
 import {
-  getDomainContractForStackDomain,
+  getHostFromUrl,
   getPrimaryLegacyApiBaseUrl,
   getUnprefixedApiHosts,
+  resolvePublicEndpointContract,
 } from '../domain-contract/src/index'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -95,6 +96,8 @@ const requireEnv = (key: string, why: string) => {
 const runnerEndpoint = (override: string, port: number, scheme: string) =>
   envOr(override, `${scheme}localhost:${port}`)
 
+const urlOrigin = (url: string) => new URL(url).origin
+
 // ── app config ───────────────────────────────────────────────────────────────
 export default $config({
   app(input) {
@@ -146,14 +149,11 @@ export default $config({
       throw new Error('STACK_DOMAIN is required (Cloudflare-managed subdomain, e.g. dev.boxlite.ai)')
     }
     const cloudflareDns = sst.cloudflare.dns()
-    const serviceDomain = (name: string) => ({
-      name: `${name}.${stackDomain}`,
-      dns: cloudflareDns,
-    })
-    const domainContract = getDomainContractForStackDomain(stackDomain)
-    const canonicalApiBaseUrl = envOr('PUBLIC_REST_API_BASE_URL', domainContract.api.canonicalBaseUrl)
-    const legacyApiBaseUrl = envOr('PUBLIC_REST_LEGACY_API_BASE_URL', getPrimaryLegacyApiBaseUrl(domainContract))
-    const unprefixedApiHosts = envOr('UNPREFIXED_API_HOSTS', getUnprefixedApiHosts(domainContract).join(','))
+    const publicEndpoints = resolvePublicEndpointContract({ ...process.env, STACK_DOMAIN: stackDomain })
+    const publicEndpointsJson = JSON.stringify(publicEndpoints)
+    const canonicalApiBaseUrl = publicEndpoints.api.canonicalBaseUrl
+    const legacyApiBaseUrl = getPrimaryLegacyApiBaseUrl(publicEndpoints)
+    const unprefixedApiHosts = envOr('UNPREFIXED_API_HOSTS', getUnprefixedApiHosts(publicEndpoints).join(','))
 
     // ─── 1. SECRETS ──────────────────────────────────────────────────────────
     // Auto-generated — override any one by setting the matching env var.
@@ -386,7 +386,10 @@ export default $config({
         dockerfile: 'apps/api/Dockerfile',
       },
       loadBalancer: {
-        domain: serviceDomain('api'),
+        domain: {
+          name: getHostFromUrl(canonicalApiBaseUrl),
+          dns: cloudflareDns,
+        },
         rules: [{ listen: '443/https', forward: `${PORTS.API}/http` }],
         // Probe the NestJS health route explicitly. The ALB default ('/') doesn't
         // match the API (globally mounted under /api), so a default probe would fail
@@ -552,14 +555,15 @@ export default $config({
         S3_ROLE_NAME: s3AccessRoleName,
 
         // Proxy
-        PROXY_DOMAIN: envOr('PROXY_DOMAIN', `proxy.${stackDomain}`),
-        PROXY_PROTOCOL: envOr('PROXY_PROTOCOL', 'https'),
+        PROXY_DOMAIN: publicEndpoints.proxy.domain,
+        PROXY_PROTOCOL: publicEndpoints.proxy.protocol,
         PROXY_API_KEY: envOr('PROXY_API_KEY', proxyApiKey.result),
-        PROXY_TEMPLATE_URL: envOr('PROXY_TEMPLATE_URL', `https://proxy.${stackDomain}`),
+        PROXY_TEMPLATE_URL: publicEndpoints.proxy.templateUrl,
+        PROXY_TOOLBOX_BASE_URL: publicEndpoints.proxy.toolboxBaseUrl,
 
         // SSH Gateway — friendly hostname `ssh.<stackDomain>` is provisioned
         // as a Cloudflare CNAME pointing at the SshGateway NLB further below.
-        SSH_GATEWAY_URL: envOr('SSH_GATEWAY_URL', `ssh://ssh.${stackDomain}:${PORTS.SSH_GATEWAY}`),
+        SSH_GATEWAY_URL: publicEndpoints.sshGateway.url,
         SSH_GATEWAY_API_KEY: envOr('SSH_GATEWAY_API_KEY', sshGatewayApiKey.result),
 
         // Admin
@@ -627,9 +631,12 @@ export default $config({
         // (index.html + /assets/*) still serve through the CF Router at the
         // root domain. The API pins CORS to DASHBOARD_URL (apps/api main.ts),
         // so this cross-origin dashboard→API path is explicitly allowed.
-        DASHBOARD_URL: envOr('DASHBOARD_URL', `https://${stackDomain}`),
+        DASHBOARD_URL: envOr('DASHBOARD_URL', urlOrigin(publicEndpoints.dashboard.canonicalUrl)),
         APP_URL: envOr('APP_URL', ''),
         DASHBOARD_BASE_API_URL: envOr('DASHBOARD_BASE_API_URL', canonicalApiBaseUrl),
+        PUBLIC_ENDPOINTS_JSON: publicEndpointsJson,
+        PUBLIC_API_BASE_URL: canonicalApiBaseUrl,
+        PUBLIC_LEGACY_API_BASE_URLS: publicEndpoints.api.legacyBaseUrls.join(','),
         PUBLIC_REST_API_BASE_URL: canonicalApiBaseUrl,
         PUBLIC_REST_LEGACY_API_BASE_URL: legacyApiBaseUrl,
         UNPREFIXED_API_HOSTS: unprefixedApiHosts,
@@ -681,14 +688,14 @@ export default $config({
     // ─── 7. EDGE SERVICES ────────────────────────────────────────────────────
     // Proxy: routes `<port>-<boxid>.proxy.<stack>` to the box port.
     // Wildcard cert covers *.proxy.<stack>; Cloudflare serves wildcard DNS.
-    const proxyDomain = `proxy.${stackDomain}`
+    const proxyDomain = publicEndpoints.proxy.domain
     new sst.aws.Service('Proxy', {
       cluster,
       image: { context: '../..', dockerfile: 'apps/proxy/Dockerfile', cache: false },
       loadBalancer: {
         domain: {
           name: proxyDomain,
-          aliases: [`*.${proxyDomain}`],
+          aliases: [publicEndpoints.proxy.wildcardDomain],
           dns: cloudflareDns,
         },
         rules: [{ listen: '443/https', forward: `${PORTS.PROXY}/http` }],
@@ -736,7 +743,7 @@ export default $config({
     cloudflareDns.createAlias(
       'SshGateway',
       {
-        name: `ssh.${stackDomain}`,
+        name: publicEndpoints.sshGateway.host,
         aliasName: sshGateway.nodes.loadBalancer.dnsName,
         aliasZone: sshGateway.nodes.loadBalancer.zoneId,
       },

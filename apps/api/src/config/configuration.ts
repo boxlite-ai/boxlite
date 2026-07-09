@@ -4,11 +4,24 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import type { DomainContract } from '@boxlite-ai/domain-contract'
+
 function csvEnv(value?: string): string[] {
   return (value ?? '')
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean)
+}
+
+function jsonEnv<T>(key: string): T | undefined {
+  const raw = process.env[key]
+  if (!raw) return undefined
+
+  try {
+    return JSON.parse(raw) as T
+  } catch (error) {
+    throw new Error(`${key} must be valid JSON: ${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 
 const configuration = {
@@ -73,6 +86,7 @@ const configuration = {
   dashboardUrl: process.env.DASHBOARD_URL,
   // Default to empty string - dashboard will then hit '/api'
   dashboardBaseApiUrl: process.env.DASHBOARD_BASE_API_URL || '',
+  publicEndpoints: jsonEnv<DomainContract>('PUBLIC_ENDPOINTS_JSON'),
   // Currently unconsumed (Daytona-port residue): nothing reads `systemSourceRegistry`.
   // Box images are a fixed curated set of digest-pinned ghcr.io refs pulled directly by
   // the runner (see box/constants/curated-images.constant.ts), not mirrored from a source

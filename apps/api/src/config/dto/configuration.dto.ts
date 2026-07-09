@@ -6,6 +6,7 @@
 
 import { ApiExtraModels, ApiProperty, ApiPropertyOptional, ApiSchema, getSchemaPath } from '@nestjs/swagger'
 import { IsBoolean, IsNumber, IsOptional, IsString } from 'class-validator'
+import type { DomainContract } from '@boxlite-ai/domain-contract'
 import { TypedConfigService } from '../typed-config.service'
 import { EndSessionState, isValidHttpUrl } from '../oidc-metadata.service'
 
@@ -172,6 +173,14 @@ export class ConfigurationDto {
   @IsOptional()
   pylonAppId?: string
 
+  @ApiPropertyOptional({
+    description: 'Public endpoint contract for SDK snippets, dashboard links, proxy, and SSH hosts',
+    type: 'object',
+    additionalProperties: true,
+  })
+  @IsOptional()
+  publicEndpoints?: DomainContract
+
   @ApiProperty({
     description: 'Proxy template URL',
     example: 'https://{{PORT}}-{{boxId}}.proxy.example.com',
@@ -270,6 +279,7 @@ export class ConfigurationDto {
     this.dashboardUrl = configService.getOrThrow('dashboardUrl')
     this.maintananceMode = configService.getOrThrow('maintananceMode')
     this.environment = configService.getOrThrow('environment')
+    this.publicEndpoints = configService.get('publicEndpoints')
 
     this.sshGatewayCommand = configService.get('sshGateway.command')
     this.sshGatewayPublicKey = configService.get('sshGateway.publicKey')
