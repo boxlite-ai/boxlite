@@ -9,7 +9,8 @@ import logging
 from enum import IntEnum
 from typing import Optional, TYPE_CHECKING
 
-from .exec import ExecResult
+from .errors import ExecError
+from .exec import ExecResult, _looks_like_command_start_error
 
 if TYPE_CHECKING:
     from .boxlite import Boxlite
@@ -266,10 +267,18 @@ class SimpleBox:
         # Convert env dict to list of tuples if provided
         env_list = list(env.items()) if env else None
 
+        command_display = " ".join([cmd, *args])
+
         # Execute via Rust (returns PyExecution)
-        execution = await self._box.exec(
-            cmd, arg_list, env_list, user=user, timeout_secs=timeout, cwd=cwd
-        )
+        try:
+            execution = await self._box.exec(
+                cmd, arg_list, env_list, user=user, timeout_secs=timeout, cwd=cwd
+            )
+        except Exception as e:
+            message = str(e)
+            if _looks_like_command_start_error(message):
+                raise ExecError(command_display, 127, message) from e
+            raise
 
         # Get streams from Rust execution
         try:

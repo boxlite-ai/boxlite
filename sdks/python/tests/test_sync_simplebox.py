@@ -82,6 +82,14 @@ class TestSyncSimpleBox:
             assert metrics is not None
             assert metrics.commands_executed_total >= 1
 
+    def test_command_not_found_raises_exec_error(self, shared_sync_runtime):
+        """Direct command start failures raise ExecError, not bare RuntimeError."""
+        with SyncSimpleBox(image="alpine:latest", runtime=shared_sync_runtime) as box:
+            with pytest.raises(boxlite.ExecError) as exc:
+                box.exec("definitely-not-a-boxlite-command-xyz")
+            assert exc.value.exit_code == 127
+            assert "not found" in exc.value.stderr.lower()
+
     def test_custom_working_dir(self, shared_sync_runtime):
         """Can set custom working directory."""
         with SyncSimpleBox(
