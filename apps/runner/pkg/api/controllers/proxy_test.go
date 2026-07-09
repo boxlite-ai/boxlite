@@ -51,6 +51,19 @@ func TestToolboxEscapedPathPreservesEscapedSlash(t *testing.T) {
 	}
 }
 
+func TestNetworkProxyEscapedPathPreservesEscapedSlash(t *testing.T) {
+	req, err := http.NewRequest(http.MethodGet, "http://runner.local/v1/boxes/box/network/proxy/3999/files/a%2Fb?download=1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := networkProxyEscapedPath(req, "box", "3999", "/files/a/b")
+	want := "/files/a%2Fb"
+	if got != want {
+		t.Fatalf("networkProxyEscapedPath = %q, want %q", got, want)
+	}
+}
+
 func TestParseGuestPortProxyPathPreservesEscapedSlash(t *testing.T) {
 	port, targetPath, ok, err := parseGuestPortProxyPath("/proxy/3999/files/a%2Fb")
 	if err != nil {

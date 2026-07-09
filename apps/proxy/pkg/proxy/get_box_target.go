@@ -101,7 +101,7 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, e
 	}
 
 	// Build the target URL
-	targetURL := fmt.Sprintf("%s/boxes/%s/toolbox/proxy/%s", runnerInfo.ApiUrl, boxId, targetPort)
+	targetURL := runnerNetworkProxyTargetURL(runnerInfo.ApiUrl, boxId, targetPort)
 
 	// Create the complete target URL with path
 	target, err := url.Parse(fmt.Sprintf("%s%s", targetURL, targetPath))
@@ -121,6 +121,10 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, e
 		"X-Forwarded-Port":        forwardedPort,
 		"Forwarded":               common_proxy.FormatForwardedHeader(forwardedHost, forwardedProto),
 	}, nil
+}
+
+func runnerNetworkProxyTargetURL(runnerApiURL string, boxId string, targetPort string) string {
+	return fmt.Sprintf("%s/v1/boxes/%s/network/proxy/%s", runnerApiURL, boxId, targetPort)
 }
 
 func requestEscapedPath(requestURL *url.URL, fallbackPath string) string {

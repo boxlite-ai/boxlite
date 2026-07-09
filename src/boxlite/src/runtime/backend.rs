@@ -112,8 +112,6 @@ pub(crate) trait BoxBackend: Send + Sync {
         opts: CopyOptions,
     ) -> BoxliteResult<()>;
 
-    async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>;
-
     async fn clone_box(
         &self,
         options: CloneOptions,
@@ -128,6 +126,15 @@ pub(crate) trait BoxBackend: Send + Sync {
     ) -> BoxliteResult<Vec<LiteBox>>;
 
     async fn export_box(&self, options: ExportOptions, dest: &Path) -> BoxliteResult<BoxArchive>;
+}
+
+/// Backend abstraction for box network operations.
+///
+/// Kept separate from `BoxBackend` so lifecycle/exec/file operations do not own
+/// network data-plane capabilities directly.
+#[async_trait]
+pub(crate) trait BoxNetworkBackend: Send + Sync {
+    async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>;
 }
 
 /// Backend abstraction for snapshot lifecycle operations on a box.

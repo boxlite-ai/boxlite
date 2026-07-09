@@ -22,9 +22,10 @@ use tokio_util::sync::CancellationToken;
 
 fn litebox_from_impl(box_impl: SharedBoxImpl) -> LiteBox {
     let box_backend: Arc<dyn crate::runtime::backend::BoxBackend> = box_impl.clone();
+    let network_backend: Arc<dyn crate::runtime::backend::BoxNetworkBackend> = box_impl.clone();
     let snapshot_backend: Arc<dyn crate::runtime::backend::SnapshotBackend> =
         Arc::new(LocalSnapshotBackend::new(box_impl));
-    LiteBox::new(box_backend, snapshot_backend)
+    LiteBox::new(box_backend, network_backend, snapshot_backend)
 }
 
 /// Archive the active exit file as `exit.previous`, freeing the canonical

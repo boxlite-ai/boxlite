@@ -1145,10 +1145,6 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         self.copy_out(container_src, host_dst, opts).await
     }
 
-    async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
-        self.network().await?.tunnel(target).await
-    }
-
     async fn clone_box(
         &self,
         options: crate::runtime::options::CloneOptions,
@@ -1172,6 +1168,13 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         dest: &std::path::Path,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
         BoxImpl::export_box(self, options, dest).await
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
+    async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
+        self.network().await?.tunnel(target).await
     }
 }
 

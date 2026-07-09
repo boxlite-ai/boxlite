@@ -38,7 +38,7 @@ func (c *Client) DialGuestPort(ctx context.Context, boxId string, port uint16) (
 		return nil, err
 	}
 
-	conn, err := bx.Tunnel(ctx, net.JoinHostPort(guestIP, fmt.Sprintf("%d", port)))
+	conn, err := bx.Network().Tunnel(ctx, net.JoinHostPort(guestIP, fmt.Sprintf("%d", port)))
 	if err != nil {
 		return nil, fmt.Errorf("open guest port tunnel to %s:%d: %w", boxId, port, err)
 	}

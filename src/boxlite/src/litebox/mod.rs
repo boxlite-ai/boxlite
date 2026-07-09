@@ -12,6 +12,7 @@ mod exec;
 mod init;
 pub(crate) mod local_snapshot;
 mod manager;
+mod network;
 mod snapshot;
 pub(crate) mod snapshot_mgr;
 mod state;
@@ -20,6 +21,7 @@ pub use copy::CopyOptions;
 pub(crate) use crash_report::CrashReport;
 pub use exec::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId};
 pub(crate) use manager::BoxManager;
+pub use network::BoxNetworkHandle;
 pub use snapshot::SnapshotHandle;
 pub use state::{BoxState, BoxStatus, HealthState, HealthStatus};
 
@@ -33,7 +35,7 @@ use std::sync::Arc;
 
 use crate::metrics::BoxMetrics;
 use crate::net::BoxTunnel;
-use crate::runtime::backend::{BoxBackend, SnapshotBackend};
+use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
 use crate::runtime::options::{BoxArchive, CloneOptions, ExportOptions};
 use crate::{BoxID, BoxInfo};
 use boxlite_shared::errors::BoxliteResult;
@@ -52,6 +54,8 @@ pub struct LiteBox {
     name: Option<String>,
     /// Backend for lifecycle/exec/file operations.
     box_backend: Arc<dyn BoxBackend>,
+    /// Backend for network operations.
+    network_backend: Arc<dyn BoxNetworkBackend>,
     /// Backend for snapshot lifecycle operations.
     snapshot_backend: Arc<dyn SnapshotBackend>,
 }
@@ -60,6 +64,7 @@ impl LiteBox {
     /// Create a LiteBox from backend implementations.
     pub(crate) fn new(
         box_backend: Arc<dyn BoxBackend>,
+        network_backend: Arc<dyn BoxNetworkBackend>,
         snapshot_backend: Arc<dyn SnapshotBackend>,
     ) -> Self {
         let id = box_backend.id().clone();
@@ -68,6 +73,7 @@ impl LiteBox {
             id,
             name,
             box_backend,
+            network_backend,
             snapshot_backend,
         }
     }
@@ -144,7 +150,12 @@ impl LiteBox {
 
     /// Open a raw byte tunnel to a guest address through the box network backend.
     pub async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
-        self.box_backend.tunnel(target).await
+        self.network().tunnel(target).await
+    }
+
+    /// Get a network handle for network operations.
+    pub fn network(&self) -> BoxNetworkHandle {
+        BoxNetworkHandle::new(Arc::clone(&self.network_backend))
     }
 
     /// Get a snapshot handle for snapshot operations.

@@ -28,6 +28,14 @@ func TestRequestEscapedPathUsesFallbackWhenRequestPathIsEmpty(t *testing.T) {
 	}
 }
 
+func TestRunnerNetworkProxyTargetURLUsesRestNamespace(t *testing.T) {
+	got := runnerNetworkProxyTargetURL("http://runner.local:3003", "box123", "3999")
+	want := "http://runner.local:3003/v1/boxes/box123/network/proxy/3999"
+	if got != want {
+		t.Fatalf("runnerNetworkProxyTargetURL = %q, want %q", got, want)
+	}
+}
+
 func TestDecodeDirectPreviewBoxID(t *testing.T) {
 	got, ok, err := decodeDirectPreviewBoxID("35334d4f5a336a70355a7531")
 	if err != nil {

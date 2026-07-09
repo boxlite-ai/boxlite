@@ -486,7 +486,7 @@ unsafe fn box_tunnel(
         let handle_ref = &*handle;
         match handle_ref
             .tokio_rt
-            .block_on(handle_ref.handle.tunnel(target))
+            .block_on(handle_ref.handle.network().tunnel(target))
         {
             Ok(tunnel) => match tunnel.into_fd() {
                 Some(fd) => {

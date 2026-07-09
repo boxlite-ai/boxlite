@@ -17,7 +17,7 @@ use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution};
 use crate::metrics::BoxMetrics;
 use crate::net::BoxTunnel;
-use crate::runtime::backend::{BoxBackend, SnapshotBackend};
+use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
 use crate::runtime::id::BoxID;
 use crate::runtime::options::{CloneOptions, ExportOptions, SnapshotOptions};
 
@@ -303,12 +303,6 @@ impl BoxBackend for RestBox {
         extract_tar_to_path(&tar_bytes, host_dst)
     }
 
-    async fn tunnel(&self, _target: SocketAddr) -> BoxliteResult<BoxTunnel> {
-        Err(BoxliteError::Unsupported(
-            "REST boxes do not support guest port tunnels".into(),
-        ))
-    }
-
     async fn clone_box(
         &self,
         options: CloneOptions,
@@ -324,8 +318,13 @@ impl BoxBackend for RestBox {
         let info = resp.to_box_info()?;
         let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
         let box_backend: Arc<dyn BoxBackend> = rest_box.clone();
+        let network_backend: Arc<dyn BoxNetworkBackend> = rest_box.clone();
         let snapshot_backend: Arc<dyn SnapshotBackend> = rest_box;
-        Ok(crate::LiteBox::new(box_backend, snapshot_backend))
+        Ok(crate::LiteBox::new(
+            box_backend,
+            network_backend,
+            snapshot_backend,
+        ))
     }
 
     async fn clone_boxes(
@@ -381,6 +380,15 @@ impl BoxBackend for RestBox {
         })?;
 
         Ok(crate::runtime::options::BoxArchive::new(output_path))
+    }
+}
+
+#[async_trait]
+impl BoxNetworkBackend for RestBox {
+    async fn tunnel(&self, _target: SocketAddr) -> BoxliteResult<BoxTunnel> {
+        Err(BoxliteError::Unsupported(
+            "REST boxes do not support guest port tunnels".into(),
+        ))
     }
 }
 

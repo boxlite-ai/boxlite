@@ -81,6 +81,28 @@ func ProxyRequest(logger *slog.Logger) gin.HandlerFunc {
 	}
 }
 
+// BoxliteNetworkProxy exposes an in-box HTTP service through the BoxLite REST API namespace.
+func BoxliteNetworkProxy(logger *slog.Logger) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		r, err := runner.GetInstance(nil)
+		if err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		boxId := ctx.Param("boxId")
+		rawPort := ctx.Param("port")
+		port64, err := strconv.ParseUint(rawPort, 10, 16)
+		if err != nil || port64 == 0 {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid target port %q", rawPort)})
+			return
+		}
+
+		targetPath := networkProxyEscapedPath(ctx.Request, boxId, rawPort, ctx.Param("path"))
+		handleGuestPortProxy(ctx, r, boxId, uint16(port64), targetPath, logger)
+	}
+}
+
 func normalizeToolboxPath(path string) string {
 	if path == "" {
 		return "/"
@@ -94,6 +116,16 @@ func normalizeToolboxPath(path string) string {
 func toolboxEscapedPath(req *http.Request, boxId string, fallbackPath string) string {
 	if req != nil && req.URL != nil {
 		prefix := "/boxes/" + url.PathEscape(boxId) + "/toolbox"
+		if path := req.URL.EscapedPath(); strings.HasPrefix(path, prefix) {
+			return normalizeToolboxPath(strings.TrimPrefix(path, prefix))
+		}
+	}
+	return normalizeToolboxPath(fallbackPath)
+}
+
+func networkProxyEscapedPath(req *http.Request, boxId string, port string, fallbackPath string) string {
+	if req != nil && req.URL != nil {
+		prefix := "/v1/boxes/" + url.PathEscape(boxId) + "/network/proxy/" + url.PathEscape(port)
 		if path := req.URL.EscapedPath(); strings.HasPrefix(path, prefix) {
 			return normalizeToolboxPath(strings.TrimPrefix(path, prefix))
 		}

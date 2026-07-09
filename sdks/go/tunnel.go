@@ -16,8 +16,21 @@ import (
 	"unsafe"
 )
 
+// NetworkHandle exposes network operations for a box.
+type NetworkHandle struct {
+	box *Box
+}
+
+// Network returns a handle for box network operations.
+func (b *Box) Network() *NetworkHandle {
+	return &NetworkHandle{box: b}
+}
+
 // Tunnel opens a raw byte stream to target inside the box's guest network.
-func (b *Box) Tunnel(ctx context.Context, target string) (net.Conn, error) {
+func (n *NetworkHandle) Tunnel(ctx context.Context, target string) (net.Conn, error) {
+	if n == nil || n.box == nil {
+		return nil, ErrRuntimeClosed
+	}
 	host, portText, err := net.SplitHostPort(target)
 	if err != nil {
 		return nil, err
@@ -29,7 +42,12 @@ func (b *Box) Tunnel(ctx context.Context, target string) (net.Conn, error) {
 	if port < 0 || port > 65535 {
 		return nil, fmt.Errorf("invalid tunnel port %d", port)
 	}
-	return b.openTunnel(ctx, host, uint16(port))
+	return n.box.openTunnel(ctx, host, uint16(port))
+}
+
+// Tunnel opens a raw byte stream to target inside the box's guest network.
+func (b *Box) Tunnel(ctx context.Context, target string) (net.Conn, error) {
+	return b.Network().Tunnel(ctx, target)
 }
 
 func (b *Box) openTunnel(ctx context.Context, targetIP string, targetPort uint16) (net.Conn, error) {
