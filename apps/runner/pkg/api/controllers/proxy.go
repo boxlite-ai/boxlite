@@ -159,10 +159,25 @@ func handleGuestPortProxy(ctx *gin.Context, r *runner.Runner, boxId string, port
 		Transport: transport,
 		ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {
 			logger.WarnContext(req.Context(), "guest port proxy failed", "box", boxId, "port", port, "error", err)
-			http.Error(w, "guest port proxy failed: "+err.Error(), http.StatusBadGateway)
+			http.Error(w, guestPortProxyErrorMessage(port, err), http.StatusBadGateway)
 		},
 	}
 	proxy.ServeHTTP(ctx.Writer, ctx.Request)
+}
+
+func guestPortProxyErrorMessage(port uint16, err error) string {
+	message := "guest port proxy failed"
+	if err != nil {
+		message = err.Error()
+	}
+	lower := strings.ToLower(message)
+	if strings.Contains(lower, "connection reset by peer") ||
+		strings.Contains(lower, "connection refused") ||
+		strings.Contains(lower, "broken pipe") ||
+		lower == "eof" {
+		return fmt.Sprintf("guest service on port %d is not accepting connections", port)
+	}
+	return "guest port proxy failed: " + message
 }
 
 func configureGuestPortProxyRequest(req *http.Request, target *url.URL, forwarded common_proxy.ForwardedRequestInfo) {

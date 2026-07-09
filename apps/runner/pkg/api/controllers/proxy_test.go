@@ -4,6 +4,7 @@
 package controllers
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"testing"
@@ -153,6 +154,24 @@ func TestConfigureGuestPortProxyRequestPreservesEscapedPath(t *testing.T) {
 	}
 	if got := req.URL.EscapedPath(); got != "/files/a%2Fb" {
 		t.Fatalf("EscapedPath = %q, want %q", got, "/files/a%2Fb")
+	}
+}
+
+func TestGuestPortProxyErrorMessageHidesTunnelResetDetails(t *testing.T) {
+	err := errors.New("read unix @->/tmp/bl-0/box/gvproxy-ctl.sock: read: connection reset by peer")
+	got := guestPortProxyErrorMessage(3030, err)
+	want := "guest service on port 3030 is not accepting connections"
+	if got != want {
+		t.Fatalf("guestPortProxyErrorMessage = %q, want %q", got, want)
+	}
+}
+
+func TestGuestPortProxyErrorMessageKeepsUnexpectedErrors(t *testing.T) {
+	err := errors.New("runner lookup failed")
+	got := guestPortProxyErrorMessage(3030, err)
+	want := "guest port proxy failed: runner lookup failed"
+	if got != want {
+		t.Fatalf("guestPortProxyErrorMessage = %q, want %q", got, want)
 	}
 }
 
