@@ -5,13 +5,6 @@
 
 /// <reference path="./.sst/platform/config.d.ts" />
 
-import {
-  getHostFromUrl,
-  getPrimaryLegacyApiBaseUrl,
-  getUnprefixedApiHosts,
-  resolvePublicEndpointContract,
-} from '../domain-contract/src/index'
-
 // ─────────────────────────────────────────────────────────────────────────────
 // BoxLite control plane on AWS. Region is stage-scoped: dev stays in
 // ap-southeast-1, prod/production stays in us-west-2 unless explicitly
@@ -169,6 +162,9 @@ export default $config({
     if (!stackDomain) {
       throw new Error('STACK_DOMAIN is required (Cloudflare-managed subdomain, e.g. dev.boxlite.ai)')
     }
+    const { getHostFromUrl, getPrimaryLegacyApiBaseUrl, getUnprefixedApiHosts, resolvePublicEndpointContract } = await import(
+      '../domain-contract/src/index'
+    )
     const cloudflareDns = sst.cloudflare.dns()
     const publicEndpoints = resolvePublicEndpointContract({ ...process.env, STACK_DOMAIN: stackDomain })
     const publicEndpointsJson = JSON.stringify(publicEndpoints)
