@@ -16,7 +16,6 @@ fn make_secret(name: &str, host: &str, value: &str) -> Secret {
     }
 }
 
-#[cfg(feature = "gvproxy")]
 mod gvproxy_tests {
     use super::*;
     use boxlite::net::gvproxy::{GvproxyConfig, GvproxySecretConfig};

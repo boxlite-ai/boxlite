@@ -899,6 +899,7 @@ mod tests {
     /// socket to expose a forward, sees it in `/all`, unexposes it, and sees it
     /// gone. No VM is needed — the ServicesMux answers independently of the tap.
     /// Requires the libgvproxy dylib; run with `--ignored`.
+    #[cfg(feature = "gvproxy")]
     #[tokio::test]
     #[ignore]
     async fn expose_unexpose_roundtrip_over_services_socket() {
@@ -967,6 +968,7 @@ mod tests {
     /// `"OK"` handshake. gvproxy writes `"OK"` *before* it dials the guest, so the
     /// handshake completes even with no guest listening — enough to exercise the
     /// raw-hijack protocol without a VM. Requires the libgvproxy dylib; `--ignored`.
+    #[cfg(feature = "gvproxy")]
     #[tokio::test]
     #[ignore]
     async fn tunnel_handshake_over_services_socket() {

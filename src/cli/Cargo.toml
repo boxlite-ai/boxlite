@@ -15,7 +15,7 @@ name = "boxlite"
 path = "src/main.rs"
 
 [dependencies]
-boxlite = { workspace = true, features = ["rest", "gvproxy"] }
+boxlite = { workspace = true, features = ["rest"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 clap_complete = "4.5"
 tokio = { version = "1.37", features = ["rt", "rt-multi-thread", "macros", "signal"] }
@@ -76,7 +76,7 @@ gtmpl_value = "0.5"
 [build-dependencies]
 
 [dev-dependencies]
-boxlite = { workspace = true, features = ["rest", "gvproxy", "test-support"] }
+boxlite = { workspace = true, features = ["rest", "test-support"] }
 boxlite-test-utils = { path = "../test-utils" }
 assert_cmd = "2.1.1"
 predicates = "3.1.3"

@@ -5,8 +5,8 @@
 //! [`NetworkBackendSpec`] the shim uses to stand up the server ([`NetworkBackend::spec`]),
 //! and be the **runtime control** seam — dynamic port forwarding, DNS, DHCP
 //! leases, and stats, dialed from the core over the backend's control socket.
-//! In the shim, the concrete [`gvproxy::GvproxyInstance`] consumes the spec and
-//! yields the [`NetworkBackendEndpoint`] value type the engine wires into the NIC.
+//! In the shim, the concrete gvproxy instance consumes the spec and yields the
+//! [`NetworkBackendEndpoint`] value type the engine wires into the NIC.
 
 use async_trait::async_trait;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -21,16 +21,13 @@ use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::UnixStream;
 
-/// MITM CA generation — only the gvproxy backend mints one (in `spec()`).
-#[cfg(feature = "gvproxy")]
+/// MITM CA generation — only the runtime-side gvproxy backend mints one (in `spec()`).
 pub(crate) mod ca;
 pub mod constants;
 pub mod socket_path;
 
-#[cfg(feature = "gvproxy")]
 pub mod gvproxy;
 
-#[cfg(feature = "gvproxy")]
 pub use gvproxy::GvproxyBackend;
 
 /// How the Box connects to the network backend.
@@ -433,7 +430,7 @@ pub enum ConnectionType {
 /// name it. Swap the whole backend by swapping the factory (e.g. inject a mock).
 pub trait NetworkBackendFactory: Send + Sync {
     /// Create the box's host-side network backend from its [`NetworkBackendConfig`].
-    /// `None` when no backend is compiled in.
+    /// `None` when this factory intentionally provides no backend.
     fn create(&self, config: &NetworkBackendConfig) -> Option<Box<dyn NetworkBackend>>;
 }
 
@@ -449,14 +446,7 @@ impl NetworkBackendFactory for NoBackendFactory {
 /// The process's default factory — the single composition root where the
 /// concrete factory is chosen for the compiled-in backend.
 pub fn default_factory() -> Arc<dyn NetworkBackendFactory> {
-    #[cfg(feature = "gvproxy")]
-    {
-        Arc::new(gvproxy::GvproxyFactory)
-    }
-    #[cfg(not(feature = "gvproxy"))]
-    {
-        Arc::new(NoBackendFactory)
-    }
+    Arc::new(gvproxy::GvproxyFactory)
 }
 
 #[cfg(test)]
@@ -527,6 +517,79 @@ mod tests {
         assert!(spec.secrets.is_empty());
         assert!(spec.ca_cert_pem.is_none());
         assert!(spec.ca_key_pem.is_none());
+    }
+
+    #[test]
+    fn default_factory_creates_runtime_gvproxy_backend_without_ffi_feature() {
+        let config = NetworkBackendConfig {
+            port_mappings: vec![(8080, 80)],
+            socket_path: PathBuf::from("/tmp/default-factory/net.sock"),
+            allow_net: vec!["example.com".to_string()],
+            secrets: Vec::new(),
+            ca_dir: PathBuf::from("/tmp/default-factory/ca"),
+        };
+
+        let backend = default_factory()
+            .create(&config)
+            .expect("runtime-side gvproxy backend");
+        let spec = backend.spec();
+
+        assert_eq!(backend.name(), "gvisor-tap-vsock");
+        assert_eq!(spec.socket_path, config.socket_path);
+        assert_eq!(spec.port_mappings, config.port_mappings);
+        assert_eq!(spec.allow_net, config.allow_net);
+        assert!(spec.ca_cert_pem.is_none());
+        assert!(spec.ca_key_pem.is_none());
+    }
+
+    #[test]
+    fn sdk_and_cli_manifests_do_not_enable_shim_gvproxy_feature() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let repo_root = manifest_dir
+            .parent()
+            .and_then(|src_dir| src_dir.parent())
+            .expect("boxlite crate lives under src/boxlite");
+        let runtime_consumers = [
+            "src/cli/Cargo.toml",
+            "sdks/python/Cargo.toml",
+            "sdks/node/Cargo.toml",
+            "sdks/c/Cargo.toml",
+        ];
+
+        for relative_manifest in runtime_consumers {
+            let manifest_path = repo_root.join(relative_manifest);
+            let manifest = std::fs::read_to_string(&manifest_path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", manifest_path.display()));
+            let parsed: toml::Value = toml::from_str(&manifest)
+                .unwrap_or_else(|e| panic!("parse {}: {e}", manifest_path.display()));
+            assert_manifest_has_no_gvproxy_feature(relative_manifest, &parsed);
+        }
+    }
+
+    fn assert_manifest_has_no_gvproxy_feature(relative_manifest: &str, value: &toml::Value) {
+        let Some(table) = value.as_table() else {
+            return;
+        };
+
+        if let Some(boxlite_dependency) = table.get("boxlite") {
+            let features = boxlite_dependency
+                .as_table()
+                .and_then(|dep| dep.get("features"))
+                .and_then(toml::Value::as_array);
+            if features.is_some_and(|features| {
+                features
+                    .iter()
+                    .any(|feature| feature.as_str() == Some("gvproxy"))
+            }) {
+                panic!(
+                    "{relative_manifest} must not enable boxlite/gvproxy; only boxlite-shim should link libgvproxy-sys"
+                );
+            }
+        }
+
+        for child in table.values() {
+            assert_manifest_has_no_gvproxy_feature(relative_manifest, child);
+        }
     }
 
     #[derive(Debug)]

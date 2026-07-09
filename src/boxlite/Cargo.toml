@@ -21,7 +21,7 @@ crate-type = ["rlib"]
 
 [features]
 default = ["embedded-runtime", "krunfw", "e2fsprogs", "bubblewrap"]
-gvproxy = ["dep:libgvproxy-sys"]                             # Uses libgvproxy CGO shared library
+gvproxy = ["dep:libgvproxy-sys"]                             # Shim-side libgvproxy CGO shared library
 e2fsprogs = ["dep:e2fsprogs-sys"]                            # Bundled mke2fs for ext4 image creation
 bubblewrap = ["dep:bubblewrap-sys"]                          # Bundled bwrap for sandbox isolation (Linux)
 krunfw = ["dep:libkrun-sys", "libkrun-sys/krunfw"]           # Download libkrunfw firmware for runtime bundling
@@ -120,3 +120,4 @@ bincode = "2.0"  # Serialize compiled BPF filters
 [dev-dependencies]
 boxlite-test-utils = { path = "../test-utils" }
 proptest = "1.4"
+toml = "0.8"

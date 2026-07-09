@@ -334,7 +334,7 @@ fn build_guest_entrypoint(
 /// Create the box's **one** network backend by routing box-level policy (port
 /// mappings + allowlist) through the abstraction: assemble a
 /// [`NetworkBackendConfig`] and hand it to the factory. `None` when networking is
-/// disabled, or no backend is compiled in. The returned backend is used for both
+/// disabled. The returned backend is used for both
 /// its wire spec (`spec()`) and, threaded on to `LiveState`, runtime control — no
 /// caller here names a concrete backend.
 fn build_network_backend(

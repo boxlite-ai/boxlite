@@ -1,21 +1,22 @@
-//! gvisor-tap-vsock ("gvproxy") integration via a CGO bridge to
-//! `libgvproxy-sys`, with a Go→Rust logging bridge.
+//! gvisor-tap-vsock ("gvproxy") integration.
 //!
 //! ## Module structure
 //!
-//! - `ffi` — safe wrappers around the raw `libgvproxy-sys` FFI
-//! - `instance` — [`GvproxyInstance`], the server-side RAII handle that creates
-//!   gvproxy in the shim and produces the VM's
-//!   [`NetworkBackendEndpoint`](super::NetworkBackendEndpoint)
 //! - `services` — [`GvproxyBackend`], the host-side [`NetworkBackend`](super::NetworkBackend):
-//!   it produces the wire spec and dials gvproxy's ServicesMux for runtime control
+//!   it produces the wire spec and dials gvproxy's ServicesMux for runtime control.
+//!   This side has no dependency on `libgvproxy-sys`.
+//! - `ffi` — safe wrappers around the raw `libgvproxy-sys` FFI, compiled only
+//!   with the `gvproxy` feature.
+//! - `instance` — `GvproxyInstance`, the shim-side RAII handle that creates
+//!   gvproxy through the FFI and produces the VM's
+//!   [`NetworkBackendEndpoint`](super::NetworkBackendEndpoint)
 //! - `logging` — Go `slog` → Rust `tracing` bridge (target `"gvproxy"`)
 //! - `config` / `stats` — the JSON config sent to Go and the stats read back
 //!
 //! ## Logging integration
 //!
-//! All logs from the Go side are forwarded to Rust's `tracing` with the target
-//! `"gvproxy"`. To see them:
+//! When the `gvproxy` feature is enabled, logs from the Go side are forwarded
+//! to Rust's `tracing` with the target `"gvproxy"`. To see them:
 //!
 //! ```bash
 //! RUST_LOG=gvproxy=debug cargo run
@@ -27,15 +28,20 @@
 //! - **Linux**: Qemu protocol with `UnixStream` sockets (`SOCK_STREAM`)
 
 mod config;
+#[cfg(feature = "gvproxy")]
 mod ffi;
+#[cfg(feature = "gvproxy")]
 mod instance;
+#[cfg(feature = "gvproxy")]
 mod logging;
 mod services;
 mod stats;
 
 // Re-export public API
 pub use config::{DnsRecord, DnsZone, GvproxyConfig, GvproxySecretConfig, PortMapping};
+#[cfg(feature = "gvproxy")]
 pub use instance::GvproxyInstance;
+#[cfg(feature = "gvproxy")]
 pub use logging::init_logging;
 pub use services::GvproxyBackend;
 pub use stats::{NetworkStats, TcpStats};

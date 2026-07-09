@@ -51,7 +51,6 @@ fn spec_deserializes_legacy_payload_with_default_control_fields() {
     assert!(spec.ca_key_pem.is_none());
 }
 
-#[cfg(feature = "gvproxy")]
 #[test]
 fn factory_creates_backend_whose_spec_reflects_config() {
     // The abstract factory is used purely through the trait — the caller never
@@ -70,7 +69,6 @@ fn factory_creates_backend_whose_spec_reflects_config() {
     assert!(spec.ca_cert_pem.is_none());
 }
 
-#[cfg(feature = "gvproxy")]
 #[test]
 fn factory_backend_carries_allowlist_and_secret_metadata_in_spec() {
     use boxlite::net::{NetworkBackendFactory, default_factory};
@@ -97,7 +95,6 @@ fn factory_backend_carries_allowlist_and_secret_metadata_in_spec() {
     assert_eq!(spec.secrets[0].placeholder, "<BOXLITE_SECRET:openai>");
 }
 
-#[cfg(feature = "gvproxy")]
 #[test]
 fn factory_backend_with_secrets_mints_ca_in_spec() {
     // Public-API path: with secrets configured, the created backend's spec()
@@ -130,12 +127,11 @@ fn factory_backend_with_secrets_mints_ca_in_spec() {
     assert_eq!(spec.secrets.len(), 1, "secrets stay enabled with a CA");
 }
 
-#[cfg(not(feature = "gvproxy"))]
 #[test]
-fn no_backend_factory_yields_none() {
-    use boxlite::net::{NetworkBackendFactory, default_factory};
+fn explicit_no_backend_factory_yields_none() {
+    use boxlite::net::{NetworkBackendFactory, NoBackendFactory};
 
-    let factory: std::sync::Arc<dyn NetworkBackendFactory> = default_factory();
+    let factory: std::sync::Arc<dyn NetworkBackendFactory> = std::sync::Arc::new(NoBackendFactory);
     let config = test_config(PathBuf::from("/tmp/factory-test/net.sock"));
     assert!(factory.create(&config).is_none());
 }
