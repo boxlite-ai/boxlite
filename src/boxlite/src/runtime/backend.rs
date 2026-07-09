@@ -112,11 +112,7 @@ pub(crate) trait BoxBackend: Send + Sync {
         opts: CopyOptions,
     ) -> BoxliteResult<()>;
 
-    async fn tunnel(&self, _target: SocketAddr) -> BoxliteResult<BoxTunnel> {
-        Err(BoxliteError::Unsupported(
-            "this backend does not support guest port tunnels".into(),
-        ))
-    }
+    async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>;
 
     async fn clone_box(
         &self,

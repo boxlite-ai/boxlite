@@ -1,5 +1,6 @@
 //! RestBox — implements BoxBackend for the REST API.
 
+use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -15,6 +16,7 @@ use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution};
 use crate::metrics::BoxMetrics;
+use crate::net::BoxTunnel;
 use crate::runtime::backend::{BoxBackend, SnapshotBackend};
 use crate::runtime::id::BoxID;
 use crate::runtime::options::{CloneOptions, ExportOptions, SnapshotOptions};
@@ -299,6 +301,12 @@ impl BoxBackend for RestBox {
 
         // Extract tar to host path
         extract_tar_to_path(&tar_bytes, host_dst)
+    }
+
+    async fn tunnel(&self, _target: SocketAddr) -> BoxliteResult<BoxTunnel> {
+        Err(BoxliteError::Unsupported(
+            "REST boxes do not support guest port tunnels".into(),
+        ))
     }
 
     async fn clone_box(
