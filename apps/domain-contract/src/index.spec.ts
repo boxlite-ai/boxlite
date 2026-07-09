@@ -36,7 +36,17 @@ describe('domain contract', () => {
 
     expect(withApiPrefix(prod.api.canonicalBaseUrl)).toBe('https://api.boxlite.ai/api')
     expect(getPrimaryLegacyApiBaseUrl(prod)).toBe('https://api.app.boxlite.ai/api')
-    expect(getUnprefixedApiHosts(prod)).toEqual(['api.boxlite.ai', 'api.app.boxlite.ai'])
+    expect(getUnprefixedApiHosts(prod)).toEqual(['api.boxlite.ai'])
+  })
+
+  it('keeps unprefixed API routing limited to the canonical API host', () => {
+    const contract = resolvePublicEndpointContract({
+      STACK_DOMAIN: 'dev.boxlite.ai',
+      PUBLIC_API_BASE_URL: 'https://api.dev.boxlite.ai',
+      PUBLIC_LEGACY_API_BASE_URLS: 'https://api.dev.boxlite.ai/api,https://dev.boxlite.ai/api',
+    })
+
+    expect(getUnprefixedApiHosts(contract)).toEqual(['api.dev.boxlite.ai'])
   })
 
   it('resolves an OSS deployment from standard PUBLIC_* env overrides', () => {

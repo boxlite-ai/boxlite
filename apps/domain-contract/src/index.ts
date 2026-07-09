@@ -203,8 +203,7 @@ export function resolvePublicEndpointContract(env: PublicEndpointEnv): DomainCon
   })
 
   const parsedSshGateway = parseSshGatewayUrl(getEnv(env, 'PUBLIC_SSH_GATEWAY_URL', 'SSH_GATEWAY_URL'))
-  const sshGatewayHost =
-    getEnv(env, 'PUBLIC_SSH_GATEWAY_HOST') ?? parsedSshGateway.host ?? base.sshGateway.host
+  const sshGatewayHost = getEnv(env, 'PUBLIC_SSH_GATEWAY_HOST') ?? parsedSshGateway.host ?? base.sshGateway.host
   const sshGatewayPort = parsePort(
     env['PUBLIC_SSH_GATEWAY_PORT'] ?? String(parsedSshGateway.port ?? ''),
     base.sshGateway.port,
@@ -241,10 +240,5 @@ export function getHostFromUrl(url: string): string {
 }
 
 export function getUnprefixedApiHosts(contract: DomainContract): readonly string[] {
-  return [
-    ...new Set([
-      getHostFromUrl(contract.api.canonicalBaseUrl),
-      ...contract.api.legacyBaseUrls.map(getHostFromUrl).filter((host) => host.startsWith('api.')),
-    ]),
-  ]
+  return [getHostFromUrl(contract.api.canonicalBaseUrl)]
 }
