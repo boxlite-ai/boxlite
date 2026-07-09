@@ -21,7 +21,7 @@ pub use copy::CopyOptions;
 pub(crate) use crash_report::CrashReport;
 pub use exec::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId};
 pub(crate) use manager::BoxManager;
-pub use network::{BoxNetworkHandle, PortPreviewUrl, SignedPortPreviewUrl};
+pub use network::{NetworkHandle, PortPreviewUrl, SignedPortPreviewUrl};
 pub use snapshot::SnapshotHandle;
 pub use state::{BoxState, BoxStatus, HealthState, HealthStatus};
 
@@ -29,12 +29,10 @@ pub(crate) use box_impl::SharedBoxImpl;
 pub(crate) use init::BoxBuilder;
 pub(crate) use local_snapshot::LocalSnapshotBackend;
 
-use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 
 use crate::metrics::BoxMetrics;
-use crate::net::BoxTunnel;
 use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
 use crate::runtime::options::{BoxArchive, CloneOptions, ExportOptions};
 use crate::{BoxID, BoxInfo};
@@ -148,14 +146,9 @@ impl LiteBox {
             .await
     }
 
-    /// Open a raw byte tunnel to a guest address through the box network backend.
-    pub async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
-        self.network().tunnel(target).await
-    }
-
     /// Get a network handle for network operations.
-    pub fn network(&self) -> BoxNetworkHandle {
-        BoxNetworkHandle::new(Arc::clone(&self.network_backend))
+    pub fn network(&self) -> NetworkHandle {
+        NetworkHandle::new(Arc::clone(&self.network_backend))
     }
 
     /// Get a snapshot handle for snapshot operations.

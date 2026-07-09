@@ -29,11 +29,11 @@ pub struct SignedPortPreviewUrl {
 ///
 /// Obtained via `litebox.network()`. Owns backend handles and can be used
 /// independently from the originating `LiteBox` borrow.
-pub struct BoxNetworkHandle {
+pub struct NetworkHandle {
     network_backend: Arc<dyn BoxNetworkBackend>,
 }
 
-impl BoxNetworkHandle {
+impl NetworkHandle {
     pub(crate) fn new(network_backend: Arc<dyn BoxNetworkBackend>) -> Self {
         Self { network_backend }
     }
