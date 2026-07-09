@@ -52,6 +52,14 @@ async function bootstrap() {
   const expressApp = express()
   const dashboardDir = join(__dirname, '..', 'dashboard')
   expressApp.use(
+    '/dashboard',
+    express.static(dashboardDir, {
+      cacheControl: false,
+      index: false,
+      setHeaders: setDashboardStaticHeaders,
+    }),
+  )
+  expressApp.use(
     express.static(dashboardDir, {
       cacheControl: false,
       index: false,

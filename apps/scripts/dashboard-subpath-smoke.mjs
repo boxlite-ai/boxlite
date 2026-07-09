@@ -44,6 +44,7 @@ for (const ref of sortedUnique(dashboardRefs)) {
     const response = await fetchNoRedirect(ref)
     assert(response.status === 200, `${ref} returned HTTP ${response.status}`)
     if (ref.startsWith('/dashboard/assets/')) {
+      assertStaticAssetResponse(ref, response)
       assert(
         /immutable/i.test(response.headers.get('cache-control') || ''),
         `${ref} should use immutable Cache-Control; got ${response.headers.get('cache-control') || '(missing)'}`,
@@ -65,6 +66,7 @@ if (checkLegacyRootAssets) {
     await check(`legacy root asset remains reachable: ${legacyRef}`, async () => {
       const response = await fetchNoRedirect(legacyRef)
       assert(response.status === 200, `${legacyRef} returned HTTP ${response.status}`)
+      assertStaticAssetResponse(legacyRef, response)
     })
   }
 } else {
@@ -144,6 +146,19 @@ function isRedirect(response) {
 
 function isHtml(response) {
   return /text\/html/i.test(response.headers.get('content-type') || '')
+}
+
+function assertStaticAssetResponse(ref, response) {
+  const contentType = response.headers.get('content-type') || ''
+  if (/\.js(?:\?|$)/.test(ref)) {
+    assert(
+      /(?:application|text)\/javascript|application\/x-javascript/i.test(contentType),
+      `${ref} should return JavaScript; got ${contentType || '(missing)'}`,
+    )
+  }
+  if (/\.css(?:\?|$)/.test(ref)) {
+    assert(/text\/css/i.test(contentType), `${ref} should return CSS; got ${contentType || '(missing)'}`)
+  }
 }
 
 function assert(condition, message) {
