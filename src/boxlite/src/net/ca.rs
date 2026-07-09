@@ -5,6 +5,7 @@
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, KeyUsagePurpose};
+use std::io::Write;
 use std::path::Path;
 use time::{Duration, OffsetDateTime};
 
@@ -75,18 +76,66 @@ pub fn load_or_generate(ca_dir: &Path) -> BoxliteResult<MitmCa> {
     std::fs::write(&cert_path, &ca.cert_pem)
         .map_err(|e| BoxliteError::Network(format!("Failed to write CA cert: {e}")))?;
 
-    std::fs::write(&key_path, &ca.key_pem)
-        .map_err(|e| BoxliteError::Network(format!("Failed to write CA key: {e}")))?;
-
-    // Private key: owner-only permissions
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600));
-    }
+    write_private_key(&key_path, &ca.key_pem)?;
 
     tracing::info!("MITM: generated and persisted CA to {}", ca_dir.display());
     Ok(ca)
+}
+
+#[cfg(unix)]
+fn write_private_key(path: &Path, contents: &str) -> BoxliteResult<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let parent = path.parent().ok_or_else(|| {
+        BoxliteError::Network(format!("CA key path has no parent: {}", path.display()))
+    })?;
+    let file_name = path.file_name().ok_or_else(|| {
+        BoxliteError::Network(format!("CA key path has no file name: {}", path.display()))
+    })?;
+    let tmp_path = parent.join(format!(
+        ".{}.{}.tmp",
+        file_name.to_string_lossy(),
+        uuid::Uuid::new_v4()
+    ));
+
+    let write_result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&tmp_path)
+            .map_err(|e| BoxliteError::Network(format!("Failed to open CA key temp file: {e}")))?;
+
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| {
+                BoxliteError::Network(format!("Failed to secure CA key permissions: {e}"))
+            })?;
+        file.write_all(contents.as_bytes())
+            .map_err(|e| BoxliteError::Network(format!("Failed to write CA key: {e}")))?;
+        file.sync_all()
+            .map_err(|e| BoxliteError::Network(format!("Failed to sync CA key: {e}")))?;
+        drop(file);
+
+        // `ca_dir` is runtime-owned and must not be shared with the guest. The
+        // temp+rename path prevents following an existing key.pem symlink or
+        // truncating an existing hardlinked file at the final path.
+        std::fs::rename(&tmp_path, path)
+            .map_err(|e| BoxliteError::Network(format!("Failed to install CA key: {e}")))?;
+        Ok(())
+    })();
+
+    if write_result.is_err() {
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+
+    write_result
+}
+
+#[cfg(not(unix))]
+fn write_private_key(path: &Path, contents: &str) -> BoxliteResult<()> {
+    std::fs::write(path, contents)
+        .map_err(|e| BoxliteError::Network(format!("Failed to write CA key: {e}")))
 }
 
 #[cfg(test)]
@@ -121,5 +170,52 @@ mod tests {
         let ca2 = load_or_generate(&ca_dir).unwrap();
         assert_eq!(ca1.cert_pem, ca2.cert_pem);
         assert_eq!(ca1.key_pem, ca2.key_pem);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_load_or_generate_writes_private_key_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let ca_dir = dir.path().join("ca");
+
+        load_or_generate(&ca_dir).unwrap();
+
+        let mode = std::fs::metadata(ca_dir.join("key.pem"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_private_key_replaces_symlink_without_writing_target() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let ca_dir = dir.path().join("ca");
+        std::fs::create_dir_all(&ca_dir).unwrap();
+        let key_path = ca_dir.join("key.pem");
+        let outside_target = dir.path().join("outside-key.pem");
+        std::fs::write(&outside_target, "sentinel").unwrap();
+        std::os::unix::fs::symlink(&outside_target, &key_path).unwrap();
+
+        write_private_key(&key_path, "private-key").unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&outside_target).unwrap(),
+            "sentinel"
+        );
+        let metadata = std::fs::symlink_metadata(&key_path).unwrap();
+        assert!(
+            !metadata.file_type().is_symlink(),
+            "key.pem should be replaced, not followed"
+        );
+        assert!(metadata.file_type().is_file());
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::read_to_string(&key_path).unwrap(), "private-key");
     }
 }
