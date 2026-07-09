@@ -1,3 +1,5 @@
+//go:build unix
+
 package boxlite
 
 /*
@@ -10,6 +12,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"syscall"
 	"unsafe"
 )
 
@@ -58,7 +61,7 @@ func (b *Box) openTunnel(ctx context.Context, targetIP string, targetPort uint16
 	}
 	file := os.NewFile(uintptr(fd), name)
 	if file == nil {
-		_ = closeFd(int(fd))
+		_ = syscall.Close(int(fd))
 		return nil, fmt.Errorf("boxlite tunnel returned invalid fd %d", int(fd))
 	}
 	defer file.Close()
