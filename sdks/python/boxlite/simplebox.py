@@ -292,6 +292,15 @@ class SimpleBox:
             error_message=error_message,
         )
 
+    async def metrics(self):
+        """Get box metrics (CPU, memory usage)."""
+        if not self._started:
+            raise RuntimeError(
+                "Box not started. Use 'async with SimpleBox(...) as box:' "
+                "or call 'await box.start()' first."
+            )
+        return await self._box.metrics()
+
     async def stop(self):
         """
         Stop the box and release resources.
