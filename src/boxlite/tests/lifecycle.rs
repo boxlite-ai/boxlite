@@ -249,6 +249,25 @@ async fn remove_nonexistent_returns_not_found() {
 }
 
 #[tokio::test]
+async fn remove_auto_removed_local_box_id_is_idempotent() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime
+        .create(common::alpine_opts_auto(), None)
+        .await
+        .unwrap();
+    let box_id = handle.id().clone();
+
+    handle.stop().await.unwrap();
+    assert!(runtime.get_info(box_id.as_str()).await.unwrap().is_none());
+    runtime.remove(box_id.as_str(), false).await.unwrap();
+}
+
+#[tokio::test]
 async fn remove_stopped_box_succeeds() {
     let home = boxlite_test_utils::home::PerTestBoxHome::isolated();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
@@ -417,8 +436,8 @@ async fn litebox_info_returns_correct_metadata() {
         .expect("info should be available");
     assert_eq!(info.id, box_id);
     assert_eq!(info.status, BoxStatus::Configured);
-    assert_eq!(info.cpus, 2); // Default value
-    assert_eq!(info.memory_mib, 512); // Default value
+    assert_eq!(info.cpus, 4); // Default value
+    assert_eq!(info.memory_mib, 4096); // Default value
 
     // Cleanup
     runtime.remove(box_id.as_str(), true).await.unwrap();

@@ -6,10 +6,12 @@ Provides common functionality for all specialized boxes (CodeBox, BrowserBox, et
 
 import asyncio
 import logging
+import time
 from enum import IntEnum
 from typing import Optional, TYPE_CHECKING
 
-from .exec import ExecResult
+from .errors import ExecError, TimeoutError
+from .exec import ExecResult, _looks_like_command_start_error, _looks_like_timeout_result
 
 if TYPE_CHECKING:
     from .boxlite import Boxlite
@@ -219,10 +221,19 @@ class SimpleBox:
         # Convert env dict to list of tuples if provided
         env_list = list(env.items()) if env else None
 
+        command_display = " ".join([cmd, *args])
+        started_at = time.monotonic()
+
         # Execute via Rust (returns PyExecution)
-        execution = await self._box.exec(
-            cmd, arg_list, env_list, user=user, timeout_secs=timeout, cwd=cwd
-        )
+        try:
+            execution = await self._box.exec(
+                cmd, arg_list, env_list, user=user, timeout_secs=timeout, cwd=cwd
+            )
+        except Exception as e:
+            message = str(e)
+            if _looks_like_command_start_error(message):
+                raise ExecError(command_display, 127, message) from e
+            raise
 
         # Get streams from Rust execution
         try:
@@ -285,12 +296,27 @@ class SimpleBox:
 
         logger.debug(f"exec finish, exit_code: {exit_code}")
 
+        elapsed = time.monotonic() - started_at
+        if _looks_like_timeout_result(exit_code, timeout=timeout, elapsed=elapsed):
+            raise TimeoutError(
+                f"Command '{command_display}' timed out after {timeout:g} seconds"
+            )
+
         return ExecResult(
             exit_code=exit_code,
             stdout=stdout,
             stderr=stderr,
             error_message=error_message,
         )
+
+    async def metrics(self):
+        """Get box metrics (CPU, memory usage)."""
+        if not self._started:
+            raise RuntimeError(
+                "Box not started. Use 'async with SimpleBox(...) as box:' "
+                "or call 'await box.start()' first."
+            )
+        return await self._box.metrics()
 
     async def stop(self):
         """

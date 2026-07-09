@@ -27,6 +27,10 @@ fn litebox_from_impl(box_impl: SharedBoxImpl) -> LiteBox {
     LiteBox::new(box_backend, snapshot_backend)
 }
 
+fn looks_like_local_box_id(value: &str) -> bool {
+    value.len() == 12 && value.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
 /// Archive the active exit file as `exit.previous`, freeing the canonical
 /// slot for the next crash. Single-slot rotation — any prior `exit.previous`
 /// is overwritten. NotFound on source is tolerated.
@@ -491,7 +495,17 @@ impl RuntimeImpl {
 
     /// Remove a box completely by ID or name.
     pub fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()> {
-        let box_id = self.resolve_id(id_or_name)?;
+        let box_id = match self.resolve_id(id_or_name) {
+            Ok(box_id) => box_id,
+            Err(BoxliteError::NotFound(_)) if looks_like_local_box_id(id_or_name) => {
+                tracing::debug!(
+                    box_id = %id_or_name,
+                    "Remove called for an already-missing local box id; treating as cleanup success"
+                );
+                return Ok(());
+            }
+            Err(err) => return Err(err),
+        };
         self.remove_box(&box_id, force)
     }
 

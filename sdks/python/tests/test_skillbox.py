@@ -71,8 +71,8 @@ class TestSkillBoxBasic:
             info = box.info()
             # Default image is node:20-alpine
             assert "node" in info.image.lower()
-            # Default memory is 2048 MiB
-            assert info.memory_mib == 2048
+            # Default memory is 4096 MiB
+            assert info.memory_mib == 4096
 
     def test_custom_name(self, shared_sync_runtime, oauth_token):
         """Test SkillBox with custom name."""

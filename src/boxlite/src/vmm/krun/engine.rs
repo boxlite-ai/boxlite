@@ -2,6 +2,7 @@
 
 use super::context::KrunContext;
 use crate::runtime::constants::network;
+use crate::runtime::constants::vm_defaults::{DEFAULT_CPUS, DEFAULT_MEMORY_MIB};
 use crate::vmm::{InstanceSpec, Vmm, VmmConfig, VmmInstance, engine::VmmInstanceImpl};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
@@ -238,9 +239,15 @@ impl Vmm for Krun {
             tracing::debug!("Creating libkrun context");
             let mut ctx = KrunContext::create()?;
 
-            tracing::debug!("Setting VM config: 4 CPUs, 4096MB memory");
-            // Configure VM like chroot_vm example: 4 CPUs and 4096MB memory
-            ctx.set_vm_config(config.cpus.unwrap_or(4), config.memory_mib.unwrap_or(4096))?;
+            tracing::debug!(
+                cpus = config.cpus.unwrap_or(DEFAULT_CPUS),
+                memory_mib = config.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
+                "Setting VM config"
+            );
+            ctx.set_vm_config(
+                config.cpus.unwrap_or(DEFAULT_CPUS),
+                config.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
+            )?;
 
             // Configure net from connection info passed by parent process
             if let Some(connection) = &config.network_backend_endpoint {

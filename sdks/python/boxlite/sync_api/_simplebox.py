@@ -7,9 +7,11 @@ API mirrors async SimpleBox exactly.
 
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING, Dict, Optional
 
-from ..exec import ExecResult
+from ..errors import ExecError, TimeoutError
+from ..exec import ExecResult, _looks_like_command_start_error, _looks_like_timeout_result
 
 if TYPE_CHECKING:
     from ._boxlite import SyncBoxlite
@@ -190,11 +192,20 @@ class SyncSimpleBox:
 
         # Access the underlying async Box directly
         async_box = self._box._box
+        command_display = " ".join([cmd, *args])
 
         async def _exec_and_collect():
-            execution = await async_box.exec(
-                cmd, arg_list, env_list, user=user, timeout_secs=timeout, cwd=cwd
-            )
+            started_at = time.monotonic()
+
+            try:
+                execution = await async_box.exec(
+                    cmd, arg_list, env_list, user=user, timeout_secs=timeout, cwd=cwd
+                )
+            except Exception as e:
+                message = str(e)
+                if _looks_like_command_start_error(message):
+                    raise ExecError(command_display, 127, message) from e
+                raise
 
             stdout_lines = []
             stderr_lines = []
@@ -245,6 +256,13 @@ class SyncSimpleBox:
             except Exception as e:
                 logger.error(f"failed to wait execution: {e}")
                 exit_code = -1
+                error_message = None
+
+            elapsed = time.monotonic() - started_at
+            if _looks_like_timeout_result(exit_code, timeout=timeout, elapsed=elapsed):
+                raise TimeoutError(
+                    f"Command '{command_display}' timed out after {timeout:g} seconds"
+                )
 
             return ExecResult(
                 exit_code=exit_code,

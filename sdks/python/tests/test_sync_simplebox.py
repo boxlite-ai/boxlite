@@ -11,6 +11,7 @@ import pytest
 
 # Try to import sync API - skip if greenlet not installed
 try:
+    import boxlite
     from boxlite import SyncSimpleBox
 
     SYNC_AVAILABLE = True
@@ -82,6 +83,14 @@ class TestSyncSimpleBox:
             assert metrics is not None
             assert metrics.commands_executed_total >= 1
 
+    def test_command_not_found_raises_exec_error(self, shared_sync_runtime):
+        """Direct command start failures raise ExecError, not bare RuntimeError."""
+        with SyncSimpleBox(image="alpine:latest", runtime=shared_sync_runtime) as box:
+            with pytest.raises(boxlite.ExecError) as exc:
+                box.exec("definitely-not-a-boxlite-command-xyz")
+            assert exc.value.exit_code == 127
+            assert "not found" in exc.value.stderr.lower()
+
     def test_custom_working_dir(self, shared_sync_runtime):
         """Can set custom working directory."""
         with SyncSimpleBox(
@@ -115,10 +124,10 @@ class TestSyncSimpleBox:
             assert "nobody" in result.stdout
 
     def test_exec_with_timeout(self, shared_sync_runtime):
-        """Per-exec timeout kills long-running commands."""
+        """Per-exec timeout raises a typed TimeoutError."""
         with SyncSimpleBox(image="alpine:latest", runtime=shared_sync_runtime) as box:
-            result = box.exec("sleep", "60", timeout=2)
-            assert result.exit_code != 0
+            with pytest.raises(boxlite.TimeoutError):
+                box.exec("sleep", "60", timeout=2)
 
     def test_exec_combined_options(self, shared_sync_runtime):
         """Per-exec cwd and user can be combined."""

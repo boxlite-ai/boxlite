@@ -28,3 +28,28 @@ class ExecResult:
     stdout: str
     stderr: str
     error_message: str | None = None
+
+
+def _looks_like_command_start_error(message: str) -> bool:
+    """Return true for errors caused by an invalid user command."""
+    lowered = message.lower()
+    return (
+        ("executable" in lowered and "not found" in lowered)
+        or "not found in $path" in lowered
+        or "not found in path" in lowered
+        or "does not have correct permissions" in lowered
+        or "permission denied" in lowered
+    )
+
+
+def _looks_like_timeout_result(
+    exit_code: int,
+    *,
+    timeout: float | None,
+    elapsed: float,
+) -> bool:
+    if timeout is None:
+        return False
+    if exit_code not in {-15, -9}:
+        return False
+    return elapsed >= max(0.0, timeout * 0.8)

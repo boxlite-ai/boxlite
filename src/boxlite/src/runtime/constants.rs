@@ -60,10 +60,10 @@ pub mod fs_options {
 /// Virtual machine resource defaults
 pub mod vm_defaults {
     /// Default number of CPUs allocated to a Box
-    pub const DEFAULT_CPUS: u8 = 1;
+    pub const DEFAULT_CPUS: u8 = 4;
 
     /// Default memory in MiB allocated to a Box
-    pub const DEFAULT_MEMORY_MIB: u32 = 2048;
+    pub const DEFAULT_MEMORY_MIB: u32 = 4096;
 
     /// Default disk size in GB for the container rootfs (sparse, grows as needed)
     pub const DEFAULT_DISK_SIZE_GB: u64 = 10;

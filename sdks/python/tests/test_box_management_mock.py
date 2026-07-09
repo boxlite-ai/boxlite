@@ -137,6 +137,17 @@ class TestBoxliteManagementMethods:
     def test_method_exists(self, cls, method):
         assert hasattr(cls, method), f"Boxlite missing method: {method}"
 
+    def test_sync_context_manager_points_to_sync_api(self, tmp_path):
+        runtime = boxlite.Boxlite(boxlite.Options(home_dir=str(tmp_path)))
+        with pytest.raises(RuntimeError, match="SyncBoxlite"):
+            with runtime:
+                pass
+
+    @pytest.mark.asyncio
+    async def test_async_context_manager(self, tmp_path):
+        async with boxlite.Boxlite(boxlite.Options(home_dir=str(tmp_path))) as runtime:
+            assert isinstance(runtime, boxlite.Boxlite)
+
     def test_rest_runtime_images_unsupported(self):
         runtime = boxlite.Boxlite.rest(
             boxlite.BoxliteRestOptions(url="http://localhost:1")
