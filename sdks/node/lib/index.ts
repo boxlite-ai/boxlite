@@ -37,6 +37,8 @@ export type {
   JsImageRegistry,
   JsImageRegistryAuth,
   JsOptions,
+  PortPreviewUrl,
+  SignedPortPreviewUrl,
 } from "./native-contracts.js";
 
 // The public `rest` takes the cross-SDK `BoxliteRestOptions` bag. The

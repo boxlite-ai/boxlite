@@ -31,6 +31,12 @@ class TestExports:
 
         assert Box is not None
 
+    def test_port_preview_url_importable(self):
+        from boxlite import PortPreviewUrl, SignedPortPreviewUrl
+
+        assert PortPreviewUrl is not None
+        assert SignedPortPreviewUrl is not None
+
     def test_box_info_importable(self):
         from boxlite import BoxInfo
 
@@ -67,6 +73,8 @@ class TestExports:
             "ImageHandle",
             "ImageInfo",
             "ImagePullResult",
+            "PortPreviewUrl",
+            "SignedPortPreviewUrl",
         ):
             assert name in boxlite.__all__, f"{name} missing from __all__"
 
@@ -143,6 +151,25 @@ class TestBoxliteManagementMethods:
         )
         with pytest.raises(RuntimeError, match="Image operations not supported"):
             _ = runtime.images
+
+
+class TestBoxNetworkPreviewMethods:
+    """Test that Box exposes port preview methods."""
+
+    @pytest.fixture()
+    def cls(self):
+        return boxlite.Box
+
+    @pytest.mark.parametrize(
+        "method",
+        [
+            "port_preview_url",
+            "signed_port_preview_url",
+            "expire_signed_port_preview_url",
+        ],
+    )
+    def test_method_exists(self, cls, method):
+        assert hasattr(cls, method), f"Box missing method: {method}"
 
 
 class TestSyncBoxliteManagementMethods:

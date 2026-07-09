@@ -352,3 +352,36 @@ impl PyBox {
         format!("Box(id={:?})", self.handle.id().to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn port_preview_url_maps_to_python_shape() {
+        let py = PyPortPreviewUrl::from(PortPreviewUrl {
+            box_id: "box123".to_string(),
+            url: "https://3000-box123.proxy.example.test/".to_string(),
+            token: "tok".to_string(),
+        });
+
+        assert_eq!(py.box_id, "box123");
+        assert_eq!(py.url, "https://3000-box123.proxy.example.test/");
+        assert_eq!(py.token, "tok");
+    }
+
+    #[test]
+    fn signed_port_preview_url_maps_to_python_shape() {
+        let py = PySignedPortPreviewUrl::from(SignedPortPreviewUrl {
+            box_id: "box123".to_string(),
+            port: 3000,
+            url: "https://3000-signed.proxy.example.test/".to_string(),
+            token: "signed".to_string(),
+        });
+
+        assert_eq!(py.box_id, "box123");
+        assert_eq!(py.port, 3000);
+        assert_eq!(py.url, "https://3000-signed.proxy.example.test/");
+        assert_eq!(py.token, "signed");
+    }
+}

@@ -202,6 +202,19 @@ export interface JsBoxMetrics {
   stageContainerInitMs?: number;
 }
 
+export interface PortPreviewUrl {
+  boxId: string;
+  url: string;
+  token: string;
+}
+
+export interface SignedPortPreviewUrl {
+  boxId: string;
+  port: number;
+  token: string;
+  url: string;
+}
+
 export interface JsExecResult {
   exitCode: number;
   errorMessage?: string;
@@ -280,6 +293,12 @@ export interface JsBox {
   start(): Promise<void>;
   stop(): Promise<void>;
   metrics(): Promise<JsBoxMetrics>;
+  portPreviewUrl(port: number): Promise<PortPreviewUrl>;
+  signedPortPreviewUrl(
+    port: number,
+    expiresInSeconds?: number | null,
+  ): Promise<SignedPortPreviewUrl>;
+  expireSignedPortPreviewUrl(port: number, token: string): Promise<void>;
   copyIn(
     hostPath: string,
     containerDest: string,

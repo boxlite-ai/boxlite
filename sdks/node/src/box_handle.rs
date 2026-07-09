@@ -268,3 +268,36 @@ impl JsBox {
             .map_err(map_err)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn port_preview_url_maps_to_node_shape() {
+        let js = JsPortPreviewUrl::from(boxlite::PortPreviewUrl {
+            box_id: "box123".to_string(),
+            url: "https://3000-box123.proxy.example.test/".to_string(),
+            token: "tok".to_string(),
+        });
+
+        assert_eq!(js.box_id, "box123");
+        assert_eq!(js.url, "https://3000-box123.proxy.example.test/");
+        assert_eq!(js.token, "tok");
+    }
+
+    #[test]
+    fn signed_port_preview_url_maps_to_node_shape() {
+        let js = JsSignedPortPreviewUrl::from(boxlite::SignedPortPreviewUrl {
+            box_id: "box123".to_string(),
+            port: 3000,
+            url: "https://3000-signed.proxy.example.test/".to_string(),
+            token: "signed".to_string(),
+        });
+
+        assert_eq!(js.box_id, "box123");
+        assert_eq!(js.port, 3000);
+        assert_eq!(js.url, "https://3000-signed.proxy.example.test/");
+        assert_eq!(js.token, "signed");
+    }
+}

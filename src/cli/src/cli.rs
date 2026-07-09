@@ -1327,6 +1327,52 @@ mod tests {
     use clap::Parser;
 
     #[test]
+    fn preview_url_parses_unsigned() {
+        let cli = Cli::try_parse_from(["boxlite", "preview-url", "box123", "3000"])
+            .expect("preview-url should parse");
+        let Commands::PreviewUrl(args) = cli.command else {
+            panic!("expected Commands::PreviewUrl");
+        };
+        assert_eq!(args.target, "box123");
+        assert_eq!(args.port, 3000);
+        assert!(!args.signed);
+        assert_eq!(args.expires_in_seconds, None);
+    }
+
+    #[test]
+    fn preview_url_parses_signed_expiration() {
+        let cli = Cli::try_parse_from([
+            "boxlite",
+            "preview-url",
+            "box123",
+            "3000",
+            "--signed",
+            "--expires-in-seconds",
+            "120",
+        ])
+        .expect("signed preview-url should parse");
+        let Commands::PreviewUrl(args) = cli.command else {
+            panic!("expected Commands::PreviewUrl");
+        };
+        assert!(args.signed);
+        assert_eq!(args.expires_in_seconds, Some(120));
+    }
+
+    #[test]
+    fn preview_url_rejects_expiration_without_signed() {
+        let err = Cli::try_parse_from([
+            "boxlite",
+            "preview-url",
+            "box123",
+            "3000",
+            "--expires-in-seconds",
+            "120",
+        ])
+        .expect_err("--expires-in-seconds requires --signed");
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
     fn auth_login_parses_with_no_flags() {
         let cli = Cli::try_parse_from(["boxlite", "auth", "login"]).expect("parse");
         let Commands::Auth(args) = cli.command else {
