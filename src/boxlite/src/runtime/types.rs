@@ -320,6 +320,7 @@ pub struct BoxInfo {
 impl BoxInfo {
     /// Create BoxInfo from config and state.
     pub fn new(config: &crate::litebox::config::BoxConfig, state: &BoxState) -> Self {
+        use crate::runtime::constants::vm_defaults::{DEFAULT_CPUS, DEFAULT_MEMORY_MIB};
         use crate::runtime::options::RootfsSpec;
 
         Self {
@@ -333,8 +334,8 @@ impl BoxInfo {
                 RootfsSpec::Image(r) => r.clone(),
                 RootfsSpec::RootfsPath(p) => format!("rootfs:{}", p),
             },
-            cpus: config.options.cpus.unwrap_or(2),
-            memory_mib: config.options.memory_mib.unwrap_or(512),
+            cpus: config.options.cpus.unwrap_or(DEFAULT_CPUS),
+            memory_mib: config.options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
             labels: HashMap::new(),
             health_status: state.health_status,
         }
