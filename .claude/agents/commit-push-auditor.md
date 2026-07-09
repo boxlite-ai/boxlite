@@ -54,7 +54,9 @@ The parent agent must tell you the exact git command they are about to retry
    - commit: parse the message from the target command's `-m` / `-F` argument(s).
      If the commit uses an editor (no inline message), return FAIL rather than
      guessing.
-   - push: read `git log origin/main..HEAD --format=%B`.
+   - push: read commit subjects from the verified
+     `last-push-audit-context.diff` lines that begin with `commit-subject `;
+     judge only those subjects from the exact pre-push ref-update context.
    FAIL on: a subject that isn't `type(scope): summary` or exceeds 72 chars;
    process / AI / conversation narrative; pasted logs or excerpts; secrets. A
    CodeRabbit auto-summary block is allowed (tool-generated, not narrative).

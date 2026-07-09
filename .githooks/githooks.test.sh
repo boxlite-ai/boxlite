@@ -226,6 +226,11 @@ try_commit() {  # repo  agent|human
   run_commit "$repo" "$who"
 }
 
+grep -q 'last-push-audit-context.diff' "$REPO_ROOT/.claude/agents/commit-push-auditor.md" && auditor_exact=yes || auditor_exact=no
+check_eq "commit-push auditor prompt uses exact push context" "$auditor_exact" "yes"
+grep -q 'git log origin/main..HEAD' "$REPO_ROOT/.claude/agents/commit-push-auditor.md" && auditor_broad=yes || auditor_broad=no
+check_eq "commit-push auditor prompt omits broad push subject range" "$auditor_broad" "no"
+
 echo "## pre-commit: agent gated, human exempt"
 R="$(setup)"
 check_eq "agent + no audit → commit rejected"       "$(try_commit "$R" agent)" 1
