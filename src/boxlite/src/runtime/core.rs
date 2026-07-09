@@ -11,6 +11,7 @@ use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
 use crate::runtime::rt_impl::{LocalRuntime, RuntimeImpl};
 use crate::runtime::signal_handler::install_signal_handler;
 use crate::runtime::types::BoxInfo;
+use crate::runtime::volumes::VolumeBackend;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 #[cfg(feature = "rest")]
@@ -57,6 +58,10 @@ extern "C" fn shutdown_on_exit() {
 pub struct BoxliteRuntime {
     backend: Arc<dyn RuntimeBackend>,
     image_backend: Option<Arc<dyn ImageBackend>>,
+    /// Named-volume capability — `Some` only for local backends (which own a
+    /// `<home>/volumes` tree). An `Arc` view of the same backend, mirroring
+    /// `image_backend` / `images()`. Surfaced via `volumes()`.
+    volume_backend: Option<Arc<dyn VolumeBackend>>,
     /// Identity capability — `Some` only for backends with a notion of
     /// remote identity (currently REST; an `Arc` view of the same backend,
     /// not a second client). Surfaced via `auth()`, mirroring
@@ -84,9 +89,11 @@ impl BoxliteRuntime {
         let local = LocalRuntime(RuntimeImpl::new(options)?);
         let backend_arc = Arc::new(local);
         let image_backend = Arc::clone(&backend_arc) as Arc<dyn ImageBackend>;
+        let volume_backend = Arc::clone(&backend_arc) as Arc<dyn VolumeBackend>;
         Ok(Self {
             backend: backend_arc,
             image_backend: Some(image_backend),
+            volume_backend: Some(volume_backend),
             auth_backend: None,
         })
     }
@@ -114,7 +121,8 @@ impl BoxliteRuntime {
         let auth_backend = Arc::clone(&rest_runtime) as Arc<dyn crate::runtime::auth::AuthBackend>;
         Ok(Self {
             backend: rest_runtime,
-            image_backend: None, // REST runtime doesn't support image operations
+            image_backend: None,  // REST runtime doesn't support image operations
+            volume_backend: None, // named volumes are a local-only capability
             auth_backend: Some(auth_backend),
         })
     }
@@ -415,6 +423,43 @@ impl BoxliteRuntime {
             Some(manager) => Ok(crate::runtime::ImageHandle::new(Arc::clone(manager))),
             None => Err(BoxliteError::Unsupported(
                 "Image operations not supported over REST API".to_string(),
+            )),
+        }
+    }
+
+    // ========================================================================
+    // NAMED VOLUME OPERATIONS (via VolumeHandle)
+    // ========================================================================
+
+    /// Get a handle for named-volume operations (create, list, get, remove).
+    ///
+    /// Returns a [`VolumeHandle`](crate::runtime::VolumeHandle) over this
+    /// runtime's `<home>/volumes` tree, following the same accessor pattern as
+    /// `images()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BoxliteError::Unsupported` on a REST runtime — named local
+    /// volumes are a local-only capability.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use boxlite::runtime::BoxliteRuntime;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let runtime = BoxliteRuntime::with_defaults()?;
+    /// let volumes = runtime.volumes()?;
+    /// let info = volumes.create("data", None)?;
+    /// println!("mountpoint: {}", info.mountpoint.display());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn volumes(&self) -> BoxliteResult<crate::runtime::VolumeHandle> {
+        match &self.volume_backend {
+            Some(backend) => Ok(crate::runtime::VolumeHandle::new(Arc::clone(backend))),
+            None => Err(BoxliteError::Unsupported(
+                "Named volume operations are only available on local runtimes".to_string(),
             )),
         }
     }

@@ -1,0 +1,38 @@
+use std::io::Write;
+
+use crate::cli::GlobalFlags;
+use crate::commands::volume::ls::VolumePresenter;
+use crate::formatter::{self, OutputFormat};
+use clap::Args;
+
+/// Show details for a named local volume.
+#[derive(Args, Debug)]
+pub struct GetArgs {
+    /// Volume name.
+    pub name: String,
+
+    /// Output format (table, json, yaml).
+    #[arg(long, default_value = "table")]
+    pub format: String,
+}
+
+pub fn run(args: GetArgs, global: &GlobalFlags) -> anyhow::Result<()> {
+    let rt = global.create_runtime()?;
+    let info = rt.volumes()?.get(&args.name)?;
+
+    let presenter = VolumePresenter::from(&info);
+    let format = OutputFormat::from_str(&args.format)?;
+    formatter::print_output(
+        &mut std::io::stdout().lock(),
+        &presenter,
+        format,
+        |writer, data| {
+            // Table mode: one row for the single volume.
+            let table = formatter::create_table(std::iter::once(data)).to_string();
+            writeln!(writer, "{}", table)?;
+            Ok(())
+        },
+    )?;
+
+    Ok(())
+}

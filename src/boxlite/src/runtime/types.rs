@@ -10,6 +10,10 @@ use std::hash::Hash;
 
 pub use crate::litebox::{BoxState, BoxStatus, HealthStatus};
 use crate::runtime::id::BoxID;
+/// Re-exported here so the CLI can reach volume metadata the same way it
+/// reaches [`ImageInfo`] (`boxlite::runtime::types::VolumeInfo`). The type
+/// itself lives with the store in [`crate::volumes`].
+pub use crate::volumes::VolumeInfo;
 
 // ============================================================================
 // RESOURCE LIMIT TYPES (C-NEWTYPE: Semantic newtypes for distinct concepts)

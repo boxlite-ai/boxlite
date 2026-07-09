@@ -105,6 +105,9 @@ pub enum Commands {
     /// Authenticate with a remote BoxLite server
     Auth(crate::commands::auth::AuthArgs),
 
+    /// Manage named local volumes
+    Volume(crate::commands::volume::VolumeArgs),
+
     /// Generate shell completion script (hidden from help)
     #[command(hide = true)]
     Completion(CompletionArgs),
@@ -716,6 +719,11 @@ impl VolumeFlags {
         for s in self.volume.iter() {
             let spec = parse_volume_spec(s)?;
             let host_path = match spec.host_path {
+                // TODO(#942): when the host side of a `-v <src>:<guest>` spec is a
+                // bare name (not a path) that matches a named volume created via
+                // `boxlite volume create`, resolve it to
+                // `VolumeStore::get(name).mountpoint` here and bind that `_data`
+                // dir instead of treating the name as a literal host path.
                 Some(host) => {
                     let mut path = host;
                     if std::path::Path::new(&path).is_relative() && !is_windows_absolute_path(&path)
@@ -1395,6 +1403,72 @@ mod tests {
             panic!("expected Commands::Auth");
         };
         assert!(matches!(args.command, AuthCommand::Status));
+    }
+
+    // ─── volume subcommand parse tests ─────────────────────────────────────
+
+    use crate::commands::volume::VolumeCommand;
+
+    #[test]
+    fn volume_create_parses_name_and_size() {
+        let cli =
+            Cli::try_parse_from(["boxlite", "volume", "create", "data", "-s", "5"]).expect("parse");
+        let Commands::Volume(args) = cli.command else {
+            panic!("expected Commands::Volume");
+        };
+        let VolumeCommand::Create(create) = args.command else {
+            panic!("expected VolumeCommand::Create");
+        };
+        assert_eq!(create.name, "data");
+        assert_eq!(create.size, Some(5));
+    }
+
+    #[test]
+    fn volume_ls_list_alias_parses() {
+        // The `list` visible alias must resolve to the same Ls variant.
+        for verb in ["ls", "list"] {
+            let cli = Cli::try_parse_from(["boxlite", "volume", verb]).expect("parse");
+            let Commands::Volume(args) = cli.command else {
+                panic!("expected Commands::Volume for {verb}");
+            };
+            assert!(
+                matches!(args.command, VolumeCommand::Ls(_)),
+                "{verb} should map to Ls"
+            );
+        }
+    }
+
+    #[test]
+    fn volume_get_inspect_alias_parses() {
+        for verb in ["get", "inspect"] {
+            let cli = Cli::try_parse_from(["boxlite", "volume", verb, "data"]).expect("parse");
+            let Commands::Volume(args) = cli.command else {
+                panic!("expected Commands::Volume for {verb}");
+            };
+            let VolumeCommand::Get(get) = args.command else {
+                panic!("{verb} should map to Get");
+            };
+            assert_eq!(get.name, "data");
+        }
+    }
+
+    #[test]
+    fn volume_rm_takes_multiple_names_and_force() {
+        let cli = Cli::try_parse_from(["boxlite", "volume", "rm", "-f", "a", "b"]).expect("parse");
+        let Commands::Volume(args) = cli.command else {
+            panic!("expected Commands::Volume");
+        };
+        let VolumeCommand::Rm(rm) = args.command else {
+            panic!("expected VolumeCommand::Rm");
+        };
+        assert!(rm.force);
+        assert_eq!(rm.names, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn volume_rm_requires_a_name() {
+        // `num_args = 1..` + required means a bare `volume rm` must error.
+        assert!(Cli::try_parse_from(["boxlite", "volume", "rm"]).is_err());
     }
 
     #[test]

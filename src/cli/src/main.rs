@@ -122,6 +122,7 @@ async fn run_cli(cli: Cli) -> i32 {
         cli::Commands::Tunnel(args) => commands::tunnel::execute(args, &global).await.map(|_| 0),
         cli::Commands::Serve(args) => commands::serve::execute(args, &global).await.map(|_| 0),
         cli::Commands::Auth(args) => commands::auth::run(args, &global).await.map(|_| 0),
+        cli::Commands::Volume(args) => commands::volume::execute(args, &global).await.map(|_| 0),
         // Handled in main() before tokio; never reaches run_cli
         cli::Commands::Completion(_) => {
             unreachable!("completion subcommand is handled before tokio in main()")
