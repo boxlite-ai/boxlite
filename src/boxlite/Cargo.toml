@@ -119,5 +119,6 @@ bincode = "2.0"  # Serialize compiled BPF filters
 
 [dev-dependencies]
 boxlite-test-utils = { path = "../test-utils" }
+notify = "6.1"
 proptest = "1.4"
 toml = "0.8"

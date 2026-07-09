@@ -571,6 +571,63 @@ mod tests {
         assert!(ca_dir.path().join("cert.pem").exists());
     }
 
+    #[test]
+    fn spec_disables_secrets_when_ca_dir_is_unusable() {
+        // The core must not hand secrets to gvproxy when it failed to provision
+        // the MITM CA. Use a plain file as ca_dir so load_or_generate fails at
+        // the project boundary, then assert spec() drops the secret material.
+        let dir = tempfile::tempdir().unwrap();
+        let ca_dir = dir.path().join("ca-dir-is-a-file");
+        std::fs::write(&ca_dir, "not a directory").unwrap();
+        let config = NetworkBackendConfig {
+            port_mappings: Vec::new(),
+            socket_path: PathBuf::from("/tmp/bl-box/net.sock"),
+            allow_net: Vec::new(),
+            secrets: vec![test_secret()],
+            ca_dir,
+        };
+
+        let spec = GvproxyBackend::from_config(&config).spec();
+
+        assert!(
+            spec.secrets.is_empty(),
+            "secrets must be disabled when CA setup fails"
+        );
+        assert!(spec.ca_cert_pem.is_none());
+        assert!(spec.ca_key_pem.is_none());
+    }
+
+    #[tokio::test]
+    async fn list_forwards_reports_missing_services_socket_path() {
+        let dir = tempfile::Builder::new()
+            .prefix("bl-svctest-missing-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let (backend, ctl, _) = test_backend(&dir);
+
+        let err = backend.list_forwards().await.unwrap_err();
+
+        let err = format!("{err}");
+        assert!(err.contains("gvproxy services connect"), "err: {err}");
+        assert!(err.contains(&ctl.display().to_string()), "err: {err}");
+    }
+
+    #[tokio::test]
+    async fn tunnel_reports_missing_services_socket_path() {
+        let dir = tempfile::Builder::new()
+            .prefix("bl-tuntest-missing-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let (backend, ctl, _) = test_backend(&dir);
+        let target: SocketAddr = "192.168.127.2:8080".parse().unwrap();
+
+        let err = backend.tunnel(target).await.unwrap_err();
+
+        let err = format!("{err}");
+        assert!(err.contains("gvproxy tunnel connect"), "err: {err}");
+        assert!(err.contains(&ctl.display().to_string()), "err: {err}");
+    }
+
     #[tokio::test]
     async fn expose_posts_forwarder_payload_to_services_socket() {
         let dir = tempfile::Builder::new()

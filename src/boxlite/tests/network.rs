@@ -135,3 +135,28 @@ fn explicit_no_backend_factory_yields_none() {
     let config = test_config(PathBuf::from("/tmp/factory-test/net.sock"));
     assert!(factory.create(&config).is_none());
 }
+
+#[tokio::test]
+async fn factory_backend_control_dials_derived_gvproxy_socket() {
+    use boxlite::net::{NetworkBackendFactory, default_factory};
+
+    let dir = tempfile::Builder::new()
+        .prefix("bl-factory-control-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let config = test_config(dir.path().join("net.sock"));
+
+    let factory: std::sync::Arc<dyn NetworkBackendFactory> = default_factory();
+    let backend = factory.create(&config).expect("gvproxy backend");
+    assert_eq!(backend.name(), "gvisor-tap-vsock");
+
+    let err = backend.list_forwards().await.unwrap_err();
+
+    let err = format!("{err}");
+    assert!(err.contains("gvproxy services connect"), "err: {err}");
+    assert!(err.contains("gvproxy-ctl.sock"), "err: {err}");
+    assert!(
+        !err.contains("does not support list_forwards"),
+        "factory must create a runtime control backend, err: {err}"
+    );
+}
