@@ -112,6 +112,7 @@ export class JobStateHandlerService {
       } else if (job.status === JobStatus.FAILED) {
         this.logger.error(`CREATE_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
         updateData.state = BoxState.ERROR
+        updateData.desiredState = BoxDesiredState.STOPPED
         const { recoverable, errorReason } = sanitizeBoxError(job.errorMessage)
         updateData.errorReason = errorReason || 'Failed to create box'
         updateData.recoverable = recoverable
