@@ -34,11 +34,6 @@ func (b *Box) TunnelTCP(ctx context.Context, targetIP string, targetPort uint16)
 	return b.openTunnel(ctx, targetIP, targetPort)
 }
 
-// TunnelGuestPort opens a raw byte stream to port on the box's guest IP.
-func (b *Box) TunnelGuestPort(ctx context.Context, targetPort uint16) (net.Conn, error) {
-	return b.openTunnel(ctx, guestIP, targetPort)
-}
-
 func (b *Box) openTunnel(ctx context.Context, targetIP string, targetPort uint16) (net.Conn, error) {
 	if b.handle == nil {
 		return nil, ErrRuntimeClosed

@@ -8,6 +8,8 @@ import (
 	"net/http"
 )
 
+const guestIP = "192.168.127.2"
+
 func (c *Client) NewGuestPortTransport(boxId string, port uint16, logger *slog.Logger) *http.Transport {
 	if logger == nil {
 		logger = slog.Default()
@@ -36,7 +38,7 @@ func (c *Client) DialGuestPort(ctx context.Context, boxId string, port uint16) (
 		return nil, err
 	}
 
-	conn, err := bx.TunnelGuestPort(ctx, port)
+	conn, err := bx.TunnelTCP(ctx, guestIP, port)
 	if err != nil {
 		return nil, fmt.Errorf("open guest port tunnel to %s:%d: %w", boxId, port, err)
 	}
