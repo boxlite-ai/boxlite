@@ -26,6 +26,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
   constructor(private readonly failedAuthTracker: FailedAuthTrackerService) {}
 
+  private isApiRequest(request: Request): boolean {
+    const path = (request.originalUrl || request.url || request.path || '').split('?')[0]
+    return path === '/api' || path.startsWith('/api/')
+  }
+
   async catch(exception: unknown, host: ArgumentsHost): Promise<void> {
     const ctx = host.switchToHttp()
     const response = ctx.getResponse<Response>()
@@ -36,8 +41,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
     let message: string
     let code: string | undefined
 
-    // If the exception is a NotFoundException and the request path is not an API request, serve the dashboard index.html file
-    if (exception instanceof NotFoundException && !request.path.startsWith('/api/')) {
+    // Use the browser-facing URL here: Nest's global prefix can make SPA paths
+    // look like API paths in request.path during 404 handling.
+    if (exception instanceof NotFoundException && !this.isApiRequest(request)) {
       const response = ctx.getResponse()
       response.sendFile(join(__dirname, '..', 'dashboard', 'index.html'))
       return
