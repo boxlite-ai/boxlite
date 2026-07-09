@@ -431,6 +431,23 @@ pub(crate) struct RuntimeMetricsResponse {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct PortPreviewUrlResponse {
+    #[serde(rename = "boxId")]
+    pub box_id: String,
+    pub url: String,
+    pub token: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct SignedPortPreviewUrlResponse {
+    #[serde(rename = "boxId")]
+    pub box_id: String,
+    pub port: u16,
+    pub token: String,
+    pub url: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct BoxMetricsResponse {
     #[serde(default)]
     pub commands_executed_total: u64,

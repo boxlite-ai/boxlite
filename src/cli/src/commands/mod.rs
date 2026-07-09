@@ -7,6 +7,7 @@ pub mod info;
 pub mod inspect;
 pub mod list;
 pub mod logs;
+pub mod preview_url;
 pub mod pull;
 pub mod restart;
 pub mod rm;

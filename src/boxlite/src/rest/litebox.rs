@@ -14,7 +14,10 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use crate::BoxInfo;
 use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
-use crate::litebox::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution};
+use crate::litebox::{
+    BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, PortPreviewUrl,
+    SignedPortPreviewUrl,
+};
 use crate::metrics::BoxMetrics;
 use crate::net::BoxTunnel;
 use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
@@ -26,7 +29,7 @@ use super::exec::RestExecControl;
 use super::types::{
     BoxMetricsResponse, BoxResponse, CloneBoxRequest, CreateSnapshotRequest, ExecRequest,
     ExecResponse, ExecutionStatusResponse, ExportBoxRequest, ListSnapshotsResponse,
-    SnapshotResponse,
+    PortPreviewUrlResponse, SignedPortPreviewUrlResponse, SnapshotResponse,
 };
 
 /// REST-backed box handle.
@@ -48,6 +51,15 @@ impl RestBox {
 
     fn box_id_str(&self) -> String {
         self.cached_info.read().id.to_string()
+    }
+
+    fn validate_preview_port(port: u16) -> BoxliteResult<()> {
+        if port == 0 {
+            return Err(BoxliteError::InvalidArgument(
+                "port must be in range 1-65535".into(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -389,6 +401,54 @@ impl BoxNetworkBackend for RestBox {
         Err(BoxliteError::Unsupported(
             "REST boxes do not support guest port tunnels".into(),
         ))
+    }
+
+    async fn preview_url(&self, port: u16) -> BoxliteResult<PortPreviewUrl> {
+        Self::validate_preview_port(port)?;
+        let box_id = self.box_id_str();
+        let path = format!("/boxes/{}/ports/{}/preview-url", box_id, port);
+        let resp: PortPreviewUrlResponse = self.client.get(&path).await?;
+        Ok(PortPreviewUrl {
+            box_id: resp.box_id,
+            url: resp.url,
+            token: resp.token,
+        })
+    }
+
+    async fn signed_preview_url(
+        &self,
+        port: u16,
+        expires_in_seconds: Option<u32>,
+    ) -> BoxliteResult<SignedPortPreviewUrl> {
+        Self::validate_preview_port(port)?;
+        let box_id = self.box_id_str();
+        let mut path = format!("/boxes/{}/ports/{}/signed-preview-url", box_id, port);
+        if let Some(seconds) = expires_in_seconds {
+            path.push_str(&format!("?expiresInSeconds={}", seconds));
+        }
+        let resp: SignedPortPreviewUrlResponse = self.client.get(&path).await?;
+        Ok(SignedPortPreviewUrl {
+            box_id: resp.box_id,
+            port: resp.port,
+            token: resp.token,
+            url: resp.url,
+        })
+    }
+
+    async fn expire_signed_preview_url(&self, port: u16, token: &str) -> BoxliteResult<()> {
+        Self::validate_preview_port(port)?;
+        if token.is_empty() {
+            return Err(BoxliteError::InvalidArgument(
+                "signed preview token is required".into(),
+            ));
+        }
+        let box_id = self.box_id_str();
+        let token = urlencoding::encode(token);
+        let path = format!(
+            "/boxes/{}/ports/{}/signed-preview-url/{}/expire",
+            box_id, port, token
+        );
+        self.client.post_empty_no_content(&path).await
     }
 }
 

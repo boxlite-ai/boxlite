@@ -12,6 +12,48 @@ use crate::snapshot_options::{JsCloneOptions, JsExportOptions};
 use crate::snapshots::JsSnapshotHandle;
 use crate::util::map_err;
 
+/// Public preview URL for a box port.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct JsPortPreviewUrl {
+    #[napi(js_name = "boxId")]
+    pub box_id: String,
+    pub url: String,
+    pub token: String,
+}
+
+impl From<boxlite::PortPreviewUrl> for JsPortPreviewUrl {
+    fn from(r: boxlite::PortPreviewUrl) -> Self {
+        Self {
+            box_id: r.box_id,
+            url: r.url,
+            token: r.token,
+        }
+    }
+}
+
+/// Signed preview URL for a box port.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct JsSignedPortPreviewUrl {
+    #[napi(js_name = "boxId")]
+    pub box_id: String,
+    pub port: u16,
+    pub token: String,
+    pub url: String,
+}
+
+impl From<boxlite::SignedPortPreviewUrl> for JsSignedPortPreviewUrl {
+    fn from(r: boxlite::SignedPortPreviewUrl) -> Self {
+        Self {
+            box_id: r.box_id,
+            port: r.port,
+            token: r.token,
+            url: r.url,
+        }
+    }
+}
+
 /// Box handle for interacting with a running container.
 ///
 /// Provides methods to execute commands, get status, and stop the box.
@@ -154,6 +196,44 @@ impl JsBox {
     pub async fn metrics(&self) -> Result<JsBoxMetrics> {
         let metrics = self.handle.metrics().await.map_err(map_err)?;
         Ok(JsBoxMetrics::from(metrics))
+    }
+
+    /// Get a public preview URL for a guest port.
+    #[napi(js_name = "portPreviewUrl")]
+    pub async fn port_preview_url(&self, port: u16) -> Result<JsPortPreviewUrl> {
+        let preview = self
+            .handle
+            .network()
+            .preview_url(port)
+            .await
+            .map_err(map_err)?;
+        Ok(JsPortPreviewUrl::from(preview))
+    }
+
+    /// Get a signed preview URL for a guest port.
+    #[napi(js_name = "signedPortPreviewUrl")]
+    pub async fn signed_port_preview_url(
+        &self,
+        port: u16,
+        expires_in_seconds: Option<u32>,
+    ) -> Result<JsSignedPortPreviewUrl> {
+        let preview = self
+            .handle
+            .network()
+            .signed_preview_url(port, expires_in_seconds)
+            .await
+            .map_err(map_err)?;
+        Ok(JsSignedPortPreviewUrl::from(preview))
+    }
+
+    /// Expire a signed preview URL token.
+    #[napi(js_name = "expireSignedPortPreviewUrl")]
+    pub async fn expire_signed_port_preview_url(&self, port: u16, token: String) -> Result<()> {
+        self.handle
+            .network()
+            .expire_signed_preview_url(port, &token)
+            .await
+            .map_err(map_err)
     }
 
     /// Copy files from host into the box's container rootfs.

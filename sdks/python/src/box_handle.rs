@@ -6,8 +6,73 @@ use crate::metrics::PyBoxMetrics;
 use crate::snapshot_options::{PyCloneOptions, PyExportOptions};
 use crate::snapshots::PySnapshotHandle;
 use crate::util::map_err;
-use boxlite::{BoxCommand, CloneOptions, ExportOptions, LiteBox};
+use boxlite::{
+    BoxCommand, CloneOptions, ExportOptions, LiteBox, PortPreviewUrl, SignedPortPreviewUrl,
+};
 use pyo3::prelude::*;
+
+#[pyclass(name = "PortPreviewUrl")]
+pub(crate) struct PyPortPreviewUrl {
+    #[pyo3(get)]
+    pub box_id: String,
+    #[pyo3(get)]
+    pub url: String,
+    #[pyo3(get)]
+    pub token: String,
+}
+
+#[pymethods]
+impl PyPortPreviewUrl {
+    fn __repr__(&self) -> String {
+        format!(
+            "PortPreviewUrl(box_id='{}', url='{}')",
+            self.box_id, self.url
+        )
+    }
+}
+
+impl From<PortPreviewUrl> for PyPortPreviewUrl {
+    fn from(r: PortPreviewUrl) -> Self {
+        Self {
+            box_id: r.box_id,
+            url: r.url,
+            token: r.token,
+        }
+    }
+}
+
+#[pyclass(name = "SignedPortPreviewUrl")]
+pub(crate) struct PySignedPortPreviewUrl {
+    #[pyo3(get)]
+    pub box_id: String,
+    #[pyo3(get)]
+    pub port: u16,
+    #[pyo3(get)]
+    pub token: String,
+    #[pyo3(get)]
+    pub url: String,
+}
+
+#[pymethods]
+impl PySignedPortPreviewUrl {
+    fn __repr__(&self) -> String {
+        format!(
+            "SignedPortPreviewUrl(box_id='{}', port={}, url='{}')",
+            self.box_id, self.port, self.url
+        )
+    }
+}
+
+impl From<SignedPortPreviewUrl> for PySignedPortPreviewUrl {
+    fn from(r: SignedPortPreviewUrl) -> Self {
+        Self {
+            box_id: r.box_id,
+            port: r.port,
+            token: r.token,
+            url: r.url,
+        }
+    }
+}
 
 #[pyclass(name = "Box")]
 pub(crate) struct PyBox {
@@ -126,6 +191,52 @@ impl PyBox {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let metrics = handle.metrics().await.map_err(map_err)?;
             Ok(PyBoxMetrics::from(metrics))
+        })
+    }
+
+    /// Get a public preview URL for a guest port.
+    fn port_preview_url<'a>(&self, py: Python<'a>, port: u16) -> PyResult<Bound<'a, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let preview = handle.network().preview_url(port).await.map_err(map_err)?;
+            Ok(PyPortPreviewUrl::from(preview))
+        })
+    }
+
+    /// Get a signed preview URL for a guest port.
+    #[pyo3(signature = (port, expires_in_seconds=None))]
+    fn signed_port_preview_url<'a>(
+        &self,
+        py: Python<'a>,
+        port: u16,
+        expires_in_seconds: Option<u32>,
+    ) -> PyResult<Bound<'a, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let preview = handle
+                .network()
+                .signed_preview_url(port, expires_in_seconds)
+                .await
+                .map_err(map_err)?;
+            Ok(PySignedPortPreviewUrl::from(preview))
+        })
+    }
+
+    /// Expire a signed preview URL token.
+    fn expire_signed_port_preview_url<'a>(
+        &self,
+        py: Python<'a>,
+        port: u16,
+        token: String,
+    ) -> PyResult<Bound<'a, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            handle
+                .network()
+                .expire_signed_preview_url(port, &token)
+                .await
+                .map_err(map_err)?;
+            Ok(())
         })
     }
 

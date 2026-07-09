@@ -39,13 +39,13 @@ pub use runtime::{AuthHandle, BoxliteRuntime, ImageHandle, Principal};
 pub use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 pub use disk::DiskInfo;
 pub use event_listener::{AuditEvent, AuditEventKind, AuditEventListener, EventListener};
-pub use litebox::SnapshotHandle;
 pub use litebox::archive::ArchiveManifest;
 pub use litebox::snapshot_mgr::SnapshotInfo;
 pub use litebox::{
     BoxCommand, CopyOptions, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId,
     HealthState, HealthStatus,
 };
+pub use litebox::{PortPreviewUrl, SignedPortPreviewUrl, SnapshotHandle};
 pub use metrics::{BoxMetrics, RuntimeMetrics};
 pub use runtime::advanced_options::{
     AdvancedBoxOptions, HealthCheckOptions, ResourceLimits, SecurityOptions,

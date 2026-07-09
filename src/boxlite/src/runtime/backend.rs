@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{BoxCommand, Execution, LiteBox};
+use crate::litebox::{PortPreviewUrl, SignedPortPreviewUrl};
 use crate::metrics::{BoxMetrics, RuntimeMetrics};
 use crate::net::BoxTunnel;
 use crate::runtime::options::{
@@ -135,6 +136,28 @@ pub(crate) trait BoxBackend: Send + Sync {
 #[async_trait]
 pub(crate) trait BoxNetworkBackend: Send + Sync {
     async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>;
+
+    async fn preview_url(&self, _port: u16) -> BoxliteResult<PortPreviewUrl> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support port preview URLs".into(),
+        ))
+    }
+
+    async fn signed_preview_url(
+        &self,
+        _port: u16,
+        _expires_in_seconds: Option<u32>,
+    ) -> BoxliteResult<SignedPortPreviewUrl> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support signed port preview URLs".into(),
+        ))
+    }
+
+    async fn expire_signed_preview_url(&self, _port: u16, _token: &str) -> BoxliteResult<()> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support expiring signed port preview URLs".into(),
+        ))
+    }
 }
 
 /// Backend abstraction for snapshot lifecycle operations on a box.

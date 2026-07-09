@@ -13,7 +13,7 @@ mod snapshots;
 mod util;
 
 use crate::advanced_options::{PyAdvancedBoxOptions, PyHealthCheckOptions, PySecurityOptions};
-use crate::box_handle::PyBox;
+use crate::box_handle::{PyBox, PyPortPreviewUrl, PySignedPortPreviewUrl};
 use crate::exec::{PyExecStderr, PyExecStdin, PyExecStdout, PyExecution};
 use crate::images::{PyImageHandle, PyImageInfo, PyImagePullResult};
 use crate::info::{PyBoxInfo, PyBoxStateInfo, PyHealthState, PyHealthStatus};
@@ -38,6 +38,8 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyAdvancedBoxOptions>()?;
     m.add_class::<PyBoxlite>()?;
     m.add_class::<PyBox>()?;
+    m.add_class::<PyPortPreviewUrl>()?;
+    m.add_class::<PySignedPortPreviewUrl>()?;
     m.add_class::<PyExecution>()?;
     m.add_class::<PyExecStdin>()?;
     m.add_class::<PyExecStdout>()?;
