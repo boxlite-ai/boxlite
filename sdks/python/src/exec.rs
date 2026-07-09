@@ -115,6 +115,8 @@ pub(crate) struct PyExecResult {
     #[pyo3(get, set)]
     pub(crate) exit_code: i32,
     #[pyo3(get, set)]
+    pub(crate) timed_out: bool,
+    #[pyo3(get, set)]
     pub(crate) error_message: Option<String>,
 }
 
@@ -172,6 +174,7 @@ impl PyExecution {
             let exec_result = execution.wait().await.map_err(map_err)?;
             Ok(PyExecResult {
                 exit_code: exec_result.exit_code,
+                timed_out: exec_result.timed_out,
                 error_message: exec_result.error_message,
             })
         })

@@ -9,6 +9,7 @@ import logging
 from enum import IntEnum
 from typing import Optional, TYPE_CHECKING
 
+from .errors import TimeoutError
 from .exec import ExecResult
 
 if TYPE_CHECKING:
@@ -266,6 +267,8 @@ class SimpleBox:
         # Convert env dict to list of tuples if provided
         env_list = list(env.items()) if env else None
 
+        command_display = " ".join([cmd, *args])
+
         # Execute via Rust (returns PyExecution)
         execution = await self._box.exec(
             cmd, arg_list, env_list, user=user, timeout_secs=timeout, cwd=cwd
@@ -322,9 +325,11 @@ class SimpleBox:
         stderr = "".join(stderr_lines)
 
         error_message = None
+        timed_out = False
         try:
             exec_result = await execution.wait()
             exit_code = exec_result.exit_code
+            timed_out = exec_result.timed_out
             error_message = exec_result.error_message
         except Exception as e:
             logger.error(f"failed to wait execution: {e}")
@@ -332,10 +337,16 @@ class SimpleBox:
 
         logger.debug(f"exec finish, exit_code: {exit_code}")
 
+        if timed_out:
+            raise TimeoutError(
+                f"Command '{command_display}' timed out after {timeout:g} seconds"
+            )
+
         return ExecResult(
             exit_code=exit_code,
             stdout=stdout,
             stderr=stderr,
+            timed_out=timed_out,
             error_message=error_message,
         )
 

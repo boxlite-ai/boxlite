@@ -38,8 +38,8 @@ use crate::box_handle::BoxHandle;
 use crate::error::{BoxliteErrorCode, FFIError, error_to_code, null_pointer_error, write_error};
 use crate::event_queue::{
     CBoxExitCb, CBoxExitFn, CBoxStderrCb, CBoxStderrFn, CBoxStdoutCb, CBoxStdoutFn,
-    CExecutionKillCb, CExecutionResizeCb, CExecutionSignalCb, CExecutionWaitCb, EventQueue,
-    RuntimeEvent, push_event,
+    CExecutionKillCb, CExecutionResizeCb, CExecutionSignalCb, CExecutionWaitCb,
+    CExecutionWaitResultCb, EventQueue, RuntimeEvent, push_event,
 };
 use crate::{CBoxHandle, CBoxliteError, CExecutionHandle};
 
@@ -166,6 +166,16 @@ pub unsafe extern "C" fn boxlite_execution_wait(
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
     execution_wait(execution, cb, user_data, out_error)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_execution_wait_result(
+    execution: *mut CExecutionHandle,
+    cb: CExecutionWaitResultCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    execution_wait_result(execution, cb, user_data, out_error)
 }
 
 #[unsafe(no_mangle)]
@@ -503,6 +513,45 @@ unsafe fn execution_wait(
     }
 }
 
+unsafe fn execution_wait_result(
+    execution: *mut ExecutionHandle,
+    cb: CExecutionWaitResultCb,
+    user_data: *mut c_void,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if execution.is_null() {
+            write_error(out_error, null_pointer_error("execution"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
+
+        let exec_ref = &*execution;
+        let exec_arc = exec_ref.execution.clone();
+        let queue = exec_ref.queue.clone();
+        let user_data_addr = user_data as usize;
+        let process_completed = exec_ref.process_completed.clone();
+
+        exec_ref.tokio_rt.spawn(async move {
+            let result = wait_result_on_clone(&exec_arc).await;
+            if result.is_ok() {
+                process_completed.store(true, Ordering::Release);
+            }
+            push_event(
+                &queue,
+                RuntimeEvent::WaitResult {
+                    cb,
+                    user_data: user_data_addr,
+                    result,
+                },
+            )
+            .await;
+        });
+
+        BoxliteErrorCode::Ok
+    }
+}
+
 unsafe fn execution_kill(
     execution: *mut ExecutionHandle,
     cb: CExecutionKillCb,
@@ -822,6 +871,16 @@ fn snapshot_execution(slot: &Mutex<Option<Execution>>) -> Result<Execution, Boxl
 async fn wait_on_clone(slot: &Mutex<Option<Execution>>) -> Result<i32, BoxliteError> {
     let clone = snapshot_execution(slot)?;
     clone.wait().await.map(|status| status.exit_code)
+}
+
+async fn wait_result_on_clone(
+    slot: &Mutex<Option<Execution>>,
+) -> Result<(i32, bool), BoxliteError> {
+    let clone = snapshot_execution(slot)?;
+    clone
+        .wait()
+        .await
+        .map(|status| (status.exit_code, status.timed_out))
 }
 
 async fn kill_on_clone(slot: &Mutex<Option<Execution>>) -> Result<(), BoxliteError> {

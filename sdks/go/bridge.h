@@ -36,6 +36,7 @@ extern CRuntimeMetricsCb cbRuntimeMetrics(void);
 extern CRuntimeShutdownCb cbRuntimeShutdown(void);
 
 extern CExecutionWaitCb cbExecutionWait(void);
+extern CExecutionWaitResultCb cbExecutionWaitResult(void);
 extern CExecutionKillCb cbExecutionKill(void);
 extern CExecutionSignalCb cbExecutionSignal(void);
 extern CExecutionResizeCb cbExecutionResize(void);

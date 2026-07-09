@@ -434,6 +434,7 @@ mod tests {
                     tokio::time::sleep(Duration::from_millis(150)).await;
                     let _ = result_tx.send(boxlite::ExecResult {
                         exit_code: 0,
+                        timed_out: false,
                         error_message: None,
                     });
                     drop(stdout_tx);
@@ -490,6 +491,7 @@ mod tests {
             tokio::spawn(async move {
                 let _ = result_tx.send(boxlite::ExecResult {
                     exit_code: 0,
+                    timed_out: false,
                     error_message: Some(
                         "WS connect failed: WS auth rejected (401 Unauthorized)".to_string(),
                     ),

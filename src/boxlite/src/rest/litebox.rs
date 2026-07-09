@@ -816,6 +816,7 @@ async fn attach_ws_pump(
                                 tracing::debug!(exit_code, "WS attach: exit control frame");
                                 let _ = result_tx.send(ExecResult {
                                     exit_code,
+                                    timed_out: false,
                                     error_message: None,
                                 });
                                 return;
@@ -937,13 +938,17 @@ async fn probe_execution_status(
         client.get::<ExecutionStatusResponse>(&status_path),
     );
     match status_probe.await {
-        Ok(Ok(info)) => match info.status.as_str() {
-            "completed" | "killed" | "timed_out" => ProbeResult::Terminal(ExecResult {
-                exit_code: info.exit_code.unwrap_or(-1),
-                error_message: None,
-            }),
-            _ => ProbeResult::StillRunning,
-        },
+        Ok(Ok(info)) => {
+            let timed_out = info.status == "timed_out";
+            match info.status.as_str() {
+                "completed" | "killed" | "timed_out" => ProbeResult::Terminal(ExecResult {
+                    exit_code: info.exit_code.unwrap_or(-1),
+                    timed_out,
+                    error_message: None,
+                }),
+                _ => ProbeResult::StillRunning,
+            }
+        }
         // A definitive 404 means the box or exec genuinely does not
         // exist — distinct from a transient probe failure. Don't loop
         // the reconnect budget against something that isn't there.
@@ -1012,6 +1017,7 @@ async fn emit_or_fallback(
                 // lost the output". The real exit code is still preserved.
                 let _ = result_tx.send(ExecResult {
                     exit_code: info.exit_code.unwrap_or(-1),
+                    timed_out: info.status == "timed_out",
                     error_message: Some(cause.clone()),
                 });
                 return;
@@ -1024,6 +1030,7 @@ async fn emit_or_fallback(
     }
     let _ = result_tx.send(ExecResult {
         exit_code: -1,
+        timed_out: false,
         error_message: Some(cause),
     });
 }

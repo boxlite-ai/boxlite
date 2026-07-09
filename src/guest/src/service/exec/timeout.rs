@@ -38,6 +38,7 @@ pub(super) fn start_timeout_watcher(
             // Process already exited on its own; nothing more to do.
             return;
         }
+        exec_state.mark_timed_out().await;
         info!(
             execution_id = %exec_id,
             grace_ms = TIMEOUT_GRACE.as_millis() as u64,

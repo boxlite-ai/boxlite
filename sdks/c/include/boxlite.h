@@ -212,6 +212,9 @@ typedef void (*CBoxExitCb)(int, void*);
 // Execution wait completion (carries exit code on success).
 typedef void (*CExecutionWaitCb)(int, CBoxliteError*, void*);
 
+// Execution wait completion with structured result metadata.
+typedef void (*CExecutionWaitResultCb)(int, bool, CBoxliteError*, void*);
+
 // Execution kill completion.
 typedef void (*CExecutionKillCb)(CBoxliteError*, void*);
 
@@ -510,6 +513,11 @@ enum BoxliteErrorCode boxlite_execution_wait(CExecutionHandle *execution,
                                              CExecutionWaitCb cb,
                                              void *user_data,
                                              CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_execution_wait_result(CExecutionHandle *execution,
+                                                    CExecutionWaitResultCb cb,
+                                                    void *user_data,
+                                                    CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_execution_kill(CExecutionHandle *execution,
                                              CExecutionKillCb cb,

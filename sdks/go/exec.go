@@ -24,6 +24,12 @@ type ExecResult struct {
 	Stderr   string
 }
 
+// ExecutionWaitResult is the structured result returned by Execution.WaitResult.
+type ExecutionWaitResult struct {
+	ExitCode int
+	TimedOut bool
+}
+
 // envMapToFlatPairs flattens an env map into a [k0, v0, k1, v1, ...]
 // slice sorted by key. Sorting makes the C call deterministic across
 // runs, which matters for test reproducibility and for any downstream
@@ -299,46 +305,48 @@ func (e *Execution) Write(p []byte) (int, error) {
 	return e.Stdin.Write(p)
 }
 
-// Wait blocks until the process has exited AND every stdout/stderr
+// WaitResult blocks until the process has exited AND every stdout/stderr
 // callback for this execution has been dispatched, then returns the
-// exit code. Mirrors os/exec.Cmd's Wait for the io.Writer case —
+// structured exit result. Mirrors os/exec.Cmd's Wait for the io.Writer case —
 // every BoxLite execution IS the io.Writer case (streams are pushed
 // to a user-supplied Writer / callback; there is no StdoutPipe-style
-// user-read pipe), so Wait is the single terminal and must guarantee
+// user-read pipe), so waiting is the single terminal and must guarantee
 // output completeness on return.
 //
 // The post-exit-code drain is non-cancelable by ctx (parity with
 // os/exec's awaitGoroutines); only runtime shutdown breaks it, in
 // which case the process's exit code is preserved and err is
 // overwritten only if the wait had none.
-func (e *Execution) Wait(ctx context.Context) (int, error) {
+func (e *Execution) WaitResult(ctx context.Context) (*ExecutionWaitResult, error) {
 	if e.handle == nil {
-		return 0, &Error{Code: ErrInvalidState, Message: "execution is closed"}
+		return nil, &Error{Code: ErrInvalidState, Message: "execution is closed"}
 	}
 
 	ch := make(chan executionWaitResult, 1)
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
-	if rc := C.boxlite_execution_wait(e.handle, C.cbExecutionWait(), handleToPtr(h), &cerr); rc != C.Ok {
+	if rc := C.boxlite_execution_wait_result(e.handle, C.cbExecutionWaitResult(), handleToPtr(h), &cerr); rc != C.Ok {
 		deleteHandleForDispatch(h)
-		return 0, freeError(&cerr)
+		return nil, freeError(&cerr)
 	}
 
-	var code int
+	result := &ExecutionWaitResult{}
 	var err error
 	select {
 	case res := <-ch:
-		code, err = res.exitCode, res.err
+		result.ExitCode = res.exitCode
+		result.TimedOut = res.timedOut
+		err = res.err
 	case <-ctx.Done():
 		// ctx cancel before the process reports exit: skip the
 		// drain barrier (consistent with os/exec's behavior on
 		// Process.Wait cancellation).
 		drainAndDelete(ch, h, e.closing)
-		return 0, ctx.Err()
+		return nil, ctx.Err()
 	case <-e.closing:
 		drainAndDelete(ch, h, e.closing)
-		return 0, ErrRuntimeClosed
+		return nil, ErrRuntimeClosed
 	}
 
 	// Drain barrier: wait for stream pumps to flush before returning,
@@ -353,7 +361,19 @@ func (e *Execution) Wait(ctx context.Context) (int, error) {
 			err = ErrRuntimeClosed
 		}
 	}
-	return code, err
+	return result, err
+}
+
+// Wait blocks until the process has exited AND every stdout/stderr
+// callback for this execution has been dispatched, then returns the
+// exit code. See WaitResult for the structured variant that also reports
+// whether the configured execution timeout terminated the process.
+func (e *Execution) Wait(ctx context.Context) (int, error) {
+	result, err := e.WaitResult(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return result.ExitCode, nil
 }
 
 // Kill terminates the running command.

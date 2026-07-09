@@ -27,8 +27,7 @@ struct Inner {
     handle: Option<ExecHandle>,
     /// Stdout/stderr forwarding tasks (set on attach)
     output_tasks: Vec<JoinHandle<()>>,
-    /// Timeout flag
-    #[allow(dead_code)] // Will be used for timeout handling
+    /// Set once the execution timeout watcher has signaled this process.
     timed_out: bool,
     /// Optional init health checker for the container this exec runs in.
     /// Used to detect container init death when exec gets SIGKILL.
@@ -190,6 +189,16 @@ impl ExecutionState {
     /// concurrent callers and any number of later ones all read the same status.
     pub async fn wait_process(&self) -> crate::service::exec::exec_handle::ExitStatus {
         self.exit.get().await
+    }
+
+    pub async fn mark_timed_out(&self) {
+        let mut inner = self.inner.lock().await;
+        inner.timed_out = true;
+    }
+
+    pub async fn was_timed_out(&self) -> bool {
+        let inner = self.inner.lock().await;
+        inner.timed_out
     }
 
     /// Attach to execution output.

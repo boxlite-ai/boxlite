@@ -181,6 +181,12 @@ pub(crate) type CRuntimeShutdownFn = extern "C" fn(*mut crate::CBoxliteError, *m
 pub type CExecutionWaitCb = Option<extern "C" fn(c_int, *mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CExecutionWaitFn = extern "C" fn(c_int, *mut crate::CBoxliteError, *mut c_void);
 
+/// Execution wait completion with structured result metadata.
+pub type CExecutionWaitResultCb =
+    Option<extern "C" fn(c_int, bool, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CExecutionWaitResultFn =
+    extern "C" fn(c_int, bool, *mut crate::CBoxliteError, *mut c_void);
+
 /// Execution kill completion.
 pub type CExecutionKillCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CExecutionKillFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
@@ -402,6 +408,11 @@ pub enum RuntimeEvent {
         cb: CExecutionWaitFn,
         user_data: usize,
         result: Result<i32, BoxliteError>,
+    },
+    WaitResult {
+        cb: CExecutionWaitResultFn,
+        user_data: usize,
+        result: Result<(i32, bool), BoxliteError>,
     },
     Kill {
         cb: CExecutionKillFn,

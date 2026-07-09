@@ -345,6 +345,8 @@ impl Execution {
 pub struct ExecResult {
     /// Exit code (0 = success). If terminated by signal, code is negative signal number.
     pub exit_code: i32,
+    /// Whether the configured execution timeout terminated this process.
+    pub timed_out: bool,
     /// Diagnostic message when process died unexpectedly
     /// (e.g., container init death causing PID namespace teardown).
     /// None if the process exited normally.
