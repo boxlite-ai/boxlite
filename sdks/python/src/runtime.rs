@@ -237,8 +237,29 @@ impl PyBoxlite {
         })
     }
 
-    fn __enter__(slf: PyRef<'_, Self>) -> PyResult<PyRef<'_, Self>> {
-        Ok(slf)
+    fn __aenter__<'py>(slf: Py<Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        pyo3_async_runtimes::tokio::future_into_py(py, async move { Ok(slf) })
+    }
+
+    fn __aexit__<'py>(
+        &self,
+        py: Python<'py>,
+        _exc_type: Py<PyAny>,
+        _exc_val: Py<PyAny>,
+        _exc_tb: Py<PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            runtime.shutdown(None).await.map_err(map_err)?;
+            Ok(false)
+        })
+    }
+
+    fn __enter__(&self) -> PyResult<()> {
+        Err(pyo3::exceptions::PyRuntimeError::new_err(
+            "Boxlite is an async runtime; use 'async with boxlite.Boxlite(...)' \
+             or use 'with boxlite.SyncBoxlite(...)' for the synchronous API",
+        ))
     }
 
     fn __exit__(
