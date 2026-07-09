@@ -41,6 +41,34 @@ func TestDecodeDirectPreviewBoxID(t *testing.T) {
 	}
 }
 
+func TestDecodeDirectPreviewBoxIDRejectsDecodedPathCharacters(t *testing.T) {
+	_, ok, err := decodeDirectPreviewBoxID("35334d4f5a336a702f2e2e2f")
+	if err == nil {
+		t.Fatal("decodeDirectPreviewBoxID returned nil error")
+	}
+	if !ok {
+		t.Fatal("decodeDirectPreviewBoxID did not recognize encoded direct box ID")
+	}
+}
+
+func TestDecodeDirectPreviewBoxIDRejectsDecodedWrongLength(t *testing.T) {
+	_, ok, err := decodeDirectPreviewBoxID("35334d4f5a336a70355a75")
+	if err != nil {
+		t.Fatalf("decodeDirectPreviewBoxID returned error for legacy-sized value: %v", err)
+	}
+	if ok {
+		t.Fatal("decodeDirectPreviewBoxID unexpectedly recognized non-encoded value")
+	}
+
+	_, ok, err = decodeDirectPreviewBoxID("35334d4f5a336a70355a7500")
+	if err == nil {
+		t.Fatal("decodeDirectPreviewBoxID returned nil error")
+	}
+	if !ok {
+		t.Fatal("decodeDirectPreviewBoxID did not recognize encoded direct box ID")
+	}
+}
+
 func TestDecodeDirectPreviewBoxIDKeepsLegacyRawValue(t *testing.T) {
 	got, ok, err := decodeDirectPreviewBoxID("legacyboxid")
 	if err != nil {

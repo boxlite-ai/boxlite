@@ -25,7 +25,10 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-const encodedDirectPreviewBoxIDLength = 24
+const (
+	directPreviewBoxIDLength        = 12
+	encodedDirectPreviewBoxIDLength = 24
+)
 
 func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, error) {
 	var targetPort, targetPath, boxIdOrSignedToken string
@@ -348,7 +351,25 @@ func decodeDirectPreviewBoxID(value string) (string, bool, error) {
 		return "", true, errors.New("invalid direct preview box ID: empty decoded box ID")
 	}
 
-	return string(decoded), true, nil
+	boxId := string(decoded)
+	if !isValidDirectPreviewBoxID(boxId) {
+		return "", true, errors.New("invalid direct preview box ID")
+	}
+
+	return boxId, true, nil
+}
+
+func isValidDirectPreviewBoxID(value string) bool {
+	if len(value) != directPreviewBoxIDLength {
+		return false
+	}
+	for _, ch := range value {
+		if (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // updateLastActivity updates the last activity timestamp for a box.
