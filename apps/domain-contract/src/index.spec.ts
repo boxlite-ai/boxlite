@@ -21,22 +21,32 @@ describe('domain contract', () => {
     expect(dev.api.legacyBaseUrls).toContain('https://api.dev.boxlite.ai/api')
     expect(dev.api.legacyBaseUrls).toContain('https://dev.boxlite.ai/api')
 
-    expect(prod.api.canonicalBaseUrl).toBe('https://api.boxlite.ai')
-    expect(prod.api.legacyBaseUrls).toContain('https://api.app.boxlite.ai/api')
-    expect(prod.api.legacyBaseUrls).toContain('https://api.boxlite.ai/api')
+    expect(prod.api.canonicalBaseUrl).toBe('https://api.app.boxlite.ai/api')
+    expect(prod.api.legacyBaseUrls).toEqual([])
   })
 
   it('maps current stack domains to the target public contract', () => {
     expect(getDomainContractForStackDomain('dev.boxlite.ai').api.canonicalBaseUrl).toBe('https://api.dev.boxlite.ai')
-    expect(getDomainContractForStackDomain('app.boxlite.ai').api.canonicalBaseUrl).toBe('https://api.boxlite.ai')
+    expect(getDomainContractForStackDomain('app.boxlite.ai').api.canonicalBaseUrl).toBe('https://api.app.boxlite.ai/api')
   })
 
   it('exposes explicit legacy and unprefixed API host helpers', () => {
     const prod = getDomainContract('production')
 
-    expect(withApiPrefix(prod.api.canonicalBaseUrl)).toBe('https://api.boxlite.ai/api')
+    expect(withApiPrefix('https://api.boxlite.ai')).toBe('https://api.boxlite.ai/api')
     expect(getPrimaryLegacyApiBaseUrl(prod)).toBe('https://api.app.boxlite.ai/api')
-    expect(getUnprefixedApiHosts(prod)).toEqual(['api.boxlite.ai'])
+    expect(getUnprefixedApiHosts(prod)).toEqual(['api.app.boxlite.ai'])
+  })
+
+  it('keeps production API, proxy, and SSH on the current prod entrypoints until cutover is explicit', () => {
+    const prod = getDomainContract('production')
+
+    expect(prod.dashboard.canonicalUrl).toBe('https://boxlite.ai/dashboard')
+    expect(prod.dashboard.legacyUrls).toContain('https://app.boxlite.ai/dashboard')
+    expect(prod.api.canonicalBaseUrl).toBe('https://api.app.boxlite.ai/api')
+    expect(prod.proxy.domain).toBe('proxy.app.boxlite.ai')
+    expect(prod.proxy.wildcardDomain).toBe('*.proxy.app.boxlite.ai')
+    expect(prod.sshGateway.host).toBe('ssh.app.boxlite.ai')
   })
 
   it('keeps unprefixed API routing limited to the canonical API host', () => {
@@ -100,5 +110,20 @@ describe('domain contract', () => {
     })
 
     expect(contract.dashboard.canonicalUrl).toBe('https://dev.boxlite.ai/dashboard')
+  })
+
+  it('allows production API, proxy, and SSH cutover through explicit PUBLIC_* overrides', () => {
+    const contract = resolvePublicEndpointContract({
+      STACK_DOMAIN: 'boxlite.ai',
+      PUBLIC_API_BASE_URL: 'https://api.boxlite.ai',
+      PUBLIC_LEGACY_API_BASE_URLS: 'https://api.app.boxlite.ai/api,https://api.boxlite.ai/api',
+      PUBLIC_PROXY_DOMAIN: 'proxy.boxlite.ai',
+      PUBLIC_SSH_GATEWAY_HOST: 'ssh.boxlite.ai',
+    })
+
+    expect(contract.api.canonicalBaseUrl).toBe('https://api.boxlite.ai')
+    expect(contract.api.legacyBaseUrls).toEqual(['https://api.app.boxlite.ai/api', 'https://api.boxlite.ai/api'])
+    expect(contract.proxy.domain).toBe('proxy.boxlite.ai')
+    expect(contract.sshGateway.host).toBe('ssh.boxlite.ai')
   })
 })

@@ -101,6 +101,7 @@ const runnerEndpoint = (override: string, port: number, scheme: string) =>
   envOr(override, `${scheme}localhost:${port}`)
 
 const urlOrigin = (url: string) => new URL(url).origin
+const uniqueStrings = (items: readonly string[]) => [...new Set(items)]
 
 // ── app config ───────────────────────────────────────────────────────────────
 export default $config({
@@ -171,6 +172,10 @@ export default $config({
     const canonicalApiBaseUrl = publicEndpoints.api.canonicalBaseUrl
     const legacyApiBaseUrl = getPrimaryLegacyApiBaseUrl(publicEndpoints)
     const unprefixedApiHosts = envOr('UNPREFIXED_API_HOSTS', getUnprefixedApiHosts(publicEndpoints).join(','))
+    const dashboardOrigins = uniqueStrings([
+      urlOrigin(publicEndpoints.dashboard.canonicalUrl),
+      ...publicEndpoints.dashboard.legacyUrls.map(urlOrigin),
+    ])
 
     // ─── 1. SECRETS ──────────────────────────────────────────────────────────
     // Auto-generated — override any one by setting the matching env var.
@@ -653,8 +658,9 @@ export default $config({
         // (index.html + /assets/*) still serve through the CF Router at the
         // root domain. The API pins CORS to DASHBOARD_URL (apps/api main.ts),
         // so this cross-origin dashboard→API path is explicitly allowed.
-        DASHBOARD_URL: envOr('DASHBOARD_URL', urlOrigin(publicEndpoints.dashboard.canonicalUrl)),
-        APP_URL: envOr('APP_URL', ''),
+        DASHBOARD_URL: envOr('DASHBOARD_URL', dashboardOrigins[0] ?? ''),
+        APP_URL: envOr('APP_URL', dashboardOrigins[1] ?? ''),
+        CORS_ALLOWED_ORIGINS: envOr('CORS_ALLOWED_ORIGINS', dashboardOrigins.join(',')),
         DASHBOARD_BASE_API_URL: envOr('DASHBOARD_BASE_API_URL', canonicalApiBaseUrl),
         PUBLIC_ENDPOINTS_JSON: publicEndpointsJson,
         PUBLIC_API_BASE_URL: canonicalApiBaseUrl,

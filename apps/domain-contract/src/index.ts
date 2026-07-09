@@ -89,11 +89,11 @@ export const BOXLITE_DOMAIN_CONTRACT = {
       legacyUrls: ['https://app.boxlite.ai/dashboard'],
     },
     api: {
-      canonicalBaseUrl: 'https://api.boxlite.ai',
-      legacyBaseUrls: ['https://api.app.boxlite.ai/api', 'https://api.boxlite.ai/api'],
+      canonicalBaseUrl: 'https://api.app.boxlite.ai/api',
+      legacyBaseUrls: [],
     },
-    proxy: buildProxyContract('proxy.boxlite.ai'),
-    sshGateway: buildSshGatewayContract('ssh.boxlite.ai'),
+    proxy: buildProxyContract('proxy.app.boxlite.ai'),
+    sshGateway: buildSshGatewayContract('ssh.app.boxlite.ai'),
   },
 } as const satisfies Record<BoxLiteEnvironment, DomainContract>
 
@@ -232,7 +232,11 @@ export function resolvePublicEndpointContract(env: PublicEndpointEnv): DomainCon
 }
 
 export function getPrimaryLegacyApiBaseUrl(contract: DomainContract): string {
-  return contract.api.legacyBaseUrls[0] ?? withApiPrefix(contract.api.canonicalBaseUrl)
+  const [firstLegacyBaseUrl] = contract.api.legacyBaseUrls
+  if (firstLegacyBaseUrl) return firstLegacyBaseUrl
+
+  const canonicalUrl = new URL(contract.api.canonicalBaseUrl)
+  return canonicalUrl.pathname === '/' ? withApiPrefix(contract.api.canonicalBaseUrl) : contract.api.canonicalBaseUrl
 }
 
 export function getHostFromUrl(url: string): string {
