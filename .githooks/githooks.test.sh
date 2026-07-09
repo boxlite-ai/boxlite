@@ -377,6 +377,14 @@ chmod +x "$R/bin/codex"
 check_eq "Codex delegated pre-push self-audits exact ref update" "$?" 0
 grep -q 'Sanitized pre-push ref-update diff' "$R/push-prompt.txt" && exact_prompt=yes || exact_prompt=no
 check_eq "Codex push audit prompt uses pre-push diff context" "$exact_prompt" "yes"
+grep -q 'Commit subjects in the exact pre-push ref-update context' "$R/push-prompt.txt" && exact_subjects=yes || exact_subjects=no
+check_eq "Codex push audit prompt uses exact ref-update subjects" "$exact_subjects" "yes"
+grep -q '"test(hooks): codex delegated push audit"' "$R/push-prompt.txt" && pushed_subject=yes || pushed_subject=no
+check_eq "Codex push audit prompt includes pushed subject JSON" "$pushed_subject" "yes"
+grep -q '"base"' "$R/push-prompt.txt" && base_subject=yes || base_subject=no
+check_eq "Codex push audit prompt excludes already-pushed subject JSON" "$base_subject" "no"
+grep -q 'Commit subjects on origin/main..HEAD' "$R/push-prompt.txt" && broad_subjects=yes || broad_subjects=no
+check_eq "Codex push audit prompt omits broad branch subjects" "$broad_subjects" "no"
 rm -rf "$R" "$B"
 
 R="$(setup)"

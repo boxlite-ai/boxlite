@@ -326,11 +326,11 @@ build_audit_context() {
       git -C "$repo_root" diff --cached --no-ext-diff | redact_diff
       ;;
     push)
-      printf '## Commit subjects on origin/main..HEAD as JSON strings\n'
-      (git -C "$repo_root" log origin/main..HEAD --format=%s 2>/dev/null || git -C "$repo_root" log -1 --format=%s) \
-        | redact_text | jq -R . | jq -s .
       if [[ "$push_diff_hash_from_command" =~ ^[0-9a-f]{64}$ ]]; then
         if valid_push_audit_context; then
+          printf '## Commit subjects in the exact pre-push ref-update context as JSON strings\n'
+          sed -n 's/^commit-subject [0-9a-f][0-9a-f]* //p' "$push_context_diff_file" \
+            | redact_text | jq -R . | jq -s .
           printf '\n## Sanitized pre-push ref-update diff\n'
           redact_diff < "$push_context_diff_file"
         else
@@ -338,6 +338,9 @@ build_audit_context() {
           printf 'Missing or stale pre-push audit context for pushed_diff_sha256=%s\n' "$push_diff_hash_from_command"
         fi
       else
+        printf '## Commit subjects on origin/main..HEAD as JSON strings\n'
+        (git -C "$repo_root" log origin/main..HEAD --format=%s 2>/dev/null || git -C "$repo_root" log -1 --format=%s) \
+          | redact_text | jq -R . | jq -s .
         printf '\n## Sanitized branch diff\n'
         (git -C "$repo_root" diff --no-ext-diff origin/main...HEAD 2>/dev/null || git -C "$repo_root" diff --no-ext-diff HEAD~1...HEAD) \
           | redact_diff
