@@ -299,12 +299,15 @@ export class BoxWarmPoolService {
       },
     })
 
-    if (warmPoolItem.pool <= boxCount) {
+    // Use the schedule-aware target, matching warmPoolCheck(). Comparing against
+    // the static pool here would fight the cron: when a schedule window sets a
+    // higher/lower target, the claim fast-path would top up to the wrong size and
+    // churn against scale-up/scale-down on the next tick.
+    const target = this.computeTargetPoolSize(warmPoolItem)
+    if (target <= boxCount) {
       return
     }
 
-    if (warmPoolItem) {
-      this.eventEmitter.emit(WarmPoolEvents.TOPUP_REQUESTED, new WarmPoolTopUpRequested(warmPoolItem))
-    }
+    this.eventEmitter.emit(WarmPoolEvents.TOPUP_REQUESTED, new WarmPoolTopUpRequested(warmPoolItem))
   }
 }

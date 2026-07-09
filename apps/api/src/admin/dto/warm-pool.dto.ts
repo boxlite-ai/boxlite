@@ -1,6 +1,6 @@
 import { ApiProperty, ApiSchema } from '@nestjs/swagger'
 import { Type } from 'class-transformer'
-import { IsArray, IsInt, IsOptional, IsString, IsTimeZone, Max, Min, ValidateNested } from 'class-validator'
+import { IsArray, IsInt, IsOptional, IsTimeZone, Max, Min, ValidateNested } from 'class-validator'
 import { ScheduleConfig, ScheduleWindow, WarmPool } from '../../box/entities/warm-pool.entity'
 
 export class ScheduleWindowDto implements ScheduleWindow {

@@ -16,4 +16,5 @@ export enum AuditTarget {
   VOLUME = 'volume',
   REGION = 'region',
   OBSERVABILITY = 'observability',
+  WARM_POOL = 'warm_pool',
 }

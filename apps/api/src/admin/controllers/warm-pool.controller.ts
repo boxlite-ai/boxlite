@@ -6,6 +6,9 @@ import { RequiredApiRole } from '../../common/decorators/required-role.decorator
 import { SystemRole } from '../../user/enums/system-role.enum'
 import { BoxWarmPoolService } from '../../box/services/box-warm-pool.service'
 import { AdminWarmPoolDto, UpdateWarmPoolScheduleDto } from '../dto/warm-pool.dto'
+import { Audit, TypedRequest } from '../../audit/decorators/audit.decorator'
+import { AuditAction } from '../../audit/enums/audit-action.enum'
+import { AuditTarget } from '../../audit/enums/audit-target.enum'
 
 @ApiTags('admin')
 @Controller('admin/warm-pools')
@@ -35,6 +38,17 @@ export class AdminWarmPoolController {
   @Patch(':id/schedule')
   @ApiOperation({ summary: 'Update warm pool schedule config', operationId: 'adminUpdateWarmPoolSchedule' })
   @ApiResponse({ status: 200, type: AdminWarmPoolDto })
+  @Audit({
+    action: AuditAction.UPDATE_SCHEDULING,
+    targetType: AuditTarget.WARM_POOL,
+    targetIdFromRequest: (req) => req.params.id,
+    requestMetadata: {
+      body: (req: TypedRequest<UpdateWarmPoolScheduleDto>) => ({
+        timezone: req.body?.timezone,
+        scheduleConfig: req.body?.scheduleConfig,
+      }),
+    },
+  })
   async updateSchedule(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateWarmPoolScheduleDto,
