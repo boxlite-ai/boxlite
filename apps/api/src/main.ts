@@ -7,7 +7,8 @@
 import { otelSdk } from './tracing'
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { NestFactory } from '@nestjs/core'
-import { NestExpressApplication } from '@nestjs/platform-express'
+import { ExpressAdapter, NestExpressApplication } from '@nestjs/platform-express'
+import express from 'express'
 import { AppModule } from './app.module'
 import { SwaggerModule } from '@nestjs/swagger'
 import { INestApplication, Logger, ValidationPipe } from '@nestjs/common'
@@ -29,11 +30,11 @@ import { isApiEnabled, isWorkerEnabled } from './common/utils/app-mode'
 import cluster from 'node:cluster'
 import type { IncomingMessage } from 'http'
 import type { Socket } from 'net'
-import type { NextFunction, Request, Response } from 'express'
 import { Logger as PinoLogger, LoggerErrorInterceptor } from 'nestjs-pino'
 import { BoxliteWsProxyService } from './boxlite-rest/boxlite-ws-proxy.service'
 import { ObservabilityContextInterceptor } from './interceptors/observability-context.interceptor'
 import { parseUnprefixedApiHosts, rewriteUnprefixedApiUrlForHost } from './common/utils/api-prefix-rewrite'
+import { createApiPrefixRewriteMiddleware } from './common/middleware/api-prefix-rewrite.middleware'
 
 // https options
 const httpsEnabled = process.env.CERT_PATH && process.env.CERT_KEY_PATH
@@ -46,18 +47,16 @@ async function bootstrap() {
   if (process.env.OTEL_ENABLED === 'true') {
     await otelSdk.start()
   }
-  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+  const unprefixedApiHosts = parseUnprefixedApiHosts(process.env.UNPREFIXED_API_HOSTS)
+  const expressApp = express()
+  expressApp.use(createApiPrefixRewriteMiddleware(unprefixedApiHosts))
+
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, new ExpressAdapter(expressApp), {
     bufferLogs: true,
     httpsOptions: httpsEnabled ? httpsOptions : undefined,
   })
   app.useLogger(app.get(PinoLogger))
   app.flushLogs()
-
-  const unprefixedApiHosts = parseUnprefixedApiHosts(process.env.UNPREFIXED_API_HOSTS)
-  app.use((req: Request, _res: Response, next: NextFunction) => {
-    req.url = rewriteUnprefixedApiUrlForHost(req.headers.host, req.url, unprefixedApiHosts)
-    next()
-  })
 
   // Pin CORS to known first-party origins rather than reflecting any origin.
   // With `credentials: true`, `origin: true` would let any site make
