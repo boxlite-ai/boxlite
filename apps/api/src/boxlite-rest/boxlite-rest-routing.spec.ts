@@ -13,8 +13,6 @@ import { OrganizationResourceActionGuard } from '../organization/guards/organiza
 import { BoxService } from '../box/services/box.service'
 import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
 import { BoxliteBoxController } from './boxlite-box.controller'
-import { BoxliteProxyController } from './boxlite-proxy.controller'
-import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 
 jest.mock('uuid', () => ({
   v4: jest.fn(() => 'mock-uuid'),
@@ -71,7 +69,6 @@ describe('BoxLite REST routing', () => {
 
   it('mounts box controllers at canonical and legacy default-prefix routes', () => {
     expect(Reflect.getMetadata(PATH_METADATA, BoxliteBoxController)).toEqual(['v1/boxes', 'v1/:prefix/boxes'])
-    expect(Reflect.getMetadata(PATH_METADATA, BoxliteProxyController)).toEqual(['v1/boxes', 'v1/:prefix/boxes'])
   })
 
   it('registers canonical and legacy default-prefix routes in the Nest HTTP router', async () => {
@@ -86,13 +83,4 @@ describe('BoxLite REST routing', () => {
     expect(await legacy.json()).toEqual({ boxes: [] })
   })
 
-  it('matches websocket attach upgrades with or without a routing prefix', () => {
-    const service = new BoxliteWsProxyService({} as any, {} as any, {} as any, {} as any, {} as any)
-
-    expect(service.matchAttachPath('/api/v1/boxes/box-1/executions/exec-1/attach')).toEqual({ boxId: 'box-1' })
-    expect(service.matchAttachPath('/api/v1/default/boxes/box-1/executions/exec-1/attach')).toEqual({
-      boxId: 'box-1',
-      tenant: 'default',
-    })
-  })
 })

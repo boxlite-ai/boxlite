@@ -30,6 +30,7 @@ COPY apps/dashboard/ dashboard/
 COPY apps/libs/runner-api-client/ libs/runner-api-client/
 COPY apps/libs/api-client/ libs/api-client/
 COPY apps/libs/analytics-api-client/ libs/analytics-api-client/
+COPY apps/domain-contract/ domain-contract/
 
 RUN yarn nx build api --configuration=production --nxBail=true --output-style=stream && node --check dist/apps/api/main.js
 

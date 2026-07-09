@@ -11,7 +11,8 @@
       "@/*": ["src/*"],
       "@boxlite-ai/*": ["../libs/*"],
       "@boxlite-ai/api-client": ["../dist/libs/api-client/src/index.d.ts"],
-      "@boxlite-ai/analytics-api-client": ["../dist/libs/analytics-api-client/src/index.d.ts"]
+      "@boxlite-ai/analytics-api-client": ["../dist/libs/analytics-api-client/src/index.d.ts"],
+      "@boxlite-ai/domain-contract": ["../domain-contract/src/index.ts"]
     }
   },
   "exclude": [

@@ -68,6 +68,20 @@ describe('BoxliteWsProxyService', () => {
     expect(pathRewrite('/api/v1/default/boxes/public-box/executions/exec-1/attach?x=1', req)).toBe(
       '/v1/boxes/box-uuid/executions/exec-1/attach?x=1',
     )
+    expect(pathRewrite('/v1/boxes/public-box/executions/exec-1/attach', req)).toBe(
+      '/v1/boxes/box-uuid/executions/exec-1/attach',
+    )
+  })
+
+  it('matches attach upgrades with or without the public /api prefix', () => {
+    const service = new BoxliteWsProxyService({} as never, {} as never, {} as never, {} as never, {} as never)
+
+    expect(service.matchAttachPath('/api/v1/boxes/box-1/executions/exec-1/attach')).toEqual({ boxId: 'box-1' })
+    expect(service.matchAttachPath('/api/v1/default/boxes/box-1/executions/exec-1/attach')).toEqual({
+      boxId: 'box-1',
+      tenant: 'default',
+    })
+    expect(service.matchAttachPath('/v1/boxes/box-1/executions/exec-1/attach')).toEqual({ boxId: 'box-1' })
   })
 
   it('authenticates API key bearer tokens for websocket attach', async () => {

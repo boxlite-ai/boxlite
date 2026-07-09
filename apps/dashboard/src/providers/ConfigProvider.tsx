@@ -14,7 +14,25 @@ import { AuthProvider, AuthProviderProps } from 'react-oidc-context'
 import { ConfigContext } from '../contexts/ConfigContext'
 import { MockAuthProvider } from '../mocks/MockAuthProvider'
 
-const apiUrl = (import.meta.env.VITE_BASE_API_URL ?? window.location.origin) + '/api'
+function trimTrailingSlash(url: string): string {
+  return url.replace(/\/+$/, '')
+}
+
+export function resolveDashboardApiUrl(configuredApiUrl: string | undefined, origin: string): string {
+  const configured = configuredApiUrl?.trim()
+  if (!configured) return `${trimTrailingSlash(origin)}/api`
+
+  const baseUrl = trimTrailingSlash(configured)
+  try {
+    const url = new URL(baseUrl)
+    if (url.pathname && url.pathname !== '/') return baseUrl
+    return url.hostname.startsWith('api.') ? baseUrl : `${baseUrl}/api`
+  } catch {
+    return baseUrl
+  }
+}
+
+const apiUrl = resolveDashboardApiUrl(import.meta.env.VITE_BASE_API_URL, window.location.origin)
 const isMocking = import.meta.env.VITE_ENABLE_MOCKING === 'true'
 
 type Props = {

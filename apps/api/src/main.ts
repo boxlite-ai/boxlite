@@ -29,9 +29,11 @@ import { isApiEnabled, isWorkerEnabled } from './common/utils/app-mode'
 import cluster from 'node:cluster'
 import type { IncomingMessage } from 'http'
 import type { Socket } from 'net'
+import type { NextFunction, Request, Response } from 'express'
 import { Logger as PinoLogger, LoggerErrorInterceptor } from 'nestjs-pino'
 import { BoxliteWsProxyService } from './boxlite-rest/boxlite-ws-proxy.service'
 import { ObservabilityContextInterceptor } from './interceptors/observability-context.interceptor'
+import { parseUnprefixedApiHosts, rewriteUnprefixedApiUrlForHost } from './common/utils/api-prefix-rewrite'
 
 // https options
 const httpsEnabled = process.env.CERT_PATH && process.env.CERT_KEY_PATH
@@ -50,6 +52,13 @@ async function bootstrap() {
   })
   app.useLogger(app.get(PinoLogger))
   app.flushLogs()
+
+  const unprefixedApiHosts = parseUnprefixedApiHosts(process.env.UNPREFIXED_API_HOSTS)
+  app.use((req: Request, _res: Response, next: NextFunction) => {
+    req.url = rewriteUnprefixedApiUrlForHost(req.headers.host, req.url, unprefixedApiHosts)
+    next()
+  })
+
   // Pin CORS to known first-party origins rather than reflecting any origin.
   // With `credentials: true`, `origin: true` would let any site make
   // credentialed cross-origin calls to the API. The dashboard SPA (served at
@@ -206,6 +215,7 @@ async function bootstrap() {
     // closed here.
     const wsProxy = app.get(BoxliteWsProxyService)
     httpServer.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
+      req.url = rewriteUnprefixedApiUrlForHost(req.headers.host, req.url, unprefixedApiHosts)
       if (wsProxy.matchAttachPath(req.url)) {
         void wsProxy.upgrade(req, socket, head)
         return

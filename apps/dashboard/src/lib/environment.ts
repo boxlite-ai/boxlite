@@ -6,10 +6,8 @@
 /**
  * Frontend environment + public API URL resolution.
  *
- * Short-term shim: the dashboard pins the public REST API URL per environment
- * here, on the frontend, so the Quickstart snippets point at the right backend
- * without a backend change. The long-term fix is to read a server-provided
- * `restApiUrl` from /api/config; until then this file is the single place to edit.
+ * The actual domain values live in @boxlite-ai/domain-contract so dashboard,
+ * SST, API snippets, and later runner rollout all read the same contract.
  *
  * Detection uses the OIDC issuer first, then the hostname. `config.environment`
  * cannot distinguish dev from prod because the dev stage reports
@@ -17,13 +15,14 @@
  * issuer keeps local dashboard + dev/prod API proxy runs honest, where the
  * browser hostname is just `localhost`.
  */
+import { getDomainContract } from '@boxlite-ai/domain-contract'
+
 export type AppEnvironment = 'local' | 'development' | 'production'
 
-// ⚠️ EDIT HERE — the public REST API base each environment's SDK/CLI should target.
 // `local` is intentionally omitted: it falls back to the dashboard's own /api.
 const REST_API_URL_BY_ENV: Partial<Record<AppEnvironment, string>> = {
-  development: 'https://dev.boxlite.ai/api',
-  production: 'https://api.boxlite.ai/api',
+  development: getDomainContract('development').api.canonicalBaseUrl,
+  production: getDomainContract('production').api.canonicalBaseUrl,
 }
 
 /** Resolve the current environment from the API issuer and browser hostname. */

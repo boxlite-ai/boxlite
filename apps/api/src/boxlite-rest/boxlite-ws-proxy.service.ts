@@ -21,8 +21,10 @@ type RunnerUpgradeRequest = IncomingMessage & {
 
 // Matches /api/v1/boxes/<id>/executions/<id>/attach and the
 // /api/v1/<tenant>/boxes/<id>/executions/<id>/attach shape with optional query string.
+// The /api prefix is optional so canonical API hosts can expose no-prefix SDK URLs.
 // Named groups: `tenant` (optional org id / path prefix) and `boxId`.
-const ATTACH_PATH = /^\/api\/v1\/(?:(?<tenant>[^/]+)\/)?boxes\/(?<boxId>[^/]+)\/executions\/[^/]+\/attach(?:\?.*)?$/
+const ATTACH_PATH =
+  /^\/(?:api\/)?v1\/(?:(?<tenant>[^/]+)\/)?boxes\/(?<boxId>[^/]+)\/executions\/[^/]+\/attach(?:\?.*)?$/
 
 /**
  * Singleton WebSocket proxy for `/attach` upgrades.
@@ -52,13 +54,13 @@ export class BoxliteWsProxyService {
     this.proxy = createProxyMiddleware({
       ws: true,
       changeOrigin: true,
-      // Drop the public `/api/v1/` or `/api/v1/<tenant>/` prefix; runner mounts routes at `/v1/...`.
+      // Drop the public `/api/v1/`, `/v1/`, or tenant-prefixed variant; runner mounts routes at `/v1/...`.
       pathRewrite: (path: string, req: IncomingMessage) => {
         const runnerBoxId = (req as RunnerUpgradeRequest).__boxliteRunnerBoxId
         if (!runnerBoxId) {
           throw new Error('ws proxy: runner box id not resolved before upgrade — bug in caller')
         }
-        return path.replace(/^\/api\/v1\/(?:[^/]+\/)?boxes\/[^/]+/, `/v1/boxes/${runnerBoxId}`)
+        return path.replace(/^\/(?:api\/)?v1\/(?:[^/]+\/)?boxes\/[^/]+/, `/v1/boxes/${runnerBoxId}`)
       },
       // Target is resolved per-upgrade and stashed on the request before
       // delegating into the proxy.

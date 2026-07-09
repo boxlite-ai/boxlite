@@ -5,6 +5,12 @@
 
 /// <reference path="./.sst/platform/config.d.ts" />
 
+import {
+  getDomainContractForStackDomain,
+  getPrimaryLegacyApiBaseUrl,
+  getUnprefixedApiHosts,
+} from '../domain-contract/src/index'
+
 // ─────────────────────────────────────────────────────────────────────────────
 // BoxLite control plane on AWS (ap-southeast-1).
 //
@@ -144,6 +150,10 @@ export default $config({
       name: `${name}.${stackDomain}`,
       dns: cloudflareDns,
     })
+    const domainContract = getDomainContractForStackDomain(stackDomain)
+    const canonicalApiBaseUrl = envOr('PUBLIC_REST_API_BASE_URL', domainContract.api.canonicalBaseUrl)
+    const legacyApiBaseUrl = envOr('PUBLIC_REST_LEGACY_API_BASE_URL', getPrimaryLegacyApiBaseUrl(domainContract))
+    const unprefixedApiHosts = envOr('UNPREFIXED_API_HOSTS', getUnprefixedApiHosts(domainContract).join(','))
 
     // ─── 1. SECRETS ──────────────────────────────────────────────────────────
     // Auto-generated — override any one by setting the matching env var.
@@ -359,7 +369,7 @@ export default $config({
         CLICKHOUSE_PASSWORD: clickHouseWriterPassword || 'unused',
         CLICKHOUSE_CREATE_SCHEMA: envOr('CLICKHOUSE_CREATE_SCHEMA', 'false'),
         CLICKHOUSE_COMPRESS: envOr('CLICKHOUSE_COMPRESS', 'none'),
-        BOXLITE_API_URL: envOr('BOXLITE_API_URL', `https://api.${stackDomain}/api`),
+        BOXLITE_API_URL: envOr('BOXLITE_API_URL', legacyApiBaseUrl),
         BOXLITE_API_KEY: envOr(
           'BOXLITE_API_KEY',
           envOr('OTEL_COLLECTOR_API_KEY', envOr('ADMIN_API_KEY', adminApiKey.result)),
@@ -619,7 +629,10 @@ export default $config({
         // so this cross-origin dashboard→API path is explicitly allowed.
         DASHBOARD_URL: envOr('DASHBOARD_URL', `https://${stackDomain}`),
         APP_URL: envOr('APP_URL', ''),
-        DASHBOARD_BASE_API_URL: envOr('DASHBOARD_BASE_API_URL', `https://api.${stackDomain}`),
+        DASHBOARD_BASE_API_URL: envOr('DASHBOARD_BASE_API_URL', canonicalApiBaseUrl),
+        PUBLIC_REST_API_BASE_URL: canonicalApiBaseUrl,
+        PUBLIC_REST_LEGACY_API_BASE_URL: legacyApiBaseUrl,
+        UNPREFIXED_API_HOSTS: unprefixedApiHosts,
 
         // Default runner — the API auto-seeds it at boot; v2 runners self-report
         DEFAULT_RUNNER_NAME: envOr('DEFAULT_RUNNER_NAME', 'default'),

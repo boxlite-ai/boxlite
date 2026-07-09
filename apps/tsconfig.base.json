@@ -16,6 +16,7 @@
     "baseUrl": ".",
     "paths": {
       "@boxlite-ai/api-client": ["libs/api-client/src/index.ts"],
+      "@boxlite-ai/domain-contract": ["domain-contract/src/index.ts"],
       "@boxlite-ai/runner-api-client": ["libs/runner-api-client/src/index.ts"],
       "@boxlite-ai/analytics-api-client": ["libs/analytics-api-client/src/index.ts"]
     }
