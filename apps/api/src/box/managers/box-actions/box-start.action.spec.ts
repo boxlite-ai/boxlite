@@ -215,3 +215,55 @@ describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => 
     expect(updatedFields.some((u) => u.state === BoxState.ERROR)).toBe(true)
   })
 })
+
+describe('BoxStartAction.handleRunnerBoxStartedStateCheck', () => {
+  it('moves a timed-out starting box to ERROR and withdraws the start intent', async () => {
+    const runnerId = 'runner-start-timeout-1'
+
+    const box = new Box('region-1', 'starting-box')
+    box.runnerId = runnerId
+    box.state = BoxState.STARTING
+    box.desiredState = BoxDesiredState.STARTED
+    box.pending = true
+
+    const runner = { id: runnerId, state: RunnerState.READY } as Runner
+    const runnerService = { findOneOrFail: jest.fn(async () => runner) }
+    const runnerAdapterFactory = {
+      create: jest.fn(async () => ({ boxInfo: jest.fn(async () => ({ state: BoxState.STARTING })) }) as any),
+    }
+
+    const lockCode = new LockCode('lock-start-timeout-1')
+    const updatedFields: Partial<Box>[] = []
+    const boxRepository = {
+      update: jest.fn(async (_id: string, opts: { updateData: Partial<Box> }) => {
+        updatedFields.push(opts.updateData)
+        return box
+      }),
+    }
+    const redisLockProvider = { getCode: jest.fn(async () => lockCode) }
+    const organizationService = { findOne: jest.fn(async () => ({ boxMetadata: {} })) }
+    const boxActivityService = {
+      getLastActivityAt: jest.fn(async () => new Date(Date.now() - 6 * 60 * 1000)),
+    }
+
+    const action = new BoxStartAction(
+      runnerService as any,
+      runnerAdapterFactory as any,
+      boxRepository as any,
+      organizationService as any,
+      {} as any,
+      redisLockProvider as any,
+      boxActivityService as any,
+    )
+
+    await (action as BoxAction).run(box, lockCode)
+
+    expect(updatedFields).toContainEqual(
+      expect.objectContaining({
+        state: BoxState.ERROR,
+        desiredState: BoxDesiredState.STOPPED,
+        recoverable: false,
+      }),
+    )
+  })
+})

@@ -7,6 +7,7 @@
 import { Injectable, Logger } from '@nestjs/common'
 import { BoxRepository } from '../../repositories/box.repository'
 import { Box } from '../../entities/box.entity'
+import { BoxDesiredState } from '../../enums/box-desired-state.enum'
 import { BoxState } from '../../enums/box-state.enum'
 import { DONT_SYNC_AGAIN, BoxAction, SYNC_AGAIN, SyncState } from './box.action'
 import { RunnerState } from '../../enums/runner-state.enum'
@@ -196,6 +197,7 @@ export class BoxStartAction extends BoxAction {
     if (lastActivityAt && lastActivityAt.getTime() < Date.now() - 1000 * 60 * timeoutMinutes) {
       const updateData: Partial<Box> = {
         state: BoxState.ERROR,
+        desiredState: BoxDesiredState.STOPPED,
         errorReason,
         recoverable: false,
       }
