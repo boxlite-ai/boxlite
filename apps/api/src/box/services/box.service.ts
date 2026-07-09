@@ -1400,6 +1400,8 @@ export class BoxService {
     const desiredState = this.getExpectedDesiredStateForState(newState)
     if (desiredState) {
       updateData.desiredState = desiredState
+    } else if (newState === BoxState.ERROR && box.desiredState === BoxDesiredState.STARTED) {
+      updateData.desiredState = BoxDesiredState.STOPPED
     }
 
     await this.boxRepository.updateWhere(box.id, {

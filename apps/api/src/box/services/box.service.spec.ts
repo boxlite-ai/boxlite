@@ -13,8 +13,10 @@ import { BoxEvents } from '../constants/box-events.constants'
 // organizationService; every other injected dependency is irrelevant.
 function makeService() {
   const boxRepository = {
+    findOne: jest.fn(),
     findOneByIdOrName: jest.fn(),
     conditionalStartForProxy: jest.fn(),
+    updateWhere: jest.fn(),
   } as any
   const eventEmitter = { emit: jest.fn(), emitAsync: jest.fn() } as any
   // assertOrganizationIsNotSuspended mirrors the real implementation: throw
@@ -149,5 +151,35 @@ describe('BoxService.ensureStartedForProxy', () => {
     await expect(service.ensureStartedForProxy('box-1', activeOrg)).resolves.toBeUndefined()
     expect(eventEmitter.emit).not.toHaveBeenCalled()
     expect(warn).toHaveBeenCalled()
+  })
+})
+
+describe('BoxService.updateState', () => {
+  afterEach(() => jest.clearAllMocks())
+
+  it('withdraws STARTED intent when the runner reports ERROR', async () => {
+    const { service, boxRepository } = makeService()
+    boxRepository.findOne.mockResolvedValue({
+      id: 'box-1',
+      state: BoxState.STARTED,
+      desiredState: BoxDesiredState.STARTED,
+    })
+    boxRepository.updateWhere.mockResolvedValue(undefined)
+
+    await service.updateState('box-1', BoxState.ERROR, false, 'runner reported error')
+
+    expect(boxRepository.updateWhere).toHaveBeenCalledWith('box-1', {
+      updateData: {
+        state: BoxState.ERROR,
+        recoverable: false,
+        errorReason: 'runner reported error',
+        desiredState: BoxDesiredState.STOPPED,
+      },
+      whereCondition: {
+        pending: false,
+        state: BoxState.STARTED,
+        desiredState: BoxDesiredState.STARTED,
+      },
+    })
   })
 })

@@ -266,6 +266,7 @@ export class JobStateHandlerService {
       } else if (job.status === JobStatus.FAILED) {
         this.logger.error(`RECOVER_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
         updateData.state = BoxState.ERROR
+        updateData.desiredState = BoxDesiredState.STOPPED
         updateData.errorReason = job.errorMessage || 'Failed to recover box'
       }
 
