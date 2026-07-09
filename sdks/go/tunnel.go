@@ -26,12 +26,7 @@ func (b *Box) Tunnel(ctx context.Context, target string) (net.Conn, error) {
 	if port < 0 || port > 65535 {
 		return nil, fmt.Errorf("invalid tunnel port %d", port)
 	}
-	return b.TunnelTCP(ctx, host, uint16(port))
-}
-
-// TunnelTCP opens a raw byte stream to host:port inside the box's guest network.
-func (b *Box) TunnelTCP(ctx context.Context, targetIP string, targetPort uint16) (net.Conn, error) {
-	return b.openTunnel(ctx, targetIP, targetPort)
+	return b.openTunnel(ctx, host, uint16(port))
 }
 
 func (b *Box) openTunnel(ctx context.Context, targetIP string, targetPort uint16) (net.Conn, error) {
