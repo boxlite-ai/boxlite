@@ -116,7 +116,7 @@ const dashboardRootPath = join(__dirname, '..', 'dashboard')
     }),
     ServeStaticModule.forRoot({
       rootPath: dashboardRootPath,
-      exclude: ['/api/{*path}'],
+      exclude: ['/api/{*path}', '/dashboard/{*path}'],
       renderPath: '/',
       serveStaticOptions: {
         // Disable serve-static's own default Cache-Control; setHeaders applies a
