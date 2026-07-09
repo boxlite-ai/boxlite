@@ -471,28 +471,8 @@ unsafe fn box_tunnel(
                 return BoxliteErrorCode::InvalidArgument;
             }
         };
-        box_tunnel_addr(handle, &ip, target_port, out_fd, out_error)
-    }
-}
 
-unsafe fn box_tunnel_addr(
-    handle: *mut BoxHandle,
-    target_ip: &str,
-    target_port: u16,
-    out_fd: *mut c_int,
-    out_error: *mut FFIError,
-) -> BoxliteErrorCode {
-    unsafe {
-        if handle.is_null() {
-            write_error(out_error, null_pointer_error("handle"));
-            return BoxliteErrorCode::InvalidArgument;
-        }
-        if out_fd.is_null() {
-            write_error(out_error, null_pointer_error("out_fd"));
-            return BoxliteErrorCode::InvalidArgument;
-        }
-
-        let target: SocketAddr = match format!("{target_ip}:{target_port}").parse() {
+        let target: SocketAddr = match format!("{ip}:{target_port}").parse() {
             Ok(target) => target,
             Err(e) => {
                 write_error(
