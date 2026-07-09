@@ -14,6 +14,7 @@ import { Box } from '../entities/box.entity'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 import { ScheduleConfig, WarmPool } from '../entities/warm-pool.entity'
 import { resolveWarmPoolTarget } from './warm-pool-schedule'
+import { BoxConflictError } from '../errors/box-conflict.error'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
 import { BoxEvents } from '../constants/box-events.constants'
 import { BoxOrganizationUpdatedEvent } from '../events/box-organization-updated.event'
@@ -247,9 +248,20 @@ export class BoxWarmPoolService {
               if (!(await this.redisLockProvider.lock(boxLockKey, 30))) {
                 continue // being claimed right now, skip
               }
-              await this.boxRepository.update(box.id, {
-                updateData: { desiredState: BoxDesiredState.DESTROYED, pending: true },
-              })
+              try {
+                await this.boxRepository.update(box.id, {
+                  updateData: { desiredState: BoxDesiredState.DESTROYED, pending: true },
+                })
+              } catch (error) {
+                // The box changed between our .find() snapshot and the update
+                // (claimed/destroyed under us). Skip it rather than abort the
+                // other candidates or reject the cron's Promise.all — matches
+                // the per-candidate handling in BoxManager's reconcile loop.
+                if (error instanceof BoxConflictError) {
+                  continue
+                }
+                throw error
+              }
             }
           }
         } finally {
