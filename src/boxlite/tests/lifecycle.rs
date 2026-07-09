@@ -249,6 +249,25 @@ async fn remove_nonexistent_returns_not_found() {
 }
 
 #[tokio::test]
+async fn remove_auto_removed_local_box_id_is_idempotent() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime
+        .create(common::alpine_opts_auto(), None)
+        .await
+        .unwrap();
+    let box_id = handle.id().clone();
+
+    handle.stop().await.unwrap();
+    assert!(runtime.get_info(box_id.as_str()).await.unwrap().is_none());
+    runtime.remove(box_id.as_str(), false).await.unwrap();
+}
+
+#[tokio::test]
 async fn remove_stopped_box_succeeds() {
     let home = boxlite_test_utils::home::PerTestBoxHome::isolated();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
