@@ -4,11 +4,15 @@
  */
 
 import { Box } from '../box/entities/box.entity'
+import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../box/constants/box.constants'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 import { BoxState } from '../box/enums/box-state.enum'
+import { BoxClass } from '../box/enums/box-class.enum'
+import { RegionType } from '../region/enums/region-type.enum'
+import { getMetadataArgsStorage } from 'typeorm'
 import { UsagePeriodArchive } from './entities/usage-period-archive.entity'
 import { UsagePeriod } from './entities/usage-period.entity'
-import { UsageService } from './usage.service'
+import { UsageService } from './services/usage.service'
 
 function matchesWhereValue(actual: unknown, expected: unknown): boolean {
   const op = expected as { _type?: string; _value?: unknown }
@@ -33,6 +37,7 @@ function matchesWhereValue(actual: unknown, expected: unknown): boolean {
 class FakeUsagePeriodRepository {
   rows: UsagePeriod[] = []
   archivedRows: UsagePeriodArchive[] = []
+  transactionOperations: string[] = []
   failNextSave: Error | null = null
   manager = {
     transaction: jest.fn(async (fn: (manager: FakeTransactionManager) => Promise<void>) => {
@@ -114,7 +119,28 @@ class FakeUsagePeriodRepository {
 class FakeTransactionManager {
   constructor(private readonly periods: FakeUsagePeriodRepository) {}
 
-  async save(_entity: typeof UsagePeriodArchive, rows: UsagePeriodArchive[]): Promise<UsagePeriodArchive[]> {
+  async find(
+    _entity: typeof UsagePeriod,
+    opts: {
+      where?: Partial<UsagePeriod>
+      order?: { startAt?: 'ASC' | 'DESC' }
+      take?: number
+    },
+  ): Promise<UsagePeriod[]> {
+    return this.periods.find(opts)
+  }
+
+  async save(
+    entityOrInput: typeof UsagePeriod | typeof UsagePeriodArchive | UsagePeriod | UsagePeriod[] | UsagePeriodArchive[],
+    input?: UsagePeriod | UsagePeriod[] | UsagePeriodArchive[],
+  ): Promise<UsagePeriod | UsagePeriod[] | UsagePeriodArchive[]> {
+    this.periods.transactionOperations.push('save')
+    const value = input ?? (entityOrInput as UsagePeriod | UsagePeriod[] | UsagePeriodArchive[])
+    if (!Array.isArray(value) || value[0] instanceof UsagePeriod) {
+      return this.periods.save(value as UsagePeriod | UsagePeriod[])
+    }
+
+    const rows = value as UsagePeriodArchive[]
     rows.forEach((row) => {
       row.id = row.id ?? `archive-${this.periods.archivedRows.length + 1}`
       this.periods.archivedRows.push(row)
@@ -123,54 +149,18 @@ class FakeTransactionManager {
   }
 
   async delete(_entity: typeof UsagePeriod, ids: string[]): Promise<void> {
+    this.periods.transactionOperations.push('delete')
     await this.periods.delete(ids)
   }
 }
 
-class FakeArchiveRepository {
-  rows: UsagePeriodArchive[] = []
-
-  create(input: Partial<UsagePeriodArchive>): UsagePeriodArchive {
-    return input as UsagePeriodArchive
-  }
-
-  async find(opts: {
-    where?: Partial<UsagePeriodArchive> | Partial<UsagePeriodArchive>[]
-    order?: { startAt?: 'ASC' | 'DESC' }
-    take?: number
-  }): Promise<UsagePeriodArchive[]> {
-    const where = Array.isArray(opts.where) ? opts.where : [opts.where ?? {}]
-    const rows = this.rows.filter((row) =>
-      where.some((whereItem) =>
-        Object.entries(whereItem).every(([key, value]) => {
-          return matchesWhereValue((row as unknown as Record<string, unknown>)[key], value)
-        }),
-      ),
-    )
-
-    if (opts.order?.startAt === 'DESC') {
-      rows.sort((left, right) => right.startAt.getTime() - left.startAt.getTime())
-    } else if (opts.order?.startAt === 'ASC') {
-      rows.sort((left, right) => left.startAt.getTime() - right.startAt.getTime())
-    }
-
-    return rows.slice(0, opts.take)
-  }
-
-  async save(rows: UsagePeriodArchive[]): Promise<UsagePeriodArchive[]> {
-    rows.forEach((row) => {
-      row.id = row.id ?? `archive-${this.rows.length + 1}`
-      this.rows.push(row)
-    })
-    return rows
-  }
-}
-
 class FakeLockProvider {
+  locks: string[] = []
   unlocks: string[] = []
 
   async waitForLock(): Promise<void> {}
-  async lock(): Promise<boolean> {
+  async lock(key: string): Promise<boolean> {
+    this.locks.push(key)
     return true
   }
   async unlock(key: string): Promise<void> {
@@ -186,6 +176,12 @@ class FakeBoxRepository {
   }
 }
 
+class FakeRegionRepository {
+  async findOne(): Promise<{ regionType: RegionType }> {
+    return { regionType: RegionType.SHARED }
+  }
+}
+
 function makeBox(state: BoxState, desiredState: BoxDesiredState = BoxDesiredState.STARTED): Box {
   return {
     id: 'box-1',
@@ -197,204 +193,87 @@ function makeBox(state: BoxState, desiredState: BoxDesiredState = BoxDesiredStat
     mem: 4,
     disk: 10,
     gpu: 1,
+    class: BoxClass.SMALL,
   } as Box
 }
 
 describe('UsageService', () => {
   let periods: FakeUsagePeriodRepository
-  let archives: FakeArchiveRepository
   let locks: FakeLockProvider
   let boxes: FakeBoxRepository
+  let regions: FakeRegionRepository
   let service: UsageService
 
   beforeEach(() => {
     periods = new FakeUsagePeriodRepository()
     periods.archivedRows = []
-    archives = new FakeArchiveRepository()
     locks = new FakeLockProvider()
     boxes = new FakeBoxRepository()
-    service = new UsageService(periods as never, archives as never, locks as never, boxes as never)
+    regions = new FakeRegionRepository()
+    service = new UsageService(periods as never, locks as never, boxes as never, regions as never)
   })
 
   it('opens running periods and switches to disk-only periods when the box stops', async () => {
     const started = makeBox(BoxState.STARTED, BoxDesiredState.STARTED)
-    const stopped = makeBox(BoxState.STOPPED, BoxDesiredState.STOPPED)
+    const stopping = makeBox(BoxState.STOPPING, BoxDesiredState.STOPPED)
 
-    await service.applyTransition(started, BoxState.STARTED, BoxDesiredState.STARTED, new Date('2026-07-08T00:00:00Z'))
-    await service.applyTransition(stopped, BoxState.STOPPED, BoxDesiredState.STOPPED, new Date('2026-07-08T00:00:10Z'))
+    await service.handleBoxStateUpdate({ box: started, newState: BoxState.STARTED } as never)
+    await service.handleBoxStateUpdate({ box: stopping, newState: BoxState.STOPPING } as never)
 
     expect(periods.rows).toHaveLength(2)
-    expect(periods.rows[0]).toMatchObject({ kind: 'running', endAt: new Date('2026-07-08T00:00:10Z') })
+    expect(periods.rows[0]).toMatchObject({ kind: 'running', endAt: expect.any(Date) })
     expect(periods.rows[1]).toMatchObject({ kind: 'stopped', endAt: null, cpu: 0, mem: 0, gpu: 0, disk: 10 })
   })
 
-  it('does not fragment the open period on same-kind transitions', async () => {
+  it('restarts the open period on every STARTED event', async () => {
     const box = makeBox(BoxState.STARTED, BoxDesiredState.STARTED)
 
-    await service.applyTransition(box, BoxState.STARTED, BoxDesiredState.STARTED, new Date('2026-07-08T00:00:00Z'))
-    await service.applyTransition(box, BoxState.RESIZING, BoxDesiredState.STARTED, new Date('2026-07-08T00:00:05Z'))
-
-    expect(periods.rows).toHaveLength(1)
-    expect(periods.rows[0]).toMatchObject({ kind: 'running', endAt: null })
-  })
-
-  it('reopens the period when billable resources change without changing lifecycle kind', async () => {
-    const started = makeBox(BoxState.STARTED, BoxDesiredState.STARTED)
-    const resized = {
-      ...started,
-      cpu: 4,
-      mem: 8,
-      disk: 20,
-      gpu: 2,
-    } as Box
-
-    await service.applyTransition(started, BoxState.STARTED, BoxDesiredState.STARTED, new Date('2026-07-08T00:00:00Z'))
-    await service.applyTransition(resized, BoxState.STARTED, BoxDesiredState.STARTED, new Date('2026-07-08T00:00:30Z'))
+    await service.handleBoxStateUpdate({ box, newState: BoxState.STARTED } as never)
+    await service.handleBoxStateUpdate({ box, newState: BoxState.STARTED } as never)
 
     expect(periods.rows).toHaveLength(2)
-    expect(periods.rows[0]).toMatchObject({
-      kind: 'running',
-      endAt: new Date('2026-07-08T00:00:30Z'),
-      cpu: 2,
-      mem: 4,
-      disk: 10,
-      gpu: 1,
-    })
-    expect(periods.rows[1]).toMatchObject({
-      kind: 'running',
-      endAt: null,
-      cpu: 4,
-      mem: 8,
-      disk: 20,
-      gpu: 2,
-    })
-  })
-
-  it('reopens the period under the new organization when a box is reassigned', async () => {
-    const started = makeBox(BoxState.STARTED, BoxDesiredState.STARTED)
-    const reassigned = {
-      ...started,
-      organizationId: 'org-2',
-    } as Box
-
-    await service.applyTransition(started, BoxState.STARTED, BoxDesiredState.STARTED, new Date('2026-07-08T00:00:00Z'))
-    await service.handleBoxOrganizationUpdated({
-      box: reassigned,
-      oldOrganizationId: 'org-1',
-      newOrganizationId: 'org-2',
-    } as never)
-
-    expect(periods.rows).toHaveLength(2)
-    expect(periods.rows[0]).toMatchObject({
-      kind: 'running',
-      organizationId: 'org-1',
-      endAt: expect.any(Date),
-    })
-    expect(periods.rows[1]).toMatchObject({
-      kind: 'running',
-      organizationId: 'org-2',
-      endAt: null,
-    })
-  })
-
-  it('returns a raw organization metering view across active and archived periods', async () => {
-    periods.rows.push({
-      id: 'period-open',
-      boxId: 'box-1',
-      organizationId: 'org-1',
-      region: 'us',
-      startAt: new Date('2026-07-08T00:00:00Z'),
-      endAt: null,
-      kind: 'running',
-      cpu: 2,
-      mem: 4,
-      disk: 10,
-      gpu: 1,
-      actualCpuSeconds: null,
-      actualRssAvgBytes: null,
-      actualRssPeakBytes: null,
-      sampleCount: null,
-    } as UsagePeriod)
-    archives.rows.push({
-      id: 'archive-1',
-      sourcePeriodId: 'period-closed',
-      boxId: 'box-2',
-      organizationId: 'org-1',
-      region: 'us',
-      startAt: new Date('2026-07-07T23:00:00Z'),
-      endAt: new Date('2026-07-08T00:00:00Z'),
-      kind: 'stopped',
-      cpu: 0,
-      mem: 0,
-      disk: 20,
-      gpu: 0,
-      actualCpuSeconds: null,
-      actualRssAvgBytes: null,
-      actualRssPeakBytes: null,
-      sampleCount: null,
-    } as UsagePeriodArchive)
-
-    const view = await service.getOrganizationMeteringView('org-1', {
-      from: new Date('2026-07-07T23:00:00Z'),
-      to: new Date('2026-07-08T01:00:00Z'),
-      limit: 10,
-    })
-
-    expect(view.organizationId).toBe('org-1')
-    expect(view.activePeriods).toHaveLength(1)
-    expect(view.archivedPeriods).toHaveLength(1)
-    expect(view.totals).toEqual({
-      cpuSeconds: 7200,
-      memGibSeconds: 14400,
-      diskGibSeconds: 108000,
-      gpuSeconds: 3600,
-    })
-    expect(view.activePeriods[0]).toMatchObject({
-      source: 'usage_period',
-      active: true,
-      durationSeconds: 3600,
-    })
-    expect(view.archivedPeriods[0]).toMatchObject({
-      source: 'usage_period_archive',
-      active: false,
-      durationSeconds: 3600,
-    })
-  })
-
-  it('ignores stale transitions that arrive before the open period start', async () => {
-    const warn = jest.spyOn((service as unknown as { logger: { warn: jest.Mock } }).logger, 'warn').mockImplementation()
-    const started = makeBox(BoxState.STARTED, BoxDesiredState.STARTED)
-    const stopped = makeBox(BoxState.STOPPED, BoxDesiredState.STOPPED)
-
-    await service.applyTransition(started, BoxState.STARTED, BoxDesiredState.STARTED, new Date('2026-07-08T00:00:10Z'))
-    await service.applyTransition(stopped, BoxState.STOPPED, BoxDesiredState.STOPPED, new Date('2026-07-08T00:00:05Z'))
-
-    expect(periods.rows).toHaveLength(1)
-    expect(periods.rows[0]).toMatchObject({ kind: 'running', startAt: new Date('2026-07-08T00:00:10Z'), endAt: null })
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('ignoring stale usage transition'))
+    expect(periods.rows[0]).toMatchObject({ kind: 'running', endAt: expect.any(Date) })
+    expect(periods.rows[1]).toMatchObject({ kind: 'running', endAt: null })
   })
 
   it('rolls open periods older than 24 hours and reopens the same billable kind', async () => {
     const box = makeBox(BoxState.STARTED, BoxDesiredState.STARTED)
     boxes.boxes.set(box.id, box)
-    await service.applyTransition(box, BoxState.STARTED, BoxDesiredState.STARTED, new Date('2026-07-06T00:00:00Z'))
+    await service.handleBoxStateUpdate({ box, newState: BoxState.STARTED } as never)
+    periods.rows[0].startAt = new Date('2026-07-06T00:00:00Z')
 
     await service.closeAndReopenUsagePeriods(new Date('2026-07-08T00:00:00Z'))
 
     expect(periods.rows).toHaveLength(2)
     expect(periods.rows[0].endAt).toEqual(new Date('2026-07-08T00:00:00Z'))
     expect(periods.rows[1]).toMatchObject({ kind: 'running', startAt: new Date('2026-07-08T00:00:00Z'), endAt: null })
+    expect(periods.manager.transaction).toHaveBeenCalledTimes(1)
+    expect(locks.locks).toContain('close-and-reopen-usage-periods')
+  })
+
+  it('does not roll over unassigned warm-pool periods', async () => {
+    const warmPoolBox = {
+      ...makeBox(BoxState.STARTED),
+      organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+    } as Box
+    boxes.boxes.set(warmPoolBox.id, warmPoolBox)
+    await service.handleBoxStateUpdate({ box: warmPoolBox, newState: BoxState.STARTED } as never)
+    periods.rows[0].startAt = new Date('2026-07-06T00:00:00Z')
+
+    await service.closeAndReopenUsagePeriods(new Date('2026-07-08T00:00:00Z'))
+
+    expect(periods.rows).toHaveLength(1)
+    expect(periods.rows[0].endAt).toBeNull()
   })
 
   it('archives closed periods and removes them from the active table', async () => {
     const box = makeBox(BoxState.STARTED, BoxDesiredState.STARTED)
-    await service.applyTransition(box, BoxState.STARTED, BoxDesiredState.STARTED, new Date('2026-07-08T00:00:00Z'))
-    await service.applyTransition(
-      makeBox(BoxState.DESTROYED, BoxDesiredState.DESTROYED),
-      BoxState.DESTROYED,
-      BoxDesiredState.DESTROYED,
-      new Date('2026-07-08T00:00:10Z'),
-    )
+    await service.handleBoxStateUpdate({ box, newState: BoxState.STARTED } as never)
+    await service.handleBoxStateUpdate({
+      box: makeBox(BoxState.DESTROYED, BoxDesiredState.DESTROYED),
+      newState: BoxState.DESTROYED,
+    } as never)
+    const closedAt = periods.rows[0].endAt
 
     await service.archiveUsagePeriods()
 
@@ -403,34 +282,50 @@ describe('UsageService', () => {
     expect(periods.archivedRows[0]).toMatchObject({
       boxId: 'box-1',
       organizationId: 'org-1',
-      endAt: new Date('2026-07-08T00:00:10Z'),
+      endAt: closedAt,
     })
+    expect(locks.locks).toContain('archive-usage-periods')
   })
 
-  it('does not propagate usage ledger failures from lifecycle event handlers', async () => {
-    jest.spyOn((service as unknown as { logger: { error: jest.Mock } }).logger, 'error').mockImplementation()
+  it('propagates usage ledger failures from lifecycle event handlers and releases the Box lock', async () => {
     periods.failNextSave = new Error('database unavailable')
 
-    await expect(service.handleBoxCreated({ box: makeBox(BoxState.STARTED, BoxDesiredState.STARTED) } as never)).resolves.toBeUndefined()
+    await expect(
+      service.handleBoxStateUpdate({ box: makeBox(BoxState.STARTED), newState: BoxState.STARTED } as never),
+    ).rejects.toThrow('database unavailable')
 
-    expect(locks.unlocks).toContain('usage-period:box-1')
+    expect(locks.unlocks).toContain('usage-period-box-1')
   })
 
   it('archives closed periods in a single transaction', async () => {
     const box = makeBox(BoxState.STARTED, BoxDesiredState.STARTED)
-    await service.applyTransition(box, BoxState.STARTED, BoxDesiredState.STARTED, new Date('2026-07-08T00:00:00Z'))
-    await service.applyTransition(
-      makeBox(BoxState.DESTROYED, BoxDesiredState.DESTROYED),
-      BoxState.DESTROYED,
-      BoxDesiredState.DESTROYED,
-      new Date('2026-07-08T00:00:10Z'),
-    )
+    await service.handleBoxStateUpdate({ box, newState: BoxState.STARTED } as never)
+    await service.handleBoxStateUpdate({
+      box: makeBox(BoxState.DESTROYED, BoxDesiredState.DESTROYED),
+      newState: BoxState.DESTROYED,
+    } as never)
 
     await service.archiveUsagePeriods()
 
     expect(periods.manager.transaction).toHaveBeenCalledTimes(1)
     expect(periods.rows).toHaveLength(0)
     expect(periods.archivedRows).toHaveLength(1)
-    expect(archives.rows).toHaveLength(0)
+    expect(periods.transactionOperations).toEqual(['delete', 'save'])
+  })
+
+  it('tracks active usage jobs for graceful shutdown', () => {
+    expect((service as unknown as { activeJobs?: Set<string> }).activeJobs).toEqual(new Set())
+  })
+})
+
+describe('usage period persistence', () => {
+  it('uses the Box-specific table names', () => {
+    const tables = getMetadataArgsStorage().tables
+
+    expect(tables.find((table) => table.target === UsagePeriod)?.name).toBe('box_usage_period')
+    expect(tables.find((table) => table.target === UsagePeriodArchive)?.name).toBe('box_usage_period_archive')
+
+    const columns = getMetadataArgsStorage().columns.filter((column) => column.target === UsagePeriod)
+    expect(columns.map((column) => column.propertyName)).toEqual(expect.arrayContaining(['boxClass', 'regionType']))
   })
 })

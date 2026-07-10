@@ -4,14 +4,16 @@
  */
 
 import { Check, Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm'
+import { BoxClass } from '../../box/enums/box-class.enum'
+import { RegionType } from '../../region/enums/region-type.enum'
 import type { UsagePeriodKind } from '../metering/usage-period-math'
 import { UsagePeriod } from './usage-period.entity'
 
-@Entity('usage_period_archive')
-@Index('usage_period_archive_source_period_idx', ['sourcePeriodId'], { unique: true })
-@Index('usage_period_archive_org_start_idx', ['organizationId', 'startAt'])
-@Index('usage_period_archive_box_start_idx', ['boxId', 'startAt'])
-@Check('usage_period_archive_end_after_start', '"endAt" >= "startAt"')
+@Entity('box_usage_period_archive')
+@Index('box_usage_period_archive_source_period_idx', ['sourcePeriodId'], { unique: true })
+@Index('box_usage_period_archive_org_start_idx', ['organizationId', 'startAt'])
+@Index('box_usage_period_archive_box_start_idx', ['boxId', 'startAt'])
+@Check('box_usage_period_archive_end_after_start', '"endAt" >= "startAt"')
 export class UsagePeriodArchive {
   @PrimaryGeneratedColumn('uuid')
   id: string
@@ -61,6 +63,12 @@ export class UsagePeriodArchive {
   @Column({ type: 'int', nullable: true })
   sampleCount: number | null
 
+  @Column({ type: 'character varying', default: BoxClass.SMALL })
+  boxClass: BoxClass = BoxClass.SMALL
+
+  @Column({ type: 'character varying', default: RegionType.SHARED })
+  regionType: string = RegionType.SHARED
+
   static fromUsagePeriod(period: UsagePeriod): UsagePeriodArchive {
     if (!period.endAt) {
       throw new Error(`usage period ${period.id} cannot be archived while open`)
@@ -82,6 +90,8 @@ export class UsagePeriodArchive {
     archived.actualRssAvgBytes = period.actualRssAvgBytes
     archived.actualRssPeakBytes = period.actualRssPeakBytes
     archived.sampleCount = period.sampleCount
+    archived.boxClass = period.boxClass
+    archived.regionType = period.regionType
     return archived
   }
 }

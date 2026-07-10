@@ -76,7 +76,7 @@ function totalsToCards(totals: MeteringTotals | undefined) {
 }
 
 function sourceLabel(source: MeteringPeriod['source']): string {
-  return source === 'usage_period' ? 'open ledger' : 'closed ledger'
+  return source === 'box_usage_period' ? 'open ledger' : 'closed ledger'
 }
 
 function periodNote(period: MeteringPeriod): string | null {
@@ -87,7 +87,15 @@ function periodNote(period: MeteringPeriod): string | null {
   return 'disk only'
 }
 
-function PeriodTable({ title, description, periods }: { title: string; description: string; periods: MeteringPeriod[] }) {
+function PeriodTable({
+  title,
+  description,
+  periods,
+}: {
+  title: string
+  description: string
+  periods: MeteringPeriod[]
+}) {
   return (
     <section>
       <SectionTitle title={title} count={`${periods.length}`} />
@@ -206,10 +214,10 @@ function Metering() {
             <div className="flex flex-wrap items-center gap-3 border border-border bg-card px-4 py-3 font-mono text-[12px] text-muted-foreground">
               <Database className="size-4 text-cyan-300" />
               <span>Organization {truncateId(data?.organizationId ?? organizationId)}</span>
-              <span>Window {formatDate(data?.from ?? null)} → {formatDate(data?.to ?? null)}</span>
               <span>
-                Periods {(data?.activePeriods.length ?? 0) + (data?.archivedPeriods.length ?? 0)}
+                Window {formatDate(data?.from ?? null)} → {formatDate(data?.to ?? null)}
               </span>
+              <span>Periods {(data?.activePeriods.length ?? 0) + (data?.archivedPeriods.length ?? 0)}</span>
               <span>Open stopped rows keep metering disk only.</span>
             </div>
 

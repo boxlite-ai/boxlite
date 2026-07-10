@@ -58,7 +58,7 @@ describe('Metering page', () => {
         activePeriods: [
           {
             id: 'period-open',
-            source: 'usage_period',
+            source: 'box_usage_period',
             boxId: 'box-1',
             organizationId: 'org-1',
             region: 'us',
@@ -80,7 +80,7 @@ describe('Metering page', () => {
         archivedPeriods: [
           {
             id: 'archive-1',
-            source: 'usage_period_archive',
+            source: 'box_usage_period_archive',
             sourcePeriodId: 'period-closed',
             boxId: 'box-2',
             organizationId: 'org-1',

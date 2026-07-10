@@ -10,7 +10,7 @@ import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate
 import { RequiredOrganizationMemberRole } from '../organization/decorators/required-organization-member-role.decorator'
 import { OrganizationMemberRole } from '../organization/enums/organization-member-role.enum'
 import { OrganizationActionGuard } from '../organization/guards/organization-action.guard'
-import { UsageService } from './usage.service'
+import { UsageMeteringService } from './usage-metering.service'
 
 @ApiTags('usage')
 @ApiOAuth2(['openid', 'profile', 'email'])
@@ -18,7 +18,7 @@ import { UsageService } from './usage.service'
 @UseGuards(CombinedAuthGuard, AuthenticatedRateLimitGuard)
 @Controller()
 export class UsageController {
-  constructor(private readonly usageService: UsageService) {}
+  constructor(private readonly usageMeteringService: UsageMeteringService) {}
 
   @Get('/organization/:organizationId/metering')
   @UseGuards(OrganizationActionGuard)
@@ -30,7 +30,7 @@ export class UsageController {
     @Query('limit') limit?: string,
     @Query('boxId') boxId?: string,
   ) {
-    return this.usageService.getOrganizationMeteringView(organizationId, {
+    return this.usageMeteringService.getOrganizationMeteringView(organizationId, {
       from: this.parseOptionalDate('from', from),
       to: this.parseOptionalDate('to', to),
       limit: this.parseOptionalLimit(limit),

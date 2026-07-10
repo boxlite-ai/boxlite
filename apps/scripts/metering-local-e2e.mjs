@@ -143,7 +143,7 @@ async function seedMeteringRows() {
   await cleanupMeteringRows()
   await pool.query(
     `
-      insert into usage_period (
+      insert into box_usage_period (
         id,
         "boxId",
         "organizationId",
@@ -166,7 +166,7 @@ async function seedMeteringRows() {
   )
   await pool.query(
     `
-      insert into usage_period_archive (
+      insert into box_usage_period_archive (
         id,
         "sourcePeriodId",
         "boxId",
@@ -199,9 +199,7 @@ async function verifyApi(window) {
   if (!activeData.activePeriods?.some((period) => period.boxId === activeBoxId && period.kind === 'running')) {
     throw new Error(`active seeded period missing from API response: ${JSON.stringify(activeData).slice(0, 400)}`)
   }
-  if (
-    !archivedData.archivedPeriods?.some((period) => period.boxId === archivedBoxId && period.kind === 'stopped')
-  ) {
+  if (!archivedData.archivedPeriods?.some((period) => period.boxId === archivedBoxId && period.kind === 'stopped')) {
     throw new Error(`archived seeded period missing from API response: ${JSON.stringify(archivedData).slice(0, 400)}`)
   }
   assertNear(activeData.totals.cpuSeconds, 7200, 'active cpuSeconds')
@@ -294,7 +292,10 @@ async function settleAuthState(page, { allowDashboardOrigin = false } = {}) {
 
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const currentUrl = page.url()
-    const bodyText = await page.locator('body').innerText().catch(() => '')
+    const bodyText = await page
+      .locator('body')
+      .innerText()
+      .catch(() => '')
     lastBodyText = bodyText
     if (/Log in to Your Account|Grant Access|Metering|Boxes|Billing/.test(bodyText)) {
       return
@@ -309,9 +310,7 @@ async function settleAuthState(page, { allowDashboardOrigin = false } = {}) {
     }
     await delay(250)
   }
-  throw new Error(
-    `Timed out waiting for dashboard or Dex state at ${page.url()}; body=${lastBodyText.slice(0, 240)}`,
-  )
+  throw new Error(`Timed out waiting for dashboard or Dex state at ${page.url()}; body=${lastBodyText.slice(0, 240)}`)
 }
 
 async function assertBodyText(page, expectedTexts) {
@@ -343,8 +342,8 @@ async function cleanupApiKey() {
 }
 
 async function cleanupMeteringRows() {
-  await pool.query(`delete from usage_period where "boxId" like 'mtr%'`)
-  await pool.query(`delete from usage_period_archive where "boxId" like 'arc%'`)
+  await pool.query(`delete from box_usage_period where "boxId" like 'mtr%'`)
+  await pool.query(`delete from box_usage_period_archive where "boxId" like 'arc%'`)
 }
 
 async function fetchWithTimeout(url, options) {
