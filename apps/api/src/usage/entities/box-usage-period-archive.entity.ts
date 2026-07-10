@@ -6,11 +6,11 @@
 import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm'
 import { BoxClass } from '../../box/enums/box-class.enum'
 import { RegionType } from '../../region/enums/region-type.enum'
-import { UsagePeriod } from './usage-period.entity'
+import { BoxUsagePeriod } from './box-usage-period.entity'
 
-// Duplicate of UsagePeriod. It only contains closed periods and keeps the active table lightweight.
+// Duplicate of BoxUsagePeriod. It only contains closed periods and keeps the active table lightweight.
 @Entity('box_usage_period_archive')
-export class UsagePeriodArchive {
+export class BoxUsagePeriodArchive {
   @PrimaryGeneratedColumn('uuid')
   id: string
 
@@ -48,8 +48,8 @@ export class UsagePeriodArchive {
   @Column({ type: 'character varying', default: RegionType.SHARED })
   regionType: string = RegionType.SHARED
 
-  public static fromUsagePeriod(usagePeriod: UsagePeriod) {
-    const usagePeriodEntity = new UsagePeriodArchive()
+  public static fromBoxUsagePeriod(usagePeriod: BoxUsagePeriod) {
+    const usagePeriodEntity = new BoxUsagePeriodArchive()
     usagePeriodEntity.boxId = usagePeriod.boxId
     usagePeriodEntity.organizationId = usagePeriod.organizationId
     usagePeriodEntity.startAt = usagePeriod.startAt

@@ -10,8 +10,8 @@ import { BoxState } from '../box/enums/box-state.enum'
 import { BoxClass } from '../box/enums/box-class.enum'
 import { RegionType } from '../region/enums/region-type.enum'
 import { getMetadataArgsStorage } from 'typeorm'
-import { UsagePeriodArchive } from './entities/usage-period-archive.entity'
-import { UsagePeriod } from './entities/usage-period.entity'
+import { BoxUsagePeriodArchive } from './entities/box-usage-period-archive.entity'
+import { BoxUsagePeriod } from './entities/box-usage-period.entity'
 import { UsageService } from './services/usage.service'
 
 function matchesWhereValue(actual: unknown, expected: unknown): boolean {
@@ -34,9 +34,9 @@ function matchesWhereValue(actual: unknown, expected: unknown): boolean {
   return actual === expected
 }
 
-class FakeUsagePeriodRepository {
-  rows: UsagePeriod[] = []
-  archivedRows: UsagePeriodArchive[] = []
+class FakeBoxUsagePeriodRepository {
+  rows: BoxUsagePeriod[] = []
+  archivedRows: BoxUsagePeriodArchive[] = []
   transactionOperations: string[] = []
   failNextSave: Error | null = null
   manager = {
@@ -45,11 +45,11 @@ class FakeUsagePeriodRepository {
     }),
   }
 
-  create(input: Partial<UsagePeriod>): UsagePeriod {
-    return input as UsagePeriod
+  create(input: Partial<BoxUsagePeriod>): BoxUsagePeriod {
+    return input as BoxUsagePeriod
   }
 
-  async save(row: UsagePeriod | UsagePeriod[]): Promise<UsagePeriod | UsagePeriod[]> {
+  async save(row: BoxUsagePeriod | BoxUsagePeriod[]): Promise<BoxUsagePeriod | BoxUsagePeriod[]> {
     if (this.failNextSave) {
       const err = this.failNextSave
       this.failNextSave = null
@@ -64,7 +64,7 @@ class FakeUsagePeriodRepository {
     return row
   }
 
-  async findOne(opts: { where: Partial<UsagePeriod> }): Promise<UsagePeriod | null> {
+  async findOne(opts: { where: Partial<BoxUsagePeriod> }): Promise<BoxUsagePeriod | null> {
     const match = this.rows.find((row) => {
       return Object.entries(opts.where).every(([key, value]) => {
         return matchesWhereValue((row as unknown as Record<string, unknown>)[key], value)
@@ -74,10 +74,10 @@ class FakeUsagePeriodRepository {
   }
 
   async find(opts: {
-    where?: Partial<UsagePeriod> | Partial<UsagePeriod>[]
+    where?: Partial<BoxUsagePeriod> | Partial<BoxUsagePeriod>[]
     order?: { startAt?: 'ASC' | 'DESC' }
     take?: number
-  }): Promise<UsagePeriod[]> {
+  }): Promise<BoxUsagePeriod[]> {
     const where = Array.isArray(opts.where) ? opts.where : [opts.where ?? {}]
     const rows = this.rows.filter((row) =>
       where.some((whereItem) =>
@@ -100,7 +100,7 @@ class FakeUsagePeriodRepository {
     this.rows = this.rows.filter((row) => !ids.includes(row.id))
   }
 
-  private upsert(row: UsagePeriod): void {
+  private upsert(row: BoxUsagePeriod): void {
     if (!row.id) {
       row.id = `period-${this.rows.length + 1}`
       this.rows.push(row)
@@ -117,30 +117,35 @@ class FakeUsagePeriodRepository {
 }
 
 class FakeTransactionManager {
-  constructor(private readonly periods: FakeUsagePeriodRepository) {}
+  constructor(private readonly periods: FakeBoxUsagePeriodRepository) {}
 
   async find(
-    _entity: typeof UsagePeriod,
+    _entity: typeof BoxUsagePeriod,
     opts: {
-      where?: Partial<UsagePeriod>
+      where?: Partial<BoxUsagePeriod>
       order?: { startAt?: 'ASC' | 'DESC' }
       take?: number
     },
-  ): Promise<UsagePeriod[]> {
+  ): Promise<BoxUsagePeriod[]> {
     return this.periods.find(opts)
   }
 
   async save(
-    entityOrInput: typeof UsagePeriod | typeof UsagePeriodArchive | UsagePeriod | UsagePeriod[] | UsagePeriodArchive[],
-    input?: UsagePeriod | UsagePeriod[] | UsagePeriodArchive[],
-  ): Promise<UsagePeriod | UsagePeriod[] | UsagePeriodArchive[]> {
+    entityOrInput:
+      | typeof BoxUsagePeriod
+      | typeof BoxUsagePeriodArchive
+      | BoxUsagePeriod
+      | BoxUsagePeriod[]
+      | BoxUsagePeriodArchive[],
+    input?: BoxUsagePeriod | BoxUsagePeriod[] | BoxUsagePeriodArchive[],
+  ): Promise<BoxUsagePeriod | BoxUsagePeriod[] | BoxUsagePeriodArchive[]> {
     this.periods.transactionOperations.push('save')
-    const value = input ?? (entityOrInput as UsagePeriod | UsagePeriod[] | UsagePeriodArchive[])
-    if (!Array.isArray(value) || value[0] instanceof UsagePeriod) {
-      return this.periods.save(value as UsagePeriod | UsagePeriod[])
+    const value = input ?? (entityOrInput as BoxUsagePeriod | BoxUsagePeriod[] | BoxUsagePeriodArchive[])
+    if (!Array.isArray(value) || value[0] instanceof BoxUsagePeriod) {
+      return this.periods.save(value as BoxUsagePeriod | BoxUsagePeriod[])
     }
 
-    const rows = value as UsagePeriodArchive[]
+    const rows = value as BoxUsagePeriodArchive[]
     rows.forEach((row) => {
       row.id = row.id ?? `archive-${this.periods.archivedRows.length + 1}`
       this.periods.archivedRows.push(row)
@@ -148,7 +153,7 @@ class FakeTransactionManager {
     return rows
   }
 
-  async delete(_entity: typeof UsagePeriod, ids: string[]): Promise<void> {
+  async delete(_entity: typeof BoxUsagePeriod, ids: string[]): Promise<void> {
     this.periods.transactionOperations.push('delete')
     await this.periods.delete(ids)
   }
@@ -198,14 +203,14 @@ function makeBox(state: BoxState, desiredState: BoxDesiredState = BoxDesiredStat
 }
 
 describe('UsageService', () => {
-  let periods: FakeUsagePeriodRepository
+  let periods: FakeBoxUsagePeriodRepository
   let locks: FakeLockProvider
   let boxes: FakeBoxRepository
   let regions: FakeRegionRepository
   let service: UsageService
 
   beforeEach(() => {
-    periods = new FakeUsagePeriodRepository()
+    periods = new FakeBoxUsagePeriodRepository()
     periods.archivedRows = []
     locks = new FakeLockProvider()
     boxes = new FakeBoxRepository()
@@ -244,7 +249,7 @@ describe('UsageService', () => {
       await service.handleBoxStateUpdate({ box, newState: BoxState.STARTED } as never)
       periods.rows[0].startAt = new Date('2026-07-06T00:00:00Z')
 
-      await service.closeAndReopenUsagePeriods()
+      await service.closeAndReopenBoxUsagePeriods()
 
       expect(periods.rows).toHaveLength(2)
       expect(periods.rows[0].endAt).toEqual(new Date('2026-07-08T00:00:00Z'))
@@ -265,7 +270,7 @@ describe('UsageService', () => {
     await service.handleBoxStateUpdate({ box: warmPoolBox, newState: BoxState.STARTED } as never)
     periods.rows[0].startAt = new Date('2026-07-06T00:00:00Z')
 
-    await service.closeAndReopenUsagePeriods()
+    await service.closeAndReopenBoxUsagePeriods()
 
     expect(periods.rows).toHaveLength(1)
     expect(periods.rows[0].endAt).toBeNull()
@@ -280,7 +285,7 @@ describe('UsageService', () => {
     } as never)
     const closedAt = periods.rows[0].endAt
 
-    await service.archiveUsagePeriods()
+    await service.archiveBoxUsagePeriods()
 
     expect(periods.rows).toHaveLength(0)
     expect(periods.archivedRows).toHaveLength(1)
@@ -310,7 +315,7 @@ describe('UsageService', () => {
       newState: BoxState.DESTROYED,
     } as never)
 
-    await service.archiveUsagePeriods()
+    await service.archiveBoxUsagePeriods()
 
     expect(periods.manager.transaction).toHaveBeenCalledTimes(1)
     expect(periods.rows).toHaveLength(0)
@@ -327,10 +332,10 @@ describe('usage period persistence', () => {
   it('uses the Box-specific table names', () => {
     const tables = getMetadataArgsStorage().tables
 
-    expect(tables.find((table) => table.target === UsagePeriod)?.name).toBe('box_usage_period')
-    expect(tables.find((table) => table.target === UsagePeriodArchive)?.name).toBe('box_usage_period_archive')
+    expect(tables.find((table) => table.target === BoxUsagePeriod)?.name).toBe('box_usage_period')
+    expect(tables.find((table) => table.target === BoxUsagePeriodArchive)?.name).toBe('box_usage_period_archive')
 
-    const columns = getMetadataArgsStorage().columns.filter((column) => column.target === UsagePeriod)
+    const columns = getMetadataArgsStorage().columns.filter((column) => column.target === BoxUsagePeriod)
     expect(columns.map((column) => column.propertyName)).toEqual(expect.arrayContaining(['boxClass', 'regionType']))
   })
 })

@@ -6,13 +6,13 @@
 import { Module } from '@nestjs/common'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { BoxModule } from '../box/box.module'
-import { UsagePeriodArchive } from './entities/usage-period-archive.entity'
-import { UsagePeriod } from './entities/usage-period.entity'
+import { BoxUsagePeriodArchive } from './entities/box-usage-period-archive.entity'
+import { BoxUsagePeriod } from './entities/box-usage-period.entity'
 import { UsageService } from './services/usage.service'
 import { Region } from '../region/entities/region.entity'
 
 @Module({
-  imports: [BoxModule, TypeOrmModule.forFeature([UsagePeriod, UsagePeriodArchive, Region])],
+  imports: [BoxModule, TypeOrmModule.forFeature([BoxUsagePeriod, BoxUsagePeriodArchive, Region])],
   providers: [UsageService],
   exports: [UsageService],
 })

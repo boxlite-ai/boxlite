@@ -6,7 +6,7 @@
 import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { IsNull, LessThan, Not, Repository } from 'typeorm'
-import { UsagePeriod } from '../entities/usage-period.entity'
+import { BoxUsagePeriod } from '../entities/box-usage-period.entity'
 import { OnEvent } from '@nestjs/event-emitter'
 import { BoxStateUpdatedEvent } from '../../box/events/box-state-updated.event'
 import { BoxState } from '../../box/enums/box-state.enum'
@@ -14,7 +14,7 @@ import { BoxEvents } from '../../box/constants/box-events.constants'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { RedisLockProvider } from '../../box/common/redis-lock.provider'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../../box/constants/box.constants'
-import { UsagePeriodArchive } from '../entities/usage-period-archive.entity'
+import { BoxUsagePeriodArchive } from '../entities/box-usage-period-archive.entity'
 import { TrackableJobExecutions } from '../../common/interfaces/trackable-job-executions'
 import { TrackJobExecution } from '../../common/decorators/track-job-execution.decorator'
 import { setTimeout as sleep } from 'timers/promises'
@@ -32,8 +32,8 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
   private readonly logger = new Logger(UsageService.name)
 
   constructor(
-    @InjectRepository(UsagePeriod)
-    private usagePeriodRepository: Repository<UsagePeriod>,
+    @InjectRepository(BoxUsagePeriod)
+    private usagePeriodRepository: Repository<BoxUsagePeriod>,
     private readonly redisLockProvider: RedisLockProvider,
     private readonly boxRepository: BoxRepository,
     @InjectRepository(Region)
@@ -56,7 +56,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
     try {
       switch (event.newDesiredState) {
         case BoxDesiredState.DESTROYED: {
-          await this.closeUsagePeriod(event.box.id)
+          await this.closeBoxUsagePeriod(event.box.id)
           break
         }
       }
@@ -75,13 +75,13 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
     try {
       switch (event.newState) {
         case BoxState.STARTED: {
-          await this.closeUsagePeriod(event.box.id)
-          await this.createUsagePeriod(event)
+          await this.closeBoxUsagePeriod(event.box.id)
+          await this.createBoxUsagePeriod(event)
           break
         }
         case BoxState.STOPPING:
-          await this.closeUsagePeriod(event.box.id)
-          await this.createUsagePeriod(event, true)
+          await this.closeBoxUsagePeriod(event.box.id)
+          await this.createBoxUsagePeriod(event, true)
           break
         // Safeguard if STOPPING state is skipped.
         case BoxState.STOPPED: {
@@ -93,8 +93,8 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
             },
           })
           if (cpuUsagePeriod) {
-            await this.closeUsagePeriod(event.box.id)
-            await this.createUsagePeriod(event, true)
+            await this.closeBoxUsagePeriod(event.box.id)
+            await this.createBoxUsagePeriod(event, true)
           }
           break
         }
@@ -102,7 +102,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
         case BoxState.ARCHIVED:
         case BoxState.DESTROYING:
         case BoxState.DESTROYED: {
-          await this.closeUsagePeriod(event.box.id)
+          await this.closeBoxUsagePeriod(event.box.id)
           break
         }
       }
@@ -113,8 +113,8 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
     }
   }
 
-  private async createUsagePeriod(event: BoxStateUpdatedEvent, diskOnly = false) {
-    const usagePeriod = new UsagePeriod()
+  private async createBoxUsagePeriod(event: BoxStateUpdatedEvent, diskOnly = false) {
+    const usagePeriod = new BoxUsagePeriod()
     usagePeriod.boxId = event.box.id
     usagePeriod.startAt = new Date()
     usagePeriod.endAt = null
@@ -136,7 +136,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
     await this.usagePeriodRepository.save(usagePeriod)
   }
 
-  private async closeUsagePeriod(boxId: string) {
+  private async closeBoxUsagePeriod(boxId: string) {
     const lastUsagePeriod = await this.usagePeriodRepository.findOne({
       where: {
         boxId,
@@ -154,7 +154,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
   @TrackJobExecution()
   @LogExecution('close-and-reopen-usage-periods')
   @WithInstrumentation()
-  async closeAndReopenUsagePeriods() {
+  async closeAndReopenBoxUsagePeriods() {
     if (!(await this.redisLockProvider.lock('close-and-reopen-usage-periods', 60))) {
       return
     }
@@ -193,7 +193,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
             box &&
             (box.state === BoxState.STARTED || box.state === BoxState.STOPPED || box.state === BoxState.STOPPING)
           ) {
-            const newUsagePeriod = UsagePeriod.fromUsagePeriod(usagePeriod)
+            const newUsagePeriod = BoxUsagePeriod.fromBoxUsagePeriod(usagePeriod)
             newUsagePeriod.startAt = closeTime
             newUsagePeriod.endAt = null
             if (box.state === BoxState.STOPPED) {
@@ -218,14 +218,14 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
   @TrackJobExecution()
   @LogExecution('archive-usage-periods')
   @WithInstrumentation()
-  async archiveUsagePeriods() {
+  async archiveBoxUsagePeriods() {
     const lockKey = 'archive-usage-periods'
     if (!(await this.redisLockProvider.lock(lockKey, 60))) {
       return
     }
 
     await this.usagePeriodRepository.manager.transaction(async (transactionalEntityManager) => {
-      const usagePeriods = await transactionalEntityManager.find(UsagePeriod, {
+      const usagePeriods = await transactionalEntityManager.find(BoxUsagePeriod, {
         where: {
           endAt: Not(IsNull()),
         },
@@ -242,10 +242,10 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
       this.logger.debug(`Found ${usagePeriods.length} usage periods to archive`)
 
       await transactionalEntityManager.delete(
-        UsagePeriod,
+        BoxUsagePeriod,
         usagePeriods.map((usagePeriod) => usagePeriod.id),
       )
-      await transactionalEntityManager.save(usagePeriods.map(UsagePeriodArchive.fromUsagePeriod))
+      await transactionalEntityManager.save(usagePeriods.map(BoxUsagePeriodArchive.fromBoxUsagePeriod))
     })
 
     await this.redisLockProvider.unlock(lockKey)
