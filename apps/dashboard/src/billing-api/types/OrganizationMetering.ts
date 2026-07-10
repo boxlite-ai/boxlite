@@ -4,7 +4,7 @@
  */
 
 export type MeteringPeriodKind = 'running' | 'stopped'
-export type MeteringPeriodSource = 'usage_period' | 'usage_period_archive'
+export type MeteringPeriodSource = 'box_usage_period' | 'box_usage_period_archive'
 
 export interface MeteringTotals {
   cpuSeconds: number

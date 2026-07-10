@@ -4,13 +4,15 @@
  */
 
 import { Check, Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm'
+import { BoxClass } from '../../box/enums/box-class.enum'
+import { RegionType } from '../../region/enums/region-type.enum'
 import type { UsagePeriodKind } from '../metering/usage-period-math'
 
-@Entity('usage_period')
-@Index('usage_period_box_end_idx', ['boxId', 'endAt'])
-@Index('usage_period_org_start_idx', ['organizationId', 'startAt'])
-@Index('usage_period_one_open_per_box_idx', ['boxId'], { unique: true, where: '"endAt" IS NULL' })
-@Check('usage_period_end_after_start', '"endAt" IS NULL OR "endAt" >= "startAt"')
+@Entity('box_usage_period')
+@Index('box_usage_period_box_end_idx', ['boxId', 'endAt'])
+@Index('box_usage_period_org_start_idx', ['organizationId', 'startAt'])
+@Index('box_usage_period_one_open_per_box_idx', ['boxId'], { unique: true, where: '"endAt" IS NULL' })
+@Check('box_usage_period_end_after_start', '"endAt" IS NULL OR "endAt" >= "startAt"')
 export class UsagePeriod {
   @PrimaryGeneratedColumn('uuid')
   id: string
@@ -56,4 +58,17 @@ export class UsagePeriod {
 
   @Column({ type: 'int', nullable: true })
   sampleCount: number | null
+
+  @Column({ type: 'character varying', default: BoxClass.SMALL })
+  boxClass: BoxClass = BoxClass.SMALL
+
+  @Column({ type: 'character varying', default: RegionType.SHARED })
+  regionType: string = RegionType.SHARED
+
+  static fromUsagePeriod(period: UsagePeriod): UsagePeriod {
+    const next = new UsagePeriod()
+    Object.assign(next, period)
+    delete (next as Partial<UsagePeriod>).id
+    return next
+  }
 }
