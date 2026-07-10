@@ -131,7 +131,12 @@ export class ApiClient {
     this._userApi = new UsersApi(this.config, undefined, axiosInstance)
     this._apiKeyApi = new ApiKeysApi(this.config, undefined, axiosInstance)
     this._organizationsApi = new OrganizationsApi(this.config, undefined, axiosInstance)
-    this._billingApi = new BillingApiClient(config.billingApiUrl || window.location.origin, accessToken)
+    this._billingApi = new BillingApiClient(
+      config.billingApiUrl || config.apiUrl,
+      accessToken,
+      config.apiUrl,
+      this.onUnauthorized ? (error) => this.handleUnauthorized(error) : undefined,
+    )
     this._volumeApi = new VolumesApi(this.config, undefined, axiosInstance)
     this._auditApi = new AuditApi(this.config, undefined, axiosInstance)
     this._regionsApi = new RegionsApi(this.config, undefined, axiosInstance)

@@ -6,7 +6,10 @@
 import { Module } from '@nestjs/common'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { Organization } from '../organization/entities/organization.entity'
+import { OrganizationModule } from '../organization/organization.module'
 import { BoxUsagePeriodArchive } from '../usage/entities/box-usage-period-archive.entity'
+import { BillingController } from './billing.controller'
+import { BillingReadService } from './billing-read.service'
 import { PricingPlan } from './entities/pricing-plan.entity'
 import { RatedPeriod } from './entities/rated-period.entity'
 import { WalletTransaction } from './entities/wallet-transaction.entity'
@@ -17,6 +20,7 @@ import { WalletService } from './wallet.service'
 
 @Module({
   imports: [
+    OrganizationModule,
     TypeOrmModule.forFeature([
       BoxUsagePeriodArchive,
       PricingPlan,
@@ -26,7 +30,8 @@ import { WalletService } from './wallet.service'
       Organization,
     ]),
   ],
-  providers: [RatingService, WalletService, SettlementService],
-  exports: [RatingService, WalletService, SettlementService],
+  controllers: [BillingController],
+  providers: [RatingService, WalletService, SettlementService, BillingReadService],
+  exports: [RatingService, WalletService, SettlementService, BillingReadService],
 })
 export class BillingModule {}
