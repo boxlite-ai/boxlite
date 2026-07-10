@@ -20,7 +20,7 @@ pub(crate) enum HostPowerActivity {
 // IOKit IOPM message constants (stable; see IOPMLib.h).
 const IOMSG_SYSTEM_WILL_SLEEP: u32 = 0xE000_0280;
 const IOMSG_SYSTEM_WILL_POWER_ON: u32 = 0xE000_0320;
-const IOMSG_SYSTEM_HAS_POWERED_ON: u32 = 0xE000_0030;
+const IOMSG_SYSTEM_HAS_POWERED_ON: u32 = 0xE000_0300;
 
 /// Map IOKit system power notifications to host sleep/wake activity.
 pub(crate) fn map_iokit_power_message(message_type: u32) -> Option<HostPowerActivity> {
@@ -64,6 +64,10 @@ mod tests {
 
     #[test]
     fn maps_has_powered_on_to_wake() {
+        assert_eq!(
+            map_iokit_power_message(0xE000_0300),
+            Some(HostPowerActivity::Wake)
+        );
         assert_eq!(
             map_iokit_power_message(IOMSG_SYSTEM_HAS_POWERED_ON),
             Some(HostPowerActivity::Wake)

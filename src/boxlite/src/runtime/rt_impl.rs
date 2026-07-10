@@ -716,22 +716,25 @@ impl RuntimeImpl {
             sync.active_boxes_by_id
                 .values()
                 .filter_map(|weak| weak.upgrade())
+                .filter(|box_impl| box_impl.state.read().status == BoxStatus::Running)
                 .collect()
         };
 
-        for box_impl in boxes {
-            if box_impl.state.read().status != BoxStatus::Running {
-                continue;
+        let sync_futures = boxes.iter().map(|box_impl| {
+            let box_impl = Arc::clone(box_impl);
+            async move {
+                if let Err(e) = box_impl.sync_guest_clock(trigger).await {
+                    tracing::warn!(
+                        box_id = %box_impl.id(),
+                        trigger,
+                        error = %e,
+                        "Guest clock sync failed"
+                    );
+                }
             }
-            if let Err(e) = box_impl.sync_guest_clock(trigger).await {
-                tracing::warn!(
-                    box_id = %box_impl.id(),
-                    trigger,
-                    error = %e,
-                    "Guest clock sync failed"
-                );
-            }
-        }
+        });
+
+        futures::future::join_all(sync_futures).await;
     }
 
     /// Synchronous shutdown for atexit/Drop contexts.
