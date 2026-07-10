@@ -3,8 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Injectable, Logger } from '@nestjs/common'
-import { Cron, CronExpression } from '@nestjs/schedule'
+import { Injectable } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { QueryFailedError, Repository } from 'typeorm'
 import { BoxUsagePeriodArchive } from '../../usage/entities/box-usage-period-archive.entity'
@@ -24,8 +23,6 @@ function isUniqueViolation(error: unknown): boolean {
 
 @Injectable()
 export class RatingService {
-  private readonly logger = new Logger(RatingService.name)
-
   constructor(
     @InjectRepository(BoxUsagePeriodArchive)
     private readonly usageArchives: Repository<BoxUsagePeriodArchive>,
@@ -34,14 +31,6 @@ export class RatingService {
     @InjectRepository(PricingPlan)
     private readonly pricingPlans: Repository<PricingPlan>,
   ) {}
-
-  @Cron(CronExpression.EVERY_5_MINUTES, { name: 'rate-usage-periods' })
-  async scheduledSweep(): Promise<void> {
-    const result = await this.rateClosedPeriods()
-    if (result.rated || result.skipped) {
-      this.logger.log(`rating sweep: rated ${result.rated}, skipped ${result.skipped}`)
-    }
-  }
 
   async rateClosedPeriods(limit = RATING_BATCH_SIZE): Promise<{ rated: number; skipped: number }> {
     const periods = await this.findUnratedArchivedPeriods(limit)

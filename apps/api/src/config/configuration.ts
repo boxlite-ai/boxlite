@@ -166,6 +166,10 @@ const configuration = {
   organizationBoxDefaultLimitedNetworkEgress: process.env.ORGANIZATION_BOX_DEFAULT_LIMITED_NETWORK_EGRESS === 'true',
   pylonAppId: process.env.PYLON_APP_ID,
   billingApiUrl: process.env.BILLING_API_URL,
+  billing: {
+    trialGrantCents: parseInt(process.env.BILLING_TRIAL_GRANT_CENTS || '10000', 10),
+    trialDurationDays: parseInt(process.env.BILLING_TRIAL_DURATION_DAYS || '30', 10),
+  },
   analyticsApiUrl: process.env.ANALYTICS_API_URL,
   defaultRunner: {
     domain: process.env.DEFAULT_RUNNER_DOMAIN,
