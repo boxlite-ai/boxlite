@@ -293,10 +293,10 @@ fn dir_size_bytes(dir: &Path) -> Option<u64> {
     }
     let mut total: u64 = 0;
     for entry in walkdir::WalkDir::new(dir).into_iter().flatten() {
-        if let Ok(meta) = entry.metadata() {
-            if meta.is_file() {
-                total += meta.len();
-            }
+        if let Ok(meta) = entry.metadata()
+            && meta.is_file()
+        {
+            total += meta.len();
         }
     }
     Some(total)
