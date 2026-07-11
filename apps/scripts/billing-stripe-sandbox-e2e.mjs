@@ -1,20 +1,31 @@
 #!/usr/bin/env node
 
 import fs from 'node:fs/promises'
+import { execFile } from 'node:child_process'
 import path from 'node:path'
 import process from 'node:process'
+import { createInterface } from 'node:readline/promises'
+import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import pg from 'pg'
 import { chromium } from 'playwright-core'
-import { assertLocalStripeDatabase, assertStripeE2EEvidence } from './billing-stripe-sandbox-config.mjs'
+import {
+  assertLocalStripeDatabase,
+  assertStripeE2EEvidence,
+  assertStripeReconcileEvidence,
+  assertStripeRefundEvidence,
+} from './billing-stripe-sandbox-config.mjs'
 
 const { Client } = pg
+const execFileAsync = promisify(execFile)
 const scriptsRoot = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(scriptsRoot, '..', '..')
 const dashboardUrl = stripTrailingSlash(process.env.BOXLITE_E2E_BASE_URL || 'http://localhost:3000')
 const loginEmail = process.env.BOXLITE_E2E_LOGIN_EMAIL || 'admin@boxlite.dev'
 const loginPassword = process.env.BOXLITE_E2E_LOGIN_PASSWORD || 'password'
 const timeoutMs = Number(process.env.BILLING_STRIPE_E2E_TIMEOUT_MS || 60_000)
+const expectReconcile = process.env.BILLING_STRIPE_E2E_EXPECT_RECONCILE === '1'
+const exerciseRefund = process.env.BILLING_STRIPE_E2E_REFUND === '1'
 const chromeExecutablePath =
   process.env.CHROME_EXECUTABLE_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 const database = {
@@ -94,6 +105,7 @@ try {
     return wallet.paymentProviderCustomerId?.startsWith('cus_') && wallet.paymentProviderMethodId?.startsWith('pm_')
   }, 'Stripe setup webhook')
   await page.screenshot({ path: path.join(artifactsDir, 'stripe-setup-complete.png'), fullPage: true })
+  if (expectReconcile) await pauseAfterSetup()
 
   await page.getByRole('button', { name: 'Add funds', exact: true }).click()
   await page.getByRole('textbox', { name: 'Custom top-up amount', exact: true }).fill('5.00')
@@ -103,10 +115,19 @@ try {
   await page.getByRole('button', { name: 'Pay', exact: true }).click()
   await page.waitForURL(`${dashboardUrl}/dashboard/billing?payment=success`)
 
+  if (expectReconcile) {
+    const pendingTopUp = await waitFor(() => loadLatestTopUp(organizationId), 'pending Stripe top-up')
+    if (pendingTopUp.status !== 'pending') {
+      throw new Error('Lost-webhook exercise expected the top-up to remain pending before reconciliation')
+    }
+    await db.query(`UPDATE top_up_record SET "nextReconcileAt" = clock_timestamp() WHERE id = $1`, [pendingTopUp.id])
+  }
+
   const topUp = await waitFor(() => loadPaidTopUp(organizationId), 'paid Stripe top-up')
   const walletAfter = await loadWallet(organizationId)
   const ledgerTopUpIds = await loadLedgerTopUpIds(topUp.id)
-  const providerEventTypes = await loadProviderEventTypes()
+  const providerEvents = await loadProviderEvents()
+  const providerEventTypes = providerEvents.map((event) => event.eventType)
   const evidence = {
     paidBalanceBeforeCents: walletBefore.paidBalanceCents,
     paidBalanceAfterCents: walletAfter.paidBalanceCents,
@@ -116,11 +137,18 @@ try {
     providerEventTypes,
   }
   assertStripeE2EEvidence(evidence)
+  if (expectReconcile) assertStripeReconcileEvidence({ topUp, providerEvents })
   assertNoLocalHttpErrors()
 
   await page.getByRole('tab', { name: 'Billing', exact: true }).click()
   await page.getByRole('heading', { name: '▸ Receipts', exact: true }).waitFor()
   await page.screenshot({ path: path.join(artifactsDir, 'stripe-top-up-complete.png'), fullPage: true })
+  const refund = exerciseRefund ? await refundTopUp(topUp, walletAfter.paidBalanceCents) : null
+  if (refund) {
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.getByRole('heading', { name: 'Billing', exact: true }).waitFor()
+    await page.screenshot({ path: path.join(artifactsDir, 'stripe-refund-complete.png'), fullPage: true })
+  }
   console.log(
     JSON.stringify(
       {
@@ -132,6 +160,8 @@ try {
         providerReferenceType: topUp.providerReference.slice(0, 3),
         ledgerCredits: ledgerTopUpIds.length,
         providerEventTypes,
+        recoveredWithoutWebhook: expectReconcile,
+        refund,
         artifactsDir,
       },
       null,
@@ -218,6 +248,11 @@ async function resetLocalPaymentProvider(targetOrganizationId) {
 }
 
 async function loadPaidTopUp(targetOrganizationId) {
+  const topUp = await loadLatestTopUp(targetOrganizationId)
+  return topUp?.status === 'paid' ? topUp : null
+}
+
+async function loadLatestTopUp(targetOrganizationId) {
   const result = await db.query(
     `SELECT id, status, "amountCents", "providerReference", "receiptUrl"
        FROM top_up_record
@@ -225,8 +260,7 @@ async function loadPaidTopUp(targetOrganizationId) {
       ORDER BY "createdAt" DESC LIMIT 1`,
     [targetOrganizationId, runStartedAt],
   )
-  const topUp = result.rows[0]
-  return topUp?.status === 'paid' ? topUp : null
+  return result.rows[0] ?? null
 }
 
 async function loadLedgerTopUpIds(topUpId) {
@@ -239,12 +273,65 @@ async function loadLedgerTopUpIds(topUpId) {
   return result.rows.map((row) => row.topUpId)
 }
 
-async function loadProviderEventTypes() {
+async function loadProviderEvents() {
   const result = await db.query(
-    `SELECT "eventType" FROM payment_provider_event WHERE "createdAt" >= $1 ORDER BY "createdAt"`,
+    `SELECT "providerEventId", "eventType", "providerReference"
+       FROM payment_provider_event WHERE "createdAt" >= $1 ORDER BY "createdAt"`,
     [runStartedAt],
   )
-  return result.rows.map((row) => row.eventType)
+  return result.rows
+}
+
+async function pauseAfterSetup() {
+  const prompt = createInterface({ input: process.stdin, output: process.stdout })
+  try {
+    await prompt.question('[billing-stripe-e2e] Setup complete. Stop the Stripe listener, then press Enter.\n')
+  } finally {
+    prompt.close()
+  }
+}
+
+async function refundTopUp(topUp, paidBalanceBeforeCents) {
+  const { stdout: sessionOutput } = await execFileAsync(
+    'stripe',
+    ['get', `/v1/checkout/sessions/${topUp.providerReference}`, '--color', 'off'],
+    { maxBuffer: 1024 * 1024 },
+  )
+  const session = JSON.parse(sessionOutput)
+  if (typeof session.payment_intent !== 'string') {
+    throw new Error(`Stripe Checkout session ${topUp.providerReference} has no PaymentIntent`)
+  }
+  const { stdout: refundOutput } = await execFileAsync(
+    'stripe',
+    ['post', '/v1/refunds', '-d', `payment_intent=${session.payment_intent}`, '-d', 'amount=500', '--color', 'off'],
+    { maxBuffer: 1024 * 1024 },
+  )
+  const providerRefund = JSON.parse(refundOutput)
+  const evidence = await waitFor(() => loadRefundEvidence(topUp.id, providerRefund.id), 'Stripe refund adjustment')
+  assertStripeRefundEvidence({ paidBalanceBeforeCents, ...evidence })
+  return {
+    providerReferenceType: providerRefund.id.slice(0, 3),
+    matchingLedgerRows: evidence.matchingLedgerRows,
+    ledgerAmountCents: evidence.amountCents,
+    paidBalanceBeforeCents,
+    paidBalanceAfterCents: evidence.paidBalanceAfterCents,
+    refundedCents: evidence.refundedCents,
+  }
+}
+
+async function loadRefundEvidence(topUpId, refundId) {
+  const result = await db.query(
+    `SELECT wt."amountCents",
+            w."paidBalanceCents" AS "paidBalanceAfterCents",
+            tur."refundedCents",
+            COUNT(*) OVER ()::int AS "matchingLedgerRows"
+       FROM wallet_transaction wt
+       JOIN wallet w ON w.id = wt."walletId"
+       JOIN top_up_record tur ON tur.id::text = wt.metadata->>'topUpId'
+      WHERE wt.metadata->>'topUpId' = $1 AND wt."providerActionId" = $2`,
+    [topUpId, `refund:${refundId}:debit`],
+  )
+  return result.rowCount === 1 ? result.rows[0] : null
 }
 
 async function waitFor(check, label) {

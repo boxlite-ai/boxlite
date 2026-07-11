@@ -15,8 +15,9 @@ export function createPaymentProvider(configService: TypedConfigService): Paymen
 
   const secretKey = configService.get('billing.stripe.secretKey')
   const webhookSecret = configService.get('billing.stripe.webhookSecret')
+  const previousWebhookSecret = configService.get('billing.stripe.previousWebhookSecret')
   if (!secretKey || !webhookSecret) {
     throw new Error('Stripe payment provider requires STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET')
   }
-  return new StripePaymentProvider(secretKey, webhookSecret)
+  return new StripePaymentProvider(secretKey, webhookSecret, undefined, previousWebhookSecret)
 }

@@ -71,11 +71,12 @@ npm run secrets -- --stage dev                          # list what's set
 ```
 
 Billing with Stripe also requires stage-scoped `STRIPE_SECRET_KEY` and
-`STRIPE_WEBHOOK_SECRET`. Use a Stripe test key for non-production stages and
-register only the four events consumed by the API: `checkout.session.completed`,
-`checkout.session.async_payment_failed`, `payment_intent.succeeded`, and
-`payment_intent.payment_failed`. Set `BILLING_PAYMENT_PROVIDER=stripe` in the
-deploy environment; the API fails closed when either secret is absent.
+`STRIPE_WEBHOOK_SECRET`. `STRIPE_WEBHOOK_SECRET_PREVIOUS` is optional and is used
+only during a controlled signing-secret rotation. Use a Stripe test key for
+non-production stages and register only the events listed in
+[BILLING_PAYMENT_RUNBOOK.md](./BILLING_PAYMENT_RUNBOOK.md). Set
+`BILLING_PAYMENT_PROVIDER=stripe` in the deploy environment; the API fails closed
+when either required secret is absent.
 
 Secret names match the env keys the services expect. Unset optional secrets
 resolve to empty (feature off); `OIDC_CLIENT_ID` defaults to `boxlite`. A changed

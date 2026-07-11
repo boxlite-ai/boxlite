@@ -1,8 +1,15 @@
 export const STRIPE_BILLING_EVENTS = [
   'checkout.session.completed',
+  'checkout.session.expired',
   'checkout.session.async_payment_failed',
   'payment_intent.succeeded',
   'payment_intent.payment_failed',
+  'refund.created',
+  'refund.updated',
+  'refund.failed',
+  'charge.dispute.created',
+  'charge.dispute.funds_withdrawn',
+  'charge.dispute.funds_reinstated',
 ]
 
 export function assertStripeSandboxSecrets(secretKey, webhookSecret) {
@@ -76,5 +83,29 @@ export function assertStripeE2EEvidence(evidence) {
   }
   if (BigInt(evidence.paidBalanceAfterCents) - BigInt(evidence.paidBalanceBeforeCents) !== 500n) {
     throw new Error('Stripe E2E paid balance must increase by 500 cents')
+  }
+}
+
+export function assertStripeReconcileEvidence(evidence) {
+  const expectedEventId = `reconcile:${evidence.topUp.providerReference}:paid`
+  const recovered = evidence.providerEvents.filter(
+    (event) =>
+      event.eventType === 'top_up_paid' &&
+      event.providerReference === evidence.topUp.providerReference &&
+      event.providerEventId === expectedEventId,
+  )
+  if (recovered.length !== 1) {
+    throw new Error('Stripe E2E requires exactly one reconciliation event for the lost webhook')
+  }
+}
+
+export function assertStripeRefundEvidence(evidence) {
+  if (
+    evidence.matchingLedgerRows !== 1 ||
+    evidence.amountCents !== '-500' ||
+    evidence.refundedCents !== '500' ||
+    BigInt(evidence.paidBalanceAfterCents) !== BigInt(evidence.paidBalanceBeforeCents) - 500n
+  ) {
+    throw new Error('Stripe E2E requires exactly one immutable $5 refund debit')
   }
 }

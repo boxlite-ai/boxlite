@@ -7,6 +7,8 @@ import Stripe from 'stripe'
 import {
   PaymentMethodView,
   PaymentProvider,
+  PaymentReconcileInput,
+  PaymentReconcileResult,
   PaymentSetupInput,
   PaymentSetupResult,
   ProviderWebhookEvent,
@@ -21,6 +23,7 @@ export class StripePaymentProvider implements PaymentProvider {
     secretKey: string,
     private readonly webhookSecret: string,
     private readonly stripe = new Stripe(secretKey),
+    private readonly previousWebhookSecret?: string,
   ) {}
 
   async createSetup(input: PaymentSetupInput): Promise<PaymentSetupResult> {
@@ -35,6 +38,7 @@ export class StripePaymentProvider implements PaymentProvider {
         metadata: {
           organizationId: input.organizationId,
           walletId: input.walletId,
+          setupAttemptId: input.setupAttemptId,
           operation: 'setup',
         },
       },
@@ -139,8 +143,37 @@ export class StripePaymentProvider implements PaymentProvider {
     }
   }
 
+  async reconcile(input: PaymentReconcileInput): Promise<PaymentReconcileResult> {
+    if (input.providerReference.startsWith('cs_')) {
+      const session = await this.stripe.checkout.sessions.retrieve(input.providerReference, {
+        expand: ['payment_intent.latest_charge'],
+      })
+      if (input.operation === 'setup') return this.reconcileSetupSession(session)
+      return this.reconcileTopUpSession(session)
+    }
+
+    if (input.operation === 'top_up' && input.providerReference.startsWith('pi_')) {
+      const intent = await this.stripe.paymentIntents.retrieve(input.providerReference, {
+        expand: ['latest_charge'],
+      })
+      if (intent.status === 'processing') return { status: 'pending' }
+      if (intent.status === 'succeeded') {
+        return {
+          status: 'resolved',
+          event: this.paymentIntentPaidEvent(`reconcile:${intent.id}:succeeded`, intent),
+        }
+      }
+      return {
+        status: 'resolved',
+        event: this.paymentIntentFailedEvent(`reconcile:${intent.id}:${intent.status}`, intent),
+      }
+    }
+
+    throw new Error(`Unsupported ${input.operation} provider reference ${input.providerReference}`)
+  }
+
   async parseWebhook(payload: Buffer, signature: string): Promise<ProviderWebhookEvent | null> {
-    const event = this.stripe.webhooks.constructEvent(payload, signature, this.webhookSecret)
+    const event = this.constructWebhookEvent(payload, signature)
 
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object
@@ -156,6 +189,12 @@ export class StripePaymentProvider implements PaymentProvider {
       return this.checkoutFailedEvent(event.id, event.data.object)
     }
 
+    if (event.type === 'checkout.session.expired') {
+      return event.data.object.mode === 'setup'
+        ? this.setupFailedEvent(event.id, event.data.object)
+        : this.checkoutFailedEvent(event.id, event.data.object, 'checkout_expired')
+    }
+
     if (event.type === 'payment_intent.succeeded' && event.data.object.metadata?.operation === 'auto_reload') {
       return this.paymentIntentPaidEvent(event.id, event.data.object)
     }
@@ -164,7 +203,35 @@ export class StripePaymentProvider implements PaymentProvider {
       return this.paymentIntentFailedEvent(event.id, event.data.object)
     }
 
+    if (event.type === 'refund.created' || event.type === 'refund.updated' || event.type === 'refund.failed') {
+      return this.refundEvent(event.id, event.data.object)
+    }
+
+    if (
+      event.type === 'charge.dispute.created' ||
+      event.type === 'charge.dispute.funds_withdrawn' ||
+      event.type === 'charge.dispute.funds_reinstated'
+    ) {
+      return this.disputeEvent(event.id, event.type, event.data.object)
+    }
+
     return null
+  }
+
+  private constructWebhookEvent(payload: Buffer, signature: string): Stripe.Event {
+    try {
+      return this.stripe.webhooks.constructEvent(payload, signature, this.webhookSecret)
+    } catch (error) {
+      if (!this.previousWebhookSecret || !this.isSignatureVerificationError(error)) throw error
+      return this.stripe.webhooks.constructEvent(payload, signature, this.previousWebhookSecret)
+    }
+  }
+
+  private isSignatureVerificationError(error: unknown): boolean {
+    return (
+      error instanceof Stripe.errors.StripeSignatureVerificationError ||
+      (error as { type?: string } | null)?.type === 'StripeSignatureVerificationError'
+    )
   }
 
   private createCustomer(input: PaymentSetupInput) {
@@ -196,8 +263,55 @@ export class StripePaymentProvider implements PaymentProvider {
       providerEventId,
       providerReference: session.id,
       organizationId,
+      setupAttemptId: this.requiredMetadata(session, 'setupAttemptId'),
       providerCustomerId: customerId,
       paymentMethod: this.paymentMethodView(paymentMethod),
+    }
+  }
+
+  private async reconcileSetupSession(session: Stripe.Checkout.Session): Promise<PaymentReconcileResult> {
+    if (session.mode !== 'setup') throw new Error(`Stripe Checkout session ${session.id} is not a setup session`)
+    if (session.status === 'complete') {
+      return {
+        status: 'resolved',
+        event: await this.setupEvent(`reconcile:${session.id}:setup_succeeded`, session),
+      }
+    }
+    if (session.status === 'expired') {
+      return {
+        status: 'resolved',
+        event: this.setupFailedEvent(`reconcile:${session.id}:expired`, session),
+      }
+    }
+    return { status: 'pending' }
+  }
+
+  private async reconcileTopUpSession(session: Stripe.Checkout.Session): Promise<PaymentReconcileResult> {
+    if (session.mode !== 'payment') throw new Error(`Stripe Checkout session ${session.id} is not a payment session`)
+    if (session.payment_status === 'paid') {
+      return {
+        status: 'resolved',
+        event: await this.checkoutPaidEvent(`reconcile:${session.id}:paid`, session),
+      }
+    }
+    if (session.status === 'expired') {
+      return {
+        status: 'resolved',
+        event: this.checkoutFailedEvent(`reconcile:${session.id}:expired`, session, 'checkout_expired'),
+      }
+    }
+    return { status: 'pending' }
+  }
+
+  private setupFailedEvent(providerEventId: string, session: Stripe.Checkout.Session): ProviderWebhookEvent {
+    return {
+      kind: 'setup_failed',
+      providerEventId,
+      providerReference: session.id,
+      organizationId: this.requiredMetadata(session, 'organizationId'),
+      setupAttemptId: this.requiredMetadata(session, 'setupAttemptId'),
+      failureCode: 'checkout_expired',
+      failureMessage: 'Stripe payment setup expired before completion',
     }
   }
 
@@ -218,16 +332,70 @@ export class StripePaymentProvider implements PaymentProvider {
     }
   }
 
-  private checkoutFailedEvent(providerEventId: string, session: Stripe.Checkout.Session): ProviderWebhookEvent {
+  private checkoutFailedEvent(
+    providerEventId: string,
+    session: Stripe.Checkout.Session,
+    failureCode = 'async_payment_failed',
+  ): ProviderWebhookEvent {
     return {
       kind: 'top_up_failed',
       providerEventId,
       providerReference: session.id,
       topUpId: this.requiredMetadata(session, 'topUpId'),
       organizationId: this.requiredMetadata(session, 'organizationId'),
-      failureCode: 'async_payment_failed',
-      failureMessage: 'Stripe Checkout payment failed',
+      failureCode,
+      failureMessage:
+        failureCode === 'checkout_expired' ? 'Stripe Checkout session expired' : 'Stripe Checkout payment failed',
     }
+  }
+
+  private async refundEvent(providerEventId: string, refund: Stripe.Refund): Promise<ProviderWebhookEvent> {
+    const intent = await this.paymentIntentForAdjustment(refund.payment_intent, refund.charge)
+    return {
+      kind: 'top_up_adjusted',
+      providerEventId,
+      providerReference: refund.id,
+      topUpId: this.requiredMetadata(intent, 'topUpId'),
+      organizationId: this.requiredMetadata(intent, 'organizationId'),
+      amountCents: String(refund.amount),
+      currency: refund.currency,
+      adjustment: 'refund',
+      direction: refund.status === 'failed' || refund.status === 'canceled' ? 'restore' : 'debit',
+    }
+  }
+
+  private async disputeEvent(
+    providerEventId: string,
+    eventType: 'charge.dispute.created' | 'charge.dispute.funds_withdrawn' | 'charge.dispute.funds_reinstated',
+    dispute: Stripe.Dispute,
+  ): Promise<ProviderWebhookEvent> {
+    const intent = await this.paymentIntentForAdjustment(dispute.payment_intent, dispute.charge)
+    return {
+      kind: 'top_up_adjusted',
+      providerEventId,
+      providerReference: dispute.id,
+      topUpId: this.requiredMetadata(intent, 'topUpId'),
+      organizationId: this.requiredMetadata(intent, 'organizationId'),
+      amountCents: String(dispute.amount),
+      currency: dispute.currency,
+      adjustment: 'dispute',
+      direction: eventType === 'charge.dispute.funds_reinstated' ? 'restore' : 'debit',
+    }
+  }
+
+  private async paymentIntentForAdjustment(
+    paymentIntent: string | Stripe.PaymentIntent | null,
+    charge: string | Stripe.Charge | null,
+  ): Promise<Stripe.PaymentIntent> {
+    if (typeof paymentIntent === 'string') return this.stripe.paymentIntents.retrieve(paymentIntent)
+    if (paymentIntent) return paymentIntent
+
+    const resolvedCharge = typeof charge === 'string' ? await this.stripe.charges.retrieve(charge) : charge
+    if (typeof resolvedCharge?.payment_intent === 'string') {
+      return this.stripe.paymentIntents.retrieve(resolvedCharge.payment_intent)
+    }
+    if (resolvedCharge?.payment_intent) return resolvedCharge.payment_intent
+    throw new Error('Stripe adjustment has no PaymentIntent')
   }
 
   private paymentIntentPaidEvent(providerEventId: string, intent: Stripe.PaymentIntent): ProviderWebhookEvent {

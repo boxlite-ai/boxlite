@@ -6,6 +6,7 @@
 
 import { Module } from '@nestjs/common'
 import { AdminObservabilityController } from './controllers/observability.controller'
+import { AdminBillingController } from './controllers/billing.controller'
 import { AdminOverviewController } from './controllers/overview.controller'
 import { AdminRunnerController } from './controllers/runner.controller'
 import { AdminBoxController } from './controllers/box.controller'
@@ -25,10 +26,17 @@ import { OrganizationModule } from '../organization/organization.module'
 import { UserModule } from '../user/user.module'
 import { AuditModule } from '../audit/audit.module'
 import { AuditService } from '../audit/services/audit.service'
+import { BillingModule } from '../billing/billing.module'
 
 @Module({
-  imports: [BoxModule, RegionModule, OrganizationModule, UserModule, AuditModule],
-  controllers: [AdminRunnerController, AdminBoxController, AdminOverviewController, AdminObservabilityController],
+  imports: [BoxModule, RegionModule, OrganizationModule, UserModule, AuditModule, BillingModule],
+  controllers: [
+    AdminRunnerController,
+    AdminBoxController,
+    AdminOverviewController,
+    AdminObservabilityController,
+    AdminBillingController,
+  ],
   providers: [
     AdminOverviewService,
     AdminObservabilityService,

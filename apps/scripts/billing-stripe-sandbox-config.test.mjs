@@ -5,6 +5,8 @@ import {
   assertLocalStripeDatabase,
   assertMatchingStripeAccounts,
   assertMatchingWebhookSecrets,
+  assertStripeReconcileEvidence,
+  assertStripeRefundEvidence,
   assertStripeE2EEvidence,
   assertStripeSandboxSecrets,
   redactStripeSecrets,
@@ -22,7 +24,7 @@ test('listens only for payment events consumed by the API', () => {
     'listen',
     '--skip-update',
     '--events',
-    'checkout.session.completed,checkout.session.async_payment_failed,payment_intent.succeeded,payment_intent.payment_failed',
+    'checkout.session.completed,checkout.session.expired,checkout.session.async_payment_failed,payment_intent.succeeded,payment_intent.payment_failed,refund.created,refund.updated,refund.failed,charge.dispute.created,charge.dispute.funds_withdrawn,charge.dispute.funds_reinstated',
     '--forward-to',
     'http://localhost:3001/api/billing/webhooks/payment',
   ])
@@ -78,4 +80,50 @@ test('requires the API key and Stripe CLI to use the same account', () => {
 test('requires the API and listener to use the same webhook secret', () => {
   assert.doesNotThrow(() => assertMatchingWebhookSecrets('whsec_same', 'whsec_same'))
   assert.throws(() => assertMatchingWebhookSecrets('whsec_api', 'whsec_cli'), /same webhook signing secret/)
+})
+
+test('requires a lost webhook to be recovered from the Stripe source of truth', () => {
+  assert.doesNotThrow(() =>
+    assertStripeReconcileEvidence({
+      topUp: { id: 'top-up-1', providerReference: 'cs_recovered' },
+      providerEvents: [
+        {
+          providerEventId: 'reconcile:cs_recovered:paid',
+          eventType: 'top_up_paid',
+          providerReference: 'cs_recovered',
+        },
+      ],
+    }),
+  )
+  assert.throws(
+    () =>
+      assertStripeReconcileEvidence({
+        topUp: { id: 'top-up-1', providerReference: 'cs_webhook' },
+        providerEvents: [{ providerEventId: 'evt_webhook', eventType: 'top_up_paid', providerReference: 'cs_webhook' }],
+      }),
+    /reconciliation event/,
+  )
+})
+
+test('requires one immutable debit for a Stripe refund', () => {
+  assert.doesNotThrow(() =>
+    assertStripeRefundEvidence({
+      paidBalanceBeforeCents: '8502',
+      paidBalanceAfterCents: '8002',
+      amountCents: '-500',
+      refundedCents: '500',
+      matchingLedgerRows: 1,
+    }),
+  )
+  assert.throws(
+    () =>
+      assertStripeRefundEvidence({
+        paidBalanceBeforeCents: '8502',
+        paidBalanceAfterCents: '7502',
+        amountCents: '-500',
+        refundedCents: '500',
+        matchingLedgerRows: 2,
+      }),
+    /exactly one immutable/,
+  )
 })

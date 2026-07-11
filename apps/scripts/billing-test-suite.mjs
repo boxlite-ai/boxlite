@@ -10,6 +10,8 @@ const appsRoot = path.resolve(scriptsRoot, '..')
 const yarn = process.platform === 'win32' ? 'yarn.cmd' : 'yarn'
 
 const apiSpecs = [
+  'api/src/admin/controllers/billing.controller.spec.ts',
+  'api/src/billing/billing-ops.service.spec.ts',
   'api/src/usage/usage.service.spec.ts',
   'api/src/billing/billing-read.service.spec.ts',
   'api/src/billing/billing.controller.spec.ts',
@@ -20,6 +22,7 @@ const apiSpecs = [
   'api/src/billing/rating/rating.service.spec.ts',
   'api/src/billing/settlement.service.spec.ts',
   'api/src/billing/wallet.service.spec.ts',
+  'api/src/migrations/pre-deploy/1782700400000-migration.spec.ts',
 ]
 
 const prerequisiteSpecs = ['api/src/organization/services/organization.service.regions.spec.ts']
@@ -54,6 +57,13 @@ const stages = {
     'api/src/billing/payment/payment.controller.spec.ts',
     'api/src/billing/payment/payment.service.spec.ts',
   ]),
+  ops: jest('Payment recovery and operations', [
+    'api/src/admin/controllers/billing.controller.spec.ts',
+    'api/src/billing/billing-ops.service.spec.ts',
+    'api/src/billing/payment/payment-provider.spec.ts',
+    'api/src/billing/payment/payment.service.spec.ts',
+    'api/src/migrations/pre-deploy/1782700400000-migration.spec.ts',
+  ]),
   stripe: {
     label: 'Stripe Sandbox configuration',
     args: ['test:billing:stripe'],
@@ -76,6 +86,10 @@ const stages = {
       'eslint',
       'api/src/usage',
       'api/src/billing',
+      'api/src/admin/controllers/billing.controller.ts',
+      'api/src/admin/controllers/billing.controller.spec.ts',
+      'api/src/migrations/pre-deploy/1782700400000-migration.ts',
+      'api/src/migrations/pre-deploy/1782700400000-migration.spec.ts',
       'dashboard/src/pages/Billing.tsx',
       'dashboard/src/components/billing',
       'dashboard/src/components/Box/CreateBoxDialog.tsx',
@@ -106,6 +120,10 @@ const suites = {
   wallet: { description: 'PR3 wallet and settlement', stages: [stages.wallet] },
   payment: { description: 'PR5 providers, webhooks, and top-ups', stages: [stages.payment, stages.stripe] },
   stripe: { description: 'PR6 Stripe Sandbox configuration', stages: [stages.stripe] },
+  ops: {
+    description: 'PR7 payment recovery, PostgreSQL edge cases, and operations',
+    stages: [stages.ops, stages.stripe, stages.db],
+  },
   read: { description: 'PR4 billing read API', stages: [stages.read] },
   ui: { description: 'PR4/PR5 dashboard behavior', stages: [stages.ui] },
   db: { description: 'Real PostgreSQL concurrency and recovery', stages: [stages.db] },
