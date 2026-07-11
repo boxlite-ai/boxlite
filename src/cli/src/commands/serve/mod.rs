@@ -21,6 +21,7 @@ use clap::Args;
 use futures::StreamExt;
 use tokio::sync::RwLock;
 use tower_http::catch_panic::CatchPanicLayer;
+use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 
 use boxlite::runtime::options::{NetworkConfig, NetworkMode};
@@ -845,7 +846,7 @@ async fn get_or_fetch_box(state: &AppState, box_id: &str) -> Result<Arc<LiteBox>
 // ============================================================================
 
 fn build_router(state: Arc<AppState>) -> Router {
-    use handlers::{advanced, boxes, config, executions, files, me, metrics, snapshots};
+    use handlers::{advanced, boxes, config, executions, files, me, metrics, payload, snapshots};
 
     Router::new()
         // Identity (no tenant prefix)
@@ -854,7 +855,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         // Runtime metrics
         .route("/v1/metrics", get(metrics::runtime_metrics))
         // Box CRUD (import first — static path before param path)
-        .route("/v1/boxes/import", post(advanced::import_box))
+        .route(
+            "/v1/boxes/import",
+            post(advanced::import_box).layer(RequestBodyLimitLayer::new(payload::MAX_REQUEST_BODY_BYTES)),
+        )
         .route(
             "/v1/boxes",
             post(boxes::create_box).get(boxes::list_boxes),
@@ -903,7 +907,9 @@ fn build_router(state: Arc<AppState>) -> Router {
         // Files
         .route(
             "/v1/boxes/{box_id}/files",
-            put(files::upload_files).get(files::download_files),
+            put(files::upload_files)
+                .layer(RequestBodyLimitLayer::new(payload::MAX_REQUEST_BODY_BYTES))
+                .get(files::download_files),
         )
         // Snapshots
         .route(
