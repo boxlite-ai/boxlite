@@ -7,7 +7,6 @@ import { PageContent, PageHeader, PageLayout, PageTitle } from '@/components/Pag
 import { BalanceOverviewCard } from '@/components/billing/BalanceOverviewCard'
 import { BillingPaymentMethodSection } from '@/components/billing/BillingPaymentMethodSection'
 import { BillingPaymentPanel } from '@/components/billing/BillingPaymentPanel'
-import { QuotaPanel } from '@/components/billing/QuotaPanel'
 import { UsageTrendCharts } from '@/components/billing/UsageTrendCharts'
 import { SectionTitle } from '@/components/billing/ascii'
 import { Calendar, RefreshCw } from '@/components/ui/icon'
@@ -130,12 +129,6 @@ function Billing() {
                         onAddFunds={() => setActiveTab('billing')}
                       />
                     }
-                  />
-
-                  <QuotaPanel
-                    cpu={selectedOrganization.maxCpuPerBox}
-                    memory={selectedOrganization.maxMemoryPerBox}
-                    disk={selectedOrganization.maxDiskPerBox}
                   />
 
                   <section>
