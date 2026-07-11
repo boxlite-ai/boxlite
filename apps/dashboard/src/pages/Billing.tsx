@@ -5,7 +5,6 @@
 
 import { PageContent, PageHeader, PageLayout, PageTitle } from '@/components/PageLayout'
 import { BalanceOverviewCard } from '@/components/billing/BalanceOverviewCard'
-import { QuotaPanel } from '@/components/billing/QuotaPanel'
 import { UsageTrendCharts } from '@/components/billing/UsageTrendCharts'
 import { SectionTitle } from '@/components/billing/ascii'
 import { Calendar, RefreshCw } from '@/components/ui/icon'
@@ -101,12 +100,6 @@ function Billing() {
               paidBalanceCents={overviewQuery.data.wallet.paidBalanceCents}
               spentThisMonthCents={overviewQuery.data.spentThisMonthCents}
               freeExpiresAt={overviewQuery.data.wallet.freeExpiresAt}
-            />
-
-            <QuotaPanel
-              cpu={selectedOrganization.maxCpuPerBox}
-              memory={selectedOrganization.maxMemoryPerBox}
-              disk={selectedOrganization.maxDiskPerBox}
             />
 
             <section>

@@ -142,7 +142,7 @@ describe('Billing page', () => {
     expect(document.body.textContent).toContain('Paid balance $25.00')
     expect(document.body.textContent).toContain('Usage over time')
     expect(document.querySelectorAll('[data-usage-card]')).toHaveLength(4)
-    expect(document.querySelector('[data-testid="billing-limits-panel"]')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('Per-box maximums')
     expect(document.body.textContent).not.toContain('Pricing v1')
     expect(document.body.textContent).not.toContain('Billing is on the way')
   })
