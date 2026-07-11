@@ -101,6 +101,14 @@ describe('Billing page', () => {
 
   beforeAll(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
+    vi.stubGlobal(
+      'ResizeObserver',
+      class ResizeObserver {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    )
   })
 
   beforeEach(() => {
@@ -125,16 +133,17 @@ describe('Billing page', () => {
     await flushReactWork()
   }
 
-  it('renders real wallet pools, rated usage, pricing, and trend data', async () => {
+  it('renders the terminal usage layout around real wallet and usage data', async () => {
     await renderBilling()
 
-    expect(document.body.textContent).toContain('$109.00')
-    expect(document.body.textContent).toContain('$84.00')
-    expect(document.body.textContent).toContain('$25.00')
-    expect(document.body.textContent).toContain('$0.0278')
-    expect(document.body.textContent).toContain('0.33 vCPU hr')
-    expect(document.body.textContent).toContain('Pricing v1')
-    expect(document.querySelectorAll('[data-usage-bucket]')).toHaveLength(12)
+    expect(document.querySelector('[data-testid="billing-balance-overview"]')).toBeTruthy()
+    expect(document.querySelector('[aria-label="109.00"]')).toBeTruthy()
+    expect(document.body.textContent).toContain('Free balance $84.00')
+    expect(document.body.textContent).toContain('Paid balance $25.00')
+    expect(document.body.textContent).toContain('Usage over time')
+    expect(document.querySelectorAll('[data-usage-card]')).toHaveLength(4)
+    expect(document.querySelector('[data-testid="billing-limits-panel"]')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('Pricing v1')
     expect(document.body.textContent).not.toContain('Billing is on the way')
   })
 
