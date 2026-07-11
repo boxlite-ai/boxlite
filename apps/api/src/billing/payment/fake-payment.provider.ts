@@ -34,7 +34,9 @@ export class FakePaymentProvider implements PaymentProvider {
     return this.paidResult(input)
   }
 
-  async parseWebhook(): Promise<ProviderWebhookEvent | null> {
+  async parseWebhook(payload: Buffer, signature: string): Promise<ProviderWebhookEvent | null> {
+    void payload
+    void signature
     throw new BadRequestException('fake payment provider does not accept webhooks')
   }
 

@@ -70,7 +70,8 @@ class PendingPaymentProvider extends FakePaymentProvider {
 }
 
 class TestWebhookPaymentProvider extends PendingPaymentProvider {
-  override async parseWebhook(payload: Buffer): Promise<ProviderWebhookEvent> {
+  override async parseWebhook(payload: Buffer, signature: string): Promise<ProviderWebhookEvent> {
+    void signature
     return JSON.parse(payload.toString('utf8')) as ProviderWebhookEvent
   }
 }
