@@ -6,6 +6,8 @@
 import { BadRequestException } from '@nestjs/common'
 import {
   PaymentProvider,
+  PaymentReconcileInput,
+  PaymentReconcileResult,
   PaymentSetupInput,
   PaymentSetupResult,
   ProviderWebhookEvent,
@@ -32,6 +34,11 @@ export class FakePaymentProvider implements PaymentProvider {
 
   async chargeSavedMethod(input: TopUpPaymentInput): Promise<TopUpPaymentResult> {
     return this.paidResult(input)
+  }
+
+  async reconcile(input: PaymentReconcileInput): Promise<PaymentReconcileResult> {
+    void input
+    return { status: 'pending' }
   }
 
   async parseWebhook(payload: Buffer, signature: string): Promise<ProviderWebhookEvent | null> {

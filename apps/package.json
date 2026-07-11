@@ -29,6 +29,7 @@
     "test:billing:wallet": "node scripts/billing-test-suite.mjs wallet",
     "test:billing:payment": "node scripts/billing-test-suite.mjs payment",
     "test:billing:stripe": "node --test scripts/billing-stripe-sandbox-config.test.mjs infra/sst-billing-config.test.mjs",
+    "test:billing:ops": "node scripts/billing-test-suite.mjs ops",
     "test:billing:read": "node scripts/billing-test-suite.mjs read",
     "test:billing:ui": "node scripts/billing-test-suite.mjs ui",
     "test:billing:db": "node scripts/billing-test-suite.mjs db",

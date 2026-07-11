@@ -7,7 +7,7 @@ import { BadRequestException, Inject, Injectable, Logger, ServiceUnavailableExce
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { InjectRepository } from '@nestjs/typeorm'
 import { randomUUID } from 'node:crypto'
-import { EntityManager, QueryFailedError, Repository } from 'typeorm'
+import { EntityManager, LessThanOrEqual, QueryFailedError, Repository } from 'typeorm'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { PaymentProviderEvent } from '../entities/payment-provider-event.entity'
 import { TopUpRecord } from '../entities/top-up-record.entity'
@@ -17,6 +17,7 @@ import { WalletService } from '../wallet.service'
 import {
   PAYMENT_PROVIDER,
   PaymentProvider,
+  PaymentSetupResult,
   ProviderWebhookEvent,
   TopUpPaymentInput,
   TopUpPaymentResult,
@@ -25,6 +26,9 @@ import {
 const MIN_TOP_UP_CENTS = 500n
 const MIN_AUTO_RELOAD_SPREAD_CENTS = 1000n
 const AUTO_RELOAD_RETRY_MILLISECONDS = 15 * 60 * 1000
+const INITIAL_RECONCILE_DELAY_MILLISECONDS = 60 * 1000
+const MAX_RECONCILE_DELAY_MILLISECONDS = 60 * 60 * 1000
+const RECOVERY_BATCH_SIZE = 100
 const PG_UNIQUE_VIOLATION = '23505'
 
 export interface AutoReloadInput {
@@ -76,37 +80,9 @@ export class PaymentService {
   async setupPaymentMethod(
     organizationId: string,
   ): Promise<{ status: 'ready' | 'pending'; checkoutUrl: string | null }> {
-    const wallet = await this.walletService.getOrCreateWallet(organizationId)
-    const result = await this.provider.createSetup({
-      organizationId,
-      walletId: wallet.id,
-      setupAttemptId: randomUUID(),
-      providerCustomerId: wallet.paymentProviderCustomerId,
-      ...this.returnUrls(),
-    })
-
-    await this.wallets.manager.transaction(async (manager) => {
-      const lockedWallet = await manager.getRepository(Wallet).findOne({
-        where: { organizationId },
-        lock: { mode: 'pessimistic_write' },
-      })
-      if (!lockedWallet) throw new BadRequestException('wallet not found')
-      lockedWallet.paymentProviderCustomerId = result.providerCustomerId
-      await manager.getRepository(Wallet).save(lockedWallet)
-    })
-
-    if (result.status === 'ready' && result.paymentMethod) {
-      await this.applyProviderEvent({
-        kind: 'setup_succeeded',
-        providerEventId: `direct:${result.providerReference}`,
-        providerReference: result.providerReference,
-        organizationId,
-        providerCustomerId: result.providerCustomerId,
-        paymentMethod: result.paymentMethod,
-      })
-    }
-
-    return { status: result.status, checkoutUrl: result.checkoutUrl }
+    await this.walletService.getOrCreateWallet(organizationId)
+    const setup = await this.claimPaymentSetup(organizationId)
+    return this.dispatchPaymentSetup(setup)
   }
 
   async setAutoReload(organizationId: string, input: AutoReloadInput): Promise<void> {
@@ -171,7 +147,7 @@ export class PaymentService {
 
   async handleWebhook(payload: Buffer, signature: string): Promise<void> {
     const event = await this.provider.parseWebhook(payload, signature)
-    if (event) await this.applyProviderEvent(event)
+    if (event) await this.processProviderEvent(event)
   }
 
   async runAutoReloadForOrganization(organizationId: string, now = new Date()): Promise<boolean> {
@@ -181,7 +157,7 @@ export class PaymentService {
     return true
   }
 
-  @Cron(CronExpression.EVERY_MINUTE, { name: 'billing-auto-reload' })
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'billing-auto-reload', waitForCompletion: true })
   async scheduledAutoReload(): Promise<void> {
     const candidates = await this.wallets
       .createQueryBuilder('wallet')
@@ -201,6 +177,38 @@ export class PaymentService {
       } catch (error) {
         this.logger.error(`auto-reload failed for organization ${candidate.organizationId}`, error)
       }
+    }
+  }
+
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'billing-payment-recovery', waitForCompletion: true })
+  async scheduledPaymentRecovery(now = new Date()): Promise<void> {
+    const [topUps, setupWallets, providerEvents] = await Promise.all([
+      this.topUps.find({
+        select: { id: true },
+        where: { status: 'pending', nextReconcileAt: LessThanOrEqual(now) },
+        order: { nextReconcileAt: 'ASC', id: 'ASC' },
+        take: RECOVERY_BATCH_SIZE,
+      }),
+      this.wallets.find({
+        select: { organizationId: true },
+        where: { paymentSetupNextReconcileAt: LessThanOrEqual(now) },
+        order: { paymentSetupNextReconcileAt: 'ASC', id: 'ASC' },
+        take: RECOVERY_BATCH_SIZE,
+      }),
+      this.wallets.manager.getRepository(PaymentProviderEvent).find({
+        select: { id: true },
+        where: { status: 'failed', nextAttemptAt: LessThanOrEqual(now) },
+        order: { nextAttemptAt: 'ASC', id: 'ASC' },
+        take: RECOVERY_BATCH_SIZE,
+      }),
+    ])
+
+    for (const topUp of topUps) await this.recover('top_up', topUp.id, () => this.reconcileTopUp(topUp.id, now))
+    for (const wallet of setupWallets) {
+      await this.recover('setup', wallet.organizationId, () => this.reconcilePaymentSetup(wallet.organizationId, now))
+    }
+    for (const event of providerEvents) {
+      await this.recover('webhook', event.id, () => this.retryProviderEvent(event.id, now))
     }
   }
 
@@ -242,6 +250,248 @@ export class PaymentService {
     }
   }
 
+  async reconcileTopUp(topUpId: string, now = new Date(), force = false): Promise<boolean> {
+    const topUp = await this.claimTopUpReconciliation(topUpId, now, force)
+    if (!topUp) return false
+
+    try {
+      if (!topUp.providerReference) {
+        await this.dispatchTopUp(topUp, topUp.source === 'auto_reload')
+        return true
+      }
+
+      const result = await this.provider.reconcile({
+        operation: 'top_up',
+        providerReference: topUp.providerReference,
+      })
+      if (result.status === 'resolved') {
+        await this.processProviderEvent(result.event)
+      } else {
+        await this.markTopUpPending(topUp.id, topUp.reconcileAttempts, now)
+      }
+      return true
+    } catch (error) {
+      await this.markTopUpReconcileFailure(topUp.id, topUp.reconcileAttempts, error, now)
+      throw error
+    }
+  }
+
+  async reconcilePaymentSetup(organizationId: string, now = new Date(), force = false): Promise<boolean> {
+    const setup = await this.claimPaymentSetupReconciliation(organizationId, now, force)
+    if (!setup) return false
+
+    try {
+      if (!setup.paymentSetupProviderReference) {
+        await this.dispatchPaymentSetup(setup)
+        return true
+      }
+
+      const result = await this.provider.reconcile({
+        operation: 'setup',
+        providerReference: setup.paymentSetupProviderReference,
+      })
+      if (result.status === 'resolved') {
+        await this.processProviderEvent(result.event)
+      } else {
+        await this.markPaymentSetupPending(organizationId, setup.paymentSetupReconcileAttempts, now)
+      }
+      return true
+    } catch (error) {
+      await this.markPaymentSetupFailure(
+        organizationId,
+        setup.paymentSetupAttemptId,
+        setup.paymentSetupReconcileAttempts,
+        error,
+        now,
+      )
+      throw error
+    }
+  }
+
+  private async claimPaymentSetup(organizationId: string): Promise<Wallet> {
+    return this.wallets.manager.transaction(async (manager) => {
+      const repository = manager.getRepository(Wallet)
+      const wallet = await repository.findOne({
+        where: { organizationId },
+        lock: { mode: 'pessimistic_write' },
+      })
+      if (!wallet) throw new BadRequestException('wallet not found')
+      if (!wallet.paymentSetupAttemptId) {
+        wallet.paymentSetupAttemptId = randomUUID()
+        wallet.paymentSetupProviderReference = null
+        wallet.paymentSetupNextReconcileAt = new Date()
+        wallet.paymentSetupReconcileAttempts = 0
+        wallet.paymentSetupLastError = null
+        await repository.save(wallet)
+      }
+      return { ...wallet }
+    })
+  }
+
+  private async dispatchPaymentSetup(
+    setup: Wallet,
+  ): Promise<{ status: 'ready' | 'pending'; checkoutUrl: string | null }> {
+    if (!setup.paymentSetupAttemptId) throw new Error('payment setup attempt is missing')
+
+    let result: PaymentSetupResult
+    try {
+      result = await this.provider.createSetup({
+        organizationId: setup.organizationId,
+        walletId: setup.id,
+        setupAttemptId: setup.paymentSetupAttemptId,
+        providerCustomerId: setup.paymentProviderCustomerId,
+        ...this.returnUrls(),
+      })
+    } catch (error) {
+      await this.markPaymentSetupFailure(
+        setup.organizationId,
+        setup.paymentSetupAttemptId,
+        setup.paymentSetupReconcileAttempts,
+        error,
+        new Date(),
+      )
+      throw new ServiceUnavailableException('payment provider request failed', { cause: error })
+    }
+
+    await this.persistPaymentSetupResult(setup.organizationId, setup.paymentSetupAttemptId, result)
+    if (result.status === 'ready' && result.paymentMethod) {
+      await this.processProviderEvent({
+        kind: 'setup_succeeded',
+        providerEventId: `direct:${result.providerReference}`,
+        providerReference: result.providerReference,
+        organizationId: setup.organizationId,
+        setupAttemptId: setup.paymentSetupAttemptId,
+        providerCustomerId: result.providerCustomerId,
+        paymentMethod: result.paymentMethod,
+      })
+    }
+    return { status: result.status, checkoutUrl: result.checkoutUrl }
+  }
+
+  private async persistPaymentSetupResult(
+    organizationId: string,
+    setupAttemptId: string,
+    result: PaymentSetupResult,
+  ): Promise<void> {
+    await this.wallets.manager.transaction(async (manager) => {
+      const repository = manager.getRepository(Wallet)
+      const wallet = await repository.findOne({
+        where: { organizationId },
+        lock: { mode: 'pessimistic_write' },
+      })
+      if (!wallet) throw new BadRequestException('wallet not found')
+      if (wallet.paymentSetupAttemptId !== setupAttemptId) return
+      wallet.paymentProviderCustomerId = result.providerCustomerId
+      wallet.paymentSetupProviderReference = result.providerReference
+      wallet.paymentSetupNextReconcileAt = new Date(Date.now() + INITIAL_RECONCILE_DELAY_MILLISECONDS)
+      wallet.paymentSetupLastError = null
+      await repository.save(wallet)
+    })
+  }
+
+  private claimPaymentSetupReconciliation(organizationId: string, now: Date, force: boolean): Promise<Wallet | null> {
+    return this.wallets.manager.transaction(async (manager) => {
+      const repository = manager.getRepository(Wallet)
+      const wallet = await repository.findOne({
+        where: { organizationId },
+        lock: { mode: 'pessimistic_write' },
+      })
+      if (
+        !wallet?.paymentSetupAttemptId ||
+        !wallet.paymentSetupNextReconcileAt ||
+        (!force && wallet.paymentSetupNextReconcileAt > now)
+      ) {
+        return null
+      }
+      wallet.paymentSetupReconcileAttempts += 1
+      wallet.paymentSetupNextReconcileAt = new Date(
+        now.getTime() + this.reconcileDelayMilliseconds(wallet.paymentSetupReconcileAttempts),
+      )
+      await repository.save(wallet)
+      return { ...wallet }
+    })
+  }
+
+  private async markPaymentSetupPending(organizationId: string, attempts: number, now: Date): Promise<void> {
+    await this.wallets.manager.transaction(async (manager) => {
+      const repository = manager.getRepository(Wallet)
+      const wallet = await repository.findOne({
+        where: { organizationId },
+        lock: { mode: 'pessimistic_write' },
+      })
+      if (!wallet?.paymentSetupAttemptId) return
+      wallet.paymentSetupNextReconcileAt = new Date(now.getTime() + this.reconcileDelayMilliseconds(attempts))
+      wallet.paymentSetupLastError = null
+      await repository.save(wallet)
+    })
+  }
+
+  private async markPaymentSetupFailure(
+    organizationId: string,
+    setupAttemptId: string | null,
+    attempts: number,
+    error: unknown,
+    now: Date,
+  ): Promise<void> {
+    await this.wallets.manager.transaction(async (manager) => {
+      const repository = manager.getRepository(Wallet)
+      const wallet = await repository.findOne({
+        where: { organizationId },
+        lock: { mode: 'pessimistic_write' },
+      })
+      if (!wallet || wallet.paymentSetupAttemptId !== setupAttemptId) return
+      wallet.paymentSetupLastError = this.errorMessage(error)
+      wallet.paymentSetupNextReconcileAt = new Date(now.getTime() + this.reconcileDelayMilliseconds(attempts + 1))
+      await repository.save(wallet)
+    })
+  }
+
+  private claimTopUpReconciliation(topUpId: string, now: Date, force: boolean): Promise<TopUpRecord | null> {
+    return this.wallets.manager.transaction(async (manager) => {
+      const repository = manager.getRepository(TopUpRecord)
+      const topUp = await repository.findOne({
+        where: { id: topUpId },
+        lock: { mode: 'pessimistic_write' },
+      })
+      if (!topUp || topUp.status !== 'pending' || (!force && topUp.nextReconcileAt && topUp.nextReconcileAt > now)) {
+        return null
+      }
+      topUp.reconcileAttempts += 1
+      topUp.lastReconciledAt = now
+      topUp.nextReconcileAt = new Date(now.getTime() + this.reconcileDelayMilliseconds(topUp.reconcileAttempts))
+      await repository.save(topUp)
+      return { ...topUp }
+    })
+  }
+
+  private async markTopUpPending(topUpId: string, attempts: number, now: Date): Promise<void> {
+    await this.wallets.manager.transaction(async (manager) => {
+      const repository = manager.getRepository(TopUpRecord)
+      const topUp = await repository.findOne({
+        where: { id: topUpId },
+        lock: { mode: 'pessimistic_write' },
+      })
+      if (!topUp || topUp.status !== 'pending') return
+      topUp.nextReconcileAt = new Date(now.getTime() + this.reconcileDelayMilliseconds(attempts))
+      topUp.reconcileLastError = null
+      await repository.save(topUp)
+    })
+  }
+
+  private async markTopUpReconcileFailure(topUpId: string, attempts: number, error: unknown, now: Date): Promise<void> {
+    await this.wallets.manager.transaction(async (manager) => {
+      const repository = manager.getRepository(TopUpRecord)
+      const topUp = await repository.findOne({
+        where: { id: topUpId },
+        lock: { mode: 'pessimistic_write' },
+      })
+      if (!topUp || topUp.status !== 'pending') return
+      topUp.reconcileLastError = this.errorMessage(error)
+      topUp.nextReconcileAt = new Date(now.getTime() + this.reconcileDelayMilliseconds(attempts + 1))
+      await repository.save(topUp)
+    })
+  }
+
   private async claimManualTopUp(organizationId: string, amountCents: bigint, idempotencyKey: string) {
     try {
       return await this.wallets.manager.transaction(async (manager) => {
@@ -271,6 +521,12 @@ export class PaymentService {
             receiptUrl: null,
             failureCode: null,
             failureMessage: null,
+            reconcileAttempts: 0,
+            nextReconcileAt: new Date(Date.now() + INITIAL_RECONCILE_DELAY_MILLISECONDS),
+            lastReconciledAt: null,
+            reconcileLastError: null,
+            refundedCents: '0',
+            disputedCents: '0',
             completedAt: null,
           }),
         )
@@ -328,6 +584,12 @@ export class PaymentService {
           receiptUrl: null,
           failureCode: null,
           failureMessage: null,
+          reconcileAttempts: 0,
+          nextReconcileAt: new Date(Date.now() + INITIAL_RECONCILE_DELAY_MILLISECONDS),
+          lastReconciledAt: null,
+          reconcileLastError: null,
+          refundedCents: '0',
+          disputedCents: '0',
           completedAt: null,
         }),
       )
@@ -352,6 +614,7 @@ export class PaymentService {
     try {
       result = savedMethod ? await this.provider.chargeSavedMethod(input) : await this.provider.createManualTopUp(input)
     } catch (error) {
+      await this.markTopUpReconcileFailure(topUp.id, topUp.reconcileAttempts, error, new Date())
       throw new ServiceUnavailableException('payment provider request failed', { cause: error })
     }
 
@@ -359,12 +622,23 @@ export class PaymentService {
   }
 
   private async applyPaymentResult(topUp: TopUpRecord, result: TopUpPaymentResult): Promise<void> {
-    topUp.providerReference = result.providerReference
-    topUp.checkoutUrl = result.checkoutUrl
-    await this.topUps.save(topUp)
+    await this.wallets.manager.transaction(async (manager) => {
+      const repository = manager.getRepository(TopUpRecord)
+      const current = await repository.findOne({
+        where: { id: topUp.id },
+        lock: { mode: 'pessimistic_write' },
+      })
+      if (!current || current.status !== 'pending') return
+      current.providerReference = result.providerReference
+      current.checkoutUrl = result.checkoutUrl
+      current.nextReconcileAt =
+        result.status === 'pending' ? new Date(Date.now() + INITIAL_RECONCILE_DELAY_MILLISECONDS) : null
+      current.reconcileLastError = null
+      await repository.save(current)
+    })
 
     if (result.status === 'paid') {
-      await this.applyProviderEvent({
+      await this.processProviderEvent({
         kind: 'top_up_paid',
         providerEventId: `direct:${result.providerReference}`,
         providerReference: result.providerReference,
@@ -375,7 +649,7 @@ export class PaymentService {
         receiptUrl: result.receiptUrl,
       })
     } else if (result.status === 'failed') {
-      await this.applyProviderEvent({
+      await this.processProviderEvent({
         kind: 'top_up_failed',
         providerEventId: `direct:${result.providerReference}`,
         providerReference: result.providerReference,
@@ -387,39 +661,135 @@ export class PaymentService {
     }
   }
 
+  private async processProviderEvent(event: ProviderWebhookEvent): Promise<void> {
+    try {
+      await this.applyProviderEvent(event)
+    } catch (error) {
+      await this.recordProviderEventFailure(event, error)
+      this.logger.error(
+        `[billing_payment] stage=webhook_apply event=${event.providerEventId} reference=${event.providerReference} error=${this.errorMessage(error)}`,
+      )
+      throw error
+    }
+  }
+
   private async applyProviderEvent(event: ProviderWebhookEvent): Promise<void> {
     try {
       await this.wallets.manager.transaction(async (manager) => {
         const eventRepository = manager.getRepository(PaymentProviderEvent)
-        if (await eventRepository.findOne({ where: { providerEventId: event.providerEventId } })) return
+        const existing = await eventRepository.findOne({
+          where: { providerEventId: event.providerEventId },
+          lock: { mode: 'pessimistic_write' },
+        })
+        if (existing?.status === 'processed') return
 
-        if (event.kind === 'setup_succeeded') {
-          const wallet = await manager.getRepository(Wallet).findOne({
-            where: { organizationId: event.organizationId },
-            lock: { mode: 'pessimistic_write' },
-          })
-          if (!wallet) throw new BadRequestException('wallet not found')
-          wallet.paymentProviderCustomerId = event.providerCustomerId
-          wallet.paymentProviderMethodId = event.paymentMethod.id
-          wallet.paymentMethodBrand = event.paymentMethod.brand
-          wallet.paymentMethodLast4 = event.paymentMethod.last4
-          await manager.getRepository(Wallet).save(wallet)
+        if (event.kind === 'setup_succeeded' || event.kind === 'setup_failed') {
+          await this.applySetupEvent(manager, event)
+        } else if (event.kind === 'top_up_adjusted') {
+          await this.applyTopUpAdjustment(manager, event)
         } else {
           await this.applyTopUpEvent(manager, event)
         }
 
-        await eventRepository.save(
-          eventRepository.create({ providerEventId: event.providerEventId, eventType: event.kind }),
-        )
+        const record =
+          existing ??
+          eventRepository.create({
+            providerEventId: event.providerEventId,
+            createdAt: new Date(),
+            attempts: 1,
+          })
+        record.eventType = this.providerEventType(event)
+        record.providerReference = event.providerReference
+        record.status = 'processed'
+        record.payload = event as unknown as Record<string, unknown>
+        record.nextAttemptAt = null
+        record.lastError = null
+        await eventRepository.save(record)
       })
     } catch (error) {
       if (!this.isUniqueViolation(error)) throw error
     }
   }
 
+  private async recordProviderEventFailure(event: ProviderWebhookEvent, error: unknown): Promise<void> {
+    try {
+      await this.wallets.manager.transaction(async (manager) => {
+        const repository = manager.getRepository(PaymentProviderEvent)
+        const existing = await repository.findOne({
+          where: { providerEventId: event.providerEventId },
+          lock: { mode: 'pessimistic_write' },
+        })
+        if (existing?.status === 'processed') return
+        const record =
+          existing ??
+          repository.create({
+            providerEventId: event.providerEventId,
+            createdAt: new Date(),
+            attempts: 0,
+          })
+        record.eventType = this.providerEventType(event)
+        record.providerReference = event.providerReference
+        record.status = 'failed'
+        record.payload = event as unknown as Record<string, unknown>
+        record.attempts += 1
+        record.nextAttemptAt = new Date(Date.now() + this.reconcileDelayMilliseconds(record.attempts))
+        record.lastError = this.errorMessage(error)
+        await repository.save(record)
+      })
+    } catch (failure) {
+      if (!this.isUniqueViolation(failure)) throw failure
+    }
+  }
+
+  private async retryProviderEvent(providerEventId: string, now: Date): Promise<boolean> {
+    const event = await this.wallets.manager.transaction(async (manager) => {
+      const repository = manager.getRepository(PaymentProviderEvent)
+      const record = await repository.findOne({
+        where: { id: providerEventId },
+        lock: { mode: 'pessimistic_write' },
+      })
+      if (record?.status !== 'failed' || !record.payload || (record.nextAttemptAt && record.nextAttemptAt > now)) {
+        return null
+      }
+      record.nextAttemptAt = new Date(now.getTime() + this.reconcileDelayMilliseconds(record.attempts + 1))
+      await repository.save(record)
+      return record.payload as unknown as ProviderWebhookEvent
+    })
+    if (!event) return false
+    await this.processProviderEvent(event)
+    return true
+  }
+
+  private async applySetupEvent(
+    manager: EntityManager,
+    event: Extract<ProviderWebhookEvent, { kind: 'setup_succeeded' | 'setup_failed' }>,
+  ): Promise<void> {
+    const repository = manager.getRepository(Wallet)
+    const wallet = await repository.findOne({
+      where: { organizationId: event.organizationId },
+      lock: { mode: 'pessimistic_write' },
+    })
+    if (!wallet) throw new BadRequestException('wallet not found')
+    if (wallet.paymentSetupAttemptId !== event.setupAttemptId) return
+
+    if (event.kind === 'setup_succeeded') {
+      wallet.paymentProviderCustomerId = event.providerCustomerId
+      wallet.paymentProviderMethodId = event.paymentMethod.id
+      wallet.paymentMethodBrand = event.paymentMethod.brand
+      wallet.paymentMethodLast4 = event.paymentMethod.last4
+      wallet.paymentSetupLastError = null
+    } else {
+      wallet.paymentSetupLastError = `${event.failureCode}: ${event.failureMessage}`
+    }
+    wallet.paymentSetupAttemptId = null
+    wallet.paymentSetupProviderReference = null
+    wallet.paymentSetupNextReconcileAt = null
+    await repository.save(wallet)
+  }
+
   private async applyTopUpEvent(
     manager: EntityManager,
-    event: Exclude<ProviderWebhookEvent, { kind: 'setup_succeeded' }>,
+    event: Extract<ProviderWebhookEvent, { kind: 'top_up_paid' | 'top_up_failed' }>,
   ): Promise<void> {
     const topUpRepository = manager.getRepository(TopUpRecord)
     const topUp = await topUpRepository.findOne({
@@ -435,6 +805,8 @@ export class PaymentService {
       topUp.status = 'failed'
       topUp.failureCode = event.failureCode
       topUp.failureMessage = event.failureMessage
+      topUp.nextReconcileAt = null
+      topUp.reconcileLastError = null
       topUp.completedAt = new Date()
       await topUpRepository.save(topUp)
       if (topUp.source === 'auto_reload') {
@@ -469,6 +841,8 @@ export class PaymentService {
     topUp.receiptUrl = event.receiptUrl
     topUp.failureCode = null
     topUp.failureMessage = null
+    topUp.nextReconcileAt = null
+    topUp.reconcileLastError = null
     topUp.completedAt = new Date()
     await topUpRepository.save(topUp)
     const transactionRepository = manager.getRepository(WalletTransaction)
@@ -480,7 +854,82 @@ export class PaymentService {
         amountCents: topUp.amountCents,
         source: topUp.source === 'auto_reload' ? 'auto_reload' : 'manual_top_up',
         ratedPeriodId: null,
+        providerActionId: null,
         metadata: { topUpId: topUp.id, providerReference: event.providerReference },
+      }),
+    )
+  }
+
+  private async applyTopUpAdjustment(
+    manager: EntityManager,
+    event: Extract<ProviderWebhookEvent, { kind: 'top_up_adjusted' }>,
+  ): Promise<void> {
+    const amount = this.positiveCents(event.amountCents, 'provider adjustment amount')
+    if (event.currency.toLowerCase() !== 'usd') throw new BadRequestException('provider adjustment must use USD')
+
+    const topUpRepository = manager.getRepository(TopUpRecord)
+    const topUp = await topUpRepository.findOne({
+      where: { id: event.topUpId },
+      lock: { mode: 'pessimistic_write' },
+    })
+    if (!topUp || topUp.organizationId !== event.organizationId || topUp.status !== 'paid') {
+      throw new BadRequestException('provider adjustment does not match a paid top-up')
+    }
+    if (amount > BigInt(topUp.amountCents)) throw new BadRequestException('provider adjustment exceeds top-up')
+
+    const walletRepository = manager.getRepository(Wallet)
+    const wallet = await walletRepository.findOne({
+      where: { id: topUp.walletId },
+      lock: { mode: 'pessimistic_write' },
+    })
+    if (!wallet) throw new BadRequestException('wallet not found')
+
+    const transactionRepository = manager.getRepository(WalletTransaction)
+    const actionPrefix = `${event.adjustment}:${event.providerReference}`
+    const debitActionId = `${actionPrefix}:debit`
+    const restoreActionId = `${actionPrefix}:restore`
+    const debit = await transactionRepository.findOne({ where: { providerActionId: debitActionId } })
+    const restore = await transactionRepository.findOne({ where: { providerActionId: restoreActionId } })
+    if (event.direction === 'debit' && (debit || restore)) return
+    if (event.direction === 'restore' && restore) return
+
+    const counter = event.adjustment === 'refund' ? 'refundedCents' : 'disputedCents'
+    let ledgerAmount = 0n
+    if (event.direction === 'debit') {
+      ledgerAmount = -amount
+      wallet.paidBalanceCents = (BigInt(wallet.paidBalanceCents) - amount).toString()
+      topUp[counter] = (BigInt(topUp[counter]) + amount).toString()
+    } else if (debit) {
+      if (BigInt(debit.amountCents) !== -amount) {
+        throw new BadRequestException('provider adjustment restoration amount does not match debit')
+      }
+      const currentAdjusted = BigInt(topUp[counter])
+      if (currentAdjusted < amount) throw new BadRequestException('provider adjustment restoration exceeds debit')
+      ledgerAmount = amount
+      wallet.paidBalanceCents = (BigInt(wallet.paidBalanceCents) + amount).toString()
+      topUp[counter] = (currentAdjusted - amount).toString()
+    }
+
+    wallet.billingStatus = this.statusForWallet(wallet)
+    if (ledgerAmount !== 0n) {
+      await walletRepository.save(wallet)
+      await topUpRepository.save(topUp)
+    }
+    await transactionRepository.save(
+      transactionRepository.create({
+        walletId: wallet.id,
+        organizationId: wallet.organizationId,
+        kind: 'adjustment',
+        amountCents: ledgerAmount.toString(),
+        source: `stripe_${event.adjustment}_${event.direction}`,
+        ratedPeriodId: null,
+        providerActionId: event.direction === 'debit' ? debitActionId : restoreActionId,
+        metadata: {
+          topUpId: topUp.id,
+          providerReference: event.providerReference,
+          adjustment: event.adjustment,
+          direction: event.direction,
+        },
       }),
     )
   }
@@ -500,6 +949,27 @@ export class PaymentService {
   private assertIdempotentAmount(topUp: TopUpRecord, amountCents: bigint): void {
     if (topUp.amountCents !== amountCents.toString()) {
       throw new BadRequestException('idempotency key was already used with a different amount')
+    }
+  }
+
+  private providerEventType(event: ProviderWebhookEvent): string {
+    return event.kind === 'top_up_adjusted' ? `${event.kind}:${event.adjustment}:${event.direction}` : event.kind
+  }
+
+  private reconcileDelayMilliseconds(attempts: number): number {
+    const exponent = Math.max(0, Math.min(6, attempts - 1))
+    return Math.min(INITIAL_RECONCILE_DELAY_MILLISECONDS * 2 ** exponent, MAX_RECONCILE_DELAY_MILLISECONDS)
+  }
+
+  private errorMessage(error: unknown): string {
+    return (error instanceof Error ? error.message : String(error)).slice(0, 500)
+  }
+
+  private async recover(stage: 'setup' | 'top_up' | 'webhook', id: string, work: () => Promise<unknown>) {
+    try {
+      await work()
+    } catch (error) {
+      this.logger.warn(`[billing_payment] stage=${stage}_reconcile id=${id} error=${this.errorMessage(error)}`)
     }
   }
 

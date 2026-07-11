@@ -174,6 +174,7 @@ export default $config({
     const sshHostKey = new sst.Secret('SSH_HOST_KEY_B64', '')
     const stripeSecretKey = new sst.Secret('STRIPE_SECRET_KEY', '')
     const stripeWebhookSecret = new sst.Secret('STRIPE_WEBHOOK_SECRET', '')
+    const stripePreviousWebhookSecret = new sst.Secret('STRIPE_WEBHOOK_SECRET_PREVIOUS', '')
 
     // ─── 2. PLATFORM ─────────────────────────────────────────────────────────
     // Network model + rationale (subnets / NAT / egress-only public IP, AWS citations): ./NETWORKING.md
@@ -465,6 +466,7 @@ export default $config({
           : envOr('BILLING_PAYMENT_PROVIDER', 'fake'),
         STRIPE_SECRET_KEY: stripeSecretKey.value,
         STRIPE_WEBHOOK_SECRET: stripeWebhookSecret.value,
+        STRIPE_WEBHOOK_SECRET_PREVIOUS: stripePreviousWebhookSecret.value,
         // Box base images: only the three digest-pinned *_IMAGE refs below are live — the
         // API gates box creation to that curated set (apps/api curated-images.constant.ts)
         // and the runner pulls them straight from ghcr.io with its GHCR_TOKEN. IMAGE_TAG and

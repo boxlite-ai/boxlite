@@ -9,7 +9,16 @@ import { TopUpRecord } from '../entities/top-up-record.entity'
 import { WalletTransaction } from '../entities/wallet-transaction.entity'
 import { Wallet } from '../entities/wallet.entity'
 import { FakePaymentProvider } from './fake-payment.provider'
-import { PaymentProvider, ProviderWebhookEvent, TopUpPaymentInput, TopUpPaymentResult } from './payment-provider'
+import {
+  PaymentProvider,
+  PaymentReconcileInput,
+  PaymentReconcileResult,
+  PaymentSetupInput,
+  PaymentSetupResult,
+  ProviderWebhookEvent,
+  TopUpPaymentInput,
+  TopUpPaymentResult,
+} from './payment-provider'
 import { PaymentService } from './payment.service'
 
 const ORG_ID = 'f5de33a9-4eb2-4279-a8de-9f02d63cc4f0'
@@ -97,6 +106,37 @@ class AmbiguousThenSuccessfulPaymentProvider extends FakePaymentProvider {
   }
 }
 
+class AmbiguousThenSuccessfulSetupProvider extends FakePaymentProvider {
+  setupCalls: PaymentSetupInput[] = []
+
+  override async createSetup(input: PaymentSetupInput): Promise<PaymentSetupResult> {
+    this.setupCalls.push(input)
+    if (this.setupCalls.length === 1) throw new Error('setup provider response was lost')
+    return super.createSetup(input)
+  }
+}
+
+class ReconciledPaymentProvider extends PendingPaymentProvider {
+  reconcileCalls: PaymentReconcileInput[] = []
+
+  override async reconcile(input: PaymentReconcileInput): Promise<PaymentReconcileResult> {
+    this.reconcileCalls.push(input)
+    return {
+      status: 'resolved',
+      event: {
+        kind: 'top_up_paid',
+        providerEventId: `reconcile:${input.providerReference}:paid`,
+        providerReference: input.providerReference,
+        topUpId: 'top-up-1',
+        organizationId: ORG_ID,
+        amountCents: '2500',
+        currency: 'usd',
+        receiptUrl: 'https://receipt.test/reconciled',
+      },
+    }
+  }
+}
+
 function wallet(overrides: Partial<Wallet> = {}): Wallet {
   return {
     id: 'wallet-1',
@@ -110,6 +150,11 @@ function wallet(overrides: Partial<Wallet> = {}): Wallet {
     paymentProviderMethodId: null,
     paymentMethodBrand: null,
     paymentMethodLast4: null,
+    paymentSetupAttemptId: null,
+    paymentSetupProviderReference: null,
+    paymentSetupNextReconcileAt: null,
+    paymentSetupReconcileAttempts: 0,
+    paymentSetupLastError: null,
     autoReloadEnabled: false,
     autoReloadThresholdCents: null,
     autoReloadTargetCents: null,
@@ -201,6 +246,12 @@ describe('PaymentService', () => {
       receiptUrl: null,
       failureCode: null,
       failureMessage: null,
+      reconcileAttempts: 0,
+      nextReconcileAt: null,
+      lastReconciledAt: null,
+      reconcileLastError: null,
+      refundedCents: '0',
+      disputedCents: '0',
       completedAt: null,
       createdAt: new Date('2026-07-10T00:00:00Z'),
       updatedAt: new Date('2026-07-10T00:00:00Z'),
@@ -260,6 +311,150 @@ describe('PaymentService', () => {
     expect(provider.manualTopUpCalls[0].topUpId).toBe(provider.manualTopUpCalls[1].topUpId)
     expect(currentWallet.paidBalanceCents).toBe('2500')
     expect(transactions.rows).toHaveLength(1)
+  })
+
+  it('reuses one durable setup attempt after the provider response is lost', async () => {
+    const provider = new AmbiguousThenSuccessfulSetupProvider()
+    const { service, currentWallet } = createService(provider)
+
+    await expect(service.setupPaymentMethod(ORG_ID)).rejects.toThrow('payment provider request failed')
+    const setupAttemptId = currentWallet.paymentSetupAttemptId
+    expect(setupAttemptId).toEqual(expect.any(String))
+    expect(currentWallet.paymentSetupNextReconcileAt).toBeInstanceOf(Date)
+
+    await expect(service.setupPaymentMethod(ORG_ID)).resolves.toEqual({ status: 'ready', checkoutUrl: null })
+    expect(provider.setupCalls.map((call) => call.setupAttemptId)).toEqual([setupAttemptId, setupAttemptId])
+    expect(currentWallet.paymentSetupAttemptId).toBeNull()
+  })
+
+  it('reconciles one pending top-up and credits the wallet exactly once', async () => {
+    const provider = new ReconciledPaymentProvider()
+    const { service, currentWallet, topUps, transactions } = createService(provider, {
+      paymentProviderCustomerId: 'cus-1',
+      paymentProviderMethodId: 'pm-1',
+    })
+    const topUp = await service.createManualTopUp(ORG_ID, '2500', 'request-reconcile')
+    const reconcileAt = new Date(Date.now() + 10 * 60 * 1000)
+
+    await expect(service.reconcileTopUp(topUp.id, reconcileAt)).resolves.toBe(true)
+    await expect(service.reconcileTopUp(topUp.id, new Date(reconcileAt.getTime() + 60_000))).resolves.toBe(false)
+
+    expect(provider.reconcileCalls).toEqual([{ operation: 'top_up', providerReference: 'checkout-pending' }])
+    expect(topUps.rows[0]).toMatchObject({
+      status: 'paid',
+      reconcileAttempts: 1,
+      nextReconcileAt: null,
+      reconcileLastError: null,
+    })
+    expect(currentWallet.paidBalanceCents).toBe('2500')
+    expect(transactions.rows.filter((row) => row.kind === 'top_up')).toHaveLength(1)
+  })
+
+  it('uses immutable adjustments for refund debit and restoration without double-changing balance', async () => {
+    const { service, currentWallet, topUps, transactions } = createService(new TestWebhookPaymentProvider(), {
+      paymentProviderCustomerId: 'cus-1',
+      paymentProviderMethodId: 'pm-1',
+    })
+    const topUp = await service.createManualTopUp(ORG_ID, '2500', 'request-refund')
+    await service.handleWebhook(
+      Buffer.from(
+        JSON.stringify({
+          kind: 'top_up_paid',
+          providerEventId: 'evt-paid-for-refund',
+          providerReference: 'checkout-pending',
+          topUpId: topUp.id,
+          organizationId: ORG_ID,
+          amountCents: '2500',
+          currency: 'usd',
+          receiptUrl: null,
+        }),
+      ),
+      'test',
+    )
+
+    const refundDebit = {
+      kind: 'top_up_adjusted',
+      providerEventId: 'evt-refund-created',
+      providerReference: 're_1',
+      topUpId: topUp.id,
+      organizationId: ORG_ID,
+      amountCents: '500',
+      currency: 'usd',
+      adjustment: 'refund',
+      direction: 'debit',
+    }
+    await service.handleWebhook(Buffer.from(JSON.stringify(refundDebit)), 'test')
+    await service.handleWebhook(
+      Buffer.from(JSON.stringify({ ...refundDebit, providerEventId: 'evt-refund-updated' })),
+      'test',
+    )
+    await service.handleWebhook(
+      Buffer.from(
+        JSON.stringify({
+          ...refundDebit,
+          providerEventId: 'evt-refund-failed',
+          direction: 'restore',
+        }),
+      ),
+      'test',
+    )
+
+    expect(currentWallet.paidBalanceCents).toBe('2500')
+    expect(topUps.rows[0]).toMatchObject({ refundedCents: '0' })
+    expect(transactions.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ providerActionId: 'refund:re_1:debit', amountCents: '-500' }),
+        expect.objectContaining({ providerActionId: 'refund:re_1:restore', amountCents: '500' }),
+      ]),
+    )
+    expect(transactions.rows.filter((row) => row.kind === 'adjustment')).toHaveLength(2)
+  })
+
+  it('does not debit a refund when its terminal failure arrives first', async () => {
+    const { service, currentWallet, transactions } = createService(new TestWebhookPaymentProvider(), {
+      paidBalanceCents: '2500',
+      paymentProviderCustomerId: 'cus-1',
+      paymentProviderMethodId: 'pm-1',
+    })
+    const topUp = await service.createManualTopUp(ORG_ID, '2500', 'request-refund-out-of-order')
+    await service.handleWebhook(
+      Buffer.from(
+        JSON.stringify({
+          kind: 'top_up_paid',
+          providerEventId: 'evt-paid-before-out-of-order-refund',
+          providerReference: 'checkout-pending',
+          topUpId: topUp.id,
+          organizationId: ORG_ID,
+          amountCents: '2500',
+          currency: 'usd',
+          receiptUrl: null,
+        }),
+      ),
+      'test',
+    )
+
+    const event = {
+      kind: 'top_up_adjusted',
+      providerReference: 're_out_of_order',
+      topUpId: topUp.id,
+      organizationId: ORG_ID,
+      amountCents: '500',
+      currency: 'usd',
+      adjustment: 'refund',
+    }
+    await service.handleWebhook(
+      Buffer.from(JSON.stringify({ ...event, providerEventId: 'evt-failed-first', direction: 'restore' })),
+      'test',
+    )
+    await service.handleWebhook(
+      Buffer.from(JSON.stringify({ ...event, providerEventId: 'evt-created-late', direction: 'debit' })),
+      'test',
+    )
+
+    expect(currentWallet.paidBalanceCents).toBe('5000')
+    expect(transactions.rows.filter((row) => row.kind === 'adjustment')).toEqual([
+      expect.objectContaining({ providerActionId: 'refund:re_out_of_order:restore', amountCents: '0' }),
+    ])
   })
 
   it('converges failed then paid webhooks, ignores later failure, and never double-credits', async () => {

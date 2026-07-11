@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto'
 import { DataSource } from 'typeorm'
 import { BoxUsagePeriodArchive } from '../usage/entities/box-usage-period-archive.entity'
 import { PaymentProviderEvent } from './entities/payment-provider-event.entity'
+import { BillingOpsService } from './billing-ops.service'
 import { PricingPlan } from './entities/pricing-plan.entity'
 import { RatedPeriod } from './entities/rated-period.entity'
 import { TopUpRecord } from './entities/top-up-record.entity'
@@ -17,6 +18,8 @@ import { Wallet } from './entities/wallet.entity'
 import { FakePaymentProvider } from './payment/fake-payment.provider'
 import type {
   PaymentProvider,
+  PaymentReconcileInput,
+  PaymentReconcileResult,
   ProviderWebhookEvent,
   TopUpPaymentInput,
   TopUpPaymentResult,
@@ -53,6 +56,36 @@ class TestWebhookPaymentProvider extends FakePaymentProvider {
   override async parseWebhook(payload: Buffer, signature: string): Promise<ProviderWebhookEvent> {
     void signature
     return JSON.parse(payload.toString('utf8')) as ProviderWebhookEvent
+  }
+}
+
+class ReconciledProvider extends FakePaymentProvider {
+  readonly payments = new Map<string, TopUpPaymentInput>()
+  readonly reconcileCalls: PaymentReconcileInput[] = []
+
+  override async createManualTopUp(input: TopUpPaymentInput): Promise<TopUpPaymentResult> {
+    const providerReference = `pi_reconcile_${input.topUpId}`
+    this.payments.set(providerReference, input)
+    return { status: 'pending', checkoutUrl: null, providerReference, receiptUrl: null }
+  }
+
+  override async reconcile(input: PaymentReconcileInput): Promise<PaymentReconcileResult> {
+    this.reconcileCalls.push(input)
+    const payment = this.payments.get(input.providerReference)
+    if (!payment) throw new Error(`missing provider payment ${input.providerReference}`)
+    return {
+      status: 'resolved',
+      event: {
+        kind: 'top_up_paid',
+        providerEventId: `reconcile:${input.providerReference}:paid`,
+        providerReference: input.providerReference,
+        topUpId: payment.topUpId,
+        organizationId: payment.organizationId,
+        amountCents: payment.amountCents,
+        currency: 'usd',
+        receiptUrl: 'https://receipt.test/reconciled',
+      },
+    }
   }
 }
 
@@ -480,5 +513,244 @@ describeWithDatabase('Billing common edge cases with PostgreSQL', () => {
     await expect(
       billingDataSource.getRepository(WalletTransaction).countBy({ organizationId, kind: 'top_up' }),
     ).resolves.toBe(1)
+  })
+
+  it('lets only one API instance claim and reconcile a stale pending top-up', async () => {
+    const organizationId = randomUUID()
+    await createWallet(organizationId, {
+      paidBalanceCents: '0',
+      paymentProviderCustomerId: 'edge-customer',
+      paymentProviderMethodId: 'edge-method',
+      paymentMethodBrand: 'visa',
+      paymentMethodLast4: '4242',
+    })
+    const provider = new ReconciledProvider()
+    const first = paymentService(walletService(), provider)
+    const second = paymentService(walletService(), provider)
+    const topUp = await first.createManualTopUp(organizationId, '2500', `edge-${randomUUID()}`)
+    const reconcileAt = new Date(Date.now() + 10 * 60 * 1000)
+
+    const claims = await Promise.all([
+      first.reconcileTopUp(topUp.id, reconcileAt),
+      second.reconcileTopUp(topUp.id, reconcileAt),
+    ])
+
+    expect(claims.filter(Boolean)).toHaveLength(1)
+    expect(provider.reconcileCalls).toHaveLength(1)
+    await expect(billingDataSource.getRepository(Wallet).findOneByOrFail({ organizationId })).resolves.toMatchObject({
+      paidBalanceCents: '2500',
+    })
+    await expect(
+      billingDataSource.getRepository(WalletTransaction).countBy({ organizationId, kind: 'top_up' }),
+    ).resolves.toBe(1)
+  })
+
+  it('deduplicates concurrent refund events and restores with one immutable counter-entry', async () => {
+    const organizationId = randomUUID()
+    await createWallet(organizationId, {
+      paidBalanceCents: '0',
+      paymentProviderCustomerId: 'edge-customer',
+      paymentProviderMethodId: 'edge-method',
+      paymentMethodBrand: 'visa',
+      paymentMethodLast4: '4242',
+    })
+    const payments = paymentService(walletService(), new TestWebhookPaymentProvider())
+    const topUp = await payments.createManualTopUp(organizationId, '2500', `edge-${randomUUID()}`)
+    await payments.handleWebhook(
+      Buffer.from(
+        JSON.stringify({
+          kind: 'top_up_paid',
+          providerEventId: `edge:${randomUUID()}`,
+          providerReference: `edge-payment-${topUp.id}`,
+          topUpId: topUp.id,
+          organizationId,
+          amountCents: '2500',
+          currency: 'usd',
+          receiptUrl: null,
+        }),
+      ),
+      'test',
+    )
+    const refund = (providerEventId: string, direction: 'debit' | 'restore') =>
+      Buffer.from(
+        JSON.stringify({
+          kind: 'top_up_adjusted',
+          providerEventId,
+          providerReference: 're_concurrent',
+          topUpId: topUp.id,
+          organizationId,
+          amountCents: '500',
+          currency: 'usd',
+          adjustment: 'refund',
+          direction,
+        }),
+      )
+
+    await Promise.all([
+      payments.handleWebhook(refund(`edge:${randomUUID()}`, 'debit'), 'test'),
+      payments.handleWebhook(refund(`edge:${randomUUID()}`, 'debit'), 'test'),
+    ])
+    await payments.handleWebhook(refund(`edge:${randomUUID()}`, 'restore'), 'test')
+
+    await expect(billingDataSource.getRepository(Wallet).findOneByOrFail({ organizationId })).resolves.toMatchObject({
+      paidBalanceCents: '2500',
+    })
+    await expect(billingDataSource.getRepository(TopUpRecord).findOneByOrFail({ id: topUp.id })).resolves.toMatchObject(
+      {
+        refundedCents: '0',
+      },
+    )
+    await expect(
+      billingDataSource.getRepository(WalletTransaction).countBy({ organizationId, kind: 'adjustment' }),
+    ).resolves.toBe(2)
+  })
+
+  it('persists a failed webhook and retries it after the business transaction rolls back', async () => {
+    const organizationId = randomUUID()
+    await createWallet(organizationId, {
+      paidBalanceCents: '0',
+      paymentProviderCustomerId: 'edge-customer',
+      paymentProviderMethodId: 'edge-method',
+      paymentMethodBrand: 'visa',
+      paymentMethodLast4: '4242',
+    })
+    const payments = paymentService(walletService(), new TestWebhookPaymentProvider())
+    const topUp = await payments.createManualTopUp(organizationId, '2500', `edge-${randomUUID()}`)
+    await payments.handleWebhook(
+      Buffer.from(
+        JSON.stringify({
+          kind: 'top_up_paid',
+          providerEventId: `edge:${randomUUID()}`,
+          providerReference: `edge-payment-${topUp.id}`,
+          topUpId: topUp.id,
+          organizationId,
+          amountCents: '2500',
+          currency: 'usd',
+          receiptUrl: null,
+        }),
+      ),
+      'test',
+    )
+    const failedEventId = `edge:${randomUUID()}`
+    const refundEvent = Buffer.from(
+      JSON.stringify({
+        kind: 'top_up_adjusted',
+        providerEventId: failedEventId,
+        providerReference: 're_retry',
+        topUpId: topUp.id,
+        organizationId,
+        amountCents: '500',
+        currency: 'usd',
+        adjustment: 'refund',
+        direction: 'debit',
+      }),
+    )
+    await controlDataSource.query(`
+      CREATE FUNCTION "${schemaName}".fail_billing_adjustment() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.kind = 'adjustment' THEN RAISE EXCEPTION 'adjustment write unavailable'; END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER fail_billing_adjustment
+      BEFORE INSERT ON "${schemaName}"."wallet_transaction"
+      FOR EACH ROW EXECUTE FUNCTION "${schemaName}".fail_billing_adjustment();
+    `)
+    try {
+      await expect(payments.handleWebhook(refundEvent, 'test')).rejects.toThrow('adjustment write unavailable')
+    } finally {
+      await controlDataSource.query(`
+        DROP TRIGGER IF EXISTS fail_billing_adjustment ON "${schemaName}"."wallet_transaction";
+        DROP FUNCTION IF EXISTS "${schemaName}".fail_billing_adjustment();
+      `)
+    }
+
+    const eventRepository = billingDataSource.getRepository(PaymentProviderEvent)
+    await expect(eventRepository.findOneByOrFail({ providerEventId: failedEventId })).resolves.toMatchObject({
+      status: 'failed',
+      attempts: 1,
+      payload: expect.objectContaining({ providerReference: 're_retry' }),
+    })
+    await eventRepository.update({ providerEventId: failedEventId }, { nextAttemptAt: new Date(0) })
+    await payments.scheduledPaymentRecovery(new Date())
+
+    await expect(eventRepository.findOneByOrFail({ providerEventId: failedEventId })).resolves.toMatchObject({
+      status: 'processed',
+      nextAttemptAt: null,
+      lastError: null,
+    })
+    await expect(billingDataSource.getRepository(Wallet).findOneByOrFail({ organizationId })).resolves.toMatchObject({
+      paidBalanceCents: '2000',
+    })
+    await expect(
+      billingDataSource.getRepository(WalletTransaction).countBy({ organizationId, kind: 'adjustment' }),
+    ).resolves.toBe(1)
+  })
+
+  it('identifies the exact organization, top-up, provider reference, and failed webhook in health output', async () => {
+    const organizationId = randomUUID()
+    const wallet = await createWallet(organizationId, { paidBalanceCents: '-250' })
+    const topUp = await billingDataSource.getRepository(TopUpRecord).save(
+      billingDataSource.getRepository(TopUpRecord).create({
+        walletId: wallet.id,
+        organizationId,
+        amountCents: '500',
+        source: 'manual',
+        status: 'pending',
+        idempotencyKey: `health:${randomUUID()}`,
+        providerReference: 'pi_health_pending',
+        checkoutUrl: null,
+        receiptUrl: null,
+        failureCode: null,
+        failureMessage: null,
+        reconcileAttempts: 2,
+        nextReconcileAt: new Date('1900-01-01T00:00:00.000Z'),
+        lastReconciledAt: new Date('1900-01-01T00:00:00.000Z'),
+        reconcileLastError: 'provider timeout',
+        refundedCents: '0',
+        disputedCents: '0',
+        completedAt: null,
+        createdAt: new Date('1900-01-01T00:00:00.000Z'),
+      }),
+    )
+    await billingDataSource.getRepository(PaymentProviderEvent).save(
+      billingDataSource.getRepository(PaymentProviderEvent).create({
+        providerEventId: 'evt_health_failed',
+        eventType: 'top_up_paid',
+        providerReference: 'pi_health_pending',
+        status: 'failed',
+        payload: { organizationId, topUpId: topUp.id },
+        attempts: 3,
+        nextAttemptAt: new Date('1900-01-01T00:00:00.000Z'),
+        lastError: 'wallet transaction unavailable',
+        createdAt: new Date('1900-01-01T00:00:00.000Z'),
+        updatedAt: new Date('1900-01-01T00:00:00.000Z'),
+      }),
+    )
+
+    const queryRunner = billingDataSource.createQueryRunner()
+    await queryRunner.connect()
+    try {
+      await queryRunner.query(`SET search_path TO "${schemaName}"`)
+      const health = await new BillingOpsService({ manager: queryRunner.manager } as never).collectHealth()
+
+      expect(health.pendingPayment).toEqual({
+        topUpId: topUp.id,
+        organizationId,
+        providerReference: 'pi_health_pending',
+        lastError: 'provider timeout',
+      })
+      expect(health.failedWebhook).toEqual({
+        providerEventId: 'evt_health_failed',
+        eventType: 'top_up_paid',
+        organizationId,
+        topUpId: topUp.id,
+        providerReference: 'pi_health_pending',
+        lastError: 'wallet transaction unavailable',
+      })
+      expect(health.negativeWallet).toEqual({ organizationId, balanceCents: '-250' })
+    } finally {
+      await queryRunner.release()
+    }
   })
 })

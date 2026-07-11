@@ -175,6 +175,7 @@ const configuration = {
     stripe: {
       secretKey: process.env.STRIPE_SECRET_KEY,
       webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
+      previousWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET_PREVIOUS,
     },
   },
   analyticsApiUrl: process.env.ANALYTICS_API_URL,

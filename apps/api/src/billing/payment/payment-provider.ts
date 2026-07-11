@@ -45,14 +45,31 @@ export interface TopUpPaymentResult {
   failureMessage?: string
 }
 
+export interface PaymentReconcileInput {
+  operation: 'setup' | 'top_up'
+  providerReference: string
+}
+
+export type PaymentReconcileResult = { status: 'pending' } | { status: 'resolved'; event: ProviderWebhookEvent }
+
 export type ProviderWebhookEvent =
   | {
       kind: 'setup_succeeded'
       providerEventId: string
       providerReference: string
       organizationId: string
+      setupAttemptId: string
       providerCustomerId: string
       paymentMethod: PaymentMethodView
+    }
+  | {
+      kind: 'setup_failed'
+      providerEventId: string
+      providerReference: string
+      organizationId: string
+      setupAttemptId: string
+      failureCode: string
+      failureMessage: string
     }
   | {
       kind: 'top_up_paid'
@@ -73,12 +90,24 @@ export type ProviderWebhookEvent =
       failureCode: string | null
       failureMessage: string | null
     }
+  | {
+      kind: 'top_up_adjusted'
+      providerEventId: string
+      providerReference: string
+      topUpId: string
+      organizationId: string
+      amountCents: string
+      currency: string
+      adjustment: 'refund' | 'dispute'
+      direction: 'debit' | 'restore'
+    }
 
 export interface PaymentProvider {
   readonly mode: 'fake' | 'stripe'
   createSetup(input: PaymentSetupInput): Promise<PaymentSetupResult>
   createManualTopUp(input: TopUpPaymentInput): Promise<TopUpPaymentResult>
   chargeSavedMethod(input: TopUpPaymentInput): Promise<TopUpPaymentResult>
+  reconcile(input: PaymentReconcileInput): Promise<PaymentReconcileResult>
   parseWebhook(payload: Buffer, signature: string): Promise<ProviderWebhookEvent | null>
 }
 
