@@ -15,6 +15,9 @@ export type TopUpStatus = 'pending' | 'paid' | 'failed'
   unique: true,
   where: '"providerReference" IS NOT NULL',
 })
+@Index('top_up_record_reconcile_due_idx', ['nextReconcileAt'], {
+  where: '"status" = \'pending\' AND "nextReconcileAt" IS NOT NULL',
+})
 @Check('top_up_record_positive_amount', '"amountCents" > 0')
 export class TopUpRecord {
   @PrimaryGeneratedColumn('uuid')
@@ -52,6 +55,24 @@ export class TopUpRecord {
 
   @Column({ type: 'text', nullable: true })
   failureMessage: string | null
+
+  @Column({ type: 'integer', default: 0 })
+  reconcileAttempts: number
+
+  @Column({ type: 'timestamp with time zone', nullable: true })
+  nextReconcileAt: Date | null
+
+  @Column({ type: 'timestamp with time zone', nullable: true })
+  lastReconciledAt: Date | null
+
+  @Column({ type: 'text', nullable: true })
+  reconcileLastError: string | null
+
+  @Column({ type: 'bigint', default: 0 })
+  refundedCents: string
+
+  @Column({ type: 'bigint', default: 0 })
+  disputedCents: string
 
   @Column({ type: 'timestamp with time zone', nullable: true })
   completedAt: Date | null

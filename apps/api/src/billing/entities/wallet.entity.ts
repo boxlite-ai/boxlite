@@ -9,6 +9,9 @@ export type BillingStatus = 'trial' | 'active' | 'zero_balance'
 
 @Entity('wallet')
 @Index('wallet_organization_idx', ['organizationId'], { unique: true })
+@Index('wallet_payment_setup_reconcile_due_idx', ['paymentSetupNextReconcileAt'], {
+  where: '"paymentSetupAttemptId" IS NOT NULL AND "paymentSetupNextReconcileAt" IS NOT NULL',
+})
 @Check('wallet_free_balance_non_negative', '"freeBalanceCents" >= 0')
 @Check('wallet_remainder_range', '"settlementRemainderCents" >= 0 AND "settlementRemainderCents" < 1')
 export class Wallet {
@@ -44,6 +47,21 @@ export class Wallet {
 
   @Column({ type: 'character varying', nullable: true })
   paymentMethodLast4: string | null
+
+  @Column({ type: 'character varying', nullable: true })
+  paymentSetupAttemptId: string | null
+
+  @Column({ type: 'character varying', nullable: true })
+  paymentSetupProviderReference: string | null
+
+  @Column({ type: 'timestamp with time zone', nullable: true })
+  paymentSetupNextReconcileAt: Date | null
+
+  @Column({ type: 'integer', default: 0 })
+  paymentSetupReconcileAttempts: number
+
+  @Column({ type: 'text', nullable: true })
+  paymentSetupLastError: string | null
 
   @Column({ type: 'boolean', default: false })
   autoReloadEnabled: boolean

@@ -10,6 +10,7 @@ import { Organization } from '../organization/entities/organization.entity'
 import { OrganizationModule } from '../organization/organization.module'
 import { BoxUsagePeriodArchive } from '../usage/entities/box-usage-period-archive.entity'
 import { BillingController } from './billing.controller'
+import { BillingOpsService } from './billing-ops.service'
 import { BillingReadService } from './billing-read.service'
 import { PaymentProviderEvent } from './entities/payment-provider-event.entity'
 import { PricingPlan } from './entities/pricing-plan.entity'
@@ -45,6 +46,7 @@ import { WalletService } from './wallet.service'
     WalletService,
     SettlementService,
     BillingReadService,
+    BillingOpsService,
     PaymentService,
     {
       provide: PAYMENT_PROVIDER,
@@ -52,6 +54,6 @@ import { WalletService } from './wallet.service'
       useFactory: createPaymentProvider,
     },
   ],
-  exports: [RatingService, WalletService, SettlementService, BillingReadService],
+  exports: [RatingService, WalletService, SettlementService, BillingReadService, BillingOpsService, PaymentService],
 })
 export class BillingModule {}

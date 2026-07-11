@@ -11,6 +11,10 @@ export type WalletTransactionKind = 'free_grant' | 'usage_debit' | 'adjustment' 
 @Index('wallet_transaction_wallet_created_idx', ['walletId', 'createdAt'])
 @Index('wallet_transaction_org_created_idx', ['organizationId', 'createdAt'])
 @Index('wallet_transaction_rated_period_idx', ['ratedPeriodId'], { unique: true })
+@Index('wallet_transaction_provider_action_idx', ['providerActionId'], {
+  unique: true,
+  where: '"providerActionId" IS NOT NULL',
+})
 export class WalletTransaction {
   @PrimaryGeneratedColumn('uuid')
   id: string
@@ -32,6 +36,9 @@ export class WalletTransaction {
 
   @Column({ type: 'uuid', nullable: true })
   ratedPeriodId: string | null
+
+  @Column({ type: 'character varying', nullable: true })
+  providerActionId: string | null
 
   @Column({ type: 'jsonb', nullable: true })
   metadata: Record<string, unknown> | null

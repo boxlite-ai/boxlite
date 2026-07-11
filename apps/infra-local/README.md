@@ -78,6 +78,32 @@ runner path against a separate Docker stack. The direct-SDK capability this stac
 relies on — read-write host volumes + host port mapping — is pinned by
 `sdks/python/tests/test_volume_port_persistence.py`.
 
+### Stripe Sandbox Billing
+
+Stripe tests use test-mode credentials only. Start the API with
+`BILLING_PAYMENT_PROVIDER=stripe`, `STRIPE_SECRET_KEY=sk_test_...`, and the
+webhook secret printed by `stripe listen --print-secret`. From `apps/`, use one
+shell for the API and listener:
+
+```bash
+export STRIPE_SECRET_KEY=sk_test_...
+export STRIPE_WEBHOOK_SECRET="$(stripe listen --skip-update --print-secret --color off)"
+set -a; source infra-local/api.env; set +a
+export BILLING_PAYMENT_PROVIDER=stripe
+(cd infra-local && make restart COMPONENTS="api dashboard")
+yarn billing:stripe:listen
+```
+
+While the listener is running, use a second shell:
+
+```bash
+yarn e2e:billing:stripe      # replaces the local test card and adds a $5 test top-up
+```
+
+The E2E refuses non-loopback PostgreSQL, verifies `cus_` / `pm_` setup, and
+requires exactly one wallet ledger credit. Credentials stay in environment
+variables; do not add them to `api.env` or Git.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
