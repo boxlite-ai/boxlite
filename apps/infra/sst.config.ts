@@ -6,7 +6,9 @@
 /// <reference path="./.sst/platform/config.d.ts" />
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BoxLite control plane on AWS (ap-southeast-1).
+// BoxLite control plane on AWS. Region is stage-scoped: dev stays in
+// ap-southeast-1, prod/production stays in us-west-2 unless explicitly
+// overridden by AWS_REGION/BOXLITE_AWS_REGION.
 //
 // Top of file: constants + helpers + the runner user-data builder.
 // Inside `run()`, resources are created in deploy order:
@@ -18,7 +20,16 @@
 //   5. observability               10. runner (EC2 + nested KVM)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const REGION = 'ap-southeast-1'
+const DEFAULT_REGION = 'ap-southeast-1'
+const STAGE_REGIONS: Record<string, string> = {
+  dev: 'ap-southeast-1',
+  prod: 'us-west-2',
+  production: 'us-west-2',
+}
+const regionForStage = (stage = 'dev') => process.env.BOXLITE_AWS_REGION || process.env.AWS_REGION || STAGE_REGIONS[stage] || DEFAULT_REGION
+const isProductionStage = (stage = '') => stage === 'prod' || stage === 'production'
+const ACCOUNT_ID = '064212132677'
+const IAM_ROLE_BOUNDARY_ARN = `arn:aws:iam::${ACCOUNT_ID}:policy/boxlite-role-boundary`
 
 // Container ports each service listens on internally
 const PORTS = {
@@ -92,12 +103,13 @@ const runnerEndpoint = (override: string, port: number, scheme: string) =>
 // ── app config ───────────────────────────────────────────────────────────────
 export default $config({
   app(input) {
+    const region = regionForStage(input?.stage)
     return {
       name: 'boxlite',
-      removal: input?.stage === 'production' ? 'retain' : 'remove',
+      removal: isProductionStage(input?.stage) ? 'retain' : 'remove',
       home: 'aws',
       providers: {
-        aws: { region: REGION, ...(process.env.AWS_PROFILE ? { profile: process.env.AWS_PROFILE } : {}) },
+        aws: { region, ...(process.env.AWS_PROFILE ? { profile: process.env.AWS_PROFILE } : {}) },
         cloudflare: '6.15.0',
         random: '4.16.6',
         // command provider: multi-runner post-deploy registration
@@ -111,6 +123,15 @@ export default $config({
     // Load .env overrides (anything unset falls back to auto-generated values)
     const { config } = await import('dotenv')
     config()
+    const region = regionForStage($app.stage)
+
+    // BoxLite AWS guardrail: every managed IAM role must keep the account's
+    // permissions boundary. If this is omitted, Pulumi treats the boundary as
+    // drift and tries DeleteRolePermissionsBoundary, which the account policy
+    // explicitly denies.
+    $transform(aws.iam.Role, (args) => {
+      args.permissionsBoundary ??= IAM_ROLE_BOUNDARY_ARN
+    })
 
     // Strip trailing slash from service.url so path concat produces clean URLs
     // (api.url = "https://api.dev.boxlite.ai/" → apiBase = "https://api.dev.boxlite.ai").
@@ -213,7 +234,11 @@ export default $config({
     // S3 versioning is on in every stage: cheap, and the only guard against an
     // object-level overwrite/delete (which `removal` never covers). Redis is a
     // transient cache, so it needs neither.
-    const isProd = $app.stage === 'production'
+    const isProd = isProductionStage($app.stage)
+    const serviceImageCache = envOr(
+      'SERVICE_IMAGE_CACHE',
+      $app.stage === 'prod' || $app.stage === 'production' ? 'false' : 'true',
+    ) === 'true'
     // Unique-but-stable suffix for the DB final snapshot: a fixed name would collide
     // with the snapshot a prior teardown of the same stage already created (RDS requires
     // unique final-snapshot ids). RandomId is stable across deploys (no drift) and is
@@ -258,7 +283,7 @@ export default $config({
     // removes the single largest by-volume consumer of fck-nat egress.
     new aws.ec2.VpcEndpoint('S3Gateway', {
       vpcId: vpc.nodes.vpc.id,
-      serviceName: `com.amazonaws.${REGION}.s3`,
+      serviceName: `com.amazonaws.${region}.s3`,
       vpcEndpointType: 'Gateway',
       routeTableIds: vpc.nodes.privateRouteTables.apply((tables) => tables.map((t) => t.id)),
     })
@@ -323,7 +348,7 @@ export default $config({
 
     const otelCollector = new sst.aws.Service('OtelCollector', {
       cluster,
-      image: { context: '../..', dockerfile: 'apps/otel-collector/Dockerfile', cache: false },
+      image: { context: '../..', dockerfile: 'apps/otel-collector/Dockerfile', cache: serviceImageCache },
       command: [
         '--config',
         '/otelcol/collector-config.yaml',
@@ -374,6 +399,7 @@ export default $config({
       image: {
         context: '../..',
         dockerfile: 'apps/api/Dockerfile',
+        cache: serviceImageCache,
       },
       loadBalancer: {
         domain: serviceDomain('api'),
@@ -407,7 +433,7 @@ export default $config({
           // (ADMIN_OBSERVABILITY_CLOUDWATCH_REGION).
           actions: ['logs:DescribeLogGroups'],
           resources: [
-            $interpolate`arn:aws:logs:${REGION}:${aws.getCallerIdentityOutput().accountId}:log-group:*`,
+            $interpolate`arn:aws:logs:${region}:${aws.getCallerIdentityOutput().accountId}:log-group:*`,
           ],
         },
         {
@@ -419,8 +445,8 @@ export default $config({
         {
           actions: ['logs:FilterLogEvents'],
           resources: [
-            $interpolate`arn:aws:logs:${REGION}:${aws.getCallerIdentityOutput().accountId}:log-group:/sst/cluster/${cluster.nodes.cluster.name}/*`,
-            $interpolate`arn:aws:logs:${REGION}:${aws.getCallerIdentityOutput().accountId}:log-group:/sst/cluster/${cluster.nodes.cluster.name}/*:*`,
+            $interpolate`arn:aws:logs:${region}:${aws.getCallerIdentityOutput().accountId}:log-group:/sst/cluster/${cluster.nodes.cluster.name}/*`,
+            $interpolate`arn:aws:logs:${region}:${aws.getCallerIdentityOutput().accountId}:log-group:/sst/cluster/${cluster.nodes.cluster.name}/*:*`,
           ],
         },
         {
@@ -536,7 +562,7 @@ export default $config({
         // supported only for S3-compatible deployments (MinIO).
         S3_ENDPOINT: $interpolate`https://s3.${aws.getRegionOutput().name}.amazonaws.com`,
         S3_STS_ENDPOINT: $interpolate`https://sts.${aws.getRegionOutput().name}.amazonaws.com`,
-        S3_REGION: REGION,
+        S3_REGION: region,
         S3_DEFAULT_BUCKET: storage.name,
         S3_ACCOUNT_ID: aws.getCallerIdentityOutput().accountId,
         S3_ROLE_NAME: s3AccessRoleName,
@@ -583,7 +609,7 @@ export default $config({
           'BOX_OTEL_ENDPOINT_URL',
           envOr('OTEL_EXPORTER_OTLP_ENDPOINT', otelCollectorOtlpHttpUrl),
         ),
-        ADMIN_OBSERVABILITY_CLOUDWATCH_REGION: envOr('ADMIN_OBSERVABILITY_CLOUDWATCH_REGION', REGION),
+        ADMIN_OBSERVABILITY_CLOUDWATCH_REGION: envOr('ADMIN_OBSERVABILITY_CLOUDWATCH_REGION', region),
         ADMIN_OBSERVABILITY_CLOUDWATCH_LOG_GROUPS: envOr('ADMIN_OBSERVABILITY_CLOUDWATCH_LOG_GROUPS', ''),
         ADMIN_OBSERVABILITY_CLOUDWATCH_LOG_GROUP_PREFIX: envOr(
           'ADMIN_OBSERVABILITY_CLOUDWATCH_LOG_GROUP_PREFIX',
@@ -591,7 +617,7 @@ export default $config({
         ),
         ADMIN_OBSERVABILITY_CLOUDWATCH_LIMIT_PER_GROUP: envOr('ADMIN_OBSERVABILITY_CLOUDWATCH_LIMIT_PER_GROUP', '25'),
         ADMIN_OBSERVABILITY_CLOUDWATCH_MAX_LOG_GROUPS: envOr('ADMIN_OBSERVABILITY_CLOUDWATCH_MAX_LOG_GROUPS', '20'),
-        ADMIN_OBSERVABILITY_S3_REGION: envOr('ADMIN_OBSERVABILITY_S3_REGION', REGION),
+        ADMIN_OBSERVABILITY_S3_REGION: envOr('ADMIN_OBSERVABILITY_S3_REGION', region),
         ADMIN_OBSERVABILITY_S3_BUCKETS: envOr('ADMIN_OBSERVABILITY_S3_BUCKETS', storage.name),
         ADMIN_OBSERVABILITY_S3_MAX_OBJECTS: envOr('ADMIN_OBSERVABILITY_S3_MAX_OBJECTS', '25'),
         ...(process.env.ADMIN_OBSERVABILITY_CLICKSTACK_URL && {
@@ -671,7 +697,7 @@ export default $config({
     const proxyDomain = `proxy.${stackDomain}`
     new sst.aws.Service('Proxy', {
       cluster,
-      image: { context: '../..', dockerfile: 'apps/proxy/Dockerfile', cache: false },
+      image: { context: '../..', dockerfile: 'apps/proxy/Dockerfile', cache: serviceImageCache },
       loadBalancer: {
         domain: {
           name: proxyDomain,
@@ -707,7 +733,7 @@ export default $config({
     // get a stable, memorable hostname instead of the auto-generated NLB DNS name.
     const sshGateway = new sst.aws.Service('SshGateway', {
       cluster,
-      image: { context: '../..', dockerfile: 'apps/ssh-gateway/Dockerfile', cache: false },
+      image: { context: '../..', dockerfile: 'apps/ssh-gateway/Dockerfile', cache: serviceImageCache },
       loadBalancer: { rules: [{ listen: `${PORTS.SSH_GATEWAY}/tcp`, forward: `${PORTS.SSH_GATEWAY}/tcp` }] },
       environment: {
         // api-client-go composes paths like "/box/ssh-access/validate" directly.
@@ -906,7 +932,7 @@ export default $config({
       otelCollectorOtlpHttpUrl,
       ghcrSecret ? ghcrSecret.arn : '',
     ]).apply(([apiUrl, token, otelEndpoint, ghcrSecretArn]) =>
-      buildRunnerUserData({ apiUrl, token, otelEndpoint, ghcrSecretArn: ghcrSecretArn || undefined, ghcrUsername }),
+      buildRunnerUserData({ apiUrl, token, otelEndpoint, ghcrSecretArn: ghcrSecretArn || undefined, ghcrUsername, region }),
     )
 
     // Runners hold load-bearing box state (/var/lib/boxlite + in-memory libkrun VMs).
@@ -977,7 +1003,7 @@ export default $config({
         `boxlite-runner-${index}`,
         $resolve([api.url, apiKey.result, otelCollectorOtlpHttpUrl, ghcrSecret ? ghcrSecret.arn : '']).apply(
           ([apiUrl, token, otelEndpoint, ghcrSecretArn]) =>
-            buildRunnerUserData({ apiUrl, token, otelEndpoint, ghcrSecretArn: ghcrSecretArn || undefined, ghcrUsername }),
+            buildRunnerUserData({ apiUrl, token, otelEndpoint, ghcrSecretArn: ghcrSecretArn || undefined, ghcrUsername, region }),
         ),
       )
       return { name, apiKey, instance }
@@ -1018,6 +1044,7 @@ async function buildRunnerUserData(input: {
   otelEndpoint: string
   ghcrSecretArn?: string
   ghcrUsername?: string
+  region: string
 }): Promise<string> {
   const { readFileSync } = await import('fs')
   const { resolve } = await import('path')
@@ -1133,7 +1160,7 @@ Environment=API_VERSION=2
 Environment=API_PORT=${PORTS.RUNNER}
 Environment=RUNNER_DOMAIN=\$HOST_IP
 Environment=BOXLITE_HOME_DIR=/var/lib/boxlite
-Environment=AWS_REGION=${REGION}
+Environment=AWS_REGION=${input.region}
 Environment=OTEL_LOGGING_ENABLED=true
 Environment=OTEL_TRACING_ENABLED=true
 Environment=OTEL_EXPORTER_OTLP_ENDPOINT=${input.otelEndpoint}${input.ghcrSecretArn ? `
