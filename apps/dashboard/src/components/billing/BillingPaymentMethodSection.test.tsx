@@ -140,6 +140,9 @@ describe('BillingPaymentMethodSection', () => {
 
     await click(findButton('Set up payment method'))
     expect(state.setupPayment).not.toHaveBeenCalled()
+    expect(document.body.textContent).toContain(
+      'Stripe securely saves this card for future top-ups. Automatic charges occur only after you enable auto-reload.',
+    )
     await click(findButton('Confirm setup'))
 
     expect(state.setupPayment).toHaveBeenCalledWith({ organizationId: 'org-1' })

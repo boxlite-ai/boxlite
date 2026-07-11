@@ -54,6 +54,10 @@ const stages = {
     'api/src/billing/payment/payment.controller.spec.ts',
     'api/src/billing/payment/payment.service.spec.ts',
   ]),
+  stripe: {
+    label: 'Stripe Sandbox configuration',
+    args: ['test:billing:stripe'],
+  },
   read: jest('Billing read API', [
     'api/src/billing/billing-read.service.spec.ts',
     'api/src/billing/billing.controller.spec.ts',
@@ -79,6 +83,9 @@ const stages = {
       'dashboard/src/billing-api',
       'dashboard/src/hooks/mutations',
       'scripts/billing-local-e2e.mjs',
+      'scripts/billing-stripe-sandbox-config.mjs',
+      'scripts/billing-stripe-sandbox-e2e.mjs',
+      'scripts/billing-stripe-sandbox-listener.mjs',
       'scripts/billing-test-suite.mjs',
     ],
   },
@@ -97,21 +104,22 @@ const suites = {
   usage: { description: 'PR1 usage lifecycle tests', stages: [stages.usage] },
   rating: { description: 'PR2 rating and price snapshots', stages: [stages.rating] },
   wallet: { description: 'PR3 wallet and settlement', stages: [stages.wallet] },
-  payment: { description: 'PR5 providers, webhooks, and top-ups', stages: [stages.payment] },
+  payment: { description: 'PR5 providers, webhooks, and top-ups', stages: [stages.payment, stages.stripe] },
+  stripe: { description: 'PR6 Stripe Sandbox configuration', stages: [stages.stripe] },
   read: { description: 'PR4 billing read API', stages: [stages.read] },
   ui: { description: 'PR4/PR5 dashboard behavior', stages: [stages.ui] },
   db: { description: 'Real PostgreSQL concurrency and recovery', stages: [stages.db] },
   quick: {
     description: 'Fast deterministic API and UI regression suite',
-    stages: [stages.apiUnit, stages.ui],
+    stages: [stages.apiUnit, stages.stripe, stages.ui],
   },
   all: {
     description: 'Complete deterministic Billing collection',
-    stages: [stages.apiUnit, stages.db, stages.ui],
+    stages: [stages.apiUnit, stages.stripe, stages.db, stages.ui],
   },
   verify: {
     description: 'Complete collection plus lint and builds',
-    stages: [stages.apiUnit, stages.db, stages.ui, stages.lint, stages.apiBuild, stages.dashboardBuild],
+    stages: [stages.apiUnit, stages.stripe, stages.db, stages.ui, stages.lint, stages.apiBuild, stages.dashboardBuild],
   },
 }
 
