@@ -7,6 +7,7 @@
 export * from './OrganizationTier'
 export * from './OrganizationUsage'
 export * from './OrganizationWallet'
+export * from './BillingOverview'
 export * from './tier'
 export * from './OrganizationEmail'
 export * from './Invoice'

@@ -43,6 +43,11 @@ export const queryKeys = {
   },
   billing: {
     all: ['billing'] as const,
+    overview: (organizationId: string, from: string, to: string) =>
+      [...queryKeys.billing.all, organizationId, 'overview', { from, to }] as const,
+    pricing: (organizationId: string) => [...queryKeys.billing.all, organizationId, 'pricing'] as const,
+    boxUsage: (organizationId: string, boxId: string) =>
+      [...queryKeys.billing.all, organizationId, 'boxes', boxId] as const,
     tiers: () => [...queryKeys.billing.all, 'tiers'] as const,
     emails: (organizationId: string) => [...queryKeys.billing.all, organizationId, 'emails'] as const,
     portalUrl: (organizationId: string) => [...queryKeys.billing.all, organizationId, 'portal-url'] as const,

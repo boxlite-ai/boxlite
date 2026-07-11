@@ -53,8 +53,27 @@ vi.mock('@/hooks/useRegions', () => ({
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
     selectedOrganization: { id: 'org-1' },
-    authenticatedUserOrganizationMember: { role: 'OWNER' },
+    authenticatedUserOrganizationMember: { role: 'owner' },
     authenticatedUserHasPermission: () => true,
+  }),
+}))
+
+vi.mock('@/hooks/queries/useBillingPricingQuery', () => ({
+  useBillingPricingQuery: () => ({
+    data: {
+      version: 1,
+      effectiveFrom: '2026-01-01T00:00:00.000Z',
+      cpuRateCentsPerHour: '5.04',
+      memRateCentsPerHour: '1.62',
+      diskRateCentsPerHour: '0.0108',
+      gpuRateCentsPerHour: '0',
+    },
+  }),
+}))
+
+vi.mock('@/hooks/queries/useBoxBillingUsageQuery', () => ({
+  useBoxBillingUsageQuery: () => ({
+    data: { costPreciseCents: '2.778' },
   }),
 }))
 
@@ -182,5 +201,14 @@ describe('BoxDetails refresh', () => {
     expect(mocks.boxRefetch).toHaveBeenCalledTimes(1)
     expect(mocks.terminalRefetch).toHaveBeenCalledTimes(1)
     expect(document.querySelector('[data-testid="terminal-frame"]')).toBe(frameBeforeRefresh)
+  })
+
+  it('shows the current running rate and this box rated cost', async () => {
+    await renderBoxDetails()
+
+    expect(document.body.textContent).toContain('cost')
+    expect(document.body.textContent).toContain('$0.08388 / hr')
+    expect(document.body.textContent).toContain('$0.0278')
+    expect(document.body.textContent).toContain('pricing v1')
   })
 })

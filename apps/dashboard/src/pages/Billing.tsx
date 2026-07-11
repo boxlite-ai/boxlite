@@ -1,66 +1,144 @@
 /*
- * Copyright 2025 Daytona Platforms Inc.
- * Modified by BoxLite AI, 2025-2026
+ * Copyright BoxLite AI, 2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { RoutePath } from '@/enums/RoutePath'
-import { Clock, Cpu, Database, MemoryStick, type LucideIcon } from '@/components/ui/icon'
-import { Link } from 'react-router-dom'
+import { PageContent, PageHeader, PageLayout, PageTitle } from '@/components/PageLayout'
+import { BalanceOverviewCard } from '@/components/billing/BalanceOverviewCard'
+import { UsageTrendCharts } from '@/components/billing/UsageTrendCharts'
+import { SectionTitle } from '@/components/billing/ascii'
+import { Calendar, RefreshCw } from '@/components/ui/icon'
+import { useBillingOverviewQuery } from '@/hooks/queries/useBillingOverviewQuery'
+import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
+import { cn } from '@/lib/utils'
+import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
+import { useMemo, useState, type ReactNode } from 'react'
 
-const DIMENSIONS: { icon: LucideIcon; name: string; unit: string }[] = [
-  { icon: Cpu, name: 'CPU', unit: 'per vCPU·hr' },
-  { icon: MemoryStick, name: 'Memory', unit: 'per GiB·hr' },
-  { icon: Database, name: 'Disk', unit: 'per GiB·mo' },
-  { icon: Clock, name: 'Runtime', unit: 'per second' },
-]
+const RANGE_OPTIONS = [
+  { id: '1h', label: 'Last 1 hour', milliseconds: 60 * 60 * 1000 },
+  { id: '24h', label: 'Last 24 hours', milliseconds: 24 * 60 * 60 * 1000 },
+  { id: '7d', label: 'Last 7 days', milliseconds: 7 * 24 * 60 * 60 * 1000 },
+  { id: '30d', label: 'Last 30 days', milliseconds: 30 * 24 * 60 * 60 * 1000 },
+  { id: 'all', label: 'All time', milliseconds: null },
+] as const
 
-function SegBars() {
+type RangeId = (typeof RANGE_OPTIONS)[number]['id']
+
+function StatePanel({ children, tone = 'default' }: { children: ReactNode; tone?: 'default' | 'error' }) {
   return (
-    <div className="mt-3 flex w-full gap-[3px]">
-      {Array.from({ length: 8 }).map((_, i) => (
-        <span key={i} className="h-[5px] flex-1 bg-brand/15" />
-      ))}
+    <div
+      className={cn(
+        'border bg-card px-[22px] py-6 font-mono text-[13px]',
+        tone === 'error' ? 'border-destructive/50 text-destructive' : 'border-border text-muted-foreground',
+      )}
+    >
+      {children}
     </div>
   )
 }
 
 function Billing() {
+  const { selectedOrganization, authenticatedUserOrganizationMember } = useSelectedOrganization()
+  const [rangeId, setRangeId] = useState<RangeId>('30d')
+  const [rangeEnd, setRangeEnd] = useState(() => new Date())
+  const isOwner = authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER
+  const selectedRange = RANGE_OPTIONS.find((range) => range.id === rangeId) ?? RANGE_OPTIONS[3]
+  const range = useMemo(
+    () => ({
+      from:
+        selectedRange.milliseconds == null ? new Date(0) : new Date(rangeEnd.getTime() - selectedRange.milliseconds),
+      to: rangeEnd,
+    }),
+    [rangeEnd, selectedRange.milliseconds],
+  )
+  const overviewQuery = useBillingOverviewQuery({
+    organizationId: selectedOrganization?.id ?? '',
+    from: range.from,
+    to: range.to,
+    enabled: Boolean(selectedOrganization && isOwner),
+  })
+
+  const selectRange = (nextRangeId: RangeId) => {
+    setRangeId(nextRangeId)
+    setRangeEnd(new Date())
+  }
+
   return (
-    <div className="flex min-h-[calc(100svh-60px)] items-center justify-center px-6 py-14 lg:px-[40px]">
-      <div className="w-full max-w-[560px] text-center" style={{ animation: 'stat-in 0.5s ease both' }}>
-        <h1 className="mb-3 text-[26px] font-semibold leading-tight tracking-[-0.5px]">Billing is on the way</h1>
-        <p className="mx-auto mb-2 max-w-[440px] text-[13px] leading-relaxed text-muted-foreground">
-          BoxLite is <span className="text-foreground">free while we finish metering</span>. Nothing is charged today —
-          run as many boxes as you need.
-        </p>
-        <p className="mx-auto mb-[30px] max-w-[440px] text-[12.5px] leading-relaxed text-muted-foreground">
-          When billing launches, usage will be metered across four dimensions:
-        </p>
+    <PageLayout>
+      <PageHeader size="full" className="pb-3">
+        <PageTitle className="font-mono text-[24px] font-semibold normal-case text-foreground sm:text-[28px]">
+          Billing
+        </PageTitle>
+      </PageHeader>
 
-        <div className="mb-[34px] grid grid-cols-4 gap-[10px]">
-          {DIMENSIONS.map(({ icon: Icon, name, unit }) => (
-            <div
-              key={name}
-              className="flex flex-col items-center gap-[9px] border border-border bg-card px-[10px] pb-[14px] pt-4"
-            >
-              <Icon className="size-[18px] text-muted-foreground" strokeWidth={1.6} />
-              <div className="text-[11px] uppercase tracking-[1px] text-foreground">{name}</div>
-              <div className="text-[9.5px] tracking-[0.5px] text-muted-foreground">{unit}</div>
-              <SegBars />
+      <PageContent size="full" className="gap-6 font-mono">
+        {!selectedOrganization ? (
+          <StatePanel>Select an organization to view billing.</StatePanel>
+        ) : !isOwner ? (
+          <StatePanel>Only organization owners can view billing.</StatePanel>
+        ) : overviewQuery.isLoading ? (
+          <StatePanel>Loading billing data...</StatePanel>
+        ) : overviewQuery.isError || !overviewQuery.data ? (
+          <StatePanel tone="error">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span>Billing data is unavailable.</span>
+              <button
+                type="button"
+                onClick={() => overviewQuery.refetch()}
+                className="inline-flex size-8 items-center justify-center border border-destructive/40 hover:bg-destructive/10"
+                title="Retry"
+              >
+                <RefreshCw className="size-4" />
+              </button>
             </div>
-          ))}
-        </div>
+          </StatePanel>
+        ) : (
+          <div className="flex flex-col gap-9">
+            <BalanceOverviewCard
+              totalBalanceCents={overviewQuery.data.wallet.totalBalanceCents}
+              freeBalanceCents={overviewQuery.data.wallet.freeBalanceCents}
+              paidBalanceCents={overviewQuery.data.wallet.paidBalanceCents}
+              spentThisMonthCents={overviewQuery.data.spentThisMonthCents}
+              freeExpiresAt={overviewQuery.data.wallet.freeExpiresAt}
+            />
 
-        <Link
-          to={RoutePath.BOXES}
-          className="inline-flex items-center gap-[9px] bg-primary px-[22px] py-3 text-[12.5px] font-semibold tracking-[0.3px] text-primary-foreground transition-opacity hover:opacity-85"
-        >
-          Back to Boxes
-          <span className="text-[14px] leading-none">→</span>
-        </Link>
-      </div>
-    </div>
+            <section>
+              <SectionTitle
+                title="Usage over time"
+                right={
+                  <div className="flex items-center gap-1">
+                    <label className="flex h-9 items-center border border-border bg-background px-3 text-[12px] text-foreground">
+                      <Calendar className="mr-2 size-3.5 text-muted-foreground" />
+                      <select
+                        aria-label="Usage time range"
+                        value={rangeId}
+                        onChange={(event) => selectRange(event.target.value as RangeId)}
+                        className="h-full appearance-none bg-transparent pr-5 font-mono outline-none"
+                      >
+                        {RANGE_OPTIONS.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setRangeEnd(new Date())}
+                      className="inline-flex size-9 items-center justify-center border border-border text-muted-foreground hover:text-foreground"
+                      title="Refresh usage"
+                    >
+                      <RefreshCw className={cn('size-3.5', overviewQuery.isFetching && 'animate-spin')} />
+                    </button>
+                  </div>
+                }
+              />
+              <UsageTrendCharts usage={overviewQuery.data.usage} buckets={overviewQuery.data.usageBuckets} />
+            </section>
+          </div>
+        )}
+      </PageContent>
+    </PageLayout>
   )
 }
 

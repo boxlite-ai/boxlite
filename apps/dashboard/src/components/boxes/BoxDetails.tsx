@@ -5,6 +5,7 @@
 
 import { OrganizationSuspendedError } from '@/api/errors'
 import { OnboardingGuideDialog } from '@/components/OnboardingGuideDialog'
+import { calculateBoxHourlyCost, formatUsdFromCents } from '@/components/billing/cost'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -23,7 +24,9 @@ import { useDeleteBoxMutation } from '@/hooks/mutations/useDeleteBoxMutation'
 import { useRecoverBoxMutation } from '@/hooks/mutations/useRecoverBoxMutation'
 import { useStartBoxMutation } from '@/hooks/mutations/useStartBoxMutation'
 import { useStopBoxMutation } from '@/hooks/mutations/useStopBoxMutation'
+import { useBillingPricingQuery } from '@/hooks/queries/useBillingPricingQuery'
 import { useBoxQuery } from '@/hooks/queries/useBoxQuery'
+import { useBoxBillingUsageQuery } from '@/hooks/queries/useBoxBillingUsageQuery'
 import { useConfig } from '@/hooks/useConfig'
 import { useRegions } from '@/hooks/useRegions'
 import { useBoxWsSync } from '@/hooks/useBoxWsSync'
@@ -163,6 +166,13 @@ export default function BoxDetails() {
   }, [clearOnboardingUrlParam, userId])
 
   const { data: box, isLoading, isError, error, refetch } = useBoxQuery(boxId ?? '')
+  const canViewBilling = authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER
+  const pricingQuery = useBillingPricingQuery(selectedOrganization?.id ?? '', canViewBilling)
+  const boxBillingQuery = useBoxBillingUsageQuery(
+    selectedOrganization?.id ?? '',
+    box?.id ?? '',
+    Boolean(canViewBilling && box),
+  )
   const isNotFound = isError && isAxiosError(error.cause) && error.cause?.status === 404
   useBoxWsSync({ boxId })
 
@@ -436,6 +446,38 @@ export default function BoxDetails() {
               <SpecRow label="cpu">{box.cpu} vcpu</SpecRow>
               <SpecRow label="memory">{box.memory} gib</SpecRow>
               <SpecRow label="disk">{box.disk} gib</SpecRow>
+
+              {canViewBilling ? (
+                <>
+                  <SectionHeader
+                    title="cost"
+                    right={
+                      pricingQuery.data ? (
+                        <span className="text-[10px] text-muted-foreground">pricing v{pricingQuery.data.version}</span>
+                      ) : undefined
+                    }
+                  />
+                  <SpecRow label="running rate">
+                    {pricingQuery.data
+                      ? `${formatUsdFromCents(
+                          calculateBoxHourlyCost(pricingQuery.data, {
+                            cpu: box.cpu,
+                            memory: box.memory,
+                            disk: box.disk,
+                          }).totalCents,
+                          5,
+                        )} / hr`
+                      : 'unavailable'}
+                  </SpecRow>
+                  <SpecRow label="rated total">
+                    {boxBillingQuery.data
+                      ? formatUsdFromCents(boxBillingQuery.data.costPreciseCents, 4)
+                      : boxBillingQuery.isError
+                        ? 'unavailable'
+                        : 'pending'}
+                  </SpecRow>
+                </>
+              ) : null}
 
               <SectionHeader title="timestamps" />
               <SpecRow label="created">{getRelativeTimeString(box.createdAt).relativeTimeString}</SpecRow>

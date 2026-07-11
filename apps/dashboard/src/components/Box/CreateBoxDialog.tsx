@@ -4,9 +4,12 @@
  */
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { calculateBoxHourlyCost, formatUsdFromCents } from '@/components/billing/cost'
+import type { BillingPricing } from '@/billing-api'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { RoutePath } from '@/enums/RoutePath'
 import { useCreateBoxMutation } from '@/hooks/mutations/useCreateBoxMutation'
+import { useBillingPricingQuery } from '@/hooks/queries/useBillingPricingQuery'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { getBoxRouteId } from '@/lib/box-identity'
 import { handleApiError } from '@/lib/error-handling'
@@ -206,6 +209,7 @@ export const CreateBoxDialog = ({
 
   const { selectedOrganization } = useSelectedOrganization()
   const createBoxMutation = useCreateBoxMutation()
+  const pricingQuery = useBillingPricingQuery(selectedOrganization?.id ?? '', Boolean(open && selectedOrganization))
   const defaultImage = SUPPORTED_BOX_IMAGES.find((i) => i.isDefault) ?? SUPPORTED_BOX_IMAGES[0]
 
   // Per-box ceilings for the current org (backend rejects a create above these).
@@ -420,13 +424,7 @@ export const CreateBoxDialog = ({
           </div>
         </div>
 
-        {/* price — billing is not enabled yet, so everything is free ($0) */}
-        <div className="flex shrink-0 flex-col gap-1 border-t border-border px-4 py-4 sm:flex-row sm:items-baseline sm:justify-between sm:px-6">
-          <span className="font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground">Price per hour</span>
-          <span className="font-mono text-[20px] font-bold tracking-[-0.5px] sm:text-[24px]">
-            $0.00 <span className="text-[11px] font-normal text-muted-foreground">/ hr · free in preview</span>
-          </span>
-        </div>
+        <BoxCostEstimate cpu={cpu} memory={memory} disk={disk} pricing={pricingQuery.data} />
 
         {/* footer */}
         <div className="grid shrink-0 grid-cols-2 gap-[10px] border-t border-border px-4 py-4 sm:flex sm:justify-end sm:px-6">
@@ -448,5 +446,65 @@ export const CreateBoxDialog = ({
         </div>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function BoxCostEstimate({
+  cpu,
+  memory,
+  disk,
+  pricing,
+}: {
+  cpu: number
+  memory: number
+  disk: number
+  pricing?: BillingPricing
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const cost = pricing ? calculateBoxHourlyCost(pricing, { cpu, memory, disk }) : null
+
+  return (
+    <div className="shrink-0 border-t border-border px-4 py-4 font-mono sm:px-6">
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          disabled={!cost}
+          className="text-[10px] uppercase tracking-[1.2px] text-muted-foreground enabled:hover:text-foreground"
+        >
+          {expanded ? '[-]' : '[+]'} Est. price / hour
+        </button>
+        {cost && pricing ? (
+          <span className="text-[20px] font-bold tracking-normal sm:text-[24px]">
+            {formatUsdFromCents(cost.totalCents, 5)}{' '}
+            <span className="text-[11px] font-normal text-muted-foreground">/ hr · Pricing v{pricing.version}</span>
+          </span>
+        ) : (
+          <span className="text-[12px] text-muted-foreground">Pricing unavailable</span>
+        )}
+      </div>
+      {expanded && cost && pricing ? (
+        <div className="mt-4 space-y-2 border-t border-dashed border-border pt-3 text-[11px] text-muted-foreground">
+          <div className="flex justify-between gap-4">
+            <span>
+              CPU {cpu} vCPU x {formatUsdFromCents(pricing.cpuRateCentsPerHour, 4)}
+            </span>
+            <span className="text-foreground">{formatUsdFromCents(cost.cpuCents, 5)}</span>
+          </div>
+          <div className="flex justify-between gap-4">
+            <span>
+              Memory {memory} GiB x {formatUsdFromCents(pricing.memRateCentsPerHour, 4)}
+            </span>
+            <span className="text-foreground">{formatUsdFromCents(cost.memoryCents, 5)}</span>
+          </div>
+          <div className="flex justify-between gap-4">
+            <span>
+              Disk {disk} GiB x {formatUsdFromCents(pricing.diskRateCentsPerHour, 6)}
+            </span>
+            <span className="text-foreground">{formatUsdFromCents(cost.diskCents, 6)}</span>
+          </div>
+        </div>
+      ) : null}
+    </div>
   )
 }

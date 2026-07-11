@@ -18,6 +18,20 @@ vi.mock('@/hooks/useSelectedOrganization', () => ({
 vi.mock('@/hooks/mutations/useCreateBoxMutation', () => ({
   useCreateBoxMutation: () => ({ mutateAsync: vi.fn() }),
 }))
+vi.mock('@/hooks/queries/useBillingPricingQuery', () => ({
+  useBillingPricingQuery: () => ({
+    data: {
+      version: 1,
+      effectiveFrom: '2026-01-01T00:00:00.000Z',
+      cpuRateCentsPerHour: '5.04',
+      memRateCentsPerHour: '1.62',
+      diskRateCentsPerHour: '0.0108',
+      gpuRateCentsPerHour: '0',
+    },
+    isLoading: false,
+    isError: false,
+  }),
+}))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 vi.mock('react-router-dom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router-dom')>()
@@ -84,7 +98,9 @@ describe('CreateBoxDialog per-org resource cap', () => {
     await flush()
   }
 
-  async function rerenderOpen(host = document.body.firstElementChild ?? document.body.appendChild(document.createElement('div'))) {
+  async function rerenderOpen(
+    host = document.body.firstElementChild ?? document.body.appendChild(document.createElement('div')),
+  ) {
     await act(async () => {
       root ??= createRoot(host)
       root.render(<CreateBoxDialog open onOpenChange={() => {}} />)
@@ -213,5 +229,18 @@ describe('CreateBoxDialog per-org resource cap', () => {
 
     expect(input.value).toBe('3')
     expect(document.body.textContent).not.toContain('support@boxlite.ai')
+  })
+
+  it('shows a live hourly estimate from the current pricing version', async () => {
+    await renderOpen()
+
+    expect(document.body.textContent).toContain('$0.06768')
+    const increaseCpu = document.querySelectorAll<HTMLButtonElement>('button[aria-label="increase"]')[0]
+    await act(async () => increaseCpu.click())
+    await flush()
+
+    expect(document.body.textContent).toContain('$0.11808')
+    expect(document.body.textContent).toContain('Pricing v1')
+    expect(document.body.textContent).not.toContain('free in preview')
   })
 })

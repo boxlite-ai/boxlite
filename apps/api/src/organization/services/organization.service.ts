@@ -206,7 +206,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
    *
    * A region is available for the organization if either:
    * - It is directly associated with the organization, or
-   * - It is not associated with any organization, but the organization has quotas allocated for the region or quotas are not enforced for the region
+   * - It is not associated with any organization and quotas are not enforced for the region
    *
    * @param organizationId - The organization ID.
    * @returns The available regions
@@ -221,13 +221,6 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       .orWhere('region."regionType" IN (:...otherRegionTypes) AND region."enforceQuotas" = false', {
         otherRegionTypes: [RegionType.DEDICATED, RegionType.SHARED],
       })
-      .orWhere(
-        'region."regionType" IN (:...otherRegionTypes) AND region."enforceQuotas" = true AND EXISTS (SELECT 1 FROM region_quota rq WHERE rq."regionId" = region."id" AND rq."organizationId" = :organizationId)',
-        {
-          otherRegionTypes: [RegionType.DEDICATED, RegionType.SHARED],
-          organizationId,
-        },
-      )
       .orderBy(
         `CASE region."regionType"
           WHEN '${RegionType.CUSTOM}' THEN 1
