@@ -456,12 +456,16 @@ export default $config({
         VERSION: '0.1.0',
         DEFAULT_REGION_ENFORCE_QUOTAS: 'false',
         DEFAULT_TEMPLATE: envOr('DEFAULT_TEMPLATE', 'boxlite/base'),
-        // Box base images: the three *_IMAGE refs below are the built-in curated set the API
-        // gates box creation to (apps/api curated-images.constant.ts); the runner pulls them
-        // straight from ghcr.io with its GHCR_TOKEN. BOXLITE_SYSTEM_IMAGES appends more images
-        // (comma-separated `name=ref`) without a code deploy — empty means built-ins only.
-        // IMAGE_TAG and the SOURCE_REGISTRY_* block are inert Daytona-port residue (no consumer
-        // — see apps/api configuration.ts), kept only as reserved names for a future registry path.
+        BILLING_TRIAL_GRANT_CENTS: envOr('BILLING_TRIAL_GRANT_CENTS', '10000'),
+        BILLING_TRIAL_DURATION_DAYS: envOr('BILLING_TRIAL_DURATION_DAYS', '30'),
+        BILLING_PAYMENT_PROVIDER: isProd
+          ? requireEnv('BILLING_PAYMENT_PROVIDER', 'for production billing')
+          : envOr('BILLING_PAYMENT_PROVIDER', 'fake'),
+        // Box base images: only the three digest-pinned *_IMAGE refs below are live — the
+        // API gates box creation to that curated set (apps/api curated-images.constant.ts)
+        // and the runner pulls them straight from ghcr.io with its GHCR_TOKEN. IMAGE_TAG and
+        // the SOURCE_REGISTRY_* block are inert Daytona-port residue (no consumer — see
+        // apps/api configuration.ts), kept only as reserved names for a future registry path.
         BOXLITE_SYSTEM_IMAGE_TAG: envOr('BOXLITE_SYSTEM_IMAGE_TAG', '20260605-p0-r3'),
         BOXLITE_SYSTEM_BASE_IMAGE: envOr(
           'BOXLITE_SYSTEM_BASE_IMAGE',
