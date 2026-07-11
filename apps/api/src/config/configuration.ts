@@ -169,6 +169,13 @@ const configuration = {
   billing: {
     trialGrantCents: parseInt(process.env.BILLING_TRIAL_GRANT_CENTS || '10000', 10),
     trialDurationDays: parseInt(process.env.BILLING_TRIAL_DURATION_DAYS || '30', 10),
+    paymentProvider:
+      process.env.BILLING_PAYMENT_PROVIDER ||
+      (process.env.NODE_ENV === 'production' || process.env.ENVIRONMENT === 'production' ? undefined : 'fake'),
+    stripe: {
+      secretKey: process.env.STRIPE_SECRET_KEY,
+      webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
+    },
   },
   analyticsApiUrl: process.env.ANALYTICS_API_URL,
   defaultRunner: {

@@ -46,6 +46,7 @@ async function bootstrap() {
   }
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: true,
+    rawBody: true,
     httpsOptions: httpsEnabled ? httpsOptions : undefined,
   })
   app.useLogger(app.get(PinoLogger))

@@ -5,7 +5,7 @@
 
 import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn } from 'typeorm'
 
-export type WalletTransactionKind = 'free_grant' | 'usage_debit' | 'adjustment'
+export type WalletTransactionKind = 'free_grant' | 'usage_debit' | 'adjustment' | 'top_up'
 
 @Entity('wallet_transaction')
 @Index('wallet_transaction_wallet_created_idx', ['walletId', 'createdAt'])

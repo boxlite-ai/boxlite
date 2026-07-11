@@ -33,6 +33,30 @@ export class Wallet {
   @Column({ type: 'character varying', default: 'trial' })
   billingStatus: BillingStatus
 
+  @Column({ type: 'character varying', nullable: true })
+  paymentProviderCustomerId: string | null
+
+  @Column({ type: 'character varying', nullable: true })
+  paymentProviderMethodId: string | null
+
+  @Column({ type: 'character varying', nullable: true })
+  paymentMethodBrand: string | null
+
+  @Column({ type: 'character varying', nullable: true })
+  paymentMethodLast4: string | null
+
+  @Column({ type: 'boolean', default: false })
+  autoReloadEnabled: boolean
+
+  @Column({ type: 'bigint', nullable: true })
+  autoReloadThresholdCents: string | null
+
+  @Column({ type: 'bigint', nullable: true })
+  autoReloadTargetCents: string | null
+
+  @Column({ type: 'timestamp with time zone', nullable: true })
+  autoReloadNextAttemptAt: Date | null
+
   @CreateDateColumn({ type: 'timestamp with time zone' })
   createdAt: Date
 
