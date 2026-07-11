@@ -53,7 +53,10 @@ page.on('response', (response) => {
   }
 })
 page.on('requestfailed', (request) => {
-  const requestError = `REQUEST FAILED ${request.method()} ${request.resourceType()} ${request.url()}: ${request.failure()?.errorText ?? 'unknown error'}`
+  const failureText = request.failure()?.errorText ?? 'unknown error'
+  if (failureText === 'net::ERR_ABORTED') return
+
+  const requestError = `REQUEST FAILED ${request.method()} ${request.resourceType()} ${request.url()}: ${failureText}`
   if (isLocalUrl(request.url())) {
     browserErrors.push(`network: ${requestError}`)
   } else {
