@@ -52,7 +52,7 @@ single laptop's `.env`:
 
 | What | Where | Set with |
 |---|---|---|
-| **App secrets** — SSH host/private keys, Auth0 Management API id + secret, `SVIX_AUTH_TOKEN`, `POSTHOG_API_KEY`, `OIDC_CLIENT_ID` | SST secret store (encrypted in SST state, per stage) | `sst secret set <NAME> "<value>" --stage <stage>` |
+| **App secrets** — SSH host/private keys, Auth0 Management API id + secret, `SVIX_AUTH_TOKEN`, `POSTHOG_API_KEY`, `OIDC_CLIENT_ID`, Stripe API + webhook secrets | SST secret store (encrypted in SST state, per stage) | `sst secret set <NAME> "<value>" --stage <stage>` |
 | **Cloudflare provider creds** — `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_DEFAULT_ACCOUNT_ID` | AWS SSM (`SecureString`, per stage) | `aws ssm put-parameter --type SecureString --name /boxlite/<stage>/cloudflare-…` |
 | **Non-secret config** — `STACK_DOMAIN`, `OIDC_ISSUER_BASE_URL`, `OIDC_AUDIENCE`, toggles | local `.env` (gitignored) | edit `.env` |
 
@@ -69,6 +69,13 @@ sst secret set SVIX_AUTH_TOKEN "<value>" --stage dev   # set one
 sst secret load .env --stage dev                       # bulk-load a dotenv (names match 1:1)
 npm run secrets -- --stage dev                          # list what's set
 ```
+
+Billing with Stripe also requires stage-scoped `STRIPE_SECRET_KEY` and
+`STRIPE_WEBHOOK_SECRET`. Use a Stripe test key for non-production stages and
+register only the four events consumed by the API: `checkout.session.completed`,
+`checkout.session.async_payment_failed`, `payment_intent.succeeded`, and
+`payment_intent.payment_failed`. Set `BILLING_PAYMENT_PROVIDER=stripe` in the
+deploy environment; the API fails closed when either secret is absent.
 
 Secret names match the env keys the services expect. Unset optional secrets
 resolve to empty (feature off); `OIDC_CLIENT_ID` defaults to `boxlite`. A changed

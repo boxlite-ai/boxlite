@@ -80,7 +80,7 @@ function PaymentMethodCard({
             <AlertDialogTitle>Confirm payment method setup</AlertDialogTitle>
             <AlertDialogDescription>
               {payment.providerMode === 'stripe'
-                ? 'Continue to Stripe to securely add or replace the organization payment method.'
+                ? 'Stripe securely saves this card for future top-ups. Automatic charges occur only after you enable auto-reload.'
                 : 'Continue with the test payment provider for this organization.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
