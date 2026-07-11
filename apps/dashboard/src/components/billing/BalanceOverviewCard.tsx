@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import type { ReactNode } from 'react'
 import { BILLING_BRAND, MatrixAmount } from './ascii'
 
 function centsToDisplay(cents: string): string {
@@ -30,12 +31,14 @@ export function BalanceOverviewCard({
   paidBalanceCents,
   spentThisMonthCents,
   freeExpiresAt,
+  paymentMethod,
 }: {
   totalBalanceCents: string
   freeBalanceCents: string
   paidBalanceCents: string
   spentThisMonthCents: string
   freeExpiresAt: string | null
+  paymentMethod: ReactNode
 }) {
   const expiry = freeExpiresAt ? new Date(freeExpiresAt) : null
   const expiryLabel = expiry && !Number.isNaN(expiry.getTime()) ? ` · expires ${expiry.toLocaleDateString()}` : ''
@@ -54,6 +57,7 @@ export function BalanceOverviewCard({
         <span className="hidden text-border sm:inline">|</span>
         <span className="text-foreground">Paid balance ${centsToDisplay(paidBalanceCents)}</span>
       </div>
+      {paymentMethod}
     </div>
   )
 }
