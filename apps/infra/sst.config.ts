@@ -456,6 +456,11 @@ export default $config({
         VERSION: '0.1.0',
         DEFAULT_REGION_ENFORCE_QUOTAS: 'false',
         DEFAULT_TEMPLATE: envOr('DEFAULT_TEMPLATE', 'boxlite/base'),
+        BILLING_TRIAL_GRANT_CENTS: envOr('BILLING_TRIAL_GRANT_CENTS', '10000'),
+        BILLING_TRIAL_DURATION_DAYS: envOr('BILLING_TRIAL_DURATION_DAYS', '30'),
+        BILLING_PAYMENT_PROVIDER: isProd
+          ? requireEnv('BILLING_PAYMENT_PROVIDER', 'for production billing')
+          : envOr('BILLING_PAYMENT_PROVIDER', 'fake'),
         // Box base images: only the three digest-pinned *_IMAGE refs below are live — the
         // API gates box creation to that curated set (apps/api curated-images.constant.ts)
         // and the runner pulls them straight from ghcr.io with its GHCR_TOKEN. IMAGE_TAG and

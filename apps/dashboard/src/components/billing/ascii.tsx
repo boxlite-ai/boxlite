@@ -106,6 +106,33 @@ export function SectionTitle({ title, count, right }: { title: string; count?: s
   )
 }
 
+export function CardBrand({ brand, size = 'sm' }: { brand: string; size?: 'sm' | 'lg' }) {
+  const normalizedBrand = brand.toLowerCase()
+  const isLarge = size === 'lg'
+  if (normalizedBrand === 'mastercard') {
+    const diameter = isLarge ? 16 : 10
+    return (
+      <span
+        className={cn('inline-flex items-center gap-0.5 rounded bg-white', isLarge ? 'px-2 py-1.5' : 'px-1 py-0.5')}
+      >
+        <span className="rounded-full bg-[#EB001B]" style={{ width: diameter, height: diameter }} />
+        <span className="-ml-1.5 rounded-full bg-[#F79E1B] opacity-90" style={{ width: diameter, height: diameter }} />
+      </span>
+    )
+  }
+
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center rounded bg-white font-bold italic leading-none text-[#1A1F71]',
+        isLarge ? 'px-3 py-2 text-[18px]' : 'px-1.5 py-0.5 text-[11px]',
+      )}
+    >
+      {normalizedBrand === 'visa' ? 'VISA' : normalizedBrand.toUpperCase() || 'CARD'}
+    </span>
+  )
+}
+
 const sparkConfig: ChartConfig = { value: { label: 'value', color: BILLING_BRAND } }
 
 function MiniSpark({ id, data }: { id: string; data: { value: number }[] }) {

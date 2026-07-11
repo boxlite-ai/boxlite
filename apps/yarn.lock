@@ -16902,6 +16902,7 @@ __metadata:
     pino: "npm:^9.13.1"
     pino-http: "npm:^10.5.0"
     pino-pretty: "npm:^13.1.2"
+    playwright-core: "npm:^1.61.1"
     postcss: "npm:8.5.10"
     posthog-js: "npm:^1.217.6"
     posthog-node: "npm:^4.10.1"
@@ -16933,6 +16934,7 @@ __metadata:
     sqlite3: "npm:^5.1.7"
     starlight-openapi: "npm:^0.19.1"
     storybook: "npm:8"
+    stripe: "npm:^22.3.0"
     suspend-react: "npm:^0.1.3"
     svix: "npm:^1.84.1"
     svix-react: "npm:^1.13.7"
@@ -30960,6 +30962,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"playwright-core@npm:^1.61.1":
+  version: 1.61.1
+  resolution: "playwright-core@npm:1.61.1"
+  bin:
+    playwright-core: cli.js
+  checksum: 10c0/c28896ba82a602182e240ed4f9c467fb0dd9cb57d510f8aba9f25183fe1cde3a0105725a29baffa4157fe885bbb11e228032a2aad0424111584fde45303f07bd
+  languageName: node
+  linkType: hard
+
 "pluralize@npm:8.0.0":
   version: 8.0.0
   resolution: "pluralize@npm:8.0.0"
@@ -35941,6 +35952,18 @@ __metadata:
   version: 2.0.1
   resolution: "strip-json-comments@npm:2.0.1"
   checksum: 10c0/b509231cbdee45064ff4f9fd73609e2bcc4e84a4d508e9dd0f31f70356473fde18abfb5838c17d56fb236f5a06b102ef115438de0600b749e818a35fbbc48c43
+  languageName: node
+  linkType: hard
+
+"stripe@npm:^22.3.0":
+  version: 22.3.0
+  resolution: "stripe@npm:22.3.0"
+  peerDependencies:
+    "@types/node": ">=18"
+  peerDependenciesMeta:
+    "@types/node":
+      optional: true
+  checksum: 10c0/6a41aeefc518031e7329872a4d9c0d468c918eef063408f48e1a1ddf20e47414992379fff158b3c5ed7ce7219da1715c97da2e6b07e104e35fd37cc865516872
   languageName: node
   linkType: hard
 

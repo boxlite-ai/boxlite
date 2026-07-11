@@ -64,6 +64,21 @@ vi.mock('@/components/PageLayout', () => ({
   PageTitle: ({ children }: { children: ReactNode }) => <h1>{children}</h1>,
 }))
 
+vi.mock('@/components/billing/BillingPaymentPanel', () => ({
+  BillingPaymentPanel: () => <div>Auto-reload One-time top-up Receipts</div>,
+}))
+
+vi.mock('@/components/billing/BillingPaymentMethodSection', () => ({
+  BillingPaymentMethodSection: ({ onAddFunds }: { onAddFunds?: () => void }) => (
+    <div>
+      Payment method Set up payment method
+      <button type="button" onClick={onAddFunds}>
+        Add funds
+      </button>
+    </div>
+  ),
+}))
+
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
     selectedOrganization: {
@@ -133,7 +148,7 @@ describe('Billing page', () => {
     await flushReactWork()
   }
 
-  it('renders the terminal usage layout around real wallet and usage data', async () => {
+  it('restores the PM usage layout around real wallet and usage data', async () => {
     await renderBilling()
 
     expect(document.querySelector('[data-testid="billing-balance-overview"]')).toBeTruthy()
@@ -145,6 +160,36 @@ describe('Billing page', () => {
     expect(document.querySelector('[data-testid="billing-limits-panel"]')).toBeTruthy()
     expect(document.body.textContent).not.toContain('Pricing v1')
     expect(document.body.textContent).not.toContain('Billing is on the way')
+  })
+
+  it('keeps payment setup with the Usage balance and limits Billing to payment operations', async () => {
+    await renderBilling()
+
+    const usageTab = Array.from(document.querySelectorAll('button')).find((button) => button.textContent === 'Usage')
+    const billingTab = Array.from(document.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Billing',
+    )
+    expect(usageTab?.getAttribute('data-state')).toBe('active')
+    expect(billingTab).toBeTruthy()
+    expect(document.body.textContent).toContain('Payment method')
+    expect(document.body.textContent).toContain('Set up payment method')
+    if (!billingTab) throw new Error('Billing tab is missing')
+    const addFunds = Array.from(document.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Add funds',
+    )
+    if (!addFunds) throw new Error('Add funds button is missing')
+
+    await act(async () => {
+      addFunds.click()
+    })
+
+    expect(billingTab.getAttribute('data-state')).toBe('active')
+    expect(document.body.textContent).toContain('Auto-reload')
+    expect(document.body.textContent).toContain('One-time top-up')
+    expect(document.body.textContent).toContain('Receipts')
+    expect(document.body.textContent).not.toContain('Payment method')
+    expect(document.body.textContent).not.toContain('Set up payment method')
+    expect(document.body.textContent).not.toContain('Rated usage')
   })
 
   it('does not present unavailable billing data as a zero balance', async () => {
