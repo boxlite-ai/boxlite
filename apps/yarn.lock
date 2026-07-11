@@ -16844,6 +16844,7 @@ __metadata:
     cmdk: "npm:^1.1.1"
     cookie-parser: "npm:^1.4.7"
     date-fns: "npm:^4.1.0"
+    decimal.js: "npm:^10.4.3"
     dockerode: "npm:^4.0.4"
     dotenv: "npm:^17.0.1"
     ejs: "npm:^3.1.10"
