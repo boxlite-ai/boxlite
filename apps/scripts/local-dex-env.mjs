@@ -12,24 +12,69 @@ const scriptsRoot = path.dirname(fileURLToPath(import.meta.url))
 const appsRoot = path.resolve(scriptsRoot, '..')
 const repoRoot = path.resolve(appsRoot, '..')
 
-const defaultConfig = {
-  dashboardUrl: process.env.BOXLITE_E2E_BASE_URL || 'http://localhost:3000',
-  apiUrl: process.env.BOXLITE_E2E_API_URL || 'http://localhost:3001/api',
-  dexIssuer: process.env.BOXLITE_E2E_DEX_ISSUER || 'http://localhost:5556',
-  dexClientId: process.env.BOXLITE_E2E_DEX_CLIENT_ID || 'boxlite',
-  dexAudience: process.env.BOXLITE_E2E_DEX_AUDIENCE || 'boxlite',
-  loginEmail: process.env.BOXLITE_E2E_LOGIN_EMAIL || 'admin@boxlite.dev',
-  loginPassword: process.env.BOXLITE_E2E_LOGIN_PASSWORD || 'password',
-  postgresContainer: 'boxlite-local-postgres',
-  redisContainer: 'boxlite-local-redis',
-  dexContainer: 'boxlite-local-dex',
-  registryContainer: 'boxlite-local-registry',
-  registryHost: process.env.BOXLITE_E2E_REGISTRY_HOST || 'localhost:5001',
-  runtimeImagePlatform: process.env.BOXLITE_E2E_RUNTIME_IMAGE_PLATFORM || defaultRuntimeImagePlatform(),
-  runtimeImageTag: process.env.BOXLITE_E2E_RUNTIME_IMAGE_TAG || '20260605-p0-r5-local',
-  runnerHomeDir: process.env.BOXLITE_E2E_RUNNER_HOME_DIR || '/tmp/blrt',
-  dockerConfigDir: process.env.BOXLITE_E2E_DOCKER_CONFIG || path.join(os.tmpdir(), 'boxlite-local-docker-config'),
+export function buildLocalDexConfig(env = process.env) {
+  const instance = parseInstance(env.BOXLITE_E2E_INSTANCE)
+  const suffix = instance ? `-${instance}` : ''
+  const apiPort = parsePort(env, 'BOXLITE_E2E_API_PORT', 3001)
+  const dexPort = 5556
+  const registryPort = 5001
+
+  return {
+    instance,
+    headless: parseBoolean(env.BOXLITE_E2E_HEADLESS),
+    dashboardUrl: env.BOXLITE_E2E_BASE_URL || 'http://localhost:3000',
+    apiUrl: env.BOXLITE_E2E_API_URL || `http://localhost:${apiPort}/api`,
+    apiPort,
+    postgresPort: parsePort(env, 'BOXLITE_E2E_POSTGRES_PORT', 5432),
+    redisPort: parsePort(env, 'BOXLITE_E2E_REDIS_PORT', 6379),
+    runnerApiPort: parsePort(env, 'BOXLITE_E2E_RUNNER_API_PORT', 8080),
+    proxyPort: parsePort(env, 'BOXLITE_E2E_PROXY_PORT', 4000),
+    dexPort,
+    dexIssuer: env.BOXLITE_E2E_DEX_ISSUER || `http://localhost:${dexPort}`,
+    dexClientId: env.BOXLITE_E2E_DEX_CLIENT_ID || 'boxlite',
+    dexAudience: env.BOXLITE_E2E_DEX_AUDIENCE || 'boxlite',
+    loginEmail: env.BOXLITE_E2E_LOGIN_EMAIL || 'admin@boxlite.dev',
+    loginPassword: env.BOXLITE_E2E_LOGIN_PASSWORD || 'password',
+    postgresContainer: `boxlite-local-postgres${suffix}`,
+    postgresVolume: `boxlite-local-postgres${suffix}`,
+    redisContainer: `boxlite-local-redis${suffix}`,
+    dexContainer: 'boxlite-local-dex',
+    dexVolume: 'boxlite-local-dex',
+    registryContainer: 'boxlite-local-registry',
+    registryPort,
+    registryHost: env.BOXLITE_E2E_REGISTRY_HOST || `localhost:${registryPort}`,
+    runtimeImagePlatform: env.BOXLITE_E2E_RUNTIME_IMAGE_PLATFORM || defaultRuntimeImagePlatform(),
+    runtimeImageTag: env.BOXLITE_E2E_RUNTIME_IMAGE_TAG || '20260605-p0-r5-local',
+    runnerHomeDir: env.BOXLITE_E2E_RUNNER_HOME_DIR || `/tmp/blrt${suffix}`,
+    dockerConfigDir: env.BOXLITE_E2E_DOCKER_CONFIG || path.join(os.tmpdir(), 'boxlite-local-docker-config'),
+  }
 }
+
+function parseInstance(value = '') {
+  const instance = value.trim()
+  if (instance && !/^[a-z0-9][a-z0-9-]{0,31}$/.test(instance)) {
+    throw new Error('BOXLITE_E2E_INSTANCE must use lowercase letters, numbers, and hyphens')
+  }
+  return instance
+}
+
+function parseBoolean(value) {
+  return value === 'true' || value === '1'
+}
+
+function parsePort(env, name, fallback) {
+  if (env[name] === undefined || env[name] === '') {
+    return fallback
+  }
+
+  const port = Number(env[name])
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`${name} must be an integer between 1 and 65535`)
+  }
+  return port
+}
+
+const defaultConfig = buildLocalDexConfig()
 
 function defaultRuntimeImagePlatform() {
   switch (os.arch()) {
@@ -51,9 +96,9 @@ export async function runLocalDexEnvironment({ mode, command = [] }) {
   ensureDex(defaultConfig)
   ensureRegistry(defaultConfig)
 
-  await waitForTcp('localhost', 5432, 'Postgres')
-  await waitForTcp('localhost', 6379, 'Redis')
-  await waitForTcp('localhost', 5001, 'Local registry')
+  await waitForTcp('localhost', defaultConfig.postgresPort, 'Postgres')
+  await waitForTcp('localhost', defaultConfig.redisPort, 'Redis')
+  await waitForTcp('localhost', defaultConfig.registryPort, 'Local registry')
   ensureLocalDockerConfig(defaultConfig)
   ensureRuntimeImages(defaultConfig)
   ensureGoSdkDevNativeLibrary()
@@ -65,7 +110,9 @@ export async function runLocalDexEnvironment({ mode, command = [] }) {
 
   try {
     await waitForHttp(`${defaultConfig.apiUrl}/config`, 'BoxLite API', appsProcess)
-    await waitForHttp(defaultConfig.dashboardUrl, 'BoxLite dashboard', appsProcess)
+    if (!defaultConfig.headless) {
+      await waitForHttp(defaultConfig.dashboardUrl, 'BoxLite dashboard', appsProcess)
+    }
     printReady(mode, command, defaultConfig)
 
     if (command.length > 0) {
@@ -136,9 +183,9 @@ function ensurePostgres(config) {
     image: 'postgres:16-alpine',
     args: [
       '-p',
-      '5432:5432',
+      `${config.postgresPort}:5432`,
       '-v',
-      'boxlite-local-postgres:/var/lib/postgresql/data',
+      `${config.postgresVolume}:/var/lib/postgresql/data`,
       '-e',
       'POSTGRES_USER=postgres',
       '-e',
@@ -153,7 +200,7 @@ function ensureRedis(config) {
   ensureContainer({
     name: config.redisContainer,
     image: 'redis:7-alpine',
-    args: ['-p', '6379:6379'],
+    args: ['-p', `${config.redisPort}:6379`],
   })
 }
 
@@ -163,7 +210,14 @@ function ensureDex(config) {
   ensureContainer({
     name: config.dexContainer,
     image: 'ghcr.io/dexidp/dex:v2.41.1',
-    args: ['-p', '5556:5556', '-v', `${configPath}:/etc/dex/config.yaml:ro`, '-v', 'boxlite-local-dex:/var/dex'],
+    args: [
+      '-p',
+      `${config.dexPort}:5556`,
+      '-v',
+      `${configPath}:/etc/dex/config.yaml:ro`,
+      '-v',
+      `${config.dexVolume}:/var/dex`,
+    ],
     command: ['dex', 'serve', '/etc/dex/config.yaml'],
   })
 }
@@ -172,7 +226,7 @@ function ensureRegistry(config) {
   ensureContainer({
     name: config.registryContainer,
     image: 'registry:2',
-    args: ['-p', '5001:5000'],
+    args: ['-p', `${config.registryPort}:5000`],
   })
 }
 
@@ -259,7 +313,7 @@ function registryImageExists(config, name) {
       '--max-time',
       '5',
       '-H',
-      'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json',
+      'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json',
       manifestUrl,
     ],
     {
@@ -333,10 +387,11 @@ function startApps(config) {
 
   const env = {
     ...process.env,
+    NX_DAEMON: 'false',
     NX_TUI: 'false',
     NODE_ENV: 'development',
     ENVIRONMENT: 'development',
-    PORT: '3001',
+    PORT: String(config.apiPort),
     APP_URL: config.dashboardUrl,
     DASHBOARD_URL: config.dashboardUrl,
     DASHBOARD_BASE_API_URL: '',
@@ -344,9 +399,9 @@ function startApps(config) {
     DISABLE_CRON_JOBS: 'false',
     NOTIFICATION_GATEWAY_DISABLED: 'true',
     DEFAULT_TEMPLATE: 'boxlite/base',
-    BOXLITE_SYSTEM_BASE_IMAGE: runtimeImageRef(config, 'base'),
-    BOXLITE_SYSTEM_PYTHON_IMAGE: runtimeImageRef(config, 'python'),
-    BOXLITE_SYSTEM_NODE_IMAGE: runtimeImageRef(config, 'node'),
+    BOXLITE_SYSTEM_BASE_IMAGE: process.env.BOXLITE_SYSTEM_BASE_IMAGE || runtimeImageRef(config, 'base'),
+    BOXLITE_SYSTEM_PYTHON_IMAGE: process.env.BOXLITE_SYSTEM_PYTHON_IMAGE || runtimeImageRef(config, 'python'),
+    BOXLITE_SYSTEM_NODE_IMAGE: process.env.BOXLITE_SYSTEM_NODE_IMAGE || runtimeImageRef(config, 'node'),
     ENCRYPTION_KEY: 'boxlite-local-e2e-encryption-key',
     ENCRYPTION_SALT: 'boxlite-local-e2e-encryption-salt',
     ADMIN_API_KEY: 'boxlite-local-admin-key',
@@ -363,7 +418,7 @@ function startApps(config) {
     INTERNAL_REGISTRY_ADMIN: 'boxlite-local-registry-user',
     INTERNAL_REGISTRY_PASSWORD: 'boxlite-local-registry-password',
     INTERNAL_REGISTRY_PROJECT_ID: 'boxlite',
-    DEFAULT_RUNNER_NAME: 'local-runner',
+    DEFAULT_RUNNER_NAME: `local-runner${config.instance ? `-${config.instance}` : ''}`,
     DEFAULT_RUNNER_API_KEY: 'boxlite-local-runner-key',
     DEFAULT_RUNNER_API_VERSION: '2',
     DEFAULT_RUNNER_DOMAIN: 'localhost',
@@ -375,24 +430,24 @@ function startApps(config) {
     RUNNER_START_SCORE_THRESHOLD: '1',
     BOXLITE_RUNNER_TOKEN: 'boxlite-local-runner-key',
     API_VERSION: '2',
-    API_PORT: '8080',
+    API_PORT: String(config.runnerApiPort),
     RUNNER_DOMAIN: 'localhost',
     BOXLITE_HOME_DIR: config.runnerHomeDir,
     INSECURE_REGISTRIES: config.registryHost,
     RESOURCE_LIMITS_DISABLED: 'true',
-    PROXY_PORT: '4000',
+    PROXY_PORT: String(config.proxyPort),
     PROXY_PROTOCOL: 'http',
-    PROXY_DOMAIN: 'localhost:4000',
-    PROXY_TEMPLATE_URL: 'http://localhost:4000/{{sandboxId}}/{{PORT}}',
+    PROXY_DOMAIN: `localhost:${config.proxyPort}`,
+    PROXY_TEMPLATE_URL: `http://localhost:${config.proxyPort}/{{sandboxId}}/{{PORT}}`,
     PROXY_API_KEY: 'boxlite-local-proxy-key',
     BOXLITE_API_URL: config.apiUrl,
     DB_HOST: 'localhost',
-    DB_PORT: '5432',
+    DB_PORT: String(config.postgresPort),
     DB_USERNAME: 'postgres',
     DB_PASSWORD: 'postgres',
     DB_DATABASE: 'boxlite',
     REDIS_HOST: 'localhost',
-    REDIS_PORT: '6379',
+    REDIS_PORT: String(config.redisPort),
     OIDC_CLIENT_ID: config.dexClientId,
     OIDC_ISSUER_BASE_URL: config.dexIssuer,
     OIDC_AUDIENCE: config.dexAudience,
@@ -408,11 +463,35 @@ function startApps(config) {
   delete env.VITE_BASE_API_URL
   delete env.VITE_API_URL
 
-  return spawn('npm', ['--prefix', 'apps', 'run', 'serve-slim'], {
-    cwd: repoRoot,
+  const command = buildAppsCommand(config)
+
+  return spawn(command.program, command.args, {
+    cwd: command.cwd,
     env,
     stdio: 'inherit',
   })
+}
+
+export function buildAppsCommand(config) {
+  if (config.headless) {
+    return {
+      program: path.join(appsRoot, 'node_modules', '.bin', 'nx'),
+      args: [
+        'run-many',
+        '--target=serve',
+        '--projects=api,runner,proxy',
+        '--parallel=3',
+        '--configuration=development',
+      ],
+      cwd: appsRoot,
+    }
+  }
+
+  return {
+    program: 'npm',
+    args: ['--prefix', 'apps', 'run', 'serve-slim'],
+    cwd: repoRoot,
+  }
 }
 
 async function runE2eCommand(command, config) {
@@ -488,7 +567,9 @@ async function waitForTcp(host, port, label) {
 function printReady(mode, command, config) {
   console.log('')
   console.log(`[local-dex] ${mode} environment is ready`)
-  console.log(`[local-dex] Dashboard: ${config.dashboardUrl}`)
+  if (!config.headless) {
+    console.log(`[local-dex] Dashboard: ${config.dashboardUrl}`)
+  }
   console.log(`[local-dex] API: ${config.apiUrl}`)
   console.log(`[local-dex] Dex issuer: ${config.dexIssuer}`)
   console.log(`[local-dex] Test login: ${config.loginEmail} / ${config.loginPassword}`)
