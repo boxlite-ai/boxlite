@@ -674,8 +674,11 @@ impl BoxImpl {
         );
 
         // Hold the lock for the duration of build operations.
-        // LockGuard acquires lock on creation and releases on drop.
-        let _guard = LockGuard::new(&*locker);
+        // Uses the hang-defence variant with a deadline so a crashed-
+        // but-not-cleaned-up holder doesn't wedge box init forever.
+        // Default 30 s is generous for a healthy spawn pipeline and
+        // short enough that a stuck previous instance surfaces quickly.
+        let _guard = LockGuard::with_timeout(&*locker, std::time::Duration::from_secs(30))?;
 
         // Build the box (lock is held)
         // The returned cleanup_guard stays armed until we disarm it after all
@@ -1212,6 +1215,7 @@ mod tests {
         let runtime = RuntimeImpl::new(BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: vec![],
+            create_timeout: std::time::Duration::from_secs(90),
         })
         .expect("create runtime");
 

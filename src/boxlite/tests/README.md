@@ -82,6 +82,7 @@ async fn test_box_lifecycle() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+            create_timeout: std::time::Duration::from_secs(90),
     }).expect("create runtime");
     let handle = runtime.create(alpine_opts(), None).await.unwrap();
     handle.start().await.unwrap();
@@ -104,6 +105,7 @@ async fn test_shutdown_idempotent() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+            create_timeout: std::time::Duration::from_secs(90),
     }).expect("create runtime");
     // ... test logic using runtime ...
 }

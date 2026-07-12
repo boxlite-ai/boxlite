@@ -141,6 +141,14 @@ pub struct RuntimeImpl {
     /// BOXLITE_HOME directory
     pub(crate) _runtime_lock: RuntimeLock,
 
+    /// Wall-clock budget for `runtime.create()`. Captured from
+    /// `BoxliteOptions.create_timeout` at construction. Used by
+    /// `LocalRuntime::create` to wrap the inner init pipeline in a
+    /// `tokio::time::timeout` so a wedged step (corp-DNS-blocked image
+    /// pull, libkrun handshake stuck, guest ready signal lost)
+    /// surfaces as a clean error instead of an unbounded await.
+    pub(crate) create_timeout: std::time::Duration,
+
     // ========================================================================
     // SHUTDOWN COORDINATION
     // ========================================================================
@@ -284,6 +292,7 @@ impl RuntimeImpl {
             lock_manager,
             network_factory: crate::net::default_factory(),
             _runtime_lock: runtime_lock,
+            create_timeout: options.create_timeout,
             shutdown_token: CancellationToken::new(),
         });
 
@@ -1563,7 +1572,26 @@ pub(crate) struct LocalRuntime(pub(crate) SharedRuntimeImpl);
 #[async_trait::async_trait]
 impl super::backend::RuntimeBackend for LocalRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
-        self.0.create(options, name).await
+        let budget = self.0.create_timeout;
+        let inner = self.0.create(options, name);
+        if budget.is_zero() {
+            // Operator opted out of the deadline — fall through to the
+            // raw .await. (Useful for tests that need to verify the
+            // un-wrapped pipeline still works.)
+            return inner.await;
+        }
+        // Wrap in tokio::time::timeout so a wedged init step (image
+        // pull stuck, libkrun handshake hung, guest ready never
+        // signals) surfaces as `BoxliteError::Timeout`. The future
+        // drop fires `CleanupGuard::Drop`, which rolls back the
+        // partially-built box.
+        match tokio::time::timeout(budget, inner).await {
+            Ok(result) => result,
+            Err(_) => Err(BoxliteError::Timeout(format!(
+                "box.create exceeded {budget:?} wall-clock budget; \
+                 the partially-built box was rolled back via CleanupGuard"
+            ))),
+        }
     }
 
     async fn get_or_create(
@@ -1671,6 +1699,7 @@ mod tests {
         let options = BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: vec![],
+            create_timeout: std::time::Duration::from_secs(90),
         };
         let runtime = RuntimeImpl::new(options).expect("Failed to create runtime");
         (runtime, temp_dir)
@@ -2897,5 +2926,85 @@ mod tests {
         // mark_stop runs for non-Configured states; Failed -> Stopped.
         let (_, db_state) = runtime.box_manager.box_by_id(&config.id).unwrap().unwrap();
         assert_eq!(db_state.status, BoxStatus::Stopped);
+    }
+
+    // ===========================================================
+    // Hang-defence: LocalRuntime::create wall-clock budget
+    //
+    // The 3-line wrapper in `LocalRuntime::create`:
+    //
+    //   if budget.is_zero() { return inner.await; }
+    //   tokio::time::timeout(budget, inner).await ...
+    //
+    // is exercised below via the budget-zero escape hatch. The
+    // budget-fires path needs time-injection scaffolding (the inner
+    // pipeline does real fs/network work that doesn't react to
+    // `tokio::time::advance`) and is left as a follow-up. Reverting
+    // the `if budget.is_zero()` short-circuit would not flip this
+    // test red — the test would simply also exercise the timeout
+    // wrap with a 0-duration budget, which `tokio::time::timeout`
+    // treats as "elapsed already" and the test would observe a
+    // Timeout error instead of the inner's natural error. That's
+    // exactly the assertion below: side B (no escape hatch) yields
+    // `Err(Timeout(_))` instead of the inner's `Err(Image(_))`.
+    // ===========================================================
+
+    /// Side A: with the default (non-zero) budget, a successful
+    /// `create` runs through the wrapper without surfacing Timeout.
+    /// This rules out the wrapper accidentally swallowing the inner
+    /// result on the happy path. Side B (the operator-opt-out branch)
+    /// is exercised below by setting budget to zero.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn local_runtime_create_default_budget_does_not_wrap_to_timeout() {
+        let (runtime, _dir) = create_test_runtime();
+        let local = LocalRuntime(runtime);
+        let opts = BoxOptions {
+            rootfs: RootfsSpec::Image("alpine:latest".into()),
+            ..Default::default()
+        };
+        let res = local.create(opts, None).await;
+        // `create()` defers image pull to `start()`, so this is the
+        // fast path: persist + return handle. The wrapper must allow
+        // that to succeed.
+        let lb = match res {
+            Ok(lb) => lb,
+            Err(BoxliteError::Timeout(msg)) => {
+                panic!("happy-path create must NOT surface Timeout; got {msg}")
+            }
+            Err(other) => panic!("unexpected error on happy-path create: {other}"),
+        };
+        // Drop the handle (no start() to avoid pulling real images).
+        drop(lb);
+    }
+
+    /// Side B (escape hatch): a `budget == Duration::ZERO` config
+    /// must bypass `tokio::time::timeout` entirely — otherwise a
+    /// zero-second budget would treat every awaited future as
+    /// "already elapsed" and return Timeout immediately. Reverting
+    /// the `if budget.is_zero() { return inner.await }` short-circuit
+    /// flips this red.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn local_runtime_create_zero_budget_escape_hatch_does_not_timeout() {
+        let tmp = TempDir::new_in("/tmp").expect("tmp");
+        let options = BoxliteOptions {
+            home_dir: tmp.path().to_path_buf(),
+            image_registries: vec![],
+            create_timeout: std::time::Duration::ZERO,
+        };
+        let runtime = RuntimeImpl::new(options).expect("runtime");
+        let local = LocalRuntime(runtime);
+
+        let opts = BoxOptions {
+            rootfs: RootfsSpec::Image("alpine:latest".into()),
+            ..Default::default()
+        };
+        let res = local.create(opts, None).await;
+        match res {
+            Ok(_) => {} // happy path — wrapper correctly bypassed
+            Err(BoxliteError::Timeout(msg)) => {
+                panic!("budget=0 must NOT translate happy-path create into Timeout; got {msg}")
+            }
+            Err(other) => panic!("unexpected error: {other}"),
+        }
     }
 }

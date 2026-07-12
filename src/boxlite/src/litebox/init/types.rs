@@ -417,6 +417,7 @@ mod tests {
         let runtime = RuntimeImpl::new(BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: vec![],
+            create_timeout: std::time::Duration::from_secs(90),
         })
         .expect("create runtime");
 

@@ -160,6 +160,29 @@ pub trait Locker: Send + Sync {
     ///
     /// Returns `true` if the lock was acquired, `false` if it was already held.
     fn try_lock(&self) -> bool;
+
+    /// Try to acquire the lock, retrying with a 10 ms backoff until
+    /// `deadline` elapses. Returns `true` if the lock was acquired.
+    ///
+    /// Default implementation polls `try_lock()`. Implementations with a
+    /// kernel-level wait primitive (e.g., flock + signalfd) can override
+    /// for a tighter loop.
+    fn try_lock_until(&self, deadline: std::time::Instant) -> bool {
+        loop {
+            if self.try_lock() {
+                return true;
+            }
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            // 10 ms × ~100 iterations/sec; cheap enough on a contested
+            // lock, and bounded by the per-attempt deadline above.
+            let remaining = deadline.saturating_duration_since(now);
+            let nap = std::time::Duration::from_millis(10).min(remaining);
+            std::thread::sleep(nap);
+        }
+    }
 }
 
 /// Convenience guard for RAII-style lock management.
@@ -168,7 +191,10 @@ pub struct LockGuard<'a> {
 }
 
 impl<'a> LockGuard<'a> {
-    /// Create a new guard, acquiring the lock.
+    /// Create a new guard, acquiring the lock (blocks until available).
+    ///
+    /// Prefer [`LockGuard::with_timeout`] in production paths so a
+    /// crashed-but-not-cleaned-up holder can't wedge the whole runtime.
     pub fn new(lock: &'a dyn Locker) -> Self {
         lock.lock();
         Self { lock }
@@ -182,6 +208,26 @@ impl<'a> LockGuard<'a> {
             Some(Self { lock })
         } else {
             None
+        }
+    }
+
+    /// Acquire the lock with a wall-clock deadline.
+    ///
+    /// Returns `Err(BoxliteError::Timeout)` if `timeout` elapses before
+    /// the lock can be obtained. This is the hang-defence variant: a
+    /// previous holder that crashed without releasing — or a stuck box
+    /// init in another process — will surface as a clear error instead
+    /// of an unbounded block.
+    pub fn with_timeout(lock: &'a dyn Locker, timeout: std::time::Duration) -> BoxliteResult<Self> {
+        let deadline = std::time::Instant::now() + timeout;
+        if lock.try_lock_until(deadline) {
+            Ok(Self { lock })
+        } else {
+            Err(BoxliteError::Timeout(format!(
+                "lock {} not acquired within {:?}",
+                lock.id(),
+                timeout
+            )))
         }
     }
 }
@@ -275,5 +321,72 @@ mod tests {
 
         assert!(lock.try_lock(), "should be able to acquire released lock");
         lock.unlock();
+    }
+
+    // ================================================================
+    // Hang-defence: LockGuard::with_timeout
+    //
+    // Side B (revert the deadline check in `try_lock_until` so it
+    // blocks forever) flips `with_timeout_returns_error_when_contended`
+    // red — the call would hang past the test's outer wall-clock.
+    // ================================================================
+
+    #[test]
+    fn with_timeout_returns_quickly_when_uncontended() {
+        let manager = InMemoryLockManager::new(16);
+        let id = manager.allocate().expect("allocate");
+        let lock = manager.retrieve(id).expect("retrieve");
+
+        let start = std::time::Instant::now();
+        let guard = LockGuard::with_timeout(lock.as_ref(), std::time::Duration::from_secs(5))
+            .expect("uncontended lock should succeed immediately");
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(50),
+            "uncontended acquire should be ~instant; got {:?}",
+            elapsed
+        );
+        drop(guard);
+    }
+
+    #[test]
+    fn with_timeout_returns_error_when_contended() {
+        let manager = InMemoryLockManager::new(16);
+        let id = manager.allocate().expect("allocate");
+        let lock = manager.retrieve(id).expect("retrieve");
+
+        // First holder takes the lock and never releases for the
+        // duration of the test.
+        let _held = LockGuard::new(lock.as_ref());
+
+        let start = std::time::Instant::now();
+        let res = LockGuard::with_timeout(lock.as_ref(), std::time::Duration::from_millis(150));
+        let elapsed = start.elapsed();
+
+        match &res {
+            Err(BoxliteError::Timeout(_)) => {}
+            other => panic!(
+                "contended acquire must return Timeout; got {}",
+                match other {
+                    Err(e) => format!("Err({})", e),
+                    Ok(_) => "Ok(_)".to_string(),
+                }
+            ),
+        }
+        // Drop the contested Result without forcing Debug on its Ok arm.
+        drop(res);
+        // Bound: ≥ requested timeout, but not orders of magnitude over.
+        // 10ms polling cadence × 15 iterations = 150ms minimum; upper
+        // bound is generous to avoid CI flake.
+        assert!(
+            elapsed >= std::time::Duration::from_millis(140),
+            "elapsed must be at least the timeout; got {:?}",
+            elapsed
+        );
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "elapsed must not run wildly over; got {:?}",
+            elapsed
+        );
     }
 }

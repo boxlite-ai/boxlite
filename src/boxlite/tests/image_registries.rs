@@ -12,6 +12,7 @@ async fn structured_image_registries_pull_unqualified_image() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        create_timeout: std::time::Duration::from_secs(90),
     })
     .unwrap();
 
@@ -39,6 +40,7 @@ fn structured_image_registries_validate_at_runtime_start() {
     let result = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: vec![ImageRegistry::https("https://registry.local")],
+        create_timeout: std::time::Duration::from_secs(90),
     });
 
     assert!(result.is_err());

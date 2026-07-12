@@ -74,6 +74,7 @@ async fn detached_box_creates_pid_file() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        create_timeout: std::time::Duration::from_secs(90),
     })
     .expect("create runtime");
 
@@ -108,6 +109,7 @@ async fn detached_box_survives_runtime_drop() {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: common::test_registries(),
+            create_timeout: std::time::Duration::from_secs(90),
         })
         .unwrap();
 
@@ -145,6 +147,7 @@ async fn detached_box_survives_runtime_drop() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        create_timeout: std::time::Duration::from_secs(90),
     })
     .unwrap();
     runtime.remove(&box_id, true).await.unwrap();
@@ -167,6 +170,7 @@ async fn non_detached_box_exits_on_runtime_drop() {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home_dir.clone(),
             image_registries: common::test_registries(),
+            create_timeout: std::time::Duration::from_secs(90),
         })
         .unwrap();
 
@@ -213,6 +217,7 @@ async fn multiple_detached_boxes_each_have_pid_file() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        create_timeout: std::time::Duration::from_secs(90),
     })
     .expect("create runtime");
 
@@ -268,6 +273,7 @@ async fn detached_box_recoverable_after_restart() {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: common::test_registries(),
+            create_timeout: std::time::Duration::from_secs(90),
         })
         .unwrap();
 
@@ -291,6 +297,7 @@ async fn detached_box_recoverable_after_restart() {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: common::test_registries(),
+            create_timeout: std::time::Duration::from_secs(90),
         })
         .unwrap();
 

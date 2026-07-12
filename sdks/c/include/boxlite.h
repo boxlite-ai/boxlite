@@ -62,6 +62,10 @@ typedef enum BoxliteErrorCode {
   // Interactive execution session was reaped server-side after disconnect.
   // Reattach is no longer possible — start a new exec.
   SessionReaped = 21,
+  // Operation exceeded its wall-clock deadline (e.g. `box.create`
+  // budget, lock acquisition timeout). Surfaced by the hang-defence
+  // wrappers in the Rust runtime.
+  Timeout = 22,
 } BoxliteErrorCode;
 
 // Transport protocol for a port forwarding rule.

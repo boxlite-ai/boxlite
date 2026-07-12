@@ -37,6 +37,7 @@ impl TestBox {
         let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: common::test_registries(),
+            create_timeout: std::time::Duration::from_secs(90),
         })
         .expect("create runtime");
         let handle = runtime.create(common::alpine_opts(), None).await.unwrap();

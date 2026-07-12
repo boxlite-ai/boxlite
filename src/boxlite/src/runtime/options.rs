@@ -46,6 +46,28 @@ pub struct BoxliteOptions {
     /// ```
     #[serde(default)]
     pub image_registries: Vec<ImageRegistry>,
+
+    /// Wall-clock budget for `runtime.create(...)`.
+    ///
+    /// Default: 90 seconds. The create pipeline runs many awaits
+    /// (image pull, rootfs prep, shim spawn, guest ready, init
+    /// gRPC). Any of them can wedge — corp DNS times out an OCI
+    /// registry pull, libkrun fails to negotiate, guest agent
+    /// crashes without signalling ready. Without a deadline, the
+    /// caller's `.await` blocks indefinitely.
+    ///
+    /// On timeout the future is dropped, `CleanupGuard::Drop` rolls
+    /// back any partially-built state, and the caller sees
+    /// `BoxliteError::Timeout`.
+    ///
+    /// Set to `Duration::from_secs(0)` to disable the deadline
+    /// (caller is on its own for hang detection).
+    #[serde(
+        default = "default_create_timeout",
+        with = "duration_seconds",
+        skip_serializing_if = "is_default_create_timeout"
+    )]
+    pub create_timeout: std::time::Duration,
 }
 
 /// Registry host configuration for OCI image pulls.
@@ -166,11 +188,47 @@ fn default_home_dir() -> PathBuf {
         })
 }
 
+fn default_create_timeout() -> std::time::Duration {
+    std::time::Duration::from_secs(90)
+}
+
+/// Skip serialising `create_timeout` when it equals the default —
+/// keeps existing JSON snapshots / round-trip tests stable for the
+/// 99 % case where operators don't override the budget.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_default_create_timeout(d: &std::time::Duration) -> bool {
+    *d == default_create_timeout()
+}
+
+/// Serialize/deserialize a `Duration` as whole seconds. Keeps the wire
+/// shape readable (`"create_timeout": 90`) and matches how config
+/// authors think about deadlines.
+mod duration_seconds {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::time::Duration;
+
+    pub fn serialize<S>(d: &Duration, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        s.serialize_u64(d.as_secs())
+    }
+
+    pub fn deserialize<'de, D>(d: D) -> Result<Duration, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let secs = u64::deserialize(d)?;
+        Ok(Duration::from_secs(secs))
+    }
+}
+
 impl Default for BoxliteOptions {
     fn default() -> Self {
         Self {
             home_dir: default_home_dir(),
             image_registries: Vec::new(),
+            create_timeout: default_create_timeout(),
         }
     }
 }
@@ -255,6 +313,7 @@ mod registry_options_tests {
                     .with_basic_auth("alice", password.as_str()),
                 ImageRegistry::https("registry.example.com").with_bearer_auth(token.as_str()),
             ],
+            create_timeout: std::time::Duration::from_secs(90),
         };
 
         let value = serde_json::to_value(options).unwrap();

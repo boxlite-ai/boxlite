@@ -64,6 +64,10 @@ pub enum BoxliteErrorCode {
     /// Interactive execution session was reaped server-side after disconnect.
     /// Reattach is no longer possible — start a new exec.
     SessionReaped = 21,
+    /// Operation exceeded its wall-clock deadline (e.g. `box.create`
+    /// budget, lock acquisition timeout). Surfaced by the hang-defence
+    /// wrappers in the Rust runtime.
+    Timeout = 22,
 }
 
 /// Extended error information for C API.
@@ -111,6 +115,7 @@ pub fn error_to_code(err: &BoxliteError) -> BoxliteErrorCode {
         BoxliteError::MetadataError(_) => BoxliteErrorCode::Metadata,
         BoxliteError::ResourceExhausted(_) => BoxliteErrorCode::ResourceExhausted,
         BoxliteError::SessionReaped(_) => BoxliteErrorCode::SessionReaped,
+        BoxliteError::Timeout(_) => BoxliteErrorCode::Timeout,
     }
 }
 

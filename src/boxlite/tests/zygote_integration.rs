@@ -30,6 +30,7 @@ fn create_test_runtime() -> (boxlite_test_utils::home::PerTestBoxHome, BoxliteRu
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        create_timeout: std::time::Duration::from_secs(90),
     })
     .expect("create runtime");
     (home, runtime)

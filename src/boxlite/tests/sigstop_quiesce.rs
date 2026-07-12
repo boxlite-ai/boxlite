@@ -24,6 +24,7 @@ async fn test_sigstop_sigcont_preserves_vm() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        create_timeout: std::time::Duration::from_secs(90),
     })
     .expect("create runtime");
 

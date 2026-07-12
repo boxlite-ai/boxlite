@@ -82,6 +82,13 @@ pub enum BoxliteError {
     /// a new exec instead.
     #[error("session reaped: {0}")]
     SessionReaped(String),
+
+    /// Operation exceeded its wall-clock deadline. Surfaced by the
+    /// hang-defence wrappers (`box.create` total budget, lock
+    /// acquisition timeout, …) instead of letting the caller block
+    /// indefinitely on a wedged or crash-leaked counterparty.
+    #[error("timed out: {0}")]
+    Timeout(String),
 }
 
 // Implement From for common error types to enable `?` operator
@@ -168,6 +175,11 @@ impl BoxliteError {
             BoxliteError::ResourceExhausted(_) => {
                 (429, "ResourceExhaustedError", "resource_exhausted")
             }
+            // 408 Request Timeout: caller waited longer than the
+            // operation's wall-clock budget. Retryable in principle,
+            // so we surface a distinct status rather than collapsing
+            // onto 500.
+            BoxliteError::Timeout(_) => (408, "TimeoutError", "timeout"),
             BoxliteError::Network(_) => (503, "NetworkError", "network_unavailable"),
             BoxliteError::Portal(_) | BoxliteError::Rpc(_) | BoxliteError::RpcTransport(_) => {
                 (503, "UpstreamUnavailableError", "upstream_unavailable")
@@ -262,6 +274,12 @@ mod tests {
                 429,
                 "ResourceExhaustedError",
                 "resource_exhausted",
+            ),
+            (
+                BoxliteError::Timeout("box.create budget exceeded".into()),
+                408,
+                "TimeoutError",
+                "timeout",
             ),
             (
                 BoxliteError::Network("tap setup failed".into()),
