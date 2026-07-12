@@ -35,6 +35,7 @@ pub struct BoxCommand {
     pub(crate) working_dir: Option<String>,
     pub(crate) tty: bool,
     pub(crate) user: Option<String>,
+    pub(crate) debug: bool,
 }
 
 impl BoxCommand {
@@ -48,6 +49,7 @@ impl BoxCommand {
             working_dir: None,
             tty: false,
             user: None,
+            debug: false,
         }
     }
 
@@ -102,6 +104,15 @@ impl BoxCommand {
     pub fn user(mut self, spec: impl Into<String>) -> Self {
         let s = spec.into();
         self.user = if s.trim().is_empty() { None } else { Some(s) };
+        self
+    }
+
+    /// Route this exec into the operator cgroup subgroup (`/boxlite/<id>/operator`,
+    /// separate tight budget) instead of the workload subgroup. Lets an operator
+    /// still get into the box when the workload has saturated its own `pids.max`.
+    /// Defaults to off — a plain `boxlite exec` keeps the workload's full budget.
+    pub fn debug(mut self, on: bool) -> Self {
+        self.debug = on;
         self
     }
 }

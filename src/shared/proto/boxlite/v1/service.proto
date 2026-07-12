@@ -280,6 +280,19 @@ message ExecRequest {
   uint64 timeout_ms = 6;
   optional TtyConfig tty = 7;  // If set, use PTY instead of pipes
   optional string user = 8;    // User override (format: <name|uid>[:<group|gid>])
+
+  // Route this exec into the operator cgroup subgroup
+  // (`/boxlite/<id>/operator`, separate PID + memory budget) so the operator
+  // can debug a box whose workload has saturated its own `pids.max=512`.
+  // Defaults to false: a regular `boxlite exec` shares the workload's
+  // cgroup like before, so a long-running user command launched via exec
+  // gets the full workload budget.
+  //
+  // Set this via `boxlite exec --debug`. The operator subgroup has a tight
+  // cap (~64 PIDs / 32 MiB) intended for inspection only — running a heavy
+  // command under `--debug` may hit ENOSPC/EAGAIN in the operator subgroup
+  // even when the workload subgroup has room.
+  bool debug = 9;
 }
 
 // TTY configuration for interactive sessions

@@ -230,6 +230,7 @@ impl ExecProtocol {
                 None
             },
             user: command.user.clone(),
+            debug: command.debug,
         }
     }
 

@@ -361,6 +361,12 @@ pub(crate) struct ExecRequest {
     pub working_dir: Option<String>,
     #[serde(default)]
     pub tty: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub debug: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl ExecRequest {
@@ -378,6 +384,7 @@ impl ExecRequest {
             timeout_seconds,
             working_dir: cmd.working_dir.clone(),
             tty: cmd.tty,
+            debug: cmd.debug,
         }
     }
 }
@@ -703,11 +710,16 @@ mod tests {
             timeout_seconds: Some(30.0),
             working_dir: Some("/app".to_string()),
             tty: false,
+            debug: false,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"command\":\"python3\""));
         assert!(json.contains("\"timeout_seconds\":30.0"));
         assert!(json.contains("\"working_dir\":\"/app\""));
+        // debug=false is omitted from the wire to keep payloads compact
+        // and to stay backwards-compatible with REST servers that don't
+        // know about the field.
+        assert!(!json.contains("debug"));
     }
 
     #[test]

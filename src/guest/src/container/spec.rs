@@ -7,9 +7,10 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::path::Path;
 
 use oci_spec::runtime::{
-    LinuxBuilder, LinuxCapabilitiesBuilder, LinuxIdMappingBuilder, LinuxNamespaceBuilder,
-    LinuxNamespaceType, Mount, MountBuilder, PosixRlimitBuilder, PosixRlimitType, ProcessBuilder,
-    RootBuilder, Spec, SpecBuilder, UserBuilder,
+    LinuxBuilder, LinuxCapabilitiesBuilder, LinuxIdMappingBuilder, LinuxMemoryBuilder,
+    LinuxNamespaceBuilder, LinuxNamespaceType, LinuxPidsBuilder, LinuxResourcesBuilder, Mount,
+    MountBuilder, PosixRlimitBuilder, PosixRlimitType, ProcessBuilder, RootBuilder, Spec,
+    SpecBuilder, UserBuilder,
 };
 
 /// User-specified bind mount for container
@@ -382,10 +383,24 @@ fn build_root_spec(rootfs: &str) -> BoxliteResult<oci_spec::runtime::Root> {
         .map_err(|e| BoxliteError::Internal(format!("Failed to build root spec: {}", e)))
 }
 
-/// Build Linux-specific configuration
+/// Build Linux-specific configuration.
+///
+/// `memory_limit` is passed in (rather than read from `/proc/meminfo` inside
+/// the builder) so the "meminfo unreadable → memory cap absent, pids cap
+/// still enforced" degradation path can be unit-tested without mocking the
+/// filesystem. Production call goes through `build_linux_spec_with_memory`
+/// below which feeds `container_memory_limit()`.
 fn build_linux_spec(
     container_id: &str,
     namespaces: Vec<oci_spec::runtime::LinuxNamespace>,
+) -> BoxliteResult<oci_spec::runtime::Linux> {
+    build_linux_spec_with_memory(container_id, namespaces, container_memory_limit())
+}
+
+fn build_linux_spec_with_memory(
+    container_id: &str,
+    namespaces: Vec<oci_spec::runtime::LinuxNamespace>,
+    memory_limit: Option<i64>,
 ) -> BoxliteResult<oci_spec::runtime::Linux> {
     // UID/GID mappings for user namespace
     // Map full range of UIDs/GIDs to allow non-root users (nginx=33, etc.)
@@ -428,20 +443,117 @@ fn build_linux_spec(
         "/proc/sysrq-trigger".to_string(),
     ];
 
-    // NOTE: Cgroup path disabled for performance (see cgroup mount comment above)
-    // Re-enable together with cgroup namespace and mount if resource limits are needed.
-    // let cgroups_path = format!("/boxlite/{}", container_id);
-    let _ = container_id; // Suppress unused warning
+    // Resource limits. `pids.max` is a constant — applied unconditionally so a
+    // transient `/proc/meminfo` blip doesn't take down the fork-bomb defence
+    // alongside the memory cap. `memory.max` is derived from the VM's current
+    // `MemAvailable`; missing/unparseable falls back to unbounded with a loud
+    // warning (silent degrade-to-unprotected is exactly what this PR fights).
+    let pids = LinuxPidsBuilder::default()
+        .limit(CONTAINER_PIDS_MAX)
+        .build()
+        .map_err(|e| BoxliteError::Internal(format!("Failed to build pids spec: {e}")))?;
+    let mut resources_builder = LinuxResourcesBuilder::default().pids(pids);
 
+    if let Some(mem_max) = memory_limit {
+        let memory = LinuxMemoryBuilder::default()
+            .limit(mem_max)
+            .build()
+            .map_err(|e| BoxliteError::Internal(format!("Failed to build memory spec: {e}")))?;
+        resources_builder = resources_builder.memory(memory);
+    } else {
+        // Loud because: zero memory cap is the failure mode this PR exists to
+        // prevent. If you see this in logs, fix the cause; don't ignore.
+        tracing::warn!(
+            container_id,
+            "/proc/meminfo unreadable or MemAvailable missing — container memory.max NOT set (cgroup OOM protection downgraded; pids.max still enforced)"
+        );
+    }
+
+    let resources = resources_builder
+        .build()
+        .map_err(|e| BoxliteError::Internal(format!("Failed to build resources spec: {e}")))?;
+
+    // Pin the container to an explicit, predictable cgroup. youki applies the
+    // limits either way, but with no path it invents `/:youki:<id>`; a stable
+    // `/sys/fs/cgroup/boxlite/<id>` is what tooling and the enforcement test
+    // inspect and matches the per-container layout the rest of the runtime
+    // uses. Set unconditionally so pids.max enforcement survives a None memory
+    // limit.
+    //
+    // FOLLOW-UP: `LinuxNamespaceType::Cgroup` would hide the host cgroup tree
+    // from the container (peer-box leakage hardening). Deferred — adding it
+    // changes `/proc/self/cgroup` semantics for every container and the
+    // existing enforcement test reads that path; needs a coordinated test
+    // update.
+    // Container init lives in the `workload` subgroup of `/boxlite/<id>`. The
+    // sibling `operator` subgroup carries a separate small PID/memory budget
+    // for `boxlite exec` so a workload bomb that saturates `pids.max=512` in
+    // workload doesn't lock the operator out of the box. See
+    // `crate::container::cgroup_carve::ensure_box_cgroup_hierarchy` for the
+    // pre-init setup and `crate::service::exec::executor` for the per-exec
+    // `cgroupsPath` swap that routes operator processes into the operator
+    // subgroup at libcontainer-build time.
     LinuxBuilder::default()
         .namespaces(namespaces)
         .uid_mappings(uid_mappings)
         .gid_mappings(gid_mappings)
-        // .masked_paths(masked_paths)
-        // .readonly_paths(readonly_paths)
-        // .cgroups_path(cgroups_path)
+        .cgroups_path(std::path::PathBuf::from(workload_cgroup_path(container_id)))
+        .resources(resources)
         .build()
         .map_err(|e| BoxliteError::Internal(format!("Failed to build linux spec: {}", e)))
+}
+
+/// OCI cgroupsPath for the container's init + workload — `pids.max=512`,
+/// `memory.max=container_memory_limit()`. Single source of truth used by both
+/// the OCI spec builder and `cgroup_carve`'s swap (paired with the operator
+/// path below). Keeping them as functions guarantees the two siblings can't
+/// drift in name.
+pub(crate) fn workload_cgroup_path(container_id: &str) -> String {
+    format!("/boxlite/{container_id}/workload")
+}
+
+/// OCI cgroupsPath for operator-injected processes (`boxlite exec --debug`).
+/// Lives as a sibling of `/boxlite/<id>/workload` under the same parent budget
+/// so a workload bomb saturating the workload subgroup can't lock the operator
+/// out of the box. Used by `cgroup_carve` (the swap-on-debug path that rewrites
+/// the OCI config.json on disk so libcontainer reads it back at tenant build).
+pub(crate) fn operator_cgroup_path(container_id: &str) -> String {
+    format!("/boxlite/{container_id}/operator")
+}
+
+/// cgroup `pids.max` for a container: a hard ceiling on the process count so a
+/// fork bomb can't exhaust the VM's PID space and kernel memory. The cgroup
+/// blocks forks past this for container processes only — never the guest agent.
+const CONTAINER_PIDS_MAX: i64 = 512;
+
+/// Container memory hard limit (cgroup `memory.max`) from the VM's available
+/// memory. Thin I/O wrapper over [`memory_limit_from_meminfo`]; `None` (set no
+/// limit) when `/proc/meminfo` can't be read.
+fn container_memory_limit() -> Option<i64> {
+    memory_limit_from_meminfo(&std::fs::read_to_string("/proc/meminfo").ok()?)
+}
+
+/// Pure: 90% of the `MemAvailable:` line in `/proc/meminfo` contents (the other
+/// 10% is headroom for the guest agent, zygote, and kernel, so a cgroup OOM
+/// kills container processes rather than panicking the guest kernel).
+///
+/// `None` when the field is missing, unparseable, or the result is non-positive
+/// — the caller then sets no memory limit rather than a bogus one. Split from
+/// the file read so the threshold math is unit-testable without `/proc`.
+fn memory_limit_from_meminfo(meminfo: &str) -> Option<i64> {
+    let available_kb: i64 = meminfo
+        .lines()
+        .find(|l| l.starts_with("MemAvailable:"))?
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()?;
+    // Saturating: a pathological MemAvailable (~9 PB+) would overflow i64
+    // multiplication and panic under debug arithmetic checks. Saturate to
+    // i64::MAX so the cap stays sane on every realistic and pathological host.
+    let bytes = available_kb.saturating_mul(1024);
+    let nine_tenths = bytes.saturating_mul(9) / 10;
+    (nine_tenths > 0).then_some(nine_tenths)
 }
 
 /// Build standard mounts for container filesystem
@@ -964,5 +1076,165 @@ mod tests {
         // Malformed entries are silently skipped (not enough fields to match)
         let err = resolve_user(r, "short").unwrap_err().to_string();
         assert!(err.contains("User 'short' not found"), "got: {}", err);
+    }
+
+    #[test]
+    fn memory_limit_is_90_percent_of_available() {
+        let meminfo = "MemTotal:        2048000 kB\n\
+                       MemFree:          100000 kB\n\
+                       MemAvailable:    1000000 kB\n\
+                       Buffers:            5000 kB\n";
+        let limit = memory_limit_from_meminfo(meminfo).expect("parse MemAvailable");
+        assert_eq!(limit, 1_000_000i64 * 1024 * 9 / 10);
+        // The whole point: leave headroom — the cap is strictly below the raw
+        // available bytes so the guest kernel + agent can't be starved.
+        assert!(
+            limit < 1_000_000i64 * 1024,
+            "memory cap must reserve headroom below MemAvailable"
+        );
+    }
+
+    #[test]
+    fn memory_limit_reads_memavailable_not_memfree_or_memtotal() {
+        // MemTotal/MemFree are larger and listed first; a sloppy parser that
+        // grabbed the wrong field would cap the container too high and defeat
+        // the OOM protection.
+        let meminfo = "MemTotal:        9999999 kB\n\
+                       MemFree:         8888888 kB\n\
+                       MemAvailable:     500000 kB\n";
+        assert_eq!(
+            memory_limit_from_meminfo(meminfo).unwrap(),
+            500_000i64 * 1024 * 9 / 10,
+            "must derive the cap from MemAvailable"
+        );
+    }
+
+    #[test]
+    fn memory_limit_none_when_field_missing() {
+        // No MemAvailable → no limit (degrade to unbounded rather than a bogus
+        // cap), so the caller sets no cgroup memory.max.
+        assert_eq!(
+            memory_limit_from_meminfo("MemTotal: 2048000 kB\nMemFree: 100000 kB\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn memory_limit_none_when_unparseable_or_zero() {
+        assert_eq!(
+            memory_limit_from_meminfo("MemAvailable:    notanumber kB\n"),
+            None
+        );
+        // 0 available → 0 cap is meaningless; must be None, never Some(0).
+        assert_eq!(
+            memory_limit_from_meminfo("MemAvailable:          0 kB\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn memory_limit_saturates_on_overflow_doesnt_panic() {
+        // i64::MAX kB is ~18 EB; raw `* 1024 * 9` would overflow i64 and
+        // panic under debug arithmetic checks. Saturating math must keep the
+        // guest agent alive at container creation — the value returned is
+        // bounded but the call must NOT panic. The exact saturated value
+        // depends on the multiplication order; assert what we can: it's
+        // `Some(positive)` and large enough to be useless as a cap on
+        // realistic hardware (i.e., effectively "unlimited").
+        let meminfo = format!("MemAvailable: {} kB\n", i64::MAX);
+        let out = memory_limit_from_meminfo(&meminfo);
+        let v = out.expect("must return Some, not panic, on saturated input");
+        assert!(v > 0, "saturated limit must be positive (got {v})");
+        // Saturated bytes ≈ i64::MAX / 10 ≈ 9.2 × 10^17 bytes (~800 PiB) —
+        // way larger than any realistic host. 1 PB (10^15) is a conservative
+        // floor that proves saturation actually happened (a plain overflow
+        // would wrap to a small or negative value).
+        assert!(
+            v > 1_000_000_000_000_000,
+            "saturated limit must be enormous (>1 PB), not a small overflow remainder (got {v})"
+        );
+    }
+
+    /// Production-path: `memory_limit = Some(N)` lands `memory.max = N` on the
+    /// cgroup spec alongside the constant `pids.max = 512`. Pins that both
+    /// caps are set when meminfo is healthy.
+    #[test]
+    fn linux_spec_with_memory_limit_has_both_memory_and_pids_caps() {
+        let limit: i64 = 256 * 1024 * 1024; // 256 MiB
+        let linux = build_linux_spec_with_memory("container-with-mem", vec![], Some(limit))
+            .expect("must build with Some memory limit");
+
+        let resources = linux
+            .resources()
+            .as_ref()
+            .expect("linux.resources must be set");
+        let memory = resources
+            .memory()
+            .as_ref()
+            .expect("memory.max must be set when memory_limit is Some");
+        assert_eq!(
+            memory.limit(),
+            Some(limit),
+            "memory.max must equal the explicit memory_limit"
+        );
+        let pids = resources.pids().as_ref().expect("pids.max must be set");
+        assert_eq!(
+            pids.limit(),
+            CONTAINER_PIDS_MAX,
+            "pids.max must always be the constant {CONTAINER_PIDS_MAX}"
+        );
+    }
+
+    /// **Load-bearing for the meminfo-degradation contract**: when
+    /// `/proc/meminfo` can't be read (or `MemAvailable` is missing /
+    /// unparseable / zero), `container_memory_limit()` returns `None` and
+    /// `build_linux_spec` must STILL produce a spec whose cgroup has
+    /// `pids.max = 512`. The whole point of pulling pids.max out of the
+    /// `if let Some` block in #605 was to keep fork-bomb protection alive
+    /// even when memory.max can't be derived — silently dropping both
+    /// would be the regression this PR exists to fight.
+    ///
+    /// A regression that, for example, moves the `pids` builder back inside
+    /// the `Some` arm would land here as: `pids().is_none()`.
+    #[test]
+    fn linux_spec_without_memory_limit_still_has_pids_cap() {
+        let linux = build_linux_spec_with_memory("container-no-mem", vec![], None)
+            .expect("must build with None memory limit (degraded path)");
+
+        let resources = linux
+            .resources()
+            .as_ref()
+            .expect("linux.resources must be set even in the degraded path");
+
+        assert!(
+            resources.memory().is_none(),
+            "memory.max must be ABSENT when memory_limit is None — \
+             #605's loud-warn-and-degrade contract means we don't \
+             silently invent a cap"
+        );
+
+        let pids = resources.pids().as_ref().expect(
+            "pids.max must STILL be set when memory_limit is None — \
+             the whole point of decoupling pids from the memory if-let \
+             is to keep fork-bomb protection alive when meminfo fails",
+        );
+        assert_eq!(
+            pids.limit(),
+            CONTAINER_PIDS_MAX,
+            "pids.max must always be the constant {CONTAINER_PIDS_MAX}, \
+             regardless of memory_limit"
+        );
+
+        // The cgroup path must also still be set — youki applies pids.max
+        // there. A regression that moves `cgroups_path` into the Some arm
+        // would silently bury the pids cap in `/:youki:<id>` instead.
+        assert_eq!(
+            linux
+                .cgroups_path()
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned()),
+            Some("/boxlite/container-no-mem".to_string()),
+            "cgroups_path must always be /boxlite/<id>"
+        );
     }
 }

@@ -697,7 +697,7 @@ fn build_box_command(req: &ExecRequest) -> BoxCommand {
     if let Some(secs) = req.timeout_seconds {
         cmd = cmd.timeout(std::time::Duration::from_secs_f64(secs));
     }
-    cmd
+    cmd.debug(req.debug)
 }
 
 // ============================================================================

@@ -60,6 +60,8 @@
 #[cfg(target_os = "linux")]
 mod capabilities;
 #[cfg(target_os = "linux")]
+pub(crate) mod cgroup_carve;
+#[cfg(target_os = "linux")]
 mod command;
 #[cfg(target_os = "linux")]
 mod console_socket;
@@ -68,7 +70,7 @@ mod kill;
 #[cfg(target_os = "linux")]
 mod lifecycle;
 #[cfg(target_os = "linux")]
-mod spec;
+pub(crate) mod spec;
 #[cfg(target_os = "linux")]
 mod start;
 #[cfg(target_os = "linux")]

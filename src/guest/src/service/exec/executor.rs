@@ -50,6 +50,7 @@ impl Executor for ContainerExecutor {
         // so a stuck console-socket doesn't block other execs or shutdown.
         let spawn_result = {
             let container = self.container.lock().await;
+            let container_id = container.id().to_string();
 
             let mut cmd = container
                 .cmd()
@@ -74,7 +75,41 @@ impl Executor for ContainerExecutor {
                 cmd = cmd.with_user(user.clone());
             }
 
-            cmd.spawn_build().await?
+            // OPT-IN: `boxlite exec --debug` routes this process into the
+            // operator subgroup (`/boxlite/<id>/operator`, separate cap) so
+            // the operator can inspect a box whose workload has saturated
+            // `pids.max=512`. The default `boxlite exec` keeps the original
+            // #605 behaviour — process lands in `/boxlite/<id>/workload` —
+            // so a legitimate long-running command started via exec gets the
+            // full workload budget, not the tight ~64-PID operator cap.
+            //
+            // libcontainer's tenant builder re-reads `cgroupsPath` from the
+            // OCI config.json at build() time, so we flip it on disk under
+            // the container mutex (single-threaded serialization), call
+            // spawn_build, then restore for the next container-level op.
+            let swapped = if req.debug {
+                match crate::container::cgroup_carve::swap_to_operator_cgroup_path(&container_id) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        tracing::warn!(
+                            container_id,
+                            error = %e,
+                            "operator-cgroup swap failed; --debug exec falls back to workload subgroup (lockout protection degraded for this call)"
+                        );
+                        false
+                    }
+                }
+            } else {
+                false
+            };
+
+            let result = cmd.spawn_build().await;
+
+            if swapped {
+                crate::container::cgroup_carve::restore_workload_cgroup_path(&container_id);
+            }
+
+            result?
             // container mutex dropped here
         };
 

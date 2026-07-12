@@ -173,6 +173,21 @@ impl Container {
         start::create_container_with_stdio(container_id, &state_root, &bundle_path, init_fds)?;
         start::start_container(container_id, &state_root)?;
 
+        // Carve out the operator sibling AFTER libcontainer has finished its
+        // own setup — libcontainer is the one that walks `/sys/fs/cgroup/...`
+        // and writes `+pids +memory` into the chain of `subtree_control`
+        // files (root → boxlite → boxlite/<id>) to delegate controllers down.
+        // Running our mkdir before that finishes left `cgroup.controllers`
+        // empty in `/boxlite/<id>`, so the operator subgroup never got
+        // `pids.max` / `memory.max` files at all.
+        if let Err(e) = super::cgroup_carve::ensure_box_cgroup_hierarchy(container_id) {
+            tracing::warn!(
+                container_id,
+                error = %e,
+                "cgroup carve-out failed; container will start but operator-lockout protection is degraded"
+            );
+        }
+
         Ok(Self {
             id: container_id.to_string(),
             state_root,
@@ -465,6 +480,13 @@ impl Drop for Container {
         }
 
         start::cleanup_bundle_directory(&self.bundle_path);
+
+        // Remove the cgroup carve-out. libcontainer's `delete_container`
+        // already rmdirs `<parent>/workload`; this also rmdirs the operator
+        // sibling and the parent so the next box with this id starts clean.
+        // Best-effort: rmdir errors mean processes are still attached
+        // (already logged in cgroup_carve).
+        super::cgroup_carve::remove_box_cgroup_hierarchy(&self.id);
 
         tracing::debug!(container_id = %self.id, "Container cleanup complete");
     }

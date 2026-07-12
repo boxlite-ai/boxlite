@@ -13,6 +13,13 @@ pub struct ExecArgs {
     #[arg(short = 'd', long)]
     pub detach: bool,
 
+    /// Route this exec into the box's operator cgroup subgroup so it still
+    /// works when the workload has saturated its own `pids.max`. Use only for
+    /// inspection commands — the operator subgroup has a tight budget
+    /// (~64 PIDs / 32 MiB) and a heavy command may hit ENOSPC/EAGAIN there.
+    #[arg(long)]
+    pub debug: bool,
+
     /// Box ID or name
     #[arg(index = 1, value_name = "BOX")]
     pub target_box: String,
@@ -90,6 +97,7 @@ impl BoxExecutor {
 
     fn prepare_command(&self) -> BoxCommand {
         let cmd = BoxCommand::new(&self.args.command[0]).args(&self.args.command[1..]);
-        self.args.process.configure_command(cmd)
+        let cmd = self.args.process.configure_command(cmd);
+        cmd.debug(self.args.debug)
     }
 }
