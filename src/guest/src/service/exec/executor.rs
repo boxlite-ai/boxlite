@@ -156,6 +156,12 @@ fn spawn_with_pipes(req: &ExecRequest) -> BoxliteResult<ExecHandle> {
 
     let pid = child.id();
 
+    // Tee guest-side exec output to `container.log` (same single-file path
+    // the container exec path uses) so `boxlite logs` sees the bytes.
+    let log_path = std::path::PathBuf::from(super::tee::CONTAINER_LOG_PATH);
+    let stdout_read = super::tee::wrap_with_tee(stdout_read, log_path.clone())?;
+    let stderr_read = super::tee::wrap_with_tee(stderr_read, log_path)?;
+
     // Non-PTY mode: stdout and stderr are separate pipes
     Ok(ExecHandle::new(
         Pid::from_raw(pid as i32),
@@ -251,6 +257,10 @@ fn spawn_with_pty(req: &ExecRequest, config: PtyConfig) -> BoxliteResult<ExecHan
 
     let stdin = unsafe { OwnedFd::from_raw_fd(stdin_fd) };
     let stdout = unsafe { OwnedFd::from_raw_fd(stdout_fd) };
+
+    // Tee guest PTY output through container.log.
+    let log_path = std::path::PathBuf::from(super::tee::CONTAINER_LOG_PATH);
+    let stdout = super::tee::wrap_with_tee(stdout, log_path)?;
 
     // PTY mode: stderr is None (merged into stdout)
     let mut handle = ExecHandle::new(Pid::from_raw(pid as i32), stdin, stdout, None);

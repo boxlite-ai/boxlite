@@ -286,6 +286,15 @@ impl ContainerCommand {
         let pipes = Some((stdin_read, stdout_write, stderr_write));
         let pid = self.build_and_spawn(pipes).await?;
 
+        // Tee container stdout/stderr through to `container.log` on the
+        // shared virtio-fs so `boxlite logs` can read it. Tee returns the
+        // SAME fd when the log file can't be opened (e.g. in unit tests
+        // where /run/boxlite/shared doesn't exist), so this is safe to
+        // always do.
+        let log_path = std::path::PathBuf::from(crate::service::exec::tee::CONTAINER_LOG_PATH);
+        let stdout_read = crate::service::exec::tee::wrap_with_tee(stdout_read, log_path.clone())?;
+        let stderr_read = crate::service::exec::tee::wrap_with_tee(stderr_read, log_path)?;
+
         tracing::debug!(pid = pid.as_raw(), "spawned with pipes");
         // Non-PTY mode: stdout and stderr are separate pipes
         Ok(ExecHandle::new(
@@ -477,6 +486,11 @@ impl SpawnedPty {
 fn create_pty_child(pid: Pid, pty_master: OwnedFd, config: PtyConfig) -> BoxliteResult<ExecHandle> {
     set_pty_window_size(&pty_master, &config)?;
     let (stdin, stdout) = reconcile_pty_fds(&pty_master)?;
+
+    // Tee PTY output through `container.log` (same shared file the pipe
+    // path writes to) so `boxlite logs` sees TTY-mode exec output too.
+    let log_path = std::path::PathBuf::from(crate::service::exec::tee::CONTAINER_LOG_PATH);
+    let stdout = crate::service::exec::tee::wrap_with_tee(stdout, log_path)?;
 
     // PTY mode: stderr is None (merged into stdout)
     let mut child = ExecHandle::new(pid, stdin, stdout, None);

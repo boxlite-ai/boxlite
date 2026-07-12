@@ -21,6 +21,7 @@ pub mod exec_handle;
 pub(in crate::service) mod executor;
 pub(in crate::service) mod registry;
 mod state;
+pub(crate) mod tee;
 mod timeout;
 
 // Re-export trait so container module can implement it

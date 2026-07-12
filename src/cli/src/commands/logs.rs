@@ -21,6 +21,16 @@ pub struct LogsArgs {
     /// Follow log output
     #[arg(short = 'f', long = "follow")]
     pub follow: bool,
+
+    /// Read the VM/guest-agent console (`logs/console.log`) instead of the
+    /// container's stdout/stderr. Useful when the box failed to boot or
+    /// the guest agent crashed.
+    ///
+    /// Default is the container's exec output (`shared/container.log` —
+    /// what every `docker logs` user expects): every `boxlite exec` /
+    /// `boxlite run` command tees its stdout+stderr there.
+    #[arg(long = "vm")]
+    pub vm: bool,
 }
 
 pub async fn execute(args: LogsArgs, global: &GlobalFlags) -> anyhow::Result<()> {
@@ -33,12 +43,25 @@ pub async fn execute(args: LogsArgs, global: &GlobalFlags) -> anyhow::Result<()>
         .await?
         .ok_or_else(|| anyhow::anyhow!("No such box: {}", args.target))?;
 
-    // Construct console.log path: {home_dir}/boxes/{box_id}/logs/console.log
     let box_id = litebox.id();
-
-    let log_path = FilesystemLayout::new(home_dir, FsLayoutConfig::with_bind_mount())
-        .box_layout(box_id.as_str(), false)?
-        .console_output_path();
+    let layout = FilesystemLayout::new(home_dir, FsLayoutConfig::with_bind_mount())
+        .box_layout(box_id.as_str(), /*isolate_mounts=*/ false)?;
+    // `--vm` → VM/agent console; default → container exec output. Fall back
+    // to console.log when container.log is absent (old box created before
+    // the tee landed, or `--vm` explicitly).
+    let container_path = layout.container_output_path();
+    let console_path = layout.console_output_path();
+    let log_path = if args.vm {
+        console_path
+    } else if container_path.exists() {
+        container_path
+    } else {
+        eprintln!(
+            "Note: no container exec output captured yet; falling back to VM/agent console. \
+             Re-run with --vm to silence this notice."
+        );
+        console_path
+    };
 
     if !log_path.exists() {
         eprintln!("No log file found for box '{}'", args.target);

@@ -513,6 +513,18 @@ impl BoxFilesystemLayout {
         self.logs_dir().join("console.log")
     }
 
+    /// Container exec output path: `~/.boxlite/boxes/{box_id}/shared/container.log`.
+    ///
+    /// Single appendable file the guest tees every exec's stdout+stderr into.
+    /// Lives inside `shared/` so it reaches the host via virtio-fs (guest sees
+    /// it at `/run/boxlite/shared/container.log`). `boxlite logs` reads this by
+    /// default — what most users want from `docker logs`-style commands. The
+    /// VM/agent console is still available via `--vm` (the
+    /// [`console_output_path`](Self::console_output_path) above).
+    pub fn container_output_path(&self) -> PathBuf {
+        self.shared_dir().join("container.log")
+    }
+
     /// PID file path: ~/.boxlite/boxes/{box_id}/shim.pid
     ///
     /// Written by the shim process in pre_exec (after fork, before exec).
