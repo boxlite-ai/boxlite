@@ -5,26 +5,22 @@ package controllers
 
 import "testing"
 
-func TestIsTerminalToolboxPath(t *testing.T) {
+func TestNormalizeToolboxPath(t *testing.T) {
 	tests := []struct {
 		path string
-		want bool
+		want string
 	}{
-		{"", true},
-		{"/", true},
-		{"proxy/22222", true},
-		{"/proxy/22222", true},
-		{"/proxy/22222/", true},
-		{"/proxy/22222/vnc.html", true},
-		{"/proxy/6080/", false},
-		{"/computeruse/status", false},
-		{"/process/execute", false},
+		{"", "/"},
+		{"/", "/"},
+		{"proxy/6080", "/proxy/6080"},
+		{"/proxy/6080/", "/proxy/6080/"},
+		{"computeruse/status", "/computeruse/status"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
-			if got := isTerminalToolboxPath(tt.path); got != tt.want {
-				t.Fatalf("isTerminalToolboxPath(%q) = %v, want %v", tt.path, got, tt.want)
+			if got := normalizeToolboxPath(tt.path); got != tt.want {
+				t.Fatalf("normalizeToolboxPath(%q) = %q, want %q", tt.path, got, tt.want)
 			}
 		})
 	}

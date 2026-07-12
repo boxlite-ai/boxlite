@@ -57,7 +57,12 @@ import { customAlphabet as customNanoid, nanoid, urlAlphabet } from 'nanoid'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 import { validateMountPaths, validateSubpaths } from '../utils/volume-mount-path-validation.util'
 import { BoxRepository } from '../repositories/box.repository'
-import { PortPreviewUrlDto, SignedPortPreviewUrlDto } from '../dto/port-preview-url.dto'
+import {
+  PortPreviewUrlDto,
+  SignedPortPreviewUrlDto,
+  SignedTerminalPreviewUrlDto,
+  TerminalPreviewUrlDto,
+} from '../dto/port-preview-url.dto'
 import { RegionService } from '../../region/services/region.service'
 import { BoxCreatedEvent } from '../events/box-create.event'
 import { InjectRedis } from '@nestjs-modules/ioredis'
@@ -83,7 +88,6 @@ const DEFAULT_BOX_CPU = 1
 const DEFAULT_BOX_MEM = 1
 const DEFAULT_BOX_DISK = 10
 const DEFAULT_BOX_GPU = 0
-const TERMINAL_PREVIEW_PORT = 22222
 
 @Injectable()
 export class BoxService {
@@ -677,9 +681,6 @@ export class BoxService {
     if (port < 1 || port > 65535) {
       throw new BadRequestError('Invalid port')
     }
-    if (port !== TERMINAL_PREVIEW_PORT) {
-      throw new BadRequestError(`Port preview is only supported for terminal port ${TERMINAL_PREVIEW_PORT}`)
-    }
 
     const proxyDomain = this.configService.getOrThrow('proxy.domain')
     const proxyProtocol = this.configService.getOrThrow('proxy.protocol')
@@ -710,9 +711,6 @@ export class BoxService {
     if (port < 1 || port > 65535) {
       throw new BadRequestError('Invalid port')
     }
-    if (port !== TERMINAL_PREVIEW_PORT) {
-      throw new BadRequestError(`Signed port preview is only supported for terminal port ${TERMINAL_PREVIEW_PORT}`)
-    }
 
     if (expiresInSeconds < 1 || expiresInSeconds > 60 * 60 * 24) {
       throw new BadRequestError('expiresInSeconds must be between 1 second and 24 hours')
@@ -742,6 +740,77 @@ export class BoxService {
       token,
       url,
     }
+  }
+
+  async getTerminalPreviewUrl(boxIdOrName: string, organizationId: string): Promise<TerminalPreviewUrlDto> {
+    const proxyDomain = this.configService.getOrThrow('proxy.domain')
+    const proxyProtocol = this.configService.getOrThrow('proxy.protocol')
+
+    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+
+    let url = `${proxyProtocol}://terminal-${box.id}.${proxyDomain}`
+
+    const region = await this.regionService.findOne(box.region, true)
+    if (region && region.proxyUrl) {
+      url = region.proxyUrl.replace(/(https?:\/)(\/)/, `$1/terminal-${box.id}.`)
+    }
+
+    return {
+      boxId: box.id,
+      url,
+      token: box.authToken,
+    }
+  }
+
+  async getSignedTerminalPreviewUrl(
+    boxIdOrName: string,
+    organizationId: string,
+    expiresInSeconds = 60,
+  ): Promise<SignedTerminalPreviewUrlDto> {
+    if (expiresInSeconds < 1 || expiresInSeconds > 60 * 60 * 24) {
+      throw new BadRequestError('expiresInSeconds must be between 1 second and 24 hours')
+    }
+
+    const proxyDomain = this.configService.getOrThrow('proxy.domain')
+    const proxyProtocol = this.configService.getOrThrow('proxy.protocol')
+
+    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+    const token = customNanoid(urlAlphabet.replace('_', '').replace('-', ''))(16).toLocaleLowerCase()
+
+    const lockKey = `box:signed-terminal-url-token:${token}`
+    await this.redis.setex(lockKey, expiresInSeconds, box.id)
+
+    let url = `${proxyProtocol}://terminal-${token}.${proxyDomain}`
+
+    const region = await this.regionService.findOne(box.region, true)
+    if (region && region.proxyUrl) {
+      url = region.proxyUrl.replace(/(https?:\/)(\/)/, `$1/terminal-${token}.`)
+    }
+
+    return {
+      boxId: box.id,
+      token,
+      url,
+    }
+  }
+
+  async getBoxIdFromSignedTerminalPreviewUrlToken(token: string): Promise<string> {
+    const lockKey = `box:signed-terminal-url-token:${token}`
+    const boxId = await this.redis.get(lockKey)
+    if (!boxId) {
+      throw new ForbiddenException('Invalid or expired token')
+    }
+    return boxId
+  }
+
+  async expireSignedTerminalPreviewUrlToken(boxIdOrName: string, organizationId: string, token: string): Promise<void> {
+    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+    if (!box) {
+      throw new NotFoundException(`Box with ID or name ${boxIdOrName} not found`)
+    }
+
+    const lockKey = `box:signed-terminal-url-token:${token}`
+    await this.redis.del(lockKey)
   }
 
   async getBoxIdFromSignedPreviewUrlToken(token: string, port: number): Promise<string> {

@@ -40,9 +40,13 @@ import type { ResizeBox } from '../models';
 // @ts-ignore
 import type { SignedPortPreviewUrl } from '../models';
 // @ts-ignore
+import type { SignedTerminalPreviewUrl } from '../models';
+// @ts-ignore
 import type { SshAccessDto } from '../models';
 // @ts-ignore
 import type { SshAccessValidationDto } from '../models';
+// @ts-ignore
+import type { TerminalPreviewUrl } from '../models';
 // @ts-ignore
 import type { ToolboxProxyUrl } from '../models';
 // @ts-ignore
@@ -141,6 +145,36 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
 
             // authentication oauth2 required
 
+
+            if (xBoxLiteOrganizationID != null) {
+                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
+            }
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        expireSignedTerminalPreviewUrl: async (boxIdOrName: string, token: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            assertParamExists('expireSignedTerminalPreviewUrl', 'boxIdOrName', boxIdOrName)
+            assertParamExists('expireSignedTerminalPreviewUrl', 'token', token)
+            const localVarPath = `/box/{boxIdOrName}/terminal/signed-preview-url/{token}/expire`
+                .replace('{boxIdOrName}', encodeURIComponent(String(boxIdOrName)))
+                .replace('{token}', encodeURIComponent(String(token)));
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             if (xBoxLiteOrganizationID != null) {
                 localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
@@ -609,6 +643,69 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
                 localVarQueryParameter['expiresInSeconds'] = expiresInSeconds;
             }
 
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            if (xBoxLiteOrganizationID != null) {
+                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
+            }
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        getSignedTerminalPreviewUrl: async (boxIdOrName: string, xBoxLiteOrganizationID?: string, expiresInSeconds?: number, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            assertParamExists('getSignedTerminalPreviewUrl', 'boxIdOrName', boxIdOrName)
+            const localVarPath = `/box/{boxIdOrName}/terminal/signed-preview-url`
+                .replace('{boxIdOrName}', encodeURIComponent(String(boxIdOrName)));
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            if (expiresInSeconds !== undefined) {
+                localVarQueryParameter['expiresInSeconds'] = expiresInSeconds;
+            }
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            if (xBoxLiteOrganizationID != null) {
+                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
+            }
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        getTerminalPreviewUrl: async (boxIdOrName: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            assertParamExists('getTerminalPreviewUrl', 'boxIdOrName', boxIdOrName)
+            const localVarPath = `/box/{boxIdOrName}/terminal/preview-url`
+                .replace('{boxIdOrName}', encodeURIComponent(String(boxIdOrName)));
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
             localVarHeaderParameter['Accept'] = 'application/json';
 
             if (xBoxLiteOrganizationID != null) {
@@ -1369,6 +1466,12 @@ export const BoxApiFp = function(configuration?: Configuration) {
             const localVarOperationServerBasePath = operationServerMap['BoxApi.expireSignedPortPreviewUrl']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
+        async expireSignedTerminalPreviewUrl(boxIdOrName: string, token: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.expireSignedTerminalPreviewUrl(boxIdOrName, token, xBoxLiteOrganizationID, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['BoxApi.expireSignedTerminalPreviewUrl']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
         /**
          * 
          * @summary Get box details
@@ -1498,6 +1601,18 @@ export const BoxApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.getSignedPortPreviewUrl(boxIdOrName, port, xBoxLiteOrganizationID, expiresInSeconds, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['BoxApi.getSignedPortPreviewUrl']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        async getSignedTerminalPreviewUrl(boxIdOrName: string, xBoxLiteOrganizationID?: string, expiresInSeconds?: number, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<SignedTerminalPreviewUrl>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getSignedTerminalPreviewUrl(boxIdOrName, xBoxLiteOrganizationID, expiresInSeconds, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['BoxApi.getSignedTerminalPreviewUrl']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        async getTerminalPreviewUrl(boxIdOrName: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<TerminalPreviewUrl>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getTerminalPreviewUrl(boxIdOrName, xBoxLiteOrganizationID, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['BoxApi.getTerminalPreviewUrl']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -1742,6 +1857,9 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
         expireSignedPortPreviewUrl(boxIdOrName: string, port: number, token: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
             return localVarFp.expireSignedPortPreviewUrl(boxIdOrName, port, token, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
+        expireSignedTerminalPreviewUrl(boxIdOrName: string, token: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.expireSignedTerminalPreviewUrl(boxIdOrName, token, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        },
         /**
          * 
          * @summary Get box details
@@ -1848,6 +1966,12 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
          */
         getSignedPortPreviewUrl(boxIdOrName: string, port: number, xBoxLiteOrganizationID?: string, expiresInSeconds?: number, options?: RawAxiosRequestConfig): AxiosPromise<SignedPortPreviewUrl> {
             return localVarFp.getSignedPortPreviewUrl(boxIdOrName, port, xBoxLiteOrganizationID, expiresInSeconds, options).then((request) => request(axios, basePath));
+        },
+        getSignedTerminalPreviewUrl(boxIdOrName: string, xBoxLiteOrganizationID?: string, expiresInSeconds?: number, options?: RawAxiosRequestConfig): AxiosPromise<SignedTerminalPreviewUrl> {
+            return localVarFp.getSignedTerminalPreviewUrl(boxIdOrName, xBoxLiteOrganizationID, expiresInSeconds, options).then((request) => request(axios, basePath));
+        },
+        getTerminalPreviewUrl(boxIdOrName: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<TerminalPreviewUrl> {
+            return localVarFp.getTerminalPreviewUrl(boxIdOrName, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -2051,6 +2175,9 @@ export class BoxApi extends BaseAPI {
     public expireSignedPortPreviewUrl(boxIdOrName: string, port: number, token: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return BoxApiFp(this.configuration).expireSignedPortPreviewUrl(boxIdOrName, port, token, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
+    public expireSignedTerminalPreviewUrl(boxIdOrName: string, token: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return BoxApiFp(this.configuration).expireSignedTerminalPreviewUrl(boxIdOrName, token, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    }
 
     /**
      * 
@@ -2165,6 +2292,12 @@ export class BoxApi extends BaseAPI {
      */
     public getSignedPortPreviewUrl(boxIdOrName: string, port: number, xBoxLiteOrganizationID?: string, expiresInSeconds?: number, options?: RawAxiosRequestConfig) {
         return BoxApiFp(this.configuration).getSignedPortPreviewUrl(boxIdOrName, port, xBoxLiteOrganizationID, expiresInSeconds, options).then((request) => request(this.axios, this.basePath));
+    }
+    public getSignedTerminalPreviewUrl(boxIdOrName: string, xBoxLiteOrganizationID?: string, expiresInSeconds?: number, options?: RawAxiosRequestConfig) {
+        return BoxApiFp(this.configuration).getSignedTerminalPreviewUrl(boxIdOrName, xBoxLiteOrganizationID, expiresInSeconds, options).then((request) => request(this.axios, this.basePath));
+    }
+    public getTerminalPreviewUrl(boxIdOrName: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return BoxApiFp(this.configuration).getTerminalPreviewUrl(boxIdOrName, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

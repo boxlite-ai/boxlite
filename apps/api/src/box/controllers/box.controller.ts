@@ -48,7 +48,12 @@ import { OrganizationAuthContext } from '../../common/interfaces/auth-context.in
 import { RequiredOrganizationResourcePermissions } from '../../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../../organization/enums/organization-resource-permission.enum'
 import { OrganizationResourceActionGuard } from '../../organization/guards/organization-resource-action.guard'
-import { PortPreviewUrlDto, SignedPortPreviewUrlDto } from '../dto/port-preview-url.dto'
+import {
+  PortPreviewUrlDto,
+  SignedPortPreviewUrlDto,
+  SignedTerminalPreviewUrlDto,
+  TerminalPreviewUrlDto,
+} from '../dto/port-preview-url.dto'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { BoxStateUpdatedEvent } from '../events/box-state-updated.event'
 import { Audit, TypedRequest } from '../../audit/decorators/audit.decorator'
@@ -724,6 +729,87 @@ export class BoxController {
     @Param('token') token: string,
   ): Promise<void> {
     await this.boxService.expireSignedPreviewUrlToken(boxIdOrName, authContext.organizationId, token, port)
+  }
+
+  @Get(':boxIdOrName/terminal/preview-url')
+  @ApiOperation({
+    summary: 'Get terminal preview URL for a box',
+    operationId: 'getTerminalPreviewUrl',
+  })
+  @ApiParam({
+    name: 'boxIdOrName',
+    description: 'ID or name of the box',
+    type: 'string',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Terminal preview URL for the box',
+    type: TerminalPreviewUrlDto,
+  })
+  @UseGuards(BoxAccessGuard)
+  async getTerminalPreviewUrl(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxIdOrName') boxIdOrName: string,
+  ): Promise<TerminalPreviewUrlDto> {
+    return this.boxService.getTerminalPreviewUrl(boxIdOrName, authContext.organizationId)
+  }
+
+  @Get(':boxIdOrName/terminal/signed-preview-url')
+  @ApiOperation({
+    summary: 'Get signed terminal preview URL for a box',
+    operationId: 'getSignedTerminalPreviewUrl',
+  })
+  @ApiParam({
+    name: 'boxIdOrName',
+    description: 'ID or name of the box',
+    type: 'string',
+  })
+  @ApiQuery({
+    name: 'expiresInSeconds',
+    required: false,
+    type: 'integer',
+    description: 'Expiration time in seconds (default: 60 seconds)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Signed terminal preview URL for the box',
+    type: SignedTerminalPreviewUrlDto,
+  })
+  @UseGuards(BoxAccessGuard)
+  async getSignedTerminalPreviewUrl(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxIdOrName') boxIdOrName: string,
+    @Query('expiresInSeconds') expiresInSeconds?: number,
+  ): Promise<SignedTerminalPreviewUrlDto> {
+    return this.boxService.getSignedTerminalPreviewUrl(boxIdOrName, authContext.organizationId, expiresInSeconds)
+  }
+
+  @Post(':boxIdOrName/terminal/signed-preview-url/:token/expire')
+  @ApiOperation({
+    summary: 'Expire signed terminal preview URL for a box',
+    operationId: 'expireSignedTerminalPreviewUrl',
+  })
+  @ApiParam({
+    name: 'boxIdOrName',
+    description: 'ID or name of the box',
+    type: 'string',
+  })
+  @ApiParam({
+    name: 'token',
+    description: 'Token to expire signed terminal preview URL for',
+    type: 'string',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Signed terminal preview URL has been expired',
+  })
+  @UseGuards(BoxAccessGuard)
+  async expireSignedTerminalPreviewUrl(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxIdOrName') boxIdOrName: string,
+    @Param('token') token: string,
+  ): Promise<void> {
+    await this.boxService.expireSignedTerminalPreviewUrlToken(boxIdOrName, authContext.organizationId, token)
   }
 
   @Post(':boxIdOrName/ssh-access')
