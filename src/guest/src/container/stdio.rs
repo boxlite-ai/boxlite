@@ -35,13 +35,17 @@
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use nix::unistd::pipe;
 use std::io::Read;
-use std::os::unix::io::{AsRawFd, OwnedFd};
+use std::os::unix::io::OwnedFd;
+use std::sync::{Arc, Mutex};
+
+const MAX_CAPTURE: usize = 4096;
+const DRAIN_BUFFER_SIZE: usize = 8192;
 
 /// Stdio configuration for container init process.
 ///
 /// Holds pipe file descriptors:
 /// - stdin_tx: write-end held open (blocks init's read forever)
-/// - stdout_rx/stderr_rx: read-ends for optional log capture
+/// - stdout/stderr tails: bounded diagnostic output retained by background drains
 ///
 /// # Lifecycle
 ///
@@ -56,11 +60,9 @@ pub struct ContainerStdio {
     #[allow(dead_code)]
     stdin_tx: OwnedFd,
 
-    /// Read-end of stdout pipe (taken by drain_output for log capture)
-    stdout_rx: Option<OwnedFd>,
+    stdout_tail: Arc<Mutex<Vec<u8>>>,
 
-    /// Read-end of stderr pipe (taken by drain_output for log capture)
-    stderr_rx: Option<OwnedFd>,
+    stderr_tail: Arc<Mutex<Vec<u8>>>,
 }
 
 /// File descriptors to pass to container init process.
@@ -106,11 +108,16 @@ impl ContainerStdio {
         let (stderr_rx, stderr_tx) = pipe()
             .map_err(|e| BoxliteError::Internal(format!("Failed to create stderr pipe: {}", e)))?;
 
-        // nix::unistd::pipe() returns OwnedFd directly
+        let stdout_tail = Arc::new(Mutex::new(Vec::with_capacity(MAX_CAPTURE)));
+        let stderr_tail = Arc::new(Mutex::new(Vec::with_capacity(MAX_CAPTURE)));
+
+        spawn_output_drain("boxlite-init-stdout", stdout_rx, stdout_tail.clone())?;
+        spawn_output_drain("boxlite-init-stderr", stderr_rx, stderr_tail.clone())?;
+
         let container_stdio = Self {
             stdin_tx,
-            stdout_rx: Some(stdout_rx),
-            stderr_rx: Some(stderr_rx),
+            stdout_tail,
+            stderr_tail,
         };
 
         let init_fds = InitStdioFds {
@@ -124,59 +131,69 @@ impl ContainerStdio {
         Ok((container_stdio, init_fds))
     }
 
-    /// Drain all available output from init process stdout and stderr.
-    ///
-    /// Takes ownership of the pipe read-ends and reads with non-blocking I/O.
-    /// Can only be called once — subsequent calls return empty strings.
+    /// Return the bounded output tail retained by the background drains.
     ///
     /// # Returns
     ///
     /// `(stdout, stderr)` — captured output, truncated to 4 KiB each.
-    pub fn drain_output(&mut self) -> (String, String) {
-        let stdout = drain_fd(self.stdout_rx.take());
-        let stderr = drain_fd(self.stderr_rx.take());
-        (stdout, stderr)
+    pub fn drain_output(&self) -> (String, String) {
+        (
+            output_tail(&self.stdout_tail),
+            output_tail(&self.stderr_tail),
+        )
     }
 }
 
-/// Read all available data from an fd using non-blocking I/O.
-fn drain_fd(fd: Option<OwnedFd>) -> String {
-    const MAX_CAPTURE: usize = 4096;
+fn spawn_output_drain(name: &str, fd: OwnedFd, tail: Arc<Mutex<Vec<u8>>>) -> BoxliteResult<()> {
+    std::thread::Builder::new()
+        .name(name.to_string())
+        .spawn(move || drain_fd(fd, tail))
+        .map(|_| ())
+        .map_err(|error| {
+            BoxliteError::Internal(format!("Failed to start init output drain: {error}"))
+        })
+}
 
-    let Some(fd) = fd else {
-        return String::new();
-    };
-
-    // Set non-blocking so read returns immediately when no more data
-    let raw_fd = fd.as_raw_fd();
-    let flags = nix::fcntl::fcntl(raw_fd, nix::fcntl::FcntlArg::F_GETFL);
-    if let Ok(flags) = flags {
-        let mut new_flags = nix::fcntl::OFlag::from_bits_truncate(flags);
-        new_flags.insert(nix::fcntl::OFlag::O_NONBLOCK);
-        let _ = nix::fcntl::fcntl(raw_fd, nix::fcntl::FcntlArg::F_SETFL(new_flags));
-    }
-
+fn drain_fd(fd: OwnedFd, tail: Arc<Mutex<Vec<u8>>>) {
     let mut file = std::fs::File::from(fd);
-    let mut buf = vec![0u8; MAX_CAPTURE];
-    let mut total = 0;
+    let mut buffer = [0; DRAIN_BUFFER_SIZE];
 
-    // Read in a loop to drain the pipe buffer
     loop {
-        match file.read(&mut buf[total..]) {
-            Ok(0) => break, // EOF
-            Ok(n) => {
-                total += n;
-                if total >= MAX_CAPTURE {
-                    break;
-                }
+        match file.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(bytes_read) => {
+                let mut captured = tail.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                append_tail(&mut captured, &buffer[..bytes_read]);
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-            Err(_) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => {
+                tracing::warn!(%error, "Init output drain stopped");
+                break;
+            }
         }
     }
+}
 
-    buf.truncate(total);
-    String::from_utf8_lossy(&buf).into_owned()
+fn append_tail(tail: &mut Vec<u8>, bytes: &[u8]) {
+    if bytes.len() >= MAX_CAPTURE {
+        tail.clear();
+        tail.extend_from_slice(&bytes[bytes.len() - MAX_CAPTURE..]);
+        return;
+    }
+
+    let overflow = tail
+        .len()
+        .saturating_add(bytes.len())
+        .saturating_sub(MAX_CAPTURE);
+    if overflow > 0 {
+        tail.drain(..overflow);
+    }
+    tail.extend_from_slice(bytes);
+}
+
+fn output_tail(tail: &Mutex<Vec<u8>>) -> String {
+    let captured = tail.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    String::from_utf8_lossy(&captured).into_owned()
 }
 
 #[cfg(test)]
@@ -184,6 +201,28 @@ mod tests {
     use super::*;
     use std::io::Write;
     use std::os::unix::io::AsRawFd;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    fn wait_for_output(
+        stdio: &ContainerStdio,
+        expected_stdout: &str,
+        expected_stderr: &str,
+    ) -> (String, String) {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let output = stdio.drain_output();
+            if output.0 == expected_stdout && output.1 == expected_stderr {
+                return output;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for init output"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
 
     #[test]
     fn test_stdio_creation() {
@@ -192,19 +231,13 @@ mod tests {
 
         let (stdio, init_fds) = result.unwrap();
 
-        // Verify all FDs are valid (positive integers)
         assert!(stdio.stdin_tx.as_raw_fd() >= 0);
-        assert!(stdio.stdout_rx.as_ref().unwrap().as_raw_fd() >= 0);
-        assert!(stdio.stderr_rx.as_ref().unwrap().as_raw_fd() >= 0);
         assert!(init_fds.stdin.as_raw_fd() >= 0);
         assert!(init_fds.stdout.as_raw_fd() >= 0);
         assert!(init_fds.stderr.as_raw_fd() >= 0);
 
-        // Verify all FDs are unique
         let fds = [
             stdio.stdin_tx.as_raw_fd(),
-            stdio.stdout_rx.as_ref().unwrap().as_raw_fd(),
-            stdio.stderr_rx.as_ref().unwrap().as_raw_fd(),
             init_fds.stdin.as_raw_fd(),
             init_fds.stdout.as_raw_fd(),
             init_fds.stderr.as_raw_fd(),
@@ -218,9 +251,8 @@ mod tests {
 
     #[test]
     fn test_drain_output_captures_data() {
-        let (mut stdio, init_fds) = ContainerStdio::new().unwrap();
+        let (stdio, init_fds) = ContainerStdio::new().unwrap();
 
-        // Write to the init side of pipes (simulating init process output)
         let mut stdout_writer = std::fs::File::from(init_fds.stdout);
         let mut stderr_writer = std::fs::File::from(init_fds.stderr);
         stdout_writer.write_all(b"hello stdout").unwrap();
@@ -228,26 +260,79 @@ mod tests {
         drop(stdout_writer);
         drop(stderr_writer);
 
-        let (stdout, stderr) = stdio.drain_output();
+        let (stdout, stderr) = wait_for_output(&stdio, "hello stdout", "hello stderr");
         assert_eq!(stdout, "hello stdout");
         assert_eq!(stderr, "hello stderr");
     }
 
     #[test]
-    fn test_drain_output_returns_empty_on_second_call() {
-        let (mut stdio, init_fds) = ContainerStdio::new().unwrap();
+    fn test_drain_output_returns_current_tail() {
+        let (stdio, init_fds) = ContainerStdio::new().unwrap();
 
         let mut stdout_writer = std::fs::File::from(init_fds.stdout);
         stdout_writer.write_all(b"data").unwrap();
         drop(stdout_writer);
         drop(init_fds.stderr);
 
-        let (stdout, _) = stdio.drain_output();
+        let (stdout, stderr) = wait_for_output(&stdio, "data", "");
         assert_eq!(stdout, "data");
-
-        // Second call returns empty (fds already taken)
         let (stdout2, stderr2) = stdio.drain_output();
-        assert_eq!(stdout2, "");
-        assert_eq!(stderr2, "");
+        assert_eq!(stdout2, stdout);
+        assert_eq!(stderr2, stderr);
+    }
+
+    #[test]
+    fn test_drain_output_does_not_wait_for_open_writer() {
+        let (stdio, init_fds) = ContainerStdio::new().unwrap();
+        let stdout_writer = std::fs::File::from(init_fds.stdout);
+        drop(init_fds.stderr);
+
+        let (snapshot_tx, snapshot_rx) = mpsc::channel();
+        let snapshotter = thread::spawn(move || {
+            let _ = snapshot_tx.send(stdio.drain_output());
+        });
+
+        let snapshot = snapshot_rx.recv_timeout(Duration::from_secs(1));
+        drop(stdout_writer);
+        snapshotter.join().unwrap();
+
+        assert!(snapshot.is_ok(), "draining output waited for pipe EOF");
+    }
+
+    #[test]
+    fn test_drain_output_keeps_large_writers_unblocked() {
+        let (stdio, init_fds) = ContainerStdio::new().unwrap();
+        let mut output = vec![b'x'; 1024 * 1024];
+        output.extend_from_slice(b"tail-marker");
+        drop(init_fds.stderr);
+
+        let (completed_tx, completed_rx) = mpsc::channel();
+        let writer = thread::spawn(move || {
+            let mut stdout_writer = std::fs::File::from(init_fds.stdout);
+            let result = stdout_writer.write_all(&output);
+            let _ = completed_tx.send(result);
+        });
+
+        let completed = completed_rx.recv_timeout(Duration::from_secs(5));
+        if completed.is_err() {
+            drop(stdio);
+            let _ = writer.join();
+            panic!("init stdout writer blocked while the reader was open");
+        }
+        completed.unwrap().unwrap();
+        writer.join().unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let (stdout, _) = stdio.drain_output();
+            if stdout.ends_with("tail-marker") {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for output tail"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
     }
 }

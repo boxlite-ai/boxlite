@@ -428,7 +428,7 @@ async fn spawn_with_executor(
                 Ok(h) => h,
                 Err(e) => {
                     // Check if container init died — provide actionable diagnostics
-                    let mut container = container_ref.lock().await;
+                    let container = container_ref.lock().await;
                     if !container.is_running() {
                         let (init_stdout, init_stderr) = container.drain_init_output();
                         let mut msg = format!(

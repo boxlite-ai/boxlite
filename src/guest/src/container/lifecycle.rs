@@ -269,15 +269,12 @@ impl Container {
         )
     }
 
-    /// Drain init process stdout and stderr.
-    ///
-    /// Reads all available data from the init process pipes using non-blocking I/O.
-    /// Can only be called once — subsequent calls return empty strings.
+    /// Return the output tail captured from the init process.
     ///
     /// # Returns
     ///
     /// `(stdout, stderr)` — captured output from the init process.
-    pub fn drain_init_output(&mut self) -> (String, String) {
+    pub fn drain_init_output(&self) -> (String, String) {
         self.stdio.drain_output()
     }
 
@@ -304,7 +301,6 @@ impl Container {
     pub fn diagnose_exit(&mut self) -> String {
         let container_state_path = self.container_state_path();
 
-        // Drain init process output before building diagnostics
         let (init_stdout, init_stderr) = self.drain_init_output();
 
         // Try to load container state from libcontainer
