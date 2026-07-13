@@ -4,7 +4,7 @@
  */
 
 import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common'
-import { ApiBearerAuth, ApiOAuth2, ApiTags } from '@nestjs/swagger'
+import { ApiBearerAuth, ApiOAuth2, ApiParam, ApiTags } from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 import { RequiredOrganizationMemberRole } from '../organization/decorators/required-organization-member-role.decorator'
@@ -28,6 +28,7 @@ export class BillingController {
   }
 
   @Get('pricing')
+  @ApiParam({ name: 'organizationId', type: String })
   getPricing() {
     return this.billingReadService.getPricing()
   }

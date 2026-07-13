@@ -138,6 +138,41 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
         },
         /**
          * 
+         * @summary Get Billing recovery and ledger health
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetBillingHealth: async (options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/admin/billing/health`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
          * @summary Get admin-scoped logs
          * @param {Date} [from] Start of time range (ISO 8601)
          * @param {Date} [to] End of time range (ISO 8601)
@@ -1049,6 +1084,119 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
         },
         /**
          * 
+         * @summary Run due Billing recovery work
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminReconcileBilling: async (options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/admin/billing/reconcile`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Force provider reconciliation for one payment setup
+         * @param {string} organizationId 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminReconcileSetup: async (organizationId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'organizationId' is not null or undefined
+            assertParamExists('adminReconcileSetup', 'organizationId', organizationId)
+            const localVarPath = `/admin/billing/reconcile/setup/{organizationId}`
+                .replace('{organizationId}', encodeURIComponent(String(organizationId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Force provider reconciliation for one top-up
+         * @param {string} topUpId 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminReconcileTopUp: async (topUpId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'topUpId' is not null or undefined
+            assertParamExists('adminReconcileTopUp', 'topUpId', topUpId)
+            const localVarPath = `/admin/billing/reconcile/top-up/{topUpId}`
+                .replace('{topUpId}', encodeURIComponent(String(topUpId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
          * @summary Recover box from error state as an admin
          * @param {string} boxId ID of the box
          * @param {*} [options] Override http request option.
@@ -1159,6 +1307,18 @@ export const AdminApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.adminDeleteRunner(id, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['AdminApi.adminDeleteRunner']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Get Billing recovery and ledger health
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminGetBillingHealth(options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminGetBillingHealth(options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminGetBillingHealth']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -1404,6 +1564,44 @@ export const AdminApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
+         * @summary Run due Billing recovery work
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminReconcileBilling(options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminReconcileBilling(options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminReconcileBilling']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Force provider reconciliation for one payment setup
+         * @param {string} organizationId 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminReconcileSetup(organizationId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminReconcileSetup(organizationId, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminReconcileSetup']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Force provider reconciliation for one top-up
+         * @param {string} topUpId 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminReconcileTopUp(topUpId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminReconcileTopUp(topUpId, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminReconcileTopUp']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
          * @summary Recover box from error state as an admin
          * @param {string} boxId ID of the box
          * @param {*} [options] Override http request option.
@@ -1456,6 +1654,15 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
          */
         adminDeleteRunner(id: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
             return localVarFp.adminDeleteRunner(id, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Get Billing recovery and ledger health
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetBillingHealth(options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.adminGetBillingHealth(options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -1661,6 +1868,35 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
         },
         /**
          * 
+         * @summary Run due Billing recovery work
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminReconcileBilling(options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.adminReconcileBilling(options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Force provider reconciliation for one payment setup
+         * @param {string} organizationId 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminReconcileSetup(organizationId: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.adminReconcileSetup(organizationId, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Force provider reconciliation for one top-up
+         * @param {string} topUpId 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminReconcileTopUp(topUpId: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.adminReconcileTopUp(topUpId, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
          * @summary Recover box from error state as an admin
          * @param {string} boxId ID of the box
          * @param {*} [options] Override http request option.
@@ -1706,6 +1942,16 @@ export class AdminApi extends BaseAPI {
      */
     public adminDeleteRunner(id: string, options?: RawAxiosRequestConfig) {
         return AdminApiFp(this.configuration).adminDeleteRunner(id, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Get Billing recovery and ledger health
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminGetBillingHealth(options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminGetBillingHealth(options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -1921,6 +2167,38 @@ export class AdminApi extends BaseAPI {
      */
     public adminListUsers(options?: RawAxiosRequestConfig) {
         return AdminApiFp(this.configuration).adminListUsers(options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Run due Billing recovery work
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminReconcileBilling(options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminReconcileBilling(options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Force provider reconciliation for one payment setup
+     * @param {string} organizationId 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminReconcileSetup(organizationId: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminReconcileSetup(organizationId, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Force provider reconciliation for one top-up
+     * @param {string} topUpId 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminReconcileTopUp(topUpId: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminReconcileTopUp(topUpId, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

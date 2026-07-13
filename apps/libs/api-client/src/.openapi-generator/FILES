@@ -6,6 +6,7 @@ api/admin-api.ts
 api/api-keys-api.ts
 api/audit-api.ts
 api/auth-api.ts
+api/billing-api.ts
 api/box-api.ts
 api/config-api.ts
 api/health-api.ts
@@ -58,6 +59,7 @@ docs/ApiKeysApi.md
 docs/AuditApi.md
 docs/AuditLog.md
 docs/AuthApi.md
+docs/BillingApi.md
 docs/Box.md
 docs/BoxApi.md
 docs/BoxClass.md

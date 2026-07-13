@@ -50,6 +50,17 @@ type AdminAPI interface {
 	AdminDeleteRunnerExecute(r AdminAPIAdminDeleteRunnerRequest) (*http.Response, error)
 
 	/*
+	AdminGetBillingHealth Get Billing recovery and ledger health
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@return AdminAPIAdminGetBillingHealthRequest
+	*/
+	AdminGetBillingHealth(ctx context.Context) AdminAPIAdminGetBillingHealthRequest
+
+	// AdminGetBillingHealthExecute executes the request
+	AdminGetBillingHealthExecute(r AdminAPIAdminGetBillingHealthRequest) (*http.Response, error)
+
+	/*
 	AdminGetObservabilityLogs Get admin-scoped logs
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
@@ -206,6 +217,41 @@ type AdminAPI interface {
 	// AdminListUsersExecute executes the request
 	//  @return []AdminUserItem
 	AdminListUsersExecute(r AdminAPIAdminListUsersRequest) ([]AdminUserItem, *http.Response, error)
+
+	/*
+	AdminReconcileBilling Run due Billing recovery work
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@return AdminAPIAdminReconcileBillingRequest
+	*/
+	AdminReconcileBilling(ctx context.Context) AdminAPIAdminReconcileBillingRequest
+
+	// AdminReconcileBillingExecute executes the request
+	AdminReconcileBillingExecute(r AdminAPIAdminReconcileBillingRequest) (*http.Response, error)
+
+	/*
+	AdminReconcileSetup Force provider reconciliation for one payment setup
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param organizationId
+	@return AdminAPIAdminReconcileSetupRequest
+	*/
+	AdminReconcileSetup(ctx context.Context, organizationId string) AdminAPIAdminReconcileSetupRequest
+
+	// AdminReconcileSetupExecute executes the request
+	AdminReconcileSetupExecute(r AdminAPIAdminReconcileSetupRequest) (*http.Response, error)
+
+	/*
+	AdminReconcileTopUp Force provider reconciliation for one top-up
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param topUpId
+	@return AdminAPIAdminReconcileTopUpRequest
+	*/
+	AdminReconcileTopUp(ctx context.Context, topUpId string) AdminAPIAdminReconcileTopUpRequest
+
+	// AdminReconcileTopUpExecute executes the request
+	AdminReconcileTopUpExecute(r AdminAPIAdminReconcileTopUpRequest) (*http.Response, error)
 
 	/*
 	AdminRecoverBox Recover box from error state as an admin
@@ -384,6 +430,92 @@ func (a *AdminAPIService) AdminDeleteRunnerExecute(r AdminAPIAdminDeleteRunnerRe
 
 	localVarPath := localBasePath + "/admin/runners/{id}"
 	localVarPath = strings.Replace(localVarPath, "{"+"id"+"}", url.PathEscape(parameterValueToString(r.id, "id")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type AdminAPIAdminGetBillingHealthRequest struct {
+	ctx context.Context
+	ApiService AdminAPI
+}
+
+func (r AdminAPIAdminGetBillingHealthRequest) Execute() (*http.Response, error) {
+	return r.ApiService.AdminGetBillingHealthExecute(r)
+}
+
+/*
+AdminGetBillingHealth Get Billing recovery and ledger health
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @return AdminAPIAdminGetBillingHealthRequest
+*/
+func (a *AdminAPIService) AdminGetBillingHealth(ctx context.Context) AdminAPIAdminGetBillingHealthRequest {
+	return AdminAPIAdminGetBillingHealthRequest{
+		ApiService: a,
+		ctx: ctx,
+	}
+}
+
+// Execute executes the request
+func (a *AdminAPIService) AdminGetBillingHealthExecute(r AdminAPIAdminGetBillingHealthRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodGet
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "AdminAPIService.AdminGetBillingHealth")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/admin/billing/health"
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -2587,6 +2719,272 @@ func (a *AdminAPIService) AdminListUsersExecute(r AdminAPIAdminListUsersRequest)
 	}
 
 	return localVarReturnValue, localVarHTTPResponse, nil
+}
+
+type AdminAPIAdminReconcileBillingRequest struct {
+	ctx context.Context
+	ApiService AdminAPI
+}
+
+func (r AdminAPIAdminReconcileBillingRequest) Execute() (*http.Response, error) {
+	return r.ApiService.AdminReconcileBillingExecute(r)
+}
+
+/*
+AdminReconcileBilling Run due Billing recovery work
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @return AdminAPIAdminReconcileBillingRequest
+*/
+func (a *AdminAPIService) AdminReconcileBilling(ctx context.Context) AdminAPIAdminReconcileBillingRequest {
+	return AdminAPIAdminReconcileBillingRequest{
+		ApiService: a,
+		ctx: ctx,
+	}
+}
+
+// Execute executes the request
+func (a *AdminAPIService) AdminReconcileBillingExecute(r AdminAPIAdminReconcileBillingRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodPost
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "AdminAPIService.AdminReconcileBilling")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/admin/billing/reconcile"
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type AdminAPIAdminReconcileSetupRequest struct {
+	ctx context.Context
+	ApiService AdminAPI
+	organizationId string
+}
+
+func (r AdminAPIAdminReconcileSetupRequest) Execute() (*http.Response, error) {
+	return r.ApiService.AdminReconcileSetupExecute(r)
+}
+
+/*
+AdminReconcileSetup Force provider reconciliation for one payment setup
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param organizationId
+ @return AdminAPIAdminReconcileSetupRequest
+*/
+func (a *AdminAPIService) AdminReconcileSetup(ctx context.Context, organizationId string) AdminAPIAdminReconcileSetupRequest {
+	return AdminAPIAdminReconcileSetupRequest{
+		ApiService: a,
+		ctx: ctx,
+		organizationId: organizationId,
+	}
+}
+
+// Execute executes the request
+func (a *AdminAPIService) AdminReconcileSetupExecute(r AdminAPIAdminReconcileSetupRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodPost
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "AdminAPIService.AdminReconcileSetup")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/admin/billing/reconcile/setup/{organizationId}"
+	localVarPath = strings.Replace(localVarPath, "{"+"organizationId"+"}", url.PathEscape(parameterValueToString(r.organizationId, "organizationId")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type AdminAPIAdminReconcileTopUpRequest struct {
+	ctx context.Context
+	ApiService AdminAPI
+	topUpId string
+}
+
+func (r AdminAPIAdminReconcileTopUpRequest) Execute() (*http.Response, error) {
+	return r.ApiService.AdminReconcileTopUpExecute(r)
+}
+
+/*
+AdminReconcileTopUp Force provider reconciliation for one top-up
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param topUpId
+ @return AdminAPIAdminReconcileTopUpRequest
+*/
+func (a *AdminAPIService) AdminReconcileTopUp(ctx context.Context, topUpId string) AdminAPIAdminReconcileTopUpRequest {
+	return AdminAPIAdminReconcileTopUpRequest{
+		ApiService: a,
+		ctx: ctx,
+		topUpId: topUpId,
+	}
+}
+
+// Execute executes the request
+func (a *AdminAPIService) AdminReconcileTopUpExecute(r AdminAPIAdminReconcileTopUpRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodPost
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "AdminAPIService.AdminReconcileTopUp")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/admin/billing/reconcile/top-up/{topUpId}"
+	localVarPath = strings.Replace(localVarPath, "{"+"topUpId"+"}", url.PathEscape(parameterValueToString(r.topUpId, "topUpId")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
 }
 
 type AdminAPIAdminRecoverBoxRequest struct {
