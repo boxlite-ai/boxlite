@@ -274,6 +274,8 @@ pub(crate) fn cleanup_bundle_directory(bundle_path: &std::path::Path) {
 pub(crate) fn load_container_status(
     container_state_path: &Path,
 ) -> BoxliteResult<libcontainer::container::ContainerStatus> {
+    use libcontainer::container::ContainerStatus;
+
     let mut container = LibContainer::load(container_state_path.to_path_buf()).map_err(|e| {
         BoxliteError::Internal(format!(
             "Failed to load container from {}: {}",
@@ -290,13 +292,63 @@ pub(crate) fn load_container_status(
         ))
     })?;
 
-    Ok(container.status())
+    let status = container.status();
+    if matches!(status, ContainerStatus::Running) {
+        match container.pid() {
+            Some(pid) if init_process_is_alive(pid) => {}
+            Some(pid) => {
+                tracing::warn!(
+                    container_state_path = %container_state_path.display(),
+                    pid = pid.as_raw(),
+                    "Container init process is not alive; treating container as stopped"
+                );
+                return Ok(ContainerStatus::Stopped);
+            }
+            None => {
+                tracing::warn!(
+                    container_state_path = %container_state_path.display(),
+                    "Container is marked running without an init pid; treating container as stopped"
+                );
+                return Ok(ContainerStatus::Stopped);
+            }
+        }
+    }
+
+    Ok(status)
+}
+
+#[cfg(target_os = "linux")]
+fn init_process_is_alive(pid: nix::unistd::Pid) -> bool {
+    let raw_pid = pid.as_raw();
+    if raw_pid <= 0 {
+        return false;
+    }
+
+    if unsafe { nix::libc::kill(raw_pid, 0) } != 0 {
+        return false;
+    }
+
+    let status_path = format!("/proc/{raw_pid}/status");
+    let Ok(status) = std::fs::read_to_string(status_path) else {
+        return true;
+    };
+
+    status.lines().find_map(|line| {
+        line.strip_prefix("State:")
+            .and_then(|state| state.trim_start().chars().next())
+    }) != Some('Z')
+}
+
+#[cfg(not(target_os = "linux"))]
+fn init_process_is_alive(_pid: nix::unistd::Pid) -> bool {
+    true
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use libcontainer::container::{ContainerStatus, State};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn load_container_status_refreshes_stale_persisted_status() {
@@ -312,5 +364,52 @@ mod tests {
         let status = load_container_status(dir.path()).expect("load container status");
 
         assert_eq!(status, ContainerStatus::Running);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn load_container_status_treats_zombie_init_as_stopped() {
+        let dir = tempfile::TempDir::new().expect("create temp dir");
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("exit 0")
+            .spawn()
+            .expect("spawn short-lived child");
+        let child_pid = child.id();
+        wait_for_zombie(child_pid);
+
+        let state = State::new(
+            "test-container",
+            ContainerStatus::Running,
+            Some(i32::try_from(child_pid).expect("child pid fits in i32")),
+            dir.path().to_path_buf(),
+        );
+        state.save(dir.path()).expect("save libcontainer state");
+
+        let status = load_container_status(dir.path()).expect("load container status");
+
+        assert_eq!(status, ContainerStatus::Stopped);
+        child.wait().expect("reap child");
+    }
+
+    #[cfg(target_os = "linux")]
+    fn wait_for_zombie(pid: u32) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if proc_state(pid) == Some('Z') {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("child process {pid} did not become zombie");
+    }
+
+    #[cfg(target_os = "linux")]
+    fn proc_state(pid: u32) -> Option<char> {
+        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+        status.lines().find_map(|line| {
+            line.strip_prefix("State:")
+                .and_then(|state| state.trim_start().chars().next())
+        })
     }
 }
