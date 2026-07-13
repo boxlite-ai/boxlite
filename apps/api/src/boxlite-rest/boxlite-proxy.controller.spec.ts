@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ForbiddenException } from '@nestjs/common'
+import { ForbiddenException, HttpException, HttpStatus, ServiceUnavailableException } from '@nestjs/common'
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
 
@@ -24,6 +24,9 @@ function makeHarness() {
     findOneByIdOrName: jest.fn().mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1', autoResume: true }),
     updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
     getNetworkTunnelUrl: jest.fn().mockResolvedValue('https://3000-box.proxy.test'),
+    ensureStartedForProxy: jest.fn().mockResolvedValue(undefined),
+    isBillingEnforcementEnabled: jest.fn().mockReturnValue(false),
+    ...overrides,
   }
   const runnerService = {
     findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }),

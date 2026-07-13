@@ -4,7 +4,14 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ForbiddenException, Injectable, Logger, NotFoundException, ConflictException } from '@nestjs/common'
+import {
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  ConflictException,
+  ServiceUnavailableException,
+} from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Not, Repository, LessThan, In, JsonContains, FindOptionsWhere, ILike } from 'typeorm'
 import { Box } from '../entities/box.entity'
@@ -52,7 +59,7 @@ import {
 } from '../dto/list-boxes-query.dto'
 import { createRangeFilter } from '../../common/utils/range-filter'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
-import { RedisLockProvider } from '../common/redis-lock.provider'
+import { LockCode, RedisLockProvider } from '../common/redis-lock.provider'
 import { customAlphabet as customNanoid, nanoid, urlAlphabet } from 'nanoid'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 import { validateMountPaths, validateSubpaths } from '../utils/volume-mount-path-validation.util'
@@ -82,6 +89,8 @@ import {
   DEFAULT_AUTO_PAUSE_SECONDS,
   DEFAULT_AUTO_RESUME,
 } from '../constants/box-lifecycle.constants'
+import { BillingAccessService } from '../../billing/access/billing-access.service'
+import type { BillingAllocation } from '../../billing/access/billing-access'
 
 // TODO(image-rewrite): resource defaults previously came from the removed image subsystem;
 // these mirror the Box entity column defaults until image resolution is rebuilt.
@@ -90,6 +99,8 @@ const DEFAULT_BOX_MEM = 1
 const DEFAULT_BOX_DISK = 10
 const DEFAULT_BOX_GPU = 0
 const TERMINAL_PREVIEW_PORT = 22222
+const BILLING_ACCESS_LOCK_TTL_SECONDS = 30
+const BILLING_ACCESS_LOCK_WAIT_MS = 5_000
 
 @Injectable()
 export class BoxService {
@@ -114,10 +125,56 @@ export class BoxService {
     private readonly regionService: RegionService,
     private readonly boxLookupCacheInvalidationService: BoxLookupCacheInvalidationService,
     private readonly boxActivityService: BoxActivityService,
+    private readonly billingAccessService: BillingAccessService,
   ) {}
 
   protected getLockKey(id: string): string {
     return `box:${id}:state-change`
+  }
+
+  private async withBillingAdmission<T>(
+    organizationId: string,
+    allocation: BillingAllocation,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    if (!this.billingAccessService.isEnabled()) return operation()
+
+    const key = `billing-access:${organizationId}`
+    const code = new LockCode(nanoid())
+    const deadline = Date.now() + BILLING_ACCESS_LOCK_WAIT_MS
+
+    try {
+      while (!(await this.redisLockProvider.lock(key, BILLING_ACCESS_LOCK_TTL_SECONDS, code))) {
+        if (Date.now() >= deadline) {
+          throw new ServiceUnavailableException('Billing access check is busy')
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+    } catch (error) {
+      if (error instanceof ServiceUnavailableException) throw error
+      throw new ServiceUnavailableException('Billing access check is unavailable', { cause: error })
+    }
+
+    try {
+      await this.billingAccessService.assertHasAccess(organizationId, allocation)
+      return await operation()
+    } finally {
+      await this.redisLockProvider.unlock(key, code)
+    }
+  }
+
+  private billingAllocation(boxId: string, resources: Pick<Box, 'cpu' | 'mem' | 'disk' | 'gpu'>): BillingAllocation {
+    return {
+      boxId,
+      cpu: resources.cpu,
+      mem: resources.mem,
+      disk: resources.disk,
+      gpu: resources.gpu,
+    }
+  }
+
+  isBillingEnforcementEnabled(): boolean {
+    return this.billingAccessService.isEnabled()
   }
 
   private assertBoxNotErrored(box: Box): void {
@@ -179,37 +236,47 @@ export class BoxService {
       // at the request boundary (defaults undefined -> base image).
       const image = assertSupportedImage(createBoxDto.image)
 
-      this.organizationService.assertOrganizationIsNotSuspended(organization)
+      return await this.withBillingAdmission(
+        organization.id,
+        { boxId: `create:${organization.id}`, cpu, mem, disk, gpu },
+        async () => {
+          this.organizationService.assertOrganizationIsNotSuspended(organization)
 
-      quotaReservation = await this.organizationUsageService.validateOrganizationQuotas(organization, cpu, mem, disk, gpu)
-
-      if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
-        const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
-        await this.volumeService.validateVolumes(organization.id, volumeIdOrNames)
-      } else if (image) {
-        //  No volumes requested — try to claim a pre-warmed box matching this image/spec
-        //  before creating a fresh one.
-        const skipWarmPool = (await this.redis.exists(`warm-pool:skip:${image}`)) === 1
-        if (!skipWarmPool) {
-          const warmPoolBox = await this.warmPoolService.fetchWarmPoolBox({
-            organizationId: organization.id,
-            image,
-            target: region.id,
-            class: boxClass,
+          quotaReservation = await this.organizationUsageService.validateOrganizationQuotas(
+            organization,
             cpu,
             mem,
             disk,
             gpu,
-            osUser: createBoxDto.user || 'boxlite',
-            env: createBoxDto.env || {},
-            state: BoxState.STARTED,
-          })
+          )
 
-          if (warmPoolBox) {
-            return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization)
+          if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
+            const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
+            await this.volumeService.validateVolumes(organization.id, volumeIdOrNames)
+          } else if (image) {
+            //  No volumes requested — try to claim a pre-warmed box matching this image/spec
+            //  before creating a fresh one.
+            const skipWarmPool = (await this.redis.exists(`warm-pool:skip:${image}`)) === 1
+            if (!skipWarmPool) {
+              const warmPoolBox = await this.warmPoolService.fetchWarmPoolBox({
+                organizationId: organization.id,
+                image,
+                target: region.id,
+                class: boxClass,
+                cpu,
+                mem,
+                disk,
+                gpu,
+                osUser: createBoxDto.user || 'boxlite',
+                env: createBoxDto.env || {},
+                state: BoxState.STARTED,
+              })
+
+              if (warmPoolBox) {
+                return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization)
+              }
+            }
           }
-        }
-      }
 
       const runner = await this.runnerService.getRandomAvailableRunner({
         regions: [region.id],
@@ -269,11 +336,65 @@ export class BoxService {
             return this.boxRepository.insert(box)
           })
 
-      this.eventEmitter
-        .emitAsync(BoxEvents.CREATED, new BoxCreatedEvent(insertedBox))
-        .catch((err) => this.logger.error('Failed to emit BoxCreatedEvent', err))
+          const box = new Box(region.id, createBoxDto.name)
 
-      return this.toBoxDto(insertedBox)
+          box.organizationId = organization.id
+
+          //  TODO: make configurable
+          box.class = boxClass
+          //  TODO: default user should be configurable
+          box.osUser = createBoxDto.user || 'boxlite'
+          box.env = createBoxDto.env || {}
+          box.labels = createBoxDto.labels || {}
+
+          box.image = image
+          box.cpu = cpu
+          box.gpu = gpu
+          box.mem = mem
+          box.disk = disk
+
+          box.public = createBoxDto.public || false
+
+          if (createBoxDto.networkBlockAll !== undefined) {
+            box.networkBlockAll = createBoxDto.networkBlockAll
+          }
+
+          if (createBoxDto.networkAllowList !== undefined) {
+            box.networkAllowList = this.resolveNetworkAllowList(createBoxDto.networkAllowList)
+          }
+
+          if (createBoxDto.autoStopInterval !== undefined) {
+            box.autoStopInterval = this.resolveAutoStopInterval(createBoxDto.autoStopInterval)
+          }
+
+          if (createBoxDto.autoDeleteInterval !== undefined) {
+            box.autoDeleteInterval = createBoxDto.autoDeleteInterval
+          }
+
+          if (createBoxDto.volumes !== undefined) {
+            box.volumes = this.resolveVolumes(createBoxDto.volumes)
+          }
+
+          box.runnerId = runner.id
+          box.pending = true
+
+          // No caller-provided name -> assign a fun default (e.g. "cozy-otter"),
+          // falling back to "cozy-otter-{boxId}" if it collides with the per-org
+          // @Unique(['organizationId', 'name']) constraint.
+          const insertedBox = createBoxDto.name
+            ? await this.boxRepository.insert(box)
+            : await persistWithGeneratedBoxName(box.id, (name) => {
+                box.name = name
+                return this.boxRepository.insert(box)
+              })
+
+          this.eventEmitter
+            .emitAsync(BoxEvents.CREATED, new BoxCreatedEvent(insertedBox))
+            .catch((err) => this.logger.error('Failed to emit BoxCreatedEvent', err))
+
+          return this.toBoxDto(insertedBox)
+        },
+      )
     } catch (error) {
       if (quotaReservation) {
         await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
@@ -850,38 +971,43 @@ export class BoxService {
 
     this.organizationService.assertOrganizationIsNotSuspended(organization)
 
-    // A stopped box holds only disk; starting it re-adds compute and a running slot,
-    // so re-check the org quota. excludeBoxId keeps the box's own disk from being
-    // double counted. Realized into current usage once the box leaves STOPPED.
-    const quotaReservation = await this.organizationUsageService.validateOrganizationQuotas(
-      organization,
-      box.cpu,
-      box.mem,
-      box.disk,
-      box.gpu,
-      box.id,
-    )
+    return this.withBillingAdmission(organization.id, this.billingAllocation(box.id, box), async () => {
+      // A stopped box holds only disk; starting it re-adds compute and a
+      // running slot. excludeBoxId prevents the existing disk allocation
+      // from being counted twice.
+      const quotaReservation = await this.organizationUsageService.validateOrganizationQuotas(
+        organization,
+        box.cpu,
+        box.mem,
+        box.disk,
+        box.gpu,
+        box.id,
+      )
 
-    const updateData: Partial<Box> = {
-      pending: true,
-      desiredState: BoxDesiredState.STARTED,
-      authToken: nanoid(32).toLocaleLowerCase(),
-    }
+      const updateData: Partial<Box> = {
+        pending: true,
+        desiredState: BoxDesiredState.STARTED,
+        authToken: nanoid(32).toLocaleLowerCase(),
+      }
 
-    let updatedBox: Box
-    try {
-      updatedBox = await this.boxRepository.updateWhere(box.id, {
-        updateData,
-        whereCondition: { pending: false, state: box.state },
-      })
-    } catch (error) {
-      await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
-      throw error
-    }
+      let updatedBox: Box
+      try {
+        updatedBox = await this.boxRepository.updateWhere(box.id, {
+          updateData,
+          whereCondition: {
+            pending: false,
+            state: box.state,
+          },
+        })
+      } catch (error) {
+        await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
+        throw error
+      }
 
-    this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updatedBox))
+      this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updatedBox))
 
-    return updatedBox
+      return updatedBox
+    })
   }
 
   /**
@@ -899,36 +1025,43 @@ export class BoxService {
       return box
     }
 
-    // Auto-resume also brings a stopped box back to running, so it must honor the
-    // org quota just like start(). Released if the box does not actually start.
-    const quotaReservation = await this.organizationUsageService.validateOrganizationQuotas(
-      organization,
-      box.cpu,
-      box.mem,
-      box.disk,
-      box.gpu,
-      box.id,
-    )
+    return this.withBillingAdmission(organization.id, this.billingAllocation(box.id, box), async () => {
+      // Auto-resume brings a stopped box back to running, so it must honor
+      // the organization quota just like start(). box.id prevents the Box's
+      // existing disk allocation from being counted twice.
+      const quotaReservation = await this.organizationUsageService.validateOrganizationQuotas(
+        organization,
+        box.cpu,
+        box.mem,
+        box.disk,
+        box.gpu,
+        box.id,
+      )
 
-    let updated: Box
-    try {
-      updated = await this.boxRepository.conditionalStartForProxy(box.id, organization.id)
-    } catch (error) {
-      await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
-      throw error
-    }
+      let updated: Box | null
+      try {
+        updated = await this.boxRepository.conditionalStartForProxy(box.id, organization.id)
+      } catch (error) {
+        await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
+        throw error
+      }
 
-    if (!updated) {
-      await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
-      return this.findOneByIdOrName(box.id, organization.id)
-    }
+      // A null result means the conditional race was lost or the database
+      // lock timed out. No start occurred, so release the reservation and
+      // return the latest Box state to the AutoResume waiter.
+      if (!updated) {
+        await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
+        return this.findOneByIdOrName(box.id, organization.id)
+      }
 
-    this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updated))
-    this.eventEmitter.emit(
-      BoxEvents.DESIRED_STATE_UPDATED,
-      new BoxDesiredStateUpdatedEvent(updated, BoxDesiredState.STOPPED, BoxDesiredState.STARTED),
-    )
-    return updated
+      this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updated))
+      this.eventEmitter.emit(
+        BoxEvents.DESIRED_STATE_UPDATED,
+        new BoxDesiredStateUpdatedEvent(updated, BoxDesiredState.STOPPED, BoxDesiredState.STARTED),
+      )
+
+      return updated
+    })
   }
 
   async stop(boxIdOrName: string, organizationId?: string, force?: boolean): Promise<Box> {

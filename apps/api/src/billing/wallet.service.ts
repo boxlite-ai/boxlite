@@ -5,6 +5,7 @@
 
 import { Injectable, NotFoundException } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
+import { EventEmitter2 } from '@nestjs/event-emitter'
 import Decimal from 'decimal.js'
 import { EntityManager, QueryFailedError, Repository } from 'typeorm'
 import { TypedConfigService } from '../config/typed-config.service'
@@ -12,6 +13,7 @@ import { Organization } from '../organization/entities/organization.entity'
 import { RatedPeriod } from './entities/rated-period.entity'
 import { WalletTransaction } from './entities/wallet-transaction.entity'
 import { BillingStatus, Wallet } from './entities/wallet.entity'
+import { BillingEvents, WalletBalanceChangedEvent } from './billing-events'
 
 const PG_UNIQUE_VIOLATION = '23505'
 const WALLET_DEBIT_BATCH_SIZE = 100
@@ -37,6 +39,7 @@ export class WalletService {
     @InjectRepository(RatedPeriod)
     private readonly ratedPeriods: Repository<RatedPeriod>,
     private readonly configService: TypedConfigService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   getOrCreateWallet(organizationId: string): Promise<Wallet> {
@@ -60,8 +63,9 @@ export class WalletService {
   }
 
   async debitRatedPeriod(period: RatedPeriod): Promise<WalletTransaction | null> {
+    let transaction: WalletTransaction | null
     try {
-      return await this.wallets.manager.transaction(async (manager) => {
+      transaction = await this.wallets.manager.transaction(async (manager) => {
         const wallet = await this.findWalletForUpdate(manager, period.organizationId)
         const transactionRepository = manager.getRepository(WalletTransaction)
         const existing = await transactionRepository.findOne({ where: { ratedPeriodId: period.id } })
@@ -78,9 +82,10 @@ export class WalletService {
         const debitCents = BigInt(unsettledCents.toDecimalPlaces(0, Decimal.ROUND_FLOOR).toFixed(0))
         const freeBefore = BigInt(wallet.freeBalanceCents)
         const paidBefore = BigInt(wallet.paidBalanceCents)
-        const freeDebitCents = debitCents < nonNegativeBigInt(wallet.freeBalanceCents)
-          ? debitCents
-          : nonNegativeBigInt(wallet.freeBalanceCents)
+        const freeDebitCents =
+          debitCents < nonNegativeBigInt(wallet.freeBalanceCents)
+            ? debitCents
+            : nonNegativeBigInt(wallet.freeBalanceCents)
         const paidDebitCents = debitCents - freeDebitCents
 
         wallet.freeBalanceCents = (freeBefore - freeDebitCents).toString()
@@ -113,6 +118,11 @@ export class WalletService {
       }
       throw error
     }
+
+    if (transaction) {
+      this.eventEmitter.emit(BillingEvents.WALLET_BALANCE_CHANGED, new WalletBalanceChangedEvent(period.organizationId))
+    }
+    return transaction
   }
 
   private findUndebitedRatedPeriods(limit: number): Promise<RatedPeriod[]> {

@@ -11,6 +11,7 @@ import { PricingPlan } from './entities/pricing-plan.entity'
 import { RatedPeriod } from './entities/rated-period.entity'
 import { WalletTransaction } from './entities/wallet-transaction.entity'
 import { WalletService } from './wallet.service'
+import { BillingAccessService } from './access/billing-access.service'
 
 export interface BillingUsageSummary {
   costPreciseCents: string
@@ -48,6 +49,12 @@ export interface BillingOverview {
     totalBalanceCents: string
     billingStatus: string
     freeExpiresAt: string | null
+  }
+  access: {
+    hasAccess: boolean
+    availableCents: string
+    unbilledUsageCents: string
+    safetyBufferCents: string
   }
   spentThisMonthCents: string
   usage: BillingUsageSummary
@@ -139,14 +146,16 @@ export class BillingReadService {
     @InjectRepository(PricingPlan)
     private readonly pricingPlans: Repository<PricingPlan>,
     private readonly walletService: WalletService,
+    private readonly billingAccessService: BillingAccessService,
   ) {}
 
   async getOverview(organizationId: string, from: Date, to: Date): Promise<BillingOverview> {
-    const [wallet, periods, spentThisMonthCents, pricing] = await Promise.all([
+    const [wallet, periods, spentThisMonthCents, pricing, access] = await Promise.all([
       this.walletService.getOrCreateWallet(organizationId),
       this.findOverlappingPeriods(organizationId, from, to),
       this.getSpentThisMonthCents(organizationId, to),
       this.getPricing(to),
+      this.billingAccessService.evaluate(organizationId),
     ])
 
     return {
@@ -156,6 +165,12 @@ export class BillingReadService {
         totalBalanceCents: (BigInt(wallet.freeBalanceCents) + BigInt(wallet.paidBalanceCents)).toString(),
         billingStatus: wallet.billingStatus,
         freeExpiresAt: wallet.freeExpiresAt?.toISOString() ?? null,
+      },
+      access: {
+        hasAccess: access.hasAccess,
+        availableCents: access.availableCents,
+        unbilledUsageCents: access.unbilledUsageCents,
+        safetyBufferCents: access.safetyBufferCents,
       },
       spentThisMonthCents,
       usage: aggregateRatedPeriods(periods, from, to),

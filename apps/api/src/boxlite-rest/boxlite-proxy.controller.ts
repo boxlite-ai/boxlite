@@ -22,6 +22,8 @@ import {
   ParseIntPipe,
   Post,
   Query,
+  HttpException,
+  ServiceUnavailableException,
 } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth, ApiExcludeController } from '@nestjs/swagger'
 import { createProxyMiddleware, fixRequestBody, Options } from 'http-proxy-middleware'
@@ -37,6 +39,13 @@ import { BoxAutoResumeService } from './box-auto-resume.service'
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
 const OBSERVATION_ONLY: ProxyActivityPolicy = { activity: false, autoResume: false }
+// Caller-side wait cap for the best-effort control-plane start hint. The hint's
+// DB work is itself bounded by a lock_timeout (see conditionalStartForProxy),
+// which aborts the statement and frees the connection on row-lock contention;
+// this race only limits how long *exec* waits on the hint, so the proxy
+// proceeds even if the hint is momentarily slow. Both bounds are 2s.
+const PROXY_START_HINT_TIMEOUT_MS = 2000
+const START_HINT_TIMED_OUT = Symbol('start-hint-timed-out')
 
 // Spec-first surface (openapi/box.openapi.yaml). Must stay out of the product
 // spec: @All() expands to the SEARCH verb, which OpenAPI 3.0 cannot express.
@@ -207,6 +216,46 @@ export class BoxliteProxyController {
   ) {
     const uri = await this.boxService.getNetworkTunnelUrl(boxId, authContext.organizationId, port)
     return { uri }
+  }
+  /**
+   * Tell the control plane that the proxied call (exec / files / metrics) is
+   * about to auto-start a stopped box in the runtime, so PG agrees and
+   * sync-states does not promptly stop it back.
+   *
+   * - Suspended org → ForbiddenException re-thrown → caller sees 403, proxy
+   *   never runs (same gate as POST /boxes/:id/start).
+   * - Billing 402/503 or timeout while enforcement is enabled → re-thrown so
+   *   runtime auto-start cannot bypass prepaid admission.
+   * - Any other failure → swallowed; box_sync reconciles state on its next tick.
+   * - Caller-side time-boxed via PROXY_START_HINT_TIMEOUT_MS; the hint's DB work
+   *   is independently bounded by a lock_timeout (conditionalStartForProxy), so
+   *   a contended row aborts at the DB and frees its connection rather than
+   *   waiting out this race detached.
+   */
+  private async startHint(boxId: string, authContext: OrganizationAuthContext) {
+    try {
+      const result = await Promise.race([
+        this.boxService.ensureStartedForProxy(boxId, authContext.organization),
+        new Promise<typeof START_HINT_TIMED_OUT>((resolve) =>
+          setTimeout(() => resolve(START_HINT_TIMED_OUT), PROXY_START_HINT_TIMEOUT_MS),
+        ),
+      ])
+      if (result === START_HINT_TIMED_OUT && this.boxService.isBillingEnforcementEnabled()) {
+        throw new ServiceUnavailableException('Billing access check timed out')
+      }
+    } catch (err) {
+      if (err instanceof ForbiddenException) {
+        throw err
+      }
+      if (
+        this.boxService.isBillingEnforcementEnabled() &&
+        err instanceof HttpException &&
+        [HttpStatus.PAYMENT_REQUIRED, HttpStatus.SERVICE_UNAVAILABLE].includes(err.getStatus())
+      ) {
+        throw err
+      }
+      this.logger.warn(`ensureStartedForProxy failed for ${boxId}: ${err}`)
+    }
   }
 
   private async proxyToRunner(

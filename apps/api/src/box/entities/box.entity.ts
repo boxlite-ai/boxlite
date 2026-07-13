@@ -25,6 +25,7 @@ import {
 @Index('box_runnerid_idx', ['runnerId'])
 @Index('box_runner_state_idx', ['runnerId', 'state'])
 @Index('box_organizationid_idx', ['organizationId'])
+@Index('box_billing_active_org_idx', ['organizationId'], { where: '"desiredState" = \'started\'' })
 @Index('box_region_idx', ['region'])
 @Index('box_resources_idx', ['cpu', 'mem', 'disk', 'gpu'])
 @Index('box_runner_state_desired_idx', ['runnerId', 'state', 'desiredState'], {

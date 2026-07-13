@@ -9,6 +9,7 @@ import { RegionType } from '../../region/enums/region-type.enum'
 
 @Entity('box_usage_period')
 @Index('box_usage_period_box_end_idx', ['boxId', 'endAt'])
+@Index('box_usage_period_organization_end_idx', ['organizationId', 'endAt'])
 @Index('box_usage_period_one_open_per_box_idx', ['boxId'], { unique: true, where: '"endAt" IS NULL' })
 export class BoxUsagePeriod {
   @PrimaryGeneratedColumn('uuid')

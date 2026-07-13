@@ -104,6 +104,17 @@ The E2E refuses non-loopback PostgreSQL, verifies `cus_` / `pm_` setup, and
 requires exactly one wallet ledger credit. Credentials stay in environment
 variables; do not add them to `api.env` or Git.
 
+To verify prepaid enforcement against a real local Box, start the API with
+`BILLING_ENFORCEMENT_ENABLED=true`, then run:
+
+```bash
+yarn e2e:billing:enforcement:local
+```
+
+The test temporarily zeroes the local wallet, verifies Create/Start return 402
+and the minute sweep stops the running Box, then restores the wallet and removes
+the test Box. It refuses non-loopback Dashboard and PostgreSQL endpoints.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |

@@ -49,12 +49,15 @@ import { EventEmitter2 } from '@nestjs/event-emitter'
 import { BoxLastActivity } from './entities/box-last-activity.entity'
 import { BoxActivityService } from './services/box-activity.service'
 import { BoxStateWaiterService } from './services/box-state-waiter.service'
+import { BillingModule } from '../billing/billing.module'
+import { BillingEnforcementService } from './services/billing-enforcement.service'
 
 @Module({
   imports: [
     UserModule,
     OrganizationModule,
     RegionModule,
+    BillingModule,
     TypeOrmModule.forFeature([Box, Runner, WarmPool, Volume, SshAccess, Region, Job, BoxLastActivity]),
   ],
   controllers: [BoxController, RunnerController, PreviewController, VolumeController, JobController],
@@ -77,6 +80,7 @@ import { BoxStateWaiterService } from './services/box-state-waiter.service'
     JobStateHandlerService,
     BoxActivityService,
     BoxStateWaiterService,
+    BillingEnforcementService,
     BoxAccessGuard,
     RunnerAccessGuard,
     RegionRunnerAccessGuard,

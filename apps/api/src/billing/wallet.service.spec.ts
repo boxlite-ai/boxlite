@@ -84,8 +84,7 @@ class FakeWalletTransactionRepository implements RepositoryWithRows {
   async findOne(options: { where: Partial<WalletTransaction> }): Promise<WalletTransaction | null> {
     return (
       this.rows.find(
-        (row) =>
-          options.where.ratedPeriodId !== undefined && row.ratedPeriodId === options.where.ratedPeriodId,
+        (row) => options.where.ratedPeriodId !== undefined && row.ratedPeriodId === options.where.ratedPeriodId,
       ) ?? null
     )
   }
@@ -168,12 +167,14 @@ function createService() {
   manager.repositories.set(WalletTransaction, transactions)
   manager.repositories.set(RatedPeriod, ratedPeriods)
   manager.repositories.set(Organization, organizations)
+  const eventEmitter = { emit: jest.fn() }
   const service = new WalletService(
     wallets as never,
     ratedPeriods as never,
     new FakeBillingConfig() as never,
+    eventEmitter as never,
   )
-  return { service, wallets, transactions, ratedPeriods, organizations }
+  return { service, wallets, transactions, ratedPeriods, organizations, eventEmitter }
 }
 
 describe('WalletService', () => {
@@ -226,6 +227,17 @@ describe('WalletService', () => {
     await service.debitRatedPeriod(ratedPeriod({ preciseCents: '150', ratedCents: '150' }))
 
     expect(wallets.rows[0]).toMatchObject({ freeBalanceCents: '0', paidBalanceCents: '50' })
+  })
+
+  it('emits a balance-changed event only after a usage debit commits', async () => {
+    const { service, eventEmitter } = createService()
+
+    await service.debitRatedPeriod(ratedPeriod({ preciseCents: '25', ratedCents: '25' }))
+
+    expect(eventEmitter.emit).toHaveBeenCalledWith(
+      'billing.wallet.balance-changed',
+      expect.objectContaining({ organizationId: 'f5de33a9-4eb2-4279-a8de-9f02d63cc4f0' }),
+    )
   })
 
   it('preserves the usage debt as a negative paid balance', async () => {

@@ -5,10 +5,13 @@
 
 import { Module } from '@nestjs/common'
 import { TypeOrmModule } from '@nestjs/typeorm'
+import { Box } from '../box/entities/box.entity'
 import { TypedConfigService } from '../config/typed-config.service'
 import { Organization } from '../organization/entities/organization.entity'
 import { OrganizationModule } from '../organization/organization.module'
 import { BoxUsagePeriodArchive } from '../usage/entities/box-usage-period-archive.entity'
+import { BoxUsagePeriod } from '../usage/entities/box-usage-period.entity'
+import { BillingAccessService } from './access/billing-access.service'
 import { BillingController } from './billing.controller'
 import { BillingOpsService } from './billing-ops.service'
 import { BillingReadService } from './billing-read.service'
@@ -30,6 +33,8 @@ import { WalletService } from './wallet.service'
   imports: [
     OrganizationModule,
     TypeOrmModule.forFeature([
+      Box,
+      BoxUsagePeriod,
       BoxUsagePeriodArchive,
       PaymentProviderEvent,
       PricingPlan,
@@ -48,12 +53,21 @@ import { WalletService } from './wallet.service'
     BillingReadService,
     BillingOpsService,
     PaymentService,
+    BillingAccessService,
     {
       provide: PAYMENT_PROVIDER,
       inject: [TypedConfigService],
       useFactory: createPaymentProvider,
     },
   ],
-  exports: [RatingService, WalletService, SettlementService, BillingReadService, BillingOpsService, PaymentService],
+  exports: [
+    RatingService,
+    WalletService,
+    SettlementService,
+    BillingReadService,
+    BillingOpsService,
+    PaymentService,
+    BillingAccessService,
+  ],
 })
 export class BillingModule {}

@@ -35,6 +35,12 @@ export interface BillingOverview {
     billingStatus: 'trial' | 'active' | 'zero_balance'
     freeExpiresAt: string | null
   }
+  access: {
+    hasAccess: boolean
+    availableCents: string
+    unbilledUsageCents: string
+    safetyBufferCents: string
+  }
   spentThisMonthCents: string
   usage: BillingUsageSummary
   usageBuckets: BillingUsageBucket[]
