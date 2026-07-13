@@ -3291,6 +3291,247 @@ paths:
       summary: Update job status
       tags:
       - jobs
+  /organization/{organizationId}/billing/overview:
+    get:
+      operationId: BillingController_getOverview
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: true
+        in: query
+        name: from
+        required: true
+        schema:
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: to
+        required: true
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      tags:
+      - billing
+  /organization/{organizationId}/billing/pricing:
+    get:
+      operationId: BillingController_getPricing
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      tags:
+      - billing
+  /organization/{organizationId}/billing/boxes/{boxId}:
+    get:
+      operationId: BillingController_getBoxUsage
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      tags:
+      - billing
+  /organization/{organizationId}/billing/payment:
+    get:
+      operationId: BillingPaymentController_getPaymentState
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      tags:
+      - billing
+  /organization/{organizationId}/billing/payment/setup:
+    post:
+      operationId: BillingPaymentController_setupPaymentMethod
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "201":
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      tags:
+      - billing
+  /organization/{organizationId}/billing/auto-reload:
+    put:
+      operationId: BillingPaymentController_setAutoReload
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      tags:
+      - billing
+  /organization/{organizationId}/billing/top-ups:
+    post:
+      operationId: BillingPaymentController_createTopUp
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: header
+        name: idempotency-key
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "201":
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      tags:
+      - billing
+  /organization/{organizationId}/billing/receipts:
+    get:
+      operationId: BillingPaymentController_listReceipts
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: true
+        in: query
+        name: page
+        required: true
+        schema:
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: pageSize
+        required: true
+        schema:
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: query
+        required: true
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      tags:
+      - billing
+  /billing/webhooks/payment:
+    post:
+      operationId: PaymentWebhookController_handle
+      parameters:
+      - explode: false
+        in: header
+        name: stripe-signature
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      tags:
+      - billing
   /admin/runners:
     get:
       operationId: adminListRunners
@@ -4389,6 +4630,84 @@ paths:
         - email
       summary: Investigate related observability and platform state from trace or
         resource identifiers
+      tags:
+      - admin
+  /admin/billing/health:
+    get:
+      operationId: adminGetBillingHealth
+      parameters: []
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get Billing recovery and ledger health
+      tags:
+      - admin
+  /admin/billing/reconcile:
+    post:
+      operationId: adminReconcileBilling
+      parameters: []
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Run due Billing recovery work
+      tags:
+      - admin
+  /admin/billing/reconcile/top-up/{topUpId}:
+    post:
+      operationId: adminReconcileTopUp
+      parameters:
+      - explode: false
+        in: path
+        name: topUpId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Force provider reconciliation for one top-up
+      tags:
+      - admin
+  /admin/billing/reconcile/setup/{organizationId}:
+    post:
+      operationId: adminReconcileSetup
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Force provider reconciliation for one payment setup
       tags:
       - admin
   /audit:

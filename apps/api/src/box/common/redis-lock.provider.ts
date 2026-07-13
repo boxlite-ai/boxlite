@@ -33,7 +33,16 @@ export class RedisLockProvider {
     return keyValue ? new LockCode(keyValue) : null
   }
 
-  async unlock(key: string): Promise<void> {
+  async unlock(key: string, code?: LockCode): Promise<void> {
+    if (code) {
+      await this.redis.eval(
+        "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+        1,
+        key,
+        code.getCode(),
+      )
+      return
+    }
     await this.redis.del(key)
   }
 

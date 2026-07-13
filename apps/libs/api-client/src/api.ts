@@ -18,6 +18,7 @@ export * from './api/admin-api';
 export * from './api/api-keys-api';
 export * from './api/audit-api';
 export * from './api/auth-api';
+export * from './api/billing-api';
 export * from './api/box-api';
 export * from './api/config-api';
 export * from './api/health-api';

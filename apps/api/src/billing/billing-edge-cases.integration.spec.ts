@@ -151,13 +151,18 @@ describeWithDatabase('Billing common edge cases with PostgreSQL', () => {
   })
 
   function walletService(): WalletService {
-    return new WalletService(billingDataSource.getRepository(Wallet), billingDataSource.getRepository(RatedPeriod), {
-      get: (key: string) => {
-        if (key === 'billing.trialGrantCents') return 10_000
-        if (key === 'billing.trialDurationDays') return 30
-        throw new Error(`unexpected billing config key ${key}`)
-      },
-    } as never)
+    return new WalletService(
+      billingDataSource.getRepository(Wallet),
+      billingDataSource.getRepository(RatedPeriod),
+      {
+        get: (key: string) => {
+          if (key === 'billing.trialGrantCents') return 10_000
+          if (key === 'billing.trialDurationDays') return 30
+          throw new Error(`unexpected billing config key ${key}`)
+        },
+      } as never,
+      { emit: jest.fn() } as never,
+    )
   }
 
   function paymentService(

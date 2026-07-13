@@ -3,13 +3,14 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm'
+import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm'
 import { BoxClass } from '../../box/enums/box-class.enum'
 import { RegionType } from '../../region/enums/region-type.enum'
 import { BoxUsagePeriod } from './box-usage-period.entity'
 
 // Duplicate of BoxUsagePeriod. It only contains closed periods and keeps the active table lightweight.
 @Entity('box_usage_period_archive')
+@Index('box_usage_period_archive_organization_end_idx', ['organizationId', 'endAt'])
 export class BoxUsagePeriodArchive {
   @PrimaryGeneratedColumn('uuid')
   id: string

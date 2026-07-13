@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ForbiddenException } from '@nestjs/common'
+import { ForbiddenException, HttpException, HttpStatus, ServiceUnavailableException } from '@nestjs/common'
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
 
@@ -27,6 +27,7 @@ function makeBoxService(overrides: Partial<Record<string, any>> = {}) {
     findOneByIdOrName: jest.fn().mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1' }),
     updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
     ensureStartedForProxy: jest.fn().mockResolvedValue(undefined),
+    isBillingEnforcementEnabled: jest.fn().mockReturnValue(false),
     ...overrides,
   }
 }
@@ -110,6 +111,50 @@ describe('BoxliteProxyController', () => {
     expect(proxyHandler).toHaveBeenCalledWith(req, res, next)
   })
 
+  it('refuses to proxy when Billing rejects the auto-start', async () => {
+    const proxyHandler = jest.fn()
+    jest.mocked(createProxyMiddleware).mockReturnValue(proxyHandler as never)
+    const billingError = new HttpException({ code: 'BILLING_BALANCE_REQUIRED' }, HttpStatus.PAYMENT_REQUIRED)
+    const boxService = makeBoxService({
+      ensureStartedForProxy: jest.fn().mockRejectedValue(billingError),
+      isBillingEnforcementEnabled: jest.fn().mockReturnValue(true),
+    })
+    const controller = new BoxliteProxyController(boxService as never, makeRunnerService() as never)
+
+    await expect(
+      controller.proxyExec(
+        activeAuth as never,
+        'public-box',
+        { url: '/api/v1/boxes/public-box/exec' } as never,
+        {} as never,
+        jest.fn(),
+      ),
+    ).rejects.toBe(billingError)
+    expect(proxyHandler).not.toHaveBeenCalled()
+  })
+
+  it('refuses to proxy when the Billing admission lock is unavailable', async () => {
+    const proxyHandler = jest.fn()
+    jest.mocked(createProxyMiddleware).mockReturnValue(proxyHandler as never)
+    const billingError = new ServiceUnavailableException('Billing access check is unavailable')
+    const boxService = makeBoxService({
+      ensureStartedForProxy: jest.fn().mockRejectedValue(billingError),
+      isBillingEnforcementEnabled: jest.fn().mockReturnValue(true),
+    })
+    const controller = new BoxliteProxyController(boxService as never, makeRunnerService() as never)
+
+    await expect(
+      controller.proxyExec(
+        activeAuth as never,
+        'public-box',
+        { url: '/api/v1/boxes/public-box/exec' } as never,
+        {} as never,
+        jest.fn(),
+      ),
+    ).rejects.toBe(billingError)
+    expect(proxyHandler).not.toHaveBeenCalled()
+  })
+
   // ❶ regression guard: if the hint ever regresses to a blocking write that
   // never resolves, the 2s race fallback must still let the proxy proceed.
   // Without this test, future refactors could silently drop the setTimeout
@@ -136,6 +181,31 @@ describe('BoxliteProxyController', () => {
     await pending
 
     expect(proxyHandler).toHaveBeenCalledWith(req, res, next)
+    jest.useRealTimers()
+  })
+
+  it('fails closed when the start hint times out while Billing enforcement is enabled', async () => {
+    jest.useFakeTimers()
+    const proxyHandler = jest.fn()
+    jest.mocked(createProxyMiddleware).mockReturnValue(proxyHandler as never)
+    const boxService = makeBoxService({
+      ensureStartedForProxy: jest.fn().mockReturnValue(new Promise<void>(() => {})),
+      isBillingEnforcementEnabled: jest.fn().mockReturnValue(true),
+    })
+    const controller = new BoxliteProxyController(boxService as never, makeRunnerService() as never)
+
+    const pending = controller.proxyExec(
+      activeAuth as never,
+      'public-box',
+      { url: '/api/v1/boxes/public-box/exec' } as never,
+      {} as never,
+      jest.fn(),
+    )
+    const assertion = expect(pending).rejects.toThrow(ServiceUnavailableException)
+    await jest.advanceTimersByTimeAsync(2500)
+    await assertion
+
+    expect(proxyHandler).not.toHaveBeenCalled()
     jest.useRealTimers()
   })
 

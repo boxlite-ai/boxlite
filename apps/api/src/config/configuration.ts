@@ -169,6 +169,8 @@ const configuration = {
   billing: {
     trialGrantCents: parseInt(process.env.BILLING_TRIAL_GRANT_CENTS || '10000', 10),
     trialDurationDays: parseInt(process.env.BILLING_TRIAL_DURATION_DAYS || '30', 10),
+    enforcementEnabled: process.env.BILLING_ENFORCEMENT_ENABLED === 'true',
+    enforcementRiskWindowSeconds: parseInt(process.env.BILLING_ENFORCEMENT_RISK_WINDOW_SECONDS || '120', 10),
     paymentProvider:
       process.env.BILLING_PAYMENT_PROVIDER ||
       (process.env.NODE_ENV === 'production' || process.env.ENVIRONMENT === 'production' ? undefined : 'fake'),

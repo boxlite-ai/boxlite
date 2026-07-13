@@ -164,6 +164,14 @@ describe('BillingReadService', () => {
       walletTransactions as never,
       pricingPlans as never,
       { getOrCreateWallet: jest.fn().mockResolvedValue(wallet) } as never,
+      {
+        evaluate: jest.fn().mockResolvedValue({
+          hasAccess: true,
+          availableCents: '10875',
+          unbilledUsageCents: '20',
+          safetyBufferCents: '5',
+        }),
+      } as never,
     )
 
     const overview = await service.getOverview(
@@ -178,6 +186,12 @@ describe('BillingReadService', () => {
       totalBalanceCents: '10900',
       billingStatus: 'trial',
       freeExpiresAt: '2026-08-09T10:00:00.000Z',
+    })
+    expect(overview.access).toEqual({
+      hasAccess: true,
+      availableCents: '10875',
+      unbilledUsageCents: '20',
+      safetyBufferCents: '5',
     })
     expect(overview.spentThisMonthCents).toBe('37')
     expect(overview.usage.costPreciseCents).toBe('2.778')
@@ -210,7 +224,7 @@ describe('BillingReadService', () => {
       }),
     }
     const ratedPeriods = { createQueryBuilder: jest.fn().mockReturnValue(aggregateQuery) }
-    const service = new BillingReadService(ratedPeriods as never, {} as never, {} as never, {} as never)
+    const service = new BillingReadService(ratedPeriods as never, {} as never, {} as never, {} as never, {} as never)
 
     const summary = await service.getBoxUsage('org-1', 'box-1')
 

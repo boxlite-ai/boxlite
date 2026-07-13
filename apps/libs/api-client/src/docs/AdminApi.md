@@ -6,6 +6,7 @@ All URIs are relative to *http://localhost:3000*
 |------------- | ------------- | -------------|
 |[**adminCreateRunner**](#admincreaterunner) | **POST** /admin/runners | Create runner|
 |[**adminDeleteRunner**](#admindeleterunner) | **DELETE** /admin/runners/{id} | Delete runner|
+|[**adminGetBillingHealth**](#admingetbillinghealth) | **GET** /admin/billing/health | Get Billing recovery and ledger health|
 |[**adminGetObservabilityLogs**](#admingetobservabilitylogs) | **GET** /admin/observability/logs | Get admin-scoped logs|
 |[**adminGetObservabilityMetrics**](#admingetobservabilitymetrics) | **GET** /admin/observability/metrics | Get admin-scoped metrics|
 |[**adminGetObservabilityStatus**](#admingetobservabilitystatus) | **GET** /admin/observability/status | Get admin observability backend and layer status|
@@ -19,6 +20,9 @@ All URIs are relative to *http://localhost:3000*
 |[**adminListRunners**](#adminlistrunners) | **GET** /admin/runners | List all runners|
 |[**adminListRunnersOverview**](#adminlistrunnersoverview) | **GET** /admin/overview/runners | List all runners with full details|
 |[**adminListUsers**](#adminlistusers) | **GET** /admin/overview/users | List all users (cross-org)|
+|[**adminReconcileBilling**](#adminreconcilebilling) | **POST** /admin/billing/reconcile | Run due Billing recovery work|
+|[**adminReconcileSetup**](#adminreconcilesetup) | **POST** /admin/billing/reconcile/setup/{organizationId} | Force provider reconciliation for one payment setup|
+|[**adminReconcileTopUp**](#adminreconciletopup) | **POST** /admin/billing/reconcile/top-up/{topUpId} | Force provider reconciliation for one top-up|
 |[**adminRecoverBox**](#adminrecoverbox) | **POST** /admin/box/{boxId}/recover | Recover box from error state as an admin|
 |[**adminUpdateRunnerScheduling**](#adminupdaterunnerscheduling) | **PATCH** /admin/runners/{id}/scheduling | Update runner scheduling status|
 
@@ -120,6 +124,49 @@ void (empty response body)
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**204** |  |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **adminGetBillingHealth**
+> adminGetBillingHealth()
+
+
+### Example
+
+```typescript
+import {
+    AdminApi,
+    Configuration
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new AdminApi(configuration);
+
+const { status, data } = await apiInstance.adminGetBillingHealth();
+```
+
+### Parameters
+This endpoint does not have any parameters.
+
+
+### Return type
+
+void (empty response body)
+
+### Authorization
+
+[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: Not defined
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**200** |  |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
@@ -956,6 +1003,149 @@ This endpoint does not have any parameters.
 
  - **Content-Type**: Not defined
  - **Accept**: application/json
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**200** |  |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **adminReconcileBilling**
+> adminReconcileBilling()
+
+
+### Example
+
+```typescript
+import {
+    AdminApi,
+    Configuration
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new AdminApi(configuration);
+
+const { status, data } = await apiInstance.adminReconcileBilling();
+```
+
+### Parameters
+This endpoint does not have any parameters.
+
+
+### Return type
+
+void (empty response body)
+
+### Authorization
+
+[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: Not defined
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**200** |  |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **adminReconcileSetup**
+> adminReconcileSetup()
+
+
+### Example
+
+```typescript
+import {
+    AdminApi,
+    Configuration
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new AdminApi(configuration);
+
+let organizationId: string; // (default to undefined)
+
+const { status, data } = await apiInstance.adminReconcileSetup(
+    organizationId
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **organizationId** | [**string**] |  | defaults to undefined|
+
+
+### Return type
+
+void (empty response body)
+
+### Authorization
+
+[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: Not defined
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**200** |  |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **adminReconcileTopUp**
+> adminReconcileTopUp()
+
+
+### Example
+
+```typescript
+import {
+    AdminApi,
+    Configuration
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new AdminApi(configuration);
+
+let topUpId: string; // (default to undefined)
+
+const { status, data } = await apiInstance.adminReconcileTopUp(
+    topUpId
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **topUpId** | [**string**] |  | defaults to undefined|
+
+
+### Return type
+
+void (empty response body)
+
+### Authorization
+
+[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: Not defined
 
 
 ### HTTP response details
