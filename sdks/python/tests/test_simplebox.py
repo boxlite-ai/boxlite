@@ -20,9 +20,7 @@ async def test_simplebox_metrics(shared_runtime):
 
 async def test_simplebox_command_not_found_raises_exec_error(shared_runtime):
     """Direct command start failures raise ExecError, not bare RuntimeError."""
-    async with boxlite.SimpleBox(
-        image="alpine:latest", runtime=shared_runtime
-    ) as box:
+    async with boxlite.SimpleBox(image="alpine:latest", runtime=shared_runtime) as box:
         with pytest.raises(boxlite.ExecError) as exc:
             await box.exec("definitely-not-a-boxlite-command-xyz")
         assert exc.value.exit_code == 127

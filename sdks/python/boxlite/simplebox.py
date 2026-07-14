@@ -9,8 +9,8 @@ import logging
 from enum import IntEnum
 from typing import Optional, TYPE_CHECKING
 
-from .errors import ExecError
-from .exec import ExecResult, _looks_like_command_start_error
+from .errors import ExecError, _CommandStartError
+from .exec import ExecResult
 
 if TYPE_CHECKING:
     from .boxlite import Boxlite
@@ -274,11 +274,8 @@ class SimpleBox:
             execution = await self._box.exec(
                 cmd, arg_list, env_list, user=user, timeout_secs=timeout, cwd=cwd
             )
-        except Exception as e:
-            message = str(e)
-            if _looks_like_command_start_error(message):
-                raise ExecError(command_display, 127, message) from e
-            raise
+        except _CommandStartError as e:
+            raise ExecError(command_display, 127, str(e)) from e
 
         # Get streams from Rust execution
         try:

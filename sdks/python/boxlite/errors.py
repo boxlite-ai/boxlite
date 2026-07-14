@@ -6,6 +6,15 @@ Provides a hierarchy of exceptions for different failure modes.
 
 __all__ = ["BoxliteError", "ExecError", "TimeoutError", "ParseError"]
 
+try:
+    from .boxlite import CommandStartError as _CommandStartError
+except ImportError:
+
+    class _CommandStartError(RuntimeError):
+        """Fallback used when the native extension is unavailable."""
+
+        pass
+
 
 class BoxliteError(Exception):
     """Base exception for all boxlite errors."""

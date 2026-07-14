@@ -4,6 +4,8 @@ Execution API - Simple interface for command execution.
 Provides Docker-like API for executing commands in boxes.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 __all__ = [
@@ -28,15 +30,3 @@ class ExecResult:
     stdout: str
     stderr: str
     error_message: str | None = None
-
-
-def _looks_like_command_start_error(message: str) -> bool:
-    """Return true for errors caused by an invalid user command."""
-    lowered = message.lower()
-    return (
-        ("executable" in lowered and "not found" in lowered)
-        or "not found in $path" in lowered
-        or "not found in path" in lowered
-        or "does not have correct permissions" in lowered
-        or "permission denied" in lowered
-    )

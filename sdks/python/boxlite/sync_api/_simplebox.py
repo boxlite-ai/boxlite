@@ -9,8 +9,8 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Dict, Optional
 
-from ..errors import ExecError
-from ..exec import ExecResult, _looks_like_command_start_error
+from ..errors import ExecError, _CommandStartError
+from ..exec import ExecResult
 
 if TYPE_CHECKING:
     from ._boxlite import SyncBoxlite
@@ -198,11 +198,8 @@ class SyncSimpleBox:
                 execution = await async_box.exec(
                     cmd, arg_list, env_list, user=user, timeout_secs=timeout, cwd=cwd
                 )
-            except Exception as e:
-                message = str(e)
-                if _looks_like_command_start_error(message):
-                    raise ExecError(command_display, 127, message) from e
-                raise
+            except _CommandStartError as e:
+                raise ExecError(command_display, 127, str(e)) from e
 
             stdout_lines = []
             stderr_lines = []

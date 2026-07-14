@@ -6,7 +6,7 @@ use crate::metrics::PyBoxMetrics;
 use crate::network::PyNetworkHandle;
 use crate::snapshot_options::{PyCloneOptions, PyExportOptions};
 use crate::snapshots::PySnapshotHandle;
-use crate::util::map_err;
+use crate::util::{map_err, map_exec_err};
 use boxlite::{BoxCommand, CloneOptions, ExportOptions, LiteBox};
 use pyo3::prelude::*;
 
@@ -87,7 +87,7 @@ impl PyBox {
                 cmd = cmd.working_dir(cwd);
             }
 
-            let execution = handle.exec(cmd).await.map_err(map_err)?;
+            let execution = handle.exec(cmd).await.map_err(map_exec_err)?;
 
             Ok(PyExecution {
                 execution: Arc::new(execution),
