@@ -165,7 +165,8 @@ Runs VM-based integration tests on a persistent, self-hosted AWS EC2 runner — 
 runners can't expose `/dev/kvm`, which BoxLite's libkrun microVMs need. The instance is
 started before a run and stopped (not terminated) after, so caches persist. AWS auth is
 GitHub OIDC → STS; runner registration is a GitHub App. A pull request must carry the
-`e2e-local` label (the cost gate) to run.
+`e2e-local` label (the cost gate) to run; fork PRs run via `pull_request_target` and only
+the labeled head commit — re-label after new pushes.
 
 See the **[E2E Local CI runbook](../../docs/ci/e2e-local.md)** for the jobs, the instance,
 one-time provisioning (`scripts/ci/setup-ci-runner.sh`), and troubleshooting.

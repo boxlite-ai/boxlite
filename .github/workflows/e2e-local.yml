@@ -19,6 +19,16 @@
 #   AWS: GitHub OIDC → AWS STS (no stored AWS credentials)
 #   GitHub: GitHub App → short-lived installation token (no PAT)
 #
+# Fork PRs: plain `pull_request` withholds secrets AND repo variables from
+# fork runs, so start-runner cannot authenticate. The PR trigger is
+# therefore `pull_request_target` (base context: secrets available, workflow
+# definition always from main), gated by the maintainer-applied `e2e-local`
+# label. For forks the approval is per-push: only the labeling event runs,
+# pinned to the head SHA the maintainer approved — a new push needs a
+# re-label. Untrusted code runs only in e2e-tests, which holds no secrets
+# and a read-only token; the runner's instance profile can only terminate
+# the runner itself (see scripts/ci/setup-ci-runner.sh).
+#
 # Setup:   ./scripts/ci/setup-ci-runner.sh
 # Runbook: docs/ci/e2e-local.md
 name: E2E local
@@ -35,7 +45,7 @@ on:
       - '**/Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/e2e-local.yml'
-  pull_request:
+  pull_request_target:
     types: [labeled, synchronize]
     branches: [main]
     paths:
@@ -59,6 +69,12 @@ concurrency:
   group: e2e-runner
   cancel-in-progress: true
 
+# pull_request_target's default token is write-capable and e2e-tests runs
+# labeled fork code — keep the inherited token read-only. start-runner and
+# stop-runner declare their own id-token permissions.
+permissions:
+  contents: read
+
 env:
   AWS_REGION: us-east-1
   AWS_ROLE_ARN: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-e2e-github-actions
@@ -72,7 +88,9 @@ env:
 
 jobs:
   # =========================================================================
-  # Gate: PRs require 'e2e-local' label (only maintainers can add it)
+  # Gate: PRs require 'e2e-local' label (only maintainers can add it).
+  # Same-repo PRs re-run while labeled; fork PRs run only on the labeling
+  # event itself, so every new fork push needs a fresh maintainer re-label.
   # =========================================================================
   should-run:
     runs-on: ubuntu-latest
@@ -81,16 +99,28 @@ jobs:
     steps:
       - name: Check trigger conditions
         id: check
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          ADDED_LABEL: ${{ github.event.label.name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            LABELS='${{ toJson(github.event.pull_request.labels.*.name) }}'
-            if echo "$LABELS" | jq -e 'index("e2e-local")' > /dev/null 2>&1; then
-              echo "run=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "run=false" >> "$GITHUB_OUTPUT"
-            fi
-          else
+          if [ "$EVENT_NAME" != "pull_request_target" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"   # push / workflow_dispatch
+            exit 0
+          fi
+          if ! echo "$LABELS" | jq -e 'index("e2e-local")' > /dev/null 2>&1; then
+            echo "run=false" >> "$GITHUB_OUTPUT"  # label is the cost gate
+            exit 0
+          fi
+          if [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT_ACTION" = "labeled" ] && [ "$ADDED_LABEL" = "e2e-local" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Fork PR changed since its e2e-local approval. Remove and re-add the label to re-run e2e."
           fi
 
   # =========================================================================
@@ -364,6 +394,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
+          # pull_request_target resolves to the BASE branch by default, which
+          # would silently test main instead of the PR. Pin the head SHA the
+          # maintainer approved when labeling; push/dispatch keep github.sha.
+          # No credentials persist on the runner: fork code runs after this.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
           submodules: recursive
           clean: false
 
