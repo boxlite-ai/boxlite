@@ -75,6 +75,26 @@ describe('BoxliteProxyController', () => {
     expect(boxService.ensureStartedForProxy).toHaveBeenCalledWith('public-box', activeAuth.organization)
   })
 
+  it('rewrites execution list requests to the runner executions endpoint', async () => {
+    const proxyHandler = jest.fn()
+    jest.mocked(createProxyMiddleware).mockReturnValue(proxyHandler as never)
+
+    const boxService = makeBoxService()
+    const runnerService = makeRunnerService()
+    const controller = new BoxliteProxyController(boxService as never, runnerService as never)
+    const req = { url: '/api/v1/boxes/public-box/executions' }
+    const res = {}
+    const next = jest.fn()
+
+    await controller.proxyExecutions(activeAuth as never, 'public-box', req as never, res as never, next)
+
+    const proxyOptions = jest.mocked(createProxyMiddleware).mock.calls[0][0]
+    const pathRewrite = proxyOptions.pathRewrite as (path: string, req: unknown) => string
+    expect(pathRewrite('/api/v1/boxes/public-box/executions', req)).toBe('/v1/boxes/box-uuid/executions')
+    expect(boxService.ensureStartedForProxy).not.toHaveBeenCalled()
+    expect(proxyHandler).toHaveBeenCalledWith(req, res, next)
+  })
+
   it('also fires the start hint for files and metrics proxy paths', async () => {
     jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
 

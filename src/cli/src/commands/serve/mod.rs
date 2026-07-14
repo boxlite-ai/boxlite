@@ -80,6 +80,7 @@ struct AppState {
 /// `signal()`, `resize_tty()` and reattach all work.
 pub(in crate::commands::serve) struct ActiveExecution {
     box_id: String,
+    command: String,
     execution: Execution,
     /// Stdin sink owned by the WS `/attach` session.
     stdin: tokio::sync::Mutex<Option<ExecStdin>>,
@@ -226,7 +227,12 @@ impl BacklogReceiver {
 }
 
 impl ActiveExecution {
-    fn new(box_id: String, mut execution: Execution, stdin: Option<ExecStdin>) -> Arc<Self> {
+    fn new(
+        box_id: String,
+        command: String,
+        mut execution: Execution,
+        stdin: Option<ExecStdin>,
+    ) -> Arc<Self> {
         let stdout = execution.stdout();
         let stderr = execution.stderr();
 
@@ -243,6 +249,7 @@ impl ActiveExecution {
         let now = Instant::now();
         let active = Arc::new(Self {
             box_id,
+            command,
             execution,
             stdin: tokio::sync::Mutex::new(stdin),
             stdout_bus: stdout_bus.clone(),
@@ -316,6 +323,10 @@ impl ActiveExecution {
         &self.box_id
     }
 
+    pub(in crate::commands::serve) fn command(&self) -> &str {
+        &self.command
+    }
+
     pub(in crate::commands::serve) fn stdout_bus(&self) -> &BacklogBroadcast {
         &self.stdout_bus
     }
@@ -377,6 +388,10 @@ impl ActiveExecution {
         s.signaled_hup = false;
         s.signaled_term = false;
         true
+    }
+
+    pub(in crate::commands::serve) async fn is_connected(&self) -> bool {
+        self.attach.lock().await.connected
     }
 
     pub(in crate::commands::serve) async fn mark_disconnected(&self) {
@@ -700,6 +715,13 @@ fn build_box_command(req: &ExecRequest) -> BoxCommand {
     cmd
 }
 
+fn execution_command_display(req: &ExecRequest) -> String {
+    let mut parts = Vec::with_capacity(req.args.len() + 1);
+    parts.push(req.command.clone());
+    parts.extend(req.args.iter().cloned());
+    parts.join(" ")
+}
+
 // ============================================================================
 // Error Helpers
 // ============================================================================
@@ -883,6 +905,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/v1/boxes/{box_id}/exec",
             post(executions::start_execution),
+        )
+        .route(
+            "/v1/boxes/{box_id}/executions",
+            get(executions::list_executions),
         )
         .route(
             "/v1/boxes/{box_id}/executions/{exec_id}",
@@ -1111,7 +1137,7 @@ mod tests {
     ) {
         let (exec, stdout_tx, stderr_tx, _stdin_rx, result_tx) =
             boxlite::Execution::stub("test-exec");
-        let active = ActiveExecution::new("test-box".to_string(), exec, None);
+        let active = ActiveExecution::new("test-box".to_string(), "test".to_string(), exec, None);
         (active, stdout_tx, stderr_tx, result_tx)
     }
 

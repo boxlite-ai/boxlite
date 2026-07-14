@@ -1,20 +1,23 @@
 //! Execution handlers: start, status, signal, resize, kill, attach.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Json;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use futures::SinkExt;
 use futures::StreamExt;
 
-use super::super::types::{ExecRequest, ExecResponse, ResizeRequest, SignalRequest};
+use super::super::types::{
+    ExecRequest, ExecResponse, ExecutionInfoResponse, ResizeRequest, SignalRequest,
+};
 use super::super::{
     ActiveExecution, AppState, build_box_command, error_from_boxlite, error_response,
-    get_or_fetch_box,
+    execution_command_display, get_or_fetch_box,
 };
 
 pub(in crate::commands::serve) async fn start_execution(
@@ -28,6 +31,7 @@ pub(in crate::commands::serve) async fn start_execution(
     };
 
     let stdin_data = req.stdin.clone();
+    let command = execution_command_display(&req);
     let cmd = build_box_command(&req);
 
     let mut execution = match litebox.exec(cmd).await {
@@ -47,7 +51,7 @@ pub(in crate::commands::serve) async fn start_execution(
     };
 
     let exec_id = execution.id().clone();
-    let active = ActiveExecution::new(box_id, execution, stdin);
+    let active = ActiveExecution::new(box_id, command, execution, stdin);
 
     state
         .executions
@@ -62,6 +66,44 @@ pub(in crate::commands::serve) async fn start_execution(
         }),
     )
         .into_response()
+}
+
+pub(in crate::commands::serve) async fn list_executions(
+    State(state): State<Arc<AppState>>,
+    Path(box_id): Path<String>,
+) -> Response {
+    let entries: Vec<(String, Arc<ActiveExecution>)> = {
+        let executions = state.executions.read().await;
+        executions
+            .iter()
+            .filter(|(_, active)| active.box_id() == box_id)
+            .map(|(exec_id, active)| (exec_id.clone(), Arc::clone(active)))
+            .collect()
+    };
+    let mut body = Vec::new();
+
+    for (exec_id, active) in entries {
+        body.push(execution_info_response(&exec_id, &active).await);
+    }
+
+    Json(body).into_response()
+}
+
+async fn execution_info_response(exec_id: &str, active: &ActiveExecution) -> ExecutionInfoResponse {
+    let (status, exit_code) = if active.is_done() {
+        ("completed".to_string(), Some(active.exit_code()))
+    } else {
+        ("running".to_string(), None)
+    };
+
+    ExecutionInfoResponse {
+        execution_id: exec_id.to_string(),
+        command: Some(active.command().to_string()),
+        status,
+        attached: active.is_connected().await,
+        exit_code,
+        error_message: None,
+    }
 }
 
 // `Response` carries axum's boxed body which is wide enough to trip
@@ -101,20 +143,7 @@ pub(in crate::commands::serve) async fn get_execution(
     };
     drop(executions);
 
-    let (status, exit_code) = if active.is_done() {
-        ("completed", Some(active.exit_code()))
-    } else {
-        ("running", None)
-    };
-
-    let mut body = serde_json::json!({
-        "execution_id": exec_id,
-        "status": status,
-    });
-    if let Some(code) = exit_code {
-        body["exit_code"] = serde_json::json!(code);
-    }
-    Json(body).into_response()
+    Json(execution_info_response(&exec_id, &active).await).into_response()
 }
 
 /// Whitelist of cooperative signals (Phase 2.3 parity). SIGKILL goes
@@ -232,8 +261,10 @@ const ATTACH_WRITE_TIMEOUT: Duration = Duration::from_secs(20);
 pub(in crate::commands::serve) async fn attach_execution(
     State(state): State<Arc<AppState>>,
     Path((box_id, exec_id)): Path<(String, String)>,
+    Query(query): Query<HashMap<String, String>>,
     ws: WebSocketUpgrade,
 ) -> Response {
+    let no_stdin = query.get("stdin").is_some_and(|value| value == "false");
     let executions = state.executions.read().await;
     let active = match get_active_for_box(&executions, &exec_id, &box_id) {
         Ok(a) => a,
@@ -243,7 +274,7 @@ pub(in crate::commands::serve) async fn attach_execution(
 
     // Claim BEFORE the HTTP upgrade so rejection is a proper 409 at the
     // HTTP level.
-    if !active.mark_connected().await {
+    if !no_stdin && !active.mark_connected().await {
         return error_response(
             StatusCode::CONFLICT,
             format!("execution {} already has an attached client", exec_id),
@@ -257,15 +288,17 @@ pub(in crate::commands::serve) async fn attach_execution(
     let failed_active = Arc::clone(&active);
     ws.on_failed_upgrade(move |_err| {
         tokio::spawn(async move {
-            failed_active.mark_disconnected().await;
+            if !no_stdin {
+                failed_active.mark_disconnected().await;
+            }
         });
     })
     .on_upgrade(move |socket| async move {
-        run_attach_session(socket, active).await;
+        run_attach_session(socket, active, no_stdin).await;
     })
 }
 
-async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>) {
+async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>, no_stdin: bool) {
     let mut stdout_rx = active.stdout_bus().subscribe();
     let mut stderr_rx = active.stderr_bus().subscribe();
     let mut done_rx = active.done_rx();
@@ -280,6 +313,9 @@ async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>) {
         while let Some(msg) = stream.next().await {
             match msg {
                 Ok(Message::Binary(bytes)) => {
+                    if no_stdin {
+                        continue;
+                    }
                     let mut guard = reader_active.stdin().lock().await;
                     if let Some(ref mut stdin) = *guard
                         && let Err(e) = stdin.write_all(&bytes).await
@@ -375,6 +411,16 @@ async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>) {
                             }
                         }
                         Some("stdin_eof") => {
+                            if no_stdin {
+                                let _ = ctrl_tx.send(
+                                    serde_json::json!({
+                                        "type": "error",
+                                        "message": "stdin close disabled for no-stdin attach",
+                                    })
+                                    .to_string(),
+                                );
+                                continue;
+                            }
                             let mut guard = reader_active.stdin().lock().await;
                             if let Some(ref mut stdin) = *guard {
                                 stdin.close();
@@ -524,5 +570,7 @@ async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>) {
         _ = &mut writer => { reader.abort(); reader }
     };
     let _ = aborted.await;
-    active.mark_disconnected().await;
+    if !no_stdin {
+        active.mark_disconnected().await;
+    }
 }

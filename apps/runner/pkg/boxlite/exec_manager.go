@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -91,6 +92,7 @@ type ExecManager struct {
 type ManagedExec struct {
 	ID        string
 	BoxID     string
+	Command   []string
 	stdinW    io.Writer
 	execution execHandle
 	Done      chan struct{}
@@ -352,6 +354,7 @@ func (m *ExecManager) Start(ctx context.Context, bx *boxlite.Box, boxID string, 
 	exec := &ManagedExec{
 		ID:        id,
 		BoxID:     boxID,
+		Command:   append([]string{opts.Command}, opts.Args...),
 		stdoutBus: newStreamBus(streamBusBacklogCap),
 		stderrBus: newStreamBus(streamBusBacklogCap),
 		Done:      make(chan struct{}),
@@ -439,6 +442,25 @@ func (m *ExecManager) GetForBox(id, boxID string) (*ManagedExec, error) {
 		return nil, fmt.Errorf("%w: %s", ErrBoxMismatch, id)
 	}
 	return e, nil
+}
+
+func (m *ExecManager) ListForBox(boxID string) []*ManagedExec {
+	m.mu.RLock()
+	execs := make([]*ManagedExec, 0)
+	for _, e := range m.execs {
+		if e.BoxID == boxID {
+			execs = append(execs, e)
+		}
+	}
+	m.mu.RUnlock()
+
+	sort.Slice(execs, func(i, j int) bool {
+		if execs[i].created.Equal(execs[j].created) {
+			return execs[i].ID < execs[j].ID
+		}
+		return execs[i].created.Before(execs[j].created)
+	})
+	return execs
 }
 
 func (m *ExecManager) Signal(id string, sig int) error {
@@ -810,6 +832,12 @@ func (e *ManagedExec) MarkConnected() bool {
 	e.SignaledHUP = false
 	e.SignaledTERM = false
 	return true
+}
+
+func (e *ManagedExec) IsConnected() bool {
+	e.attachMu.Lock()
+	defer e.attachMu.Unlock()
+	return e.Connected
 }
 
 // FinishEscalation clears the Escalating flag after signal delivery so

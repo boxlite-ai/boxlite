@@ -6,7 +6,7 @@ use async_trait::async_trait;
 
 use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
-use crate::litebox::{BoxCommand, Execution, LiteBox};
+use crate::litebox::{BoxCommand, Execution, ExecutionInfo, LiteBox};
 use crate::metrics::{BoxMetrics, RuntimeMetrics};
 use crate::runtime::options::{
     BoxArchive, BoxOptions, CloneOptions, ExportOptions, SnapshotOptions,
@@ -78,6 +78,12 @@ pub(crate) trait BoxBackend: Send + Sync {
 
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution>;
 
+    async fn list_executions(&self) -> BoxliteResult<Vec<ExecutionInfo>> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support listing executions".into(),
+        ))
+    }
+
     /// Reattach to an already-running execution by id. The returned
     /// `Execution` carries fresh stdin/stdout/stderr/result channels
     /// wired to a new WebSocket; the caller discards any prior handle
@@ -89,6 +95,12 @@ pub(crate) trait BoxBackend: Send + Sync {
     async fn attach(&self, _execution_id: &str) -> BoxliteResult<Execution> {
         Err(BoxliteError::Unsupported(
             "this backend does not support reattaching to existing executions".into(),
+        ))
+    }
+
+    async fn attach_no_stdin(&self, _execution_id: &str) -> BoxliteResult<Execution> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support no-stdin execution attach".into(),
         ))
     }
 

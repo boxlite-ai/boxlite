@@ -18,7 +18,10 @@ mod state;
 
 pub use copy::CopyOptions;
 pub(crate) use crash_report::CrashReport;
-pub use exec::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId};
+pub use exec::{
+    BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId,
+    ExecutionInfo,
+};
 pub(crate) use manager::BoxManager;
 pub use snapshot::SnapshotHandle;
 pub use state::{BoxState, BoxStatus, HealthState, HealthStatus};
@@ -98,6 +101,10 @@ impl LiteBox {
         self.box_backend.exec(command).await
     }
 
+    pub async fn list_executions(&self) -> BoxliteResult<Vec<ExecutionInfo>> {
+        self.box_backend.list_executions().await
+    }
+
     /// Reattach to a running execution by id, returning a fresh
     /// `Execution` handle. The caller discards any previous handle for
     /// the same id. Used after a transient WebSocket drop to resume
@@ -106,6 +113,10 @@ impl LiteBox {
     /// attachable on the server side.
     pub async fn attach(&self, execution_id: &str) -> BoxliteResult<Execution> {
         self.box_backend.attach(execution_id).await
+    }
+
+    pub async fn attach_no_stdin(&self, execution_id: &str) -> BoxliteResult<Execution> {
+        self.box_backend.attach_no_stdin(execution_id).await
     }
 
     pub async fn metrics(&self) -> BoxliteResult<BoxMetrics> {

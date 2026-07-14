@@ -102,6 +102,19 @@ pub(super) struct ExecResponse {
     pub execution_id: String,
 }
 
+#[derive(Serialize)]
+pub(super) struct ExecutionInfoResponse {
+    pub execution_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    pub status: String,
+    pub attached: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+}
+
 #[derive(Deserialize)]
 pub(super) struct SignalRequest {
     pub signal: i32,

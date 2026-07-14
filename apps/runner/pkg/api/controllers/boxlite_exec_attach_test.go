@@ -215,6 +215,15 @@ func dialAttach(t *testing.T, srv *httptest.Server, execId string) (*websocket.C
 	return dialer.Dial(wsURL, nil)
 }
 
+func dialAttachNoStdin(t *testing.T, srv *httptest.Server, execId string) (*websocket.Conn, *http.Response, error) {
+	t.Helper()
+	wsURL := strings.Replace(srv.URL, "http://", "ws://", 1) +
+		"/v1/boxes/box/executions/" + execId + "/attach?stdin=false"
+	dialer := *websocket.DefaultDialer
+	dialer.HandshakeTimeout = 5 * time.Second
+	return dialer.Dial(wsURL, nil)
+}
+
 // readNextNonPongFrame reads frames, ignoring control pongs. Returns the
 // first data frame.
 func readNextDataFrame(t *testing.T, conn *websocket.Conn, deadline time.Duration) (int, []byte, error) {
@@ -362,6 +371,92 @@ func TestBoxliteExecAttach_SingleAttach409(t *testing.T) {
 	}
 	if resp2.StatusCode != http.StatusConflict {
 		t.Fatalf("expected status 409, got %d", resp2.StatusCode)
+	}
+}
+
+func TestBoxliteExecAttach_NoStdinDoesNotClaimWriteSlotOrForwardInputButForwardsSignal(t *testing.T) {
+	stub := newStubAttachExec()
+	stub.connected.Store(true)
+	cleanup := withStubExec(t, "exec-readonly", stub)
+	defer cleanup()
+	t.Cleanup(func() {
+		_ = stub.stdinW.Close()
+		_ = stub.stdoutW.Close()
+		_ = stub.stderrW.Close()
+	})
+
+	srv := newAttachServer(t)
+	defer srv.Close()
+
+	conn, resp, err := dialAttachNoStdin(t, srv, "exec-readonly")
+	if err != nil {
+		t.Fatalf("no-stdin dial failed: %v (resp=%v)", err, resp)
+	}
+	defer conn.Close()
+
+	stdinSeen := make(chan []byte, 1)
+	go func() {
+		buf := make([]byte, 64)
+		n, _ := stub.stdinR.Read(buf)
+		stdinSeen <- buf[:n]
+	}()
+
+	if err := conn.WriteMessage(websocket.BinaryMessage, []byte("must-not-write\n")); err != nil {
+		t.Fatalf("write ignored stdin frame: %v", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"resize","rows":40,"cols":120}`)); err != nil {
+		t.Fatalf("write resize control frame: %v", err)
+	}
+
+	go func() {
+		_, _ = stub.stdoutW.Write([]byte("observed"))
+	}()
+
+	mt, payload, err := readNextDataFrame(t, conn, 2*time.Second)
+	if err != nil {
+		t.Fatalf("read stdout frame: %v", err)
+	}
+	if mt != websocket.BinaryMessage {
+		t.Fatalf("expected BinaryMessage, got %d", mt)
+	}
+	if len(payload) < 1 || payload[0] != chanStdout {
+		t.Fatalf("expected stdout prefix, got payload=% x", payload)
+	}
+	if string(payload[1:]) != "observed" {
+		t.Fatalf("expected no-stdin stdout payload %q, got %q", "observed", string(payload[1:]))
+	}
+
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"signal","sig":2}`)); err != nil {
+		t.Fatalf("write signal frame: %v", err)
+	}
+
+	select {
+	case got := <-stdinSeen:
+		t.Fatalf("no-stdin attach forwarded stdin %q", string(got))
+	case <-time.After(200 * time.Millisecond):
+	}
+	if got := stub.resizeCalls.Load(); got != 1 {
+		t.Fatalf("no-stdin attach should preserve resize control once, got %d", got)
+	}
+	if got := stub.signalCalls.Load(); got != 1 {
+		t.Fatalf("no-stdin attach should forward signal control once, got %d", got)
+	}
+	stub.mu.Lock()
+	signals := append([]int(nil), stub.signaledWith...)
+	stub.mu.Unlock()
+	if len(signals) != 1 || signals[0] != 2 {
+		t.Fatalf("no-stdin attach should forward SIGINT, got %v", signals)
+	}
+
+	if err := conn.Close(); err != nil {
+		t.Fatalf("close no-stdin conn: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := stub.disconnect.Load(); got != 0 {
+		t.Fatalf("no-stdin attach must not mark the writer disconnected, got %d", got)
+	}
+	if !stub.connected.Load() {
+		t.Fatal("no-stdin attach cleared the existing writer slot")
 	}
 }
 

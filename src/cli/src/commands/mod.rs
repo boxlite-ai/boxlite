@@ -1,3 +1,4 @@
+pub mod attach;
 pub mod auth;
 pub mod cp;
 pub mod create;
@@ -15,3 +16,4 @@ pub mod serve;
 pub mod start;
 pub mod stats;
 pub mod stop;
+pub mod top;
