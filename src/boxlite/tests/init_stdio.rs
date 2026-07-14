@@ -5,7 +5,7 @@ use boxlite::{BoxCommand, BoxliteRuntime};
 use std::time::Duration;
 
 #[tokio::test]
-async fn init_stdout_larger_than_a_pipe_does_not_block_entrypoint() {
+async fn init_output_larger_than_pipes_does_not_block_entrypoint() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
@@ -18,7 +18,7 @@ async fn init_stdout_larger_than_a_pipe_does_not_block_entrypoint() {
                 entrypoint: Some(vec![
                     "sh".to_string(),
                     "-c".to_string(),
-                    "dd if=/dev/zero bs=1024 count=1024; touch /tmp/init-output-drained; exec sleep 300"
+                    "dd if=/dev/zero bs=1024 count=1024; dd if=/dev/zero bs=1024 count=1024 >&2; touch /tmp/init-output-drained; exec sleep 300"
                         .to_string(),
                 ]),
                 ..common::alpine_opts_auto()
@@ -54,5 +54,5 @@ async fn init_stdout_larger_than_a_pipe_does_not_block_entrypoint() {
     let _ = runtime.remove(&box_id, false).await;
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 
-    ready.expect("init stdout filled its pipe before the entrypoint could continue");
+    ready.expect("init stdout or stderr filled its pipe before the entrypoint could continue");
 }

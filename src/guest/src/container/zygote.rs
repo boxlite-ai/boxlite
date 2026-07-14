@@ -110,7 +110,9 @@ enum ZygoteRequest {
     /// Wait for a container process to exit and return its exit status.
     /// The zygote must handle this because it's the parent of all container
     /// processes (they were created by clone3() inside the zygote).
-    Wait { pid: i32 },
+    Wait {
+        pid: i32,
+    },
 }
 
 /// Tagged IPC response from zygote to parent, matched 1:1 with requests.
@@ -615,6 +617,16 @@ mod tests {
     #[test]
     fn init_build_result_serde_roundtrip() {
         let result = InitBuildResult::Built;
+        let json = serde_json::to_vec(&result).unwrap();
+        let decoded: InitBuildResult = serde_json::from_slice(&json).unwrap();
+        assert_eq!(result, decoded);
+    }
+
+    #[test]
+    fn init_build_result_failed_serde_roundtrip() {
+        let result = InitBuildResult::Failed {
+            error: "init build failed: container not found".to_string(),
+        };
         let json = serde_json::to_vec(&result).unwrap();
         let decoded: InitBuildResult = serde_json::from_slice(&json).unwrap();
         assert_eq!(result, decoded);
