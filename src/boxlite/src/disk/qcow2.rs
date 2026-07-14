@@ -945,6 +945,154 @@ pub fn read_backing_file_path(path: &Path) -> BoxliteResult<Option<String>> {
     })
 }
 
+/// Bits 9..55 of a qcow2 L1/L2 entry hold the referenced cluster's host offset.
+const QCOW2_OFFSET_MASK: u64 = 0x00FF_FFFF_FFFF_FE00;
+
+/// Check that every cluster a qcow2 overlay's L1/L2 tables reference actually
+/// lives inside the overlay file, *without* booting a VM.
+///
+/// A host crash can persist an overlay's L2 mapping while the data cluster it
+/// points at was never written (or the file was never extended to hold it),
+/// leaving an L2 entry whose host offset lies at or past the file's physical
+/// end. The qcow2 *header* and even the ext4 *superblock* can still look intact
+/// — but when the guest reads that virtual cluster, libkrun serves zeros, so
+/// ext4 sees zeroed metadata (e.g. the journal inode) and fails the mount with
+/// EBADMSG. This walks the whole L1/L2 tree and flags the first reference that
+/// falls outside the file.
+///
+/// The invariant enforced for every present, uncompressed entry is
+/// `host_offset + cluster_size <= file_len`. Holes (entry 0) fall through to the
+/// backing file and are skipped. Compressed clusters never occur in a boxlite
+/// COW overlay, so one is treated as structural damage.
+///
+/// Failures are classified as transient [`Io`](Qcow2HeaderError::Io) (the file
+/// could not be read; proves nothing about its contents) vs structural
+/// [`Corrupt`](Qcow2HeaderError::Corrupt) (a referenced cluster is missing or
+/// the tables are torn), so a caller never discards an overlay on an I/O blip.
+pub fn probe_overlay_cluster_integrity(overlay_path: &Path) -> Result<(), Qcow2HeaderError> {
+    use std::io::{ErrorKind, Read, Seek, SeekFrom};
+
+    fn on_read(path: &Path, e: std::io::Error, what: &str) -> Qcow2HeaderError {
+        if e.kind() == ErrorKind::UnexpectedEof {
+            Qcow2HeaderError::Corrupt(format!("qcow2 {} is truncated ({what})", path.display()))
+        } else {
+            Qcow2HeaderError::Io(e)
+        }
+    }
+
+    let mut file = std::fs::File::open(overlay_path).map_err(Qcow2HeaderError::Io)?;
+    let file_len = file.metadata().map_err(Qcow2HeaderError::Io)?.len();
+
+    // Header prefix: magic (0..4) through l1_table_offset (40..48).
+    let mut hdr = [0u8; 48];
+    file.read_exact(&mut hdr)
+        .map_err(|e| on_read(overlay_path, e, "header"))?;
+
+    let magic = u32::from_be_bytes(hdr[0..4].try_into().unwrap());
+    if magic != QCOW2_MAGIC {
+        return Err(Qcow2HeaderError::Corrupt(format!(
+            "Invalid qcow2 magic in {}: 0x{:08x}",
+            overlay_path.display(),
+            magic
+        )));
+    }
+
+    let cluster_bits = u32::from_be_bytes(hdr[20..24].try_into().unwrap());
+    let l1_size = u32::from_be_bytes(hdr[36..40].try_into().unwrap());
+    let l1_offset = u64::from_be_bytes(hdr[40..48].try_into().unwrap());
+
+    if !(9..=30).contains(&cluster_bits) {
+        return Err(Qcow2HeaderError::Corrupt(format!(
+            "qcow2 {} has an implausible cluster_bits {cluster_bits}",
+            overlay_path.display()
+        )));
+    }
+    let cluster_size = 1u64 << cluster_bits;
+
+    if l1_size == 0 || l1_offset == 0 {
+        // No mappings: every read falls through to the backing file. Nothing in
+        // the overlay can dangle.
+        return Ok(());
+    }
+
+    // Bound every allocation derived from the (untrusted) header against the real
+    // file length before allocating, so a corrupt header cannot force a multi-GB
+    // allocation during recovery. A cluster can't exceed the file, and the L1
+    // table must lie within it.
+    if cluster_size > file_len {
+        return Err(Qcow2HeaderError::Corrupt(format!(
+            "qcow2 {} declares a cluster size {cluster_size} larger than the file {file_len}",
+            overlay_path.display()
+        )));
+    }
+    match (l1_size as u64)
+        .checked_mul(8)
+        .and_then(|bytes| l1_offset.checked_add(bytes))
+    {
+        Some(l1_end) if l1_end <= file_len => {}
+        _ => {
+            return Err(Qcow2HeaderError::Corrupt(format!(
+                "qcow2 {} L1 table (offset {l1_offset}, {l1_size} entries) extends past the file end {file_len}",
+                overlay_path.display()
+            )));
+        }
+    }
+
+    // Read the L1 table in one shot, then resolve each present L2 table.
+    file.seek(SeekFrom::Start(l1_offset))
+        .map_err(Qcow2HeaderError::Io)?;
+    let mut l1_buf = vec![0u8; l1_size as usize * 8];
+    file.read_exact(&mut l1_buf)
+        .map_err(|e| on_read(overlay_path, e, "L1 table"))?;
+
+    let entries_per_l2 = (cluster_size / 8) as usize;
+    let mut l2_buf = vec![0u8; cluster_size as usize];
+    for l1_chunk in l1_buf.chunks_exact(8) {
+        let l2_table_offset = u64::from_be_bytes(l1_chunk.try_into().unwrap()) & QCOW2_OFFSET_MASK;
+        if l2_table_offset == 0 {
+            continue; // Whole 2 GiB region is unmapped — falls through to backing.
+        }
+        // The L2 table is itself a cluster; it must fit inside the file.
+        if l2_table_offset + cluster_size > file_len {
+            return Err(Qcow2HeaderError::Corrupt(format!(
+                "qcow2 {} references an L2 table at offset {l2_table_offset} past the file end {file_len}",
+                overlay_path.display()
+            )));
+        }
+        file.seek(SeekFrom::Start(l2_table_offset))
+            .map_err(Qcow2HeaderError::Io)?;
+        file.read_exact(&mut l2_buf)
+            .map_err(|e| on_read(overlay_path, e, "L2 table"))?;
+
+        for l2_chunk in l2_buf.chunks_exact(8).take(entries_per_l2) {
+            let l2_entry = u64::from_be_bytes(l2_chunk.try_into().unwrap());
+            // Bit 62: compressed cluster — never produced by a boxlite COW
+            // overlay, and its offset is encoded differently, so treat it as
+            // structural damage rather than risk a bogus bounds check. Checked
+            // before the hole fast-path: a bare `1 << 62` masks to offset 0 and
+            // would otherwise be skipped as a hole, never reaching this check.
+            if l2_entry & (1 << 62) != 0 {
+                return Err(Qcow2HeaderError::Corrupt(format!(
+                    "qcow2 {} uses an unexpected compressed cluster",
+                    overlay_path.display()
+                )));
+            }
+            let data_offset = l2_entry & QCOW2_OFFSET_MASK;
+            if data_offset == 0 {
+                continue; // Hole within a mapped L2 table — falls through to backing.
+            }
+            if data_offset + cluster_size > file_len {
+                return Err(Qcow2HeaderError::Corrupt(format!(
+                    "qcow2 {} references a data cluster at offset {data_offset} past the file end {file_len} (torn overlay)",
+                    overlay_path.display()
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Overwrite the backing file path in a qcow2 header.
 ///
 /// Updates the backing file reference to point at `new_backing`. The file at
@@ -1854,6 +2002,142 @@ mod tests {
             err.contains("compressed"),
             "error should mention compressed clusters, got: {}",
             err
+        );
+    }
+
+    // ── probe_overlay_cluster_integrity tests ──────────────────────────
+
+    /// Craft a minimal qcow2 v3 overlay whose single L1→L2 mapping points virtual
+    /// cluster 0 at `data_cluster_offset`. The caller decides whether that offset
+    /// lands inside the file (intact) or at/past its end (torn), reproducing the
+    /// prod tear where an L2 entry survives but its data cluster was never written.
+    ///
+    /// Layout (cluster N = N << CLUSTER_BITS): cluster 0 = header, cluster 1 = L1
+    /// table, cluster 2 = L2 table. The COPIED flag (bit 63) is set on both table
+    /// entries for realism; it lies outside `QCOW2_OFFSET_MASK` and is ignored.
+    fn write_overlay_with_data_offset(path: &Path, file_clusters: u64, data_cluster_offset: u64) {
+        let cluster_size = 1u64 << CLUSTER_BITS;
+        let mut buf = vec![0u8; (file_clusters * cluster_size) as usize];
+
+        buf[0..4].copy_from_slice(&QCOW2_MAGIC.to_be_bytes());
+        buf[4..8].copy_from_slice(&3u32.to_be_bytes()); // version 3
+        buf[20..24].copy_from_slice(&(CLUSTER_BITS as u32).to_be_bytes());
+        buf[24..32].copy_from_slice(&cluster_size.to_be_bytes()); // virtual size = 1 cluster
+        buf[36..40].copy_from_slice(&1u32.to_be_bytes()); // l1_size = 1
+
+        let l1_offset = cluster_size; // cluster 1
+        buf[40..48].copy_from_slice(&l1_offset.to_be_bytes());
+
+        let l2_offset = 2 * cluster_size; // cluster 2
+        const COPIED: u64 = 1 << 63;
+        buf[l1_offset as usize..l1_offset as usize + 8]
+            .copy_from_slice(&(l2_offset | COPIED).to_be_bytes());
+        buf[l2_offset as usize..l2_offset as usize + 8]
+            .copy_from_slice(&(data_cluster_offset | COPIED).to_be_bytes());
+
+        std::fs::write(path, &buf).unwrap();
+    }
+
+    #[test]
+    fn test_probe_overlay_cluster_integrity_accepts_intact_overlay() {
+        let dir = TempDir::new().unwrap();
+        let cluster_size = 1u64 << CLUSTER_BITS;
+        let path = dir.path().join("intact.qcow2");
+        // 4 clusters: header, L1, L2, data. The data cluster (cluster 3) fits
+        // wholly inside the file: 3*cs + cs == 4*cs == file_len.
+        write_overlay_with_data_offset(&path, 4, 3 * cluster_size);
+        probe_overlay_cluster_integrity(&path).expect("intact overlay must pass");
+    }
+
+    #[test]
+    fn test_probe_overlay_cluster_integrity_flags_torn_overlay() {
+        let dir = TempDir::new().unwrap();
+        let cluster_size = 1u64 << CLUSTER_BITS;
+        let path = dir.path().join("torn.qcow2");
+        // The file is 4 clusters long, but L2 maps virtual cluster 0 to a host
+        // offset == file end — the exact prod tear (mapping persisted, data
+        // cluster never allocated / file never extended). libkrun would serve
+        // zeros for this cluster, yielding the EBADMSG mount failure.
+        let file_len = 4 * cluster_size;
+        write_overlay_with_data_offset(&path, 4, file_len);
+        let err = probe_overlay_cluster_integrity(&path).unwrap_err();
+        assert!(
+            matches!(err, Qcow2HeaderError::Corrupt(_)),
+            "torn overlay must be Corrupt, got {err:?}"
+        );
+        assert!(
+            format!("{err}").contains("past the file end"),
+            "error should name the out-of-bounds cluster, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_probe_overlay_cluster_integrity_skips_unmapped_overlay() {
+        // An overlay with no L1 mappings (l1_size == 0) reads entirely from its
+        // backing file; there is nothing in the overlay that can dangle.
+        let dir = TempDir::new().unwrap();
+        let cluster_size = 1u64 << CLUSTER_BITS;
+        let path = dir.path().join("empty.qcow2");
+        let mut buf = vec![0u8; cluster_size as usize];
+        buf[0..4].copy_from_slice(&QCOW2_MAGIC.to_be_bytes());
+        buf[4..8].copy_from_slice(&3u32.to_be_bytes());
+        buf[20..24].copy_from_slice(&(CLUSTER_BITS as u32).to_be_bytes());
+        // l1_size (36..40) and l1_table_offset (40..48) stay 0 → no mappings.
+        std::fs::write(&path, &buf).unwrap();
+        probe_overlay_cluster_integrity(&path).expect("unmapped overlay must pass");
+    }
+
+    #[test]
+    fn test_probe_overlay_cluster_integrity_rejects_compressed_zero_offset_entry() {
+        // An L2 entry of exactly `1 << 62` sets the compressed flag with a zero
+        // host offset. It must be rejected as corrupt, not silently skipped by the
+        // `data_offset == 0` hole fast-path (which would let `1 << 62` slip through
+        // before the compressed check). Guards the check-ordering in the probe.
+        let dir = TempDir::new().unwrap();
+        let cluster_size = 1u64 << CLUSTER_BITS;
+        let path = dir.path().join("compressed.qcow2");
+        // header, L1, L2 — 3 clusters; L2[0] = bare compressed marker.
+        let mut buf = vec![0u8; (3 * cluster_size) as usize];
+        buf[0..4].copy_from_slice(&QCOW2_MAGIC.to_be_bytes());
+        buf[4..8].copy_from_slice(&3u32.to_be_bytes());
+        buf[20..24].copy_from_slice(&(CLUSTER_BITS as u32).to_be_bytes());
+        buf[36..40].copy_from_slice(&1u32.to_be_bytes()); // l1_size = 1
+        let l1_offset = cluster_size;
+        buf[40..48].copy_from_slice(&l1_offset.to_be_bytes());
+        let l2_offset = 2 * cluster_size;
+        const COPIED: u64 = 1 << 63;
+        buf[l1_offset as usize..l1_offset as usize + 8]
+            .copy_from_slice(&(l2_offset | COPIED).to_be_bytes());
+        buf[l2_offset as usize..l2_offset as usize + 8]
+            .copy_from_slice(&(1u64 << 62).to_be_bytes()); // compressed flag, offset 0
+        std::fs::write(&path, &buf).unwrap();
+        let err = probe_overlay_cluster_integrity(&path).unwrap_err();
+        assert!(
+            matches!(err, Qcow2HeaderError::Corrupt(_)) && format!("{err}").contains("compressed"),
+            "compressed zero-offset entry must be Corrupt, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_probe_overlay_cluster_integrity_rejects_oversized_l1_without_allocating() {
+        // A corrupt header claiming a 32 GiB L1 table must be classified Corrupt
+        // from the file length *before* allocating — otherwise the probe would
+        // try to `vec![0u8; u32::MAX * 8]` and OOM the process during recovery.
+        let dir = TempDir::new().unwrap();
+        let cluster_size = 1u64 << CLUSTER_BITS;
+        let path = dir.path().join("huge_l1.qcow2");
+        let mut buf = vec![0u8; (2 * cluster_size) as usize];
+        buf[0..4].copy_from_slice(&QCOW2_MAGIC.to_be_bytes());
+        buf[4..8].copy_from_slice(&3u32.to_be_bytes());
+        buf[20..24].copy_from_slice(&(CLUSTER_BITS as u32).to_be_bytes());
+        buf[36..40].copy_from_slice(&u32::MAX.to_be_bytes()); // l1_size = 4G entries
+        buf[40..48].copy_from_slice(&cluster_size.to_be_bytes()); // l1_offset = cluster 1
+        std::fs::write(&path, &buf).unwrap();
+        let err = probe_overlay_cluster_integrity(&path).unwrap_err();
+        assert!(
+            matches!(err, Qcow2HeaderError::Corrupt(_))
+                && format!("{err}").contains("past the file end"),
+            "oversized L1 must be Corrupt, got {err:?}"
         );
     }
 }

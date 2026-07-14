@@ -181,7 +181,12 @@ fn validate_reusable_guest_rootfs_disk(guest_rootfs_disk_path: &Path) -> Boxlite
             guest_rootfs_disk_path.display(),
             backing
         ))),
-        Ok(_) => Ok(true),
+        // Header and backing chain are intact, but a clean header does not prove
+        // the *contents* survived. A host crash can tear the overlay's in-flight
+        // writes (e.g. the ext4 journal), leaving an unmountable filesystem behind
+        // a perfectly valid qcow2 header — so the box would fail to boot forever on
+        // every restart. Probe the assembled guest filesystem before reusing it.
+        Ok(_) => validate_reusable_guest_rootfs_contents(guest_rootfs_disk_path),
         // Structurally corrupt overlay: its data is already unreadable, so discard
         // it and recreate a fresh COW from the shared cache.
         Err(Qcow2HeaderError::Corrupt(reason)) => {
@@ -205,6 +210,48 @@ fn validate_reusable_guest_rootfs_disk(guest_rootfs_disk_path: &Path) -> Boxlite
         Err(Qcow2HeaderError::Io(io)) => Err(BoxliteError::Storage(format!(
             "Cannot read guest rootfs {} to validate its backing chain (I/O error: {io}); \
              refusing to discard a possibly-intact overlay",
+            guest_rootfs_disk_path.display()
+        ))),
+    }
+}
+
+/// Probe the per-box guest rootfs overlay and decide whether it can be reused.
+///
+/// Returns `Ok(true)` to reuse, `Ok(false)` to discard + recreate a fresh overlay
+/// from the shared base, or `Err` when reuse must be refused without deleting
+/// anything (a transient I/O fault).
+fn validate_reusable_guest_rootfs_contents(guest_rootfs_disk_path: &Path) -> BoxliteResult<bool> {
+    use crate::disk::qcow2::Qcow2HeaderError;
+
+    let discard = |reason: &str| -> BoxliteResult<bool> {
+        tracing::warn!(
+            disk_path = %guest_rootfs_disk_path.display(),
+            reason = %reason,
+            "Discarding guest rootfs COW overlay with unreadable contents and recreating from cache"
+        );
+        std::fs::remove_file(guest_rootfs_disk_path).map_err(|remove_err| {
+            BoxliteError::Storage(format!(
+                "Failed to remove corrupt guest rootfs {} ({}): {}",
+                guest_rootfs_disk_path.display(),
+                reason,
+                remove_err
+            ))
+        })?;
+        Ok(false)
+    };
+
+    // A structural self-consistency check of the overlay itself: every cluster
+    // its L1/L2 tables reference must physically exist in the file. A crash can
+    // persist an L2 mapping whose data cluster was never written, leaving a
+    // dangling reference past the file's end. libkrun reads that as zeros, so
+    // the guest kernel fails the mount with EBADMSG on every restart. A dangling
+    // cluster is purely overlay damage, so discard + rebuild.
+    match crate::disk::qcow2::probe_overlay_cluster_integrity(guest_rootfs_disk_path) {
+        Ok(()) => Ok(true),
+        Err(Qcow2HeaderError::Corrupt(reason)) => discard(&reason),
+        Err(Qcow2HeaderError::Io(io)) => Err(BoxliteError::Storage(format!(
+            "Cannot read guest rootfs {} to validate overlay cluster integrity \
+             (I/O error: {io}); refusing to discard a possibly-intact overlay",
             guest_rootfs_disk_path.display()
         ))),
     }
@@ -280,10 +327,9 @@ mod tests {
 
     fn create_base_disk(dir: &TempDir) -> std::path::PathBuf {
         let base_disk_path = dir.path().join("guest-rootfs-base.ext4");
-        File::create(&base_disk_path)
-            .unwrap()
-            .set_len(1024 * 1024)
-            .unwrap();
+        let file = File::create(&base_disk_path).unwrap();
+        file.set_len(1024 * 1024).unwrap();
+        file.sync_all().unwrap();
         base_disk_path
     }
 
