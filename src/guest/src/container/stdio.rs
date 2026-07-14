@@ -37,6 +37,7 @@ use nix::unistd::pipe;
 use std::io::Read;
 use std::os::unix::io::OwnedFd;
 use std::sync::{Arc, Mutex};
+use tokio::sync::oneshot;
 
 const MAX_CAPTURE: usize = 4096;
 const DRAIN_BUFFER_SIZE: usize = 8192;
@@ -85,17 +86,34 @@ pub struct InitStdioFds {
     pub stderr: OwnedFd,
 }
 
+pub(crate) struct InitOutputCompletion {
+    stdout: oneshot::Receiver<Result<(), String>>,
+    stderr: oneshot::Receiver<Result<(), String>>,
+}
+
+impl InitOutputCompletion {
+    pub(crate) async fn wait(self) -> Result<(), String> {
+        let (stdout, stderr) = tokio::join!(self.stdout, self.stderr);
+        stdout
+            .map_err(|_| "init stdout drain stopped before reporting completion".to_string())??;
+        stderr
+            .map_err(|_| "init stderr drain stopped before reporting completion".to_string())??;
+        Ok(())
+    }
+}
+
 impl ContainerStdio {
     /// Create new stdio pipes for container init.
     ///
-    /// Returns `(ContainerStdio, InitStdioFds)` where:
+    /// Returns `(ContainerStdio, InitStdioFds, InitOutputCompletion)` where:
     /// - `ContainerStdio`: held by boxlite-guest to keep init alive
     /// - `InitStdioFds`: passed to libcontainer for init process
+    /// - `InitOutputCompletion`: resolves when stdout and stderr reach EOF
     ///
     /// # Errors
     ///
     /// Returns error if pipe creation fails.
-    pub fn new() -> BoxliteResult<(Self, InitStdioFds)> {
+    pub fn new() -> BoxliteResult<(Self, InitStdioFds, InitOutputCompletion)> {
         // Create stdin pipe: init reads from rx, we hold tx open
         let (stdin_rx, stdin_tx) = pipe()
             .map_err(|e| BoxliteError::Internal(format!("Failed to create stdin pipe: {}", e)))?;
@@ -111,8 +129,10 @@ impl ContainerStdio {
         let stdout_tail = Arc::new(Mutex::new(Vec::with_capacity(MAX_CAPTURE)));
         let stderr_tail = Arc::new(Mutex::new(Vec::with_capacity(MAX_CAPTURE)));
 
-        spawn_output_drain("boxlite-init-stdout", stdout_rx, stdout_tail.clone())?;
-        spawn_output_drain("boxlite-init-stderr", stderr_rx, stderr_tail.clone())?;
+        let stdout_complete =
+            spawn_output_drain("boxlite-init-stdout", stdout_rx, stdout_tail.clone())?;
+        let stderr_complete =
+            spawn_output_drain("boxlite-init-stderr", stderr_rx, stderr_tail.clone())?;
 
         let container_stdio = Self {
             stdin_tx,
@@ -128,7 +148,14 @@ impl ContainerStdio {
 
         tracing::debug!("Created container stdio pipes");
 
-        Ok((container_stdio, init_fds))
+        Ok((
+            container_stdio,
+            init_fds,
+            InitOutputCompletion {
+                stdout: stdout_complete,
+                stderr: stderr_complete,
+            },
+        ))
     }
 
     /// Return the bounded output tail retained by the background drains.
@@ -144,23 +171,30 @@ impl ContainerStdio {
     }
 }
 
-fn spawn_output_drain(name: &str, fd: OwnedFd, tail: Arc<Mutex<Vec<u8>>>) -> BoxliteResult<()> {
+fn spawn_output_drain(
+    name: &str,
+    fd: OwnedFd,
+    tail: Arc<Mutex<Vec<u8>>>,
+) -> BoxliteResult<oneshot::Receiver<Result<(), String>>> {
+    let (complete_tx, complete_rx) = oneshot::channel();
     std::thread::Builder::new()
         .name(name.to_string())
-        .spawn(move || drain_fd(fd, tail))
-        .map(|_| ())
+        .spawn(move || {
+            let _ = complete_tx.send(drain_fd(fd, tail));
+        })
+        .map(|_| complete_rx)
         .map_err(|error| {
             BoxliteError::Internal(format!("Failed to start init output drain: {error}"))
         })
 }
 
-fn drain_fd(fd: OwnedFd, tail: Arc<Mutex<Vec<u8>>>) {
+fn drain_fd(fd: OwnedFd, tail: Arc<Mutex<Vec<u8>>>) -> Result<(), String> {
     let mut file = std::fs::File::from(fd);
     let mut buffer = [0; DRAIN_BUFFER_SIZE];
 
     loop {
         match file.read(&mut buffer) {
-            Ok(0) => break,
+            Ok(0) => return Ok(()),
             Ok(bytes_read) => {
                 let mut captured = tail.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 append_tail(&mut captured, &buffer[..bytes_read]);
@@ -168,7 +202,7 @@ fn drain_fd(fd: OwnedFd, tail: Arc<Mutex<Vec<u8>>>) {
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(error) => {
                 tracing::warn!(%error, "Init output drain stopped");
-                break;
+                return Err(error.to_string());
             }
         }
     }
@@ -229,7 +263,7 @@ mod tests {
         let result = ContainerStdio::new();
         assert!(result.is_ok());
 
-        let (stdio, init_fds) = result.unwrap();
+        let (stdio, init_fds, _) = result.unwrap();
 
         assert!(stdio.stdin_tx.as_raw_fd() >= 0);
         assert!(init_fds.stdin.as_raw_fd() >= 0);
@@ -251,7 +285,7 @@ mod tests {
 
     #[test]
     fn test_drain_output_captures_data() {
-        let (stdio, init_fds) = ContainerStdio::new().unwrap();
+        let (stdio, init_fds, _) = ContainerStdio::new().unwrap();
 
         let mut stdout_writer = std::fs::File::from(init_fds.stdout);
         let mut stderr_writer = std::fs::File::from(init_fds.stderr);
@@ -267,7 +301,7 @@ mod tests {
 
     #[test]
     fn test_drain_output_returns_current_tail() {
-        let (stdio, init_fds) = ContainerStdio::new().unwrap();
+        let (stdio, init_fds, _) = ContainerStdio::new().unwrap();
 
         let mut stdout_writer = std::fs::File::from(init_fds.stdout);
         stdout_writer.write_all(b"data").unwrap();
@@ -283,7 +317,7 @@ mod tests {
 
     #[test]
     fn test_drain_output_does_not_wait_for_open_writer() {
-        let (stdio, init_fds) = ContainerStdio::new().unwrap();
+        let (stdio, init_fds, _) = ContainerStdio::new().unwrap();
         let stdout_writer = std::fs::File::from(init_fds.stdout);
         drop(init_fds.stderr);
 
@@ -301,7 +335,7 @@ mod tests {
 
     #[test]
     fn test_drain_output_keeps_large_writers_unblocked() {
-        let (stdio, init_fds) = ContainerStdio::new().unwrap();
+        let (stdio, init_fds, _) = ContainerStdio::new().unwrap();
         let mut output = vec![b'x'; 1024 * 1024];
         output.extend_from_slice(b"tail-marker");
         drop(init_fds.stderr);
@@ -334,5 +368,25 @@ mod tests {
             );
             thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn test_output_completion_waits_for_both_pipes_to_reach_eof() {
+        let (_stdio, init_fds, completion) = ContainerStdio::new().unwrap();
+        let stdout_writer = std::fs::File::from(init_fds.stdout);
+        drop(init_fds.stderr);
+
+        let (result_tx, result_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            let _ = result_tx.send(runtime.block_on(completion.wait()));
+        });
+
+        assert!(result_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        drop(stdout_writer);
+        assert_eq!(
+            result_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Ok(())
+        );
     }
 }

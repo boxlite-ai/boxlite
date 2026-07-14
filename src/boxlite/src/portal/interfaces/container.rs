@@ -99,6 +99,7 @@ impl ContainerInterface {
         rootfs: ContainerRootfsInitConfig,
         mounts: Vec<ContainerMount>,
         ca_certs: Vec<String>,
+        lifecycle_generation: u64,
     ) -> BoxliteResult<String> {
         let proto_config = ProtoContainerConfig {
             entrypoint: image_config.final_cmd(),
@@ -140,6 +141,7 @@ impl ContainerInterface {
             rootfs: Some(rootfs.into_proto()),
             mounts: proto_mounts,
             ca_certs: ca_certs.into_iter().map(|pem| CaCert { pem }).collect(),
+            lifecycle_generation,
         };
 
         let response = self.client.init(request).await?.into_inner();

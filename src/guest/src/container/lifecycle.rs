@@ -5,7 +5,8 @@
 
 use super::command::ContainerCommand;
 use super::spec::UserMount;
-use super::stdio::ContainerStdio;
+use super::stdio::{ContainerStdio, InitOutputCompletion, InitStdioFds};
+use super::zygote::{self, InitSpec};
 use super::{kill, spec, start};
 use crate::layout::GuestLayout;
 use crate::service::exec::InitHealthCheck;
@@ -13,6 +14,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use libcontainer::container::Container as LibContainer;
 use libcontainer::signal::Signal;
 use std::collections::HashMap;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
 /// OCI container
@@ -55,6 +57,12 @@ pub struct Container {
     is_shutdown: std::sync::atomic::AtomicBool,
 }
 
+pub(crate) struct StartedContainer {
+    pub container: Container,
+    pub init_pid: nix::unistd::Pid,
+    pub output_completion: InitOutputCompletion,
+}
+
 impl Container {
     /// Create and start an OCI container
     ///
@@ -80,8 +88,7 @@ impl Container {
     /// - Empty rootfs or entrypoint
     /// - Failed to create container directory
     /// - Failed to create or start container
-    /// - Init process exited immediately
-    pub fn start(
+    pub async fn start(
         container_id: &str,
         rootfs: impl AsRef<Path>,
         entrypoint: Vec<String>,
@@ -89,7 +96,7 @@ impl Container {
         workdir: impl AsRef<Path>,
         user: &str,
         user_mounts: Vec<UserMount>,
-    ) -> BoxliteResult<Self> {
+    ) -> BoxliteResult<StartedContainer> {
         let rootfs = rootfs.as_ref();
         let workdir = workdir.as_ref();
 
@@ -167,20 +174,29 @@ impl Container {
 
         // Create stdio pipes before container creation.
         // These keep the init process alive by holding stdin open.
-        let (stdio, init_fds) = ContainerStdio::new()?;
+        let (stdio, init_fds, output_completion) = ContainerStdio::new()?;
 
-        // Create and start container with custom stdio
-        start::create_container_with_stdio(container_id, &state_root, &bundle_path, init_fds)?;
-        start::start_container(container_id, &state_root)?;
+        create_init_via_zygote(
+            container_id,
+            state_root.clone(),
+            bundle_path.clone(),
+            init_fds,
+        )
+        .await?;
+        let init_pid = start::start_container(container_id, &state_root)?;
 
-        Ok(Self {
-            id: container_id.to_string(),
-            state_root,
-            bundle_path,
-            env: env_map,
-            user: (uid, gid),
-            stdio,
-            is_shutdown: std::sync::atomic::AtomicBool::new(false),
+        Ok(StartedContainer {
+            container: Self {
+                id: container_id.to_string(),
+                state_root,
+                bundle_path,
+                env: env_map,
+                user: (uid, gid),
+                stdio,
+                is_shutdown: std::sync::atomic::AtomicBool::new(false),
+            },
+            init_pid,
+            output_completion,
         })
     }
 
@@ -423,6 +439,35 @@ impl Container {
     fn container_state_path(&self) -> PathBuf {
         self.state_root.join(&self.id)
     }
+}
+
+async fn create_init_via_zygote(
+    container_id: &str,
+    state_root: PathBuf,
+    bundle_path: PathBuf,
+    init_fds: InitStdioFds,
+) -> BoxliteResult<()> {
+    let spec = InitSpec {
+        container_id: container_id.to_string(),
+        state_root,
+        bundle_path,
+    };
+
+    tokio::task::spawn_blocking(move || {
+        let raw_fds = [
+            init_fds.stdin.as_raw_fd(),
+            init_fds.stdout.as_raw_fd(),
+            init_fds.stderr.as_raw_fd(),
+        ];
+        let result = zygote::ZYGOTE
+            .get()
+            .expect("zygote not started")
+            .build_init(spec, raw_fds);
+        drop(init_fds);
+        result
+    })
+    .await
+    .map_err(|error| BoxliteError::Internal(format!("init build join error: {error}")))?
 }
 
 // ====================

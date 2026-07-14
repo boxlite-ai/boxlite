@@ -74,6 +74,8 @@ mod start;
 #[cfg(target_os = "linux")]
 mod stdio;
 #[cfg(target_os = "linux")]
+mod supervisor;
+#[cfg(target_os = "linux")]
 pub(crate) mod zygote;
 
 #[cfg(target_os = "linux")]
@@ -82,3 +84,5 @@ pub(crate) use command::SpawnResult;
 pub use lifecycle::Container;
 #[cfg(target_os = "linux")]
 pub use spec::UserMount;
+#[cfg(target_os = "linux")]
+pub(crate) use supervisor::{InitSupervisor, InitTerminal};

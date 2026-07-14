@@ -7,14 +7,16 @@ use std::path::Path;
 
 use crate::service::server::GuestServer;
 use boxlite_shared::{
-    container_init_response, rootfs_init, Container as ContainerService, ContainerInitError,
-    ContainerInitRequest, ContainerInitResponse, ContainerInitSuccess, Filesystem, RootfsInit,
+    container_exited, container_init_response, container_wait_response, rootfs_init,
+    Container as ContainerService, ContainerExited, ContainerInitError, ContainerInitRequest,
+    ContainerInitResponse, ContainerInitSuccess, ContainerWaitFailed, ContainerWaitRequest,
+    ContainerWaitResponse, Filesystem, RootfsInit,
 };
 use nix::mount::{mount, MsFlags};
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
 
-use crate::container::{Container, UserMount};
+use crate::container::{Container, InitSupervisor, InitTerminal, UserMount};
 use crate::layout::GuestLayout;
 use crate::storage::block_device::BlockDeviceMount;
 
@@ -119,20 +121,61 @@ impl ContainerService for GuestServer {
             }
         }
 
-        // Extract container config
-        let config = init_req
-            .container_config
-            .ok_or_else(|| Status::invalid_argument("Missing container_config in Init request"))?;
+        let lifecycle_generation = init_req.lifecycle_generation;
+        let supervisor = {
+            let mut supervisors = self.init_supervisors.lock().await;
+            match supervisors.get(&container_id) {
+                Some(existing) if !existing.matches_generation(lifecycle_generation) => {
+                    return Ok(Response::new(ContainerInitResponse {
+                        result: Some(container_init_response::Result::Error(ContainerInitError {
+                            reason:
+                                "Container init already exists for another lifecycle generation"
+                                    .to_string(),
+                        })),
+                    }));
+                }
+                Some(_) => {
+                    return Ok(Response::new(ContainerInitResponse {
+                        result: Some(container_init_response::Result::Error(ContainerInitError {
+                            reason: "Container init is already in progress".to_string(),
+                        })),
+                    }));
+                }
+                None => {
+                    let supervisor = InitSupervisor::new(lifecycle_generation);
+                    supervisors.insert(container_id.clone(), supervisor.clone());
+                    supervisor
+                }
+            }
+        };
 
-        // Validate configuration
+        let config = match init_req.container_config {
+            Some(config) => config,
+            None => {
+                return Ok(Response::new(init_error(
+                    &supervisor,
+                    "Missing container_config in Init request".to_string(),
+                )));
+            }
+        };
+
         if config.entrypoint.is_empty() {
             error!("Invalid container config: entrypoint cannot be empty");
-            return Ok(Response::new(ContainerInitResponse {
-                result: Some(container_init_response::Result::Error(ContainerInitError {
-                    reason: "Invalid container config: entrypoint cannot be empty".to_string(),
-                })),
-            }));
+            return Ok(Response::new(init_error(
+                &supervisor,
+                "Invalid container config: entrypoint cannot be empty".to_string(),
+            )));
         }
+
+        let rootfs_init = match init_req.rootfs {
+            Some(rootfs_init) => rootfs_init,
+            None => {
+                return Ok(Response::new(init_error(
+                    &supervisor,
+                    "Missing rootfs in Container.Init request".to_string(),
+                )));
+            }
+        };
 
         info!("🚀 Starting OCI container with received configuration");
 
@@ -148,27 +191,18 @@ impl ContainerService for GuestServer {
         // Create bundle rootfs directory
         if let Err(e) = std::fs::create_dir_all(&bundle_rootfs) {
             error!("Failed to create bundle rootfs directory: {}", e);
-            return Ok(Response::new(ContainerInitResponse {
-                result: Some(container_init_response::Result::Error(ContainerInitError {
-                    reason: format!("Failed to create bundle rootfs directory: {}", e),
-                })),
-            }));
+            return Ok(Response::new(init_error(
+                &supervisor,
+                format!("Failed to create bundle rootfs directory: {}", e),
+            )));
         }
 
         // Handle rootfs initialization based on strategy
-        let rootfs_init = init_req
-            .rootfs
-            .ok_or_else(|| Status::invalid_argument("Missing rootfs in Container.Init request"))?;
-
         if let Err(reason) =
             prepare_rootfs(&rootfs_init, &container_id, &shared_rootfs, &self.layout)
         {
             error!("{}", reason);
-            return Ok(Response::new(ContainerInitResponse {
-                result: Some(container_init_response::Result::Error(ContainerInitError {
-                    reason,
-                })),
-            }));
+            return Ok(Response::new(init_error(&supervisor, reason)));
         }
 
         // Bind mount shared rootfs to bundle rootfs
@@ -180,11 +214,10 @@ impl ContainerService for GuestServer {
             None::<&str>,
         ) {
             error!("Failed to bind mount rootfs: {}", e);
-            return Ok(Response::new(ContainerInitResponse {
-                result: Some(container_init_response::Result::Error(ContainerInitError {
-                    reason: format!("Failed to bind mount rootfs: {}", e),
-                })),
-            }));
+            return Ok(Response::new(init_error(
+                &supervisor,
+                format!("Failed to bind mount rootfs: {}", e),
+            )));
         }
 
         // Install CA certs into container trust store (from gRPC CACert field).
@@ -261,39 +294,20 @@ impl ContainerService for GuestServer {
             &config.workdir,
             &config.user,
             user_mounts,
-        ) {
-            Ok(mut container) => {
-                debug!(container_id = %container_id, "Container started, checking if init process is running");
-                // Verify container init process is running
-                if !container.is_running() {
-                    // Gather diagnostic information (includes init stdout/stderr)
-                    let diagnostics = container.diagnose_exit();
-
-                    error!(
-                        "Container init process exited immediately after start. Diagnostics: {}",
-                        diagnostics
-                    );
-
-                    return Ok(Response::new(ContainerInitResponse {
-                        result: Some(container_init_response::Result::Error(ContainerInitError {
-                            reason: format!(
-                                "Container init process exited immediately. {}",
-                                diagnostics
-                            ),
-                        })),
-                    }));
-                }
-
+        )
+        .await
+        {
+            Ok(started) => {
                 info!(
                     container_id = %container_id,
-                    "✅ Container started successfully and ready for exec"
+                    "Container init started"
                 );
 
-                // Store container in registry
                 self.containers.lock().await.insert(
                     container_id.clone(),
-                    std::sync::Arc::new(tokio::sync::Mutex::new(container)),
+                    std::sync::Arc::new(tokio::sync::Mutex::new(started.container)),
                 );
+                supervisor.supervise(started.init_pid, started.output_completion);
 
                 Ok(Response::new(ContainerInitResponse {
                     result: Some(container_init_response::Result::Success(
@@ -303,12 +317,64 @@ impl ContainerService for GuestServer {
             }
             Err(e) => {
                 error!("Failed to start container: {}", e);
-                Ok(Response::new(ContainerInitResponse {
-                    result: Some(container_init_response::Result::Error(ContainerInitError {
-                        reason: format!("Failed to start container: {}", e),
-                    })),
-                }))
+                Ok(Response::new(init_error(
+                    &supervisor,
+                    format!("Failed to start container: {}", e),
+                )))
             }
         }
+    }
+
+    async fn wait(
+        &self,
+        request: Request<ContainerWaitRequest>,
+    ) -> Result<Response<ContainerWaitResponse>, Status> {
+        let request = request.into_inner();
+        if request.container_id.is_empty() {
+            return Err(Status::invalid_argument("missing container_id"));
+        }
+
+        let supervisor = self
+            .init_supervisors
+            .lock()
+            .await
+            .get(&request.container_id)
+            .cloned()
+            .ok_or_else(|| Status::unavailable("container init is not ready"))?;
+
+        if !supervisor.matches_generation(request.lifecycle_generation) {
+            return Err(Status::failed_precondition(
+                "container lifecycle generation does not match",
+            ));
+        }
+
+        let result = match supervisor.wait().await {
+            InitTerminal::Exited { code } => {
+                container_wait_response::Result::Exited(ContainerExited {
+                    cause: Some(container_exited::Cause::ExitCode(code)),
+                })
+            }
+            InitTerminal::Signaled { signal } => {
+                container_wait_response::Result::Exited(ContainerExited {
+                    cause: Some(container_exited::Cause::Signal(signal)),
+                })
+            }
+            InitTerminal::Failed { reason } => {
+                container_wait_response::Result::Failed(ContainerWaitFailed { reason })
+            }
+        };
+
+        Ok(Response::new(ContainerWaitResponse {
+            result: Some(result),
+        }))
+    }
+}
+
+fn init_error(supervisor: &InitSupervisor, reason: String) -> ContainerInitResponse {
+    supervisor.fail(reason.clone());
+    ContainerInitResponse {
+        result: Some(container_init_response::Result::Error(ContainerInitError {
+            reason,
+        })),
     }
 }

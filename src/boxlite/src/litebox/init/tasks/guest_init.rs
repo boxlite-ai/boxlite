@@ -32,6 +32,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             container_mounts,
             network_spec,
             ca_cert_pem,
+            lifecycle_generation,
         ) =
             {
                 let mut ctx = ctx.lock().await;
@@ -63,6 +64,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                     container_mounts,
                     network_spec,
                     ca_cert_pem,
+                    ctx.lifecycle_generation,
                 )
             };
 
@@ -75,6 +77,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             &container_mounts,
             &network_spec,
             ca_cert_pem.as_deref(),
+            lifecycle_generation,
         )
         .await
         .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
@@ -104,6 +107,7 @@ async fn run_guest_init(
     container_mounts: &[ContainerMount],
     network_spec: &NetworkSpec,
     ca_cert_pem: Option<&str>,
+    lifecycle_generation: u64,
 ) -> BoxliteResult<()> {
     let container_id_str = container_id.as_str();
 
@@ -141,6 +145,7 @@ async fn run_guest_init(
             rootfs_init.clone(),
             container_mounts.to_vec(),
             ca_certs,
+            lifecycle_generation,
         )
         .await?;
     tracing::info!(container_id = %returned_id, "Container initialized");

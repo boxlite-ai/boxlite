@@ -60,10 +60,23 @@ pub(crate) struct BuildSpec {
     pub gid: u32,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub(crate) struct InitSpec {
+    pub container_id: String,
+    pub state_root: PathBuf,
+    pub bundle_path: PathBuf,
+}
+
 /// Build outcome. Invalid states are unrepresentable.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub(crate) enum BuildResult {
     Spawned { pid: i32 },
+    Failed { error: String },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+enum InitBuildResult {
+    Built,
     Failed { error: String },
 }
 
@@ -93,6 +106,7 @@ pub(crate) enum WaitResult {
 enum ZygoteRequest {
     /// Build a new container process. May include SCM_RIGHTS fds for stdio pipes.
     Build(BuildSpec),
+    BuildInit(InitSpec),
     /// Wait for a container process to exit and return its exit status.
     /// The zygote must handle this because it's the parent of all container
     /// processes (they were created by clone3() inside the zygote).
@@ -106,6 +120,7 @@ enum ZygoteRequest {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 enum ZygoteResponse {
     Build(BuildResult),
+    BuildInit(InitBuildResult),
     Wait(WaitResult),
 }
 
@@ -163,6 +178,21 @@ impl Zygote {
         }
     }
 
+    pub fn build_init(&self, spec: InitSpec, fds: [RawFd; 3]) -> BoxliteResult<()> {
+        let sock = self.sock.lock().unwrap();
+        let fd = sock.as_raw_fd();
+        send_request(fd, &ZygoteRequest::BuildInit(spec), Some(fds))?;
+        match recv_response(fd)? {
+            ZygoteResponse::BuildInit(InitBuildResult::Built) => Ok(()),
+            ZygoteResponse::BuildInit(InitBuildResult::Failed { error }) => {
+                Err(BoxliteError::Internal(error))
+            }
+            other => Err(BoxliteError::Internal(format!(
+                "expected BuildInit response, got: {other:?}"
+            ))),
+        }
+    }
+
     /// Wait for a container process to exit. Returns exit status.
     ///
     /// Container processes are direct children of the zygote (created by
@@ -213,6 +243,13 @@ fn serve(sock: OwnedFd) -> ! {
                     std::process::exit(1);
                 }
             }
+            Ok((ZygoteRequest::BuildInit(spec), fds)) => {
+                let result = do_build_init(spec, fds);
+                if let Err(e) = send_response(fd, &ZygoteResponse::BuildInit(result)) {
+                    eprintln!("[zygote] send_response failed: {e}");
+                    std::process::exit(1);
+                }
+            }
             Ok((ZygoteRequest::Wait { pid }, _)) => {
                 let result = do_wait(pid);
                 if let Err(e) = send_response(fd, &ZygoteResponse::Wait(result)) {
@@ -227,6 +264,41 @@ fn serve(sock: OwnedFd) -> ! {
                 std::process::exit(0);
             }
         }
+    }
+}
+
+fn do_build_init(spec: InitSpec, fds: Option<[RawFd; 3]>) -> InitBuildResult {
+    let Some([stdin, stdout, stderr]) = fds else {
+        return InitBuildResult::Failed {
+            error: "init build missing stdio file descriptors".to_string(),
+        };
+    };
+
+    let result = (|| -> Result<(), String> {
+        // SAFETY: SCM_RIGHTS transferred exclusive ownership to the zygote.
+        let stdin = unsafe { OwnedFd::from_raw_fd(stdin) };
+        let stdout = unsafe { OwnedFd::from_raw_fd(stdout) };
+        let stderr = unsafe { OwnedFd::from_raw_fd(stderr) };
+
+        ContainerBuilder::new(spec.container_id.clone(), SyscallType::default())
+            .with_root_path(spec.state_root)
+            .map_err(|e| format!("Failed to set container root path: {e}"))?
+            .validate_id()
+            .map_err(|e| format!("Invalid container ID: {e}"))?
+            .with_stdin(stdin)
+            .with_stdout(stdout)
+            .with_stderr(stderr)
+            .as_init(&spec.bundle_path)
+            .with_systemd(false)
+            .with_detach(true)
+            .build()
+            .map_err(|e| format!("init build failed: {e}"))?;
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => InitBuildResult::Built,
+        Err(error) => InitBuildResult::Failed { error },
     }
 }
 
@@ -537,6 +609,14 @@ mod tests {
         };
         let json = serde_json::to_vec(&result).unwrap();
         let decoded: BuildResult = serde_json::from_slice(&json).unwrap();
+        assert_eq!(result, decoded);
+    }
+
+    #[test]
+    fn init_build_result_serde_roundtrip() {
+        let result = InitBuildResult::Built;
+        let json = serde_json::to_vec(&result).unwrap();
+        let decoded: InitBuildResult = serde_json::from_slice(&json).unwrap();
         assert_eq!(result, decoded);
     }
 

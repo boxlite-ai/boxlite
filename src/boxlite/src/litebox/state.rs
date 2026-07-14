@@ -217,6 +217,9 @@ pub struct BoxState {
     /// Serde default keeps existing DB rows readable without migration.
     #[serde(default)]
     pub error_reason: Option<String>,
+    /// Monotonic identity for each VM run.
+    #[serde(default)]
+    pub lifecycle_generation: u64,
 }
 
 /// Health status of a box.
@@ -315,7 +318,16 @@ impl BoxState {
             lock_id: None,
             health_status: HealthStatus::new(),
             error_reason: None,
+            lifecycle_generation: 0,
         }
+    }
+
+    pub fn advance_lifecycle_generation(&mut self) -> BoxliteResult<u64> {
+        self.lifecycle_generation = self
+            .lifecycle_generation
+            .checked_add(1)
+            .ok_or_else(|| BoxliteError::Internal("lifecycle generation overflow".to_string()))?;
+        Ok(self.lifecycle_generation)
     }
 
     /// Set lock ID and update timestamp.
@@ -990,5 +1002,22 @@ mod tests {
         assert_eq!(state.health_status.state, HealthState::None);
         assert_eq!(state.health_status.failures, 0);
         assert!(state.health_status.last_check.is_none());
+        assert_eq!(state.lifecycle_generation, 0);
+    }
+
+    #[test]
+    fn lifecycle_generation_advances_monotonically() {
+        let mut state = BoxState::new();
+
+        assert_eq!(state.advance_lifecycle_generation().unwrap(), 1);
+        assert_eq!(state.advance_lifecycle_generation().unwrap(), 2);
+    }
+
+    #[test]
+    fn lifecycle_generation_rejects_overflow() {
+        let mut state = BoxState::new();
+        state.lifecycle_generation = u64::MAX;
+
+        assert!(state.advance_lifecycle_generation().is_err());
     }
 }

@@ -287,6 +287,7 @@ pub struct InitPipelineContext {
     pub config: BoxConfig,
     pub runtime: SharedRuntimeImpl,
     pub guard: CleanupGuard,
+    pub lifecycle_generation: u64,
     pub reuse_rootfs: bool,
     /// Skip waiting for guest ready signal (for reattach to running box).
     pub skip_guest_wait: bool,
@@ -312,12 +313,14 @@ impl InitPipelineContext {
         runtime: SharedRuntimeImpl,
         reuse_rootfs: bool,
         skip_guest_wait: bool,
+        lifecycle_generation: u64,
     ) -> Self {
         let guard = CleanupGuard::new(runtime.clone(), config.id.clone());
         Self {
             config,
             runtime,
             guard,
+            lifecycle_generation,
             reuse_rootfs,
             skip_guest_wait,
             layout: None,

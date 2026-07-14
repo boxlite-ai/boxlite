@@ -1,4 +1,4 @@
-use crate::container::Container;
+use crate::container::{Container, InitSupervisor};
 use crate::layout::GuestLayout;
 use crate::service::exec::registry::ExecutionRegistry;
 use boxlite_shared::{BoxliteResult, Transport};
@@ -34,6 +34,8 @@ pub(crate) struct GuestServer {
     /// Container registry: container_id -> Container
     pub containers: Arc<Mutex<HashMap<String, Arc<Mutex<Container>>>>>,
 
+    pub init_supervisors: Arc<Mutex<HashMap<String, InitSupervisor>>>,
+
     /// Execution registry for tracking running executions
     pub registry: ExecutionRegistry,
 
@@ -51,6 +53,7 @@ impl GuestServer {
             layout,
             init_state: Arc::new(Mutex::new(GuestInitState::default())),
             containers: Arc::new(Mutex::new(HashMap::new())),
+            init_supervisors: Arc::new(Mutex::new(HashMap::new())),
             registry: ExecutionRegistry::new(),
             frozen_mounts: Mutex::new(Vec::new()),
         }

@@ -631,7 +631,7 @@ impl BoxImpl {
         use super::BoxBuilder;
         use std::sync::Arc;
 
-        let state = self.state.read().clone();
+        let mut state = self.state.read().clone();
         let is_first_start = state.status == BoxStatus::Configured;
 
         // Retrieve the lock (allocated in create())
@@ -652,6 +652,15 @@ impl BoxImpl {
         // Hold the lock for the duration of build operations.
         // LockGuard acquires lock on creation and releases on drop.
         let _guard = LockGuard::new(&*locker);
+
+        if state.status != BoxStatus::Running {
+            state.advance_lifecycle_generation()?;
+            let mut current_state = self.state.write();
+            current_state.lifecycle_generation = state.lifecycle_generation;
+            self.runtime
+                .box_manager
+                .save_box(&self.config.id, &current_state)?;
+        }
 
         // Build the box (lock is held)
         // The returned cleanup_guard stays armed until we disarm it after all
