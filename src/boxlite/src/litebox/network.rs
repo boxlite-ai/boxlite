@@ -51,9 +51,9 @@ pub struct BoxTunnel {
 }
 
 impl BoxTunnel {
-    pub(crate) fn new(endpoint: Option<String>, connector: TunnelConnector) -> Self {
+    pub(crate) fn new(endpoint: Option<BoxEndpoint>, connector: TunnelConnector) -> Self {
         Self {
-            endpoint: Arc::new(tokio::sync::Mutex::new(endpoint.map(BoxEndpoint::Url))),
+            endpoint: Arc::new(tokio::sync::Mutex::new(endpoint)),
             connector,
         }
     }
@@ -133,7 +133,9 @@ mod tests {
         async fn tunnel(&self, _target: SocketAddr) -> BoxliteResult<BoxTunnel> {
             let connected = Arc::clone(&self.connected);
             Ok(BoxTunnel::new(
-                Some("https://3000-box.proxy.example.test".to_string()),
+                Some(BoxEndpoint::Url(
+                    "https://3000-box.proxy.example.test".to_string(),
+                )),
                 Arc::new(move || {
                     let connected = Arc::clone(&connected);
                     Box::pin(async move {
