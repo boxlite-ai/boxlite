@@ -740,13 +740,6 @@ impl RuntimeImpl {
         }
     }
 
-    /// Build a [`VolumeStore`](crate::volumes::VolumeStore) over
-    /// `<home>/volumes`. The store is stateless (just the root path), so it is
-    /// constructed on demand rather than held as a field.
-    pub(crate) fn volume_store(&self) -> crate::volumes::VolumeStore {
-        crate::volumes::VolumeStore::new(self.layout.volumes_dir())
-    }
-
     /// Synchronous shutdown for atexit/Drop contexts.
     ///
     /// At atexit/Drop time, all `LiteBox` handles are gone (Weak refs dead),
@@ -1707,29 +1700,35 @@ impl super::images::ImageBackend for LocalRuntime {
     }
 }
 
-// Named-volume operations (separate from RuntimeBackend). Synchronous
-// filesystem calls over `<home>/volumes`; the store is stateless so we build
-// it on demand from the layout rather than holding one on RuntimeImpl.
+// Named-volume operations (separate from RuntimeBackend). The concrete backend
+// is not yet implemented: the local filesystem store was removed in favor of a
+// future managed volume backend, so every operation returns `Unsupported`.
 impl super::volumes::VolumeBackend for LocalRuntime {
     fn create_volume(
         &self,
-        name: &str,
-        size_gb: Option<u64>,
+        _name: &str,
+        _size_gb: Option<u64>,
     ) -> BoxliteResult<crate::volumes::VolumeInfo> {
-        self.0.volume_store().create(name, size_gb)
+        Err(volumes_unsupported())
     }
 
     fn list_volumes(&self) -> BoxliteResult<Vec<crate::volumes::VolumeInfo>> {
-        self.0.volume_store().list()
+        Err(volumes_unsupported())
     }
 
-    fn get_volume(&self, name: &str) -> BoxliteResult<crate::volumes::VolumeInfo> {
-        self.0.volume_store().get(name)
+    fn get_volume(&self, _name: &str) -> BoxliteResult<crate::volumes::VolumeInfo> {
+        Err(volumes_unsupported())
     }
 
-    fn remove_volume(&self, name: &str, force: bool) -> BoxliteResult<()> {
-        self.0.volume_store().remove(name, force)
+    fn remove_volume(&self, _name: &str, _force: bool) -> BoxliteResult<()> {
+        Err(volumes_unsupported())
     }
+}
+
+/// Error returned by every named-volume operation until a volume backend is
+/// wired up.
+fn volumes_unsupported() -> BoxliteError {
+    BoxliteError::Unsupported("named volumes are not supported yet".to_string())
 }
 
 // ============================================================================

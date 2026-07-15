@@ -13,9 +13,6 @@ pub mod dirs {
     /// Subdirectory for images layers
     pub const IMAGES_DIR: &str = "images";
 
-    /// Subdirectory for named local volumes
-    pub const VOLUMES_DIR: &str = "volumes";
-
     /// Subdirectory for individual layer storage
     pub const LAYERS_DIR: &str = "layers";
 
@@ -136,15 +133,6 @@ impl FilesystemLayout {
 
     pub fn images_dir(&self) -> PathBuf {
         self.home_dir.join(dirs::IMAGES_DIR)
-    }
-
-    /// Named-volume store root: `~/.boxlite/volumes`.
-    ///
-    /// Each managed local volume lives under `<volumes>/<name>/` with a
-    /// `_data` payload dir and a `meta.json` metadata file. See
-    /// [`crate::volumes::VolumeStore`].
-    pub fn volumes_dir(&self) -> PathBuf {
-        self.home_dir.join(dirs::VOLUMES_DIR)
     }
 
     pub fn logs_dir(&self) -> PathBuf {
@@ -946,18 +934,6 @@ mod tests {
         assert_eq!(
             layout.bases_dir(),
             PathBuf::from("/home/user/.boxlite/bases")
-        );
-    }
-
-    #[test]
-    fn test_volumes_dir() {
-        let layout = FilesystemLayout::new(
-            PathBuf::from("/home/user/.boxlite"),
-            FsLayoutConfig::without_bind_mount(),
-        );
-        assert_eq!(
-            layout.volumes_dir(),
-            PathBuf::from("/home/user/.boxlite/volumes")
         );
     }
 

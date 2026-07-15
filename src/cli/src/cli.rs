@@ -720,10 +720,10 @@ impl VolumeFlags {
             let spec = parse_volume_spec(s)?;
             let host_path = match spec.host_path {
                 // TODO(#942): when the host side of a `-v <src>:<guest>` spec is a
-                // bare name (not a path) that matches a named volume created via
-                // `boxlite volume create`, resolve it to
-                // `VolumeStore::get(name).mountpoint` here and bind that `_data`
-                // dir instead of treating the name as a literal host path.
+                // bare name (not a path) that matches a named volume, resolve it
+                // to the volume's mountpoint here (via the volume backend) and
+                // bind that payload dir instead of treating the name as a literal
+                // host path.
                 Some(host) => {
                     let mut path = host;
                     if std::path::Path::new(&path).is_relative() && !is_windows_absolute_path(&path)

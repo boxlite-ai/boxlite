@@ -3,7 +3,7 @@
 //! Provides:
 //! - `GuestVolumeManager` for virtiofs shares and block devices
 //! - `ContainerVolumeManager` for container bind mounts
-//! - `VolumeStore` for named local volumes (Docker `local` driver style)
+//! - `VolumeInfo` metadata for named volumes (backend not yet implemented)
 
 mod container_volume;
 mod guest_volume;
@@ -15,4 +15,4 @@ pub use container_volume::{ContainerMount, ContainerVolumeManager};
 pub use guest_volume::GuestVolumeManager;
 pub use share::{VolumeShare, classify_volume_share};
 pub use staging::stage_single_file;
-pub use store::{VolumeInfo, VolumeStore};
+pub use store::VolumeInfo;
