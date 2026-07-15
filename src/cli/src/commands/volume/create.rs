@@ -13,9 +13,9 @@ pub struct CreateArgs {
     pub size: Option<u64>,
 }
 
-pub fn run(args: CreateArgs, global: &GlobalFlags) -> anyhow::Result<()> {
+pub async fn run(args: CreateArgs, global: &GlobalFlags) -> anyhow::Result<()> {
     let rt = global.create_runtime()?;
-    let info = rt.volumes()?.create(&args.name, args.size)?;
+    let info = rt.volumes()?.create(&args.name, args.size).await?;
     // Docker prints the created volume's name on success.
     println!("{}", info.name);
     Ok(())

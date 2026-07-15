@@ -1703,8 +1703,9 @@ impl super::images::ImageBackend for LocalRuntime {
 // Named-volume operations (separate from RuntimeBackend). The concrete backend
 // is not yet implemented: the local filesystem store was removed in favor of a
 // future managed volume backend, so every operation returns `Unsupported`.
+#[async_trait::async_trait]
 impl super::volumes::VolumeBackend for LocalRuntime {
-    fn create_volume(
+    async fn create_volume(
         &self,
         _name: &str,
         _size_gb: Option<u64>,
@@ -1712,15 +1713,15 @@ impl super::volumes::VolumeBackend for LocalRuntime {
         Err(volumes_unsupported())
     }
 
-    fn list_volumes(&self) -> BoxliteResult<Vec<crate::volumes::VolumeInfo>> {
+    async fn list_volumes(&self) -> BoxliteResult<Vec<crate::volumes::VolumeInfo>> {
         Err(volumes_unsupported())
     }
 
-    fn get_volume(&self, _name: &str) -> BoxliteResult<crate::volumes::VolumeInfo> {
+    async fn get_volume(&self, _name: &str) -> BoxliteResult<crate::volumes::VolumeInfo> {
         Err(volumes_unsupported())
     }
 
-    fn remove_volume(&self, _name: &str, _force: bool) -> BoxliteResult<()> {
+    async fn remove_volume(&self, _name: &str, _force: bool) -> BoxliteResult<()> {
         Err(volumes_unsupported())
     }
 }

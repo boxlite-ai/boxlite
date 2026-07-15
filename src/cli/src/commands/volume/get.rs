@@ -16,9 +16,9 @@ pub struct GetArgs {
     pub format: String,
 }
 
-pub fn run(args: GetArgs, global: &GlobalFlags) -> anyhow::Result<()> {
+pub async fn run(args: GetArgs, global: &GlobalFlags) -> anyhow::Result<()> {
     let rt = global.create_runtime()?;
-    let info = rt.volumes()?.get(&args.name)?;
+    let info = rt.volumes()?.get(&args.name).await?;
 
     let presenter = VolumePresenter::from(&info);
     let format = OutputFormat::from_str(&args.format)?;

@@ -717,6 +717,17 @@ fn box_info_to_response(info: &BoxInfo) -> BoxResponse {
     }
 }
 
+fn volume_info_to_response(
+    info: &boxlite::runtime::types::VolumeInfo,
+) -> types::VolumeResponse {
+    types::VolumeResponse {
+        name: info.name.clone(),
+        mountpoint: info.mountpoint.display().to_string(),
+        created_at: info.created_at.to_rfc3339(),
+        size_bytes: info.size_bytes,
+    }
+}
+
 fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::BoxliteError> {
     let rootfs = if let Some(ref path) = req.rootfs_path {
         RootfsSpec::RootfsPath(path.clone())
@@ -1055,7 +1066,9 @@ async fn get_or_attach_main_session(
 // ============================================================================
 
 fn build_router(state: Arc<AppState>) -> Router {
-    use handlers::{advanced, boxes, config, executions, files, me, metrics, snapshots};
+    use handlers::{
+        advanced, boxes, config, executions, files, me, metrics, snapshots, volumes,
+    };
 
     Router::new()
         // Identity (no tenant prefix)
@@ -1063,6 +1076,15 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/v1/config", get(config::get_config))
         // Runtime metrics
         .route("/v1/metrics", get(metrics::runtime_metrics))
+        // Named volumes
+        .route(
+            "/v1/volumes",
+            post(volumes::create_volume).get(volumes::list_volumes),
+        )
+        .route(
+            "/v1/volumes/{name}",
+            get(volumes::get_volume).delete(volumes::remove_volume),
+        )
         // Box CRUD (import first — static path before param path)
         .route("/v1/boxes/import", post(advanced::import_box))
         .route(

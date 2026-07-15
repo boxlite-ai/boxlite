@@ -13,7 +13,7 @@ pub struct RmArgs {
     pub names: Vec<String>,
 }
 
-pub fn run(args: RmArgs, global: &GlobalFlags) -> anyhow::Result<()> {
+pub async fn run(args: RmArgs, global: &GlobalFlags) -> anyhow::Result<()> {
     let rt = global.create_runtime()?;
     let handle = rt.volumes()?;
 
@@ -22,7 +22,7 @@ pub fn run(args: RmArgs, global: &GlobalFlags) -> anyhow::Result<()> {
     // `boxlite rm`).
     let mut had_error = false;
     for name in &args.names {
-        match handle.remove(name, args.force) {
+        match handle.remove(name, args.force).await {
             Ok(()) => println!("{name}"),
             Err(e) => {
                 eprintln!("Error removing volume '{name}': {e}");

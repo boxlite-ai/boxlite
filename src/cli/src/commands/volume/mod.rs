@@ -39,9 +39,9 @@ pub enum VolumeCommand {
 
 pub async fn execute(args: VolumeArgs, global: &GlobalFlags) -> anyhow::Result<()> {
     match args.command {
-        VolumeCommand::Create(a) => create::run(a, global),
-        VolumeCommand::Ls(a) => ls::run(a, global),
-        VolumeCommand::Get(a) => get::run(a, global),
-        VolumeCommand::Rm(a) => rm::run(a, global),
+        VolumeCommand::Create(a) => create::run(a, global).await,
+        VolumeCommand::Ls(a) => ls::run(a, global).await,
+        VolumeCommand::Get(a) => get::run(a, global).await,
+        VolumeCommand::Rm(a) => rm::run(a, global).await,
     }
 }

@@ -12,8 +12,13 @@ use crate::{BoxInfo, LiteBox};
 use super::client::ApiClient;
 use super::litebox::RestBox;
 use super::options::BoxliteRestOptions;
-use super::types::{BoxResponse, CreateBoxRequest, ListBoxesResponse, RuntimeMetricsResponse};
+use super::types::{
+    BoxResponse, CreateBoxRequest, CreateVolumeRequest, ListBoxesResponse, ListVolumesResponse,
+    RuntimeMetricsResponse, VolumeResponse,
+};
 use crate::runtime::auth::{AuthBackend, Principal};
+use crate::runtime::volumes::VolumeBackend;
+use crate::volumes::VolumeInfo;
 
 pub(crate) struct RestRuntime {
     client: ApiClient,
@@ -30,6 +35,40 @@ impl RestRuntime {
 impl AuthBackend for RestRuntime {
     async fn whoami(&self) -> BoxliteResult<Principal> {
         self.client.get_me().await
+    }
+}
+
+#[async_trait::async_trait]
+impl VolumeBackend for RestRuntime {
+    async fn create_volume(&self, name: &str, size_gb: Option<u64>) -> BoxliteResult<VolumeInfo> {
+        let req = CreateVolumeRequest {
+            name: name.to_string(),
+            size_gb,
+        };
+        let resp: VolumeResponse = self.client.post("/volumes", &req).await?;
+        Ok(resp.to_volume_info())
+    }
+
+    async fn list_volumes(&self) -> BoxliteResult<Vec<VolumeInfo>> {
+        let resp: ListVolumesResponse = self.client.get("/volumes").await?;
+        Ok(resp.volumes.iter().map(|v| v.to_volume_info()).collect())
+    }
+
+    async fn get_volume(&self, name: &str) -> BoxliteResult<VolumeInfo> {
+        let path = format!("/volumes/{}", name);
+        let resp: VolumeResponse = self.client.get(&path).await?;
+        Ok(resp.to_volume_info())
+    }
+
+    async fn remove_volume(&self, name: &str, force: bool) -> BoxliteResult<()> {
+        let path = format!("/volumes/{}", name);
+        if force {
+            self.client
+                .delete_with_query(&path, &[("force", "true")])
+                .await
+        } else {
+            self.client.delete(&path).await
+        }
     }
 }
 

@@ -317,6 +317,49 @@ pub(crate) struct ListBoxesResponse {
 }
 
 // ============================================================================
+// Named volumes (`/v1/volumes`)
+// ============================================================================
+
+/// Body for `POST /v1/volumes`.
+#[derive(Debug, Serialize)]
+pub(crate) struct CreateVolumeRequest {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_gb: Option<u64>,
+}
+
+/// A single named volume as returned by the REST API.
+#[derive(Debug, Deserialize)]
+pub(crate) struct VolumeResponse {
+    pub name: String,
+    pub mountpoint: String,
+    pub created_at: String,
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
+}
+
+impl VolumeResponse {
+    pub fn to_volume_info(&self) -> crate::volumes::VolumeInfo {
+        let created_at = chrono::DateTime::parse_from_rfc3339(&self.created_at)
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(|_| chrono::Utc::now());
+
+        crate::volumes::VolumeInfo {
+            name: self.name.clone(),
+            mountpoint: std::path::PathBuf::from(&self.mountpoint),
+            created_at,
+            size_bytes: self.size_bytes,
+        }
+    }
+}
+
+/// Response for `GET /v1/volumes`.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ListVolumesResponse {
+    pub volumes: Vec<VolumeResponse>,
+}
+
+// ============================================================================
 // Snapshot / Clone / Export
 // ============================================================================
 

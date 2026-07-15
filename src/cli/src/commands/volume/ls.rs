@@ -74,9 +74,9 @@ fn human_bytes(bytes: u64) -> String {
     }
 }
 
-pub fn run(args: LsArgs, global: &GlobalFlags) -> anyhow::Result<()> {
+pub async fn run(args: LsArgs, global: &GlobalFlags) -> anyhow::Result<()> {
     let rt = global.create_runtime()?;
-    let volumes = rt.volumes()?.list()?;
+    let volumes = rt.volumes()?.list().await?;
 
     if args.quiet {
         for info in &volumes {
