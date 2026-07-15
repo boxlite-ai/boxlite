@@ -34,72 +34,58 @@ pub enum BoxEndpoint {
     Fd(OwnedFd),
 }
 
+impl BoxEndpoint {
+    fn try_clone(&self) -> std::io::Result<Self> {
+        match self {
+            Self::Url(url) => Ok(Self::Url(url.clone())),
+            Self::Fd(fd) => Ok(Self::Fd(fd.try_clone()?)),
+        }
+    }
+}
+
 /// A box service tunnel target. Call [`endpoint`](Self::endpoint) first, then
 /// [`connect`](Self::connect) on this handle.
 pub struct BoxTunnel {
-    endpoint: Option<String>,
+    endpoint: Arc<tokio::sync::Mutex<Option<BoxEndpoint>>>,
     connector: TunnelConnector,
-    local_endpoint: Arc<tokio::sync::Mutex<Option<OwnedFd>>>,
-    stream: Arc<tokio::sync::Mutex<Option<BoxInternalTunnel>>>,
 }
 
 impl BoxTunnel {
     pub(crate) fn new(endpoint: Option<String>, connector: TunnelConnector) -> Self {
         Self {
-            endpoint,
+            endpoint: Arc::new(tokio::sync::Mutex::new(endpoint.map(BoxEndpoint::Url))),
             connector,
-            local_endpoint: Arc::new(tokio::sync::Mutex::new(None)),
-            stream: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
     /// Resolve the endpoint, fetching a URL remotely or preparing a local stream.
     pub async fn endpoint(&self) -> BoxliteResult<BoxEndpoint> {
-        match &self.endpoint {
-            Some(endpoint) => Ok(BoxEndpoint::Url(endpoint.clone())),
-            None => {
-                let mut stream = self.stream.lock().await;
-                if stream.is_none() {
-                    *stream = Some((self.connector)().await?);
-                }
-                let mut local_endpoint = self.local_endpoint.lock().await;
-                if local_endpoint.is_none() {
-                    let tunnel = stream.take().expect("local tunnel was just prepared");
-                    *local_endpoint = tunnel.into_fd();
-                }
-                let endpoint = local_endpoint
-                    .as_ref()
-                    .ok_or_else(|| {
-                        BoxliteError::Network("local tunnel has no file descriptor".into())
-                    })?
-                    .try_clone()
-                    .map_err(|error| {
-                        BoxliteError::Network(format!("clone local tunnel fd: {error}"))
-                    })?;
-                Ok(BoxEndpoint::Fd(endpoint))
-            }
+        let mut endpoint = self.endpoint.lock().await;
+        if endpoint.is_none() {
+            let tunnel = (self.connector)().await?;
+            let fd = tunnel.into_fd().ok_or_else(|| {
+                BoxliteError::Network("local tunnel has no file descriptor".into())
+            })?;
+            *endpoint = Some(BoxEndpoint::Fd(fd));
         }
+        endpoint
+            .as_ref()
+            .expect("endpoint was initialized above")
+            .try_clone()
+            .map_err(|error| BoxliteError::Network(format!("clone local tunnel fd: {error}")))
     }
 
     /// Consume the prepared local stream or establish the remote stream once.
     pub async fn connect(&self) -> BoxliteResult<Box<dyn BoxConnection>> {
-        if self.endpoint.is_none() {
-            let mut local_endpoint = self.local_endpoint.lock().await;
-            if let Some(fd) = local_endpoint.take() {
-                let stream = std::os::unix::net::UnixStream::from(fd);
-                stream.set_nonblocking(true).map_err(|error| {
-                    BoxliteError::Network(format!("configure local tunnel: {error}"))
-                })?;
-                return Ok(Box::new(tokio::net::UnixStream::from_std(stream).map_err(
-                    |error| BoxliteError::Network(format!("adopt local tunnel: {error}")),
-                )?));
-            }
+        if let Some(BoxEndpoint::Fd(fd)) = self.endpoint.lock().await.take() {
+            let stream = std::os::unix::net::UnixStream::from(fd);
+            stream.set_nonblocking(true).map_err(|error| {
+                BoxliteError::Network(format!("configure local tunnel: {error}"))
+            })?;
+            return Ok(Box::new(tokio::net::UnixStream::from_std(stream).map_err(
+                |error| BoxliteError::Network(format!("adopt local tunnel: {error}")),
+            )?));
         }
-        let mut stream = self.stream.lock().await;
-        if let Some(stream) = stream.take() {
-            return Ok(Box::new(stream));
-        }
-        drop(stream);
         Ok(Box::new((self.connector)().await?))
     }
 }
