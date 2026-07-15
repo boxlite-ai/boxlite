@@ -6,14 +6,12 @@ Provides a hierarchy of exceptions for different failure modes.
 
 __all__ = ["BoxliteError", "ExecError", "TimeoutError", "ParseError"]
 
-try:
-    from .boxlite import CommandStartError as _CommandStartError
-except ImportError:
 
-    class _CommandStartError(RuntimeError):
-        """Fallback used when the native extension is unavailable."""
-
-        pass
+def _command_start_exit_code(message: str) -> int:
+    """Translate a pre-exec spawn failure to the conventional shell code."""
+    detail = message.casefold()
+    not_found_markers = ("not found in $path", "no such file or directory", "os error 2")
+    return 127 if any(marker in detail for marker in not_found_markers) else 126
 
 
 class BoxliteError(Exception):

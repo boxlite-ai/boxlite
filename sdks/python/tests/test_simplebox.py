@@ -25,3 +25,12 @@ async def test_simplebox_command_not_found_raises_exec_error(shared_runtime):
             await box.exec("definitely-not-a-boxlite-command-xyz")
         assert exc.value.exit_code == 127
         assert "not found" in exc.value.stderr.lower()
+
+
+async def test_simplebox_unexecutable_command_raises_exit_code_126(shared_runtime):
+    async with boxlite.SimpleBox(image="alpine:latest", runtime=shared_runtime) as box:
+        await box.exec("sh", "-c", "printf '#!/bin/sh\\n' > /tmp/noexec && chmod 644 /tmp/noexec")
+        with pytest.raises(boxlite.ExecError) as exc:
+            await box.exec("/tmp/noexec")
+        assert exc.value.exit_code == 126
+        assert "permission denied" in exc.value.stderr.lower()

@@ -9,8 +9,17 @@ import logging
 from enum import IntEnum
 from typing import Optional, TYPE_CHECKING
 
-from .errors import ExecError, _CommandStartError
+from .errors import ExecError, _command_start_exit_code
 from .exec import ExecResult
+
+try:
+    from .boxlite import CommandStartError as _CommandStartError
+except ImportError:
+
+    class _CommandStartError(RuntimeError):
+        """Fallback for native extensions built before CommandStartError."""
+
+        pass
 
 if TYPE_CHECKING:
     from .boxlite import Boxlite
@@ -275,7 +284,10 @@ class SimpleBox:
                 cmd, arg_list, env_list, user=user, timeout_secs=timeout, cwd=cwd
             )
         except _CommandStartError as e:
-            raise ExecError(command_display, 127, str(e)) from e
+            message = str(e)
+            raise ExecError(
+                command_display, _command_start_exit_code(message), message
+            ) from e
 
         # Get streams from Rust execution
         try:

@@ -5,7 +5,26 @@ Tests the error hierarchy and exception behavior.
 """
 
 import pytest
-from boxlite.errors import BoxliteError, ExecError, TimeoutError, ParseError
+from boxlite.errors import (
+    BoxliteError,
+    ExecError,
+    ParseError,
+    TimeoutError,
+    _command_start_exit_code,
+)
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("executable '/missing' not found in $PATH", 127),
+        ("No such file or directory (os error 2)", 127),
+        ("Permission denied (os error 13)", 126),
+        ("Exec format error (os error 8)", 126),
+    ],
+)
+def test_command_start_exit_code(message, expected):
+    assert _command_start_exit_code(message) == expected
 
 
 class TestBoxliteError:
