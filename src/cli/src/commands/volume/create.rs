@@ -1,22 +1,17 @@
 use crate::cli::GlobalFlags;
 use clap::Args;
 
-/// Create a named local volume.
+/// Create a volume.
+///
+/// Takes no arguments — the server assigns the id, which is printed on success
+/// (mirroring `boxlite create`).
 #[derive(Args, Debug)]
-pub struct CreateArgs {
-    /// Volume name (single path segment: [A-Za-z0-9][A-Za-z0-9_.-]*)
-    pub name: String,
+pub struct CreateArgs {}
 
-    /// Advisory size in GB. Stored in metadata only; not enforced for a
-    /// local directory (a plain dir has no quota).
-    #[arg(short = 's', long = "size", value_name = "GB")]
-    pub size: Option<u64>,
-}
-
-pub async fn run(args: CreateArgs, global: &GlobalFlags) -> anyhow::Result<()> {
+pub async fn run(_args: CreateArgs, global: &GlobalFlags) -> anyhow::Result<()> {
     let rt = global.create_runtime()?;
-    let info = rt.volumes()?.create(&args.name, args.size).await?;
-    // Docker prints the created volume's name on success.
-    println!("{}", info.name);
+    let info = rt.volumes()?.create().await?;
+    // Like `boxlite create`, print the new id on success.
+    println!("{}", info.id);
     Ok(())
 }

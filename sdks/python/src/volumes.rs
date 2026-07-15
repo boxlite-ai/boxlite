@@ -10,9 +10,7 @@ use crate::util::map_err;
 #[derive(Clone)]
 pub(crate) struct PyVolumeInfo {
     #[pyo3(get)]
-    pub(crate) name: String,
-    #[pyo3(get)]
-    pub(crate) mountpoint: String,
+    pub(crate) id: String,
     #[pyo3(get)]
     pub(crate) created_at: String,
     #[pyo3(get)]
@@ -23,8 +21,8 @@ pub(crate) struct PyVolumeInfo {
 impl PyVolumeInfo {
     fn __repr__(&self) -> String {
         format!(
-            "VolumeInfo(name={:?}, mountpoint={:?}, created_at={:?})",
-            self.name, self.mountpoint, self.created_at
+            "VolumeInfo(id={:?}, created_at={:?})",
+            self.id, self.created_at
         )
     }
 }
@@ -32,8 +30,7 @@ impl PyVolumeInfo {
 impl From<VolumeInfo> for PyVolumeInfo {
     fn from(info: VolumeInfo) -> Self {
         Self {
-            name: info.name,
-            mountpoint: info.mountpoint.display().to_string(),
+            id: info.id,
             created_at: info.created_at.to_rfc3339(),
             size_bytes: info.size_bytes,
         }
@@ -47,16 +44,10 @@ pub(crate) struct PyVolumeHandle {
 
 #[pymethods]
 impl PyVolumeHandle {
-    #[pyo3(signature = (name, size_gb=None))]
-    fn create<'py>(
-        &self,
-        py: Python<'py>,
-        name: String,
-        size_gb: Option<u64>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    fn create<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let info = handle.create(&name, size_gb).await.map_err(map_err)?;
+            let info = handle.create().await.map_err(map_err)?;
             Ok(PyVolumeInfo::from(info))
         })
     }
@@ -72,24 +63,24 @@ impl PyVolumeHandle {
         })
     }
 
-    fn get<'py>(&self, py: Python<'py>, name: String) -> PyResult<Bound<'py, PyAny>> {
+    fn get<'py>(&self, py: Python<'py>, id: String) -> PyResult<Bound<'py, PyAny>> {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let info = handle.get(&name).await.map_err(map_err)?;
+            let info = handle.get(&id).await.map_err(map_err)?;
             Ok(PyVolumeInfo::from(info))
         })
     }
 
-    #[pyo3(signature = (name, force=false))]
+    #[pyo3(signature = (id, force=false))]
     fn remove<'py>(
         &self,
         py: Python<'py>,
-        name: String,
+        id: String,
         force: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            handle.remove(&name, force).await.map_err(map_err)?;
+            handle.remove(&id, force).await.map_err(map_err)?;
             Ok(())
         })
     }

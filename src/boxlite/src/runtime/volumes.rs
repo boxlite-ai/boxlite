@@ -24,17 +24,17 @@ use crate::volumes::VolumeInfo;
 /// `Unsupported` until a managed volume backend is wired up.
 #[async_trait]
 pub(crate) trait VolumeBackend: Send + Sync {
-    /// Create a named volume. `size_gb` is stored as an advisory hint only.
-    async fn create_volume(&self, name: &str, size_gb: Option<u64>) -> BoxliteResult<VolumeInfo>;
+    /// Create a volume, returning its server-assigned metadata (including id).
+    async fn create_volume(&self) -> BoxliteResult<VolumeInfo>;
 
-    /// List all named volumes (sorted by name).
+    /// List all volumes.
     async fn list_volumes(&self) -> BoxliteResult<Vec<VolumeInfo>>;
 
-    /// Get metadata for a single named volume.
-    async fn get_volume(&self, name: &str) -> BoxliteResult<VolumeInfo>;
+    /// Get metadata for a single volume by id.
+    async fn get_volume(&self, id: &str) -> BoxliteResult<VolumeInfo>;
 
-    /// Remove a named volume. `force` makes a missing volume a no-op.
-    async fn remove_volume(&self, name: &str, force: bool) -> BoxliteResult<()>;
+    /// Remove a volume by id. `force` makes a missing volume a no-op.
+    async fn remove_volume(&self, id: &str, force: bool) -> BoxliteResult<()>;
 }
 
 /// Handle for performing named-volume operations.
@@ -51,23 +51,23 @@ impl VolumeHandle {
         Self { backend }
     }
 
-    /// Create a named volume, returning its metadata.
-    pub async fn create(&self, name: &str, size_gb: Option<u64>) -> BoxliteResult<VolumeInfo> {
-        self.backend.create_volume(name, size_gb).await
+    /// Create a volume, returning its metadata (including the assigned id).
+    pub async fn create(&self) -> BoxliteResult<VolumeInfo> {
+        self.backend.create_volume().await
     }
 
-    /// List all named volumes, sorted by name.
+    /// List all volumes.
     pub async fn list(&self) -> BoxliteResult<Vec<VolumeInfo>> {
         self.backend.list_volumes().await
     }
 
-    /// Get metadata for a single named volume.
-    pub async fn get(&self, name: &str) -> BoxliteResult<VolumeInfo> {
-        self.backend.get_volume(name).await
+    /// Get metadata for a single volume by id.
+    pub async fn get(&self, id: &str) -> BoxliteResult<VolumeInfo> {
+        self.backend.get_volume(id).await
     }
 
-    /// Remove a named volume. With `force`, a missing volume is a no-op.
-    pub async fn remove(&self, name: &str, force: bool) -> BoxliteResult<()> {
-        self.backend.remove_volume(name, force).await
+    /// Remove a volume by id. With `force`, a missing volume is a no-op.
+    pub async fn remove(&self, id: &str, force: bool) -> BoxliteResult<()> {
+        self.backend.remove_volume(id, force).await
     }
 }

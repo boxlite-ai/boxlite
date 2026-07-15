@@ -1410,17 +1410,15 @@ mod tests {
     use crate::commands::volume::VolumeCommand;
 
     #[test]
-    fn volume_create_parses_name_and_size() {
-        let cli =
-            Cli::try_parse_from(["boxlite", "volume", "create", "data", "-s", "5"]).expect("parse");
+    fn volume_create_takes_no_args() {
+        // `create` takes no arguments — the id is server-assigned and printed.
+        let cli = Cli::try_parse_from(["boxlite", "volume", "create"]).expect("parse");
         let Commands::Volume(args) = cli.command else {
             panic!("expected Commands::Volume");
         };
-        let VolumeCommand::Create(create) = args.command else {
-            panic!("expected VolumeCommand::Create");
-        };
-        assert_eq!(create.name, "data");
-        assert_eq!(create.size, Some(5));
+        assert!(matches!(args.command, VolumeCommand::Create(_)));
+        // A positional argument must be rejected.
+        assert!(Cli::try_parse_from(["boxlite", "volume", "create", "data"]).is_err());
     }
 
     #[test]
@@ -1441,19 +1439,19 @@ mod tests {
     #[test]
     fn volume_get_inspect_alias_parses() {
         for verb in ["get", "inspect"] {
-            let cli = Cli::try_parse_from(["boxlite", "volume", verb, "data"]).expect("parse");
+            let cli = Cli::try_parse_from(["boxlite", "volume", verb, "vol-123"]).expect("parse");
             let Commands::Volume(args) = cli.command else {
                 panic!("expected Commands::Volume for {verb}");
             };
             let VolumeCommand::Get(get) = args.command else {
                 panic!("{verb} should map to Get");
             };
-            assert_eq!(get.name, "data");
+            assert_eq!(get.id, "vol-123");
         }
     }
 
     #[test]
-    fn volume_rm_takes_multiple_names_and_force() {
+    fn volume_rm_takes_multiple_ids_and_force() {
         let cli = Cli::try_parse_from(["boxlite", "volume", "rm", "-f", "a", "b"]).expect("parse");
         let Commands::Volume(args) = cli.command else {
             panic!("expected Commands::Volume");
@@ -1462,11 +1460,11 @@ mod tests {
             panic!("expected VolumeCommand::Rm");
         };
         assert!(rm.force);
-        assert_eq!(rm.names, vec!["a", "b"]);
+        assert_eq!(rm.ids, vec!["a", "b"]);
     }
 
     #[test]
-    fn volume_rm_requires_a_name() {
+    fn volume_rm_requires_an_id() {
         // `num_args = 1..` + required means a bare `volume rm` must error.
         assert!(Cli::try_parse_from(["boxlite", "volume", "rm"]).is_err());
     }

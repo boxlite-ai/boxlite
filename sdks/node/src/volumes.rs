@@ -11,8 +11,7 @@ use crate::util::map_err;
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct JsVolumeInfo {
-    pub name: String,
-    pub mountpoint: String,
+    pub id: String,
     #[napi(js_name = "createdAt")]
     pub created_at: String,
     #[napi(js_name = "sizeBytes")]
@@ -22,8 +21,7 @@ pub struct JsVolumeInfo {
 impl From<&VolumeInfo> for JsVolumeInfo {
     fn from(info: &VolumeInfo) -> Self {
         Self {
-            name: info.name.clone(),
-            mountpoint: info.mountpoint.display().to_string(),
+            id: info.id.clone(),
             created_at: info.created_at.to_rfc3339(),
             // Saturating cast preserves a stable JS number surface if a future
             // backend ever reports a value beyond signed 64-bit range.
@@ -48,14 +46,11 @@ pub struct JsVolumeHandle {
 
 #[napi]
 impl JsVolumeHandle {
-    /// Create a named volume and return its metadata.
+    /// Create a volume and return its metadata.
     #[napi]
-    pub async fn create(&self, name: String, size_gb: Option<u32>) -> Result<JsVolumeInfo> {
+    pub async fn create(&self) -> Result<JsVolumeInfo> {
         let handle = Arc::clone(&self.handle);
-        let info = handle
-            .create(&name, size_gb.map(u64::from))
-            .await
-            .map_err(map_err)?;
+        let info = handle.create().await.map_err(map_err)?;
         Ok(JsVolumeInfo::from(&info))
     }
 
@@ -67,20 +62,20 @@ impl JsVolumeHandle {
         Ok(infos.into_iter().map(JsVolumeInfo::from).collect())
     }
 
-    /// Get metadata for a single named volume.
+    /// Get metadata for a single volume by id.
     #[napi]
-    pub async fn get(&self, name: String) -> Result<JsVolumeInfo> {
+    pub async fn get(&self, id: String) -> Result<JsVolumeInfo> {
         let handle = Arc::clone(&self.handle);
-        let info = handle.get(&name).await.map_err(map_err)?;
+        let info = handle.get(&id).await.map_err(map_err)?;
         Ok(JsVolumeInfo::from(&info))
     }
 
-    /// Remove a named volume. With `force`, a missing volume is a no-op.
+    /// Remove a volume by id. With `force`, a missing volume is a no-op.
     #[napi]
-    pub async fn remove(&self, name: String, force: Option<bool>) -> Result<()> {
+    pub async fn remove(&self, id: String, force: Option<bool>) -> Result<()> {
         let handle = Arc::clone(&self.handle);
         handle
-            .remove(&name, force.unwrap_or(false))
+            .remove(&id, force.unwrap_or(false))
             .await
             .map_err(map_err)
     }

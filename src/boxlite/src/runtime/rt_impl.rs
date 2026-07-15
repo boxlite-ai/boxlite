@@ -1705,11 +1705,7 @@ impl super::images::ImageBackend for LocalRuntime {
 // future managed volume backend, so every operation returns `Unsupported`.
 #[async_trait::async_trait]
 impl super::volumes::VolumeBackend for LocalRuntime {
-    async fn create_volume(
-        &self,
-        _name: &str,
-        _size_gb: Option<u64>,
-    ) -> BoxliteResult<crate::volumes::VolumeInfo> {
+    async fn create_volume(&self) -> BoxliteResult<crate::volumes::VolumeInfo> {
         Err(volumes_unsupported())
     }
 
@@ -1717,11 +1713,11 @@ impl super::volumes::VolumeBackend for LocalRuntime {
         Err(volumes_unsupported())
     }
 
-    async fn get_volume(&self, _name: &str) -> BoxliteResult<crate::volumes::VolumeInfo> {
+    async fn get_volume(&self, _id: &str) -> BoxliteResult<crate::volumes::VolumeInfo> {
         Err(volumes_unsupported())
     }
 
-    async fn remove_volume(&self, _name: &str, _force: bool) -> BoxliteResult<()> {
+    async fn remove_volume(&self, _id: &str, _force: bool) -> BoxliteResult<()> {
         Err(volumes_unsupported())
     }
 }

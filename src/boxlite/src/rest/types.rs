@@ -320,19 +320,15 @@ pub(crate) struct ListBoxesResponse {
 // Named volumes (`/v1/volumes`)
 // ============================================================================
 
-/// Body for `POST /v1/volumes`.
+/// Body for `POST /v1/volumes`. Volume creation takes no parameters — the
+/// server assigns the id — so the body is empty.
 #[derive(Debug, Serialize)]
-pub(crate) struct CreateVolumeRequest {
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub size_gb: Option<u64>,
-}
+pub(crate) struct CreateVolumeRequest {}
 
-/// A single named volume as returned by the REST API.
+/// A single volume as returned by the REST API.
 #[derive(Debug, Deserialize)]
 pub(crate) struct VolumeResponse {
-    pub name: String,
-    pub mountpoint: String,
+    pub id: String,
     pub created_at: String,
     #[serde(default)]
     pub size_bytes: Option<u64>,
@@ -345,8 +341,7 @@ impl VolumeResponse {
             .unwrap_or_else(|_| chrono::Utc::now());
 
         crate::volumes::VolumeInfo {
-            name: self.name.clone(),
-            mountpoint: std::path::PathBuf::from(&self.mountpoint),
+            id: self.id.clone(),
             created_at,
             size_bytes: self.size_bytes,
         }

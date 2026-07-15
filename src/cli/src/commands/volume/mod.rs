@@ -1,8 +1,10 @@
-//! `boxlite volume {create,ls,get,rm}` — manage named local volumes.
+//! `boxlite volume {create,ls,get,rm}` — manage volumes.
 //!
-//! A named volume is a managed host directory under `<home>/volumes/<name>`
-//! (Docker `local` driver style). Each leaf module owns its own `Args` struct
-//! and `run()`; this module holds the subcommand enum and dispatches.
+//! Volumes are addressed by a server-assigned id (like boxes): `create` takes
+//! no arguments and prints the new id, and get/rm operate on ids. Each leaf
+//! module owns its own `Args` struct and `run()`; this module holds the
+//! subcommand enum and dispatches. The backend is not implemented yet, so every
+//! command currently returns "not supported".
 
 use clap::{Args, Subcommand};
 
@@ -21,18 +23,18 @@ pub struct VolumeArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum VolumeCommand {
-    /// Create a named local volume.
+    /// Create a volume (prints the new id).
     Create(create::CreateArgs),
 
-    /// List named local volumes.
+    /// List volumes.
     #[command(visible_alias = "list")]
     Ls(ls::LsArgs),
 
-    /// Show details for a named local volume.
+    /// Show details for a volume by id.
     #[command(visible_alias = "inspect")]
     Get(get::GetArgs),
 
-    /// Remove one or more named local volumes.
+    /// Remove one or more volumes by id.
     #[command(visible_alias = "delete")]
     Rm(rm::RmArgs),
 }

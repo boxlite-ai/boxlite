@@ -12,16 +12,15 @@ import (
 	"unsafe"
 )
 
-// VolumeInfo holds metadata about a named volume.
+// VolumeInfo holds metadata about a volume.
 //
 // CreatedAt is an RFC 3339 timestamp string (the C side formats the creation
 // time as a string, mirroring the Node/Python SDKs). SizeBytes is nil when the
 // payload size could not be computed.
 type VolumeInfo struct {
-	Name       string
-	Mountpoint string
-	CreatedAt  string
-	SizeBytes  *uint64
+	Id        string
+	CreatedAt string
+	SizeBytes *uint64
 }
 
 // Volumes is a runtime-scoped handle for named-volume operations.
@@ -50,29 +49,18 @@ func (r *Runtime) Volumes() (*Volumes, error) {
 	return &Volumes{runtime: r, handle: handle}, nil
 }
 
-// Create creates a named volume and returns its metadata. sizeGb is an
-// advisory size hint; pass nil to leave it unset.
-func (v *Volumes) Create(ctx context.Context, name string, sizeGb *uint64) (*VolumeInfo, error) {
+// Create creates a volume and returns its metadata.
+func (v *Volumes) Create(ctx context.Context) (*VolumeInfo, error) {
 	if v == nil || v.handle == nil {
 		return nil, closedVolumesError()
 	}
 	v.runtime.ensureDrainRunning()
 
-	cName := toCString(name)
-	defer C.free(unsafe.Pointer(cName))
-
-	var cSizeGb C.uint64_t
-	var cHasSizeGb C.int
-	if sizeGb != nil {
-		cSizeGb = C.uint64_t(*sizeGb)
-		cHasSizeGb = 1
-	}
-
 	ch := make(chan volumeResult, 1)
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
-	code := C.boxlite_volume_create(v.handle, cName, cSizeGb, cHasSizeGb, C.cbVolumeCreate(), handleToPtr(h), &cerr)
+	code := C.boxlite_volume_create(v.handle, C.cbVolumeCreate(), handleToPtr(h), &cerr)
 	if code != C.Ok {
 		deleteHandleForDispatch(h)
 		return nil, freeError(&cerr)
@@ -119,21 +107,21 @@ func (v *Volumes) List(ctx context.Context) ([]VolumeInfo, error) {
 	}
 }
 
-// Get returns metadata for a single named volume.
-func (v *Volumes) Get(ctx context.Context, name string) (*VolumeInfo, error) {
+// Get returns metadata for a single volume by id.
+func (v *Volumes) Get(ctx context.Context, id string) (*VolumeInfo, error) {
 	if v == nil || v.handle == nil {
 		return nil, closedVolumesError()
 	}
 	v.runtime.ensureDrainRunning()
 
-	cName := toCString(name)
-	defer C.free(unsafe.Pointer(cName))
+	cID := toCString(id)
+	defer C.free(unsafe.Pointer(cID))
 
 	ch := make(chan volumeResult, 1)
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
-	code := C.boxlite_volume_get(v.handle, cName, C.cbVolumeGet(), handleToPtr(h), &cerr)
+	code := C.boxlite_volume_get(v.handle, cID, C.cbVolumeGet(), handleToPtr(h), &cerr)
 	if code != C.Ok {
 		deleteHandleForDispatch(h)
 		return nil, freeError(&cerr)
@@ -151,15 +139,15 @@ func (v *Volumes) Get(ctx context.Context, name string) (*VolumeInfo, error) {
 	}
 }
 
-// Remove removes a named volume. With force, a missing volume is a no-op.
-func (v *Volumes) Remove(ctx context.Context, name string, force bool) error {
+// Remove removes a volume by id. With force, a missing volume is a no-op.
+func (v *Volumes) Remove(ctx context.Context, id string, force bool) error {
 	if v == nil || v.handle == nil {
 		return closedVolumesError()
 	}
 	v.runtime.ensureDrainRunning()
 
-	cName := toCString(name)
-	defer C.free(unsafe.Pointer(cName))
+	cID := toCString(id)
+	defer C.free(unsafe.Pointer(cID))
 
 	forceFlag := C.int(0)
 	if force {
@@ -170,7 +158,7 @@ func (v *Volumes) Remove(ctx context.Context, name string, force bool) error {
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
-	code := C.boxlite_volume_remove(v.handle, cName, forceFlag, C.cbVolumeRemove(), handleToPtr(h), &cerr)
+	code := C.boxlite_volume_remove(v.handle, cID, forceFlag, C.cbVolumeRemove(), handleToPtr(h), &cerr)
 	if code != C.Ok {
 		deleteHandleForDispatch(h)
 		return freeError(&cerr)
@@ -206,10 +194,9 @@ func cVolumeInfoToGo(info *C.CVolumeInfo) VolumeInfo {
 		size = &v
 	}
 	return VolumeInfo{
-		Name:       cString(info.name),
-		Mountpoint: cString(info.mountpoint),
-		CreatedAt:  cString(info.created_at),
-		SizeBytes:  size,
+		Id:        cString(info.id),
+		CreatedAt: cString(info.created_at),
+		SizeBytes: size,
 	}
 }
 

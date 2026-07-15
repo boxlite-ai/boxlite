@@ -7,10 +7,10 @@ use clap::Args;
 use serde::Serialize;
 use tabled::Tabled;
 
-/// List named local volumes.
+/// List volumes.
 #[derive(Args, Debug)]
 pub struct LsArgs {
-    /// Only show volume names.
+    /// Only show volume ids.
     #[arg(short, long)]
     pub quiet: bool,
 
@@ -23,12 +23,9 @@ pub struct LsArgs {
 /// table and JSON/YAML formats.
 #[derive(Tabled, Serialize)]
 pub struct VolumePresenter {
-    #[tabled(rename = "NAME")]
-    #[serde(rename = "Name")]
-    pub name: String,
-    #[tabled(rename = "MOUNTPOINT")]
-    #[serde(rename = "Mountpoint")]
-    pub mountpoint: String,
+    #[tabled(rename = "ID")]
+    #[serde(rename = "Id")]
+    pub id: String,
     #[tabled(rename = "CREATED")]
     #[serde(rename = "CreatedAt")]
     pub created: String,
@@ -40,8 +37,7 @@ pub struct VolumePresenter {
 impl From<&VolumeInfo> for VolumePresenter {
     fn from(info: &VolumeInfo) -> Self {
         Self {
-            name: info.name.clone(),
-            mountpoint: info.mountpoint.display().to_string(),
+            id: info.id.clone(),
             created: formatter::format_time(&info.created_at),
             size: format_size(info.size_bytes),
         }
@@ -80,7 +76,7 @@ pub async fn run(args: LsArgs, global: &GlobalFlags) -> anyhow::Result<()> {
 
     if args.quiet {
         for info in &volumes {
-            println!("{}", info.name);
+            println!("{}", info.id);
         }
         return Ok(());
     }

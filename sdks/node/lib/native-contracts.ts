@@ -28,17 +28,16 @@ export interface ImageHandle {
 }
 
 export interface VolumeInfo {
-  name: string;
-  mountpoint: string;
+  id: string;
   createdAt: string;
   sizeBytes?: number;
 }
 
 export interface VolumeHandle {
-  create(name: string, sizeGb?: number | null): Promise<VolumeInfo>;
+  create(): Promise<VolumeInfo>;
   list(): Promise<VolumeInfo[]>;
-  get(name: string): Promise<VolumeInfo>;
-  remove(name: string, force?: boolean | null): Promise<void>;
+  get(id: string): Promise<VolumeInfo>;
+  remove(id: string, force?: boolean | null): Promise<void>;
 }
 
 export interface JsEnvVar {

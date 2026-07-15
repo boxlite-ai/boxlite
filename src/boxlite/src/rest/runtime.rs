@@ -40,12 +40,8 @@ impl AuthBackend for RestRuntime {
 
 #[async_trait::async_trait]
 impl VolumeBackend for RestRuntime {
-    async fn create_volume(&self, name: &str, size_gb: Option<u64>) -> BoxliteResult<VolumeInfo> {
-        let req = CreateVolumeRequest {
-            name: name.to_string(),
-            size_gb,
-        };
-        let resp: VolumeResponse = self.client.post("/volumes", &req).await?;
+    async fn create_volume(&self) -> BoxliteResult<VolumeInfo> {
+        let resp: VolumeResponse = self.client.post("/volumes", &CreateVolumeRequest {}).await?;
         Ok(resp.to_volume_info())
     }
 
@@ -54,14 +50,14 @@ impl VolumeBackend for RestRuntime {
         Ok(resp.volumes.iter().map(|v| v.to_volume_info()).collect())
     }
 
-    async fn get_volume(&self, name: &str) -> BoxliteResult<VolumeInfo> {
-        let path = format!("/volumes/{}", name);
+    async fn get_volume(&self, id: &str) -> BoxliteResult<VolumeInfo> {
+        let path = format!("/volumes/{}", id);
         let resp: VolumeResponse = self.client.get(&path).await?;
         Ok(resp.to_volume_info())
     }
 
-    async fn remove_volume(&self, name: &str, force: bool) -> BoxliteResult<()> {
-        let path = format!("/volumes/{}", name);
+    async fn remove_volume(&self, id: &str, force: bool) -> BoxliteResult<()> {
+        let path = format!("/volumes/{}", id);
         if force {
             self.client
                 .delete_with_query(&path, &[("force", "true")])

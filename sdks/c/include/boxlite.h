@@ -338,8 +338,7 @@ typedef struct VolumeHandle CBoxliteVolumeHandle;
 typedef void (*CRuntimeShutdownCb)(CBoxliteError*, void*);
 
 typedef struct CVolumeInfo {
-  char *name;
-  char *mountpoint;
+  char *id;
   char *created_at;
   uint64_t size_bytes;
   int has_size;
@@ -842,9 +841,6 @@ int boxlite_runtime_drain(CBoxliteRuntime *runtime, int timeout_ms, CBoxliteErro
 void boxlite_free_string(char *s);
 
 enum BoxliteErrorCode boxlite_volume_create(CBoxliteVolumeHandle *handle,
-                                            const char *name,
-                                            uint64_t size_gb,
-                                            int has_size_gb,
                                             CBoxVolumeCreateCb cb,
                                             void *user_data,
                                             CBoxliteError *out_error);
@@ -855,13 +851,13 @@ enum BoxliteErrorCode boxlite_volume_list(CBoxliteVolumeHandle *handle,
                                           CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_volume_get(CBoxliteVolumeHandle *handle,
-                                         const char *name,
+                                         const char *id,
                                          CBoxVolumeGetCb cb,
                                          void *user_data,
                                          CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_volume_remove(CBoxliteVolumeHandle *handle,
-                                            const char *name,
+                                            const char *id,
                                             int force,
                                             CBoxVolumeRemoveCb cb,
                                             void *user_data,

@@ -5,11 +5,11 @@ use crate::commands::volume::ls::VolumePresenter;
 use crate::formatter::{self, OutputFormat};
 use clap::Args;
 
-/// Show details for a named local volume.
+/// Show details for a volume.
 #[derive(Args, Debug)]
 pub struct GetArgs {
-    /// Volume name.
-    pub name: String,
+    /// Volume id.
+    pub id: String,
 
     /// Output format (table, json, yaml).
     #[arg(long, default_value = "table")]
@@ -18,7 +18,7 @@ pub struct GetArgs {
 
 pub async fn run(args: GetArgs, global: &GlobalFlags) -> anyhow::Result<()> {
     let rt = global.create_runtime()?;
-    let info = rt.volumes()?.get(&args.name).await?;
+    let info = rt.volumes()?.get(&args.id).await?;
 
     let presenter = VolumePresenter::from(&info);
     let format = OutputFormat::from_str(&args.format)?;

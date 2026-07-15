@@ -721,8 +721,7 @@ fn volume_info_to_response(
     info: &boxlite::runtime::types::VolumeInfo,
 ) -> types::VolumeResponse {
     types::VolumeResponse {
-        name: info.name.clone(),
-        mountpoint: info.mountpoint.display().to_string(),
+        id: info.id.clone(),
         created_at: info.created_at.to_rfc3339(),
         size_bytes: info.size_bytes,
     }
@@ -1082,7 +1081,7 @@ fn build_router(state: Arc<AppState>) -> Router {
             post(volumes::create_volume).get(volumes::list_volumes),
         )
         .route(
-            "/v1/volumes/{name}",
+            "/v1/volumes/{id}",
             get(volumes::get_volume).delete(volumes::remove_volume),
         )
         // Box CRUD (import first — static path before param path)

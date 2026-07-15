@@ -451,8 +451,8 @@ impl BoxliteRuntime {
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let runtime = BoxliteRuntime::with_defaults()?;
     /// let volumes = runtime.volumes()?;
-    /// let info = volumes.create("data", None).await?;
-    /// println!("mountpoint: {}", info.mountpoint.display());
+    /// let info = volumes.create().await?;
+    /// println!("created volume {}", info.id);
     /// # Ok(())
     /// # }
     /// ```
