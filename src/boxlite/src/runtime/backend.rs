@@ -78,15 +78,36 @@ pub(crate) trait BoxBackend: Send + Sync {
 
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution>;
 
-    /// Reattach to an already-running execution by id. The returned
-    /// `Execution` carries fresh stdin/stdout/stderr/result channels
-    /// wired to a new WebSocket; the caller discards any prior handle
-    /// for the same id. Returns `BoxliteError::SessionReaped` if the
-    /// server reports the session is no longer attachable.
+    /// Attach to the box's main command session (docker semantics:
+    /// `run`'s COMMAND is the container init; the guest registers it
+    /// under execution_id = container id at container start). The
+    /// unqualified name mirrors the ecosystem convention
+    /// (`ContainerAttach`, `podman attach`, CRI `Attach`).
+    async fn attach(&self) -> BoxliteResult<Execution> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support attaching to the main command session".into(),
+        ))
+    }
+
+    /// Start the box with a client already attached to its main command
+    /// (docker's create → attach → start). Backends that cannot hold init at the
+    /// gate fall back to start-then-attach, which races a command that finishes
+    /// instantly.
+    async fn start_attached(&self) -> BoxliteResult<Execution> {
+        self.start().await?;
+        self.attach().await
+    }
+
+    /// Reattach to an already-running exec session by id (mirrors
+    /// docker's `ContainerExecAttach`). The returned `Execution`
+    /// carries fresh stdin/stdout/stderr/result channels wired to a
+    /// new WebSocket; the caller discards any prior handle for the
+    /// same id. Returns `BoxliteError::SessionReaped` if the server
+    /// reports the session is no longer attachable.
     ///
     /// Default impl returns `Unsupported` — backends that don't model
     /// long-lived attachable sessions (local in-process) don't need it.
-    async fn attach(&self, _execution_id: &str) -> BoxliteResult<Execution> {
+    async fn attach_exec(&self, _execution_id: &str) -> BoxliteResult<Execution> {
         Err(BoxliteError::Unsupported(
             "this backend does not support reattaching to existing executions".into(),
         ))

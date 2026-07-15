@@ -5,6 +5,14 @@
 
 use crate::service::exec::state::ExecutionState;
 use nix::sys::signal::{kill, Signal};
+
+/// How long [`ExecutionRegistry::shutdown_all`] gives execs to die between
+/// SIGTERM and SIGKILL.
+///
+/// One budget, because there is one policy: both teardown paths — the
+/// host-driven Shutdown RPC and the guest's own power-off when the main
+/// command exits — drain the same execs and should wait the same amount.
+pub(crate) const SHUTDOWN_TIMEOUT_MS: u64 = 1000;
 use nix::unistd::Pid;
 use std::collections::HashMap;
 use std::sync::Arc;

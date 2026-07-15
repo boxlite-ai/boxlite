@@ -19,6 +19,13 @@ use crate::runtime::auth::Principal;
 /// Re-request a token once it is within this leeway of `expires_at`.
 const REFRESH_LEEWAY: Duration = Duration::from_secs(60);
 
+/// An upgraded attach WebSocket.
+pub(crate) type WsStream =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// The HTTP 101 response that upgraded a [`WsStream`].
+pub(crate) type WsHandshakeResponse = tokio_tungstenite::tungstenite::handshake::client::Response;
+
 /// HTTP client for the BoxLite REST API.
 ///
 /// Handles base URL construction, bearer auth (any [`Credential`] impl),
@@ -277,14 +284,19 @@ impl ApiClient {
     ///
     /// Translates the http(s) URL to ws(s), attaches the Bearer header
     /// when configured, and returns the upgraded stream.
-    pub(crate) async fn connect_ws(
+    pub(crate) async fn connect_ws(&self, path: &str) -> BoxliteResult<WsStream> {
+        let (stream, _resp) = self.connect_ws_with_response(path).await?;
+        Ok(stream)
+    }
+
+    /// Like [`connect_ws`](Self::connect_ws), but also returns the handshake
+    /// response so the caller can read server-assigned metadata off the
+    /// upgrade — `/boxes/{id}/attach` answers with the main session's
+    /// execution id, which the client has no other way to learn.
+    pub(crate) async fn connect_ws_with_response(
         &self,
         path: &str,
-    ) -> BoxliteResult<
-        tokio_tungstenite::WebSocketStream<
-            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-        >,
-    > {
+    ) -> BoxliteResult<(WsStream, WsHandshakeResponse)> {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
         use tokio_tungstenite::tungstenite::http::HeaderValue;
 
@@ -311,10 +323,9 @@ impl ApiClient {
             request.headers_mut().insert("Authorization", value);
         }
 
-        let (stream, _resp) = tokio_tungstenite::connect_async(request)
+        tokio_tungstenite::connect_async(request)
             .await
-            .map_err(map_ws_error)?;
-        Ok(stream)
+            .map_err(map_ws_error)
     }
 
     /// Build an authorized request (for custom operations like file upload/download).

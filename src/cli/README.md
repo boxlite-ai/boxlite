@@ -296,7 +296,14 @@ Scopes:          box:read, box:write, box:exec, image:read, snapshot:read
 
 ### `boxlite run`
 
-Create a box from an image and run a command.
+Create a box from an image and run a command, with docker's semantics: `COMMAND`
+replaces the image's `CMD`, the image's `ENTRYPOINT` is prepended, and the result
+**is** the container's init (PID 1). Omit it and the image's own default runs.
+
+The box lives exactly as long as that command. When it exits, the box stops and
+takes its exit code — `boxlite inspect -f '{{.State.ExitCode}}' NAME` reads it
+back. `exec` against a box whose command has finished is refused rather than
+silently restarting it, because restarting would run the command a second time.
 
 **Usage:** `boxlite run [OPTIONS] IMAGE [COMMAND]...`
 
@@ -325,9 +332,15 @@ boxlite run -v /host/data:/app/data alpine:latest cat /app/data/hello.txt
 
 ### `boxlite create`
 
-Create a new box without running a command.
+Create a box without starting it.
 
-**Usage:** `boxlite create [OPTIONS] IMAGE`
+`COMMAND` is stored, not run — it becomes the box's main command when the box is
+next started, exactly as under `run`. A box created *with* one is a job, and
+`exec`/`cp` will not start it implicitly (that would run the command); start it
+deliberately with `boxlite start`. A box created *without* one boots the image's
+default, and `exec` still starts it on demand.
+
+**Usage:** `boxlite create [OPTIONS] IMAGE [COMMAND]...`
 
 | Option | Short | Description |
 |--------|-------|-------------|

@@ -104,6 +104,7 @@ pub(crate) fn create_oci_bundle(
     gid: u32,
     bundle_root: &Path,
     user_mounts: &[spec::UserMount],
+    tty: bool,
 ) -> BoxliteResult<PathBuf> {
     let bundle_path = bundle_root.join(container_id);
 
@@ -133,6 +134,7 @@ pub(crate) fn create_oci_bundle(
         gid,
         &bundle_path,
         user_mounts,
+        tty,
     )?;
     let config_path = bundle_path.join("config.json");
 
@@ -190,33 +192,49 @@ pub(crate) fn create_container(
     Ok(())
 }
 
-/// Create container with custom stdio file descriptors.
-///
-/// This allows the init process to use pipes controlled by boxlite-guest,
-/// keeping interactive entrypoints (like /bin/sh) alive by holding stdin open.
+/// How the container's init process gets its stdio.
+pub(crate) enum InitIoSetup {
+    /// Pipes controlled by boxlite-guest, which keep interactive entrypoints
+    /// (like `/bin/sh`) alive by holding stdin open.
+    Pipes(super::stdio::InitStdioFds),
+
+    /// libcontainer allocates a PTY for init (OCI `process.terminal`, docker
+    /// `run -t`) and hands the master back over this console socket. Init gets
+    /// the replica as all three of its fds — so no stdio fds are passed here.
+    Console(String),
+}
+
+/// Create container with custom stdio.
 ///
 /// # Arguments
 ///
 /// * `container_id` - Unique container identifier
 /// * `state_root` - Directory for libcontainer state
 /// * `bundle_path` - OCI bundle directory with config.json
-/// * `stdio_fds` - Custom stdio file descriptors for init process
+/// * `io` - How init's stdio is wired (pipes, or a PTY via console socket)
 pub(crate) fn create_container_with_stdio(
     container_id: &str,
     state_root: &Path,
     bundle_path: &Path,
-    stdio_fds: super::stdio::InitStdioFds,
+    io: InitIoSetup,
 ) -> BoxliteResult<()> {
-    // Note: with_stdin/stdout/stderr must be called before as_init()
-    // because they're methods on ContainerBuilder, not InitContainerBuilder
-    ContainerBuilder::new(container_id.to_string(), SyscallType::default())
+    let builder = ContainerBuilder::new(container_id.to_string(), SyscallType::default())
         .with_root_path(state_root)
         .map_err(|e| BoxliteError::Internal(format!("Failed to set container root path: {}", e)))?
         .validate_id()
-        .map_err(|e| BoxliteError::Internal(format!("Invalid container ID: {}", e)))?
-        .with_stdin(stdio_fds.stdin)
-        .with_stdout(stdio_fds.stdout)
-        .with_stderr(stdio_fds.stderr)
+        .map_err(|e| BoxliteError::Internal(format!("Invalid container ID: {}", e)))?;
+
+    // Both arms must run before as_init(): these are ContainerBuilder methods,
+    // not InitContainerBuilder ones.
+    let builder = match io {
+        InitIoSetup::Pipes(fds) => builder
+            .with_stdin(fds.stdin)
+            .with_stdout(fds.stdout)
+            .with_stderr(fds.stderr),
+        InitIoSetup::Console(socket_path) => builder.with_console_socket(Some(socket_path)),
+    };
+
+    builder
         .as_init(bundle_path)
         .with_systemd(false)
         .with_detach(true)

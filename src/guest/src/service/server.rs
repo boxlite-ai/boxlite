@@ -39,6 +39,21 @@ pub(crate) struct GuestServer {
 
     /// Mount points frozen by Quiesce RPC, thawed by Thaw RPC.
     pub frozen_mounts: Mutex<Vec<PathBuf>>,
+
+    /// Set when a host-driven Shutdown RPC is in progress. The exit
+    /// watcher checks this to avoid powering the VM off underneath a
+    /// host-orchestrated teardown.
+    pub shutting_down: Arc<std::sync::atomic::AtomicBool>,
+
+    /// The tasks following each container's init, keyed by container id.
+    ///
+    /// Kept so `Shutdown` can *wait* for them. Killing init makes a watcher
+    /// wake up and write the exit file, but the write happens on its own task —
+    /// so without joining, the RPC can return, the host can read the exit file,
+    /// and the record it wanted may not be there yet. The host's `stop()`
+    /// reports the code the box died with (docker leaves ExitCode 137 after a
+    /// `docker stop`), and that must be ordered, not lucky.
+    pub init_watchers: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
 }
 
 impl GuestServer {
@@ -53,6 +68,8 @@ impl GuestServer {
             containers: Arc::new(Mutex::new(HashMap::new())),
             registry: ExecutionRegistry::new(),
             frozen_mounts: Mutex::new(Vec::new()),
+            shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            init_watchers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

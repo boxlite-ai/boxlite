@@ -19,7 +19,7 @@ use crate::runtime::backend::{BoxBackend, SnapshotBackend};
 use crate::runtime::id::BoxID;
 use crate::runtime::options::{CloneOptions, ExportOptions, SnapshotOptions};
 
-use super::client::ApiClient;
+use super::client::{ApiClient, WsStream};
 use super::exec::RestExecControl;
 use super::types::{
     BoxMetricsResponse, BoxResponse, CloneBoxRequest, CreateSnapshotRequest, ExecRequest,
@@ -46,6 +46,49 @@ impl RestBox {
 
     fn box_id_str(&self) -> String {
         self.cached_info.read().id.to_string()
+    }
+
+    /// Wire an already-open attach WebSocket into an `Execution`.
+    ///
+    /// Shared by [`BoxBackend::attach`] (the box's main command session)
+    /// and [`BoxBackend::attach_exec`] (a tenant exec): once the socket is
+    /// open, the two are the same session — same pump, same channels, same
+    /// control routes (`RestExecControl` addresses both by execution id).
+    /// Callers open the socket themselves, and do it synchronously, so a
+    /// 404/409 surfaces at *their* await point rather than arriving later
+    /// as a synthesized `ExecResult`.
+    fn wire_attach(&self, box_id: String, execution_id: String, stream: WsStream) -> Execution {
+        let (stdout_tx, stdout_rx) = mpsc::unbounded_channel::<String>();
+        let (stderr_tx, stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (result_tx, result_rx) = mpsc::unbounded_channel::<ExecResult>();
+
+        let ws_client = self.client.clone();
+        let ws_box_id = box_id.clone();
+        let ws_exec_id = execution_id.clone();
+        tokio::spawn(async move {
+            attach_ws_pump(
+                &ws_client,
+                &ws_box_id,
+                &ws_exec_id,
+                stream,
+                stdin_rx,
+                stdout_tx,
+                stderr_tx,
+                result_tx,
+            )
+            .await;
+        });
+
+        let control = RestExecControl::new(self.client.clone(), box_id);
+        Execution::new(
+            execution_id,
+            Box::new(control),
+            result_rx,
+            Some(ExecStdin::new(stdin_tx)),
+            Some(ExecStdout::new(stdout_rx)),
+            Some(ExecStderr::new(stderr_rx)),
+        )
     }
 }
 
@@ -131,12 +174,75 @@ impl BoxBackend for RestBox {
         ))
     }
 
-    async fn attach(&self, execution_id: &str) -> BoxliteResult<Execution> {
+    /// Start the box with a client already attached — over REST, that *is*
+    /// `attach()`.
+    ///
+    /// The server's `/boxes/{id}/attach` boots a cold box with the client on the
+    /// stream (create → attach → start) and refuses a stopped one, so the whole
+    /// ordering happens on the far side of the wire and there is nothing left for
+    /// this end to sequence.
+    ///
+    /// Taking the trait's default here would have been a quiet bug: it is
+    /// `start()` then `attach()` — a `POST /start` that runs the main command to
+    /// completion server-side, followed by an attach that arrives too late to see
+    /// any of it. `boxlite run --url … alpine echo hi` would print a refusal
+    /// instead of `hi`.
+    async fn start_attached(&self) -> BoxliteResult<Execution> {
+        self.attach().await
+    }
+
+    /// Attach to the box's main command session — the container's init.
+    ///
+    /// Hits the container-attach route (docker's
+    /// `POST /containers/{id}/attach`), which is a distinct resource from
+    /// exec-attach: the client cannot name the init session, because its
+    /// execution id is the container id and `BoxInfo` does not carry it.
+    /// The server answers the upgrade with that id, so the `Execution`
+    /// this returns is a fully ordinary one — signal, resize and kill go
+    /// out over the same `/executions/{id}/…` routes as any exec, and the
+    /// pump reconnects through them too.
+    async fn attach(&self) -> BoxliteResult<Execution> {
+        let box_id = self.box_id_str();
+
+        // Synchronous connect, same as attach_exec: a 404 (no such box) or
+        // 409 (another client already attached) belongs at the caller's
+        // `await box.attach()`, not in a later ExecResult.
+        let path = format!("/boxes/{}/attach", box_id);
+        let (stream, handshake) =
+            self.client
+                .connect_ws_with_response(&path)
+                .await
+                .map_err(|e| match e {
+                    BoxliteError::AlreadyExists(msg) => BoxliteError::AlreadyExists(format!(
+                        "box {} main session has another client attached: {}",
+                        box_id, msg
+                    )),
+                    other => other,
+                })?;
+
+        let execution_id = handshake
+            .headers()
+            .get(MAIN_SESSION_ID_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| {
+                BoxliteError::Unsupported(format!(
+                    "server did not identify box {}'s main session (no {} header on the attach \
+                     upgrade); the server predates container attach",
+                    box_id, MAIN_SESSION_ID_HEADER
+                ))
+            })?
+            .to_string();
+
+        Ok(self.wire_attach(box_id, execution_id, stream))
+    }
+
+    async fn attach_exec(&self, execution_id: &str) -> BoxliteResult<Execution> {
         let box_id = self.box_id_str();
 
         // Open the WebSocket synchronously so a rejection (404 reaped /
         // 409 already-attached) surfaces here, at the caller's `await
-        // box.attach(id)` point — not as an after-the-fact ExecResult
+        // box.attach_exec(id)` point — not as an after-the-fact ExecResult
         // pulled from `wait()`.
         let path = format!("/boxes/{}/executions/{}/attach", box_id, execution_id);
         let stream = self.client.connect_ws(&path).await.map_err(|e| match e {
@@ -151,41 +257,7 @@ impl BoxBackend for RestBox {
             other => other,
         })?;
 
-        let (stdout_tx, stdout_rx) = mpsc::unbounded_channel::<String>();
-        let (stderr_tx, stderr_rx) = mpsc::unbounded_channel::<String>();
-        let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let (result_tx, result_rx) = mpsc::unbounded_channel::<ExecResult>();
-
-        let ws_client = self.client.clone();
-        let ws_box_id = box_id.clone();
-        let ws_exec_id = execution_id.to_string();
-        tokio::spawn(async move {
-            attach_ws_pump(
-                &ws_client,
-                &ws_box_id,
-                &ws_exec_id,
-                stream,
-                stdin_rx,
-                stdout_tx,
-                stderr_tx,
-                result_tx,
-            )
-            .await;
-        });
-
-        let control = RestExecControl::new(self.client.clone(), box_id);
-        let stdout = ExecStdout::new(stdout_rx);
-        let stderr = ExecStderr::new(stderr_rx);
-        let stdin = ExecStdin::new(stdin_tx);
-
-        Ok(Execution::new(
-            execution_id.to_string(),
-            Box::new(control),
-            result_rx,
-            Some(stdin),
-            Some(stdout),
-            Some(stderr),
-        ))
+        Ok(self.wire_attach(box_id, execution_id.to_string(), stream))
     }
 
     async fn metrics(&self) -> BoxliteResult<BoxMetrics> {
@@ -442,6 +514,14 @@ impl SnapshotBackend for RestBox {
 // JSON: resize / signal / stdin_eof / exit / error). Wire format is the
 // authoritative one defined by the server attach handler — see plan D1/D2.
 
+/// Upgrade-response header carrying the main session's execution id (the
+/// container id) on `/boxes/{id}/attach`. Server counterpart:
+/// `MAIN_SESSION_ID_HEADER` in `src/cli/src/commands/serve/mod.rs`. Like
+/// the channel prefixes and control frames above, the attach wire contract
+/// is duplicated on each side of the boundary rather than shared through a
+/// crate.
+const MAIN_SESSION_ID_HEADER: &str = "x-boxlite-execution-id";
+
 /// Maximum idle interval before the WS reader gives up on the connection.
 ///
 /// The watchdog catches silent CDN/proxy cuts that would otherwise leave the
@@ -553,9 +633,7 @@ async fn attach_ws_pump(
     client: &ApiClient,
     box_id: &str,
     execution_id: &str,
-    initial_stream: tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-    >,
+    initial_stream: WsStream,
     mut stdin_rx: mpsc::UnboundedReceiver<Vec<u8>>,
     stdout_tx: mpsc::UnboundedSender<String>,
     stderr_tx: mpsc::UnboundedSender<String>,
@@ -1107,6 +1185,19 @@ mod tests {
     use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::Mutex;
     use tokio_tungstenite::tungstenite::Message;
+    use tokio_tungstenite::tungstenite::handshake::server::{
+        Request as HandshakeRequest, Response as HandshakeResponse,
+    };
+    use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
+
+    /// Pull the path out of an HTTP request line (`GET /v1/... HTTP/1.1`).
+    fn request_path(head: &str) -> Option<String> {
+        head.lines()
+            .next()?
+            .split_whitespace()
+            .nth(1)
+            .map(str::to_string)
+    }
 
     /// Recorded behavior of the in-process test server.
     #[derive(Default)]
@@ -1115,6 +1206,11 @@ mod tests {
         received_stdin: Vec<Vec<u8>>,
         /// Whether `GET /executions/{id}` was hit and what we replied with.
         status_calls: u32,
+        /// Request-line paths the client asked for, in order.
+        requested_paths: Vec<String>,
+        /// Headers to add to the WS handshake response — how the real
+        /// server hands back the main session's execution id.
+        ws_response_headers: Vec<(String, String)>,
     }
 
     /// Shorthand for the `Arc<Mutex<...>>` shared between server and client.
@@ -1147,6 +1243,20 @@ mod tests {
     fn client_for(port: u16) -> ApiClient {
         let opts = BoxliteRestOptions::new(format!("http://127.0.0.1:{}", port));
         ApiClient::new(&opts).expect("ApiClient::new")
+    }
+
+    /// A `RestBox` for `box_id`, pointed at the in-process server. The
+    /// `BoxInfo` comes out of the production wire decoder rather than a
+    /// hand-rolled literal.
+    fn rest_box_for(port: u16, box_id: &str) -> RestBox {
+        let body = format!(
+            r#"{{"box_id":"{box_id}","name":null,"status":"running",
+                 "created_at":"2026-07-14T00:00:00Z",
+                 "updated_at":"2026-07-14T00:00:00Z",
+                 "pid":null,"image":"alpine:latest","cpus":1,"memory_mib":512}}"#
+        );
+        let resp: BoxResponse = serde_json::from_str(&body).expect("BoxResponse");
+        RestBox::new(client_for(port), resp.to_box_info().expect("to_box_info"))
     }
 
     /// Send a minimal HTTP/1.1 200 OK with a JSON body.
@@ -1221,6 +1331,9 @@ mod tests {
     /// The loop runs until the listener is dropped (`server.abort()` from
     /// the test) — never `return`s on its own — so status probes that
     /// arrive AFTER the WS connection closes still get answered.
+    // The handshake callback's Err type is tungstenite's `ErrorResponse`
+    // (a full http::Response); its size is not ours to shrink.
+    #[allow(clippy::result_large_err)]
     async fn run_server<F, Fut>(
         listener: TcpListener,
         state: SharedState,
@@ -1240,6 +1353,9 @@ mod tests {
             };
             let head = read_request_head(&mut stream).await;
             let head_str = String::from_utf8_lossy(&head);
+            if let Some(path) = request_path(&head_str) {
+                state.lock().await.requested_paths.push(path);
+            }
             let is_upgrade = head_str.to_ascii_lowercase().contains("upgrade: websocket");
             if is_upgrade {
                 if let Some(handler) = ws_handler.take() {
@@ -1248,7 +1364,17 @@ mod tests {
                         head_pos: 0,
                         inner: stream,
                     };
-                    match tokio_tungstenite::accept_async(chained).await {
+                    let extra_headers = state.lock().await.ws_response_headers.clone();
+                    let with_headers = |_req: &HandshakeRequest, mut resp: HandshakeResponse| {
+                        for (name, value) in extra_headers {
+                            resp.headers_mut().insert(
+                                HeaderName::from_bytes(name.as_bytes()).expect("header name"),
+                                HeaderValue::from_str(&value).expect("header value"),
+                            );
+                        }
+                        Ok(resp)
+                    };
+                    match tokio_tungstenite::accept_hdr_async(chained, with_headers).await {
                         Ok(ws) => handler(ws, state.clone()).await,
                         Err(_) => continue,
                     }
@@ -1442,6 +1568,81 @@ mod tests {
         assert!(msg.contains("watchdog"), "unexpected diagnostic: {:?}", msg);
 
         attach.await.unwrap();
+        server.abort();
+    }
+
+    // ─── attach_streams_main_session_over_container_route ─────────────────
+    //
+    // `boxlite run IMAGE COMMAND` against a REST runtime attaches to the
+    // box's MAIN session — COMMAND *is* the container init now (docker
+    // semantics), so `run` calls RestBox::attach(), not exec(). Before
+    // this existed the REST backend inherited the trait's `Unsupported`
+    // default and `run` failed outright against `--url` / a stored profile.
+    //
+    // The attach must address the container route (exec-attach cannot
+    // reach init: the client has no id for it), adopt the execution id the
+    // server hands back on the upgrade — every control op the terminal
+    // needs (SIGINT on Ctrl-C, resize on SIGWINCH) is addressed by that id
+    // — and stream init's output and exit code.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn attach_streams_main_session_over_container_route() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let state: SharedState = Arc::new(Mutex::new(ServerState::default()));
+        state.lock().await.ws_response_headers = vec![(
+            "x-boxlite-execution-id".to_string(),
+            "container-1".to_string(),
+        )];
+
+        let state_clone = state.clone();
+        let server = tokio::spawn(async move {
+            run_server(listener, state_clone, None, |mut ws, _state| async move {
+                ws.send(Message::Binary(vec![0x01, b'h', b'i']))
+                    .await
+                    .unwrap();
+                ws.send(Message::Text(r#"{"type":"exit","exit_code":7}"#.into()))
+                    .await
+                    .unwrap();
+                let _ = ws.close(None).await;
+            })
+            .await;
+        });
+
+        let rest_box = rest_box_for(port, "box1");
+        let mut execution = tokio::time::timeout(Duration::from_secs(3), rest_box.attach())
+            .await
+            .expect("attach timed out")
+            .expect("the REST backend must support attaching to the main command session");
+
+        assert_eq!(
+            execution.id(),
+            "container-1",
+            "the main session must adopt the execution id the server assigned on the upgrade",
+        );
+
+        let mut stdout = execution.stdout().expect("stdout stream");
+        let line = tokio::time::timeout(Duration::from_secs(3), stdout.next())
+            .await
+            .expect("stdout timed out")
+            .expect("stdout closed without data");
+        assert_eq!(line, "hi", "init's output must reach the caller");
+
+        let result = tokio::time::timeout(Duration::from_secs(3), execution.wait())
+            .await
+            .expect("wait timed out")
+            .expect("wait");
+        assert_eq!(
+            result.exit_code, 7,
+            "init's exit code must propagate (it becomes `run`'s exit code)",
+        );
+
+        let recorded = state.lock().await;
+        assert_eq!(
+            recorded.requested_paths,
+            vec!["/v1/boxes/box1/attach".to_string()],
+            "attach must address the container-attach route",
+        );
+        drop(recorded);
         server.abort();
     }
 

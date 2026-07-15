@@ -85,6 +85,13 @@ pub(in crate::commands::serve) async fn start_box(
     State(state): State<Arc<AppState>>,
     Path(box_id): Path<String>,
 ) -> Response {
+    // Drop any cached handle first. A box now stops *itself* when its main
+    // command exits, and such a handle is spent — it holds the dead VM's
+    // LiveState and can never boot again (BoxImpl::start refuses it). Take a
+    // fresh one from the runtime, which rebuilds from persisted state, so that
+    // starting a box that ran to completion actually boots it.
+    state.boxes.write().await.remove(&box_id);
+
     let litebox = match get_or_fetch_box(&state, &box_id).await {
         Ok(b) => b,
         Err(resp) => return resp,
@@ -110,6 +117,11 @@ pub(in crate::commands::serve) async fn stop_box(
     if let Err(e) = litebox.stop().await {
         return error_from_boxlite(&e);
     }
+
+    // stop() cancels the box's token, which invalidates this handle for good.
+    // Keeping it cached would hand the next request a handle that answers every
+    // call with "invalidated after stop()".
+    state.boxes.write().await.remove(&box_id);
 
     let info = litebox.info();
     Json(box_info_to_response(&info)).into_response()

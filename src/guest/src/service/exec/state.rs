@@ -21,6 +21,14 @@ pub(crate) trait InitHealthCheck: Send + Sync {
     fn diagnose_exit(&mut self) -> String;
 }
 
+/// How to wait for the process: container processes are children of the
+/// zygote (only it can waitpid them), guest processes are waited directly.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum WaitVia {
+    Zygote,
+    Direct,
+}
+
 /// Inner state that requires synchronization.
 struct Inner {
     /// The process handle (owns pid, pty_controller, stdin, stdout, stderr)
@@ -33,6 +41,8 @@ struct Inner {
     /// Optional init health checker for the container this exec runs in.
     /// Used to detect container init death when exec gets SIGKILL.
     init_health: Option<Arc<Mutex<dyn InitHealthCheck>>>,
+    /// Wait mechanism for this process.
+    wait_via: WaitVia,
 }
 
 /// Execution state.
@@ -42,21 +52,30 @@ struct Inner {
 #[derive(Clone)]
 pub(crate) struct ExecutionState {
     inner: Arc<Mutex<Inner>>,
+    /// Cached exit status. The zygote reaps a pid exactly once — a second
+    /// concurrent waitpid would race the first and see ECHILD — so the
+    /// first waiter performs the wait and every other caller (concurrent
+    /// or later) awaits/reads the cached result.
+    exit: Arc<tokio::sync::OnceCell<crate::service::exec::exec_handle::ExitStatus>>,
 }
 
 impl ExecutionState {
-    /// Create new execution state.
+    fn from_inner(inner: Inner) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(inner)),
+            exit: Arc::new(tokio::sync::OnceCell::new()),
+        }
+    }
+
+    /// Create new execution state (guest process, waited directly).
     pub(super) fn new(handle: ExecHandle) -> Self {
-        let inner = Inner {
+        Self::from_inner(Inner {
             handle: Some(handle),
             output_tasks: Vec::new(),
             timed_out: false,
             init_health: None,
-        };
-
-        Self {
-            inner: Arc::new(Mutex::new(inner)),
-        }
+            wait_via: WaitVia::Direct,
+        })
     }
 
     /// Create execution state with an init health checker.
@@ -67,16 +86,30 @@ impl ExecutionState {
         handle: ExecHandle,
         init_health: Arc<Mutex<dyn InitHealthCheck>>,
     ) -> Self {
-        let inner = Inner {
+        Self::from_inner(Inner {
             handle: Some(handle),
             output_tasks: Vec::new(),
             timed_out: false,
             init_health: Some(init_health),
-        };
+            wait_via: WaitVia::Zygote,
+        })
+    }
 
-        Self {
-            inner: Arc::new(Mutex::new(inner)),
-        }
+    /// Create execution state for the container's init process itself.
+    ///
+    /// Init is waited *directly*, not via the zygote: libcontainer spawns
+    /// init through an intermediate process (zygote → intermediate → init)
+    /// and the intermediate exits after handoff, so init reparents to
+    /// boxlite-guest (the VM's PID 1). The zygote was never its parent —
+    /// a zygote waitpid would return ECHILD immediately.
+    pub(crate) fn new_init_session(handle: ExecHandle) -> Self {
+        Self::from_inner(Inner {
+            handle: Some(handle),
+            output_tasks: Vec::new(),
+            timed_out: false,
+            init_health: None,
+            wait_via: WaitVia::Direct,
+        })
     }
 
     /// Check if the container init process died.
@@ -154,27 +187,38 @@ impl ExecutionState {
 
     /// Wait for process to exit.
     ///
-    /// Routes to the correct wait mechanism based on executor type:
-    /// - Container processes (init_health.is_some()) → zygote IPC polling
-    /// - Guest processes (init_health.is_none()) → direct waitpid
+    /// Routes to the correct wait mechanism (`wait_via`), which is decided by
+    /// who actually parents the process — only a parent may reap it:
+    /// - Exec tenants → zygote IPC polling (the zygote forked them)
+    /// - Container init → direct waitpid: libcontainer's intermediate exits
+    ///   after handoff, so init reparents to the guest (PID 1), not the zygote
+    /// - Guest processes → direct waitpid
+    ///
+    /// Multi-waiter safe: the first caller performs the underlying wait and
+    /// the result is cached; concurrent and later callers get the cached
+    /// status instead of racing the reap (waitpid succeeds exactly once).
     pub async fn wait_process(
         &self,
     ) -> Result<crate::service::exec::exec_handle::ExitStatus, Status> {
-        let (pid, is_container) = {
+        let (pid, wait_via) = {
             let inner = self.inner.lock().await;
             let pid = inner
                 .handle
                 .as_ref()
                 .ok_or_else(|| Status::failed_precondition("Handle not available"))?
                 .pid();
-            (pid, inner.init_health.is_some())
+            (pid, inner.wait_via)
         };
 
-        if is_container {
-            Self::wait_via_zygote(pid).await
-        } else {
-            Self::wait_direct(pid).await
-        }
+        self.exit
+            .get_or_try_init(|| async move {
+                match wait_via {
+                    WaitVia::Zygote => Self::wait_via_zygote(pid).await,
+                    WaitVia::Direct => Self::wait_direct(pid).await,
+                }
+            })
+            .await
+            .copied()
     }
 
     /// Wait for a container process via zygote WNOHANG polling.

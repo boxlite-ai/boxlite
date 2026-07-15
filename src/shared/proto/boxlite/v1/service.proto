@@ -8,9 +8,17 @@ package boxlite.v1;
 
 // Container lifecycle management
 service Container {
-  // Initialize OCI container (called after GuestInit)
-  // Prepares rootfs, then starts the container with the provided configuration
+  // Prepare the rootfs and create the container. Starts it too, unless the
+  // request sets `defer_start` — see ContainerInitRequest.
   rpc Init(ContainerInitRequest) returns (ContainerInitResponse);
+
+  // Run the init process of a container created with `defer_start`.
+  //
+  // The split exists so a client can attach to the main command *before* it
+  // runs — docker's create → attach → start. Fused, a fast command
+  // (`run alpine echo hi`) can exit before an attach issued after start ever
+  // reaches the guest, and its output and exit code die with the VM.
+  rpc Start(ContainerStartRequest) returns (ContainerStartResponse);
 }
 
 // Guest agent management
@@ -208,6 +216,40 @@ message ContainerInitRequest {
   // Additional CA certificates to install in the container trust store.
   // Used for MITM secret substitution — the container trusts the proxy CA.
   repeated CACert ca_certs = 5;
+  // Session id the guest registers the container's init process under, so
+  // the main command is addressable through the same execution namespace as
+  // exec sessions (Attach/SendInput/Wait/Kill take an execution_id).
+  //
+  // Host-assigned and set to container_id, mirroring the kata-agent
+  // protocol, where the runtime fills CreateContainerRequest.exec_id with
+  // the container id and generates a fresh uuid for every later exec. The
+  // host owns the naming; the guest registers what it is handed rather than
+  // re-deriving the rule on its own side of the wire.
+  string execution_id = 6;
+
+  // Create the container but do not run its init process; the caller will say
+  // when, via Container.Start. Lets a client attach to the main command before
+  // it runs, which is the only way to be sure of catching the output and exit
+  // code of a command that finishes immediately.
+  //
+  // Default (false) keeps Init doing create-and-start in one step, which is what
+  // every non-interactive caller wants.
+  bool defer_start = 7;
+}
+
+message ContainerStartRequest {
+  string container_id = 1;
+}
+
+message ContainerStartResponse {
+  oneof result {
+    ContainerStartSuccess success = 1;
+    ContainerInitError error = 2;
+  }
+}
+
+message ContainerStartSuccess {
+  string container_id = 1;
 }
 
 // A CA certificate to add to the container's trust store.
@@ -247,7 +289,9 @@ message ContainerInitError {
   string reason = 1;
 }
 
-// Container configuration (OCI-derived, from image)
+// The container init process's OCI config: image-derived, with the box's
+// create-time overrides already applied by the host. These are the fields of
+// OCI runtime-spec `process`.
 message ContainerConfig {
   // Entrypoint command (e.g., ["/bin/sh", "-c", "echo hello"])
   repeated string entrypoint = 1;
@@ -260,6 +304,13 @@ message ContainerConfig {
 
   // Username or UID (format: <name|uid>[:<group|gid>]).
   string user = 4;
+
+  // OCI `process.terminal` — run init on a PTY instead of pipes (docker
+  // `run -t`). No size here on purpose: a box outlives the client that
+  // attaches to it, so a size captured at create time would be stale. The
+  // guest opens the PTY at a default size and the attaching client's
+  // ResizeTty sets the real one.
+  bool tty = 5;
 }
 
 // ============================================================================

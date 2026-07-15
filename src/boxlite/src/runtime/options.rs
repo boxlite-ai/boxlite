@@ -386,6 +386,16 @@ pub struct BoxOptions {
     #[serde(default)]
     pub user: Option<String>,
 
+    /// Run the box's main command on a PTY rather than pipes (docker `run -t`).
+    ///
+    /// This is a property of the *box*, not of an attach: the main command is
+    /// the container's init, so whether it gets a terminal is decided when the
+    /// container is created and cannot be changed by a later client. The
+    /// terminal's size is not fixed here — the attaching client sets it, since
+    /// a box outlives any one client.
+    #[serde(default)]
+    pub tty: bool,
+
     /// Secrets for MITM proxy injection into outbound HTTP(S) requests.
     ///
     /// Each secret maps a placeholder string to a real value. When the box
@@ -496,6 +506,7 @@ impl Default for BoxOptions {
             entrypoint: None,
             cmd: None,
             user: None,
+            tty: false,
             secrets: Vec::new(),
         }
     }

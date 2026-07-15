@@ -47,13 +47,16 @@ pub async fn execute(args: CpArgs, global: &GlobalFlags) -> Result<()> {
         } => {
             let handle = require_box(&rt, &box_name).await?;
             let was_running = handle.info().status == boxlite::BoxStatus::Running;
-            if !was_running {
-                handle.start().await?;
-            }
+
+            // No explicit start(): copy_into boots the box itself when that is
+            // safe, and refuses when it is not. Starting it here would walk
+            // straight past that guard and, for a box whose init is the user's
+            // own command, run their workload a second time just to fetch a file.
             handle
                 .copy_into(&host, &box_path, opts)
                 .await
                 .map_err(anyhow::Error::from)?;
+
             if !was_running {
                 handle.stop().await?;
             }
@@ -66,13 +69,17 @@ pub async fn execute(args: CpArgs, global: &GlobalFlags) -> Result<()> {
         } => {
             let handle = require_box(&rt, &box_name).await?;
             let was_running = handle.info().status == boxlite::BoxStatus::Running;
-            if !was_running {
-                handle.start().await?;
-            }
+
+            // Same as above: let copy_out decide whether booting is safe. This
+            // is the path that would otherwise turn
+            //   boxlite run --name job alpine sh -c 'send-payment'
+            //   boxlite cp job:/receipt .
+            // into a second payment.
             handle
                 .copy_out(&box_path, &host, opts)
                 .await
                 .map_err(anyhow::Error::from)?;
+
             if !was_running {
                 handle.stop().await?;
             }

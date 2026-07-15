@@ -69,6 +69,22 @@ impl ContainerRootfsInitConfig {
     }
 }
 
+/// How the container's init process is brought up.
+///
+/// Both of these describe init itself rather than the image, and both are
+/// decided by the caller at create time — so they travel together.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct InitProcessSetup {
+    /// OCI `process.terminal`: give init a PTY rather than pipes (docker
+    /// `run -t`). It cannot be added later — init is created once.
+    pub tty: bool,
+
+    /// Create the container but do not run init; the caller will, once it has
+    /// attached (docker's create → attach → start). Without this, a command that
+    /// finishes instantly can be gone before the attach lands.
+    pub defer_start: bool,
+}
+
 /// Container service interface.
 pub struct ContainerInterface {
     client: ContainerClient<Channel>,
@@ -99,12 +115,16 @@ impl ContainerInterface {
         rootfs: ContainerRootfsInitConfig,
         mounts: Vec<ContainerMount>,
         ca_certs: Vec<String>,
+        init_setup: InitProcessSetup,
     ) -> BoxliteResult<String> {
         let proto_config = ProtoContainerConfig {
             entrypoint: image_config.final_cmd(),
             env: image_config.env.clone(),
             workdir: image_config.working_dir.clone(),
             user: image_config.user.clone(),
+            // Not an image property: `run -t` decides it, and init is the
+            // process it applies to (OCI `process.terminal`).
+            tty: init_setup.tty,
         };
 
         // Convert ContainerMount to proto BindMount
@@ -139,6 +159,14 @@ impl ContainerInterface {
             rootfs: Some(rootfs.into_proto()),
             mounts: proto_mounts,
             ca_certs: ca_certs.into_iter().map(|pem| CaCert { pem }).collect(),
+            // Init's session id, kata-style: exec_id == container_id. The host
+            // declares it here so `LiteBox::attach()` can address the main
+            // command with the same id it sent, instead of both sides
+            // separately hard-coding the convention.
+            execution_id: container_id.to_string(),
+            // When set, the guest creates the container and stops: we start it
+            // ourselves, after attaching. See `Container.Start`.
+            defer_start: init_setup.defer_start,
         };
 
         let response = self.client.init(request).await?.into_inner();
@@ -157,6 +185,40 @@ impl ContainerInterface {
             }
             None => Err(BoxliteError::Internal(
                 "ContainerInit response missing result".to_string(),
+            )),
+        }
+    }
+
+    /// Run the init process of a container created with `defer_start`.
+    ///
+    /// The second half of docker's create → attach → start: the caller has
+    /// attached to the main command's session, so nothing it prints and no code
+    /// it exits with can be missed, however fast it finishes.
+    pub async fn start(&mut self, container_id: &str) -> BoxliteResult<()> {
+        use boxlite_shared::{ContainerStartRequest, container_start_response};
+
+        let response = self
+            .client
+            .start(ContainerStartRequest {
+                container_id: container_id.to_string(),
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            Some(container_start_response::Result::Success(_)) => {
+                tracing::debug!(container_id = %container_id, "Container started");
+                Ok(())
+            }
+            Some(container_start_response::Result::Error(err)) => {
+                tracing::error!(container_id = %container_id, "Container start failed: {}", err.reason);
+                Err(BoxliteError::Internal(format!(
+                    "Container start failed: {}",
+                    err.reason
+                )))
+            }
+            None => Err(BoxliteError::Internal(
+                "ContainerStart response missing result".to_string(),
             )),
         }
     }

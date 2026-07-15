@@ -20,7 +20,7 @@
 pub mod exec_handle;
 pub(in crate::service) mod executor;
 pub(in crate::service) mod registry;
-mod state;
+pub(in crate::service) mod state;
 mod timeout;
 
 // Re-export trait so container module can implement it
@@ -412,6 +412,26 @@ async fn spawn_with_executor(
                 container_id = %container_id,
                 "Using ContainerExecutor"
             );
+            // Refuse cleanly when the container's init has already exited
+            // (docker semantics: no exec in a stopped container). Without
+            // this, the tenant build reaches libcontainer against a dead
+            // init and surfaces an opaque procfs internal error.
+            //
+            // Presence is the signal, not parseability: a torn record still
+            // means init is gone, and letting a bad parse fall through here
+            // would hand the exec straight back to the panic.
+            let exit_file = server.layout.shared().container(container_id).exit_file();
+            if exit_file.exists() {
+                let how = boxlite_shared::layout::ExitRecord::read(&exit_file).map_or_else(
+                    || "init exited".to_string(),
+                    |record| format!("init exited with code {}", record.exit_code),
+                );
+                return Err(spawn_error(
+                    execution_id,
+                    format!("container is not running: {how}"),
+                ));
+            }
+
             // Look up container from registry
             let container_arc = {
                 let containers_guard = server.containers.lock().await;

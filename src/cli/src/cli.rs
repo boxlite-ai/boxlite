@@ -328,8 +328,9 @@ pub struct ProcessFlags {
     pub user: Option<String>,
 
     /// Override the image entrypoint with a single executable, mirroring
-    /// `docker run --entrypoint`. Sets the container's configured entrypoint;
-    /// any trailing command is still exec'd as the foreground process.
+    /// `docker run --entrypoint`. Any trailing COMMAND replaces the image's
+    /// CMD and is appended to it, and the result runs as the container's
+    /// init.
     #[arg(long = "entrypoint", value_name = "EXEC")]
     pub entrypoint: Option<String>,
 }
@@ -350,6 +351,12 @@ impl ProcessFlags {
         if let Some(ref exec) = self.entrypoint {
             opts.entrypoint = Some(vec![exec.clone()]);
         }
+        if let Some(ref user) = self.user {
+            opts.user = Some(user.clone());
+        }
+        // `-t` is a property of the container's init, which COMMAND now is, so
+        // it has to be decided here at create time rather than at attach.
+        opts.tty = self.tty;
         Ok(())
     }
 
@@ -1084,6 +1091,23 @@ mod tests {
             .expect("entrypoint apply");
 
         assert_eq!(opts.entrypoint, Some(vec!["/bin/bash".to_string()]));
+    }
+
+    /// `-t` has to reach `BoxOptions.tty`, because the terminal now belongs to
+    /// the *container's* init rather than to an exec: nothing downstream can
+    /// add it later. When this mapping was missing, `run -it` still parsed,
+    /// still put the local terminal in raw mode, and still ran — just against a
+    /// process on pipes, with no prompt and no job control.
+    #[test]
+    fn test_process_flags_tty_reaches_box_options() {
+        let mut opts = BoxOptions::default();
+        assert!(!opts.tty, "a box is not a terminal by default");
+
+        let mut flags = process_flags_with_entrypoint(None);
+        flags.tty = true;
+        flags.apply_to(&mut opts).expect("tty apply");
+
+        assert!(opts.tty, "-t must make the main command a terminal");
     }
 
     #[test]

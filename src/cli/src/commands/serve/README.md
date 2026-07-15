@@ -131,12 +131,22 @@ permissive (accepts any/no bearer) — the zero-config local-dev default.
 
 | Method | Path                                                            | Handler                       | Description                 |
 |--------|-----------------------------------------------------------------|-------------------------------|-----------------------------|
+| GET    | `/v1/boxes/{box_id}/attach`                             | `executions::attach_box`      | WebSocket attach to init    |
 | POST   | `/v1/boxes/{box_id}/exec`                               | `executions::start_execution` | Start a new command         |
 | GET    | `/v1/boxes/{box_id}/executions/{id}`                    | `executions::get_execution`   | Get status + exit code      |
 | DELETE | `/v1/boxes/{box_id}/executions/{id}`                    | `executions::kill_execution`  | SIGKILL + evict             |
 | GET    | `/v1/boxes/{box_id}/executions/{id}/attach`             | `executions::attach_execution`| WebSocket attach (bidi)     |
 | POST   | `/v1/boxes/{box_id}/executions/{id}/signal`             | `executions::send_signal`     | Send cooperative signal     |
 | POST   | `/v1/boxes/{box_id}/executions/{id}/resize`             | `executions::resize_tty`      | Resize PTY                  |
+
+`/attach` is the box's **main command session** — the container's init, which
+`run IMAGE COMMAND` replaces with COMMAND (docker semantics). It mirrors
+docker's `POST /containers/{id}/attach`, distinct from exec-attach: the client
+has no id for init, because init's execution id is the container id. The first
+attach opens that session and registers it alongside tenant execs; the upgrade
+response returns its id in `X-Boxlite-Execution-Id`, so signal/resize/kill and
+reconnect then go through the `/executions/{id}/…` routes above. A second
+client on an attached main session gets 409, same as for an exec.
 
 ### Files
 

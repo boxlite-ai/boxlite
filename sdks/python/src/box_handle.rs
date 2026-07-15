@@ -86,14 +86,25 @@ impl PyBox {
         })
     }
 
-    /// Reattach to a running execution by id. Returns a fresh
-    /// `Execution` wired to a new WebSocket; the caller discards any
-    /// previous handle for the same id. Raises if the server reports
-    /// the session is no longer attachable.
-    fn attach<'a>(&self, py: Python<'a>, execution_id: String) -> PyResult<Bound<'a, PyAny>> {
+    /// Attach to a session in the box (docker-py shape):
+    /// - no argument → the box's main command session (`run`'s COMMAND
+    ///   runs as the container init; this follows it).
+    /// - with `execution_id` → reattach to that exec session on a fresh
+    ///   WebSocket; the caller discards any previous handle for the same
+    ///   id. Raises if the server reports the session is no longer
+    ///   attachable.
+    #[pyo3(signature = (execution_id=None))]
+    fn attach<'a>(
+        &self,
+        py: Python<'a>,
+        execution_id: Option<String>,
+    ) -> PyResult<Bound<'a, PyAny>> {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let execution = handle.attach(&execution_id).await.map_err(map_err)?;
+            let execution = match execution_id {
+                None => handle.attach().await.map_err(map_err)?,
+                Some(id) => handle.attach_exec(&id).await.map_err(map_err)?,
+            };
             Ok(PyExecution {
                 execution: Arc::new(execution),
             })

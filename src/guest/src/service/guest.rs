@@ -10,7 +10,7 @@ use boxlite_shared::{
     QuiesceResponse, ShutdownRequest, ShutdownResponse, ThawRequest, ThawResponse,
 };
 use tonic::{Request, Response, Status};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 #[tonic::async_trait]
 impl GuestService for GuestServer {
@@ -92,10 +92,16 @@ impl GuestService for GuestServer {
     ) -> Result<Response<ShutdownResponse>, Status> {
         info!("Received shutdown request - graceful shutdown starting");
 
+        // Host owns this teardown — tell the exit watcher to stand down
+        // (it would otherwise race us with its own VM power-off).
+        self.shutting_down
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
         // Step 1: Gracefully shutdown all running executions
-        const EXEC_SHUTDOWN_TIMEOUT_MS: u64 = 1000;
         info!("Stopping running executions...");
-        self.registry.shutdown_all(EXEC_SHUTDOWN_TIMEOUT_MS).await;
+        self.registry
+            .shutdown_all(crate::service::exec::registry::SHUTDOWN_TIMEOUT_MS)
+            .await;
 
         // Step 2: Gracefully shutdown all containers
         const CONTAINER_SHUTDOWN_TIMEOUT_MS: u64 = 2000;
@@ -109,6 +115,33 @@ impl GuestService for GuestServer {
             }
         }
         drop(containers);
+
+        // Step 2b: wait for each init watcher to finish writing its exit record.
+        //
+        // Killing init above is what *wakes* the watcher; the write happens on
+        // the watcher's own task. Returning from this RPC without joining would
+        // let the host read the exit file before the record it wants is in it —
+        // and the host reports that code as the box's exit status (docker leaves
+        // ExitCode 137 after a `docker stop`). The watcher is already awake and
+        // has nothing to wait on itself: `shutting_down` is set, so it writes
+        // and returns instead of powering the VM off.
+        let watchers: Vec<_> = self.init_watchers.lock().await.drain().collect();
+        for (container_id, watcher) in watchers {
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(CONTAINER_SHUTDOWN_TIMEOUT_MS),
+                watcher,
+            )
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    warn!(container_id = %container_id, error = %e, "init watcher panicked")
+                }
+                Err(_) => {
+                    warn!(container_id = %container_id, "init watcher did not finish in time")
+                }
+            }
+        }
 
         // Step 3: Sync all filesystems to ensure data is flushed to disk.
         // This is critical for COW disks to be in consistent state on restart.

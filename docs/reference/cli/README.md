@@ -233,7 +233,13 @@ Credential:      API key (from BOXLITE_API_KEY env var)
 
 **Synopsis:** `boxlite run [OPTIONS] IMAGE [COMMAND...]`
 
-Create a box from an image and run a command. If `COMMAND` is omitted, the box runs `sh` (`src/cli/src/commands/run.rs:138`).
+Create a box from an image and run a command, with docker's semantics: `COMMAND`
+replaces the image's `CMD`, the image's `ENTRYPOINT` is prepended, and the result
+**is** the container's init (PID 1). Omit it and the image's own default runs.
+
+The box's lifetime is that command's lifetime. When it exits, the box stops and
+takes the command's exit code; `boxlite ps` shows it stopped and
+`boxlite inspect -f '{{.State.ExitCode}}'` gives the code.
 
 **Options:** Uses [`ProcessFlags`](#processflags) + [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`ManagementFlags`](#managementflags).
 
@@ -281,9 +287,18 @@ boxlite exec -e DEBUG=1 -w /app mybox -- pytest tests/
 
 ### `boxlite create`
 
-**Synopsis:** `boxlite create [OPTIONS] IMAGE`
+**Synopsis:** `boxlite create [OPTIONS] IMAGE [COMMAND...]`
 
-Create a box without running a command. Prints the new box's ID to stdout.
+Create a box without starting it. Prints the new box's ID to stdout.
+
+`COMMAND` is stored, not run — it becomes the box's main command (the container's
+init) when the box is next started, exactly as it would under `run`. Omit it and
+the image's own default is used.
+
+A box created **with** a command is a job: `exec` and `cp` will not start it
+implicitly, because starting it runs that command. Start it deliberately with
+`boxlite start`. A box created **without** one boots the image's default, and
+`exec` still starts it on demand.
 
 **Options:**
 

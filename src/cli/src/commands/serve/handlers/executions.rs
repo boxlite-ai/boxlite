@@ -13,8 +13,8 @@ use futures::StreamExt;
 
 use super::super::types::{ExecRequest, ExecResponse, ResizeRequest, SignalRequest};
 use super::super::{
-    ActiveExecution, AppState, build_box_command, error_from_boxlite, error_response,
-    get_or_fetch_box,
+    ActiveExecution, AppState, MAIN_SESSION_ID_HEADER, SessionKind, build_box_command,
+    error_from_boxlite, error_response, get_or_attach_main_session, get_or_fetch_box,
 };
 
 pub(in crate::commands::serve) async fn start_execution(
@@ -47,7 +47,7 @@ pub(in crate::commands::serve) async fn start_execution(
     };
 
     let exec_id = execution.id().clone();
-    let active = ActiveExecution::new(box_id, execution, stdin);
+    let active = ActiveExecution::new(box_id, SessionKind::Exec, execution, stdin);
 
     state
         .executions
@@ -252,8 +252,70 @@ pub(in crate::commands::serve) async fn attach_execution(
         );
     }
 
-    // If Hyper fails the upgrade (client drops mid-handshake), release
-    // the slot so the exec is reattachable / reapable.
+    upgrade_to_attach_session(ws, active)
+}
+
+/// Attach to the box's **main command session** — the container's init.
+/// Docker's `POST /containers/{id}/attach`, as distinct from its
+/// exec-attach; `boxlite run IMAGE COMMAND` lands here because COMMAND
+/// *is* init.
+///
+/// The session is opened lazily on the first attach and then lives in the
+/// same registry as tenant execs, so reattach, single-attach claiming and
+/// reaping need no special case. Its execution id (the container id) rides
+/// back on the upgrade response — see [`MAIN_SESSION_ID_HEADER`] — after
+/// which the client can address it through the ordinary
+/// `/executions/{id}/…` routes.
+pub(in crate::commands::serve) async fn attach_box(
+    State(state): State<Arc<AppState>>,
+    Path(box_id): Path<String>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let active = match get_or_attach_main_session(&state, &box_id).await {
+        Ok(a) => a,
+        Err(resp) => return resp,
+    };
+
+    // Same claim-before-upgrade as attach_execution: a second client on a
+    // main session that is already attached gets a 409, not a second guest
+    // stream.
+    if !active.mark_connected().await {
+        return error_response(
+            StatusCode::CONFLICT,
+            format!("box {} main session already has an attached client", box_id),
+            "InvalidStateError",
+            "invalid_state",
+        );
+    }
+
+    let exec_id = active.execution().id().clone();
+    let header_value = match axum::http::HeaderValue::from_str(&exec_id) {
+        Ok(v) => v,
+        Err(e) => {
+            active.mark_disconnected().await;
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("main session id {exec_id:?} is not a valid header value: {e}"),
+                "InternalError",
+                "internal",
+            );
+        }
+    };
+
+    let mut response = upgrade_to_attach_session(ws, active);
+    response
+        .headers_mut()
+        .insert(MAIN_SESSION_ID_HEADER, header_value);
+    response
+}
+
+/// Hand the upgraded socket to [`run_attach_session`], releasing the
+/// attach slot if Hyper fails the handshake (client drops mid-upgrade) —
+/// otherwise the session would stay marked connected and become
+/// permanently unattachable and unreapable.
+///
+/// The caller must have already claimed the slot with `mark_connected()`.
+fn upgrade_to_attach_session(ws: WebSocketUpgrade, active: Arc<ActiveExecution>) -> Response {
     let failed_active = Arc::clone(&active);
     ws.on_failed_upgrade(move |_err| {
         tokio::spawn(async move {

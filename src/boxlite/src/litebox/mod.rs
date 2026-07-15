@@ -98,14 +98,33 @@ impl LiteBox {
         self.box_backend.exec(command).await
     }
 
-    /// Reattach to a running execution by id, returning a fresh
-    /// `Execution` handle. The caller discards any previous handle for
-    /// the same id. Used after a transient WebSocket drop to resume
-    /// stdio without restarting the underlying process. Returns
+    /// Attach to the box's main command session (`run IMAGE COMMAND`
+    /// runs COMMAND *as* the container init, docker semantics). The
+    /// unqualified name follows the ecosystem convention (`docker
+    /// attach`, `podman attach`, CRI `Attach`).
+    pub async fn attach(&self) -> BoxliteResult<Execution> {
+        self.box_backend.attach().await
+    }
+
+    /// Start the box with a client already attached to its main command —
+    /// docker's create → attach → start.
+    ///
+    /// Use this instead of `start()` + `attach()` whenever the main command's
+    /// output and exit code matter. Started first, a command that finishes
+    /// instantly can be gone before the attach lands, taking both with it.
+    pub async fn start_attached(&self) -> BoxliteResult<Execution> {
+        self.box_backend.start_attached().await
+    }
+
+    /// Reattach to a running exec session by id, returning a fresh
+    /// `Execution` handle (mirrors docker's `ContainerExecAttach`).
+    /// The caller discards any previous handle for the same id. Used
+    /// after a transient WebSocket drop to resume stdio without
+    /// restarting the underlying process. Returns
     /// `BoxliteError::SessionReaped` if the session is no longer
     /// attachable on the server side.
-    pub async fn attach(&self, execution_id: &str) -> BoxliteResult<Execution> {
-        self.box_backend.attach(execution_id).await
+    pub async fn attach_exec(&self, execution_id: &str) -> BoxliteResult<Execution> {
+        self.box_backend.attach_exec(execution_id).await
     }
 
     pub async fn metrics(&self) -> BoxliteResult<BoxMetrics> {

@@ -32,6 +32,8 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             container_mounts,
             network_spec,
             ca_cert_pem,
+            tty,
+            defer_start,
         ) =
             {
                 let mut ctx = ctx.lock().await;
@@ -54,6 +56,8 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                 })?;
                 let network_spec = ctx.config.options.network.clone();
                 let ca_cert_pem = ctx.ca_cert_pem.clone();
+                let tty = ctx.config.options.tty;
+                let defer_start = ctx.defer_container_start;
                 (
                     guest_session,
                     container_image_config,
@@ -63,6 +67,8 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                     container_mounts,
                     network_spec,
                     ca_cert_pem,
+                    tty,
+                    defer_start,
                 )
             };
 
@@ -75,6 +81,8 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             &container_mounts,
             &network_spec,
             ca_cert_pem.as_deref(),
+            tty,
+            defer_start,
         )
         .await
         .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
@@ -104,6 +112,8 @@ async fn run_guest_init(
     container_mounts: &[ContainerMount],
     network_spec: &NetworkSpec,
     ca_cert_pem: Option<&str>,
+    tty: bool,
+    defer_start: bool,
 ) -> BoxliteResult<()> {
     let container_id_str = container_id.as_str();
 
@@ -141,6 +151,7 @@ async fn run_guest_init(
             rootfs_init.clone(),
             container_mounts.to_vec(),
             ca_certs,
+            crate::portal::interfaces::container::InitProcessSetup { tty, defer_start },
         )
         .await?;
     tracing::info!(container_id = %returned_id, "Container initialized");

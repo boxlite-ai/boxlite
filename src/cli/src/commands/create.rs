@@ -36,6 +36,11 @@ pub struct CreateArgs {
 
     #[command(flatten)]
     pub network: NetworkFlags,
+
+    /// Command to run as the container's init (replaces the image CMD;
+    /// the image ENTRYPOINT is preserved), mirroring `docker create`.
+    #[arg(index = 2, trailing_var_arg = true)]
+    pub command: Vec<String>,
 }
 
 pub async fn execute(args: CreateArgs, global: &GlobalFlags) -> anyhow::Result<()> {
@@ -59,6 +64,9 @@ impl CreateArgs {
         options.working_dir = self.workdir.clone();
         if let Some(ref exec) = self.entrypoint {
             options.entrypoint = Some(vec![exec.clone()]);
+        }
+        if !self.command.is_empty() {
+            options.cmd = Some(self.command.clone());
         }
         crate::cli::apply_env_vars(&self.env, &mut options);
         options.rootfs = RootfsSpec::Image(self.image.clone());

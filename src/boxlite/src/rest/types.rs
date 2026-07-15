@@ -117,6 +117,12 @@ pub(crate) struct CreateBoxRequest {
     pub auto_remove: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detach: Option<bool>,
+    /// A terminal for the main command (`run -t`). Only sent when asked for:
+    /// the server rejects unknown fields, so an older one would 400 on it —
+    /// which is the right failure. Degrading `-it` to pipes silently, as the
+    /// alternative, is how this whole class of bug happens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tty: Option<bool>,
 }
 
 impl CreateBoxRequest {
@@ -167,6 +173,7 @@ impl CreateBoxRequest {
             secrets,
             auto_remove: Some(options.auto_remove),
             detach: Some(options.detach),
+            tty: options.tty.then_some(true),
         }
     }
 }
@@ -225,6 +232,11 @@ pub(crate) struct BoxResponse {
     pub memory_mib: u32,
     #[serde(default)]
     pub labels: HashMap<String, String>,
+    /// Absent while the box's main command is still running. An older server
+    /// omits it entirely, which reads the same as "still running" — the
+    /// honest answer when it cannot say.
+    #[serde(default)]
+    pub exit_code: Option<i32>,
 }
 
 impl BoxResponse {
@@ -262,6 +274,7 @@ impl BoxResponse {
             memory_mib: self.memory_mib,
             labels: self.labels.clone(),
             health_status: crate::litebox::HealthStatus::new(), // REST API doesn't provide health status
+            exit_code: self.exit_code,
         })
     }
 }
@@ -494,6 +507,7 @@ mod tests {
             entrypoint: None,
             cmd: None,
             user: None,
+            tty: None,
             secrets: Some(vec![CreateBoxSecret {
                 name: "openai".into(),
                 value: "sk-test".into(),
@@ -640,6 +654,7 @@ mod tests {
             cpus: 2,
             memory_mib: 512,
             labels: HashMap::new(),
+            exit_code: None,
         };
         let info = resp.to_box_info().expect("valid ULID box_id should parse");
         assert_eq!(info.name.as_deref(), Some("mybox"));
@@ -663,6 +678,7 @@ mod tests {
             cpus: 1,
             memory_mib: 256,
             labels: HashMap::new(),
+            exit_code: None,
         };
         let info = resp.to_box_info().expect("UUID box_id should parse");
         assert_eq!(info.id.as_str(), "d406c59d-eb09-4bc3-9b3a-62455c7e8f32");
@@ -687,6 +703,7 @@ mod tests {
             cpus: 1,
             memory_mib: 256,
             labels: HashMap::new(),
+            exit_code: None,
         };
         assert!(mk("").to_box_info().is_err(), "empty");
         assert!(mk("a/b").to_box_info().is_err(), "slash");
@@ -755,6 +772,7 @@ mod tests {
             cpus: 2,
             memory_mib: 512,
             labels: HashMap::new(),
+            exit_code: None,
         };
 
         // Legacy transient statuses map to Unknown (no longer valid)

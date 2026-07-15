@@ -448,6 +448,18 @@ impl BoxFilesystemLayout {
         self.box_dir.join(shared_dirs::SHARED)
     }
 
+    /// The container's exit file: shared/containers/{cid}/exit.json.
+    ///
+    /// Written by the guest when the box's main command exits. Distinct from
+    /// [`Self::exit_file_path`], which is the *shim's* exit record used for
+    /// crash reporting — this one is the container's, and it is the same path
+    /// the guest computes from its own side of the virtiofs mount.
+    pub fn container_exit_file(&self, container_id: &str) -> PathBuf {
+        boxlite_shared::layout::SharedGuestLayout::new(self.shared_dir())
+            .container(container_id)
+            .exit_file()
+    }
+
     // BIN AND LOGS (jailer isolation)
     // ========================================================================
 

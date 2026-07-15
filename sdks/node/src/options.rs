@@ -426,6 +426,10 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             entrypoint: js_opts.entrypoint,
             cmd: js_opts.cmd,
             user: js_opts.user,
+            // Not surfaced on JsBoxOptions yet: a TTY is only useful to a
+            // client that attaches to the main command, which the SDKs cannot
+            // do until they grow `attach()` (see sdk-run-semantics-api.md).
+            tty: false,
             secrets,
         })
     }

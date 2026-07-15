@@ -20,10 +20,36 @@ use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 
 fn litebox_from_impl(box_impl: SharedBoxImpl) -> LiteBox {
+    // Every handle this runtime hands out starts following its box's main
+    // command, if the box is running and nobody is following it yet.
+    //
+    // `start()` arms the watcher for boxes *we* start. This covers the ones we
+    // merely adopt — recovered from a previous process, already Running with a
+    // live shim. That is what a long-lived runtime meets on every restart
+    // (`boxlite serve`, the cloud), and without it such a box would run to
+    // completion entirely unobserved and be reported Running forever: exactly
+    // the lie the watcher exists to stop telling.
+    box_impl.arm_exit_watcher();
+
     let box_backend: Arc<dyn crate::runtime::backend::BoxBackend> = box_impl.clone();
     let snapshot_backend: Arc<dyn crate::runtime::backend::SnapshotBackend> =
         Arc::new(LocalSnapshotBackend::new(box_impl));
     LiteBox::new(box_backend, snapshot_backend)
+}
+
+/// Record that the box's main command is over, taking its exit code from the
+/// guest-written exit file.
+///
+/// Two callers reach this from opposite directions and must agree: the live
+/// watcher in `BoxImpl` (a long-lived runtime sees the shim die) and
+/// `recover_boxes` (a fresh process finds a Running box with a dead shim).
+/// A missing record leaves `exit_code` as None rather than inventing a 0 —
+/// the box stopped, but nobody witnessed how.
+pub(crate) fn record_main_command_exit(state: &mut BoxState, exit_file: &std::path::Path) {
+    if let Some(record) = boxlite_shared::layout::ExitRecord::read(exit_file) {
+        state.exit_code = Some(record.exit_code);
+    }
+    state.mark_stop();
 }
 
 /// Archive the active exit file as `exit.previous`, freeing the canonical
@@ -765,14 +791,26 @@ impl RuntimeImpl {
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
 
-            state.mark_stop();
-            let _ = self.box_manager.save_box(&config.id, &state);
-            let pid_file = self
+            let box_layout = self
                 .layout
                 .box_layout(config.id.as_str(), false)
-                .expect("box_layout is infallible")
-                .pid_file_path();
-            let _ = std::fs::remove_file(&pid_file);
+                .expect("box_layout is infallible");
+
+            // The third way a box dies, and it must report the exit code like the
+            // other two. `stop()` records it, and so does the live watcher — but
+            // this path is the one a *non-detached* box takes when its runtime
+            // goes away, which is every `boxlite create` + `boxlite start`. Left
+            // as a bare `mark_stop()`, it marked the box Stopped with no code, and
+            // `recover_boxes` could not backfill it afterwards (its branch only
+            // fires on a box still marked Running). `inspect .State.ExitCode`
+            // answered 0 for a command that exited 23.
+            record_main_command_exit(
+                &mut state,
+                &box_layout.container_exit_file(config.container.id.as_str()),
+            );
+            let _ = self.box_manager.save_box(&config.id, &state);
+
+            let _ = std::fs::remove_file(box_layout.pid_file_path());
         }
     }
 
@@ -1307,9 +1345,21 @@ impl RuntimeImpl {
                             "Box crashed; marked Failed with crash report"
                         );
                     } else if state.status == BoxStatus::Running {
-                        state.mark_stop();
+                        // A Running box whose shim is gone: the guest powered
+                        // off because its main command exited (docker
+                        // semantics), and no live watcher was around to see it
+                        // — this process was not running at the time. Take the
+                        // exit code from the record the guest left behind.
+                        //
+                        // The container id lives in the box *config*
+                        // (BoxState.container_id is never persisted).
+                        record_main_command_exit(
+                            &mut state,
+                            &box_layout.container_exit_file(config.container.id.as_str()),
+                        );
                         tracing::warn!(
                             box_id = %box_id,
+                            exit_code = ?state.exit_code,
                             "Shim not verifiable (file missing, process dead, or PID reuse); \
                              marked Stopped"
                         );
@@ -2326,12 +2376,17 @@ mod tests {
             .expect("Failed to get box")
             .expect("Box should exist");
 
+        // Refused by the status gate on `exec` (BoxStatus::can_exec), before any
+        // attempt to boot a VM. It used to be refused a layer deeper, by the
+        // init pipeline's plan lookup ("Cannot initialize box in Unknown
+        // state"); the gate now catches it first, because a lazy boot is no
+        // longer a harmless thing to attempt — it runs the box's main command.
         let result = litebox.exec(BoxCommand::new("true")).await;
         match result {
             Err(BoxliteError::InvalidState(msg)) => {
                 assert!(
-                    msg.contains("Cannot initialize box"),
-                    "Expected initialization state error, got: {msg}"
+                    msg.contains("unknown"),
+                    "the refusal must name the state that caused it, got: {msg}"
                 );
             }
             Err(other) => panic!("Expected InvalidState error, got: {other}"),

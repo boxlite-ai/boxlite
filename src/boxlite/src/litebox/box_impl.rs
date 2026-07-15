@@ -117,6 +117,11 @@ pub(crate) struct BoxImpl {
     live: OnceCell<LiveState>,
 
     health_check_task: RwLock<Option<JoinHandle<()>>>,
+
+    /// Whether this handle is already following its box's main command.
+    /// One watcher per BoxImpl: it is armed both when *we* start the box and
+    /// when we adopt one that was already running, and those can both happen.
+    exit_watcher_armed: std::sync::atomic::AtomicBool,
 }
 
 impl BoxImpl {
@@ -155,7 +160,35 @@ impl BoxImpl {
             event_listeners: Vec::new(), // populated from runtime options
             live: OnceCell::new(),
             health_check_task: RwLock::new(None),
+            exit_watcher_armed: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Follow this box's main command, if it is running and nobody is following
+    /// it yet.
+    ///
+    /// Called both when we start a box and when the runtime hands out a handle
+    /// to one that was *already* running — a box recovered from a previous
+    /// process. Without the second case, a long-lived runtime that never touches
+    /// such a box (`boxlite serve` after a restart, the cloud) would keep
+    /// reporting it Running behind a main command that exited hours ago, which is
+    /// precisely the lie [`Self::spawn_exit_watcher`] exists to stop telling.
+    ///
+    /// Must be called from a tokio context.
+    pub(crate) fn arm_exit_watcher(&self) {
+        let Some(shim_pid) = self.state.read().pid else {
+            return;
+        };
+        if self.state.read().status != BoxStatus::Running {
+            return;
+        }
+        if self
+            .exit_watcher_armed
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return; // already following it
+        }
+        self.spawn_exit_watcher(shim_pid);
     }
 
     // ========================================================================
@@ -186,6 +219,12 @@ impl BoxImpl {
     ///
     /// This is idempotent - calling start() on a Running box is a no-op.
     pub(crate) async fn start(&self) -> BoxliteResult<()> {
+        self.start_booting(false).await
+    }
+
+    /// `start`, saying whether the container's init should be held at the gate
+    /// for a client to attach first (see [`Self::start_attached`]).
+    async fn start_booting(&self, defer_container_start: bool) -> BoxliteResult<()> {
         let t0 = Instant::now();
 
         // Check if already shutdown (via stop() or runtime shutdown)
@@ -211,8 +250,11 @@ impl BoxImpl {
             )));
         }
 
-        // Trigger lazy initialization (this does the actual work)
-        let _ = self.live_state().await?;
+        // A spent handle — one whose box stopped itself, leaving a dead VM in the
+        // OnceCell — is refused by `live_state()` below, which is the one funnel
+        // every operation shares. Guarding it only here would have fixed `start`
+        // and left `exec`, `attach`, `cp` and `metrics` serving the corpse.
+        let _ = self.live_state_booting(defer_container_start).await?;
 
         for listener in &self.event_listeners {
             listener.on_box_started(&self.config.id);
@@ -226,6 +268,90 @@ impl BoxImpl {
         Ok(())
     }
 
+    /// Guard every operation that would lazily boot the VM.
+    ///
+    /// Booting is no longer neutral. The box's init *is* its main command now,
+    /// so a lazy start re-runs the user's workload — and `live_state()` boots
+    /// silently, from any status `can_start()` admits. `exec` / `cp` / `metrics`
+    /// / `attach` on a box that already ran to completion would therefore
+    /// execute it a second time:
+    ///
+    ///   boxlite run --name job alpine sh -c 'send-payment'   # runs, exits
+    ///   boxlite cp job:/receipt .                            # sends it again
+    ///
+    /// The hazard is not "the box is stopped" — it is "restarting it would run
+    /// the user's workload again", and only a box with an explicit `cmd` has
+    /// that property. Its init *is* that command. A box without one boots the
+    /// image's own default (a daemon, an agent), and restarting that is not just
+    /// harmless but load-bearing:
+    ///
+    /// - the SDK's create-then-exec model boots a `Configured` box on first use;
+    /// - the cloud stops idle boxes on a reaper and revives them on the next SDK
+    ///   call, which goes straight to `/exec` and never calls start.
+    ///
+    /// So the gate keys on the config, not just the status. A stopped *job* is
+    /// refused (docker refuses `exec` on a non-running container too); a stopped
+    /// *box* is still woken up.
+    fn ensure_usable_without_rerunning_main(&self, op: &str) -> BoxliteResult<()> {
+        let status = self.state.read().status;
+
+        // Already up: nothing to boot, nothing to re-run.
+        if status == BoxStatus::Running {
+            return Ok(());
+        }
+
+        if !status.can_exec() {
+            return Err(BoxliteError::InvalidState(format!(
+                "Cannot {op} box {}: it is {}",
+                self.config.id, status
+            )));
+        }
+
+        // Startable, but not up — so this call would boot the box, which runs the
+        // container's init. If the user chose that command, running it is a
+        // *decision*, and an exec or a file copy is not the place to make it on
+        // their behalf. Not once, and certainly not twice:
+        //
+        //   boxlite run --name job alpine sh -c 'send-payment'  # runs, exits
+        //   boxlite cp job:/receipt .                           # must not re-send
+        //
+        //   boxlite create --name job alpine sh -c 'send-payment'
+        //   boxlite cp ./input job:/in                          # must not send at all
+        //
+        // A box with no command of its own boots the image's default — the
+        // cloud's agent daemon, the SDK's boot-and-exec — and waking that is the
+        // whole point of the implicit start, so it stays.
+        if self.has_user_main_command() {
+            let already = if status == BoxStatus::Stopped {
+                "its main command has already run, and starting the box again would run it \
+                 a second time"
+            } else {
+                "starting the box would run its main command"
+            };
+            return Err(BoxliteError::InvalidState(format!(
+                "Cannot {op} box {}: it is {}, and {}. That is a decision for you, not for \
+                 a side effect — start the box explicitly if it is what you want.",
+                self.config.id, status, already
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Whether this box's init is a command the *user* chose.
+    ///
+    /// Both `cmd` and `entrypoint` land in init's argv — `final_cmd()` is
+    /// entrypoint ++ cmd — so either one makes init the user's workload, and
+    /// restarting the box re-runs it. Keying only on `cmd` would miss
+    /// `run --entrypoint /bin/send-payment`, whose init is *entirely* the
+    /// user's command and whose `cmd` is None.
+    ///
+    /// A box with neither boots the image's own default, which is the cloud's
+    /// agent daemon and the SDK's boot-and-exec model: restarting it is intended.
+    fn has_user_main_command(&self) -> bool {
+        self.config.options.cmd.is_some() || self.config.options.entrypoint.is_some()
+    }
+
     pub(crate) async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {
         use boxlite_shared::constants::executor as executor_const;
 
@@ -235,6 +361,7 @@ impl BoxImpl {
                 "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
             ));
         }
+        self.ensure_usable_without_rerunning_main("exec")?;
 
         let live = self.live_state().await?;
 
@@ -294,6 +421,127 @@ impl BoxImpl {
         ))
     }
 
+    /// Make the main command's exit code survive the VM's power-off.
+    ///
+    /// The guest powers the VM off the moment init exits, which can cut the
+    /// in-flight `Wait` RPC — and the portal then reports `-1`
+    /// (`portal/interfaces/exec.rs::spawn_wait`), so `boxlite run` would give
+    /// the user a status the process never returned. That is the headline
+    /// behaviour of this whole change, and it must not hang on an RPC beating a
+    /// reboot.
+    ///
+    /// It does not have to. The guest writes the real code to the exit file
+    /// *before* powering off, so it is already on disk — just read it back.
+    ///
+    /// The trigger is any **negative** code, not the `-1` specifically. A real
+    /// process exit is 0-255, so a negative value always means the portal had no
+    /// exit code to give: either it lost the Wait, or it is encoding a signal
+    /// death as `-signal` (`map_wait_response`) — and those two overlap exactly
+    /// at `-1`, since SIGHUP is signal 1. The exit file is the right answer to
+    /// both, because the guest records the docker-convention code (`128 + n` for
+    /// a signal), which is what every consumer of this already expects.
+    fn exit_code_from_file_when_portal_has_none(
+        &self,
+        mut upstream: tokio::sync::mpsc::UnboundedReceiver<crate::litebox::ExecResult>,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<crate::litebox::ExecResult> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let exit_file = self.layout.container_exit_file(self.container_id());
+
+        tokio::spawn(async move {
+            while let Some(mut result) = upstream.recv().await {
+                if result.exit_code < 0
+                    && let Some(record) = boxlite_shared::layout::ExitRecord::read(&exit_file)
+                {
+                    tracing::debug!(
+                        portal_code = result.exit_code,
+                        recovered = record.exit_code,
+                        "portal had no exit code for the main command; took it from the exit file"
+                    );
+                    result.exit_code = record.exit_code;
+                    // error_message is left alone: if the portal had something
+                    // to say about how the wait ended, it is still true.
+                }
+                if tx.send(result).is_err() {
+                    break;
+                }
+            }
+        });
+
+        rx
+    }
+
+    /// Start the box with a client already attached to its main command —
+    /// docker's create → attach → start, in that order.
+    ///
+    /// The order is the whole point. `start()` runs init, so an `attach()` issued
+    /// after it is a race: a command that finishes immediately (`run alpine echo
+    /// hi`) can be dead before the attach reaches the guest, and once the guest
+    /// powers the VM off, the box is Stopped — at which point attaching is
+    /// refused, because restarting it would run the user's command again. The
+    /// output and the exit code go with it, and `run` prints a refusal instead of
+    /// `hi`. Only a bounded flush window on the guest side hid that, and a window
+    /// is a bet, not a guarantee.
+    ///
+    /// So: create the container, attach to init's session while it is still
+    /// standing at the gate, and only then start it. Nothing it prints and no
+    /// code it exits with can be missed, however fast it is.
+    pub(crate) async fn start_attached(&self) -> BoxliteResult<Execution> {
+        // Only *this* call can hold init at the gate, and only if it is the one
+        // that boots the box. On an already-running box init is long gone from the
+        // gate, so there is nothing to defer and nothing to fire — just attach.
+        if self.live.initialized() {
+            return self.attach().await;
+        }
+
+        // Boot with the container created but not run. Init exists — it has a pid
+        // and its stdio, which is what lets the session below be opened against
+        // it — but it has not started.
+        self.start_booting(true).await?;
+
+        let execution = self.attach().await?;
+
+        // The client is on the stream. Fire.
+        self.live_state()
+            .await?
+            .guest_session
+            .container()
+            .await?
+            .start(self.container_id())
+            .await?;
+
+        Ok(execution)
+    }
+
+    /// Attach to the box's main command session — the guest registers
+    /// the container init under execution_id = container_id. This is how
+    /// `run` follows the user command now that it *is* init (docker
+    /// semantics), reusing the exact stream plumbing of exec().
+    pub(crate) async fn attach(&self) -> BoxliteResult<Execution> {
+        if self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+            ));
+        }
+        self.ensure_usable_without_rerunning_main("attach")?;
+
+        let live = self.live_state().await?;
+        let mut exec_interface = live.guest_session.execution().await?;
+        let components = exec_interface
+            .attach_existing(self.container_id(), self.shutdown_token.clone())
+            .await?;
+
+        let result_rx = self.exit_code_from_file_when_portal_has_none(components.result_rx);
+
+        Ok(Execution::new(
+            components.execution_id,
+            Box::new(exec_interface),
+            result_rx,
+            Some(ExecStdin::new(components.stdin_tx)),
+            Some(ExecStdout::new(components.stdout_rx)),
+            Some(ExecStderr::new(components.stderr_rx)),
+        ))
+    }
+
     pub(crate) async fn metrics(&self) -> BoxliteResult<BoxMetrics> {
         // Check if box is stopped before proceeding (via stop() or runtime shutdown)
         if self.shutdown_token.is_cancelled() {
@@ -301,6 +549,7 @@ impl BoxImpl {
                 "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
             ));
         }
+        self.ensure_usable_without_rerunning_main("metrics")?;
 
         let live = self.live_state().await?;
         let handler = live
@@ -402,7 +651,19 @@ impl BoxImpl {
             // If we were Configured (never started), stay Configured so next start()
             // triggers full initialization (creating disks).
             if !state.status.is_configured() {
-                state.mark_stop();
+                // Take the exit code the guest recorded on its way down, as
+                // docker does: `docker stop` leaves ExitCode 137, not 0. The
+                // guest writes the exit file when init dies — including when it
+                // dies because *we* killed it — before it checks whether the
+                // teardown was host-driven. The watcher cannot do this: stop()
+                // cancels its token, and it stands down precisely so it does not
+                // race this path.
+                crate::runtime::rt_impl::record_main_command_exit(
+                    &mut state,
+                    &self
+                        .layout
+                        .container_exit_file(self.config.container.id.as_str()),
+                );
             }
 
             if was_persisted {
@@ -479,6 +740,7 @@ impl BoxImpl {
                 "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
             ));
         }
+        self.ensure_usable_without_rerunning_main("copy into")?;
 
         // Ensure box is running
         let live = self.live_state().await?;
@@ -554,6 +816,7 @@ impl BoxImpl {
                 "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
             ));
         }
+        self.ensure_usable_without_rerunning_main("copy out")?;
 
         // Ensure box is running
         let live = self.live_state().await?;
@@ -614,8 +877,52 @@ impl BoxImpl {
     // ========================================================================
 
     /// Get LiveState, lazily initializing it if needed.
+    ///
+    /// Refuses to hand back a **spent** handle. A box can now stop *itself* —
+    /// its main command exits, the guest powers the VM off, the watcher marks it
+    /// Stopped — and this `OnceCell` still holds that dead VM's `LiveState`.
+    /// `OnceCell` cannot be re-initialized, so `get_or_try_init` would return the
+    /// corpse: `init_live_state()` would never run, the restart the caller was
+    /// promised would silently not happen, and their `exec` would be dialing a
+    /// guest that is gone.
+    ///
+    /// The guard lives *here*, at the one funnel every operation passes through
+    /// (`start`, `exec`, `attach`, `metrics`, `copy_into`, `copy_out`), rather
+    /// than at any one of them. `ensure_usable_without_rerunning_main` cannot
+    /// stand in for it: that gate deliberately *passes* a stopped box with no
+    /// main command of its own, because the cloud's auto-restart depends on it —
+    /// which makes this the exact path where a corpse would be served.
+    ///
+    /// A `Stopped` box whose cell is empty is fine: that is a fresh handle, and
+    /// booting it is the restart. Only an *initialized* cell on a box that is no
+    /// longer Running means the VM behind it is dead.
     async fn live_state(&self) -> BoxliteResult<&LiveState> {
-        self.live.get_or_try_init(|| self.init_live_state()).await
+        self.live_state_booting(false).await
+    }
+
+    /// `live_state`, saying how to boot the container *if* this call is the one
+    /// that boots it.
+    ///
+    /// `defer_container_start` is a parameter and not a field on purpose. As
+    /// ambient state it survived a failed boot — `get_or_try_init` leaves the
+    /// cell empty on error, and `Failed` is startable — so a later plain
+    /// `start()` would re-enter the pipeline, still find the flag set, create the
+    /// container and never run it: a box reporting Running whose main command
+    /// never happened. Passing it means it cannot outlive the call that meant it.
+    async fn live_state_booting(&self, defer_container_start: bool) -> BoxliteResult<&LiveState> {
+        if self.live.initialized() && self.state.read().status != BoxStatus::Running {
+            return Err(BoxliteError::Stopped(format!(
+                "Box {} is no longer running and this handle is spent — it still holds the \
+                 stopped VM, and cannot boot another. Drop it and call runtime.get() for a \
+                 fresh one; the runtime hands back the same handle while any reference to it \
+                 is alive.",
+                self.config.id
+            )));
+        }
+
+        self.live
+            .get_or_try_init(|| self.init_live_state(defer_container_start))
+            .await
     }
 
     /// Initialize LiveState via BoxBuilder.
@@ -627,7 +934,7 @@ impl BoxImpl {
     ///
     /// Note: Lock is allocated in create(), not here. DB persistence also
     /// happens in create().
-    async fn init_live_state(&self) -> BoxliteResult<LiveState> {
+    async fn init_live_state(&self, defer_container_start: bool) -> BoxliteResult<LiveState> {
         use super::BoxBuilder;
         use std::sync::Arc;
 
@@ -657,7 +964,12 @@ impl BoxImpl {
         // The returned cleanup_guard stays armed until we disarm it after all
         // operations succeed. If any operation fails, the guard's Drop will
         // cleanup the VM process and directory.
-        let builder = BoxBuilder::new(Arc::clone(&self.runtime), self.config.clone(), state)?;
+        let builder = BoxBuilder::new(
+            Arc::clone(&self.runtime),
+            self.config.clone(),
+            state,
+            defer_container_start,
+        )?;
         let (live_state, mut cleanup_guard) = builder.build().await?;
 
         // Read PID from file (single source of truth) and update state.
@@ -679,6 +991,11 @@ impl BoxImpl {
             let mut state = self.state.write();
             state.set_pid(Some(pid));
             state.set_status(BoxStatus::Running);
+            // This is a fresh run of the box's main command, so the exit code
+            // recorded for the previous one no longer describes it (docker
+            // clears ExitCode on start too). The guest drops its matching
+            // exit file in Container.Init.
+            state.exit_code = None;
 
             // Initialize health status if health check is configured
             if self.config.options.advanced.health_check.is_some() {
@@ -702,6 +1019,9 @@ impl BoxImpl {
         // the next attach preflight doesn't trip on stale evidence.
         // Stash (rename → exit.previous) preserves forensic data.
         crate::runtime::rt_impl::stash_exit_file(&self.layout);
+
+        // Follow the box's main command for as long as this runtime lives.
+        self.arm_exit_watcher();
 
         // Start health check task if configured
         if let Some(ref health_config) = self.config.options.advanced.health_check {
@@ -727,6 +1047,110 @@ impl BoxImpl {
         );
         // Lock is automatically released when _guard drops
         Ok(live_state)
+    }
+
+    /// Mark the box Stopped the moment its main command exits.
+    ///
+    /// The guest powers the VM off when init exits (docker: a container's
+    /// lifetime *is* its main command's), so the shim's death is that exit,
+    /// observed from the host.
+    ///
+    /// Without this, the exit record is only ever read by `recover_boxes`,
+    /// which runs once when a runtime is constructed. The CLI gets away with
+    /// that because every command is a fresh process; a long-lived runtime — an
+    /// SDK program, `boxlite serve`, the cloud — would keep reporting the box
+    /// Running behind a main command that exited hours ago, which is the same
+    /// lie about a dead container that this whole change set exists to stop
+    /// telling.
+    fn spawn_exit_watcher(&self, shim_pid: u32) -> JoinHandle<()> {
+        let state = Arc::clone(&self.state);
+        // Weak, and this is load-bearing. This task parks on the shim for the
+        // life of the box, and `RuntimeImpl::Drop` is what runs `shutdown_sync`
+        // to kill shims. A strong Arc here would deadlock the two against each
+        // other: Drop cannot run until the task lets go, and the task does not
+        // let go until the shim dies — which is Drop's job. Boxes would outlive
+        // their runtime and leak their VMs.
+        let runtime = Arc::downgrade(&self.runtime);
+        let shutdown_token = self.shutdown_token.child_token();
+        let box_id = self.config.id.clone();
+        let box_name = self.config.name.clone();
+        let auto_remove = self.config.options.auto_remove;
+        let exit_file = self
+            .layout
+            .container_exit_file(self.config.container.id.as_str());
+
+        tokio::spawn(async move {
+            let shim = crate::util::ProcessMonitor::new(shim_pid);
+            tokio::select! {
+                // stop() and runtime shutdown cancel the token *and* kill the
+                // shim themselves. That path owns the transition and persists
+                // it, so stand down rather than race it to the same fields.
+                _ = shutdown_token.cancelled() => return,
+                _ = shim.wait_for_exit() => {}
+            }
+
+            // The runtime is gone, so it has already torn everything down (its
+            // Drop runs shutdown_sync) and there is nobody left to report to.
+            let Some(runtime) = runtime.upgrade() else {
+                return;
+            };
+
+            let stopped = {
+                let mut state = state.write();
+
+                if state.status == BoxStatus::Running {
+                    crate::runtime::rt_impl::record_main_command_exit(&mut state, &exit_file);
+                } else if state.exit_code.is_none()
+                    && let Some(record) = boxlite_shared::layout::ExitRecord::read(&exit_file)
+                {
+                    // The health check watches the same shim and forces Stopped
+                    // when it dies — it can win this race, and it has no exit
+                    // code to record. Don't fight it for the status, but do fill
+                    // in the code it could not know: delivering that code is the
+                    // entire point of this watcher, and `recover_boxes` will not
+                    // backfill it (its branch only fires on a *Running* box).
+                    state.exit_code = Some(record.exit_code);
+                } else {
+                    // Fully resolved by someone else (a concurrent stop, a crash
+                    // report, recovery).
+                    return;
+                }
+
+                state.clone()
+            };
+
+            tracing::info!(
+                box_id = %box_id,
+                exit_code = ?stopped.exit_code,
+                "Main command exited; box stopped"
+            );
+
+            // NotFound is expected for an auto_remove box: the exit raced the
+            // cleanup that deleted it, and the box being gone is the state we
+            // were trying to record anyway.
+            match runtime.box_manager.save_box(&box_id, &stopped) {
+                Ok(()) | Err(BoxliteError::NotFound(_)) => {}
+                Err(e) => tracing::warn!(
+                    box_id = %box_id,
+                    error = %e,
+                    "Failed to persist the box's exit"
+                ),
+            }
+
+            // The same tail `stop()` runs, because this is the box's *other*
+            // death. Without it a long-lived runtime keeps handing out the spent
+            // handle from its cache, and an `auto_remove` box — the default —
+            // that ran to completion is never cleaned up, because nobody ever
+            // called stop() to do it.
+            runtime.invalidate_box_impl(&box_id, box_name.as_deref());
+            if auto_remove && let Err(e) = runtime.remove_box(&box_id, false) {
+                tracing::warn!(
+                    box_id = %box_id,
+                    error = %e,
+                    "Failed to auto-remove the box after its main command exited"
+                );
+            }
+        })
     }
 
     pub fn spawn_health_check(
@@ -1092,6 +1516,14 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
 
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {
         self.exec(command).await
+    }
+
+    async fn attach(&self) -> BoxliteResult<Execution> {
+        self.attach().await
+    }
+
+    async fn start_attached(&self) -> BoxliteResult<Execution> {
+        self.start_attached().await
     }
 
     async fn metrics(&self) -> BoxliteResult<BoxMetrics> {
