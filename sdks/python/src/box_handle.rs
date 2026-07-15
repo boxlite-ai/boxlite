@@ -101,10 +101,10 @@ impl PyBox {
     ) -> PyResult<Bound<'a, PyAny>> {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let execution = match execution_id {
-                None => handle.attach().await.map_err(map_err)?,
-                Some(id) => handle.attach_exec(&id).await.map_err(map_err)?,
-            };
+            let execution = handle
+                .attach(execution_id.as_deref())
+                .await
+                .map_err(map_err)?;
             Ok(PyExecution {
                 execution: Arc::new(execution),
             })

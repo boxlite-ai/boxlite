@@ -472,17 +472,25 @@ impl BoxImpl {
         rx
     }
 
-    /// Attach to the box's main command session — the guest registers the
-    /// container init under execution_id = container_id. This is how `run`
-    /// follows the user command now that it *is* init (docker semantics), reusing
-    /// the exact stream plumbing of exec().
+    /// Attach to a session in the box. Only the main command session (`None`) is
+    /// attachable locally: an in-process exec keeps the `Execution` it was created
+    /// with and never drops its stream, so there is nothing to reattach to by id.
     ///
+    /// For `None`, the guest registers the container init under execution_id =
+    /// container_id — this is how `run` follows the user command now that it *is*
+    /// init (docker semantics), reusing the exact stream plumbing of exec().
     /// Boots the box if needed but only *creates* the container — it does not run
     /// init. That is what lets `run` be create → attach → start: attach here,
     /// then `start()`, so a command that finishes instantly cannot outrun the
     /// stream. Because attaching never runs the user's command, it needs no
     /// re-run guard (unlike `exec`/`cp`, which do start it).
-    pub(crate) async fn attach(&self) -> BoxliteResult<Execution> {
+    pub(crate) async fn attach(&self, execution_id: Option<&str>) -> BoxliteResult<Execution> {
+        if execution_id.is_some() {
+            return Err(BoxliteError::Unsupported(
+                "the local backend does not support reattaching to executions by id".into(),
+            ));
+        }
+
         if self.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(
                 "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
@@ -1518,8 +1526,8 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         self.exec(command).await
     }
 
-    async fn attach(&self) -> BoxliteResult<Execution> {
-        self.attach().await
+    async fn attach(&self, execution_id: Option<&str>) -> BoxliteResult<Execution> {
+        self.attach(execution_id).await
     }
 
     async fn metrics(&self) -> BoxliteResult<BoxMetrics> {

@@ -84,7 +84,7 @@ impl BoxRunner {
         // first races it — `run alpine echo hi` can finish before the attach
         // lands, and its output and exit code die with the VM. Attaching only
         // creates the container; `start()` runs its init.
-        let mut execution = litebox.attach().await?;
+        let mut execution = litebox.attach(None).await?;
         litebox.start().await?;
 
         // --tty implies --interactive when stdin is a terminal

@@ -78,29 +78,25 @@ pub(crate) trait BoxBackend: Send + Sync {
 
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution>;
 
-    /// Attach to the box's main command session (docker semantics:
-    /// `run`'s COMMAND is the container init; the guest registers it
-    /// under execution_id = container id at container start). The
-    /// unqualified name mirrors the ecosystem convention
-    /// (`ContainerAttach`, `podman attach`, CRI `Attach`).
-    async fn attach(&self) -> BoxliteResult<Execution> {
-        Err(BoxliteError::Unsupported(
-            "this backend does not support attaching to the main command session".into(),
-        ))
-    }
-
-    /// Reattach to an already-running exec session by id (mirrors
-    /// docker's `ContainerExecAttach`). The returned `Execution`
-    /// carries fresh stdin/stdout/stderr/result channels wired to a
-    /// new WebSocket; the caller discards any prior handle for the
-    /// same id. Returns `BoxliteError::SessionReaped` if the server
-    /// reports the session is no longer attachable.
+    /// Attach to a session in the box.
     ///
-    /// Default impl returns `Unsupported` — backends that don't model
-    /// long-lived attachable sessions (local in-process) don't need it.
-    async fn attach_exec(&self, _execution_id: &str) -> BoxliteResult<Execution> {
+    /// - `None` — the box's main command session (docker semantics: `run`'s
+    ///   COMMAND is the container init, registered under execution_id = container
+    ///   id, which the caller cannot name — hence `None`). The unqualified verb
+    ///   mirrors the ecosystem convention (`ContainerAttach`, `podman attach`,
+    ///   CRI `Attach`).
+    /// - `Some(id)` — reattach to an already-running exec session (docker's
+    ///   `ContainerExecAttach`): a fresh `Execution` on a new stream, so the
+    ///   caller discards any prior handle for the same id. Returns
+    ///   `BoxliteError::SessionReaped` if the server reports it no longer
+    ///   attachable.
+    ///
+    /// Default is `Unsupported`; a backend implements the arms it models. A local
+    /// in-process backend has no long-lived reattachable exec sessions, so it
+    /// supports `None` only.
+    async fn attach(&self, _execution_id: Option<&str>) -> BoxliteResult<Execution> {
         Err(BoxliteError::Unsupported(
-            "this backend does not support reattaching to existing executions".into(),
+            "this backend does not support attaching to sessions".into(),
         ))
     }
 

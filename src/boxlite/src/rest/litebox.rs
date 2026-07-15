@@ -50,8 +50,8 @@ impl RestBox {
 
     /// Wire an already-open attach WebSocket into an `Execution`.
     ///
-    /// Shared by [`BoxBackend::attach`] (the box's main command session)
-    /// and [`BoxBackend::attach_exec`] (a tenant exec): once the socket is
+    /// Shared by both arms of [`BoxBackend::attach`] — the box's main command
+    /// session (`None`) and a tenant exec (`Some(id)`): once the socket is
     /// open, the two are the same session — same pump, same channels, same
     /// control routes (`RestExecControl` addresses both by execution id).
     /// Callers open the socket themselves, and do it synchronously, so a
@@ -174,78 +174,77 @@ impl BoxBackend for RestBox {
         ))
     }
 
-    /// Attach to the box's main command session — the container's init.
+    /// Attach to a session in the box.
     ///
-    /// Hits the container-attach route (docker's
-    /// `POST /containers/{id}/attach`), which is a distinct resource from
-    /// exec-attach: the client cannot name the init session, because its
-    /// execution id is the container id and `BoxInfo` does not carry it.
-    /// The server answers the upgrade with that id, so the `Execution`
-    /// this returns is a fully ordinary one — signal, resize and kill go
-    /// out over the same `/executions/{id}/…` routes as any exec, and the
+    /// - `None` — the main command session (the container's init). Hits the
+    ///   container-attach route (docker's `POST /containers/{id}/attach`), a
+    ///   distinct resource from exec-attach: the client cannot name the init
+    ///   session (its execution id is the container id, which `BoxInfo` does not
+    ///   carry), so the server returns it on the upgrade header. The route boots
+    ///   the box and subscribes to init's session but does not run it —
+    ///   `POST /start` does. `run --url` calls `attach(None)` then `start()`, the
+    ///   same create → attach → start it does locally, so a command that finishes
+    ///   instantly cannot outrun the stream.
+    /// - `Some(id)` — reattach to an existing exec session on
+    ///   `/executions/{id}/attach`.
+    ///
+    /// Either way the returned `Execution` is a fully ordinary one — signal,
+    /// resize and kill go out over the same `/executions/{id}/…` routes, and the
     /// pump reconnects through them too.
-    ///
-    /// The route boots the box and subscribes to init's session but does not run
-    /// it — `POST /start` does. `run --url` calls `attach()` then `start()`, the
-    /// same create → attach → start it does locally, so a command that finishes
-    /// instantly cannot outrun the stream.
-    async fn attach(&self) -> BoxliteResult<Execution> {
+    async fn attach(&self, execution_id: Option<&str>) -> BoxliteResult<Execution> {
         let box_id = self.box_id_str();
 
-        // Synchronous connect, same as attach_exec: a 404 (no such box) or
-        // 409 (another client already attached) belongs at the caller's
-        // `await box.attach()`, not in a later ExecResult.
-        let path = format!("/boxes/{}/attach", box_id);
-        let (stream, handshake) =
-            self.client
-                .connect_ws_with_response(&path)
-                .await
-                .map_err(|e| match e {
+        // Open the WebSocket synchronously so a rejection (404 no-such-box /
+        // reaped, 409 another client already attached) surfaces here, at the
+        // caller's `await box.attach(..)`, not in a later ExecResult from `wait()`.
+        match execution_id {
+            None => {
+                let path = format!("/boxes/{}/attach", box_id);
+                let (stream, handshake) = self
+                    .client
+                    .connect_ws_with_response(&path)
+                    .await
+                    .map_err(|e| match e {
+                        BoxliteError::AlreadyExists(msg) => BoxliteError::AlreadyExists(format!(
+                            "box {} main session has another client attached: {}",
+                            box_id, msg
+                        )),
+                        other => other,
+                    })?;
+
+                let execution_id = handshake
+                    .headers()
+                    .get(MAIN_SESSION_ID_HEADER)
+                    .and_then(|value| value.to_str().ok())
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| {
+                        BoxliteError::Unsupported(format!(
+                            "server did not identify box {}'s main session (no {} header on the \
+                             attach upgrade); the server predates container attach",
+                            box_id, MAIN_SESSION_ID_HEADER
+                        ))
+                    })?
+                    .to_string();
+
+                Ok(self.wire_attach(box_id, execution_id, stream))
+            }
+            Some(execution_id) => {
+                let path = format!("/boxes/{}/executions/{}/attach", box_id, execution_id);
+                let stream = self.client.connect_ws(&path).await.map_err(|e| match e {
+                    BoxliteError::NotFound(msg) => BoxliteError::SessionReaped(format!(
+                        "session {} not found — likely reaped after disconnect timeout: {}",
+                        execution_id, msg
+                    )),
                     BoxliteError::AlreadyExists(msg) => BoxliteError::AlreadyExists(format!(
-                        "box {} main session has another client attached: {}",
-                        box_id, msg
+                        "session {} has another client attached: {}",
+                        execution_id, msg
                     )),
                     other => other,
                 })?;
 
-        let execution_id = handshake
-            .headers()
-            .get(MAIN_SESSION_ID_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .filter(|id| !id.is_empty())
-            .ok_or_else(|| {
-                BoxliteError::Unsupported(format!(
-                    "server did not identify box {}'s main session (no {} header on the attach \
-                     upgrade); the server predates container attach",
-                    box_id, MAIN_SESSION_ID_HEADER
-                ))
-            })?
-            .to_string();
-
-        Ok(self.wire_attach(box_id, execution_id, stream))
-    }
-
-    async fn attach_exec(&self, execution_id: &str) -> BoxliteResult<Execution> {
-        let box_id = self.box_id_str();
-
-        // Open the WebSocket synchronously so a rejection (404 reaped /
-        // 409 already-attached) surfaces here, at the caller's `await
-        // box.attach_exec(id)` point — not as an after-the-fact ExecResult
-        // pulled from `wait()`.
-        let path = format!("/boxes/{}/executions/{}/attach", box_id, execution_id);
-        let stream = self.client.connect_ws(&path).await.map_err(|e| match e {
-            BoxliteError::NotFound(msg) => BoxliteError::SessionReaped(format!(
-                "session {} not found — likely reaped after disconnect timeout: {}",
-                execution_id, msg
-            )),
-            BoxliteError::AlreadyExists(msg) => BoxliteError::AlreadyExists(format!(
-                "session {} has another client attached: {}",
-                execution_id, msg
-            )),
-            other => other,
-        })?;
-
-        Ok(self.wire_attach(box_id, execution_id.to_string(), stream))
+                Ok(self.wire_attach(box_id, execution_id.to_string(), stream))
+            }
+        }
     }
 
     async fn metrics(&self) -> BoxliteResult<BoxMetrics> {
@@ -1174,7 +1173,8 @@ mod tests {
     use tokio::sync::Mutex;
     use tokio_tungstenite::tungstenite::Message;
     use tokio_tungstenite::tungstenite::handshake::server::{
-        Request as HandshakeRequest, Response as HandshakeResponse,
+        ErrorResponse as HandshakeErrorResponse, Request as HandshakeRequest,
+        Response as HandshakeResponse,
     };
     use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
 
@@ -1199,6 +1199,10 @@ mod tests {
         /// Headers to add to the WS handshake response — how the real
         /// server hands back the main session's execution id.
         ws_response_headers: Vec<(String, String)>,
+        /// When set, reject the WS upgrade with this HTTP status instead of
+        /// completing it — models the server refusing a reattach (404 reaped,
+        /// 409 already-attached).
+        reject_upgrade_status: Option<u16>,
     }
 
     /// Shorthand for the `Arc<Mutex<...>>` shared between server and client.
@@ -1353,7 +1357,16 @@ mod tests {
                         inner: stream,
                     };
                     let extra_headers = state.lock().await.ws_response_headers.clone();
+                    let reject_status = state.lock().await.reject_upgrade_status;
                     let with_headers = |_req: &HandshakeRequest, mut resp: HandshakeResponse| {
+                        if let Some(code) = reject_status {
+                            let err: HandshakeErrorResponse =
+                                tokio_tungstenite::tungstenite::http::Response::builder()
+                                    .status(code)
+                                    .body(Some(format!("upgrade rejected with {code}")))
+                                    .expect("error response");
+                            return Err(err);
+                        }
                         for (name, value) in extra_headers {
                             resp.headers_mut().insert(
                                 HeaderName::from_bytes(name.as_bytes()).expect("header name"),
@@ -1597,7 +1610,7 @@ mod tests {
         });
 
         let rest_box = rest_box_for(port, "box1");
-        let mut execution = tokio::time::timeout(Duration::from_secs(3), rest_box.attach())
+        let mut execution = tokio::time::timeout(Duration::from_secs(3), rest_box.attach(None))
             .await
             .expect("attach timed out")
             .expect("the REST backend must support attaching to the main command session");
@@ -1632,6 +1645,155 @@ mod tests {
         );
         drop(recorded);
         server.abort();
+    }
+
+    // ─── attach_some_id_reattaches_over_the_exec_route ────────────────────
+    //
+    // `attach(Some(id))` folds in what used to be `attach_exec`: reattaching to
+    // an already-running exec after a transport drop. It must address the
+    // *exec*-attach route (not the container route), keep the id the caller
+    // named — there is no upgrade header to adopt, because the caller owns the
+    // id — and stream the session's output.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn attach_some_id_reattaches_over_the_exec_route() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let state: SharedState = Arc::new(Mutex::new(ServerState::default()));
+
+        let state_clone = state.clone();
+        let server = tokio::spawn(async move {
+            run_server(listener, state_clone, None, |mut ws, _state| async move {
+                ws.send(Message::Binary(vec![0x01, b'o', b'k']))
+                    .await
+                    .unwrap();
+                ws.send(Message::Text(r#"{"type":"exit","exit_code":0}"#.into()))
+                    .await
+                    .unwrap();
+                let _ = ws.close(None).await;
+            })
+            .await;
+        });
+
+        let rest_box = rest_box_for(port, "box1");
+        let mut execution =
+            tokio::time::timeout(Duration::from_secs(3), rest_box.attach(Some("exec-9")))
+                .await
+                .expect("attach timed out")
+                .expect("the REST backend must support reattaching to an exec by id");
+
+        assert_eq!(
+            execution.id(),
+            "exec-9",
+            "a reattach keeps the exec id the caller named, not one from a header",
+        );
+
+        let mut stdout = execution.stdout().expect("stdout stream");
+        let line = tokio::time::timeout(Duration::from_secs(3), stdout.next())
+            .await
+            .expect("stdout timed out")
+            .expect("stdout closed without data");
+        assert_eq!(
+            line, "ok",
+            "the reattached session's output must reach the caller",
+        );
+
+        let recorded = state.lock().await;
+        assert_eq!(
+            recorded.requested_paths,
+            vec!["/v1/boxes/box1/executions/exec-9/attach".to_string()],
+            "reattach must address the exec-attach route, not the container route",
+        );
+        drop(recorded);
+        server.abort();
+    }
+
+    // ─── attach_none_without_session_header_is_unsupported ────────────────
+    //
+    // The main session's id is not nameable by the client — the server hands it
+    // back on the upgrade header. A server that upgrades without it (one that
+    // predates container-attach) must surface as `Unsupported`, not a silent
+    // `Execution` wired to an empty id.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn attach_none_without_session_header_is_unsupported() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // `ws_response_headers` left empty: the server upgrades but names no id.
+        let state: SharedState = Arc::new(Mutex::new(ServerState::default()));
+
+        let state_clone = state.clone();
+        let server = tokio::spawn(async move {
+            run_server(listener, state_clone, None, |ws, _state| async move {
+                // Keep the socket open long enough for the client to inspect the
+                // handshake response; it rejects on the missing header, not a frame.
+                let _hold = ws;
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            })
+            .await;
+        });
+
+        let rest_box = rest_box_for(port, "box1");
+        let err = match tokio::time::timeout(Duration::from_secs(3), rest_box.attach(None)).await {
+            Ok(Ok(_)) => {
+                panic!("attach(None) must fail when the server names no main session id")
+            }
+            Ok(Err(e)) => e,
+            Err(_) => panic!("attach timed out"),
+        };
+        assert!(
+            matches!(err, BoxliteError::Unsupported(_)),
+            "a missing session-id header must surface as Unsupported, got: {err:?}",
+        );
+        server.abort();
+    }
+
+    // ─── attach_some_id_maps_reaped_and_conflict_to_typed_errors ──────────
+    //
+    // Reattaching to an exec the server has reaped (404) must surface as
+    // `SessionReaped`, and one another client already holds (409) as
+    // `AlreadyExists` — the two outcomes the SDK's reconnect logic branches on.
+    // The rejection rides the WS *upgrade*, so it lands at the caller's await,
+    // not in a later `wait()`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn attach_some_id_maps_reaped_and_conflict_to_typed_errors() {
+        for (status, expect_reaped) in [(404u16, true), (409u16, false)] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let state: SharedState = Arc::new(Mutex::new(ServerState::default()));
+            state.lock().await.reject_upgrade_status = Some(status);
+
+            let state_clone = state.clone();
+            let server = tokio::spawn(async move {
+                run_server(listener, state_clone, None, |ws, _state| async move {
+                    let _ = ws; // never reached: the upgrade itself is rejected
+                })
+                .await;
+            });
+
+            let rest_box = rest_box_for(port, "box1");
+            let err = match tokio::time::timeout(
+                Duration::from_secs(3),
+                rest_box.attach(Some("exec-x")),
+            )
+            .await
+            {
+                Ok(Ok(_)) => panic!("a rejected upgrade ({status}) must not yield an Execution"),
+                Ok(Err(e)) => e,
+                Err(_) => panic!("attach timed out"),
+            };
+
+            if expect_reaped {
+                assert!(
+                    matches!(err, BoxliteError::SessionReaped(_)),
+                    "a 404 reattach must map to SessionReaped, got: {err:?}",
+                );
+            } else {
+                assert!(
+                    matches!(err, BoxliteError::AlreadyExists(_)),
+                    "a 409 reattach must map to AlreadyExists, got: {err:?}",
+                );
+            }
+            server.abort();
+        }
     }
 
     // ─── ws_text_error_frame_logs_but_continues ──────────────────────────

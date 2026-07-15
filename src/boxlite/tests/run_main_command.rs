@@ -38,7 +38,7 @@ async fn attached_stdout(opts: BoxOptions) -> String {
     let handle = runtime.create(opts, None).await.expect("create box");
     handle.start().await.expect("start box");
 
-    let mut execution = handle.attach().await.expect("attach to the main command");
+    let mut execution = handle.attach(None).await.expect("attach to the main command");
 
     let mut stdout = String::new();
     if let Some(mut stream) = execution.stdout() {
@@ -286,7 +286,7 @@ async fn a_failed_attach_does_not_poison_the_next_start() {
     readonly.set_mode(0o500);
     std::fs::set_permissions(&boxes_dir, readonly).expect("make read-only");
 
-    let failed = handle.attach().await;
+    let failed = handle.attach(None).await;
 
     std::fs::set_permissions(&boxes_dir, restore).expect("restore permissions");
     assert!(
@@ -531,7 +531,7 @@ async fn attach_refuses_a_stopped_box() {
     );
 
     // `Execution` is not `Debug`, so match rather than `expect_err`.
-    let msg = match stopped.attach().await {
+    let msg = match stopped.attach(None).await {
         Ok(_) => panic!("attaching to a stopped box must fail, not reboot it"),
         Err(e) => e.to_string(),
     };
@@ -541,5 +541,44 @@ async fn attach_refuses_a_stopped_box() {
     );
 
     let _ = runtime.remove(stopped.id().as_str(), true).await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
+}
+
+/// `attach(Some(id))` — reattaching to an exec by id — is REST-only.
+///
+/// The single `attach(execution_id)` folds in what used to be `attach_exec`. A
+/// local, in-process exec keeps the `Execution` it was created with and never
+/// drops its stream, so there is nothing to reattach to by id: the local backend
+/// supports the main session (`None`) only and refuses the `Some(id)` arm.
+#[tokio::test]
+async fn attach_by_exec_id_is_unsupported_on_the_local_backend() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+
+    // Never started: the `Some(id)` arm is refused before any box state matters,
+    // so no VM is booted (and the box name holds neither "local" nor "reattach",
+    // keeping the message assertion honest).
+    let handle = runtime
+        .create(
+            main_command_opts(&["sh", "-c", "sleep 30"], false),
+            Some("job-a".to_string()),
+        )
+        .await
+        .expect("create box");
+
+    let msg = match handle.attach(Some("some-exec-id")).await {
+        Ok(_) => panic!("local attach(Some(id)) must be Unsupported, not succeed"),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        msg.contains("local") && msg.contains("reattach"),
+        "the error must explain local reattach is unsupported, got: {msg}"
+    );
+
+    let _ = runtime.remove(handle.id().as_str(), true).await;
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }

@@ -1035,7 +1035,7 @@ async fn get_or_attach_main_session(
     // second Attach, so the loser would get a permanently silent Execution. A
     // per-box open lock would scope that to the same box; worth doing, not here.
     let mut executions = state.executions.write().await;
-    register_main_session(&mut executions, box_id, || async { litebox.attach().await })
+    register_main_session(&mut executions, box_id, || async { litebox.attach(None).await })
         .await
         .map_err(|e| error_from_boxlite(&e))
 }
