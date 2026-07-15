@@ -75,28 +75,23 @@ func BoxliteExec(ctx *gin.Context) {
 
 	execId, err := execManager.Start(ctx.Request.Context(), bx, boxId, startOpts)
 	if err != nil {
-		writeExecStartError(ctx, err)
+		if sdkboxlite.IsExecution(err) {
+			ctx.JSON(http.StatusUnprocessableEntity, gin.H{
+				"message": fmt.Sprintf("exec failed: %s", err),
+				"code":    "execution_failed",
+			})
+			return
+		}
+		// A stopped or wrong-state box exists but is not accepting execs.
+		if sdkboxlite.IsStopped(err) || sdkboxlite.IsInvalidState(err) {
+			ctx.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("exec failed: %s", err)})
+			return
+		}
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("exec failed: %s", err)})
 		return
 	}
 
 	ctx.JSON(http.StatusCreated, ExecResponse{ExecutionID: execId})
-}
-
-func writeExecStartError(ctx *gin.Context, err error) {
-	if sdkboxlite.IsExecution(err) {
-		ctx.JSON(http.StatusUnprocessableEntity, gin.H{
-			"message": fmt.Sprintf("exec failed: %s", err),
-			"code":    "execution_failed",
-		})
-		return
-	}
-
-	// A stopped or wrong-state box exists but is not accepting execs.
-	if sdkboxlite.IsStopped(err) || sdkboxlite.IsInvalidState(err) {
-		ctx.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("exec failed: %s", err)})
-		return
-	}
-	ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("exec failed: %s", err)})
 }
 
 // allowedExecSignals is the whitelist of POSIX signal numbers callers may
