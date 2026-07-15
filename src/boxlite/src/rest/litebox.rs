@@ -15,7 +15,7 @@ use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution};
 use crate::metrics::BoxMetrics;
-use crate::runtime::backend::{BoxBackend, SnapshotBackend};
+use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
 use crate::runtime::id::BoxID;
 use crate::runtime::options::{CloneOptions, ExportOptions, SnapshotOptions};
 
@@ -317,7 +317,13 @@ impl BoxBackend for RestBox {
         let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
         let box_backend: Arc<dyn BoxBackend> = rest_box.clone();
         let snapshot_backend: Arc<dyn SnapshotBackend> = rest_box;
-        Ok(crate::LiteBox::new(box_backend, snapshot_backend))
+        let network_backend: Arc<dyn BoxNetworkBackend> =
+            Arc::new(crate::runtime::backend::UnsupportedNetworkBackend);
+        Ok(crate::LiteBox::new(
+            box_backend,
+            network_backend,
+            snapshot_backend,
+        ))
     }
 
     async fn clone_boxes(

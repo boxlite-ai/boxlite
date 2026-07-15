@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+use boxlite_shared::errors::BoxliteResult;
 
 use crate::net::BoxInternalTunnel;
 use crate::runtime::backend::BoxNetworkBackend;
@@ -30,17 +30,6 @@ pub(crate) type TunnelUrlFetch =
 pub trait BoxConnection: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin {}
 
 impl<T> BoxConnection for T where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin {}
-
-pub(crate) struct UnsupportedNetworkBackend;
-
-#[async_trait::async_trait]
-impl BoxNetworkBackend for UnsupportedNetworkBackend {
-    async fn tunnel(&self, _target: SocketAddr) -> BoxliteResult<BoxTunnel> {
-        Err(BoxliteError::Unsupported(
-            "box networking is unavailable".into(),
-        ))
-    }
-}
 
 /// A box service tunnel target. Call [`endpoint`](Self::endpoint) first, then
 /// [`connect`](Self::connect) on this handle.

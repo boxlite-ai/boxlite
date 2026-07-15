@@ -62,17 +62,6 @@ impl LiteBox {
     /// Create a LiteBox from backend implementations.
     pub(crate) fn new(
         box_backend: Arc<dyn BoxBackend>,
-        snapshot_backend: Arc<dyn SnapshotBackend>,
-    ) -> Self {
-        Self::new_with_network(
-            box_backend,
-            Arc::new(crate::litebox::network::UnsupportedNetworkBackend),
-            snapshot_backend,
-        )
-    }
-
-    pub(crate) fn new_with_network(
-        box_backend: Arc<dyn BoxBackend>,
         network_backend: Arc<dyn BoxNetworkBackend>,
         snapshot_backend: Arc<dyn SnapshotBackend>,
     ) -> Self {
