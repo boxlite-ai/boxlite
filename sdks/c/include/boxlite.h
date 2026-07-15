@@ -85,6 +85,9 @@ typedef struct AdvancedBoxOptionsHandle AdvancedBoxOptionsHandle;
 // async lifecycle ops.
 typedef struct BoxHandle BoxHandle;
 
+// Opaque handle for network operations on a box.
+typedef struct BoxNetworkHandle BoxNetworkHandle;
+
 // Opaque handle for Runner API (auto-manages runtime)
 typedef struct BoxRunner BoxRunner;
 
@@ -295,6 +298,8 @@ typedef struct CRuntimeMetrics {
 
 // Runtime metrics completion.
 typedef void (*CRuntimeMetricsCb)(struct CRuntimeMetrics*, CBoxliteError*, void*);
+
+typedef struct BoxNetworkHandle CBoxNetworkHandle;
 
 typedef struct CredentialHandle CBoxliteCredential;
 
@@ -526,6 +531,17 @@ enum BoxliteErrorCode boxlite_runtime_metrics(CBoxliteRuntime *runtime,
                                               CRuntimeMetricsCb cb,
                                               void *user_data,
                                               CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_box_network(CBoxHandle *handle,
+                                          CBoxNetworkHandle **out_network,
+                                          CBoxliteError *out_error);
+
+void boxlite_box_network_free(CBoxNetworkHandle *network);
+
+enum BoxliteErrorCode boxlite_box_network_tunnel(CBoxNetworkHandle *network,
+                                                 uint16_t port,
+                                                 int32_t *out_fd,
+                                                 CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_options_new(const char *image,
                                           CBoxliteOptions **out_opts,
