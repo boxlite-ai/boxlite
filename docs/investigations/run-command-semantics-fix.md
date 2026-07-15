@@ -244,6 +244,28 @@ Integration tests mirroring the podman side-by-side (S1–S4), asserting on the
    clean "not running" error (fails today: Running + procfs panic).
 5. nginx no-command parity: `run -d nginx:alpine` serves; exec works.
 
+### Test suite
+
+- `src/cli/tests/run_init_semantics.rs` — the CLI-level docker-parity contract:
+  COMMAND-is-PID1, stop-on-exit + exit code, `128+n` on signal death,
+  exec-after-exit refused-without-restart, cp-from-a-finished-job doesn't re-run
+  it, `create IMAGE COMMAND` stores it, and `--user`/`-w` landing on *init* (they
+  were exec-only before init became the command).
+- `src/boxlite/tests/run_main_command.rs` — the library lifecycle: `run -t` PTY
+  (with a pipes control), cloud auto-restart of a no-command box, spent-handle
+  refusal on a dead VM, an adopted running box followed to its exit, the
+  failed-attached-start poison guard, and self-stop restart refusal.
+- `src/cli/tests/run_rest_e2e.rs` — the one true end-to-end for the REST data
+  plane: spins up `boxlite serve`, and `run --url alpine sh -c 'echo …; exit 7'`
+  must stream the output back and propagate the code — the path whose *breakage*
+  (start-then-attach racing a fast command) was a release blocker, guarded before
+  only at the unit level. Teardown drains the server's boxes first: box teardown
+  over REST is async (exit → guest power-off → server watcher → `--rm` removal, a
+  beat after the client returns), and `serve` runs its stop-everything path only
+  on SIGINT, so killing it mid-window would leak a shim.
+- Unit: `ExitRecord` wire format, serve reaper/main-session lookup, the `tty`
+  create-wire mapping, `can_exec`.
+
 ### 7. create → attach → start, in that order
 
 `run` attaches to the main command **before** it runs. The guest's

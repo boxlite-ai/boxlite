@@ -85,6 +85,38 @@ fn test_init_semantics_command_is_pid1() {
         .stdout(predicate::str::contains("tr"));
 }
 
+/// S-user: `--user` applies to the *main command*, which is now init.
+///
+/// Before COMMAND became init, `--user` only ever reached an exec tenant; now it
+/// has to land on init itself. `id -u` asks the kernel who PID 1 is running as,
+/// so it cannot pass unless the override threaded all the way to the container's
+/// process spec.
+#[test]
+fn test_init_semantics_user_applies_to_init() {
+    let mut ctx = common::boxlite();
+    ctx.cmd
+        .args(["run", "--rm", "--user", "1000", "alpine:latest", "id", "-u"]);
+    ctx.cmd
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1000"));
+}
+
+/// S-workdir: `-w` sets the main command's working directory.
+///
+/// Same story: working-dir used to be an exec-only option, and once COMMAND is
+/// init it has to reach init's spec. `pwd` reports where PID 1 actually started.
+#[test]
+fn test_init_semantics_workdir_applies_to_init() {
+    let mut ctx = common::boxlite();
+    ctx.cmd
+        .args(["run", "--rm", "-w", "/tmp", "alpine:latest", "pwd"]);
+    ctx.cmd
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("/tmp"));
+}
+
 /// S-status: a detached box whose init exits must report Stopped with the
 /// init's exit code — not sit in `running` forever.
 #[test]
