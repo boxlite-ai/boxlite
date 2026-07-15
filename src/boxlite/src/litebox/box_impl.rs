@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 use parking_lot::RwLock;
 use tokio::sync::OnceCell;
 use tokio::task::JoinHandle;
-use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -27,12 +26,11 @@ use crate::litebox::copy::CopyOptions;
 use crate::lock::LockGuard;
 use crate::metrics::{BoxMetrics, BoxMetricsStorage};
 use crate::portal::GuestSession;
-use crate::portal::interfaces::GuestInterface;
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::runtime::types::BoxStatus;
 use crate::vmm::controller::VmmHandler;
-use crate::{BoxID, BoxInfo, HealthCheckOptions, HealthState};
+use crate::{BoxID, BoxInfo};
 
 // ============================================================================
 // TYPE ALIASES
@@ -116,12 +114,11 @@ pub(crate) struct BoxImpl {
     // --- Lazily initialized ---
     live: OnceCell<LiveState>,
 
-    health_check_task: RwLock<Option<JoinHandle<()>>>,
-
-    /// Whether this handle is already following its box's main command.
-    /// One watcher per BoxImpl: it is armed both when *we* start the box and
-    /// when we adopt one that was already running, and those can both happen.
-    exit_watcher_armed: std::sync::atomic::AtomicBool,
+    /// The box's [`BoxWatcher`](super::watcher::BoxWatcher) task. Set once, on the
+    /// first arm — `arm_watcher` is called on every handle the runtime hands out
+    /// (and on start), so the `OnceLock` makes "one watcher per box" race-free,
+    /// exactly as [`Self::live`] does for the VM. Held so `stop()` can abort it.
+    watcher: std::sync::OnceLock<JoinHandle<()>>,
 
     /// Runs the container's init exactly once. Booting only *creates* the
     /// container now (docker's create); running its init is a separate step so a
@@ -166,37 +163,43 @@ impl BoxImpl {
             disk_ops: tokio::sync::Mutex::new(()),
             event_listeners: Vec::new(), // populated from runtime options
             live: OnceCell::new(),
-            health_check_task: RwLock::new(None),
-            exit_watcher_armed: std::sync::atomic::AtomicBool::new(false),
+            watcher: std::sync::OnceLock::new(),
             container_start: OnceCell::new(),
         }
     }
 
-    /// Follow this box's main command, if it is running and nobody is following
-    /// it yet.
+    /// Watch this box's main command, if it is running and nobody is watching it
+    /// yet.
     ///
-    /// Called both when we start a box and when the runtime hands out a handle
-    /// to one that was *already* running — a box recovered from a previous
-    /// process. Without the second case, a long-lived runtime that never touches
-    /// such a box (`boxlite serve` after a restart, the cloud) would keep
-    /// reporting it Running behind a main command that exited hours ago, which is
-    /// precisely the lie [`Self::spawn_exit_watcher`] exists to stop telling.
+    /// Armed both when we start a box — with `health` = a guest probe when a
+    /// HEALTHCHECK is configured — and when the runtime adopts one already
+    /// running (`health` = None: adopted boxes are watched exit-only by design;
+    /// only a fresh boot installs a probe). Without the second case, a long-lived
+    /// runtime that never touches such a box (`boxlite serve` after a restart,
+    /// the cloud) would keep reporting it Running behind a main command that
+    /// exited hours ago — the lie [`BoxWatcher`](super::watcher::BoxWatcher)
+    /// exists to stop telling.
     ///
     /// Must be called from a tokio context.
-    pub(crate) fn arm_exit_watcher(&self) {
+    pub(crate) fn arm_watcher(&self, health: Option<super::watcher::HealthProbe>) {
         let Some(shim_pid) = self.state.read().pid else {
             return;
         };
         if self.state.read().status != BoxStatus::Running {
             return;
         }
-        if self
-            .exit_watcher_armed
-            .swap(true, std::sync::atomic::Ordering::SeqCst)
-        {
-            return; // already following it
-        }
-        self.spawn_exit_watcher(shim_pid);
+        self.spawn_watcher_once(shim_pid, health);
+    }
+
+    /// Spawn the box's watcher exactly once, whatever `health` the caller brings —
+    /// the `OnceLock` makes it race-free across the many `arm_watcher` calls the
+    /// runtime makes (one per handle handout, plus start), the same "init once"
+    /// the `live` cell gives the VM. `init_live_state` calls this directly, under
+    /// the state lock that publishes Running, so a concurrent exit-only handout
+    /// cannot win the cell ahead of it and strand the health probe.
+    fn spawn_watcher_once(&self, shim_pid: u32, health: Option<super::watcher::HealthProbe>) {
+        self.watcher
+            .get_or_init(|| super::watcher::BoxWatcher::new(self, shim_pid, health).spawn());
     }
 
     // ========================================================================
@@ -568,12 +571,14 @@ impl BoxImpl {
             return Ok(());
         }
 
-        // Cancel health check task first (if running)
-        // This prevents the task from continuing after stop() completes
-        if let Some(task) = self.health_check_task.write().take() {
+        // Abort the box watcher (if armed) so it does not run past stop().
+        // `stop()` also cancels the shutdown token the watcher selects on, but the
+        // abort stops it immediately even if it is mid-probe. `abort` takes `&self`,
+        // so the `OnceLock` need not be emptied.
+        if let Some(task) = self.watcher.get() {
             tracing::debug!(
                 box_id = %self.config.id,
-                "Aborting health check task"
+                "Aborting box watcher"
             );
             task.abort();
         }
@@ -988,6 +993,23 @@ impl BoxImpl {
         //
         // For reattach (status=Running), the PID file was written during
         // the original spawn and is still valid.
+        // Only a *fresh boot* (Configured/Stopped → start) gets a health probe.
+        // An adopted box — already Running when we reached here — was armed
+        // exit-only by the handout that first observed it, so a probe built here
+        // would be stranded (the watcher's cell is already taken). Adopted boxes
+        // are exit-only by design; see [`BoxWatcher`](super::watcher::BoxWatcher).
+        // Gating here also skips a guest fetch whose result we would discard.
+        //
+        // Fetched before the state lock — the await must not run under it — and
+        // before publishing Running below.
+        let health_guest = if self.config.options.advanced.health_check.is_some()
+            && !adopting_running
+        {
+            Some(live_state.guest_session.guest().await?)
+        } else {
+            None
+        };
+
         {
             // PidFile is the single source of truth for shim identity
             // (PID + optional starttime fingerprint). The starttime is
@@ -1013,6 +1035,25 @@ impl BoxImpl {
             // Save to DB (cache for queries and recovery)
             self.runtime.box_manager.save_box(&self.config.id, &state)?;
 
+            // Arm the watcher under the *same* lock that publishes Running+pid.
+            // A concurrent handout runs `arm_watcher(None)`, which reads the state
+            // first: it either sees a not-yet-Running box and skips, or blocks
+            // here and finds the watcher already armed. So it can never slip an
+            // exit-only watcher in ahead of us and strand the health probe.
+            let health = health_guest.map(|guest| {
+                super::watcher::HealthProbe::new(
+                    guest,
+                    self.config
+                        .options
+                        .advanced
+                        .health_check
+                        .clone()
+                        .expect("guest is fetched only when a health check is configured"),
+                    state.health_status,
+                )
+            });
+            self.spawn_watcher_once(pid, health);
+
             tracing::debug!(
                 box_id = %self.config.id,
                 pid = pid,
@@ -1028,26 +1069,6 @@ impl BoxImpl {
         // Stash (rename → exit.previous) preserves forensic data.
         crate::runtime::rt_impl::stash_exit_file(&self.layout);
 
-        // Follow the box's main command for as long as this runtime lives.
-        self.arm_exit_watcher();
-
-        // Start health check task if configured
-        if let Some(ref health_config) = self.config.options.advanced.health_check {
-            // Get guest interface from session
-            let guest = live_state.guest_session.guest().await?;
-
-            // Spawn health check task
-            let health_task = self.spawn_health_check(
-                Arc::clone(&self.state),
-                self.config.id.clone(),
-                health_config.to_owned(),
-                guest,
-                self.shutdown_token.child_token(),
-                Arc::clone(&self.runtime),
-            );
-            *self.health_check_task.write() = Some(health_task);
-        }
-
         tracing::info!(
             box_id = %self.config.id,
             "Box started successfully (first_start={})",
@@ -1055,281 +1076,6 @@ impl BoxImpl {
         );
         // Lock is automatically released when _guard drops
         Ok(live_state)
-    }
-
-    /// Mark the box Stopped the moment its main command exits.
-    ///
-    /// The guest powers the VM off when init exits (docker: a container's
-    /// lifetime *is* its main command's), so the shim's death is that exit,
-    /// observed from the host.
-    ///
-    /// Without this, the exit record is only ever read by `recover_boxes`,
-    /// which runs once when a runtime is constructed. The CLI gets away with
-    /// that because every command is a fresh process; a long-lived runtime — an
-    /// SDK program, `boxlite serve`, the cloud — would keep reporting the box
-    /// Running behind a main command that exited hours ago, which is the same
-    /// lie about a dead container that this whole change set exists to stop
-    /// telling.
-    fn spawn_exit_watcher(&self, shim_pid: u32) -> JoinHandle<()> {
-        let state = Arc::clone(&self.state);
-        // Weak, and this is load-bearing. This task parks on the shim for the
-        // life of the box, and `RuntimeImpl::Drop` is what runs `shutdown_sync`
-        // to kill shims. A strong Arc here would deadlock the two against each
-        // other: Drop cannot run until the task lets go, and the task does not
-        // let go until the shim dies — which is Drop's job. Boxes would outlive
-        // their runtime and leak their VMs.
-        let runtime = Arc::downgrade(&self.runtime);
-        let shutdown_token = self.shutdown_token.child_token();
-        let box_id = self.config.id.clone();
-        let box_name = self.config.name.clone();
-        let auto_remove = self.config.options.auto_remove;
-        let exit_file = self
-            .layout
-            .container_exit_file(self.config.container.id.as_str());
-
-        tokio::spawn(async move {
-            let shim = crate::util::ProcessMonitor::new(shim_pid);
-            tokio::select! {
-                // stop() and runtime shutdown cancel the token *and* kill the
-                // shim themselves. That path owns the transition and persists
-                // it, so stand down rather than race it to the same fields.
-                _ = shutdown_token.cancelled() => return,
-                _ = shim.wait_for_exit() => {}
-            }
-
-            // The runtime is gone, so it has already torn everything down (its
-            // Drop runs shutdown_sync) and there is nobody left to report to.
-            let Some(runtime) = runtime.upgrade() else {
-                return;
-            };
-
-            let stopped = {
-                let mut state = state.write();
-
-                if state.status == BoxStatus::Running {
-                    crate::runtime::rt_impl::record_main_command_exit(&mut state, &exit_file);
-                } else if state.exit_code.is_none()
-                    && let Some(record) = boxlite_shared::layout::ExitRecord::read(&exit_file)
-                {
-                    // The health check watches the same shim and forces Stopped
-                    // when it dies — it can win this race, and it has no exit
-                    // code to record. Don't fight it for the status, but do fill
-                    // in the code it could not know: delivering that code is the
-                    // entire point of this watcher, and `recover_boxes` will not
-                    // backfill it (its branch only fires on a *Running* box).
-                    state.exit_code = Some(record.exit_code);
-                } else {
-                    // Fully resolved by someone else (a concurrent stop, a crash
-                    // report, recovery).
-                    return;
-                }
-
-                state.clone()
-            };
-
-            tracing::info!(
-                box_id = %box_id,
-                exit_code = ?stopped.exit_code,
-                "Main command exited; box stopped"
-            );
-
-            // NotFound is expected for an auto_remove box: the exit raced the
-            // cleanup that deleted it, and the box being gone is the state we
-            // were trying to record anyway.
-            match runtime.box_manager.save_box(&box_id, &stopped) {
-                Ok(()) | Err(BoxliteError::NotFound(_)) => {}
-                Err(e) => tracing::warn!(
-                    box_id = %box_id,
-                    error = %e,
-                    "Failed to persist the box's exit"
-                ),
-            }
-
-            // The same tail `stop()` runs, because this is the box's *other*
-            // death. Without it a long-lived runtime keeps handing out the spent
-            // handle from its cache, and an `auto_remove` box — the default —
-            // that ran to completion is never cleaned up, because nobody ever
-            // called stop() to do it.
-            runtime.invalidate_box_impl(&box_id, box_name.as_deref());
-            if auto_remove && let Err(e) = runtime.remove_box(&box_id, false) {
-                tracing::warn!(
-                    box_id = %box_id,
-                    error = %e,
-                    "Failed to auto-remove the box after its main command exited"
-                );
-            }
-        })
-    }
-
-    pub fn spawn_health_check(
-        &self,
-        state: Arc<RwLock<BoxState>>,
-        box_id: BoxID,
-        health_config: HealthCheckOptions,
-        mut guest: GuestInterface,
-        shutdown_token: CancellationToken,
-        runtime: SharedRuntimeImpl,
-    ) -> JoinHandle<()> {
-        let interval = health_config.interval;
-        let check_timeout = health_config.timeout;
-        let retries = health_config.retries;
-        let start_period = health_config.start_period;
-
-        tokio::spawn(async move {
-            let start_time = Instant::now();
-            let mut last_health_state = state.read().health_status;
-
-            tracing::info!(
-                box_id = %box_id,
-                interval_secs = interval.as_secs(),
-                timeout_secs = check_timeout.as_secs(),
-                retries,
-                start_period_secs = start_period.as_secs(),
-                "Health check task started"
-            );
-
-            loop {
-                tokio::select! {
-                    _ = tokio::time::sleep(interval) => {},
-                    _ = shutdown_token.cancelled() => {
-                        tracing::debug!(
-                            box_id = %box_id,
-                            "Health check task received shutdown signal during sleep"
-                        );
-                        break;
-                    }
-                }
-
-                let elapsed = start_time.elapsed();
-                let result = if elapsed < start_period {
-                    tracing::debug!(
-                        box_id = %box_id,
-                        elapsed_ms = elapsed.as_millis(),
-                        start_period_ms = start_period.as_millis(),
-                        "In start period, skipping health check"
-                    );
-
-                    Ok(())
-                } else {
-                    let ping_result = timeout(check_timeout, guest.ping()).await;
-
-                    match ping_result {
-                        Ok(Ok(_)) => {
-                            // Calculate new state
-                            let new_state = HealthState::Healthy;
-                            let new_failures = 0;
-
-                            // Only update if state actually changed
-                            if last_health_state.state != new_state
-                                || last_health_state.failures != new_failures
-                            {
-                                let mut state_guard = state.write();
-                                state_guard.mark_health_check_success();
-
-                                if let Err(e) = runtime.box_manager.save_box(&box_id, &state_guard)
-                                {
-                                    tracing::error!(
-                                        box_id = %box_id,
-                                        error = %e,
-                                        "Failed to persist health check success to database"
-                                    );
-                                }
-
-                                // Update cache
-                                last_health_state = state_guard.health_status;
-                            }
-
-                            Ok(())
-                        }
-                        Ok(Err(e)) => Err(e),
-                        Err(_) => Err(BoxliteError::Internal(format!(
-                            "Health check timed out after {}s",
-                            check_timeout.as_secs()
-                        ))),
-                    }
-                };
-
-                // Update health status on failure and check if shim died
-                if let Err(e) = result {
-                    tracing::warn!(
-                        box_id = %box_id,
-                        error = %e,
-                        "Health check failed"
-                    );
-
-                    // Step 1: Read pid (brief read lock)
-                    let pid = state.read().pid;
-
-                    // Step 2: Check if shim is alive (without holding lock)
-                    let shim_died = if let Some(pid) = pid
-                        && !crate::util::is_process_alive(pid)
-                    {
-                        tracing::error!(
-                            box_id = %box_id,
-                            pid,
-                            "Shim process died, marking box as Stopped and Unhealthy"
-                        );
-                        true
-                    } else {
-                        false
-                    };
-
-                    // If shim died, mark as Unhealthy and stop health check immediately
-                    if shim_died {
-                        let mut state_guard = state.write();
-                        state_guard.force_status(BoxStatus::Stopped);
-                        state_guard.set_pid(None);
-                        state_guard.health_status.state = HealthState::Unhealthy;
-
-                        if let Err(db_err) = runtime.box_manager.save_box(&box_id, &state_guard) {
-                            tracing::error!(
-                                box_id = %box_id,
-                                error = %db_err,
-                                "Failed to persist health check state to database"
-                            );
-                        }
-                        break;
-                    }
-
-                    // Step 3: Calculate new state (shim is still alive)
-                    let new_failures = last_health_state.failures + 1;
-                    let new_state = if new_failures >= retries {
-                        HealthState::Unhealthy
-                    } else {
-                        last_health_state.state
-                    };
-
-                    // Step 4: Only update if state would actually change
-                    if last_health_state.state != new_state
-                        || last_health_state.failures != new_failures
-                    {
-                        let mut state_guard = state.write();
-                        let became_unhealthy = state_guard.mark_health_check_failure(retries);
-
-                        if let Err(db_err) = runtime.box_manager.save_box(&box_id, &state.read()) {
-                            tracing::error!(
-                                box_id = %box_id,
-                                error = %db_err,
-                                "Failed to persist health check state to database"
-                            );
-                        }
-
-                        // Update cache
-                        last_health_state = state_guard.health_status;
-
-                        // Step 5: Stop health check task if became unhealthy
-                        if became_unhealthy {
-                            break;
-                        }
-                    }
-                }
-            }
-
-            tracing::debug!(
-                box_id = %box_id,
-                "Health check task stopped"
-            );
-        })
     }
 }
 
@@ -1696,5 +1442,160 @@ mod tests {
 
         // ChildGuard's Drop reaps the (now-dead) child.
         drop(child);
+    }
+
+    /// Set up a Running box backed by a live stand-in process (the fake shim),
+    /// with the exit record the guest would have written. `runtime.get()` on it
+    /// arms a `BoxWatcher` on the stand-in — exactly the adopt path. Returns the
+    /// child (keep it alive), the box id, and the shim pid.
+    fn running_box_with_standin(
+        runtime: &SharedRuntimeImpl,
+        auto_remove: bool,
+        exit_code: i32,
+    ) -> (ChildGuard, BoxID, u32) {
+        let child = ChildGuard(
+            std::process::Command::new("sleep")
+                .arg("300")
+                .spawn()
+                .expect("spawn stand-in process"),
+        );
+        let pid = child.0.id();
+
+        let id = BoxIDMint::mint();
+        let box_home = runtime.layout.boxes_dir().join(id.as_str());
+        let config = BoxConfig {
+            id: id.clone(),
+            name: None,
+            created_at: Utc::now(),
+            container: ContainerRuntimeConfig {
+                id: ContainerID::new(),
+            },
+            options: BoxOptions {
+                rootfs: RootfsSpec::Image("alpine:latest".into()),
+                detach: false,
+                auto_remove,
+                ..Default::default()
+            },
+            engine_kind: VmmKind::Libkrun,
+            box_home: box_home.clone(),
+        };
+
+        let mut state = BoxState::new();
+        state.status = BoxStatus::Running;
+        state.pid = Some(pid);
+        state.set_lock_id(runtime.lock_manager.allocate().expect("allocate lock"));
+
+        std::fs::create_dir_all(&box_home).expect("create box dir");
+        let st = crate::util::process_start_time(pid).expect("OS reports start_time");
+        let layout = runtime
+            .layout
+            .box_layout(config.id.as_str(), false)
+            .expect("box_layout is infallible");
+        std::fs::write(layout.pid_file_path(), format!("{pid}\n{st}\n")).expect("write pid file");
+
+        // The exit record the guest writes on its way down — what on_shim_exit
+        // reads for the code.
+        let exit_file = layout.container_exit_file(config.container.id.as_str());
+        if let Some(parent) = exit_file.parent() {
+            std::fs::create_dir_all(parent).expect("create exit-file dir");
+        }
+        boxlite_shared::layout::ExitRecord { exit_code }
+            .write(&exit_file)
+            .expect("write exit record");
+
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("add box to manager");
+
+        (child, id, pid)
+    }
+
+    /// Poll `get_info` until the predicate holds or the deadline passes.
+    async fn wait_for_box<F>(runtime: &SharedRuntimeImpl, id: &str, done: F) -> Option<BoxInfo>
+    where
+        F: Fn(&Option<BoxInfo>) -> bool,
+    {
+        for _ in 0..40 {
+            let info = runtime.get_info(id).await.expect("query box");
+            if done(&info) {
+                return info;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        runtime.get_info(id).await.expect("query box")
+    }
+
+    /// The watcher records `Stopped` + the guest's exit code the moment the shim
+    /// dies — the exit-arm of `BoxWatcher`, the single writer of the transition.
+    #[tokio::test]
+    async fn box_watcher_records_stopped_with_exit_code_when_the_shim_dies() {
+        let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
+        let runtime = RuntimeImpl::new(BoxliteOptions {
+            home_dir: temp_dir.path().to_path_buf(),
+            image_registries: vec![],
+        })
+        .expect("create runtime");
+
+        let (child, id, pid) = running_box_with_standin(&runtime, false, 7);
+
+        // Handing out a handle arms the watcher (adopt path, health = None).
+        let litebox = runtime
+            .get(id.as_str())
+            .await
+            .expect("get box")
+            .expect("box exists");
+
+        // The shim dies: the watcher's `wait_for_exit` fires and records the exit.
+        assert!(crate::util::kill_process(pid), "kill the stand-in shim");
+
+        let info = wait_for_box(&runtime, id.as_str(), |i| {
+            i.as_ref().is_some_and(|i| i.status != BoxStatus::Running)
+        })
+        .await
+        .expect("box still present");
+
+        assert_eq!(
+            info.status,
+            BoxStatus::Stopped,
+            "the watcher must stop the box when its shim dies"
+        );
+        assert_eq!(
+            info.exit_code,
+            Some(7),
+            "and deliver the exit code the guest recorded, not invent one"
+        );
+
+        drop((litebox, child));
+    }
+
+    /// An `auto_remove` box is cleaned up by the watcher after its shim dies —
+    /// the "other death" tail that used to depend on someone calling `stop()`.
+    #[tokio::test]
+    async fn box_watcher_auto_removes_the_box_after_its_shim_dies() {
+        let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
+        let runtime = RuntimeImpl::new(BoxliteOptions {
+            home_dir: temp_dir.path().to_path_buf(),
+            image_registries: vec![],
+        })
+        .expect("create runtime");
+
+        let (child, id, pid) = running_box_with_standin(&runtime, true, 0);
+
+        let litebox = runtime
+            .get(id.as_str())
+            .await
+            .expect("get box")
+            .expect("box exists");
+
+        assert!(crate::util::kill_process(pid), "kill the stand-in shim");
+
+        let gone = wait_for_box(&runtime, id.as_str(), |i| i.is_none()).await;
+        assert!(
+            gone.is_none(),
+            "an auto_remove box must be gone after its shim dies, found {gone:?}"
+        );
+
+        drop((litebox, child));
     }
 }

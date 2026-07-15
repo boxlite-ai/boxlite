@@ -29,7 +29,7 @@ fn litebox_from_impl(box_impl: SharedBoxImpl) -> LiteBox {
     // (`boxlite serve`, the cloud), and without it such a box would run to
     // completion entirely unobserved and be reported Running forever: exactly
     // the lie the watcher exists to stop telling.
-    box_impl.arm_exit_watcher();
+    box_impl.arm_watcher(None);
 
     let box_backend: Arc<dyn crate::runtime::backend::BoxBackend> = box_impl.clone();
     let snapshot_backend: Arc<dyn crate::runtime::backend::SnapshotBackend> =

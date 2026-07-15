@@ -15,6 +15,7 @@ mod manager;
 mod snapshot;
 pub(crate) mod snapshot_mgr;
 mod state;
+mod watcher;
 
 pub use copy::CopyOptions;
 pub(crate) use crash_report::CrashReport;
