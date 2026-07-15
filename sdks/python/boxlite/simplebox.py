@@ -9,8 +9,17 @@ import logging
 from enum import IntEnum
 from typing import Optional, TYPE_CHECKING
 
-from .errors import ExecError, _is_command_start_failure
+from .errors import ExecError
 from .exec import ExecResult
+
+try:
+    from .boxlite import _ExecStartError
+except ImportError:
+
+    class _ExecStartError(RuntimeError):
+        """Import placeholder when the native extension is unavailable."""
+
+        pass
 
 
 if TYPE_CHECKING:
@@ -275,11 +284,9 @@ class SimpleBox:
             execution = await self._box.exec(
                 cmd, arg_list, env_list, user=user, timeout_secs=timeout, cwd=cwd
             )
-        except RuntimeError as e:
+        except _ExecStartError as e:
             message = str(e)
-            if _is_command_start_failure(message):
-                raise ExecError(command_display, 126, message) from e
-            raise
+            raise ExecError(command_display, 126, message) from e
 
         # Get streams from Rust execution
         try:

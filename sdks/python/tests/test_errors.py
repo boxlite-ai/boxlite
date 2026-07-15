@@ -5,29 +5,7 @@ Tests the error hierarchy and exception behavior.
 """
 
 import pytest
-from boxlite.errors import (
-    BoxliteError,
-    ExecError,
-    ParseError,
-    TimeoutError,
-    _is_command_start_failure,
-)
-
-
-@pytest.mark.parametrize(
-    ("message", "expected"),
-    [
-        (
-            "boxlite: internal error: spawn_failed: Failed to spawn 'missing': "
-            "No such file or directory (os error 2)",
-            True,
-        ),
-        ("Permission denied (os error 13)", False),
-        ("internal error: database unavailable", False),
-    ],
-)
-def test_is_command_start_failure(message, expected):
-    assert _is_command_start_failure(message) is expected
+from boxlite.errors import BoxliteError, ExecError, ParseError, TimeoutError
 
 
 class TestBoxliteError:

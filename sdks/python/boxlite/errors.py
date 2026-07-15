@@ -7,12 +7,6 @@ Provides a hierarchy of exceptions for different failure modes.
 __all__ = ["BoxliteError", "ExecError", "TimeoutError", "ParseError"]
 
 
-def _is_command_start_failure(message: str) -> bool:
-    """Return whether a native RuntimeError came from pre-exec spawning."""
-    detail = message.casefold()
-    return "spawn_failed" in detail and "failed to spawn" in detail
-
-
 class BoxliteError(Exception):
     """Base exception for all boxlite errors."""
 

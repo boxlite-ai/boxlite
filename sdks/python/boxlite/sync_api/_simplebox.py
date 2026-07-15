@@ -9,8 +9,17 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Dict, Optional
 
-from ..errors import ExecError, _is_command_start_failure
+from ..errors import ExecError
 from ..exec import ExecResult
+
+try:
+    from ..boxlite import _ExecStartError
+except ImportError:
+
+    class _ExecStartError(RuntimeError):
+        """Import placeholder when the native extension is unavailable."""
+
+        pass
 
 
 if TYPE_CHECKING:
@@ -199,11 +208,9 @@ class SyncSimpleBox:
                 execution = await async_box.exec(
                     cmd, arg_list, env_list, user=user, timeout_secs=timeout, cwd=cwd
                 )
-            except RuntimeError as e:
+            except _ExecStartError as e:
                 message = str(e)
-                if _is_command_start_failure(message):
-                    raise ExecError(command_display, 126, message) from e
-                raise
+                raise ExecError(command_display, 126, message) from e
 
             stdout_lines = []
             stderr_lines = []
