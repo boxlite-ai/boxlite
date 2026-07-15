@@ -34,11 +34,10 @@ pub(super) fn start_timeout_watcher(
         use nix::sys::signal::Signal;
 
         // Stage 1: SIGTERM — polite termination request.
-        if !exec_state.kill(Signal::SIGTERM).await {
+        if !exec_state.kill_for_timeout(Signal::SIGTERM).await {
             // Process already exited on its own; nothing more to do.
             return;
         }
-        exec_state.mark_timed_out().await;
         info!(
             execution_id = %exec_id,
             grace_ms = TIMEOUT_GRACE.as_millis() as u64,
