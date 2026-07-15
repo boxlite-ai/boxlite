@@ -99,7 +99,7 @@ class TestSyncSimpleBox:
             with pytest.raises(ExecError) as exc:
                 box.exec("/tmp/noexec")
             assert exc.value.exit_code == 126
-            assert "not found" in exc.value.stderr.lower()
+            assert "permission" in exc.value.stderr.lower()
 
     def test_custom_working_dir(self, shared_sync_runtime):
         """Can set custom working directory."""
