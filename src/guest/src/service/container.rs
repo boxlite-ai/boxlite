@@ -107,9 +107,9 @@ impl ContainerService for GuestServer {
         }
 
         // Session id to register the init process under, assigned by the host
-        // (= container_id, as the kata runtime does). The guest does not
-        // derive it: whoever names the session owns the convention, and that
-        // is the side that later attaches to it.
+        // (= container_id). The guest does not derive it: whoever names the
+        // session owns the convention, and that is the side that later attaches
+        // to it.
         let init_execution_id = init_req.execution_id.clone();
         if init_execution_id.is_empty() {
             error!("Missing execution_id in Init request");
@@ -291,10 +291,11 @@ impl ContainerService for GuestServer {
             config.tty,
         ) {
             Ok(mut container) => {
-                // Init is created, not yet running — that is what makes the
-                // attach-before-start ordering possible. Its pid and stdio exist
-                // already, so the session below can be registered against it.
-                debug!(container_id = %container_id, defer_start = init_req.defer_start, "Container created");
+                // Init is created, not yet running — Init never runs it; the
+                // host calls Container.Start for that. That its pid and stdio
+                // exist already is what lets the session below be registered
+                // against it, and a client attach to it, before it runs.
+                debug!(container_id = %container_id, "Container created");
 
                 info!(
                     container_id = %container_id,
@@ -438,20 +439,10 @@ impl ContainerService for GuestServer {
                         .insert(container_id.clone(), watcher);
                 }
 
-                // Everything that needs to exist *before* the main command runs
-                // now does: its session is registered and its watcher is armed.
-                // Unless the caller asked to hold the starting gun themselves —
-                // so it can attach first — run it.
-                if !init_req.defer_start {
-                    if let Err(reason) = self.run_container_init(&container_id).await {
-                        return Ok(Response::new(ContainerInitResponse {
-                            result: Some(container_init_response::Result::Error(
-                                ContainerInitError { reason },
-                            )),
-                        }));
-                    }
-                }
-
+                // Everything that must exist *before* the main command runs now
+                // does — the session is registered and the watcher is armed — and
+                // init has *not* run. The host calls Container.Start to run it,
+                // after attaching if it wants to.
                 Ok(Response::new(ContainerInitResponse {
                     result: Some(container_init_response::Result::Success(
                         ContainerInitSuccess { container_id },
@@ -496,11 +487,8 @@ impl ContainerService for GuestServer {
 }
 
 impl GuestServer {
-    /// Run a created container's init process.
-    ///
-    /// Shared by `Init` (the fused create-and-start every non-interactive caller
-    /// wants) and `Start` (the deferred half, for a client that attached first),
-    /// so the two cannot drift.
+    /// Run a created container's init process. Reached only via the
+    /// `Container.Start` RPC — `Container.Init` creates the container and stops.
     ///
     /// It deliberately does **not** check that init survived the start. Under
     /// docker semantics init *is* the user's command, and a command that finishes

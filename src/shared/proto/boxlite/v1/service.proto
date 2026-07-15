@@ -8,16 +8,19 @@ package boxlite.v1;
 
 // Container lifecycle management
 service Container {
-  // Prepare the rootfs and create the container. Starts it too, unless the
-  // request sets `defer_start` — see ContainerInitRequest.
+  // Prepare the rootfs and create the container. Does NOT run its init
+  // process — the host calls Start for that. Creation and start are separate,
+  // unconditional steps (no "also start it" flag) so the host can act between
+  // them; see Start.
   rpc Init(ContainerInitRequest) returns (ContainerInitResponse);
 
-  // Run the init process of a container created with `defer_start`.
+  // Run the init process of a created container.
   //
-  // The split exists so a client can attach to the main command *before* it
-  // runs — docker's create → attach → start. Fused, a fast command
-  // (`run alpine echo hi`) can exit before an attach issued after start ever
-  // reaches the guest, and its output and exit code die with the VM.
+  // Separate from Init so the host can attach to the main command *before* it
+  // runs. Fused, a fast command (`run alpine echo hi`) can exit before an
+  // attach issued after start ever reaches the guest, and its output and exit
+  // code die with the VM. The host sequences the two: for an ordinary boot it
+  // calls Start right after Init; for a foreground `run` it attaches in between.
   rpc Start(ContainerStartRequest) returns (ContainerStartResponse);
 }
 
@@ -220,21 +223,10 @@ message ContainerInitRequest {
   // the main command is addressable through the same execution namespace as
   // exec sessions (Attach/SendInput/Wait/Kill take an execution_id).
   //
-  // Host-assigned and set to container_id, mirroring the kata-agent
-  // protocol, where the runtime fills CreateContainerRequest.exec_id with
-  // the container id and generates a fresh uuid for every later exec. The
-  // host owns the naming; the guest registers what it is handed rather than
-  // re-deriving the rule on its own side of the wire.
+  // Host-assigned and set to container_id. The host owns the naming and the
+  // guest registers what it is handed, rather than both sides separately
+  // hard-coding the id==container_id rule on their own side of the wire.
   string execution_id = 6;
-
-  // Create the container but do not run its init process; the caller will say
-  // when, via Container.Start. Lets a client attach to the main command before
-  // it runs, which is the only way to be sure of catching the output and exit
-  // code of a command that finishes immediately.
-  //
-  // Default (false) keeps Init doing create-and-start in one step, which is what
-  // every non-interactive caller wants.
-  bool defer_start = 7;
 }
 
 message ContainerStartRequest {

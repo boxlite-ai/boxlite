@@ -140,7 +140,8 @@ async fn run_guest_init(
     guest_interface.init(guest_init_config).await?;
     tracing::info!("Guest initialized successfully");
 
-    // Step 2: Container Init (rootfs + container image config + user volume mounts)
+    // Step 2: create the container (rootfs + image config + user mounts). This
+    // does NOT run init — Container.Init only creates.
     tracing::info!("Sending container configuration to guest");
     let mut container_interface = guest_session.container().await?;
     let ca_certs: Vec<String> = ca_cert_pem.into_iter().map(|s| s.to_string()).collect();
@@ -151,10 +152,19 @@ async fn run_guest_init(
             rootfs_init.clone(),
             container_mounts.to_vec(),
             ca_certs,
-            crate::portal::interfaces::container::InitProcessSetup { tty, defer_start },
+            tty,
         )
         .await?;
-    tracing::info!(container_id = %returned_id, "Container initialized");
+    tracing::info!(container_id = %returned_id, "Container created");
+
+    // Step 3: run init — unless the caller is deferring it to attach first
+    // (`LiteBox::start_attached`), in which case *it* calls Container.Start once
+    // the client is on the stream. The host sequences the two RPCs; the choice
+    // of when to start is host-side, not a flag on the wire.
+    if !defer_start {
+        container_interface.start(container_id_str).await?;
+        tracing::info!(container_id = %returned_id, "Container started");
+    }
 
     Ok(())
 }
