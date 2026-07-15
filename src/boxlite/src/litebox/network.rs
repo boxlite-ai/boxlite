@@ -20,12 +20,6 @@ pub(crate) type TunnelConnector = Arc<
         + Sync,
 >;
 
-/// Lazily fetches the public endpoint for a [`BoxTunnel`]. Present only for remote
-/// boxes, and invoked on demand so a caller that only connects never pays for
-/// the describe round-trip.
-pub(crate) type TunnelUrlFetch =
-    Box<dyn Fn() -> Pin<Box<dyn Future<Output = BoxliteResult<String>> + Send>> + Send + Sync>;
-
 /// Public byte-stream capability for a box service connection.
 pub trait BoxConnection: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin {}
 
@@ -34,15 +28,15 @@ impl<T> BoxConnection for T where T: tokio::io::AsyncRead + tokio::io::AsyncWrit
 /// A box service tunnel target. Call [`endpoint`](Self::endpoint) first, then
 /// [`connect`](Self::connect) on this handle.
 pub struct BoxTunnel {
-    endpoint: Option<TunnelUrlFetch>,
+    endpoint: Option<String>,
     connector: TunnelConnector,
     stream: Arc<tokio::sync::Mutex<Option<BoxInternalTunnel>>>,
 }
 
 impl BoxTunnel {
-    pub(crate) fn new(url: Option<TunnelUrlFetch>, connector: TunnelConnector) -> Self {
+    pub(crate) fn new(endpoint: Option<String>, connector: TunnelConnector) -> Self {
         Self {
-            endpoint: url,
+            endpoint,
             connector,
             stream: Arc::new(tokio::sync::Mutex::new(None)),
         }
@@ -51,7 +45,7 @@ impl BoxTunnel {
     /// Resolve the endpoint, fetching a URL remotely or preparing a local stream.
     pub async fn endpoint(&self) -> BoxliteResult<Option<String>> {
         match &self.endpoint {
-            Some(fetch) => Ok(Some(fetch().await?)),
+            Some(endpoint) => Ok(Some(endpoint.clone())),
             None => {
                 let mut stream = self.stream.lock().await;
                 if stream.is_none() {
@@ -108,23 +102,15 @@ mod tests {
 
     #[derive(Default)]
     struct TestBackend {
-        described: Arc<AtomicUsize>,
         connected: Arc<AtomicUsize>,
     }
 
     #[async_trait::async_trait]
     impl BoxNetworkBackend for TestBackend {
         async fn tunnel(&self, _target: SocketAddr) -> BoxliteResult<BoxTunnel> {
-            let described = Arc::clone(&self.described);
             let connected = Arc::clone(&self.connected);
             Ok(BoxTunnel::new(
-                Some(Box::new(move || {
-                    let described = Arc::clone(&described);
-                    Box::pin(async move {
-                        described.fetch_add(1, Ordering::Relaxed);
-                        Ok("https://3000-box.proxy.example.test".to_string())
-                    })
-                })),
+                Some("https://3000-box.proxy.example.test".to_string()),
                 Arc::new(move || {
                     let connected = Arc::clone(&connected);
                     Box::pin(async move {
@@ -142,24 +128,21 @@ mod tests {
         let network = NetworkHandle::new(backend.clone());
         let target = "192.168.127.2:3000".parse().unwrap();
 
-        // Obtaining the tunnel does no work — no describe, no connect.
+        // Obtaining the tunnel does no work — no connect.
         let tunnel = network.tunnel(target).await.unwrap();
-        assert_eq!(backend.described.load(Ordering::Relaxed), 0);
         assert_eq!(backend.connected.load(Ordering::Relaxed), 0);
 
-        // endpoint() triggers exactly one describe; connect() remains separate.
+        // endpoint() returns the already-resolved URL; connect() remains separate.
         let endpoint = tunnel.endpoint().await.unwrap();
         assert_eq!(
             endpoint.as_deref(),
             Some("https://3000-box.proxy.example.test")
         );
-        assert_eq!(backend.described.load(Ordering::Relaxed), 1);
         assert_eq!(backend.connected.load(Ordering::Relaxed), 0);
 
         // Connecting the tunnel triggers exactly one connect.
         assert!(tunnel.connect().await.is_err());
         assert_eq!(backend.connected.load(Ordering::Relaxed), 1);
-        assert_eq!(backend.described.load(Ordering::Relaxed), 1);
     }
 
     struct LocalBackend {
