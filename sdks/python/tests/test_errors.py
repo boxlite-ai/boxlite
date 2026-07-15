@@ -10,21 +10,24 @@ from boxlite.errors import (
     ExecError,
     ParseError,
     TimeoutError,
-    _command_start_exit_code,
+    _is_command_start_failure,
 )
 
 
 @pytest.mark.parametrize(
     ("message", "expected"),
     [
-        ("executable '/missing' not found in $PATH", 127),
-        ("No such file or directory (os error 2)", 127),
-        ("Permission denied (os error 13)", 126),
-        ("Exec format error (os error 8)", 126),
+        (
+            "boxlite: internal error: spawn_failed: Failed to spawn 'missing': "
+            "No such file or directory (os error 2)",
+            True,
+        ),
+        ("Permission denied (os error 13)", False),
+        ("internal error: database unavailable", False),
     ],
 )
-def test_command_start_exit_code(message, expected):
-    assert _command_start_exit_code(message) == expected
+def test_is_command_start_failure(message, expected):
+    assert _is_command_start_failure(message) is expected
 
 
 class TestBoxliteError:

@@ -60,10 +60,10 @@ impl ExecutionInterface {
         // Start execution
         let exec_response = self.client.exec(request).await?.into_inner();
         if let Some(err) = exec_response.error {
-            return Err(match err.reason.as_str() {
-                "spawn_failed" => BoxliteError::Execution(err.detail),
-                _ => BoxliteError::Internal(format!("{}: {}", err.reason, err.detail)),
-            });
+            return Err(BoxliteError::Internal(format!(
+                "{}: {}",
+                err.reason, err.detail
+            )));
         }
 
         let execution_id = exec_response.execution_id.clone();

@@ -4,8 +4,6 @@ Execution API - Simple interface for command execution.
 Provides Docker-like API for executing commands in boxes.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 __all__ = [

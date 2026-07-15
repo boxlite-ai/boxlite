@@ -69,12 +69,6 @@ func IsInvalidState(err error) bool {
 	return errors.As(err, &e) && e.Code == ErrInvalidState
 }
 
-// IsExecution reports whether err indicates a command execution failure.
-func IsExecution(err error) bool {
-	var e *Error
-	return errors.As(err, &e) && e.Code == ErrExecution
-}
-
 // IsStopped reports whether err indicates a stopped or shut down resource.
 func IsStopped(err error) bool {
 	var e *Error

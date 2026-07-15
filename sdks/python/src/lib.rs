@@ -28,7 +28,6 @@ use crate::options::{
 use crate::runtime::PyBoxlite;
 use crate::snapshot_options::{PyCloneOptions, PyExportOptions, PySnapshotOptions};
 use crate::snapshots::{PySnapshotHandle, PySnapshotInfo};
-use crate::util::_ExecStartError;
 use crate::volumes::{PyVolumeHandle, PyVolumeInfo};
 use pyo3::prelude::*;
 
@@ -72,7 +71,6 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyApiKeyCredential>()?;
     m.add_class::<PyAccessToken>()?;
     m.add_class::<PySecret>()?;
-    m.add("_ExecStartError", m.py().get_type::<_ExecStartError>())?;
 
     Ok(())
 }

@@ -7,15 +7,10 @@ Provides a hierarchy of exceptions for different failure modes.
 __all__ = ["BoxliteError", "ExecError", "TimeoutError", "ParseError"]
 
 
-def _command_start_exit_code(message: str) -> int:
-    """Translate a pre-exec spawn failure to the conventional shell code."""
+def _is_command_start_failure(message: str) -> bool:
+    """Return whether a native RuntimeError came from pre-exec spawning."""
     detail = message.casefold()
-    not_found_markers = (
-        "not found in $path",
-        "no such file or directory",
-        "os error 2",
-    )
-    return 127 if any(marker in detail for marker in not_found_markers) else 126
+    return "spawn_failed" in detail and "failed to spawn" in detail
 
 
 class BoxliteError(Exception):

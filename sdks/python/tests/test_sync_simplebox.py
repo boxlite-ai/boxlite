@@ -87,7 +87,7 @@ class TestSyncSimpleBox:
         with SyncSimpleBox(image="alpine:latest", runtime=shared_sync_runtime) as box:
             with pytest.raises(ExecError) as exc:
                 box.exec("definitely-not-a-boxlite-command-xyz")
-            assert exc.value.exit_code == 127
+            assert exc.value.exit_code == 126
 
     def test_unexecutable_command_raises_exit_code_126(self, shared_sync_runtime):
         with SyncSimpleBox(image="alpine:latest", runtime=shared_sync_runtime) as box:
