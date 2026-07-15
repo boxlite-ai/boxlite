@@ -338,9 +338,10 @@ class SimpleBox:
         logger.debug(f"exec finish, exit_code: {exit_code}")
 
         if timed_out:
-            raise TimeoutError(
-                f"Command '{command_display}' timed out after {timeout:g} seconds"
+            timeout_detail = (
+                f" after {timeout:g} seconds" if timeout is not None else ""
             )
+            raise TimeoutError(f"Command '{command_display}' timed out{timeout_detail}")
 
         return ExecResult(
             exit_code=exit_code,

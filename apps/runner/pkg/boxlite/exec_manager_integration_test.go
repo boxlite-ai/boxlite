@@ -46,7 +46,7 @@ func TestIntegrationExecManagerRecordsTimedOut(t *testing.T) {
 	}
 
 	mgr := NewExecManager()
-	mgr.Stop()
+	t.Cleanup(func() { mgr.Stop() })
 	id, err := mgr.Start(ctx, box, box.ID(), StartOptions{
 		Command: "sleep",
 		Args:    []string{"20"},

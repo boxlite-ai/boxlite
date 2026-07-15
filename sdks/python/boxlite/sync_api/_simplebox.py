@@ -252,8 +252,11 @@ class SyncSimpleBox:
                 error_message = None
 
             if timed_out:
+                timeout_detail = (
+                    f" after {timeout:g} seconds" if timeout is not None else ""
+                )
                 raise TimeoutError(
-                    f"Command '{command_display}' timed out after {timeout:g} seconds"
+                    f"Command '{command_display}' timed out{timeout_detail}"
                 )
 
             return ExecResult(

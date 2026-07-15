@@ -514,6 +514,16 @@ enum BoxliteErrorCode boxlite_execution_wait(CExecutionHandle *execution,
                                              void *user_data,
                                              CBoxliteError *out_error);
 
+// Schedules an asynchronous wait and invokes `cb` with the exit code and
+// timeout status, passing `user_data` through unchanged.
+//
+// Returns immediately with a validation or scheduling status. When non-null,
+// `out_error` receives details for synchronous failures.
+//
+// # Safety
+//
+// `execution` must be a valid handle, `cb` must be callable for the duration
+// of the asynchronous operation, and `out_error` must be null or writable.
 enum BoxliteErrorCode boxlite_execution_wait_result(CExecutionHandle *execution,
                                                     CExecutionWaitResultCb cb,
                                                     void *user_data,
