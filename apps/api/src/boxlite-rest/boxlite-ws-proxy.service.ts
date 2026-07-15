@@ -24,6 +24,8 @@ type RunnerUpgradeRequest = IncomingMessage & {
 // Named groups: `tenant` (optional org id / path prefix) and `boxId`.
 const ATTACH_PATH = /^\/api\/v1\/(?:(?<tenant>[^/]+)\/)?boxes\/(?<boxId>[^/]+)\/executions\/[^/]+\/attach(?:\?.*)?$/
 
+const WS_ACTIVITY_KEEPALIVE_INTERVAL_MS = 45_000
+
 /**
  * Singleton WebSocket proxy for `/attach` upgrades.
  *
@@ -114,12 +116,6 @@ export class BoxliteWsProxyService {
         this.respondAndClose(socket, 404, 'Not Found')
         return
       }
-      // Mirror legacy toolbox path — opening a WS attach is user activity,
-      // so the autostop cron does not reap a session that's still connected.
-      // Best-effort: do not fail the upgrade if this errors.
-      this.boxService
-        .updateLastActivityAt(box.id, new Date())
-        .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${box.id}: ${err}`))
       const runner = await this.runnerService.findOne(box.runnerId)
       if (!runner) {
         this.respondAndClose(socket, 404, 'Not Found')
@@ -127,15 +123,54 @@ export class BoxliteWsProxyService {
       }
       ;(req as RunnerUpgradeRequest).__boxliteRunner = runner
       ;(req as RunnerUpgradeRequest).__boxliteRunnerBoxId = box.id
-      ;(
-        this.proxy as unknown as {
-          upgrade: (req: IncomingMessage, socket: Socket, head: Buffer) => void
-        }
-      ).upgrade(req, socket, head)
+      const stopActivityKeepalive = this.startActivityKeepalive(box.id, socket)
+      try {
+        ;(
+          this.proxy as unknown as {
+            upgrade: (req: IncomingMessage, socket: Socket, head: Buffer) => void
+          }
+        ).upgrade(req, socket, head)
+      } catch (err) {
+        stopActivityKeepalive()
+        throw err
+      }
     } catch (err) {
       this.logger.warn(`upgrade failed for ${req.url}: ${(err as Error).message}`)
       this.respondAndClose(socket, 404, 'Not Found')
     }
+  }
+
+  private startActivityKeepalive(boxId: string, socket: Socket): () => void {
+    let stopped = false
+    let updateInFlight = false
+
+    const update = () => {
+      if (stopped || updateInFlight) return
+
+      updateInFlight = true
+      void this.boxService
+        .updateLastActivityAt(boxId, new Date())
+        .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${boxId}: ${err}`))
+        .finally(() => {
+          updateInFlight = false
+        })
+    }
+
+    const interval = setInterval(update, WS_ACTIVITY_KEEPALIVE_INTERVAL_MS)
+    interval.unref()
+
+    const stop = () => {
+      if (stopped) return
+
+      stopped = true
+      clearInterval(interval)
+      socket.off('close', stop)
+    }
+
+    socket.once('close', stop)
+    update()
+
+    return stop
   }
 
   /**

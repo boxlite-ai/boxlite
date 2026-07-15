@@ -22,6 +22,11 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const (
+	activityPollInterval  = 50 * time.Second
+	activityUpdateTimeout = 10 * time.Second
+)
+
 func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, error) {
 	var targetPort, targetPath, boxIdOrSignedToken string
 
@@ -292,38 +297,11 @@ func (p *Proxy) parseHost(host string) (targetPort string, boxIdOrSignedToken st
 // updateLastActivity updates the last activity timestamp for a box.
 // If shouldPollUpdate is true, it starts a goroutine that updates every 50 seconds.
 func (p *Proxy) updateLastActivity(ctx context.Context, boxId string, shouldPollUpdate bool, doneCh chan struct{}) {
-	// Prevent frequent updates by caching the last update
-	cached, err := p.boxLastActivityUpdateCache.Has(ctx, boxId)
-	if err != nil {
-		// If cache doesn't work, skip the update to avoid spamming the API
-		log.Errorf("failed to check last activity update cache for box %s: %v", boxId, err)
-		return
-	}
-
-	// Poll interval is 50 seconds to avoid spamming the API which will also cache updates for 45 seconds
-	pollInterval := 50 * time.Second
-
-	if !cached {
-		_, err := p.apiclient.BoxAPI.UpdateLastActivity(ctx, boxId).Execute()
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return
-			}
-			log.Errorf("failed to update last activity for box %s", boxId)
-			return
-		}
-
-		// Expire a bit before the poll interval to avoid skipping one interval
-		err = p.boxLastActivityUpdateCache.Set(ctx, boxId, true, pollInterval-5*time.Second)
-		if err != nil {
-			log.Errorf("failed to set last activity update cache for box %s: %v", boxId, err)
-		}
-	}
-
 	if shouldPollUpdate {
-		// Update keep alive every pollInterval until stopped
+		// Keep retrying while the proxied connection remains open, even if the
+		// initial activity update encounters a transient API or cache failure.
 		go func() {
-			ticker := time.NewTicker(pollInterval)
+			ticker := time.NewTicker(activityPollInterval)
 			defer ticker.Stop()
 
 			for {
@@ -335,5 +313,35 @@ func (p *Proxy) updateLastActivity(ctx context.Context, boxId string, shouldPoll
 				}
 			}
 		}()
+	}
+
+	updateCtx, cancel := context.WithTimeout(ctx, activityUpdateTimeout)
+	defer cancel()
+
+	// Prevent frequent updates by caching the last update
+	cached, err := p.boxLastActivityUpdateCache.Has(updateCtx, boxId)
+	if err != nil {
+		// If cache doesn't work, skip the update to avoid spamming the API
+		log.Errorf("failed to check last activity update cache for box %s: %v", boxId, err)
+		return
+	}
+
+	if !cached {
+		_, err := p.apiclient.BoxAPI.UpdateLastActivity(updateCtx, boxId).Execute()
+		if err != nil {
+			log.Errorf("failed to update last activity for box %s: %v", boxId, err)
+			return
+		}
+
+		// Expire a bit before the poll interval to avoid skipping one interval
+		err = p.boxLastActivityUpdateCache.Set(
+			updateCtx,
+			boxId,
+			true,
+			activityPollInterval-5*time.Second,
+		)
+		if err != nil {
+			log.Errorf("failed to set last activity update cache for box %s: %v", boxId, err)
+		}
 	}
 }
