@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
-use crate::net::TunnelStream;
+use crate::net::BoxInternalTunnel;
 use crate::runtime::backend::BoxNetworkBackend;
 
 /// Lazily opens the raw byte stream backing a [`BoxTunnel`]. Each backend
@@ -15,7 +15,9 @@ use crate::runtime::backend::BoxNetworkBackend;
 /// it needs (a REST client, a gvproxy handle) so the tunnel stays self-contained
 /// and the backend only has to expose `tunnel`.
 pub(crate) type TunnelConnector = Arc<
-    dyn Fn() -> Pin<Box<dyn Future<Output = BoxliteResult<TunnelStream>> + Send>> + Send + Sync,
+    dyn Fn() -> Pin<Box<dyn Future<Output = BoxliteResult<BoxInternalTunnel>> + Send>>
+        + Send
+        + Sync,
 >;
 
 /// Lazily fetches the public endpoint for a [`BoxTunnel`]. Present only for remote
@@ -23,6 +25,11 @@ pub(crate) type TunnelConnector = Arc<
 /// the describe round-trip.
 pub(crate) type TunnelUrlFetch =
     Box<dyn Fn() -> Pin<Box<dyn Future<Output = BoxliteResult<String>> + Send>> + Send + Sync>;
+
+/// Public byte-stream capability for a box service connection.
+pub trait BoxConnection: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin {}
+
+impl<T> BoxConnection for T where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin {}
 
 pub(crate) struct UnsupportedNetworkBackend;
 
@@ -40,7 +47,7 @@ impl BoxNetworkBackend for UnsupportedNetworkBackend {
 pub struct BoxTunnel {
     endpoint: Option<TunnelUrlFetch>,
     connector: TunnelConnector,
-    stream: Arc<tokio::sync::Mutex<Option<TunnelStream>>>,
+    stream: Arc<tokio::sync::Mutex<Option<BoxInternalTunnel>>>,
 }
 
 impl BoxTunnel {
@@ -67,13 +74,13 @@ impl BoxTunnel {
     }
 
     /// Consume the prepared local stream or establish the remote stream once.
-    pub async fn connect(&self) -> BoxliteResult<TunnelStream> {
+    pub async fn connect(&self) -> BoxliteResult<Box<dyn BoxConnection>> {
         let mut stream = self.stream.lock().await;
         if let Some(stream) = stream.take() {
-            return Ok(stream);
+            return Ok(Box::new(stream));
         }
         drop(stream);
-        (self.connector)().await
+        Ok(Box::new((self.connector)().await?))
     }
 }
 
@@ -183,7 +190,10 @@ mod tests {
                             BoxliteError::Network(format!("test socket pair failed: {error}"))
                         })?;
                         *peer.lock().await = Some(other);
-                        Ok(TunnelStream::Local(stream))
+                        Ok(BoxInternalTunnel::from_local(
+                            stream,
+                            "192.168.127.2:3000".parse().unwrap(),
+                        ))
                     })
                 }),
             ))
@@ -201,7 +211,7 @@ mod tests {
         let tunnel = network.tunnel(target).await.unwrap();
         let endpoint = tunnel.endpoint().await.unwrap();
         assert_eq!(endpoint, None);
-        let TunnelStream::Local(mut stream) = tunnel.connect().await.unwrap();
+        let mut stream = tunnel.connect().await.unwrap();
         let mut peer = peer.lock().await.take().unwrap();
 
         peer.write_all(b"local").await.unwrap();

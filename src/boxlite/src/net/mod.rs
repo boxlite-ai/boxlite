@@ -225,7 +225,7 @@ impl NetworkBackendStats {
 /// erasing to `Box<dyn>`) is deliberate: the local variant can hand its raw OS fd
 /// to an SDK with no unsafe downcast, and split lock-free. Mirrors pingora's
 /// `enum RawStream` and tungstenite's `MaybeTlsStream`.
-pub enum TunnelStream {
+pub(crate) enum TunnelStream {
     /// A raw unix-socket pipe to a same-host backend (gvproxy `/tunnel`).
     Local(UnixStream),
 }
@@ -257,10 +257,6 @@ impl BoxInternalTunnel {
     /// The guest `ip:port` this tunnel targets.
     pub fn peer_addr(&self) -> SocketAddr {
         self.peer
-    }
-
-    pub(crate) fn into_stream(self) -> TunnelStream {
-        self.stream
     }
 
     /// Recover the tunnel's owned OS file descriptor — the transport-agnostic

@@ -1187,7 +1187,7 @@ impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
             None,
             Arc::new(move || {
                 let network = Arc::clone(&network);
-                Box::pin(async move { Ok(network.tunnel(target).await?.into_stream()) })
+                Box::pin(async move { network.tunnel(target).await })
             }),
         ))
     }
