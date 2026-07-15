@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { LifeBuoyIcon } from 'lucide-react'
+import { LifeBuoyIcon } from '@/components/ui/icon'
 import { useMemo } from 'react'
 import { useRegisterCommands } from '../../components/CommandPalette'
 import { usePylon } from './usePylon'

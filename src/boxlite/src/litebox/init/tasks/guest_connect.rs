@@ -13,7 +13,7 @@ use crate::portal::GuestSession;
 use crate::runtime::layout::{BoxFilesystemLayout, FsLayoutConfig};
 use crate::util::{ProcessExit, ProcessMonitor};
 use async_trait::async_trait;
-use boxlite_shared::Transport;
+use boxlite_shared::BoxTransport;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::path::Path;
 use std::time::Duration;
@@ -115,7 +115,7 @@ const GUEST_READY_TIMEOUT: Duration = Duration::from_secs(30);
 /// 2. Shim process exits unexpectedly (fast failure with diagnostic)
 /// 3. `timeout` expires (slow failure fallback with on-host evidence)
 async fn wait_for_guest_ready(
-    ready_transport: &Transport,
+    ready_transport: &BoxTransport,
     shim_pid: Option<u32>,
     exit_file: &Path,
     console_log: &Path,
@@ -124,7 +124,7 @@ async fn wait_for_guest_ready(
     timeout: Duration,
 ) -> BoxliteResult<()> {
     let ready_socket_path = match ready_transport {
-        Transport::Unix { socket_path } => socket_path,
+        BoxTransport::Unix { socket_path } => socket_path,
         _ => {
             return Err(BoxliteError::Engine(
                 "ready transport must be Unix socket".into(),
@@ -307,7 +307,7 @@ mod tests {
         let exit_file = dir.path().join("exit");
         let console_log = dir.path().join("console.log");
         let stderr_file = dir.path().join("shim.stderr");
-        let transport = Transport::unix(socket_path.clone());
+        let transport = BoxTransport::unix(socket_path.clone());
 
         // Spawn a task that connects after a short delay
         let connect_path = socket_path.clone();
@@ -337,7 +337,7 @@ mod tests {
         let exit_file = dir.path().join("exit");
         let console_log = dir.path().join("console.log");
         let stderr_file = dir.path().join("shim.stderr");
-        let transport = Transport::Vsock { port: 2695 };
+        let transport = BoxTransport::Vsock { port: 2695 };
 
         let result = wait_for_guest_ready(
             &transport,
@@ -371,7 +371,7 @@ mod tests {
         std::fs::write(&socket_path, b"stale").unwrap();
         assert!(socket_path.exists());
 
-        let transport = Transport::unix(socket_path.clone());
+        let transport = BoxTransport::unix(socket_path.clone());
 
         // Spawn connector
         let connect_path = socket_path.clone();
@@ -406,7 +406,7 @@ mod tests {
         let exit_file = dir.path().join("exit");
         let console_log = dir.path().join("console.log");
         let stderr_file = dir.path().join("shim.stderr");
-        let transport = Transport::unix(socket_path);
+        let transport = BoxTransport::unix(socket_path);
 
         // Use a PID that doesn't exist — wait_for_process_exit will
         // detect it as dead on the first poll interval.
@@ -537,7 +537,7 @@ mod tests {
         // production code picks the "guest booted but agent did not connect"
         // likely-cause branch.
         std::fs::write(&console_log, b"early kernel boot...\n").unwrap();
-        let transport = Transport::unix(socket_path);
+        let transport = BoxTransport::unix(socket_path);
 
         let result = wait_for_guest_ready(
             &transport,

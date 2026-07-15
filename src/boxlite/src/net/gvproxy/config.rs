@@ -50,6 +50,11 @@ pub struct GvproxyConfig {
     /// Caller-provided to ensure each box gets a unique, collision-free path.
     pub socket_path: PathBuf,
 
+    /// Unix socket path for gvproxy's control API (ServicesMux: dynamic port
+    /// forwarding / DNS / DHCP leases / stats). Empty means it is not exposed.
+    #[serde(default)]
+    pub control_socket_path: PathBuf,
+
     /// Virtual network subnet (e.g., "192.168.127.0/24")
     pub subnet: String,
 
@@ -124,6 +129,7 @@ impl std::fmt::Debug for GvproxyConfig {
         // via `GvproxySecretConfig::Debug`.
         f.debug_struct("GvproxyConfig")
             .field("socket_path", &self.socket_path)
+            .field("control_socket_path", &self.control_socket_path)
             .field("subnet", &self.subnet)
             .field("gateway_ip", &self.gateway_ip)
             .field("gateway_mac", &self.gateway_mac)
@@ -178,6 +184,7 @@ fn defaults_with_socket_path(socket_path: PathBuf) -> GvproxyConfig {
 
     GvproxyConfig {
         socket_path,
+        control_socket_path: PathBuf::new(),
         subnet: SUBNET.to_string(),
         gateway_ip: GATEWAY_IP.to_string(),
         gateway_mac: GATEWAY_MAC_STRING.to_string(),
@@ -255,6 +262,13 @@ impl GvproxyConfig {
     /// Enable debug logging
     pub fn with_debug(mut self, debug: bool) -> Self {
         self.debug = debug;
+        self
+    }
+
+    /// Set gvproxy's control socket path (`gvproxy-ctl.sock`). When set, gvproxy
+    /// binds its ServicesMux there so the boxlite core can drive runtime control.
+    pub fn with_control_socket_path(mut self, path: PathBuf) -> Self {
+        self.control_socket_path = path;
         self
     }
 

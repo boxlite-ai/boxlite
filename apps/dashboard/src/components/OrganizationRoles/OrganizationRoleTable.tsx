@@ -22,7 +22,7 @@ import {
   SortingState,
   useReactTable,
 } from '@tanstack/react-table'
-import { MoreHorizontal } from 'lucide-react'
+import { MoreHorizontal } from '@/components/ui/icon'
 import { useState } from 'react'
 import { TableEmptyState } from '../TableEmptyState'
 

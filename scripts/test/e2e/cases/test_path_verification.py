@@ -50,7 +50,7 @@ async def test_exec_roundtrip_proves_api_to_runner_chain(rt, image):
     2. exec stdout contains the expected output (proves runner executed it)
     Together these prove SDK → API → Runner end-to-end."""
     import boxlite
-    from e2e_auth import auth_context
+    from e2e_auth import auth_context, request_json
 
     ctx = auth_context()
 
@@ -77,7 +77,7 @@ async def test_exec_roundtrip_proves_api_to_runner_chain(rt, image):
         # exec through SDK to verify runner actually runs the command
         box = await rt._inner.get(bid)
         if box is None:
-            info_status, info_body = ctx_request_json("GET", ctx.v1(f"boxes/{bid}"))
+            info_status, info_body = request_json("GET", ctx.v1(f"boxes/{bid}"))
             pytest.fail(f"SDK.get({bid}) returned None; API says {info_status}")
 
         ex = await box.exec("echo", ["e2e-chain-proof"], None)

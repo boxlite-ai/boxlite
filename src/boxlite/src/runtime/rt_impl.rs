@@ -12,6 +12,7 @@ use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
 use crate::runtime::signal_handler::timeout_to_duration;
 use crate::runtime::types::{BoxInfo, BoxState, BoxStatus, ContainerID};
 use crate::vmm::VmmKind;
+use crate::vmm::controller::{ShimHandler, VmmHandler};
 use boxlite_shared::{BoxliteError, BoxliteResult};
 use chrono::Utc;
 use std::collections::HashMap;
@@ -32,9 +33,10 @@ fn litebox_from_impl(box_impl: SharedBoxImpl) -> LiteBox {
     box_impl.arm_watcher(None);
 
     let box_backend: Arc<dyn crate::runtime::backend::BoxBackend> = box_impl.clone();
+    let network_backend: Arc<dyn crate::runtime::backend::BoxNetworkBackend> = box_impl.clone();
     let snapshot_backend: Arc<dyn crate::runtime::backend::SnapshotBackend> =
         Arc::new(LocalSnapshotBackend::new(box_impl));
-    LiteBox::new(box_backend, snapshot_backend)
+    LiteBox::new(box_backend, network_backend, snapshot_backend)
 }
 
 /// Record that the box's main command is over, taking its exit code from the
@@ -156,6 +158,11 @@ pub struct RuntimeImpl {
     /// Provides locks for individual entities (boxes, volumes, etc.) that work
     /// across multiple processes. Similar to Podman's lock manager.
     pub(crate) lock_manager: Arc<dyn LockManager>,
+
+    /// Abstract factory for boxes' network control backends (the one place a
+    /// concrete backend is chosen). Boxes create their backend through this, so
+    /// no call site names a concrete backend — see [`crate::net::NetworkBackendFactory`].
+    pub(crate) network_factory: Arc<dyn crate::net::NetworkBackendFactory>,
 
     /// Runtime filesystem lock (held for lifetime). Prevent from multiple process run on same
     /// BOXLITE_HOME directory
@@ -302,6 +309,7 @@ impl RuntimeImpl {
             base_disk_mgr,
             snapshot_mgr,
             lock_manager,
+            network_factory: crate::net::default_factory(),
             _runtime_lock: runtime_lock,
             shutdown_token: CancellationToken::new(),
         });
@@ -872,10 +880,16 @@ impl RuntimeImpl {
             let mut state = state;
             if state.status.is_active() || state.pid.is_some() {
                 if force {
-                    // Force mode: kill the process directly
+                    // Stop the box's whole process tree through the same handler
+                    // teardown `LiteBox::stop()` uses: it SIGTERMs the recorded
+                    // pid (the outer launcher), then reaps any survivors of a
+                    // detached box's inner pid-ns tree (inner bwrap + shim + VM) —
+                    // which a single-pid kill misses, since #851 stopped tying
+                    // detached boxes to the launcher's lifetime.
                     if let Some(pid) = state.pid {
-                        tracing::info!(box_id = %id, pid = pid, "Force killing box process");
-                        crate::util::kill_process(pid);
+                        tracing::info!(box_id = %id, pid = pid, "Force stopping box process tree");
+                        let mut handler = ShimHandler::from_pid(pid, config.id.clone());
+                        let _ = handler.stop();
                     }
                     // Update status to stopped and save
                     state.set_status(BoxStatus::Stopped);

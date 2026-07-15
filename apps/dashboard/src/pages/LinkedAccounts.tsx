@@ -14,7 +14,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { useUnlinkAccountMutation } from '@/hooks/mutations/useUnlinkAccountMutation'
 import { useAccountProvidersQuery } from '@/hooks/queries/useAccountProvidersQuery'
 import { handleApiError } from '@/lib/error-handling'
-import { ShieldCheck } from 'lucide-react'
+import { ShieldCheck } from '@/components/ui/icon'
 import React, { useMemo } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { toast } from 'sonner'

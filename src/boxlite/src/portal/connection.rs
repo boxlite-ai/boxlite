@@ -1,11 +1,11 @@
 //! Connection management.
 //!
-//! Converts Transport to tonic Channel with lazy initialization.
+//! Converts BoxTransport to tonic Channel with lazy initialization.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use boxlite_shared::{BoxliteError, BoxliteResult, Transport};
+use boxlite_shared::{BoxTransport, BoxliteError, BoxliteResult};
 use hyper_util::rt::TokioIo;
 use tokio::sync::OnceCell;
 use tonic::transport::{Channel, Endpoint, Uri};
@@ -16,13 +16,13 @@ use tower::service_fn;
 /// Connects on first use to ensure connection happens in the correct async runtime.
 #[derive(Clone)]
 pub struct Connection {
-    transport: Transport,
+    transport: BoxTransport,
     channel: Arc<OnceCell<Channel>>,
 }
 
 impl Connection {
     /// Create a lazy connection (does not connect immediately).
-    pub fn new(transport: Transport) -> Self {
+    pub fn new(transport: BoxTransport) -> Self {
         Self {
             transport,
             channel: Arc::new(OnceCell::new()),
@@ -41,17 +41,17 @@ impl Connection {
 }
 
 /// Connect to a transport.
-async fn connect_transport(transport: &Transport) -> BoxliteResult<Channel> {
+async fn connect_transport(transport: &BoxTransport) -> BoxliteResult<Channel> {
     match transport {
-        Transport::Unix { socket_path } => {
+        BoxTransport::Unix { socket_path } => {
             tracing::debug!("Connecting via Unix: {}", socket_path.display());
             connect_unix(socket_path).await
         }
-        Transport::Tcp { port } => {
+        BoxTransport::Tcp { port } => {
             tracing::debug!("Connecting via TCP: 127.0.0.1:{}", port);
             connect_tcp(*port).await
         }
-        Transport::Vsock { port } => Err(BoxliteError::Internal(format!(
+        BoxTransport::Vsock { port } => Err(BoxliteError::Internal(format!(
             "Vsock client not yet implemented (port: {})",
             port
         ))),

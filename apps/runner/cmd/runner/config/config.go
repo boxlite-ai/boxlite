@@ -60,6 +60,8 @@ type Config struct {
 	InsecureRegistries                 string        `envconfig:"INSECURE_REGISTRIES"`
 	GhcrUsername                       string        `envconfig:"GHCR_USERNAME"`
 	GhcrToken                          string        `envconfig:"GHCR_TOKEN"`
+	DockerHubUsername                  string        `envconfig:"DOCKERHUB_USERNAME"`
+	DockerHubToken                     string        `envconfig:"DOCKERHUB_TOKEN"`
 }
 
 var DEFAULT_API_PORT int = 8080
@@ -136,18 +138,6 @@ func (c *Config) GetOtelHeaders() map[string]string {
 	return headers
 }
 
-func GetContainerRuntime() string {
-	return config.ContainerRuntime
-}
-
-func GetContainerNetwork() string {
-	return config.ContainerNetwork
-}
-
 func GetEnvironment() string {
 	return config.Environment
-}
-
-func GetBuildEngine() string {
-	return config.BuildEngine
 }

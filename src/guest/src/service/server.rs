@@ -1,7 +1,7 @@
 use crate::container::Container;
 use crate::layout::GuestLayout;
 use crate::service::exec::registry::ExecutionRegistry;
-use boxlite_shared::{BoxliteResult, Transport};
+use boxlite_shared::{BoxTransport, BoxliteResult};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -84,7 +84,7 @@ impl GuestServer {
         info!("Starting tonic gRPC server");
 
         // Parse the listen URI to determine transport type
-        let transport = Transport::from_uri(&listen_uri).map_err(|e| {
+        let transport = BoxTransport::from_uri(&listen_uri).map_err(|e| {
             boxlite_shared::errors::BoxliteError::Internal(format!(
                 "Invalid listen URI '{}': {}",
                 listen_uri, e
@@ -103,7 +103,7 @@ impl GuestServer {
             .add_service(boxlite_shared::FilesServer::from_arc(server.clone()));
 
         match transport {
-            Transport::Vsock { port } => {
+            BoxTransport::Vsock { port } => {
                 use tokio_vsock::{VsockAddr, VsockListener, VMADDR_CID_ANY};
 
                 info!("Binding to vsock port {}", port);
@@ -140,7 +140,7 @@ impl GuestServer {
                     })?;
             }
 
-            Transport::Unix { socket_path } => {
+            BoxTransport::Unix { socket_path } => {
                 use tokio_stream::wrappers::UnixListenerStream;
 
                 // Remove socket if it exists
@@ -180,7 +180,7 @@ impl GuestServer {
                     })?;
             }
 
-            Transport::Tcp { port } => {
+            BoxTransport::Tcp { port } => {
                 use tokio_stream::wrappers::TcpListenerStream;
 
                 let addr = format!("127.0.0.1:{}", port);
@@ -229,7 +229,7 @@ async fn notify_host_ready(notify_uri: Option<String>) -> BoxliteResult<()> {
         }
     };
 
-    let transport = Transport::from_uri(uri.as_str()).map_err(|e| {
+    let transport = BoxTransport::from_uri(uri.as_str()).map_err(|e| {
         boxlite_shared::errors::BoxliteError::Internal(format!(
             "Invalid notify URI '{}': {}",
             uri, e
@@ -237,7 +237,7 @@ async fn notify_host_ready(notify_uri: Option<String>) -> BoxliteResult<()> {
     })?;
 
     match transport {
-        Transport::Vsock { port } => {
+        BoxTransport::Vsock { port } => {
             use tokio_vsock::{VsockAddr, VsockStream, VMADDR_CID_HOST};
 
             info!("Notifying host via vsock:{}", port);
@@ -256,7 +256,7 @@ async fn notify_host_ready(notify_uri: Option<String>) -> BoxliteResult<()> {
             info!("Host notified successfully");
             // Connection itself signals readiness, drop immediately
         }
-        Transport::Unix { socket_path } => {
+        BoxTransport::Unix { socket_path } => {
             info!("Notifying host via unix:{}", socket_path.display());
             let _stream = tokio::net::UnixStream::connect(&socket_path)
                 .await
@@ -272,7 +272,7 @@ async fn notify_host_ready(notify_uri: Option<String>) -> BoxliteResult<()> {
             );
             info!("Host notified successfully");
         }
-        Transport::Tcp { port } => {
+        BoxTransport::Tcp { port } => {
             info!("Notifying host via tcp:127.0.0.1:{}", port);
             let _stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port))
                 .await

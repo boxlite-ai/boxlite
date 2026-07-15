@@ -21,7 +21,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { toast } from 'sonner'
-import { Plus } from 'lucide-react'
+import { Plus } from '@/components/ui/icon'
 import { getMaskedToken } from '@/lib/utils'
 
 const DEFAULT_FORM_DATA = {

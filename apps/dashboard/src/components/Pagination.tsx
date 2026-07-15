@@ -7,7 +7,7 @@
 import { useIsCompactScreen, useIsMobile } from '@/hooks/use-mobile'
 import { cn } from '@/lib/utils'
 import { Table } from '@tanstack/react-table'
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from '@/components/ui/icon'
 import { PAGE_SIZE_OPTIONS } from '../constants/Pagination'
 import { Button } from './ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'

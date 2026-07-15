@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { getRelativeTimeString } from '@/lib/utils'
-import { ChevronDown, ChevronUp, X } from 'lucide-react'
+import { ChevronDown, ChevronUp, X } from '@/components/ui/icon'
 import { MessageOut } from 'svix'
 import { MessageAttemptsTable } from '../MessageAttemptsTable'
 

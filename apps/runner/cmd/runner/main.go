@@ -111,6 +111,8 @@ func run() int {
 		InsecureRegistries:           insecureRegs,
 		GhcrUsername:                 cfg.GhcrUsername,
 		GhcrToken:                    cfg.GhcrToken,
+		DockerHubUsername:            cfg.DockerHubUsername,
+		DockerHubToken:               cfg.DockerHubToken,
 		AWSRegion:                    cfg.AWSRegion,
 		AWSEndpointUrl:               cfg.AWSEndpointUrl,
 		AWSAccessKeyId:               cfg.AWSAccessKeyId,

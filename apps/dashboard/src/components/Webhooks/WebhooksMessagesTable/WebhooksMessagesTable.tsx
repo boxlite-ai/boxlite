@@ -22,7 +22,7 @@ import {
   SortingState,
   useReactTable,
 } from '@tanstack/react-table'
-import { Mail, RefreshCcw } from 'lucide-react'
+import { Mail, RefreshCcw } from '@/components/ui/icon'
 import { useCallback, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { useMessages } from 'svix-react'

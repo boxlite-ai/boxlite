@@ -5,40 +5,6 @@
   "sourceRoot": "runner",
   "tags": [],
   "targets": {
-    "copy-daemon-bin": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "cp dist/apps/daemon-amd64 {projectRoot}/pkg/daemon/static/daemon-amd64"
-      },
-      "cache": true,
-      "inputs": [{ "dependentTasksOutputFiles": "**/*", "transitive": true }],
-      "outputs": ["{projectRoot}/pkg/daemon/static/daemon-amd64"],
-      "dependsOn": [
-        {
-          "target": "build-amd64",
-          "projects": "daemon"
-        }
-      ]
-    },
-    "copy-computeruse-plugin": {
-      "executor": "nx:run-commands",
-      "options": {
-        "cwd": "{workspaceRoot}",
-        "command": "cp dist/libs/computer-use-amd64 {projectRoot}/pkg/daemon/static/boxlite-computer-use"
-      },
-      "cache": true,
-      "inputs": [
-        "{workspaceRoot}/dist/libs/computer-use-amd64",
-        { "dependentTasksOutputFiles": "**/*", "transitive": true }
-      ],
-      "outputs": ["{projectRoot}/pkg/daemon/static/boxlite-computer-use"],
-      "dependsOn": [
-        {
-          "target": "build-amd64",
-          "projects": "computer-use"
-        }
-      ]
-    },
     "build": {
       "executor": "@nx-go/nx-go:build",
       "options": {
@@ -46,7 +12,7 @@
         "outputPath": "dist/apps/runner",
         "flags": ["-ldflags \"-X 'github.com/boxlite-ai/runner/internal.Version=$VERSION'\""]
       },
-      "dependsOn": ["copy-daemon-bin", "copy-computeruse-plugin", "check-version-env"],
+      "dependsOn": ["check-version-env"],
       "inputs": [
         "goProduction",
         "^goProduction",
@@ -65,7 +31,7 @@
         },
         "flags": ["-ldflags \"-X 'github.com/boxlite-ai/runner/internal.Version=$VERSION'\""]
       },
-      "dependsOn": ["copy-daemon-bin", "copy-computeruse-plugin", "check-version-env"],
+      "dependsOn": ["check-version-env"],
       "inputs": [
         "goProduction",
         "^goProduction",
@@ -81,15 +47,7 @@
       },
       "configurations": {
         "production": {}
-      },
-      "dependsOn": [
-        {
-          "target": "build",
-          "projects": "daemon"
-        },
-        "copy-daemon-bin",
-        "copy-computeruse-plugin"
-      ]
+      }
     },
     "format": {
       "executor": "nx:run-commands",
@@ -122,13 +80,7 @@
       "options": {
         "target": "runner"
       },
-      "dependsOn": [
-        "check-version-env",
-        {
-          "target": "build-amd64",
-          "projects": "computer-use"
-        }
-      ]
+      "dependsOn": ["check-version-env"]
     },
     "package-deb": {
       "executor": "nx:run-commands",
@@ -155,6 +107,5 @@
       "dependsOn": ["build-amd64", "check-version-env"]
     },
     "push-manifest": {}
-  },
-  "implicitDependencies": ["computer-use", "daemon"]
+  }
 }

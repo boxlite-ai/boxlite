@@ -5,10 +5,7 @@
  */
 
 import { LogoText } from '@/assets/Logo'
-import { OrganizationPicker } from '@/components/Organizations/OrganizationPicker'
-import { Button } from '@/components/ui/button'
-import { Kbd } from '@/components/ui/kbd'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { BoxSearchCommands } from '@/components/BoxSearchCommands'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,38 +19,32 @@ import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from '@/constants/ExternalLinks'
 import { Theme, useTheme } from '@/contexts/ThemeContext'
 import { RoutePath } from '@/enums/RoutePath'
 import { useApi } from '@/hooks/useApi'
-import { useIsCompactScreen } from '@/hooks/use-mobile'
-import {
-  ONBOARDING_OPEN_EVENT,
-  ONBOARDING_ENTRY_HIGHLIGHT_EVENT,
-  getOnboardingCoreProgress,
-  ONBOARDING_PROGRESS_EVENT,
-  readOnboardingProgress,
-  type OnboardingProgress,
-} from '@/lib/onboarding-progress'
+import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
+import { useCopyToClipboard } from 'usehooks-ts'
+import { toast } from 'sonner'
+import { markJustLoggedOut } from '@/lib/auth-session'
+import { ONBOARDING_OPEN_EVENT } from '@/lib/onboarding-progress'
 import { cn, getMetaKey } from '@/lib/utils'
 import {
   ArrowRightIcon,
   BookOpen,
+  Building2,
   ChevronDown,
-  Container,
+  Copy,
   KeyRound,
   ListChecks,
   LogOut,
-  Menu,
   MessageCircle,
   Monitor,
-  MoreHorizontal,
   MoonIcon,
-  ReceiptText,
+  MoreHorizontal,
   SearchIcon,
   ShieldCheck,
-  SquareUserRound,
   SunIcon,
-} from 'lucide-react'
+} from '@/components/ui/icon'
 import { usePostHog } from 'posthog-js/react'
 import { useQuery } from '@tanstack/react-query'
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { CommandConfig, useCommandPaletteActions, useRegisterCommands } from './CommandPalette'
@@ -66,27 +57,23 @@ interface SidebarProps {
   version: string
 }
 
-interface SidebarItem {
-  icon: React.ReactElement
+interface NavItem {
+  icon?: React.ReactElement
   label: string
   path: RoutePath | string
   onClick?: () => void
 }
 
-interface SidebarGroup {
-  label: string
-  items: SidebarItem[]
-}
-
 const themeOptions: { value: Theme; label: string; icon: React.ReactElement }[] = [
-  { value: 'system', label: 'System', icon: <Monitor className="size-4" /> },
-  { value: 'light', label: 'Light', icon: <SunIcon className="size-4" /> },
-  { value: 'dark', label: 'Dark', icon: <MoonIcon className="size-4" /> },
+  { value: 'system', label: 'System', icon: <Monitor className="size-3.5" /> },
+  { value: 'light', label: 'Light', icon: <SunIcon className="size-3.5" /> },
+  { value: 'dark', label: 'Dark', icon: <MoonIcon className="size-3.5" /> },
 ]
 
 function ThemeMenuItems({ theme, setTheme }: { theme: Theme; setTheme: (theme: Theme) => void }) {
   return (
-    <div className="px-2 pb-2">
+    <div className="px-2 py-2">
+      <div className="px-1 pb-2 font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Theme</div>
       <ToggleGroup
         type="single"
         value={theme}
@@ -95,14 +82,14 @@ function ThemeMenuItems({ theme, setTheme }: { theme: Theme; setTheme: (theme: T
         }}
         variant="outline"
         size="sm"
-        className="grid w-full grid-cols-3 gap-1 rounded-md border bg-muted/40 p-1"
+        className="grid w-full grid-cols-3 gap-0 border border-border"
       >
         {themeOptions.map((option) => (
           <ToggleGroupItem
             key={option.value}
             value={option.value}
             aria-label={`Use ${option.label.toLowerCase()} theme`}
-            className="h-8 justify-center gap-1.5 rounded-sm border border-transparent text-xs text-muted-foreground transition-all hover:bg-muted/70 hover:text-foreground data-[state=on]:border-transparent data-[state=on]:bg-muted-foreground/20 data-[state=on]:text-foreground data-[state=on]:shadow-sm dark:data-[state=on]:bg-muted-foreground/30"
+            className="h-9 justify-center gap-1.5 rounded-none border-0 border-r border-border text-xs text-muted-foreground transition-colors last:border-r-0 hover:text-foreground data-[state=on]:bg-card data-[state=on]:font-semibold data-[state=on]:text-foreground"
           >
             {option.icon}
             <span>{option.label}</span>
@@ -113,7 +100,7 @@ function ThemeMenuItems({ theme, setTheme }: { theme: Theme; setTheme: (theme: T
   )
 }
 
-const useNavCommands = (items: { label: string; path: RoutePath | string; onClick?: () => void }[]) => {
+const useNavCommands = (items: NavItem[]) => {
   const { pathname } = useLocation()
   const navigate = useNavigate()
 
@@ -133,33 +120,44 @@ const useNavCommands = (items: { label: string; path: RoutePath | string; onClic
   useRegisterCommands(navCommands, { groupId: 'navigation', groupLabel: 'Navigation', groupOrder: 1 })
 }
 
+/**
+ * Top navigation bar (ASCII/terminal restyle). Named `Sidebar` for import compatibility;
+ * it has always rendered as a top header. All data/command wiring is preserved — only the
+ * presentation matches the new design (Nav.dc): a single 60px monospace bar with bordered
+ * segments, a standalone organization switcher, and a profile menu.
+ */
 export function Sidebar({ isBannerVisible }: SidebarProps) {
-  const isCompactScreen = useIsCompactScreen()
   const posthog = usePostHog()
   const { axiosInstance } = useApi()
   const { theme, setTheme } = useTheme()
   const { user, signoutRedirect } = useAuth()
-  const userId = user?.profile.sub
   const { pathname } = useLocation()
   const navigate = useNavigate()
-  const [highlightOnboardingEntry, setHighlightOnboardingEntry] = useState(false)
-  const [onboardingProgress, setOnboardingProgress] = useState<OnboardingProgress>(() => readOnboardingProgress(userId))
+  const { selectedOrganization } = useSelectedOrganization()
+  const [, copyToClipboard] = useCopyToClipboard()
 
-  useEffect(() => {
-    setOnboardingProgress(readOnboardingProgress(userId))
-  }, [userId])
+  const copyOrgId = useCallback(() => {
+    if (!selectedOrganization) return
+    copyToClipboard(selectedOrganization.id)
+    toast.success('Organization ID copied to clipboard')
+  }, [copyToClipboard, selectedOrganization])
 
-  useEffect(() => {
-    const handleOnboardingProgress = (event: Event) => {
-      const progress = (event as CustomEvent<OnboardingProgress>).detail
-      setOnboardingProgress(progress ?? readOnboardingProgress(userId))
-    }
+  const orgCommands = useMemo<CommandConfig[]>(
+    () =>
+      selectedOrganization
+        ? [
+            {
+              id: 'copy-org-id',
+              label: 'Copy Organization ID',
+              icon: <Copy className="w-4 h-4" />,
+              onSelect: copyOrgId,
+            },
+          ]
+        : [],
+    [selectedOrganization, copyOrgId],
+  )
+  useRegisterCommands(orgCommands, { groupId: 'organization', groupLabel: 'Organization', groupOrder: 5 })
 
-    window.addEventListener(ONBOARDING_PROGRESS_EVENT, handleOnboardingProgress)
-    return () => window.removeEventListener(ONBOARDING_PROGRESS_EVENT, handleOnboardingProgress)
-  }, [userId])
-
-  const onboardingCoreProgress = getOnboardingCoreProgress(onboardingProgress)
   const adminAccessQuery = useQuery({
     queryKey: ['admin', 'sidebar-access'],
     queryFn: async () => {
@@ -168,46 +166,26 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
     },
     enabled: !!user,
     retry: false,
-    staleTime: 60_000,
+    // Admin status doesn't change within a session. Cache it for the whole
+    // session so this /admin/overview probe (which 403s for non-admins and
+    // competes with the first-paint API burst) fires once, not on every
+    // sidebar mount / navigation. Login/logout go through a full OIDC page
+    // redirect, which discards the in-memory queryClient — so a same-tab user
+    // switch can't carry a stale admin flag across.
+    staleTime: Infinity,
+    gcTime: Infinity,
     refetchOnWindowFocus: false,
   })
   const canViewAdmin = adminAccessQuery.data === true
 
-  useEffect(() => {
-    const handleHighlight = () => {
-      setHighlightOnboardingEntry(true)
-      window.setTimeout(() => setHighlightOnboardingEntry(false), 3200)
-    }
-
-    window.addEventListener(ONBOARDING_ENTRY_HIGHLIGHT_EVENT, handleHighlight)
-    return () => window.removeEventListener(ONBOARDING_ENTRY_HIGHLIGHT_EVENT, handleHighlight)
-  }, [])
-
-  const primaryItems = useMemo<SidebarItem[]>(() => {
-    return [
-      {
-        icon: <Container size={16} strokeWidth={1.5} />,
-        label: 'Boxes',
-        path: RoutePath.BOXES,
-      },
-      {
-        icon: <ReceiptText size={16} strokeWidth={1.5} />,
-        label: 'Billing',
-        path: RoutePath.BILLING,
-      },
-      ...(canViewAdmin
-        ? [
-            {
-              icon: <ShieldCheck size={16} strokeWidth={1.5} />,
-              label: 'Admin',
-              path: RoutePath.ADMIN,
-            },
-          ]
-        : []),
-    ]
-  }, [canViewAdmin])
-
-  const secondaryGroups: SidebarGroup[] = useMemo(() => [], [])
+  const primaryItems = useMemo<NavItem[]>(
+    () => [
+      { label: 'Boxes', path: RoutePath.BOXES },
+      { label: 'Billing', path: RoutePath.BILLING },
+      ...(canViewAdmin ? [{ label: 'Admin', path: RoutePath.ADMIN }] : []),
+    ],
+    [canViewAdmin],
+  )
 
   const openOnboardingGuide = useCallback(() => {
     const event = new Event(ONBOARDING_OPEN_EVENT, { cancelable: true })
@@ -218,15 +196,10 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
     }
   }, [navigate])
 
-  const commandItems = useMemo<SidebarItem[]>(
+  const commandItems = useMemo<NavItem[]>(
     () => [
       ...primaryItems,
-      ...secondaryGroups.flatMap((group) => group.items),
-      {
-        path: RoutePath.KEYS,
-        label: 'API Keys',
-        icon: <KeyRound size={16} strokeWidth={1.5} />,
-      },
+      { path: RoutePath.KEYS, label: 'API Keys', icon: <KeyRound size={16} strokeWidth={1.5} /> },
       {
         path: RoutePath.ONBOARDING,
         label: 'Onboarding',
@@ -234,11 +207,12 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
         onClick: openOnboardingGuide,
       },
     ],
-    [openOnboardingGuide, primaryItems, secondaryGroups],
+    [openOnboardingGuide, primaryItems],
   )
 
   const handleSignOut = () => {
     posthog?.reset()
+    markJustLoggedOut()
     signoutRedirect()
   }
 
@@ -252,257 +226,183 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
     commandPaletteActions.setIsOpen(true)
   }
 
-  const renderMenuItem = (item: SidebarItem) => {
-    if (item.onClick) {
-      return (
-        <DropdownMenuItem key={item.label} onClick={() => item.onClick?.()} className="cursor-pointer">
-          {item.icon}
-          {item.label}
-        </DropdownMenuItem>
-      )
-    }
+  const userName = user?.profile.name || user?.profile.email || 'Profile'
+  const initials =
+    userName
+      .split(/\s+/)
+      .map((w) => w[0])
+      .slice(0, 2)
+      .join('')
+      .toUpperCase() || 'U'
 
-    return (
-      <DropdownMenuItem key={item.label} asChild className="cursor-pointer">
-        <Link to={item.path}>
-          {item.icon}
-          {item.label}
-        </Link>
-      </DropdownMenuItem>
+  // One full-height nav cell. Selection is conveyed purely by value/grayscale — no hue:
+  // active = neutral grey fill + brightest (foreground) label; inactive = dimmer muted text.
+  const navCellClass = (active: boolean, extra?: string) =>
+    cn(
+      'relative h-full items-center gap-2 px-[18px] text-[13px] font-medium transition-colors',
+      active ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-card hover:text-foreground',
+      extra,
     )
-  }
 
   return (
     <header
       className={cn(
-        'sticky z-40 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/88',
+        'sticky z-40 flex h-[60px] items-stretch border-b border-border bg-background font-mono text-[13px]',
         isBannerVisible ? 'top-16 md:top-12' : 'top-0',
       )}
     >
-      <div className="mx-auto flex h-14 w-full max-w-[1440px] items-center gap-3 px-4 sm:px-5 2xl:px-0">
-        <div className="flex min-w-0 items-center gap-3 sm:gap-6">
-          <Link
-            to={RoutePath.BOXES}
-            className="inline-flex h-14 shrink-0 items-center text-foreground"
-            aria-label="BoxLite home"
-          >
-            <LogoText className="h-8 w-auto sm:h-9" />
+      <BoxSearchCommands />
+
+      {/* brand */}
+      <Link
+        to={RoutePath.BOXES}
+        className="flex shrink-0 items-center border-r border-border px-[30px] text-foreground"
+        aria-label="BoxLite home"
+      >
+        <LogoText className="h-[26px] w-auto" />
+      </Link>
+
+      {/* primary nav */}
+      {primaryItems.map((item) => {
+        const active = pathname.startsWith(item.path)
+        return (
+          <Link key={item.label} to={item.path} className={navCellClass(active, 'hidden md:inline-flex')}>
+            {item.label}
           </Link>
+        )
+      })}
 
-          <nav className="hidden h-14 shrink-0 items-stretch gap-1 md:flex">
-            {primaryItems.map((item) => {
-              const isActive = pathname.startsWith(item.path)
+      <div className="flex-1" />
 
-              return item.onClick ? (
-                <button
-                  key={item.label}
-                  type="button"
-                  onClick={() => item.onClick?.()}
-                  className={cn(
-                    'inline-flex items-center border-b px-2 text-sm font-medium transition-colors sm:px-3',
-                    isActive
-                      ? 'border-foreground text-foreground'
-                      : 'border-transparent text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  {item.label}
-                </button>
-              ) : (
-                <Link
-                  key={item.label}
-                  to={item.path}
-                  className={cn(
-                    'inline-flex items-center border-b px-2 text-sm font-medium transition-colors sm:px-3',
-                    isActive
-                      ? 'border-foreground text-foreground'
-                      : 'border-transparent text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  {item.label}
-                </Link>
-              )
-            })}
-          </nav>
-        </div>
+      {/* search → command palette */}
+      <button
+        type="button"
+        onClick={() => openCommandPalette('dashboard_header')}
+        aria-label="Search"
+        className="hidden min-w-[180px] items-center gap-2.5 border-l border-border px-4 text-muted-foreground transition-colors hover:text-foreground lg:flex"
+      >
+        <SearchIcon className="size-3.5 shrink-0" />
+        <span className="flex-1 text-left">Search</span>
+        <span className="rounded-none border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
+          {metaKey} K
+        </span>
+      </button>
 
-        <div className="ml-auto flex items-center gap-2">
-          <Button
-            variant="outline"
-            size={isCompactScreen ? 'icon-sm' : 'sm'}
-            className={cn('shrink-0', !isCompactScreen && 'hidden md:inline-flex')}
-            aria-label="Search"
-            onClick={() => openCommandPalette('dashboard_header')}
-          >
-            {isCompactScreen ? (
-              <SearchIcon className="size-4" />
+      {/* api keys */}
+      <Link
+        to={RoutePath.KEYS}
+        className={navCellClass(pathname.startsWith(RoutePath.KEYS), 'hidden border-l border-border lg:inline-flex')}
+      >
+        <KeyRound className="size-3.5" />
+        API Keys
+      </Link>
+
+      {/* onboarding guide */}
+      <button
+        type="button"
+        onClick={openOnboardingGuide}
+        aria-label="Open onboarding guide"
+        className="hidden h-full items-center gap-2 border-l border-border px-[18px] text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground lg:inline-flex"
+      >
+        <BookOpen className="size-3.5" />
+        <span className="hidden sm:inline">Quickstart</span>
+      </button>
+
+      {/* profile menu (organization switcher tucked inside) */}
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          aria-label="Open profile menu"
+          className="inline-flex h-full items-center gap-2 border-l border-border px-4 text-[13px] font-medium text-foreground outline-none transition-colors hover:bg-card data-[state=open]:bg-card sm:px-5"
+        >
+          <span className="flex size-[23px] shrink-0 items-center justify-center overflow-hidden bg-brand text-[9px] font-extrabold text-white">
+            {user?.profile.picture ? (
+              <img src={user.profile.picture} alt={userName} className="h-full w-full object-cover" />
             ) : (
-              <>
-                <SearchIcon className="size-4" />
-                Search
-                <Kbd className="ml-1">{metaKey} K</Kbd>
-              </>
+              initials
             )}
-          </Button>
+          </span>
+          <span className="hidden max-w-[140px] truncate xl:inline">{userName}</span>
+          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-[18rem]">
+          <DropdownMenuLabel className="flex flex-col gap-0.5">
+            <span className="truncate text-[13px] font-semibold text-foreground">{userName}</span>
+            {user?.profile.email && user.profile.email !== userName && (
+              <span className="truncate font-mono text-[11px] font-normal text-muted-foreground">
+                {user.profile.email}
+              </span>
+            )}
+          </DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <ThemeMenuItems theme={theme} setTheme={setTheme} />
+          <DropdownMenuSeparator />
+          {selectedOrganization && (
+            <DropdownMenuItem asChild className="cursor-pointer">
+              <Link to={RoutePath.SETTINGS}>
+                <Building2 className="size-4" />
+                Organization
+              </Link>
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuItem asChild className="cursor-pointer">
+            <a href={BOXLITE_DOCS_URL} target="_blank" rel="noopener noreferrer">
+              <BookOpen className="size-4" />
+              Docs
+            </a>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild className="cursor-pointer">
+            <a href={BOXLITE_SLACK_URL} target="_blank" rel="noopener noreferrer">
+              <MessageCircle className="size-4" />
+              Discord
+            </a>
+          </DropdownMenuItem>
+          {canViewAdmin && (
+            <DropdownMenuItem asChild className="cursor-pointer">
+              <Link to={RoutePath.ADMIN}>
+                <ShieldCheck className="size-4" />
+                Admin
+              </Link>
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuSeparator />
+          <DropdownMenuItem className="cursor-pointer" onClick={handleSignOut}>
+            <LogOut className="size-4" />
+            Sign out
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
 
-          <div className="hidden md:block">
-            <OrganizationPicker variant="header" />
-          </div>
-
-          <Button variant="ghost" size="sm" className="hidden xl:inline-flex" asChild>
+      {/* mobile: search + nav */}
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          aria-label="Open navigation menu"
+          className="inline-flex h-full items-center border-l border-border px-5 text-muted-foreground outline-none transition-colors hover:text-foreground lg:hidden"
+        >
+          <MoreHorizontal className="size-4" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-[14rem]">
+          <DropdownMenuItem className="cursor-pointer" onClick={() => openCommandPalette('dashboard_mobile_menu')}>
+            <SearchIcon className="size-4" />
+            Search
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          {primaryItems.map((item) => (
+            <DropdownMenuItem key={item.label} asChild className="cursor-pointer">
+              <Link to={item.path}>{item.label}</Link>
+            </DropdownMenuItem>
+          ))}
+          <DropdownMenuItem asChild className="cursor-pointer">
             <Link to={RoutePath.KEYS}>
               <KeyRound className="size-4" />
               API Keys
             </Link>
-          </Button>
-
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size={isCompactScreen ? 'icon-sm' : 'sm'}
-                className={cn(
-                  'relative',
-                  highlightOnboardingEntry &&
-                    'animate-[boxlite-guide-callout_1.1s_ease-in-out_3] ring-2 ring-primary ring-offset-2 ring-offset-background',
-                )}
-                aria-label="Open onboarding guide"
-                onClick={openOnboardingGuide}
-              >
-                <ListChecks className="size-4" />
-                {!isCompactScreen && <span>Guide</span>}
-                {!onboardingCoreProgress.isComplete && (
-                  <span
-                    className={cn(
-                      'inline-flex items-center justify-center rounded-full bg-muted-foreground/15 px-1.5 py-0.5 text-[10px] font-medium leading-none text-foreground',
-                      isCompactScreen && 'absolute -right-1 -top-1 size-4 bg-foreground p-0 text-background',
-                    )}
-                  >
-                    {isCompactScreen
-                      ? onboardingCoreProgress.completed
-                      : `${onboardingCoreProgress.completed}/${onboardingCoreProgress.total}`}
-                  </span>
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Open onboarding guide</TooltipContent>
-          </Tooltip>
-
-          {!isCompactScreen && secondaryGroups.length > 0 && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="sm" className="hidden md:inline-flex">
-                  <MoreHorizontal className="size-4" />
-                  More
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-[14rem]">
-                {secondaryGroups.map((group, index) => (
-                  <React.Fragment key={group.label}>
-                    {index > 0 && <DropdownMenuSeparator />}
-                    <DropdownMenuLabel className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-                      {group.label}
-                    </DropdownMenuLabel>
-                    {group.items.map(renderMenuItem)}
-                  </React.Fragment>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                aria-label="Open profile menu"
-                className={cn(
-                  'inline-flex min-w-0 gap-2 rounded-md border border-border bg-background px-2 shadow-sm transition-colors hover:border-foreground/30 hover:bg-muted/70 data-[state=open]:border-foreground/40 data-[state=open]:bg-muted',
-                  isCompactScreen ? 'justify-center' : 'sm:min-w-[8.5rem] sm:justify-between',
-                )}
-              >
-                <span className="flex min-w-0 items-center gap-2">
-                  <span className="flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border bg-muted text-muted-foreground">
-                    {user?.profile.picture ? (
-                      <img
-                        src={user.profile.picture}
-                        alt={user.profile.name || 'Profile picture'}
-                        className="h-full w-full object-cover"
-                      />
-                    ) : (
-                      <SquareUserRound className="size-4" />
-                    )}
-                  </span>
-                  <span className={cn('truncate', isCompactScreen ? 'hidden' : 'hidden sm:block')}>
-                    {user?.profile.name || 'Profile'}
-                  </span>
-                </span>
-                {!isCompactScreen && <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-[15rem]">
-              <DropdownMenuLabel className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-                Appearance
-              </DropdownMenuLabel>
-              <ThemeMenuItems theme={theme} setTheme={setTheme} />
-              <DropdownMenuSeparator />
-              <DropdownMenuItem asChild className="cursor-pointer">
-                <a href={BOXLITE_DOCS_URL} target="_blank" rel="noopener noreferrer">
-                  <BookOpen className="size-4" />
-                  Docs
-                </a>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild className="cursor-pointer">
-                <a href={BOXLITE_SLACK_URL} target="_blank" rel="noopener noreferrer">
-                  <MessageCircle className="size-4" />
-                  Discord
-                </a>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem className="cursor-pointer" onClick={handleSignOut}>
-                <LogOut className="size-4" />
-                Sign out
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          {isCompactScreen && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon-sm">
-                  <Menu className="size-4" />
-                  <span className="sr-only">Open navigation menu</span>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-[14rem]">
-                <DropdownMenuItem
-                  className="cursor-pointer"
-                  onClick={() => openCommandPalette('dashboard_mobile_menu')}
-                >
-                  <SearchIcon className="size-4" />
-                  Search
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                {primaryItems.map(renderMenuItem)}
-                <DropdownMenuItem asChild className="cursor-pointer">
-                  <Link to={RoutePath.KEYS}>
-                    <KeyRound className="size-4" />
-                    API Keys
-                  </Link>
-                </DropdownMenuItem>
-                {secondaryGroups.map((group) => (
-                  <React.Fragment key={group.label}>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuLabel className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-                      {group.label}
-                    </DropdownMenuLabel>
-                    {group.items.map(renderMenuItem)}
-                  </React.Fragment>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-        </div>
-      </div>
+          </DropdownMenuItem>
+          <DropdownMenuItem className="cursor-pointer" onClick={openOnboardingGuide}>
+            <BookOpen className="size-4" />
+            Quickstart
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </header>
   )
 }

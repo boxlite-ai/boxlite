@@ -13,12 +13,19 @@ export FAIL_FAST
 # go: regex, pytest -k / vitest -t: expression/substring).
 export FILTER
 
-NEXTEST_FILTER   = $(if $(FILTER),-E 'test(~$(FILTER))',)
+# Advanced nextest-only filter expression. Use this for CI-specific exclusions
+# that cannot be expressed as a simple positive FILTER pattern.
+export NEXTEST_FILTER_EXPR
+
+NEXTEST_FILTER   = $(if $(NEXTEST_FILTER_EXPR),-E '$(NEXTEST_FILTER_EXPR)',$(if $(FILTER),-E 'test(~$(FILTER))',))
+NEXTEST_CLI_FILTER = $(if $(NEXTEST_FILTER_EXPR),-E '$(NEXTEST_FILTER_EXPR)',$(if $(FILTER),-E 'test(~$(FILTER))',-E 'not binary(stress_disk)'))
 CARGOTEST_FILTER = $(if $(FILTER),$(FILTER),)
 PYTEST_FILTER    = $(if $(FILTER),-k '$(FILTER)',)
 VITEST_FILTER    = $(if $(FILTER),-t '$(FILTER)',)
 CTEST_FILTER     = $(if $(FILTER),-R '$(FILTER)',)
 GOTEST_FILTER    = $(if $(FILTER),-run '$(FILTER)',)
+
+CLI_INTEGRATION_TESTS = $(basename $(notdir $(filter-out src/cli/tests/stress_disk.rs,$(wildcard src/cli/tests/*.rs))))
 
 # $(call run_suites,<space-separated make targets>)
 # Runs each target via a recursive $(MAKE). With FAIL_FAST=false the loop
@@ -153,6 +160,13 @@ test\:integration:
 	@echo ""
 	@echo "✅ Integration test matrix passed"
 
+# Stress suites: intentionally excluded from the default integration matrix.
+test\:stress:
+	@echo "── Stress tests ──"
+	$(call run_integration_suites,test:stress:disk)
+	@echo ""
+	@echo "✅ Stress test matrix passed"
+
 # Core unit suites: Rust unit + FFI unit.
 test\:unit\:core:
 	@echo "── Core unit suites (rust, ffi) ──"
@@ -231,9 +245,23 @@ test\:integration\:cli: $(if $(SETUP_DONE),,runtime\:debug)
 	@echo "🧪 Running CLI integration tests..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run -p boxlite-cli --tests --profile vm --no-fail-fast \
+		$(NEXTEST_CLI_FILTER); \
+	else \
+		rc=0; \
+		for test_name in $(CLI_INTEGRATION_TESTS); do \
+			cargo test -p boxlite-cli --test $$test_name --no-fail-fast -- --test-threads=4 \
+			$(CARGOTEST_FILTER) || rc=$$?; \
+		done; \
+		exit $$rc; \
+	fi
+
+test\:stress\:disk: $(if $(SETUP_DONE),,runtime\:debug)
+	@echo "🧪 Running disk pressure stress tests..."
+	@if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run -p boxlite-cli --test stress_disk --profile vm --no-fail-fast \
 		$(NEXTEST_FILTER); \
 	else \
-		cargo test -p boxlite-cli --tests --no-fail-fast -- --test-threads=4 \
+		cargo test -p boxlite-cli --test stress_disk --no-fail-fast -- --test-threads=1 \
 		$(CARGOTEST_FILTER); \
 	fi
 
@@ -344,3 +372,60 @@ test\:e2e:
 
 test\:e2e\:two-sided:
 	@PR_REF=$${PR_REF:?must set PR_REF=<branch>} bash scripts/test/e2e/two_sided.sh
+
+# ─── Stress: deployed REST API ─────────────────────────────────────────────
+test\:stress\:api-read:
+	@command -v k6 >/dev/null 2>&1 || { echo "k6 is required. Install with: brew install k6"; exit 2; }
+	@k6 run scripts/test/stress/api-read.k6.js
+
+test\:stress\:api-read-local:
+	@command -v k6 >/dev/null 2>&1 || { echo "k6 is required. Install with: brew install k6"; exit 2; }
+	@BOXLITE_STRESS_START_RATE=$${BOXLITE_STRESS_START_RATE:-1} \
+	BOXLITE_STRESS_RATE_1=$${BOXLITE_STRESS_RATE_1:-1} \
+	BOXLITE_STRESS_RATE_2=$${BOXLITE_STRESS_RATE_2:-3} \
+	BOXLITE_STRESS_RATE_3=$${BOXLITE_STRESS_RATE_3:-5} \
+	BOXLITE_STRESS_STAGE_1=$${BOXLITE_STRESS_STAGE_1:-20s} \
+	BOXLITE_STRESS_STAGE_2=$${BOXLITE_STRESS_STAGE_2:-20s} \
+	BOXLITE_STRESS_STAGE_3=$${BOXLITE_STRESS_STAGE_3:-20s} \
+	BOXLITE_STRESS_RAMP_DOWN=$${BOXLITE_STRESS_RAMP_DOWN:-5s} \
+	BOXLITE_STRESS_PREALLOCATED_VUS=$${BOXLITE_STRESS_PREALLOCATED_VUS:-10} \
+	BOXLITE_STRESS_MAX_VUS=$${BOXLITE_STRESS_MAX_VUS:-30} \
+	BOXLITE_STRESS_P95_MS=$${BOXLITE_STRESS_P95_MS:-2500} \
+	BOXLITE_STRESS_P99_MS=$${BOXLITE_STRESS_P99_MS:-4000} \
+	k6 run --summary-trend-stats 'avg,min,med,p(90),p(95),p(99),max' scripts/test/stress/api-read.k6.js
+
+test\:stress\:api-create-box:
+	@command -v k6 >/dev/null 2>&1 || { echo "k6 is required. Install with: brew install k6"; exit 2; }
+	@k6 run --summary-trend-stats 'avg,min,med,p(90),p(95),p(99),max' scripts/test/stress/api-create-box.k6.js
+
+test\:stress\:api-create-box-local:
+	@command -v k6 >/dev/null 2>&1 || { echo "k6 is required. Install with: brew install k6"; exit 2; }
+	@BOXLITE_STRESS_START_RATE=$${BOXLITE_STRESS_START_RATE:-0.02} \
+	BOXLITE_STRESS_RATE_1=$${BOXLITE_STRESS_RATE_1:-0.05} \
+	BOXLITE_STRESS_RATE_2=$${BOXLITE_STRESS_RATE_2:-0.1} \
+	BOXLITE_STRESS_RATE_3=$${BOXLITE_STRESS_RATE_3:-0.1} \
+	BOXLITE_STRESS_STAGE_1=$${BOXLITE_STRESS_STAGE_1:-30s} \
+	BOXLITE_STRESS_STAGE_2=$${BOXLITE_STRESS_STAGE_2:-1m} \
+	BOXLITE_STRESS_STAGE_3=$${BOXLITE_STRESS_STAGE_3:-1m} \
+	BOXLITE_STRESS_RAMP_DOWN=$${BOXLITE_STRESS_RAMP_DOWN:-20s} \
+	BOXLITE_STRESS_PREALLOCATED_VUS=$${BOXLITE_STRESS_PREALLOCATED_VUS:-2} \
+	BOXLITE_STRESS_MAX_VUS=$${BOXLITE_STRESS_MAX_VUS:-5} \
+	BOXLITE_STRESS_P95_MS=$${BOXLITE_STRESS_P95_MS:-45000} \
+	BOXLITE_STRESS_P99_MS=$${BOXLITE_STRESS_P99_MS:-60000} \
+	k6 run --summary-trend-stats 'avg,min,med,p(90),p(95),p(99),max' scripts/test/stress/api-create-box.k6.js
+
+test\:stress\:api-vm-lifecycle:
+	@command -v k6 >/dev/null 2>&1 || { echo "k6 is required. Install with: brew install k6"; exit 2; }
+	@k6 run --summary-trend-stats 'avg,min,med,p(90),p(95),p(99),max' scripts/test/stress/api-vm-lifecycle.k6.js
+
+test\:stress\:api-vm-lifecycle-local:
+	@command -v k6 >/dev/null 2>&1 || { echo "k6 is required. Install with: brew install k6"; exit 2; }
+	@BOXLITE_STRESS_RUNNER_CPUS=$${BOXLITE_STRESS_RUNNER_CPUS:-8} \
+	BOXLITE_STRESS_VM_LIMIT=$${BOXLITE_STRESS_VM_LIMIT:-2} \
+	BOXLITE_STRESS_VUS=$${BOXLITE_STRESS_VUS:-2} \
+	BOXLITE_STRESS_DURATION=$${BOXLITE_STRESS_DURATION:-1m} \
+	BOXLITE_STRESS_HOLD_SECONDS=$${BOXLITE_STRESS_HOLD_SECONDS:-20} \
+	BOXLITE_STRESS_GRACEFUL_STOP=$${BOXLITE_STRESS_GRACEFUL_STOP:-2m} \
+	BOXLITE_STRESS_P95_MS=$${BOXLITE_STRESS_P95_MS:-60000} \
+	BOXLITE_STRESS_P99_MS=$${BOXLITE_STRESS_P99_MS:-90000} \
+	k6 run --summary-trend-stats 'avg,min,med,p(90),p(95),p(99),max' scripts/test/stress/api-vm-lifecycle.k6.js

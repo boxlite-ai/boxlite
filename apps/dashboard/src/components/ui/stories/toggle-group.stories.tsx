@@ -5,7 +5,7 @@
 
 import type { Meta, StoryObj } from '@storybook/react'
 import { ToggleGroup, ToggleGroupItem } from '../toggle-group'
-import { AlignLeftIcon, AlignCenterIcon, AlignRightIcon } from 'lucide-react'
+import { AlignLeftIcon, AlignCenterIcon, AlignRightIcon } from '@/components/ui/icon'
 
 const meta: Meta<typeof ToggleGroup> = {
   title: 'UI/ToggleGroup',

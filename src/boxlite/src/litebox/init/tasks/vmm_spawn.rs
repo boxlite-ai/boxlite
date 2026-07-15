@@ -8,7 +8,7 @@ use super::{InitCtx, log_task_error, task_start};
 use crate::disk::DiskFormat;
 use crate::images::ContainerImageConfig;
 use crate::litebox::init::types::resolve_user_volumes;
-use crate::net::NetworkBackendConfig;
+use crate::net::{NetworkBackend, NetworkBackendConfig};
 use crate::pipeline::PipelineTask;
 use crate::rootfs::guest::{GuestRootfs, Strategy};
 use crate::runtime::constants::{guest_paths, mount_tags};
@@ -20,9 +20,11 @@ use crate::runtime::types::ContainerID;
 use crate::util::find_binary;
 use crate::vmm::controller::{ShimController, VmmController, VmmHandler};
 use crate::vmm::{Entrypoint, InstanceSpec, VmmKind};
-use crate::volumes::{ContainerMount, ContainerVolumeManager, GuestVolumeManager};
+use crate::volumes::{
+    ContainerMount, ContainerVolumeManager, GuestVolumeManager, stage_single_file,
+};
 use async_trait::async_trait;
-use boxlite_shared::Transport;
+use boxlite_shared::BoxTransport;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -75,19 +77,20 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
         };
 
         // Build config and get outputs
-        let (instance_spec, volume_mgr, rootfs_init, container_mounts) = build_config(
-            &box_id,
-            &options,
-            &layout,
-            &container_image_config,
-            &container_disk_path,
-            guest_disk_path.as_deref(),
-            &container_id,
-            &runtime,
-            reuse_rootfs,
-        )
-        .await
-        .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
+        let (instance_spec, volume_mgr, rootfs_init, container_mounts, network_backend) =
+            build_config(
+                &box_id,
+                &options,
+                &layout,
+                &container_image_config,
+                &container_disk_path,
+                guest_disk_path.as_deref(),
+                &container_id,
+                &runtime,
+                reuse_rootfs,
+            )
+            .await
+            .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
         // Spawn VM
         let handler = spawn_vm(&box_id, &instance_spec, &options, &layout)
@@ -99,11 +102,13 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
         ctx.volume_mgr = Some(volume_mgr);
         ctx.rootfs_init = Some(rootfs_init);
         ctx.container_mounts = Some(container_mounts);
+        // Hand the box's one network backend to LiveState assembly (init/mod.rs).
+        ctx.network_backend = network_backend;
         // Store CA cert PEM for Container.Init gRPC (passed as CACert proto field)
         ctx.ca_cert_pem = instance_spec
-            .network_config
+            .network_backend_spec
             .as_ref()
-            .and_then(|nc| nc.ca_cert_pem.clone());
+            .and_then(|s| s.ca_cert_pem.clone());
         Ok(())
     }
 
@@ -129,10 +134,11 @@ async fn build_config(
     GuestVolumeManager,
     crate::portal::interfaces::ContainerRootfsInitConfig,
     Vec<ContainerMount>,
+    Option<Box<dyn NetworkBackend>>,
 )> {
-    // Transport setup
-    let transport = Transport::unix(layout.socket_path());
-    let ready_transport = Transport::unix(layout.ready_socket_path());
+    // BoxTransport setup
+    let transport = BoxTransport::unix(layout.socket_path());
+    let ready_transport = BoxTransport::unix(layout.ready_socket_path());
 
     let user_volumes = resolve_user_volumes(&options.volumes)?;
 
@@ -174,15 +180,27 @@ async fn build_config(
     // Add user volumes via ContainerVolumeManager
     let mut container_mgr = ContainerVolumeManager::new(&mut volume_mgr);
     for vol in &user_volumes {
+        // Single-file volume: stage the file into a dedicated dir under the box's
+        // shared tree (already granted to the VMM sandbox) and share that dir, so
+        // virtio-fs never exposes the file's host siblings. Directories share as-is.
+        let share_dir = match &vol.subpath {
+            None => vol.host_path.clone(),
+            Some(file_name) => {
+                let staging_dir = layout.shared_dir().join("user-volumes").join(&vol.tag);
+                stage_single_file(&staging_dir, &vol.host_path, file_name, vol.read_only)?;
+                staging_dir
+            }
+        };
         container_mgr.add_volume(
             container_id.as_str(),
             &vol.tag,
             &vol.tag,
-            vol.host_path.clone(),
+            share_dir,
             &vol.guest_path,
             vol.read_only,
             vol.owner_uid,
             vol.owner_gid,
+            vol.subpath.clone(),
         );
     }
     let container_mounts = container_mgr.build_container_mounts();
@@ -203,8 +221,10 @@ async fn build_config(
     let guest_entrypoint =
         build_guest_entrypoint(&transport, &ready_transport, &guest_rootfs, options)?;
 
-    // Network configuration
-    let network_config = build_network_config(container_image_config, options, layout);
+    // The box's one network backend: it produces the wire spec now, and is
+    // threaded on to LiveState (via the init ctx) for runtime control.
+    let network_backend = build_network_backend(container_image_config, options, layout, runtime);
+    let network_backend_spec = network_backend.as_ref().map(|backend| backend.spec());
 
     // Assemble VMM instance spec
     let instance_spec = InstanceSpec {
@@ -222,7 +242,7 @@ async fn build_config(
         transport: transport.clone(),
         ready_transport: ready_transport.clone(),
         guest_rootfs,
-        network_config,
+        network_backend_spec,
         network_backend_endpoint: None,
         disable_network: matches!(
             options.network,
@@ -235,7 +255,13 @@ async fn build_config(
         detach: options.detach,
     };
 
-    Ok((instance_spec, volume_mgr, rootfs_init, container_mounts))
+    Ok((
+        instance_spec,
+        volume_mgr,
+        rootfs_init,
+        container_mounts,
+        network_backend,
+    ))
 }
 
 /// Configure guest rootfs with device path from volume manager.
@@ -268,8 +294,8 @@ fn configure_guest_rootfs(
 }
 
 fn build_guest_entrypoint(
-    transport: &Transport,
-    ready_transport: &Transport,
+    transport: &BoxTransport,
+    ready_transport: &BoxTransport,
     guest_rootfs: &GuestRootfs,
     options: &crate::runtime::options::BoxOptions,
 ) -> BoxliteResult<Entrypoint> {
@@ -305,68 +331,56 @@ fn build_guest_entrypoint(
     Ok(builder.build())
 }
 
-/// Build network configuration from container image config and options.
-fn build_network_config(
+/// Create the box's **one** network backend by routing box-level policy (port
+/// mappings + allowlist) through the abstraction: assemble a
+/// [`NetworkBackendConfig`] and hand it to the factory. `None` when networking is
+/// disabled. The returned backend is used for both
+/// its wire spec (`spec()`) and, threaded on to `LiveState`, runtime control — no
+/// caller here names a concrete backend.
+fn build_network_backend(
     container_image_config: &crate::images::ContainerImageConfig,
     options: &crate::runtime::options::BoxOptions,
     layout: &BoxFilesystemLayout,
-) -> Option<NetworkBackendConfig> {
-    let mut port_map: HashMap<u16, u16> = HashMap::new();
-
-    // Step 1: Collect guest ports that user wants to customize
-    let user_guest_ports: HashSet<u16> = options.ports.iter().map(|p| p.guest_port).collect();
-
-    // Step 2: Image exposed ports (only add default 1:1 mapping if user didn't override)
-    for port in container_image_config.tcp_ports() {
-        if !user_guest_ports.contains(&port) {
-            port_map.insert(port, port);
-        }
-    }
-
-    // Step 3: User-provided mappings (always applied)
-    for port in &options.ports {
-        let host_port = port.host_port.unwrap_or(port.guest_port);
-        port_map.insert(host_port, port.guest_port);
-    }
-
-    let final_mappings: Vec<(u16, u16)> = port_map.into_iter().collect();
-
-    tracing::info!(
-        "Port mappings: {} (image: {}, user: {}, overridden: {})",
-        final_mappings.len(),
-        container_image_config.exposed_ports.len(),
-        options.ports.len(),
-        user_guest_ports
-            .intersection(&container_image_config.tcp_ports().into_iter().collect())
-            .count()
-    );
-
-    // Extract allow_net from NetworkSpec; Disabled = no network at all
+    runtime: &SharedRuntimeImpl,
+) -> Option<Box<dyn NetworkBackend>> {
+    // Disabled = no network at all.
     let allow_net = match &options.network {
         crate::runtime::options::NetworkSpec::Enabled { allow_net } => allow_net.clone(),
         crate::runtime::options::NetworkSpec::Disabled => return None,
     };
 
-    let mut config = NetworkBackendConfig::new(final_mappings, layout.net_backend_socket_path());
-    config.allow_net = allow_net;
-    config.secrets = options.secrets.clone();
-
-    // Generate ephemeral MITM CA when secrets are configured.
-    // The CA cert+key flow through NetworkBackendConfig → GvproxyConfig → Go.
-    if !options.secrets.is_empty() {
-        match crate::net::ca::load_or_generate(&layout.ca_dir()) {
-            Ok(ca) => {
-                config.ca_cert_pem = Some(ca.cert_pem);
-                config.ca_key_pem = Some(ca.key_pem);
-            }
-            Err(e) => {
-                tracing::error!("MITM: CA setup failed, secrets disabled: {e}");
-                config.secrets.clear();
-            }
+    // Port mappings (box-level policy): image EXPOSE gets a default 1:1 mapping
+    // unless the user overrode that guest port; user `-p` mappings always apply.
+    let mut port_map: HashMap<u16, u16> = HashMap::new();
+    let user_guest_ports: HashSet<u16> = options.ports.iter().map(|p| p.guest_port).collect();
+    for port in container_image_config.tcp_ports() {
+        if !user_guest_ports.contains(&port) {
+            port_map.insert(port, port);
         }
     }
+    for port in &options.ports {
+        let host_port = port.host_port.unwrap_or(port.guest_port);
+        port_map.insert(host_port, port.guest_port);
+    }
+    let final_mappings: Vec<(u16, u16)> = port_map.into_iter().collect();
 
-    Some(config)
+    tracing::info!(
+        "Port mappings: {} (image: {}, user: {})",
+        final_mappings.len(),
+        container_image_config.exposed_ports.len(),
+        options.ports.len(),
+    );
+
+    let config = NetworkBackendConfig {
+        port_mappings: final_mappings,
+        socket_path: layout.net_backend_socket_path(),
+        allow_net,
+        secrets: options.secrets.clone(),
+        ca_dir: layout.ca_dir(),
+    };
+
+    // Hand the config to the backend abstraction — the one backend for this box.
+    runtime.network_factory.create(&config)
 }
 
 /// Spawn VM subprocess and return handler.

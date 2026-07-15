@@ -82,14 +82,19 @@ impl Sandbox for CompositeSandbox {
 // so we provide a no-arg constructor that assembles the default Linux sandbox stack.
 #[cfg(target_os = "linux")]
 impl CompositeSandbox {
-    /// Create the default Linux sandbox: bwrap (namespaces) + Landlock (filesystem ACL).
+    /// Create the default Linux sandbox: bwrap (namespaces).
     ///
     /// This is called by [`JailerBuilder::build()`] via the `PlatformSandbox::new()` alias.
+    ///
+    /// [`LandlockSandbox`](super::LandlockSandbox) is intentionally **not** in
+    /// the stack. A host-side filesystem Landlock domain blocks every mount
+    /// syscall (EPERM), so it cannot be applied in a `pre_exec` hook that runs
+    /// before bwrap performs its mounts — it would EPERM bwrap's own `mount()`
+    /// and the box would never start. Filesystem isolation is left to bwrap.
+    /// `LandlockSandbox` and the ruleset builder are kept for a future
+    /// post-mount path (the LD_PRELOAD approach in #842).
     pub fn platform_new() -> Self {
-        Self::new(vec![
-            Box::new(super::BwrapSandbox::new()),
-            Box::new(super::LandlockSandbox::new()),
-        ])
+        Self::new(vec![Box::new(super::BwrapSandbox::new())])
     }
 }
 
@@ -123,6 +128,7 @@ mod tests {
             resource_limits: limits,
             network_enabled: false,
             sandbox_profile: None,
+            detached: false,
         }
     }
 

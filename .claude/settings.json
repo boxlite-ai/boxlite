@@ -1,16 +1,40 @@
 {
+  "env": {
+    "VERDICT_GATE_HARD_BLOCK": "1"
+  },
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/rule-recency.sh"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/preflight-claude-md.sh"
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/preflight-commit-push.sh"
           },
           {
             "type": "command",
             "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/preflight-pr-review.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/preflight-verdict-check.sh",
+            "timeout": 60
           }
         ]
       }

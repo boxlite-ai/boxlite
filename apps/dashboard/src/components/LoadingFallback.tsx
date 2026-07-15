@@ -5,12 +5,13 @@
  */
 
 import { LogoText } from '@/assets/Logo'
-import { Loader2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { Skeleton } from './ui/skeleton'
 
+// Terminal-style boot screen so the loading state matches the console's
+// pixel/mono aesthetic instead of a generic skeleton shell.
 const LoadingFallback = () => {
   const [showLongLoadingMessage, setShowLongLoadingMessage] = useState(false)
+  const [dotCount, setDotCount] = useState(1)
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -20,59 +21,39 @@ const LoadingFallback = () => {
     return () => clearTimeout(timer)
   }, [])
 
+  // Typewriter ellipsis: cycle 1 → 2 → 3 dots and back, a touch retro.
+  useEffect(() => {
+    const id = setInterval(() => setDotCount((d) => (d % 3) + 1), 400)
+    return () => clearInterval(id)
+  }, [])
+
   return (
-    <div className="flex min-h-svh flex-col bg-background text-foreground">
-      <header className="border-b border-border bg-background">
-        <div className="mx-auto flex h-14 w-full max-w-[1440px] items-center gap-3 px-4 sm:px-5 2xl:px-0">
-          <div className="shrink-0 text-[1.15rem] font-semibold tracking-tight">
-            <LogoText />
-          </div>
-          <div className="hidden items-center gap-2 sm:flex">
-            <Skeleton className="h-5 w-24" />
-            <Skeleton className="h-5 w-24" />
-            <Skeleton className="h-5 w-24" />
-          </div>
-          <div className="ml-auto flex items-center gap-2">
-            <Skeleton className="hidden h-8 w-28 md:block" />
-            <Skeleton className="h-8 w-8 sm:w-32" />
-          </div>
-        </div>
-      </header>
+    <div className="flex min-h-svh flex-col items-center justify-center gap-10 bg-background px-6 text-center font-mono text-foreground">
+      <LogoText className="h-14 w-auto" />
 
-      <main className="mx-auto flex min-h-[calc(100svh-3.5rem)] w-full max-w-[1440px] flex-1 flex-col px-4 pb-8 pt-7 sm:px-5 2xl:px-0">
-        <div className="mb-6 flex items-center justify-between gap-4">
-          <Skeleton className="h-4 w-32" />
-          <Skeleton className="h-8 w-28" />
-        </div>
+      <div className="flex items-center gap-3 text-[17px] uppercase tracking-[2.5px] text-muted-foreground">
+        <span
+          className="inline-block size-[11px] animate-pulse bg-brand"
+          style={{ boxShadow: '0 0 12px hsl(var(--brand))' }}
+        />
+        <span>booting console</span>
+        {/* typewriter ellipsis: 1 → 2 → 3 dots, looping */}
+        <span className="inline-block w-[1.6em] text-left" aria-hidden="true">
+          {'.'.repeat(dotCount)}
+        </span>
+      </div>
 
-        <div className="space-y-3">
-          <Skeleton className="h-9 w-full max-w-xl" />
-          <div className="rounded-sm border border-border">
-            <Skeleton className="h-11 rounded-none border-b border-border" />
-            <Skeleton className="h-12 rounded-none border-b border-border" />
-            <Skeleton className="h-12 rounded-none border-b border-border" />
-            <Skeleton className="h-12 rounded-none" />
-          </div>
+      {showLongLoadingMessage && (
+        <div className="space-y-1 text-[13px] normal-case tracking-normal text-muted-foreground">
+          <p>taking longer than expected…</p>
+          <p>
+            if it persists, ping{' '}
+            <a href="mailto:support@boxlite.ai" className="text-brand underline underline-offset-2">
+              support@boxlite.ai
+            </a>
+          </p>
         </div>
-
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 py-10">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-          <div
-            className={`space-y-1 text-center transition-all duration-300 ${
-              showLongLoadingMessage ? 'translate-y-0 opacity-100' : 'translate-y-2 opacity-0'
-            }`}
-          >
-            <p className="text-sm text-muted-foreground">This is taking longer than expected...</p>
-            <p className="text-sm text-muted-foreground">
-              If this issue persists, contact us at{' '}
-              <a href="mailto:support@boxlite.ai" className="text-primary underline">
-                support@boxlite.ai
-              </a>
-              .
-            </p>
-          </div>
-        </div>
-      </main>
+      )}
     </div>
   )
 }

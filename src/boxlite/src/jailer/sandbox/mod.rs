@@ -125,6 +125,10 @@ pub struct SandboxContext<'a> {
     pub network_enabled: bool,
     /// Custom sandbox profile path (macOS only).
     pub sandbox_profile: Option<&'a Path>,
+    /// Whether the box is detached (`run -d`). Detached boxes must outlive the
+    /// launching process, so the sandbox must not tie their lifetime to it
+    /// (e.g. bwrap's `--die-with-parent`).
+    pub detached: bool,
 }
 
 impl SandboxContext<'_> {

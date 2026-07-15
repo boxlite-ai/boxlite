@@ -29,30 +29,10 @@ const initialState: ThemeProviderState = {
 
 const ThemeProviderContext = createContext<ThemeProviderState>(initialState)
 
-async function runWithoutAnimation<T>(callback: () => T | Promise<T>): Promise<T> {
-  const style = document.createElement('style')
-  style.appendChild(
-    document.createTextNode(`*, *::before, *::after { transition: none !important; animation: none !important; }`),
-  )
-  document.head.appendChild(style)
-
-  try {
-    return await callback()
-  } finally {
-    window.getComputedStyle(document.body)
-
-    setTimeout(() => {
-      if (document.head.contains(style)) {
-        document.head.removeChild(style)
-      }
-    }, 1)
-  }
-}
-
 export function ThemeProvider({
   children,
-  defaultTheme = 'system',
-  storageKey = 'vite-ui-theme',
+  defaultTheme = 'dark',
+  storageKey = 'boxlite-theme',
   ...props
 }: ThemeProviderProps) {
   const [theme, setTheme] = useState<Theme>(() => {
@@ -76,13 +56,9 @@ export function ThemeProvider({
   }, [theme])
 
   useEffect(() => {
-    runWithoutAnimation(() => {
-      const root = window.document.documentElement
-
-      root.classList.remove('light', 'dark')
-
-      root.classList.add(resolvedTheme)
-    })
+    const root = window.document.documentElement
+    root.classList.remove('light', 'dark')
+    root.classList.add(resolvedTheme)
   }, [resolvedTheme])
 
   const value = {

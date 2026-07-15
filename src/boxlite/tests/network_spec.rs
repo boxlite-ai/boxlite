@@ -120,6 +120,33 @@ async fn disabled_network_runs_without_eth0() {
     litebox.stop().await.unwrap();
 }
 
+#[tokio::test]
+async fn enabled_network_runs_with_eth0_and_host_alias_dns() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+
+    let litebox = runtime.create(common::alpine_opts(), None).await.unwrap();
+    litebox.start().await.unwrap();
+
+    let has_eth0 = run_exit_code(&litebox, "sh", &["-c", "test -e /sys/class/net/eth0"]).await;
+    assert_eq!(
+        has_eth0, 0,
+        "enabled network should create eth0, got exit code {has_eth0}"
+    );
+
+    let nslookup = run_stdout(&litebox, "nslookup", &[HOST_HOSTNAME]).await;
+    assert!(
+        nslookup.contains(HOST_IP),
+        "host alias should resolve through the enabled backend, got: {nslookup}"
+    );
+
+    litebox.stop().await.unwrap();
+}
+
 /// Helper: run a command and collect stdout.
 async fn run_stdout(litebox: &boxlite::LiteBox, cmd: &str, args: &[&str]) -> String {
     let mut ex = litebox

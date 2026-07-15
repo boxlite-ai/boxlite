@@ -32,8 +32,7 @@ export function OrganizationsProvider(props: Props) {
     suspend(getOrganizations, [organizationsApi, 'organizations']),
   )
 
-  // TODO: come back to this asap
-  const refreshOrganizations_todo = useCallback(
+  const refreshOrganizations = useCallback(
     async (selectedOrganizationId?: string) => {
       const orgs = await getOrganizations()
       setOrganizations(orgs)
@@ -44,20 +43,9 @@ export function OrganizationsProvider(props: Props) {
     [getOrganizations],
   )
 
-  // After creating a new org, the selected org was updated unnecessarily so we reload the page just in case
-  const refreshOrganizations = useCallback(async (selectedOrganizationId?: string) => {
-    if (selectedOrganizationId) {
-      localStorage.setItem(LocalStorageKey.SelectedOrganizationId, selectedOrganizationId)
-    }
-    setTimeout(() => {
-      window.location.reload()
-    }, 500)
-  }, [])
-
   const contextValue: IOrganizationsContext = useMemo(() => {
     return {
       organizations,
-      setOrganizations,
       refreshOrganizations,
     }
   }, [organizations, refreshOrganizations])

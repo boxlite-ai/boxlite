@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { PlusCircle } from 'lucide-react'
+import { PlusCircle } from '@/components/ui/icon'
 
 import { cn } from '@/lib/utils'
 import { Badge } from './badge'

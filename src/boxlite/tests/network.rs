@@ -1,92 +1,162 @@
-//! Integration tests for network backend selection and configuration.
+//! Integration tests for the network backend abstraction.
 
 use std::path::PathBuf;
 
-use boxlite::net::{NetworkBackendConfig, NetworkBackendFactory};
+use boxlite::net::{NetworkBackendConfig, NetworkBackendSpec};
 
-fn test_socket_path() -> PathBuf {
-    PathBuf::from("/tmp/test-network-backend.sock")
+fn test_config(socket_path: PathBuf) -> NetworkBackendConfig {
+    NetworkBackendConfig {
+        port_mappings: vec![(8080, 80), (3000, 3000), (5432, 5432)],
+        socket_path,
+        allow_net: Vec::new(),
+        secrets: Vec::new(),
+        ca_dir: PathBuf::from("/tmp/test-ca"),
+    }
 }
 
 #[test]
-#[cfg(all(not(feature = "libslirp"), not(feature = "gvproxy")))]
-fn test_no_backend_when_no_features_enabled() {
-    // When no backend features are enabled, factory should return None
-    let config = NetworkBackendConfig::new(vec![], test_socket_path());
-    let backend = NetworkBackendFactory::create(config).unwrap();
+fn spec_carries_unique_socket_path_across_serde() {
+    // The wire spec carries a unique per-box socket path across the serde
+    // boundary to the shim (guards the old gvproxy socket collision, where the
+    // Go library generated /tmp/gvproxy-{id}.sock).
+    let spec = NetworkBackendSpec {
+        port_mappings: vec![(8080, 80)],
+        socket_path: PathBuf::from("/boxes/box-a/sockets/net.sock"),
+        allow_net: Vec::new(),
+        secrets: Vec::new(),
+        ca_cert_pem: None,
+        ca_key_pem: None,
+    };
 
-    assert!(
-        backend.is_none(),
-        "Expected None when no backend features are enabled"
+    // socket_path survives serde — this is how it crosses to the shim.
+    let json = serde_json::to_string(&spec).unwrap();
+    let deserialized: NetworkBackendSpec = serde_json::from_str(&json).unwrap();
+    assert_eq!(deserialized.socket_path, spec.socket_path);
+    assert_eq!(deserialized.port_mappings, spec.port_mappings);
+}
+
+#[test]
+fn spec_deserializes_legacy_payload_with_default_control_fields() {
+    let json = r#"{"port_mappings":[[8080,80]],"socket_path":"/boxes/box-a/sockets/net.sock"}"#;
+    let spec: NetworkBackendSpec = serde_json::from_str(json).unwrap();
+
+    assert_eq!(spec.port_mappings, vec![(8080, 80)]);
+    assert_eq!(
+        spec.socket_path,
+        PathBuf::from("/boxes/box-a/sockets/net.sock")
     );
+    assert!(spec.allow_net.is_empty());
+    assert!(spec.secrets.is_empty());
+    assert!(spec.ca_cert_pem.is_none());
+    assert!(spec.ca_key_pem.is_none());
 }
 
-// Note: libslirp backend tests are disabled because the backend's endpoint()
-// implementation is incomplete and returns an error. These tests can be
-// re-enabled once the backend is fully implemented.
+#[test]
+fn factory_creates_backend_whose_spec_reflects_config() {
+    // The abstract factory is used purely through the trait — the caller never
+    // names a concrete backend. The one created backend produces the wire spec.
+    use boxlite::net::{NetworkBackendFactory, default_factory};
+
+    let factory: std::sync::Arc<dyn NetworkBackendFactory> = default_factory();
+    let config = test_config(PathBuf::from("/tmp/factory-test/net.sock"));
+
+    let backend = factory.create(&config).expect("gvproxy backend");
+    let spec = backend.spec();
+    // The config's socket/ports cross into the wire spec via production spec().
+    assert_eq!(spec.socket_path, config.socket_path);
+    assert_eq!(spec.port_mappings, config.port_mappings);
+    // No secrets configured → no CA is minted.
+    assert!(spec.ca_cert_pem.is_none());
+}
 
 #[test]
-fn test_network_config_creation() {
-    // Test NetworkConfig constructor
-    let port_mappings = vec![(8080, 80), (3000, 3000), (5432, 5432)];
-    let config = NetworkBackendConfig::new(port_mappings.clone(), test_socket_path());
+fn factory_backend_carries_allowlist_and_secret_metadata_in_spec() {
+    use boxlite::net::{NetworkBackendFactory, default_factory};
+    use boxlite::runtime::options::Secret;
 
-    assert_eq!(config.port_mappings.len(), 3);
-    assert_eq!(config.port_mappings, port_mappings);
-    assert_eq!(config.socket_path, test_socket_path());
+    let ca_dir = tempfile::tempdir().unwrap();
+    let mut config = test_config(PathBuf::from("/tmp/factory-allowlist/net.sock"));
+    config.ca_dir = ca_dir.path().to_path_buf();
+    config.allow_net = vec!["api.openai.com".to_string(), "example.com".to_string()];
+    config.secrets = vec![Secret {
+        name: "openai".to_string(),
+        hosts: vec!["api.openai.com".to_string()],
+        placeholder: "<BOXLITE_SECRET:openai>".to_string(),
+        value: "sk-test-not-a-real-key".to_string(),
+    }];
+
+    let factory: std::sync::Arc<dyn NetworkBackendFactory> = default_factory();
+    let backend = factory.create(&config).expect("gvproxy backend");
+    let spec = backend.spec();
+    assert_eq!(spec.allow_net, config.allow_net);
+    assert_eq!(spec.secrets.len(), 1);
+    assert_eq!(spec.secrets[0].name, "openai");
+    assert_eq!(spec.secrets[0].hosts, vec!["api.openai.com"]);
+    assert_eq!(spec.secrets[0].placeholder, "<BOXLITE_SECRET:openai>");
+}
+
+#[test]
+fn factory_backend_with_secrets_mints_ca_in_spec() {
+    // Public-API path: with secrets configured, the created backend's spec()
+    // mints an ephemeral MITM CA into ca_dir — the create → spec-with-CA flow
+    // the core relies on to hand the shim a usable CA.
+    use boxlite::net::{NetworkBackendFactory, default_factory};
+    use boxlite::runtime::options::Secret;
+
+    let ca_dir = tempfile::tempdir().unwrap();
+    let mut config = test_config(PathBuf::from("/tmp/factory-secrets/net.sock"));
+    config.ca_dir = ca_dir.path().to_path_buf();
+    config.secrets = vec![Secret {
+        name: "openai".to_string(),
+        hosts: vec!["api.openai.com".to_string()],
+        placeholder: "<BOXLITE_SECRET:openai>".to_string(),
+        value: "sk-test-not-a-real-key".to_string(),
+    }];
+
+    let factory: std::sync::Arc<dyn NetworkBackendFactory> = default_factory();
+    let backend = factory.create(&config).expect("gvproxy backend");
+    let spec = backend.spec();
+    assert!(
+        spec.ca_cert_pem
+            .as_deref()
+            .unwrap()
+            .contains("BEGIN CERTIFICATE"),
+        "secrets should mint a CA cert on the wire spec"
+    );
+    assert!(spec.ca_key_pem.is_some(), "CA key should be present");
+    assert_eq!(spec.secrets.len(), 1, "secrets stay enabled with a CA");
+}
+
+#[test]
+fn explicit_no_backend_factory_yields_none() {
+    use boxlite::net::{NetworkBackendFactory, NoBackendFactory};
+
+    let factory: std::sync::Arc<dyn NetworkBackendFactory> = std::sync::Arc::new(NoBackendFactory);
+    let config = test_config(PathBuf::from("/tmp/factory-test/net.sock"));
+    assert!(factory.create(&config).is_none());
 }
 
 #[tokio::test]
-#[cfg(any(feature = "libslirp", feature = "gvproxy"))]
-async fn test_backend_trait_send_sync() {
-    use boxlite::net::NetworkBackend;
+async fn factory_backend_control_dials_derived_gvproxy_socket() {
+    use boxlite::net::{NetworkBackendFactory, default_factory};
 
-    // Verify NetworkBackend trait objects are Send + Sync
-    fn assert_send_sync<T: Send + Sync>() {}
+    let dir = tempfile::Builder::new()
+        .prefix("bl-factory-control-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let config = test_config(dir.path().join("net.sock"));
 
-    let config = NetworkBackendConfig::new(vec![], test_socket_path());
-    let backend = NetworkBackendFactory::create(config).unwrap();
+    let factory: std::sync::Arc<dyn NetworkBackendFactory> = default_factory();
+    let backend = factory.create(&config).expect("gvproxy backend");
+    assert_eq!(backend.name(), "gvisor-tap-vsock");
 
-    // This will fail to compile if NetworkBackend is not Send + Sync
-    fn check_send_sync(backend: Box<dyn NetworkBackend>) {
-        assert_send_sync::<Box<dyn NetworkBackend>>();
-        drop(backend);
-    }
+    let err = backend.list_forwards().await.unwrap_err();
 
-    if let Some(backend) = backend {
-        check_send_sync(backend);
-    }
-}
-
-// Note: libslirp backend tests are disabled because the backend's endpoint()
-// implementation is incomplete and returns an error.
-
-#[test]
-fn test_network_config_carries_unique_socket_paths() {
-    // Regression test for gvproxy socket path collision bug.
-    // Verifies that NetworkBackendConfig (the caller-facing config)
-    // carries the socket path through serialization — this is how the path
-    // crosses the process boundary from main process → shim subprocess.
-    //
-    // OLD CODE: NetworkBackendConfig had no socket_path field.
-    //           The Go library generated /tmp/gvproxy-{id}.sock internally,
-    //           causing collisions between concurrent boxes.
-    // NEW CODE: Each config carries its own unique socket_path.
-
-    let config_a = NetworkBackendConfig::new(
-        vec![(8080, 80)],
-        PathBuf::from("/boxes/box-a/sockets/net.sock"),
+    let err = format!("{err}");
+    assert!(err.contains("gvproxy services connect"), "err: {err}");
+    assert!(err.contains("gvproxy-ctl.sock"), "err: {err}");
+    assert!(
+        !err.contains("does not support list_forwards"),
+        "factory must create a runtime control backend, err: {err}"
     );
-    let config_b = NetworkBackendConfig::new(
-        vec![(8080, 80)],
-        PathBuf::from("/boxes/box-b/sockets/net.sock"),
-    );
-
-    // Different boxes → different socket paths in config
-    assert_ne!(config_a.socket_path, config_b.socket_path);
-
-    // Verify socket_path survives serde (this is how it crosses process boundary to shim)
-    let json = serde_json::to_string(&config_a).unwrap();
-    let deserialized: NetworkBackendConfig = serde_json::from_str(&json).unwrap();
-    assert_eq!(deserialized.socket_path, config_a.socket_path);
 }

@@ -484,6 +484,11 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_handle_event::<crate::CBoxHandle>(result, user_data, cb),
+            RuntimeEvent::GetOrCreateBox {
+                cb,
+                user_data,
+                result,
+            } => dispatch_get_or_create_event(result, user_data, cb),
             RuntimeEvent::StartBox {
                 cb,
                 user_data,
@@ -621,6 +626,30 @@ unsafe fn dispatch_handle_event<T>(
             }
         };
         cb(ptr, &mut err as *mut _, user_data as *mut c_void);
+        if !err.message.is_null() {
+            crate::boxlite_error_free(&mut err);
+        }
+    }
+}
+
+/// Like [`dispatch_handle_event`] for the box handle, but also forwards the
+/// `created` flag (`true` = newly created, `false` = adopted existing box).
+/// On error the handle is null and `created` is reported as `false`.
+unsafe fn dispatch_get_or_create_event(
+    result: Result<(crate::event_queue::OwnedFfiPtr<crate::CBoxHandle>, bool), BoxliteError>,
+    user_data: usize,
+    cb: crate::event_queue::CBoxGetOrCreateBoxFn,
+) {
+    unsafe {
+        let mut err = FFIError::default();
+        let (ptr, created) = match result {
+            Ok((owned, created)) => (owned.take(), created),
+            Err(e) => {
+                err = crate::error::error_to_c_error(e);
+                (ptr::null_mut(), false)
+            }
+        };
+        cb(ptr, created, &mut err as *mut _, user_data as *mut c_void);
         if !err.message.is_null() {
             crate::boxlite_error_free(&mut err);
         }

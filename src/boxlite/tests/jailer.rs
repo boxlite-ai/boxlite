@@ -168,21 +168,17 @@ fn write_deny_boxes_profile(home_dir: &std::path::Path) -> std::path::PathBuf {
 // DEFAULT CONFIGURATION TESTS
 // ============================================================================
 
-/// Verify SecurityOptions::default() enables the jailer on macOS only.
+/// Verify SecurityOptions::default() enables the jailer (secure by default).
+///
+/// Since #652 the default profile is fully enabled on every supported
+/// platform, so `jailer_enabled` is `true` on both macOS and Linux.
 #[test]
 fn default_security_options_enable_jailer_on_supported_platforms() {
     let opts = SecurityOptions::default();
 
-    #[cfg(target_os = "macos")]
     assert!(
         opts.jailer_enabled,
-        "Jailer should be enabled by default on macOS"
-    );
-
-    #[cfg(not(target_os = "macos"))]
-    assert!(
-        !opts.jailer_enabled,
-        "Jailer should be disabled by default on Linux and unsupported platforms"
+        "Jailer should be enabled by default (secure by default)"
     );
 }
 
@@ -331,6 +327,48 @@ async fn jailer_disabled_with_same_profile_still_starts() {
 // LINUX-ONLY: Namespace isolation enforcement
 // ============================================================================
 
+/// Find a descendant of `root` whose mount namespace differs from `host`.
+///
+/// `shim.pid` records the *outer* bwrap launcher, which stays in the host mount
+/// namespace. bwrap runs with `--unshare-pid`, so it forks: the sandboxed
+/// processes — the inner bwrap and the shim itself (which runs under libkrun,
+/// so its `comm` shows as "libkrun VM", not "boxlite-shim") — live in a new
+/// namespace below it. Walk `/proc` parent links from `root` and return the
+/// first descendant that is actually isolated. Returns `None` only if no
+/// descendant left the host namespace, i.e. isolation genuinely failed.
+#[cfg(target_os = "linux")]
+fn isolated_descendant(root: u32, host: &std::path::Path) -> Option<u32> {
+    // A failure to read /proc is a broken test environment, not "no isolation";
+    // fail fast with the real cause rather than reporting an isolation failure.
+    let procs: Vec<(u32, u32)> = std::fs::read_dir("/proc")
+        .expect("read /proc to walk the process tree")
+        .flatten()
+        .filter_map(|e| {
+            let pid = e.file_name().to_str()?.parse::<u32>().ok()?;
+            let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+            let ppid = status
+                .lines()
+                .find_map(|l| l.strip_prefix("PPid:")?.trim().parse::<u32>().ok())?;
+            Some((pid, ppid))
+        })
+        .collect();
+
+    let mut stack = vec![root];
+    while let Some(cur) = stack.pop() {
+        for (pid, ppid) in &procs {
+            if *ppid == cur {
+                let isolated = std::fs::read_link(format!("/proc/{pid}/ns/mnt"))
+                    .is_ok_and(|ns| ns.as_path() != host);
+                if isolated {
+                    return Some(*pid);
+                }
+                stack.push(*pid);
+            }
+        }
+    }
+    None
+}
+
 /// On Linux, verify bwrap creates an isolated mount namespace for the shim.
 #[cfg(target_os = "linux")]
 #[tokio::test]
@@ -351,18 +389,23 @@ async fn jailer_creates_isolated_mount_namespace() {
         .join("boxes")
         .join(t.bx.id().as_str())
         .join("shim.pid");
-    let shim_pid = boxlite::util::PidFileReader::at(&pid_file)
+    let recorded_pid = boxlite::util::PidFileReader::at(&pid_file)
         .read()
         .map(|r| r.pid)
         .expect("Should read shim PID file");
 
     let self_mnt_ns =
         std::fs::read_link("/proc/self/ns/mnt").expect("Should read own mount namespace");
-    let shim_mnt_ns = std::fs::read_link(format!("/proc/{}/ns/mnt", shim_pid))
-        .expect("Should read shim mount namespace");
 
-    assert_ne!(
-        self_mnt_ns, shim_mnt_ns,
-        "Shim should be in a different mount namespace (bwrap isolation active)"
+    // The recorded pid is the outer bwrap launcher, which shares the test's
+    // (host) mount namespace; the sandboxed processes are its descendants in a
+    // new namespace. Verify at least one descendant is actually isolated.
+    let isolated = isolated_descendant(recorded_pid, &self_mnt_ns);
+
+    assert!(
+        isolated.is_some(),
+        "bwrap should place the sandboxed process tree in a different mount \
+         namespace than the test, but recorded pid {recorded_pid} and all of its \
+         descendants share the test namespace {self_mnt_ns:?} (bwrap isolation inactive)"
     );
 }

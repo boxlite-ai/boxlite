@@ -4,7 +4,7 @@
  */
 
 import { Skeleton } from '@/components/ui/skeleton'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight } from '@/components/ui/icon'
 import React, { useMemo } from 'react'
 import { groupBoxesByOwner, isOnlineRunner, runnerCpuPercent, selectErroringOwners } from './adminHelpers'
 import AdminPlatformTelemetryView from './AdminPlatformTelemetryView'

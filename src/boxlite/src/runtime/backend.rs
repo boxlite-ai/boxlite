@@ -1,12 +1,13 @@
 //! Runtime backend trait — internal abstraction for local vs REST execution.
 
+use std::net::SocketAddr;
 use std::path::Path;
 
 use async_trait::async_trait;
 
 use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
-use crate::litebox::{BoxCommand, Execution, LiteBox};
+use crate::litebox::{BoxCommand, BoxTunnel, Execution, LiteBox};
 use crate::metrics::{BoxMetrics, RuntimeMetrics};
 use crate::runtime::options::{
     BoxArchive, BoxOptions, CloneOptions, ExportOptions, SnapshotOptions,
@@ -132,6 +133,30 @@ pub(crate) trait BoxBackend: Send + Sync {
     ) -> BoxliteResult<Vec<LiteBox>>;
 
     async fn export_box(&self, options: ExportOptions, dest: &Path) -> BoxliteResult<BoxArchive>;
+}
+
+/// Backend abstraction for box network operations.
+///
+/// Kept separate from `BoxBackend` so lifecycle/exec/file operations do not own
+/// network data-plane capabilities directly.
+#[async_trait]
+pub(crate) trait BoxNetworkBackend: Send + Sync {
+    /// Describe a tunnel target, returning a self-contained [`BoxTunnel`]:
+    /// remote backends attach a public URL, and either kind can lazily open
+    /// the raw byte stream via [`BoxTunnel::connect`].
+    async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>;
+}
+
+/// Network backend used when the current runtime does not provide networking.
+pub(crate) struct UnsupportedNetworkBackend;
+
+#[async_trait]
+impl BoxNetworkBackend for UnsupportedNetworkBackend {
+    async fn tunnel(&self, _target: SocketAddr) -> BoxliteResult<BoxTunnel> {
+        Err(BoxliteError::Unsupported(
+            "box networking is unavailable".into(),
+        ))
+    }
 }
 
 /// Backend abstraction for snapshot lifecycle operations on a box.

@@ -5,7 +5,7 @@
 
 import type { Meta, StoryObj } from '@storybook/react'
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput, InputGroupText } from '../input-group'
-import { SearchIcon, CopyIcon } from 'lucide-react'
+import { SearchIcon, CopyIcon } from '@/components/ui/icon'
 
 const meta: Meta<typeof InputGroup> = {
   title: 'UI/InputGroup',

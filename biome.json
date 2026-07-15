@@ -1,0 +1,6 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.5.0/schema.json",
+	"files": {
+		"includes": ["**", "!scripts/test/stress/**/*.k6.js"]
+	}
+}

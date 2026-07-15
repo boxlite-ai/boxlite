@@ -19,10 +19,27 @@ module.exports = {
       screens: {
         xs: '480px',
       },
+      fontFamily: {
+        // ASCII/terminal restyle: IBM Plex Mono everywhere (sans, mono, and display).
+        sans: ['IBM Plex Mono', 'ui-monospace', 'SFMono-Regular', 'SF Mono', 'monospace'],
+        mono: ['IBM Plex Mono', 'ui-monospace', 'SFMono-Regular', 'SF Mono', 'monospace'],
+        display: ['IBM Plex Mono', 'ui-monospace', 'SFMono-Regular', 'SF Mono', 'monospace'],
+      },
       borderRadius: {
-        lg: 'var(--radius)',
-        md: 'calc(var(--radius) - 2px)',
-        sm: 'calc(var(--radius) - 4px)',
+        // Square corners are a load-bearing part of the design; only pills/dots stay round.
+        none: '0',
+        sm: '0',
+        md: '0',
+        lg: '0',
+        xl: '0',
+        '2xl': '0',
+        '3xl': '0',
+        full: '9999px',
+      },
+      boxShadow: {
+        // Theme-aware floating-surface elevation (see --shadow-card in index.css)
+        card: 'var(--shadow-card)',
+        'card-hover': 'var(--shadow-card-hover)',
       },
       colors: {
         background: 'hsl(var(--background))',
@@ -50,6 +67,10 @@ module.exports = {
         accent: {
           DEFAULT: 'hsl(var(--accent))',
           foreground: 'hsl(var(--accent-foreground))',
+        },
+        brand: {
+          DEFAULT: 'hsl(var(--brand))',
+          foreground: 'hsl(var(--brand-foreground))',
         },
         destructive: {
           DEFAULT: 'hsl(var(--destructive))',

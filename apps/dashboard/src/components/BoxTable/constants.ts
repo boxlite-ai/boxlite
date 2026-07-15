@@ -5,7 +5,7 @@
  */
 
 import { BoxState } from '@boxlite-ai/api-client'
-import { CheckCircle, Circle, AlertTriangle, Timer } from 'lucide-react'
+import { CheckCircle, Circle, AlertTriangle, Timer } from '@/components/ui/icon'
 import { FacetedFilterOption } from './types'
 
 const STATE_LABEL_MAPPING: Record<BoxState, string> = {

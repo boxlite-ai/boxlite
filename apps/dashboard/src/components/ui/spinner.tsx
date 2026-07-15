@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Loader2Icon } from 'lucide-react'
+import { Loader2Icon } from '@/components/ui/icon'
 
 import { cn } from '@/lib/utils'
 

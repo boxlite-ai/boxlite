@@ -81,6 +81,13 @@ pub type CBoxCreateBoxCb =
 pub(crate) type CBoxCreateBoxFn =
     extern "C" fn(*mut crate::CBoxHandle, *mut crate::CBoxliteError, *mut c_void);
 
+/// Get-or-create completion. Same shape as create plus a `bool` that is `true`
+/// when a new box was created and `false` when an existing box was adopted.
+pub type CBoxGetOrCreateBoxCb =
+    Option<extern "C" fn(*mut crate::CBoxHandle, bool, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxGetOrCreateBoxFn =
+    extern "C" fn(*mut crate::CBoxHandle, bool, *mut crate::CBoxliteError, *mut c_void);
+
 /// Box start completion.
 pub type CBoxStartBoxCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxStartBoxFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
@@ -276,6 +283,11 @@ pub enum RuntimeEvent {
         cb: CBoxCreateBoxFn,
         user_data: usize,
         result: Result<OwnedFfiPtr<crate::CBoxHandle>, BoxliteError>,
+    },
+    GetOrCreateBox {
+        cb: CBoxGetOrCreateBoxFn,
+        user_data: usize,
+        result: Result<(OwnedFfiPtr<crate::CBoxHandle>, bool), BoxliteError>,
     },
     StartBox {
         cb: CBoxStartBoxFn,

@@ -31,7 +31,7 @@ import { WEBHOOK_EVENT_CATEGORIES, WEBHOOK_EVENTS } from '@/constants/webhook-ev
 import { handleApiError } from '@/lib/error-handling'
 import { cn } from '@/lib/utils'
 import { useForm } from '@tanstack/react-form'
-import { ChevronsUpDown, Plus } from 'lucide-react'
+import { ChevronsUpDown, Plus } from '@/components/ui/icon'
 import React, { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { useSvix } from 'svix-react'

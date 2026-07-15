@@ -16,6 +16,7 @@ import {
   UseGuards,
   Logger,
   NotFoundException,
+  ForbiddenException,
 } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth, ApiExcludeController } from '@nestjs/swagger'
 import { createProxyMiddleware, fixRequestBody, Options } from 'http-proxy-middleware'
@@ -26,6 +27,13 @@ import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
+
+// Caller-side wait cap for the best-effort control-plane start hint. The hint's
+// DB work is itself bounded by a lock_timeout (see conditionalStartForProxy),
+// which aborts the statement and frees the connection on row-lock contention;
+// this race only limits how long *exec* waits on the hint, so the proxy
+// proceeds even if the hint is momentarily slow. Both bounds are 2s.
+const PROXY_START_HINT_TIMEOUT_MS = 2000
 
 // Spec-first surface (openapi/box.openapi.yaml). Must stay out of the product
 // spec: @All() expands to the SEARCH verb, which OpenAPI 3.0 cannot express.
@@ -50,6 +58,7 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
+    await this.startHint(boxId, authContext)
     return this.proxyToRunner(authContext, boxId, (runnerBoxId) => `/v1/boxes/${runnerBoxId}/exec`, req, res, next)
   }
 
@@ -143,6 +152,7 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
+    await this.startHint(boxId, authContext)
     const query = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : ''
     return this.proxyToRunner(
       authContext,
@@ -162,7 +172,36 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
+    await this.startHint(boxId, authContext)
     return this.proxyToRunner(authContext, boxId, (runnerBoxId) => `/v1/boxes/${runnerBoxId}/metrics`, req, res, next)
+  }
+
+  /**
+   * Tell the control plane that the proxied call (exec / files / metrics) is
+   * about to auto-start a stopped box in the runtime, so PG agrees and
+   * sync-states does not promptly stop it back.
+   *
+   * - Suspended org → ForbiddenException re-thrown → caller sees 403, proxy
+   *   never runs (same gate as POST /boxes/:id/start).
+   * - Any other failure → swallowed; the proxy proceeds because the hint is
+   *   best-effort and box_sync reconciles state on its next tick.
+   * - Caller-side time-boxed via PROXY_START_HINT_TIMEOUT_MS; the hint's DB work
+   *   is independently bounded by a lock_timeout (conditionalStartForProxy), so
+   *   a contended row aborts at the DB and frees its connection rather than
+   *   waiting out this race detached.
+   */
+  private async startHint(boxId: string, authContext: OrganizationAuthContext) {
+    try {
+      await Promise.race([
+        this.boxService.ensureStartedForProxy(boxId, authContext.organization),
+        new Promise<void>((resolve) => setTimeout(resolve, PROXY_START_HINT_TIMEOUT_MS)),
+      ])
+    } catch (err) {
+      if (err instanceof ForbiddenException) {
+        throw err
+      }
+      this.logger.warn(`ensureStartedForProxy failed for ${boxId}: ${err}`)
+    }
   }
 
   private async proxyToRunner(

@@ -231,17 +231,25 @@ Credential:      API key (from BOXLITE_API_KEY env var)
 
 ### `boxlite run`
 
-**Synopsis:** `boxlite run [OPTIONS] IMAGE [COMMAND...]`
+**Synopsis:**
 
-Create a box from an image and run a command, with docker's semantics: `COMMAND`
-replaces the image's `CMD`, the image's `ENTRYPOINT` is prepended, and the result
-**is** the container's init (PID 1). Omit it and the image's own default runs.
+- `boxlite run [OPTIONS] IMAGE [COMMAND...]`
+- `boxlite run [OPTIONS] --rootfs PATH [COMMAND...]`
+
+Create a box from an image (or a prepared rootfs via `--rootfs`) and run a
+command, with docker's semantics: `COMMAND` replaces the image's `CMD`, the
+image's `ENTRYPOINT` is prepended, and the result **is** the container's init
+(PID 1). Omit it and the image's own default runs.
 
 The box's lifetime is that command's lifetime. When it exits, the box stops and
 takes the command's exit code; `boxlite ps` shows it stopped and
 `boxlite inspect -f '{{.State.ExitCode}}'` gives the code.
 
-**Options:** Uses [`ProcessFlags`](#processflags) + [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`ManagementFlags`](#managementflags).
+**Options:** Uses [`ProcessFlags`](#processflags) + [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`ManagementFlags`](#managementflags), plus:
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--rootfs PATH` | — | Use a prepared rootfs path instead of pulling/resolving an image |
 
 **Exit behavior:**
 
@@ -257,6 +265,7 @@ boxlite run -it --rm alpine:latest /bin/sh
 boxlite run -d --name web -p 8080:80 nginx:alpine
 boxlite run -v $(pwd):/work -w /work alpine:latest ls -la
 boxlite run --cpus 4 --memory 4096 python:slim python -c "print(2+2)"
+boxlite run --rootfs /path/to/rootfs /bin/sh
 ```
 
 ---
@@ -287,7 +296,10 @@ boxlite exec -e DEBUG=1 -w /app mybox -- pytest tests/
 
 ### `boxlite create`
 
-**Synopsis:** `boxlite create [OPTIONS] IMAGE [COMMAND...]`
+**Synopsis:**
+
+- `boxlite create [OPTIONS] IMAGE [COMMAND...]`
+- `boxlite create [OPTIONS] --rootfs PATH [COMMAND...]`
 
 Create a box without starting it. Prints the new box's ID to stdout.
 
@@ -304,6 +316,7 @@ implicitly, because starting it runs that command. Start it deliberately with
 
 | Flag | Short | Description |
 |------|-------|-------------|
+| `--rootfs PATH` | — | Use a prepared rootfs path instead of pulling/resolving an image |
 | `--env KEY=VALUE` | `-e` | Set environment variables (repeatable) |
 | `--workdir PATH` | `-w` | Working directory inside the box |
 
@@ -316,6 +329,7 @@ Also uses [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + 
 ```bash
 boxlite create --name mybox alpine:latest
 boxlite create -p 8080:80 -v /data:/app/data --name web nginx:alpine
+boxlite create --rootfs /path/to/rootfs --name local-rootfs
 ```
 
 ---

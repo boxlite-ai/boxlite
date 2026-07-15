@@ -7,19 +7,49 @@
 import { OrganizationEmail, OrganizationTier, OrganizationWallet } from '@/billing-api'
 import { Invoice, PaginatedInvoices, PaymentUrl } from '@/billing-api/types/Invoice'
 import { Tier } from '@/billing-api/types/tier'
-import { BoxliteConfiguration } from '@boxlite-ai/api-client/src'
-import { bypass, http, HttpResponse } from 'msw'
+import { http, HttpResponse } from 'msw'
+import {
+  MOCK_BOXES,
+  MOCK_ORGANIZATION,
+  MOCK_ORGANIZATION_MEMBER,
+  MOCK_PAGINATED_BOXES,
+  buildMockConfig,
+} from './fixtures'
 
 const BILLING_API_URL = 'http://localhost:3000/api/billing'
 const API_URL = import.meta.env.VITE_API_URL
 
 export const handlers = [
-  http.get(`${API_URL}/config`, async () => {
-    const originalConfig = await fetch(bypass(`${API_URL}/config`)).then((res) => res.json())
-
-    return HttpResponse.json<Partial<BoxliteConfiguration>>({
-      ...originalConfig,
-      billingApiUrl: BILLING_API_URL,
+  // Core dashboard surface — fully self-contained so `start:mock` needs no
+  // backend and no login (see MockAuthProvider for the fake session).
+  http.get(`${API_URL}/config`, () => HttpResponse.json(buildMockConfig(BILLING_API_URL))),
+  http.get(`${API_URL}/organizations`, () => HttpResponse.json([MOCK_ORGANIZATION])),
+  http.get(`${API_URL}/organizations/:organizationId/users`, () => HttpResponse.json([MOCK_ORGANIZATION_MEMBER])),
+  http.get(`${API_URL}/box/paginated`, ({ request }) => {
+    // Respect the ?states=… filter so the fleet count cards (running / stopped)
+    // show real per-state counts in mock, not just the unfiltered total.
+    const states = new URL(request.url).searchParams.getAll('states').flatMap((s) => s.split(','))
+    if (states.length === 0) return HttpResponse.json(MOCK_PAGINATED_BOXES)
+    const items = MOCK_BOXES.filter((b) => b.state != null && states.includes(b.state))
+    return HttpResponse.json({ items, total: items.length, page: 1, totalPages: 1 })
+  }),
+  http.get(`${API_URL}/box/:boxIdOrName`, ({ params }) => {
+    const box = MOCK_BOXES.find((b) => b.id === params.boxIdOrName) ?? MOCK_BOXES[0]
+    return box ? HttpResponse.json(box) : new HttpResponse(null, { status: 404 })
+  }),
+  http.get(`${API_URL}/shared-regions`, () => HttpResponse.json([])),
+  http.get(`${API_URL}/regions`, () => HttpResponse.json([])),
+  // Admin probe: report "not an admin" so the sidebar hides the admin entry.
+  http.get(`${API_URL}/admin/overview`, () => new HttpResponse(null, { status: 403 })),
+  http.get(`${API_URL}/api-keys`, () => HttpResponse.json([])),
+  http.post(`${API_URL}/api-keys`, async ({ request }) => {
+    const body = (await request.json().catch(() => ({}))) as { name?: string }
+    return HttpResponse.json({
+      name: body?.name || 'mock-key',
+      value: 'bxl_sk_mock_0123456789abcdef0123456789abcdef',
+      createdAt: new Date(),
+      permissions: [],
+      expiresAt: null,
     })
   }),
   http.get(`${BILLING_API_URL}/organization/:organizationId/portal-url`, async () => {

@@ -25,26 +25,15 @@ import (
 func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, error) {
 	var targetPort, targetPath, boxIdOrSignedToken string
 
-	if ctx.GetBool(IS_TOOLBOX_REQUEST_KEY) {
-		// Expected format: /toolbox/<boxID>/<targetPath>
-		var err error
-		targetPort, boxIdOrSignedToken, targetPath, err = p.parseToolboxSubpath(ctx.Param("path"))
-		if err != nil {
-			ctx.Error(common_errors.NewBadRequestError(err))
-			return nil, nil, err
-		}
-	} else {
-		// Extract port and box ID from the host header
-		// Expected format: 1234-<boxId | token>.proxy.domain
-		var err error
-		targetPort, boxIdOrSignedToken, _, err = p.parseHost(ctx.Request.Host)
-		if err != nil {
-			ctx.Error(common_errors.NewBadRequestError(err))
-			return nil, nil, err
-		}
-
-		targetPath = ctx.Param("path")
+	// Extract port and box ID from the host header.
+	// Expected format: 1234-<boxId | token>.proxy.domain
+	var err error
+	targetPort, boxIdOrSignedToken, _, err = p.parseHost(ctx.Request.Host)
+	if err != nil {
+		ctx.Error(common_errors.NewBadRequestError(err))
+		return nil, nil, err
 	}
+	targetPath = ctx.Param("path")
 
 	if targetPort == "" {
 		ctx.Error(common_errors.NewBadRequestError(errors.New("target port is required")))
@@ -64,7 +53,7 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, e
 		return nil, nil, fmt.Errorf("failed to get box public status: %w", err)
 	}
 
-	if !*isPublic || targetPort == TERMINAL_PORT || targetPort == TOOLBOX_PORT || targetPort == RECORDING_DASHBOARD_PORT {
+	if !*isPublic || targetPort == TERMINAL_PORT {
 		portFloat, err := strconv.ParseFloat(targetPort, 64)
 		if err != nil {
 			ctx.Error(common_errors.NewBadRequestError(fmt.Errorf("failed to parse target port: %w", err)))
@@ -98,9 +87,6 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, e
 
 	// Build the target URL
 	targetURL := fmt.Sprintf("%s/boxes/%s/toolbox/proxy/%s", runnerInfo.ApiUrl, boxId, targetPort)
-	if ctx.GetBool(IS_TOOLBOX_REQUEST_KEY) {
-		targetURL = fmt.Sprintf("%s/boxes/%s/toolbox", runnerInfo.ApiUrl, boxId)
-	}
 
 	// Ensure path always has a leading slash but not duplicate slashes
 	if targetPath == "" {
@@ -350,26 +336,4 @@ func (p *Proxy) updateLastActivity(ctx context.Context, boxId string, shouldPoll
 			}
 		}()
 	}
-}
-
-func (p *Proxy) parseToolboxSubpath(path string) (string, string, string, error) {
-	// Expected format: /toolbox/<boxID>/<path>
-	if path == "" {
-		return "", "", "", errors.New("path is required")
-	}
-
-	if !strings.HasPrefix(path, "/toolbox/") {
-		return "", "", "", errors.New("path must start with /toolbox/")
-	}
-
-	// Trim prefix and split by "/"
-	parts := strings.SplitN(strings.TrimPrefix(path, "/toolbox/"), "/", 2)
-	if len(parts) < 2 {
-		return "", "", "", errors.New("path must be of format /toolbox/<boxId>/<path>")
-	}
-
-	boxID := parts[0]
-	targetPath := "/" + parts[1]
-
-	return TOOLBOX_PORT, boxID, targetPath, nil
 }

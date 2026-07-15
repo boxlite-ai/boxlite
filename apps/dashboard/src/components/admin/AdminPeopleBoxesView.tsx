@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { cn } from '@/lib/utils'
-import { ChevronsDownUp, ChevronsUpDown, Search, Users, X } from 'lucide-react'
+import { ChevronsDownUp, ChevronsUpDown, Search, Users, X } from '@/components/ui/icon'
 import React, { useEffect, useMemo, useState } from 'react'
 import {
   type AdminBox,

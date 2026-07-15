@@ -74,6 +74,9 @@ run "chained with &&"                   "cd x && gh pr create -t foo"       "den
 run "chained with ;"                    "echo done; gh pr create -t foo"    "deny"
 run "command substitution"              "out=\$(gh pr create -t foo)"       "deny"
 run "env var prefix"                    "FOO=bar gh pr create -t foo"       "deny"
+# Newline-before-verb: multi-line Bash with the gh invocation on line 2. Before the
+# newline-as-separator fix this SILENTLY PASSED THROUGH (the bypass); must deny now.
+run "newline before pr create"          $'cd x\ngh pr create -t foo'         "deny"
 
 echo
 echo "## Gate logic: marker file states"
@@ -105,6 +108,14 @@ run "branch mismatch → deny"            "gh pr create -t foo"               "d
 write_marker "reviewed: old"
 touch -t 202001010000 "$TMP/.claude/.pr-reviewed.json"
 run "stale mtime (>max_age) → deny"     "gh pr create -t foo"               "deny"
+
+echo
+echo "## Title check: quoted --title must be a Conventional-Commit subject <=72"
+write_marker "reviewed: title cases"
+run "bad --title (no type prefix) → deny"  'gh pr create --title "add a cool thing" --body x'  "deny"
+run "over-72 --title → deny"               'gh pr create --title "feat(api): this title is far too long and clearly exceeds the seventy-two character ceiling"'  "deny"
+run "good --title + valid marker → allow"  'gh pr create --title "feat(api): add a cool thing"'  "passthrough"
+run "marker consumed after allow → deny"   'gh pr create --title "feat(api): add a cool thing"'  "deny"
 
 echo
 echo "RESULT: $pass passed, $fail failed"

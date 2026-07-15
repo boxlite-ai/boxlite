@@ -5,6 +5,7 @@
  */
 
 import LoadingFallback from '@/components/LoadingFallback'
+import { markJustLoggedOut } from '@/lib/auth-session'
 import { usePostHog } from 'posthog-js/react'
 import { useEffect } from 'react'
 import { useAuth } from 'react-oidc-context'
@@ -15,6 +16,7 @@ const Logout = () => {
 
   useEffect(() => {
     posthog?.reset()
+    markJustLoggedOut()
     void signoutRedirect()
   }, [signoutRedirect, posthog])
 

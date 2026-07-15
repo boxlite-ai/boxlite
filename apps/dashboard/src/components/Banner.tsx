@@ -14,7 +14,7 @@ import {
   InfoIcon,
   MegaphoneIcon,
   XIcon,
-} from 'lucide-react'
+} from '@/components/ui/icon'
 import { AnimatePresence, motion } from 'motion/react'
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { v4 as uuidv4 } from 'uuid'

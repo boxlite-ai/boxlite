@@ -5,7 +5,7 @@
 
 import type { Meta, StoryObj } from '@storybook/react'
 import { useState, useCallback } from 'react'
-import { MoreVertical, Check } from 'lucide-react'
+import { MoreVertical, Check } from '@/components/ui/icon'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../dropdown-menu'
 import { Separator } from '../separator'
 

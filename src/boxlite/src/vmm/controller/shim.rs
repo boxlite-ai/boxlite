@@ -76,14 +76,13 @@ impl ShimHandler {
             metrics_sys: Mutex::new(sysinfo::System::new()),
         }
     }
-}
 
-impl VmmHandlerTrait for ShimHandler {
-    fn pid(&self) -> u32 {
-        self.pid
-    }
-
-    fn stop(&mut self) -> BoxliteResult<()> {
+    /// Graceful shutdown of the recorded process: SIGTERM, wait, then SIGKILL.
+    ///
+    /// Signals only `self.pid` (the outer launcher). The full process-tree
+    /// sweep happens in `stop()` after this returns — see the comment there for
+    /// why the order matters (libkrun must flush before the hard cgroup kill).
+    fn graceful_stop(&mut self) -> BoxliteResult<()> {
         // Graceful shutdown: SIGTERM first, wait, then SIGKILL if needed.
         // This gives libkrun time to flush its virtio-blk buffers to disk,
         // preventing qcow2 corruption.
@@ -164,6 +163,26 @@ impl VmmHandlerTrait for ShimHandler {
 
         #[allow(unreachable_code)]
         Ok(())
+    }
+}
+
+impl VmmHandlerTrait for ShimHandler {
+    fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    fn stop(&mut self) -> BoxliteResult<()> {
+        // Graceful shutdown of the recorded pid first, then sweep the box's
+        // whole tree. `graceful_stop` only signals the recorded pid — the outer
+        // bwrap launcher — and a detached box's inner pid-ns tree (inner bwrap +
+        // shim + VM) outlives it, since #851 stopped applying `--die-with-parent`
+        // to detached boxes. The whole tree lives in the box's cgroup, so reap it
+        // by id — *after* graceful shutdown, so libkrun can flush its virtio-blk
+        // buffers first (a cgroup kill is a hard kill; reaping mid-flush risks
+        // qcow2 corruption). Best-effort and idempotent.
+        let result = self.graceful_stop();
+        crate::jailer::reap_box(&self.box_id);
+        result
     }
 
     fn metrics(&self) -> BoxliteResult<VmmMetrics> {
@@ -313,7 +332,7 @@ impl VmmController for ShimController {
             transport: config.transport.clone(),
             ready_transport: config.ready_transport.clone(),
             guest_rootfs: config.guest_rootfs.clone(),
-            network_config: config.network_config.clone(), // Pass port mappings to subprocess (shim creates gvproxy)
+            network_backend_spec: config.network_backend_spec.clone(), // provisioning spec passed to the shim (stands up gvproxy)
             network_backend_endpoint: None, // Will be populated by shim (not serialized)
             disable_network: config.disable_network,
             home_dir: config.home_dir.clone(),
@@ -328,7 +347,7 @@ impl VmmController for ShimController {
 
         // Clean up stale socket file if it exists (defense in depth)
         // Only relevant for Unix sockets
-        if let boxlite_shared::Transport::Unix { socket_path } = &config.transport
+        if let boxlite_shared::BoxTransport::Unix { socket_path } = &config.transport
             && socket_path.exists()
         {
             tracing::warn!("Removing stale Unix socket: {}", socket_path.display());

@@ -1,6 +1,12 @@
 use predicates::prelude::*;
+use std::net::TcpListener;
 
 mod common;
+
+fn free_host_port() -> u16 {
+    let listener = TcpListener::bind("0.0.0.0:0").expect("bind ephemeral host port");
+    listener.local_addr().expect("read local addr").port()
+}
 
 // ============================================================================
 // Exit Code Tests
@@ -465,11 +471,12 @@ fn test_run_rm_cleanup() {
 #[test]
 fn test_run_with_publish_success() {
     let mut ctx = common::boxlite();
+    let host_port = free_host_port();
     ctx.cmd.args([
         "run",
         "--rm",
         "-p",
-        "18789:18789",
+        &format!("{host_port}:18789"),
         "alpine:latest",
         "echo",
         "ok",
@@ -480,11 +487,12 @@ fn test_run_with_publish_success() {
 #[test]
 fn test_run_with_publish_short_flag() {
     let mut ctx = common::boxlite();
+    let host_port = free_host_port();
     ctx.cmd.args([
         "run",
         "--rm",
         "-p",
-        "8080:80",
+        &format!("{host_port}:80"),
         "alpine:latest",
         "sh",
         "-c",
@@ -496,11 +504,12 @@ fn test_run_with_publish_short_flag() {
 #[test]
 fn test_run_with_publish_tcp_suffix() {
     let mut ctx = common::boxlite();
+    let host_port = free_host_port();
     ctx.cmd.args([
         "run",
         "--rm",
         "--publish",
-        "9000:9000/tcp",
+        &format!("{host_port}:9000/tcp"),
         "alpine:latest",
         "echo",
         "tcp",

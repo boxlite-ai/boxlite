@@ -16,7 +16,7 @@ pub mod generated {
 }
 
 pub use errors::{BoxliteError, BoxliteResult};
-pub use transport::Transport;
+pub use transport::BoxTransport;
 
 // Container service
 pub use generated::container_client::ContainerClient;

@@ -56,9 +56,25 @@ Key test entry points:
 2. Create a feature branch (`git checkout -b feature/my-feature`)
 3. Make your changes
 4. Run quality and tests (`make lint && make fmt:check && make test`)
-5. Commit with clear messages
+5. Commit with clear messages — see [Commit & PR messages](#commit--pr-messages)
 6. Open a Pull Request
 7. Sign the [BoxLite Contributor License Agreement](./docs/legal/CLA.md) when CLA Assistant asks you to do so
+
+### Commit & PR messages
+
+Write for a reviewer skimming in ~30 seconds. Describe the change, not the process that produced it.
+
+**Commits** — [Conventional Commits](https://www.conventionalcommits.org):
+
+- Subject: `type(scope): summary` — imperative, ≤72 chars, no trailing period. Types: `feat` `fix` `docs` `refactor` `test` `chore` `perf` `ci` `build`.
+- Body (only when it adds value): the *why* and *what* at a high level; wrap ~72.
+
+**PRs:**
+
+- Title: a Conventional-Commit subject (same rule as above).
+- Description: fill in [`.github/pull_request_template.md`](./.github/pull_request_template.md); delete sections that don't apply.
+
+**Never put in a commit or PR** the process that produced the change (conversation / AI / step-by-step narrative), pasted logs or tickets, or secrets.
 
 ### Code Style
 

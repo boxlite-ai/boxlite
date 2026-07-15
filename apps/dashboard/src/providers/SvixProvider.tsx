@@ -11,7 +11,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useWebhookAppPortalAccessQuery } from '@/hooks/queries/useWebhookAppPortalAccessQuery'
 import { useWebhookInitializationStatusQuery } from '@/hooks/queries/useWebhookInitializationStatusQuery'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { RefreshCcw } from 'lucide-react'
+import { RefreshCcw } from '@/components/ui/icon'
 import React from 'react'
 import { SvixProvider as SvixReactProvider } from 'svix-react'
 

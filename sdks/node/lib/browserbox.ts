@@ -552,8 +552,7 @@ export class BrowserBox extends SimpleBox {
     // Dynamic import to avoid requiring playwright-core as a dependency
     const playwright = await import("playwright-core");
     const browserType = playwright[this._browser as keyof typeof playwright] as
-      | { connect: (url: string) => Promise<unknown> }
-      | undefined;
+      { connect: (url: string) => Promise<unknown> } | undefined;
 
     if (!browserType?.connect) {
       throw new BoxliteError(`Unknown browser type: ${this._browser}`);

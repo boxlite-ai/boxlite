@@ -12,7 +12,7 @@ use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::options::VolumeSpec;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::vmm::controller::VmmHandler;
-use crate::volumes::{ContainerMount, GuestVolumeManager};
+use crate::volumes::{ContainerMount, GuestVolumeManager, VolumeShare, classify_volume_share};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -41,6 +41,9 @@ pub struct ResolvedVolume {
     pub owner_uid: u32,
     /// Owner GID of host directory (for auto-idmap in guest).
     pub owner_gid: u32,
+    /// For a single-file mount, the file's name (staged and bind-mounted on its
+    /// own); `None` for a whole-directory mount.
+    pub subpath: Option<String>,
 }
 
 pub fn resolve_user_volumes(volumes: &[VolumeSpec]) -> BoxliteResult<Vec<ResolvedVolume>> {
@@ -63,16 +66,23 @@ pub fn resolve_user_volumes(volumes: &[VolumeSpec]) -> BoxliteResult<Vec<Resolve
             ))
         })?;
 
-        if !resolved_path.is_dir() {
-            return Err(BoxliteError::Config(format!(
-                "Volume host path is not a directory: {}",
-                vol.host_path
-            )));
-        }
+        // A directory is shared as-is; a single file keeps its own path here and
+        // is staged into a dedicated share dir later (see vmm_spawn), so virtio-fs
+        // never exposes the file's host siblings.
+        let (source_path, subpath) = match classify_volume_share(&resolved_path) {
+            Some(VolumeShare::Dir(dir)) => (dir, None),
+            Some(VolumeShare::File(name)) => (resolved_path.clone(), Some(name)),
+            None => {
+                return Err(BoxliteError::Config(format!(
+                    "Volume host path is not a file or directory: {}",
+                    vol.host_path
+                )));
+            }
+        };
 
         let tag = format!("uservol{}", i);
 
-        // Stat host path to get owner UID/GID for auto-idmap in guest
+        // Owner comes from the mount target itself (file or dir) for guest idmap.
         let (owner_uid, owner_gid) = {
             use std::os::unix::fs::MetadataExt;
             let meta = std::fs::metadata(&resolved_path).map_err(|e| {
@@ -87,7 +97,8 @@ pub fn resolve_user_volumes(volumes: &[VolumeSpec]) -> BoxliteResult<Vec<Resolve
 
         tracing::debug!(
             tag = %tag,
-            host_path = %resolved_path.display(),
+            host_path = %source_path.display(),
+            subpath = ?subpath,
             guest_path = %vol.guest_path,
             read_only = vol.read_only,
             owner_uid,
@@ -97,11 +108,12 @@ pub fn resolve_user_volumes(volumes: &[VolumeSpec]) -> BoxliteResult<Vec<Resolve
 
         resolved.push(ResolvedVolume {
             tag,
-            host_path: resolved_path,
+            host_path: source_path,
             guest_path: vol.guest_path.clone(),
             read_only: vol.read_only,
             owner_uid,
             owner_gid,
+            subpath,
         });
     }
 
@@ -287,6 +299,9 @@ pub struct InitPipelineContext {
     pub rootfs_init: Option<ContainerRootfsInitConfig>,
     pub container_mounts: Option<Vec<ContainerMount>>,
     pub guest_session: Option<GuestSession>,
+    /// The box's one network backend (set by vmm_spawn on first start/restart, or
+    /// by vmm_attach on reattach; moved into LiveState for runtime control).
+    pub network_backend: Option<Box<dyn crate::net::NetworkBackend>>,
     /// MITM CA cert PEM (set by vmm_spawn, read by guest_init for Container.Init gRPC).
     pub ca_cert_pem: Option<String>,
 
@@ -316,6 +331,7 @@ impl InitPipelineContext {
             rootfs_init: None,
             container_mounts: None,
             guest_session: None,
+            network_backend: None,
             ca_cert_pem: None,
             #[cfg(target_os = "linux")]
             bind_mount: None,
@@ -348,6 +364,7 @@ mod tests {
         assert_eq!(resolved[0].owner_uid, expected_uid);
         assert_eq!(resolved[0].owner_gid, expected_gid);
         assert_eq!(resolved[0].tag, "uservol0");
+        assert_eq!(resolved[0].subpath, None);
     }
 
     #[test]
@@ -363,17 +380,23 @@ mod tests {
     }
 
     #[test]
-    fn resolve_volume_file_not_dir_errors() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
+    fn resolve_single_file_volume_records_source_and_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file_path = tmp.path().join("app.conf");
+        std::fs::write(&file_path, "key=value\n").unwrap();
+
         let volumes = vec![VolumeSpec {
-            host_path: tmp.path().to_str().unwrap().to_string(),
-            guest_path: "/data".to_string(),
-            read_only: false,
+            host_path: file_path.to_str().unwrap().to_string(),
+            guest_path: "/etc/app.conf".to_string(),
+            read_only: true,
         }];
 
-        let result = resolve_user_volumes(&volumes);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not a directory"));
+        let resolved = resolve_user_volumes(&volumes).unwrap();
+        assert_eq!(resolved.len(), 1);
+        // Keeps the file's own path (staged into a share dir later) plus its name.
+        assert_eq!(resolved[0].host_path, file_path.canonicalize().unwrap());
+        assert_eq!(resolved[0].subpath, Some("app.conf".to_string()));
+        assert_eq!(resolved[0].guest_path, "/etc/app.conf");
     }
 
     /// Reverting Drop to call `remove_box` (the pre-fix behavior) flips this red:

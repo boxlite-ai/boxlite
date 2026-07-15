@@ -7,7 +7,7 @@
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard'
 import { cn } from '@/lib/utils'
 import { AnimatePresence, motion } from 'framer-motion'
-import { CheckIcon, CopyIcon } from 'lucide-react'
+import { CheckIcon, CopyIcon } from '@/components/ui/icon'
 import { ComponentProps } from 'react'
 import TooltipButton from './TooltipButton'
 

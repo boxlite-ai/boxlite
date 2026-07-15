@@ -5,7 +5,7 @@
 use crate::portal::connection::Connection;
 use crate::portal::interfaces::FilesInterface;
 use crate::portal::interfaces::{ContainerInterface, ExecutionInterface, GuestInterface};
-use boxlite_shared::{BoxliteResult, Transport};
+use boxlite_shared::{BoxTransport, BoxliteResult};
 
 /// High-level guest session.
 ///
@@ -17,7 +17,7 @@ pub struct GuestSession {
 
 impl GuestSession {
     /// Create a session (connects lazily on first use).
-    pub fn new(transport: Transport) -> Self {
+    pub fn new(transport: BoxTransport) -> Self {
         Self {
             connection: Connection::new(transport),
         }

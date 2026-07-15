@@ -15,8 +15,8 @@ The BoxLite CLI (`boxlite`) lets you create, run, and manage BoxLite boxes from 
 
 ### Key Features
 
-- **Run** — Create a box from an image and run a command (interactive, TTY, or detached); supports `-p` (publish ports) and `-v` (volumes)
-- **Create** — Create a box without running; supports `-p` and `-v`
+- **Run** — Create a box from an image or prepared rootfs and run a command (interactive, TTY, or detached); supports `-p` (publish ports) and `-v` (volumes)
+- **Create** — Create a box from an image or prepared rootfs without running; supports `-p` and `-v`
 - **Lifecycle** — Start, stop, restart, remove boxes
 - **Inspect** — Show detailed box info (JSON, YAML, or Go template)
 - **Exec** — Run commands inside a running box
@@ -296,19 +296,24 @@ Scopes:          box:read, box:write, box:exec, image:read, snapshot:read
 
 ### `boxlite run`
 
-Create a box from an image and run a command, with docker's semantics: `COMMAND`
-replaces the image's `CMD`, the image's `ENTRYPOINT` is prepended, and the result
-**is** the container's init (PID 1). Omit it and the image's own default runs.
+Create a box from an image (or a prepared rootfs via `--rootfs`) and run a
+command, with docker's semantics: `COMMAND` replaces the image's `CMD`, the
+image's `ENTRYPOINT` is prepended, and the result **is** the container's init
+(PID 1). Omit it and the image's own default runs.
 
 The box lives exactly as long as that command. When it exits, the box stops and
 takes its exit code — `boxlite inspect -f '{{.State.ExitCode}}' NAME` reads it
 back. `exec` against a box whose command has finished is refused rather than
 silently restarting it, because restarting would run the command a second time.
 
-**Usage:** `boxlite run [OPTIONS] IMAGE [COMMAND]...`
+**Usage:**
+
+- `boxlite run [OPTIONS] IMAGE [COMMAND]...`
+- `boxlite run [OPTIONS] --rootfs PATH [COMMAND]...`
 
 | Option | Short | Description |
 |--------|-------|-------------|
+| `--rootfs PATH` | | Use a prepared rootfs path instead of pulling/resolving an image |
 | `--interactive` | `-i` | Keep STDIN open |
 | `--tty` | `-t` | Allocate a pseudo-TTY |
 | `--env KEY=VALUE` | `-e` | Set environment variables (repeatable) |
@@ -328,6 +333,7 @@ boxlite run alpine:latest echo "Hello"
 boxlite run -it --rm alpine:latest /bin/sh
 boxlite run -d --name openclaw -p 18789:18789 ghcr.io/openclaw/openclaw:main
 boxlite run -v /host/data:/app/data alpine:latest cat /app/data/hello.txt
+boxlite run --rootfs /path/to/rootfs /bin/sh
 ```
 
 ### `boxlite create`
@@ -340,10 +346,14 @@ next started, exactly as under `run`. A box created *with* one is a job, and
 deliberately with `boxlite start`. A box created *without* one boots the image's
 default, and `exec` still starts it on demand.
 
-**Usage:** `boxlite create [OPTIONS] IMAGE [COMMAND]...`
+**Usage:**
+
+- `boxlite create [OPTIONS] IMAGE [COMMAND]...`
+- `boxlite create [OPTIONS] --rootfs PATH [COMMAND]...`
 
 | Option | Short | Description |
 |--------|-------|-------------|
+| `--rootfs PATH` | | Use a prepared rootfs path instead of pulling/resolving an image |
 | `--name NAME` | | Name the box |
 | `--env KEY=VALUE` | `-e` | Environment variables |
 | `--workdir PATH` | `-w` | Working directory |
@@ -359,6 +369,7 @@ default, and `exec` still starts it on demand.
 ```bash
 boxlite create --name mybox alpine:latest
 boxlite create -p 18789:18789 -v /data:/app/data --name openclaw ghcr.io/openclaw/openclaw:main
+boxlite create --rootfs /path/to/rootfs --name local-rootfs
 boxlite start mybox
 boxlite start openclaw
 ```

@@ -27,6 +27,9 @@ pub struct ContainerMount {
     pub owner_uid: u32,
     /// Owner GID of host directory (for auto-idmap in guest)
     pub owner_gid: u32,
+    /// For a single-file mount, the file name to bind-mount from the staged
+    /// share dir; `None` for a whole-directory mount.
+    pub subpath: Option<String>,
 }
 
 /// Manages container-level volume configuration.
@@ -76,6 +79,7 @@ impl<'a> ContainerVolumeManager<'a> {
         read_only: bool,
         owner_uid: u32,
         owner_gid: u32,
+        subpath: Option<String>,
     ) {
         // Add virtiofs share to guest with container_id
         // Guest will mount at convention path: /run/boxlite/shared/containers/{container_id}/volumes/{tag}
@@ -94,6 +98,7 @@ impl<'a> ContainerVolumeManager<'a> {
             read_only,
             owner_uid,
             owner_gid,
+            subpath,
         });
     }
 
@@ -108,11 +113,38 @@ impl<'a> ContainerVolumeManager<'a> {
             read_only,
             owner_uid: 0,
             owner_gid: 0,
+            subpath: None,
         });
     }
 
     /// Build container mount configuration.
     pub fn build_container_mounts(&self) -> Vec<ContainerMount> {
         self.container_mounts.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_volume_carries_subpath_for_single_file() {
+        let mut guest = GuestVolumeManager::new();
+        let mut mgr = ContainerVolumeManager::new(&mut guest);
+        mgr.add_volume(
+            "cid",
+            "uservol0",
+            "uservol0",
+            PathBuf::from("/host/parent"),
+            "/etc/app.conf",
+            true,
+            0,
+            0,
+            Some("app.conf".to_string()),
+        );
+
+        let mounts = mgr.build_container_mounts();
+        assert_eq!(mounts.len(), 1);
+        assert_eq!(mounts[0].subpath, Some("app.conf".to_string()));
     }
 }

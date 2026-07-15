@@ -38,7 +38,7 @@ import { useRotateWebhookSecretMutation } from '@/hooks/mutations/useRotateWebho
 import { useUpdateWebhookEndpointMutation } from '@/hooks/mutations/useUpdateWebhookEndpointMutation'
 import { handleApiError } from '@/lib/error-handling'
 import { getMaskedToken, getRelativeTimeString } from '@/lib/utils'
-import { ArrowLeft, Eye, EyeOff, Loader2, MoreHorizontal, RefreshCcw } from 'lucide-react'
+import { ArrowLeft, Eye, EyeOff, Loader2, MoreHorizontal, RefreshCcw } from '@/components/ui/icon'
 import React, { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'

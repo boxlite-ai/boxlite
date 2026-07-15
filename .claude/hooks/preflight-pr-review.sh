@@ -16,7 +16,7 @@
 #
 # Design notes
 # ------------
-# * Matcher scope: same reason as preflight-claude-md.sh — PreToolUse matchers
+# * Matcher scope: same reason as preflight-commit-push.sh — PreToolUse matchers
 #   are tool-name-only. This script does the actual `gh pr <subcmd>` filtering
 #   and exits 0 immediately on unrelated bash calls.
 #
@@ -28,7 +28,7 @@
 #
 # * One-shot consumption: the marker file is `rm -f`'d on the allow path so
 #   each successive gh pr command forces a fresh ack, even at the same HEAD.
-#   Mirrors the trade-off in preflight-claude-md.sh.
+#   Mirrors the trade-off in preflight-commit-push.sh.
 #
 # Tests: bash .claude/hooks/preflight-pr-review.test.sh
 set -euo pipefail
@@ -38,16 +38,17 @@ command="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""')"
 
 # Match `gh pr create|edit|ready` at start of command OR at start of any chain
 # segment (after &&, ||, ;, |, &, $(, (, `). Same shape as the git matcher in
-# preflight-claude-md.sh so chained invocations are caught.
+# preflight-commit-push.sh so chained invocations are caught.
 #
-# Scan only the FIRST physical line of the command. Multi-line commands almost
-# always put the gh invocation on the first line; this excludes heredoc bodies
-# (e.g. a `git commit -m "$(cat <<EOF ... gh pr create ... EOF)"` where the
-# trigger phrase legitimately appears in commit-message prose) from matching.
-# Trade-off: a chained `foo \\\n  && gh pr create` would no longer gate, but
-# that form is rare for gh invocations.
-first_line="${command%%$'\n'*}"
-work="${first_line#"${first_line%%[![:space:]]*}"}"
+# Treat a newline as a command separator (same as `;`), so a `gh pr create` at the
+# start of a later line (`cd foo\ngh pr create ...`) is caught. An earlier version
+# scanned only the first physical line to dodge heredoc bodies (e.g. `gh pr create`
+# appearing in commit-message prose), but that left the newline bypass OPEN — a real
+# `gh pr create` on line 2 slipped past unaudited. Closing the bypass wins: the cost
+# is that a `gh pr create|edit|ready` token on its own line inside a heredoc/message
+# body may falsely gate an unrelated command (fails CLOSED — safe), which is rare.
+normalized="${command//$'\n'/;}"
+work="${normalized#"${normalized%%[![:space:]]*}"}"
 if [[ "$work" =~ (^|[[:space:]]*(\&\&|\|\||;|\||\&|\$\(|\(|\`)[[:space:]]*)([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)*gh[[:space:]]+pr[[:space:]]+(create|edit|ready)([[:space:]]|$) ]]; then
   subcmd="${BASH_REMATCH[4]}"
 else
@@ -76,6 +77,27 @@ deny() {
   }'
   exit 0
 }
+
+# Deterministic title check: when a quoted --title is given, require a
+# Conventional-Commit subject <=72 chars. (Short `-t` / unquoted forms aren't
+# inspected; body quality / no-narrative is confirmed in the ack below.)
+pr_title=""
+if [[ "$command" =~ --title[[:space:]]+\"([^\"]*)\" ]]; then
+  pr_title="${BASH_REMATCH[1]}"
+elif [[ "$command" =~ --title[[:space:]]+\'([^\']*)\' ]]; then
+  pr_title="${BASH_REMATCH[1]}"
+fi
+if [[ -n "$pr_title" ]]; then
+  title_re='^(feat|fix|docs|refactor|test|chore|perf|ci|build)(\([^)]+\))?!?:[[:space:]].+'
+  if [[ ! "$pr_title" =~ $title_re ]] || (( ${#pr_title} > 72 )); then
+    deny "PR title is not a Conventional-Commit subject <=72 chars.
+  title (${#pr_title} chars): ${pr_title}
+  required: type(scope): summary  — e.g. feat(api): cute default box names
+  types: feat fix docs refactor test chore perf ci build
+
+Fix --title and retry. See CONTRIBUTING.md #commit--pr-messages."
+  fi
+fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TODO(user, learning-mode): author the ack instructions Claude reads on every
@@ -113,7 +135,9 @@ on the question's 'notes' annotation (not the 'answers' field).
 
 Use this AskUserQuestion payload:
   question: 'PR-review acknowledgment for: ${command}
-             Pick \"Other\" and type your acknowledgment in this exact shape:
+             First confirm the description follows the PR template and has no
+             internal/AI narrative, pasted logs, or secrets. Then pick \"Other\"
+             and type your acknowledgment in this exact shape:
                  reviewed: <one-line summary, in your own words, of what
                             this PR changes>'
   header:   'PR review'

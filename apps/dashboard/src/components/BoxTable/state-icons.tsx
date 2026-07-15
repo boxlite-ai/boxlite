@@ -5,7 +5,7 @@
  */
 
 import { BoxState } from '@boxlite-ai/api-client'
-import { Loader2 } from 'lucide-react'
+import { Loader2 } from '@/components/ui/icon'
 
 interface SquareProps {
   color: string

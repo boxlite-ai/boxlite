@@ -838,31 +838,62 @@ impl Qcow2Helper {
     }
 }
 
-/// Read the backing file path from a qcow2 disk image header.
+/// Why reading a qcow2 header failed.
 ///
-/// Returns `None` if the qcow2 has no backing file (offset or size is 0).
-/// Returns `Err` if the file is not a valid qcow2 image.
-pub fn read_backing_file_path(path: &Path) -> BoxliteResult<Option<String>> {
-    use std::io::{Read, Seek, SeekFrom};
+/// The split matters for callers that decide whether to *discard* a disk: a
+/// structurally [`Corrupt`](Qcow2HeaderError::Corrupt) overlay is unreadable and
+/// safe to rebuild, whereas an [`Io`](Qcow2HeaderError::Io) fault is transient or
+/// environmental and proves nothing about the file's contents — discarding on it
+/// could destroy an intact overlay.
+#[derive(Debug)]
+pub enum Qcow2HeaderError {
+    /// The file could not be read — open/seek/read failed for a reason other than
+    /// hitting end-of-file. A transient or system I/O fault, not evidence of
+    /// corruption.
+    Io(std::io::Error),
+    /// The bytes are not a valid qcow2 header: bad magic, truncated, or a
+    /// non-UTF-8 backing path. The image is structurally corrupt.
+    Corrupt(String),
+}
 
-    let mut file = std::fs::File::open(path).map_err(|e| {
-        BoxliteError::Storage(format!("Failed to open qcow2 {}: {}", path.display(), e))
-    })?;
+impl std::fmt::Display for Qcow2HeaderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Qcow2HeaderError::Io(e) => write!(f, "I/O error: {e}"),
+            Qcow2HeaderError::Corrupt(msg) => f.write_str(msg),
+        }
+    }
+}
+
+/// Read the backing file path from a qcow2 header, classifying failures as a
+/// transient [`Io`](Qcow2HeaderError::Io) fault vs structural
+/// [`Corrupt`](Qcow2HeaderError::Corrupt)ion.
+///
+/// Returns `Ok(None)` for a valid qcow2 with no backing file.
+pub fn read_backing_file_path_checked(path: &Path) -> Result<Option<String>, Qcow2HeaderError> {
+    use std::io::{ErrorKind, Read, Seek, SeekFrom};
+
+    // A short read (UnexpectedEof) means the file is truncated — structural
+    // corruption; any other io::Error is a genuine I/O fault.
+    fn on_read(path: &Path, e: std::io::Error, what: &str) -> Qcow2HeaderError {
+        if e.kind() == ErrorKind::UnexpectedEof {
+            Qcow2HeaderError::Corrupt(format!("qcow2 {} is truncated ({what})", path.display()))
+        } else {
+            Qcow2HeaderError::Io(e)
+        }
+    }
+
+    let mut file = std::fs::File::open(path).map_err(Qcow2HeaderError::Io)?;
 
     // Read the first 20 bytes of the header
     let mut header = [0u8; 20];
-    file.read_exact(&mut header).map_err(|e| {
-        BoxliteError::Storage(format!(
-            "Failed to read qcow2 header from {}: {}",
-            path.display(),
-            e
-        ))
-    })?;
+    file.read_exact(&mut header)
+        .map_err(|e| on_read(path, e, "header"))?;
 
     // Verify magic
     let magic = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
     if magic != 0x514649fb {
-        return Err(BoxliteError::Storage(format!(
+        return Err(Qcow2HeaderError::Corrupt(format!(
             "Invalid qcow2 magic in {}: 0x{:08x}",
             path.display(),
             magic
@@ -881,25 +912,15 @@ pub fn read_backing_file_path(path: &Path) -> BoxliteResult<Option<String>> {
     }
 
     // Read backing file path
-    file.seek(SeekFrom::Start(backing_offset)).map_err(|e| {
-        BoxliteError::Storage(format!(
-            "Failed to seek to backing file path in {}: {}",
-            path.display(),
-            e
-        ))
-    })?;
+    file.seek(SeekFrom::Start(backing_offset))
+        .map_err(Qcow2HeaderError::Io)?;
 
     let mut backing_buf = vec![0u8; backing_size as usize];
-    file.read_exact(&mut backing_buf).map_err(|e| {
-        BoxliteError::Storage(format!(
-            "Failed to read backing file path from {}: {}",
-            path.display(),
-            e
-        ))
-    })?;
+    file.read_exact(&mut backing_buf)
+        .map_err(|e| on_read(path, e, "backing path"))?;
 
     let backing_path = String::from_utf8(backing_buf).map_err(|e| {
-        BoxliteError::Storage(format!(
+        Qcow2HeaderError::Corrupt(format!(
             "Invalid UTF-8 in backing file path of {}: {}",
             path.display(),
             e
@@ -907,6 +928,21 @@ pub fn read_backing_file_path(path: &Path) -> BoxliteResult<Option<String>> {
     })?;
 
     Ok(Some(backing_path))
+}
+
+/// Read the backing file path from a qcow2 disk image header.
+///
+/// Returns `None` if the qcow2 has no backing file (offset or size is 0).
+/// Returns `Err` if the file is not a valid qcow2 image or cannot be read. Use
+/// [`read_backing_file_path_checked`] when the caller needs to distinguish a
+/// transient I/O fault from structural corruption.
+pub fn read_backing_file_path(path: &Path) -> BoxliteResult<Option<String>> {
+    read_backing_file_path_checked(path).map_err(|e| match e {
+        Qcow2HeaderError::Io(io) => {
+            BoxliteError::Storage(format!("Failed to read qcow2 {}: {io}", path.display()))
+        }
+        Qcow2HeaderError::Corrupt(msg) => BoxliteError::Storage(msg),
+    })
 }
 
 /// Overwrite the backing file path in a qcow2 header.
@@ -1441,6 +1477,30 @@ mod tests {
     fn test_read_backing_file_path_nonexistent_file() {
         let result = read_backing_file_path(Path::new("/nonexistent/file.qcow2"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_read_backing_file_path_checked_classifies_corrupt_vs_io() {
+        let dir = TempDir::new().unwrap();
+
+        // Bad magic => the bytes are not a valid qcow2 header => structural corruption.
+        let corrupt = dir.path().join("corrupt.qcow2");
+        let mut buf = vec![0u8; 64];
+        buf[0..4].copy_from_slice(&0xDEADBEEFu32.to_be_bytes());
+        std::fs::write(&corrupt, &buf).unwrap();
+        assert!(matches!(
+            read_backing_file_path_checked(&corrupt),
+            Err(Qcow2HeaderError::Corrupt(_))
+        ));
+
+        // A directory opens fine but read() fails with EISDIR (not EOF) => I/O fault,
+        // which must NOT be mistaken for corruption.
+        let as_dir = dir.path().join("dir.qcow2");
+        std::fs::create_dir(&as_dir).unwrap();
+        assert!(matches!(
+            read_backing_file_path_checked(&as_dir),
+            Err(Qcow2HeaderError::Io(_))
+        ));
     }
 
     #[test]

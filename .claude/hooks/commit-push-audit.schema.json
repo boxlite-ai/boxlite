@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "branch",
+    "head",
+    "command_kind",
+    "diff_hash",
+    "command_hash",
+    "commit_subject_hash",
+    "verdict",
+    "findings"
+  ],
+  "properties": {
+    "branch": {
+      "type": "string"
+    },
+    "head": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$|^\\?$"
+    },
+    "command_kind": {
+      "type": "string",
+      "enum": [
+        "commit",
+        "push"
+      ]
+    },
+    "diff_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "command_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "commit_subject_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$|^$"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "PASS",
+        "FAIL"
+      ]
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

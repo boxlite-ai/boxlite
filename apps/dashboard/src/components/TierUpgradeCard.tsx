@@ -13,7 +13,7 @@ import { useUpgradeTierMutation } from '@/hooks/mutations/useUpgradeTierMutation
 import { handleApiError } from '@/lib/error-handling'
 import { cn } from '@/lib/utils'
 import { Organization } from '@boxlite-ai/api-client/src'
-import { CheckIcon, ExternalLinkIcon, Loader2 } from 'lucide-react'
+import { CheckIcon, ExternalLinkIcon, Loader2 } from '@/components/ui/icon'
 import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'

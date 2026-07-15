@@ -13,8 +13,8 @@ f982c45a42e52c98631002c7dc1df565c44d7aac
 
 License map:
 
-- AGPL-3.0 components include apps/api, apps/daemon,
-  apps/dashboard, apps/infra, apps/libs/computer-use, apps/otel-collector,
+- AGPL-3.0 components include apps/api, apps/dashboard, apps/infra,
+  apps/otel-collector,
   apps/proxy, apps/runner, apps/snapshot-manager, and apps/ssh-gateway.
 - Apache-2.0 components include apps/common-go and generated SDK/client
   packages that contain Apache-2.0 LICENSE files.

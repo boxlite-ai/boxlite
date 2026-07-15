@@ -22,7 +22,7 @@ import { usePastOrganizationUsageQuery } from '@/hooks/queries/usePastOrganizati
 import { useConfig } from '@/hooks/useConfig'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { addDays, differenceInCalendarDays, subDays } from 'date-fns'
-import { AlertCircle, BarChart3, RefreshCw } from 'lucide-react'
+import { AlertCircle, BarChart3, RefreshCw } from '@/components/ui/icon'
 import { useFeatureFlagEnabled } from 'posthog-js/react'
 import { useCallback, useMemo, useState } from 'react'
 import { DateRange } from 'react-day-picker'

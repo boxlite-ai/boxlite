@@ -8,7 +8,8 @@
 //!
 //! ## Network Backend
 //!
-//! The shim creates the network backend (gvproxy) from network_config if present.
+//! The shim stands up the network backend (gvproxy) from the network provisioning
+//! spec (`network_backend_spec`) if present.
 //! This ensures networking survives detach operations - the gvproxy lives in the
 //! shim subprocess, not the main boxlite process.
 
@@ -135,12 +136,12 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
     // Network backend (gvproxy) + Seccomp
     // =========================================================================
 
-    // Create network backend (gvproxy) from network_config if present.
+    // Stand up the network backend (gvproxy) from the provisioning spec if present.
     // gvproxy provides virtio-net (eth0) to the guest - required even without port mappings.
     // The gvproxy instance is leaked intentionally - it must live for the entire
     // duration of the VM. When the shim process exits, OS cleans up all resources.
-    if let Some(ref net_config) = config.network_config {
-        let (gvproxy, endpoint) = GvproxyInstance::from_config(net_config)?;
+    if let Some(ref spec) = config.network_backend_spec {
+        let (gvproxy, endpoint) = GvproxyInstance::from_config(spec)?;
         config.network_backend_endpoint = Some(endpoint);
         timing("gvproxy created");
 
@@ -153,7 +154,10 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
     {
         use boxlite::jailer::seccomp;
 
-        if config.security.jailer_enabled && config.security.seccomp_enabled {
+        if config.security.jailer_enabled
+            && config.security.seccomp_enabled
+            && config.network_backend_spec.is_none()
+        {
             tracing::info!(
                 box_id = %config.box_id,
                 "Applying VMM seccomp filter (TSYNC)"
@@ -164,6 +168,11 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
             tracing::info!(
                 box_id = %config.box_id,
                 "Seccomp isolation complete"
+            );
+        } else if config.security.jailer_enabled && config.security.seccomp_enabled {
+            tracing::warn!(
+                box_id = %config.box_id,
+                "Seccomp disabled for network-enabled VM; gvproxy runs in-process and is not covered by the VMM syscall profile"
             );
         } else if config.security.jailer_enabled {
             tracing::warn!(
@@ -249,7 +258,7 @@ const GUEST_SHUTDOWN_TIMEOUT_SECS: u64 = 3;
 /// triggers a graceful guest shutdown with filesystem sync. Without this handler,
 /// SIGTERM would immediately kill the process, risking qcow2 COW disk buffer loss
 /// and ext4 filesystem corruption on next restart.
-fn install_graceful_shutdown_handler(transport: boxlite_shared::Transport) {
+fn install_graceful_shutdown_handler(transport: boxlite_shared::BoxTransport) {
     use signal_hook::consts::signal::SIGTERM;
     use signal_hook::iterator::Signals;
 

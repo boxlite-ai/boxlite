@@ -417,8 +417,8 @@ async fn litebox_info_returns_correct_metadata() {
         .expect("info should be available");
     assert_eq!(info.id, box_id);
     assert_eq!(info.status, BoxStatus::Configured);
-    assert_eq!(info.cpus, 2); // Default value
-    assert_eq!(info.memory_mib, 512); // Default value
+    assert_eq!(info.cpus, 1); // Default value
+    assert_eq!(info.memory_mib, 1024); // Default value
 
     // Cleanup
     runtime.remove(box_id.as_str(), true).await.unwrap();

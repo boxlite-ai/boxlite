@@ -10,12 +10,16 @@ import { useApi } from '@/hooks/useApi'
 import { useOrganizations } from '@/hooks/useOrganizations'
 import { handleApiError } from '@/lib/error-handling'
 import { resolveSelectedOrganizationId } from '@/lib/organization-selection'
-import { Organization, OrganizationRolePermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
+import {
+  Organization,
+  OrganizationRolePermissionsEnum,
+  OrganizationUser,
+  OrganizationUserRoleEnum,
+} from '@boxlite-ai/api-client'
 import { usePostHog } from 'posthog-js/react'
 import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { toast } from 'sonner'
-import { suspend } from 'suspend-react'
 
 type Props = {
   children: ReactNode
@@ -84,9 +88,29 @@ export function SelectedOrganizationProvider(props: Props) {
     [organizationsApi],
   )
 
-  const [organizationMembers, setOrganizationMembers] = useState(
-    suspend(() => getOrganizationMembers(selectedOrganizationId), [organizationsApi, 'organizationMembers']),
-  )
+  // Members are only needed for permission checks (Create/Delete buttons), not
+  // for first paint. Fetching them here used to suspend() the whole dashboard
+  // subtree for ~0.75s before the boxes table could mount. Load them in the
+  // background instead: the table renders immediately; permission-gated actions
+  // default to disabled (authenticatedUserHasPermission returns false on an
+  // empty list) until members arrive.
+  const [organizationMembers, setOrganizationMembers] = useState<OrganizationUser[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    getOrganizationMembers(selectedOrganizationId)
+      .then((members) => {
+        if (!cancelled) {
+          setOrganizationMembers(members)
+        }
+      })
+      // getOrganizationMembers already surfaces a toast via handleApiError; a
+      // members failure must not crash the dashboard (was: error boundary).
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [getOrganizationMembers, selectedOrganizationId])
 
   const refreshOrganizationMembers = useCallback(
     async (organizationId?: string) => {

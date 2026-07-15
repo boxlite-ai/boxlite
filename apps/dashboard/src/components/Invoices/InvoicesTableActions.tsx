@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { MoreHorizontalIcon } from 'lucide-react'
+import { MoreHorizontalIcon } from '@/components/ui/icon'
 import {
   AlertDialog,
   AlertDialogAction,

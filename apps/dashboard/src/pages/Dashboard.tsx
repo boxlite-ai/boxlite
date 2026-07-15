@@ -4,11 +4,13 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { Suspense, useEffect, useMemo, useState } from 'react'
 import { Outlet } from 'react-router-dom'
+import { Skeleton } from '@/components/ui/skeleton'
 
 import { AnnouncementBanner } from '@/components/AnnouncementBanner'
 import { CommandPalette, useRegisterCommands, type CommandConfig } from '@/components/CommandPalette'
+import { OnboardingDialogHost } from '@/components/OnboardingDialogHost'
 import { Sidebar } from '@/components/Sidebar'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { Toaster } from '@/components/ui/sonner'
@@ -22,7 +24,7 @@ import { useDocsSearchCommands } from '@/hooks/useDocsSearchCommands'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useSuspensionBanner } from '@/hooks/useSuspensionBanner'
 import { cn } from '@/lib/utils'
-import { BookOpen, BookSearchIcon, MessageCircle, SunMoon } from 'lucide-react'
+import { BookOpen, BookSearchIcon, MessageCircle, SunMoon } from '@/components/ui/icon'
 
 function useDashboardCommands() {
   const { theme, setTheme } = useTheme()
@@ -127,9 +129,9 @@ const Dashboard: React.FC = () => {
   return (
     <div
       className={cn(
-        'relative w-full [--app-content-height:calc(100svh_-_3.5rem)]',
+        'relative w-full [--app-content-height:calc(100svh_-_60px)]',
         isBannerVisible &&
-          'pt-16 [--app-banner-height:4rem] [--app-content-height:calc(100svh_-_3.5rem_-_var(--app-banner-height))] md:pt-12 md:[--app-banner-height:3rem]',
+          'pt-16 [--app-banner-height:4rem] [--app-content-height:calc(100svh_-_60px_-_var(--app-banner-height))] md:pt-12 md:[--app-banner-height:3rem]',
       )}
     >
       {isBannerVisible && bannerText && (
@@ -138,11 +140,24 @@ const Dashboard: React.FC = () => {
       <SidebarProvider isBannerVisible={false} defaultOpen={true} className="flex-col">
         <Sidebar isBannerVisible={isBannerVisible} billingEnabled={!!config.billingApiUrl} version={config.version} />
         <SidebarInset className="min-h-0 overflow-visible">
-          <div className="w-full min-h-[var(--app-content-height,calc(100svh_-_3.5rem))] overscroll-none">
-            <Outlet />
+          <div className="w-full min-h-[var(--app-content-height,calc(100svh_-_60px))] overscroll-none">
+            {/* Lazy route components (Admin/Billing/Settings/box-details) suspend
+                here so only the content area shows a fallback — the sidebar/shell
+                stays mounted across navigation. */}
+            <Suspense
+              fallback={
+                <div className="space-y-3 p-4 sm:p-5">
+                  <Skeleton className="h-8 w-48" />
+                  <Skeleton className="h-32 w-full" />
+                </div>
+              }
+            >
+              <Outlet />
+            </Suspense>
             <CommandPalette />
           </div>
         </SidebarInset>
+        <OnboardingDialogHost />
         <Toaster />
         <VerifyEmailDialog open={showVerifyEmailDialog} onOpenChange={setShowVerifyEmailDialog} />
       </SidebarProvider>

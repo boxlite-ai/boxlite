@@ -93,7 +93,7 @@ func (p *Proxy) browserWarningMiddleware() gin.HandlerFunc {
 			}
 		}
 
-		if ctx.Request.URL.Path == ACCEPT_PREVIEW_PAGE_WARNING_PATH || targetPort == TERMINAL_PORT || targetPort == TOOLBOX_PORT || targetPort == RECORDING_DASHBOARD_PORT {
+		if ctx.Request.URL.Path == ACCEPT_PREVIEW_PAGE_WARNING_PATH || targetPort == TERMINAL_PORT {
 			ctx.Next()
 			return
 		}

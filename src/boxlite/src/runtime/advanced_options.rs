@@ -230,7 +230,12 @@ impl Default for SecurityOptions {
             resource_limits: ResourceLimits {
                 max_open_files: Some(1024),
                 max_file_size: Some(1024 * 1024 * 1024), // 1GB
-                max_processes: Some(100),
+                // Per-box cgroup `pids.max` — the fork-bomb cap for the box's
+                // host-side process tree (bwrap + shim + libkrun/gvproxy
+                // threads), which sits well under this. Deliberately does NOT
+                // set RLIMIT_NPROC anymore: that is per-host-UID and broke box
+                // spawn on busy hosts (see jailer::common::rlimit::apply_limits_raw).
+                max_processes: Some(1024),
                 max_memory: None,   // VM config handles this
                 max_cpu_time: None, // VM config handles this
             },

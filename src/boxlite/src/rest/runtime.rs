@@ -36,7 +36,9 @@ impl AuthBackend for RestRuntime {
 fn litebox_from_rest(rest_box: Arc<RestBox>) -> LiteBox {
     let box_backend: Arc<dyn crate::runtime::backend::BoxBackend> = rest_box.clone();
     let snapshot_backend: Arc<dyn crate::runtime::backend::SnapshotBackend> = rest_box;
-    LiteBox::new(box_backend, snapshot_backend)
+    let network_backend: Arc<dyn crate::runtime::backend::BoxNetworkBackend> =
+        Arc::new(crate::runtime::backend::UnsupportedNetworkBackend);
+    LiteBox::new(box_backend, network_backend, snapshot_backend)
 }
 
 #[async_trait::async_trait]

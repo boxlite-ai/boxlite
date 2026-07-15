@@ -4,6 +4,7 @@
 // IMPORTS
 // ============================================================================
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
@@ -22,9 +23,11 @@ use crate::disk::Disk;
 use crate::event_listener::EventListener;
 #[cfg(target_os = "linux")]
 use crate::fs::BindMountHandle;
+use crate::litebox::BoxTunnel;
 use crate::litebox::copy::CopyOptions;
 use crate::lock::LockGuard;
 use crate::metrics::{BoxMetrics, BoxMetricsStorage};
+use crate::net::NetworkBackend;
 use crate::portal::GuestSession;
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
@@ -52,6 +55,13 @@ pub(crate) struct LiveState {
     handler: std::sync::Mutex<Box<dyn VmmHandler>>,
     guest_session: GuestSession,
 
+    /// Host-side network control backend (gvproxy ServicesMux client), owned
+    /// beside `guest_session`. `None` when the box was created network-disabled.
+    /// Read via [`BoxImpl::network`]; the first caller lands with the outer
+    /// (SDK/CLI) layer — held now so the box owns the abstraction from birth.
+    #[allow(dead_code)]
+    network: Option<Arc<dyn NetworkBackend>>,
+
     // Metrics
     metrics: BoxMetricsStorage,
 
@@ -71,6 +81,7 @@ impl LiveState {
     pub(crate) fn new(
         handler: Box<dyn VmmHandler>,
         guest_session: GuestSession,
+        network: Option<Box<dyn NetworkBackend>>,
         metrics: BoxMetricsStorage,
         container_rootfs_disk: Disk,
         guest_rootfs_disk: Option<Disk>,
@@ -79,6 +90,7 @@ impl LiveState {
         Self {
             handler: std::sync::Mutex::new(handler),
             guest_session,
+            network: network.map(Arc::from),
             metrics,
             _container_rootfs_disk: container_rootfs_disk,
             guest_rootfs_disk,
@@ -932,6 +944,20 @@ impl BoxImpl {
         Ok(true)
     }
 
+    /// The box's network control backend (gvproxy ServicesMux client), owned in
+    /// `LiveState` beside `guest_session`. Lazily starts the box like any live
+    /// operation. `Unsupported` when the box was created network-disabled.
+    ///
+    /// The owner accessor; the first caller lands with the outer SDK/CLI layer.
+    #[allow(dead_code)]
+    pub(crate) async fn network(&self) -> BoxliteResult<&dyn NetworkBackend> {
+        self.live_state()
+            .await?
+            .network
+            .as_deref()
+            .ok_or_else(|| BoxliteError::Unsupported("box networking is disabled".into()))
+    }
+
     /// Initialize LiveState via BoxBuilder.
     ///
     /// BoxBuilder handles all status types with different execution plans:
@@ -1325,6 +1351,27 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         dest: &std::path::Path,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
         BoxImpl::export_box(self, options, dest).await
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
+    async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
+        // Local boxes have no public URL; the tunnel carries a connector that
+        // opens the raw stream through the guest-network backend on demand.
+        let network = self
+            .live_state()
+            .await?
+            .network
+            .clone()
+            .ok_or_else(|| BoxliteError::Unsupported("box networking is disabled".into()))?;
+        Ok(BoxTunnel::new(
+            None,
+            Arc::new(move || {
+                let network = Arc::clone(&network);
+                Box::pin(async move { network.tunnel(target).await })
+            }),
+        ))
     }
 }
 

@@ -67,13 +67,13 @@ describe("SimpleBox network and secrets", { timeout: 180_000 }, () => {
       image: "python:slim",
       network: {
         mode: "enabled",
-        allowNet: ["httpbin.org"],
+        allowNet: ["httpbingo.org"],
       },
       secrets: [
         {
           name: "testkey",
           value: "super-secret-value",
-          hosts: ["httpbin.org"],
+          hosts: ["httpbingo.org"],
         },
       ],
       autoRemove: true,
@@ -85,7 +85,7 @@ describe("SimpleBox network and secrets", { timeout: 180_000 }, () => {
         [
           "import os, urllib.request",
           "req = urllib.request.Request(",
-          "  'https://httpbin.org/headers',",
+          "  'https://httpbingo.org/headers',",
           "  headers={'Authorization': 'Bearer ' + os.environ['BOXLITE_SECRET_TESTKEY']},",
           ")",
           "print(urllib.request.urlopen(req, timeout=20).read().decode())",

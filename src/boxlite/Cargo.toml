@@ -21,8 +21,7 @@ crate-type = ["rlib"]
 
 [features]
 default = ["embedded-runtime", "krunfw", "e2fsprogs", "bubblewrap"]
-libslirp = []                                               # Uses external libslirp-helper binary
-gvproxy = ["dep:libgvproxy-sys"]                             # Uses libgvproxy CGO shared library
+gvproxy = ["dep:libgvproxy-sys"]                             # Shim-side libgvproxy CGO shared library
 e2fsprogs = ["dep:e2fsprogs-sys"]                            # Bundled mke2fs for ext4 image creation
 bubblewrap = ["dep:bubblewrap-sys"]                          # Bundled bwrap for sandbox isolation (Linux)
 krunfw = ["dep:libkrun-sys", "libkrun-sys/krunfw"]           # Download libkrunfw firmware for runtime bundling
@@ -50,6 +49,10 @@ async-stream = "0.3"
 tonic = "0.12"
 tower = "0.5"
 hyper-util = { version = "0.1", features = ["tokio"] }
+# gvproxy ServicesMux control client (HTTP/1.1 over the per-box unix socket).
+hyper = { version = "1", features = ["client", "http1"] }
+http-body-util = "0.1"
+bytes = "1"
 uuid = { version = "1.10", features = ["v4"] }
 ulid = "1.1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -116,4 +119,6 @@ bincode = "2.0"  # Serialize compiled BPF filters
 
 [dev-dependencies]
 boxlite-test-utils = { path = "../test-utils" }
+notify = "6.1"
 proptest = "1.4"
+toml = "0.8"

@@ -8,9 +8,6 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -40,10 +37,8 @@ const (
 	terminalWriteDeadline     = 20 * time.Second
 )
 
-// ProxyRequest handles toolbox/terminal requests.
-// For terminal preview requests: serves the xterm.js page and bridges WS to BoxLite exec.
-// For all other toolbox requests: forwards to the box daemon toolbox through the
-// per-box host port created by the BoxLite runner.
+// ProxyRequest handles the terminal preview endpoint. Legacy in-box toolbox
+// endpoints are no longer available because boxes do not run the old daemon.
 func ProxyRequest(logger *slog.Logger) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		r, err := runner.GetInstance(nil)
@@ -61,7 +56,7 @@ func ProxyRequest(logger *slog.Logger) gin.HandlerFunc {
 				return
 			}
 
-			ctx.JSON(http.StatusNotImplemented, gin.H{"error": "websocket toolbox proxy is only available for terminal sessions"})
+			legacyToolboxUnavailable(ctx, logger, boxId, path)
 			return
 		}
 
@@ -70,12 +65,8 @@ func ProxyRequest(logger *slog.Logger) gin.HandlerFunc {
 			return
 		}
 
-		proxyToBoxToolbox(ctx, r.Boxlite, boxId, path, logger)
+		legacyToolboxUnavailable(ctx, logger, boxId, path)
 	}
-}
-
-type toolboxHostPortResolver interface {
-	ToolboxHostPort(boxID string) (int, error)
 }
 
 func normalizeToolboxPath(path string) string {
@@ -93,43 +84,11 @@ func isTerminalToolboxPath(path string) bool {
 	return path == "/" || path == "/proxy/22222" || strings.HasPrefix(path, "/proxy/22222/")
 }
 
-func proxyToBoxToolbox(
-	ctx *gin.Context,
-	portResolver toolboxHostPortResolver,
-	boxId string,
-	path string,
-	logger *slog.Logger,
-) {
-	hostPort, err := portResolver.ToolboxHostPort(boxId)
-	if err != nil {
-		logger.WarnContext(ctx.Request.Context(), "box toolbox host port not found", "box", boxId, "error", err)
-		ctx.JSON(http.StatusBadGateway, gin.H{
-			"error": "box toolbox port is not available; recreate the box after the runner update",
-		})
-		return
-	}
-
-	target, err := url.Parse("http://127.0.0.1")
-	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	target.Host = "127.0.0.1:" + strconv.Itoa(hostPort)
-
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
-		req.URL.Path = path
-		req.Host = target.Host
-		req.Header.Set("X-Forwarded-Host", ctx.Request.Host)
-	}
-	proxy.ErrorHandler = func(res http.ResponseWriter, req *http.Request, proxyErr error) {
-		logger.WarnContext(req.Context(), "box toolbox proxy failed", "box", boxId, "path", path, "error", proxyErr)
-		http.Error(res, "box toolbox proxy failed", http.StatusBadGateway)
-	}
-
-	proxy.ServeHTTP(ctx.Writer, ctx.Request)
+func legacyToolboxUnavailable(ctx *gin.Context, logger *slog.Logger, boxId string, path string) {
+	logger.InfoContext(ctx.Request.Context(), "legacy toolbox proxy request rejected", "box", boxId, "path", path)
+	ctx.JSON(http.StatusGone, gin.H{
+		"error": "legacy toolbox proxy is no longer available; use the BoxLite REST API or terminal preview",
+	})
 }
 
 const terminalHTML = `<!DOCTYPE html>

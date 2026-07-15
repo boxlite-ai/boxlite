@@ -8,6 +8,7 @@ import { ForbiddenException, Injectable, Logger, NotFoundException, ConflictExce
 import { InjectRepository } from '@nestjs/typeorm'
 import { Not, Repository, LessThan, In, JsonContains, FindOptionsWhere, ILike } from 'typeorm'
 import { Box } from '../entities/box.entity'
+import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
 import { CreateBoxDto } from '../dto/create-box.dto'
 import { ResizeBoxDto } from '../dto/resize-box.dto'
 import { BoxState } from '../enums/box-state.enum'
@@ -29,6 +30,7 @@ import { BoxEvents } from '../constants/box-events.constants'
 import { BoxStateUpdatedEvent } from '../events/box-state-updated.event'
 import { BoxDestroyedEvent } from '../events/box-destroyed.event'
 import { BoxStartedEvent } from '../events/box-started.event'
+import { BoxDesiredStateUpdatedEvent } from '../events/box-desired-state-updated.event'
 import { BoxStoppedEvent } from '../events/box-stopped.event'
 import { OrganizationService } from '../../organization/services/organization.service'
 import { OrganizationEvents } from '../../organization/constants/organization-events.constant'
@@ -81,6 +83,7 @@ const DEFAULT_BOX_CPU = 1
 const DEFAULT_BOX_MEM = 1
 const DEFAULT_BOX_DISK = 10
 const DEFAULT_BOX_GPU = 0
+const TERMINAL_PREVIEW_PORT = 22222
 
 @Injectable()
 export class BoxService {
@@ -242,7 +245,15 @@ export class BoxService {
       box.runnerId = runner.id
       box.pending = true
 
-      const insertedBox = await this.boxRepository.insert(box)
+      // No caller-provided name -> assign a fun default (e.g. "cozy-otter"),
+      // falling back to "cozy-otter-{boxId}" if it collides with the per-org
+      // @Unique(['organizationId', 'name']) constraint.
+      const insertedBox = createBoxDto.name
+        ? await this.boxRepository.insert(box)
+        : await persistWithGeneratedBoxName(box.id, (name) => {
+            box.name = name
+            return this.boxRepository.insert(box)
+          })
 
       this.eventEmitter
         .emitAsync(BoxEvents.CREATED, new BoxCreatedEvent(insertedBox))
@@ -251,7 +262,11 @@ export class BoxService {
       return this.toBoxDto(insertedBox)
     } catch (error) {
       if (error.code === '23505') {
-        throw new ConflictException(`Box with name ${createBoxDto.name} already exists`)
+        throw new ConflictException(
+          createBoxDto.name
+            ? `Box with name ${createBoxDto.name} already exists`
+            : 'Could not allocate a unique box name, please retry',
+        )
       }
 
       throw error
@@ -269,10 +284,6 @@ export class BoxService {
       labels: createBoxDto.labels || {},
       organizationId: organization.id,
       createdAt: now,
-    }
-
-    if (createBoxDto.name) {
-      updateData.name = createBoxDto.name
     }
 
     if (createBoxDto.autoStopInterval !== undefined) {
@@ -310,10 +321,19 @@ export class BoxService {
       )
     }
 
-    const updatedBox = await this.boxRepository.update(warmPoolBox.id, {
-      updateData,
-      entity: warmPoolBox,
-    })
+    // Resolve the name at persist time. A caller-provided name updates in one
+    // shot (reusing the pre-fetched entity). A generated default falls back to
+    // "{name}-{boxId}" on collision and omits `entity` so each attempt re-reads
+    // the row — reusing the mutated entity would corrupt the optimistic-update
+    // guard.
+    const updatedBox = createBoxDto.name
+      ? await this.boxRepository.update(warmPoolBox.id, {
+          updateData: { ...updateData, name: createBoxDto.name },
+          entity: warmPoolBox,
+        })
+      : await persistWithGeneratedBoxName(warmPoolBox.id, (name) =>
+          this.boxRepository.update(warmPoolBox.id, { updateData: { ...updateData, name } }),
+        )
 
     // Defensive invalidation of orgId cache since the box moved from unassigned to a real organization
     this.boxLookupCacheInvalidationService.invalidateOrgId({
@@ -657,6 +677,9 @@ export class BoxService {
     if (port < 1 || port > 65535) {
       throw new BadRequestError('Invalid port')
     }
+    if (port !== TERMINAL_PREVIEW_PORT) {
+      throw new BadRequestError(`Port preview is only supported for terminal port ${TERMINAL_PREVIEW_PORT}`)
+    }
 
     const proxyDomain = this.configService.getOrThrow('proxy.domain')
     const proxyProtocol = this.configService.getOrThrow('proxy.protocol')
@@ -686,6 +709,9 @@ export class BoxService {
   ): Promise<SignedPortPreviewUrlDto> {
     if (port < 1 || port > 65535) {
       throw new BadRequestError('Invalid port')
+    }
+    if (port !== TERMINAL_PREVIEW_PORT) {
+      throw new BadRequestError(`Signed port preview is only supported for terminal port ${TERMINAL_PREVIEW_PORT}`)
     }
 
     if (expiresInSeconds < 1 || expiresInSeconds > 60 * 60 * 24) {
@@ -802,6 +828,73 @@ export class BoxService {
     this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updatedBox))
 
     return updatedBox
+  }
+
+  /**
+   * Reflect a proxy-triggered auto-start in the control plane.
+   *
+   * exec / files / metrics on a stopped box all reach `Box::live_state()` in
+   * the runtime, which lazily inits the VM — but nothing tells the API. Left
+   * alone, PG keeps the box at desiredState=STOPPED and sync-states promptly
+   * issues STOP_BOX, undoing the auto-start. Flip desiredState to STARTED —
+   * exactly like start() — so the runner-reported STARTED state agrees and
+   * the box stays up. We never write state directly; the runner remains the
+   * source of truth for it.
+   *
+   * Suspension is a hard wall (same as start()): throws ForbiddenException so
+   * the controller surfaces 403 to the caller and the proxy never runs.
+   *
+   * Otherwise best-effort and idempotent: the proxied call has already (or
+   * will soon) hit the runtime, so DB-side failures are swallowed and
+   * box_sync reconciles state on its next tick.
+   *
+   * On a successful flip emits BoxEvents.STARTED (drives convergence) and
+   * BoxEvents.DESIRED_STATE_UPDATED — the same desired-state event start()
+   * raises via updateWhere, so the notification gateway and analytics see the
+   * STOPPED→STARTED transition for an exec-autostart too.
+   */
+  async ensureStartedForProxy(boxIdOrName: string, organization: Organization): Promise<void> {
+    // Suspension check first — same gate as start() (~line 790). Without it,
+    // a suspended org could exec/files/metrics a STOPPED box back to STARTED,
+    // bypassing the start-time guard entirely.
+    this.organizationService.assertOrganizationIsNotSuspended(organization)
+
+    const box = await this.findOneByIdOrName(boxIdOrName, organization.id)
+    if (!box) {
+      return
+    }
+
+    // Cheap pre-check on the cached snapshot. The repository's conditional
+    // UPDATE re-asserts atomically — this just avoids a no-op round-trip when
+    // the snapshot already shows the box isn't a candidate.
+    if (box.pending || box.state !== BoxState.STOPPED || box.desiredState !== BoxDesiredState.STOPPED) {
+      return
+    }
+
+    let updated: Box | null
+    try {
+      updated = await this.boxRepository.conditionalStartForProxy(box.id, organization.id)
+    } catch (err) {
+      this.logger.warn(`ensureStartedForProxy: unexpected failure for box ${boxIdOrName}: ${err}`)
+      return
+    }
+
+    // Zero rows matched — race lost or the box transitioned out of the
+    // eligible state between snapshot and write. No-op (same semantics as
+    // the old BoxConflictError swallow).
+    if (!updated) {
+      return
+    }
+
+    // Emit post-commit (conditionalStartForProxy's transaction has returned),
+    // so listeners never observe an uncommitted desiredState. The flip was
+    // strictly STOPPED→STARTED — the pre-check and the conditional UPDATE both
+    // gate on desiredState=STOPPED.
+    this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updated))
+    this.eventEmitter.emit(
+      BoxEvents.DESIRED_STATE_UPDATED,
+      new BoxDesiredStateUpdatedEvent(updated, BoxDesiredState.STOPPED, BoxDesiredState.STARTED),
+    )
   }
 
   async stop(boxIdOrName: string, organizationId?: string, force?: boolean): Promise<Box> {

@@ -28,12 +28,13 @@ pub struct RunArgs {
     #[command(flatten)]
     pub management: ManagementFlags,
 
-    #[arg(index = 1)]
-    pub image: String,
+    /// Path to an already prepared rootfs
+    #[arg(long = "rootfs", value_name = "PATH")]
+    pub rootfs: Option<String>,
 
-    /// Command to run inside the image
-    #[arg(index = 2, trailing_var_arg = true)]
-    pub command: Vec<String>,
+    /// Image and command, or command only when --rootfs is set
+    #[arg(index = 1, trailing_var_arg = true, value_name = "IMAGE|COMMAND")]
+    pub args: Vec<String>,
 }
 
 /// Entry point.
@@ -45,8 +46,10 @@ pub struct RunArgs {
 /// runs `shutdown_sync()` and stops the box's shim on every return path.
 /// `std::process::exit` would bypass that Drop chain and leak the shim (#622).
 pub async fn execute(args: RunArgs, global: &GlobalFlags) -> anyhow::Result<i32> {
+    let (rootfs, command_args) = args.rootfs_and_command()?;
+    let command_args = command_args.to_vec();
     let mut runner = BoxRunner::new(args, global)?;
-    runner.run().await
+    runner.run(rootfs, command_args).await
 }
 
 struct BoxRunner {
@@ -63,14 +66,14 @@ impl BoxRunner {
         Ok(Self { args, rt, home })
     }
 
-    async fn run(&mut self) -> anyhow::Result<i32> {
+    async fn run(&mut self, rootfs: RootfsSpec, command_args: Vec<String>) -> anyhow::Result<i32> {
         // Validate flags and environment
         self.validate_flags()?;
 
-        // COMMAND becomes the container's init (docker semantics — it
-        // replaces the image CMD via options.cmd in create_box), so there
-        // is nothing to spawn here: attach to the init session instead.
-        let litebox = self.create_box().await?;
+        // COMMAND becomes the container's init (docker semantics — it replaces
+        // the image CMD via options.cmd in create_box), so there is nothing to
+        // spawn here: attach to the init session instead.
+        let litebox = self.create_box(rootfs, &command_args).await?;
 
         // Detach mode: start it and get out of the way. Nobody is reading the
         // output, so there is nothing to be attached for.
@@ -111,7 +114,11 @@ impl BoxRunner {
         Ok(to_shell_exit_code(exit_code))
     }
 
-    async fn create_box(&self) -> anyhow::Result<LiteBox> {
+    async fn create_box(
+        &self,
+        rootfs: RootfsSpec,
+        command_args: &[String],
+    ) -> anyhow::Result<LiteBox> {
         let mut options = BoxOptions::default();
         self.args.resource.apply_to(&mut options);
         self.args.management.apply_to(&mut options)?;
@@ -127,14 +134,14 @@ impl BoxRunner {
             options.auto_remove = false;
         }
 
-        // Docker semantics: the user COMMAND replaces the image CMD (the
-        // image ENTRYPOINT is preserved and prepended) and the result runs
-        // as the container's init. No COMMAND → the image default runs.
-        if !self.args.command.is_empty() {
-            options.cmd = Some(self.args.command.clone());
+        // Docker semantics: the user COMMAND replaces the image CMD (the image
+        // ENTRYPOINT is preserved and prepended) and the result runs as the
+        // container's init. No COMMAND → the image default runs.
+        if !command_args.is_empty() {
+            options.cmd = Some(command_args.to_vec());
         }
 
-        options.rootfs = RootfsSpec::Image(self.args.image.clone());
+        options.rootfs = rootfs;
 
         let litebox = self
             .rt
@@ -151,5 +158,106 @@ impl BoxRunner {
         }
 
         Ok(())
+    }
+}
+
+impl RunArgs {
+    fn rootfs_and_command(&self) -> anyhow::Result<(RootfsSpec, &[String])> {
+        resolve_rootfs_and_command(self.rootfs.as_deref(), &self.args)
+    }
+}
+
+fn resolve_rootfs_and_command<'a>(
+    rootfs: Option<&str>,
+    args: &'a [String],
+) -> anyhow::Result<(RootfsSpec, &'a [String])> {
+    if let Some(path) = rootfs {
+        return Ok((RootfsSpec::RootfsPath(path.to_string()), args));
+    }
+
+    let Some((image, command)) = args.split_first() else {
+        anyhow::bail!("provide IMAGE or --rootfs PATH");
+    };
+
+    Ok((RootfsSpec::Image(image.clone()), command))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::{Cli, Commands};
+    use clap::Parser;
+
+    #[test]
+    fn run_rootfs_flag_sets_rootfs_path_and_uses_trailing_command() {
+        let cli = Cli::try_parse_from(["boxlite", "run", "--rootfs", "/tmp/rootfs", "echo", "hi"])
+            .expect("run --rootfs should parse");
+        let Commands::Run(args) = cli.command else {
+            panic!("expected run command");
+        };
+
+        let (rootfs, command) = args
+            .rootfs_and_command()
+            .expect("rootfs command should resolve");
+
+        match rootfs {
+            RootfsSpec::RootfsPath(path) => assert_eq!(path, "/tmp/rootfs"),
+            other => panic!("expected RootfsPath, got {other:?}"),
+        }
+        assert_eq!(command, &["echo".to_string(), "hi".to_string()]);
+    }
+
+    #[test]
+    fn run_rootfs_without_command_leaves_command_empty() {
+        let cli = Cli::try_parse_from(["boxlite", "run", "--rootfs", "/tmp/rootfs"])
+            .expect("run --rootfs should parse");
+        let Commands::Run(args) = cli.command else {
+            panic!("expected run command");
+        };
+
+        let (rootfs, command) = args
+            .rootfs_and_command()
+            .expect("rootfs command should resolve");
+
+        match rootfs {
+            RootfsSpec::RootfsPath(path) => assert_eq!(path, "/tmp/rootfs"),
+            other => panic!("expected RootfsPath, got {other:?}"),
+        }
+        // No COMMAND → empty; the image/rootfs default init runs (docker
+        // semantics), rather than the CLI forcing a shell.
+        assert!(command.is_empty());
+    }
+
+    #[test]
+    fn run_without_rootfs_preserves_image_and_command() {
+        let cli = Cli::try_parse_from(["boxlite", "run", "alpine:latest", "echo", "hi"])
+            .expect("run image command should parse");
+        let Commands::Run(args) = cli.command else {
+            panic!("expected run command");
+        };
+
+        let (rootfs, command) = args
+            .rootfs_and_command()
+            .expect("image command should resolve");
+
+        match rootfs {
+            RootfsSpec::Image(image) => assert_eq!(image, "alpine:latest"),
+            other => panic!("expected Image, got {other:?}"),
+        }
+        assert_eq!(command, &["echo".to_string(), "hi".to_string()]);
+    }
+
+    #[test]
+    fn run_requires_image_or_rootfs() {
+        let cli = Cli::try_parse_from(["boxlite", "run"]).expect("run should parse");
+        let Commands::Run(args) = cli.command else {
+            panic!("expected run command");
+        };
+
+        let err = args
+            .rootfs_and_command()
+            .expect_err("missing source must be rejected");
+
+        assert!(err.to_string().contains("IMAGE or --rootfs"));
     }
 }

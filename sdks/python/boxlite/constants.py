@@ -4,7 +4,7 @@ Centralized constants for BoxLite Python SDK.
 
 # Default VM resources
 DEFAULT_CPUS = 1
-DEFAULT_MEMORY_MIB = 2048
+DEFAULT_MEMORY_MIB = 1024
 
 # ComputerBox defaults (higher resources for desktop)
 COMPUTERBOX_CPUS = 2

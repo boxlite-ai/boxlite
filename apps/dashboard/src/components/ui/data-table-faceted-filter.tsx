@@ -5,7 +5,7 @@
  */
 
 import { Column } from '@tanstack/react-table'
-import { PlusCircle } from 'lucide-react'
+import { PlusCircle } from '@/components/ui/icon'
 import * as React from 'react'
 
 import { cn } from '@/lib/utils'

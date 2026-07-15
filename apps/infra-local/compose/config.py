@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 from dataclasses import dataclass, field
@@ -102,6 +103,33 @@ def _default_state_root() -> Path:
     return _detect_repo_root() / ".apps-local"
 
 
+def _machine_short_root() -> Path:
+    """Machine-global parent for socket-bearing BoxLite homes.
+
+    A box's control sockets live at <home>/boxes/<id>/sockets/ready.sock, and
+    macOS caps unix socket paths at 104 bytes (SUN_LEN). A repo-scoped home
+    under a deep worktree path (…/boxlite-wt/<name>/.apps-local/boxlite) blows
+    that budget, so EVERY worktree past a short prefix fails to boot a box.
+
+    Anchoring the socket-bearing home here — short and constant (~/.bl) — keeps
+    any worktree, however deep, comfortably under the cap. Override with
+    BOXLITE_LOCAL_STATE_ROOT.
+    """
+    return Path(os.environ.get("BOXLITE_LOCAL_STATE_ROOT") or (Path.home() / ".bl")).expanduser()
+
+
+def worktree_home(repo_root: Path, leaf: str) -> Path:
+    """Per-worktree socket-bearing home under the machine-global short root.
+
+    Keyed by a short hash of the worktree path so each checkout is isolated
+    (every BoxliteRuntime takes an exclusive flock on its home). `leaf`
+    separates the L1 SDK home ("h") from the runner home ("r") — distinct
+    runtimes that must not share a home/flock.
+    """
+    tag = hashlib.sha1(str(repo_root).encode()).hexdigest()[:8]
+    return _machine_short_root() / tag / leaf
+
+
 @dataclass
 class InfraConfig:
     host_hub: str = "host.boxlite.internal"
@@ -137,10 +165,11 @@ class InfraConfig:
 
     data_dir: Path = field(default_factory=lambda: _default_state_root() / "data")
     # SDK home for the L1 boxes (exported as BOXLITE_HOME before the runtime
-    # singleton is built — see orchestrator.ensure_home_env). Separate from the
-    # runner's home (.apps-local/boxlite-runner): each BoxliteRuntime takes an
-    # exclusive lock on its home dir.
-    boxlite_home: Path = field(default_factory=lambda: _default_state_root() / "boxlite")
+    # singleton is built — see orchestrator.ensure_home_env). Anchored at the
+    # machine-global short root (NOT under the deep worktree path) so box
+    # sockets stay under the macOS SUN_LEN cap — see worktree_home(). Separate
+    # from the runner's home (…/r): each BoxliteRuntime flocks its own home.
+    boxlite_home: Path = field(default_factory=lambda: worktree_home(_detect_repo_root(), "h"))
     repo_root: Path = field(default_factory=_detect_repo_root)
 
     @classmethod
@@ -167,7 +196,7 @@ class InfraConfig:
             # InfraConfig and a user-pinned SDK home in agreement.
             boxlite_home=Path(
                 os.environ.get("BOXLITE_HOME")
-                or str(_default_state_root() / "boxlite")
+                or str(worktree_home(_detect_repo_root(), "h"))
             ).expanduser(),
         )
 

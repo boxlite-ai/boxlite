@@ -62,10 +62,24 @@ pub fn apply_limits_raw(limits: &ResourceLimits) -> Result<(), i32> {
         set_rlimit_raw(libc::RLIMIT_FSIZE, max_fsize)?;
     }
 
-    if let Some(max_procs) = limits.max_processes {
-        // Note: Ignore errors for NPROC on macOS (works differently)
-        let _ = set_rlimit_raw(libc::RLIMIT_NPROC, max_procs);
-    }
+    // NOTE: `max_processes` is deliberately NOT applied as RLIMIT_NPROC.
+    // RLIMIT_NPROC is enforced per *real UID across the whole host*, and it is
+    // checked during bwrap's namespace setup while the process still runs as
+    // the spawning UID (before the box drops to its own UID). A small per-box
+    // value therefore makes box spawn fail
+    //   bwrap: Creating new namespace failed: Resource temporarily unavailable
+    // as soon as the spawning UID already has that many tasks — routine on a
+    // runner hosting several boxes or any loaded host. The correct, per-box,
+    // non-bypassable fork-bomb cap is the cgroup `pids.max` (set from
+    // `max_processes` in jailer::cgroup), so RLIMIT_NPROC is left at its
+    // inherited value here.
+    //
+    // Previous behaviour, kept for reference (do not re-enable without moving
+    // the drop-to-per-box-UID before this point — see PR #891):
+    //   if let Some(max_procs) = limits.max_processes {
+    //       // Note: Ignore errors for NPROC on macOS (works differently)
+    //       let _ = set_rlimit_raw(libc::RLIMIT_NPROC, max_procs);
+    //   }
 
     if let Some(max_mem) = limits.max_memory {
         set_rlimit_raw(libc::RLIMIT_AS, max_mem)?;

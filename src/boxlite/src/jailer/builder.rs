@@ -571,7 +571,8 @@ mod tests {
             .expect("should build dev");
         assert!(!dev.security().jailer_enabled);
 
-        // Maximum → strict: jailer + seccomp on, namespaces on.
+        // Maximum → strict: jailer on; seccomp / namespaces on where the
+        // platform supports them (Linux).
         let max = JailerBuilder::new()
             .with_box_id("test-box")
             .with_layout(test_layout("/tmp/box"))
@@ -579,7 +580,9 @@ mod tests {
             .build()
             .expect("should build max");
         assert!(max.security().jailer_enabled);
-        assert!(max.security().seccomp_enabled);
+        // seccomp is Linux-only (SecurityOptions::default gates it on cfg), so the
+        // maximum profile enables it on Linux and correctly leaves it off elsewhere.
+        assert_eq!(max.security().seccomp_enabled, cfg!(target_os = "linux"));
 
         // Standard is the recommended default; just confirm it
         // overrides whatever the chain set before.
