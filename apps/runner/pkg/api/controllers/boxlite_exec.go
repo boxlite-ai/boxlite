@@ -75,24 +75,28 @@ func BoxliteExec(ctx *gin.Context) {
 
 	execId, err := execManager.Start(ctx.Request.Context(), bx, boxId, startOpts)
 	if err != nil {
-		// Classify so a stopped / wrong-state box surfaces as 4xx, not
-		// 500. Without this the box-stopped case leaks
-		//   internal error: HTTP 500 Internal Server Error:
-		//   {"error":"exec failed: failed to start execution: boxlite: stopped:
-		//    Handle invalidated after stop(). ... (code=11)"}
-		// and the SDK's 'all 5xx is bug' guard fires. The Go SDK already
-		// gives us a typed bool for the two states that aren't 500 from
-		// the runner's perspective (the box exists but isn't accepting
-		// execs right now).
-		if sdkboxlite.IsStopped(err) || sdkboxlite.IsInvalidState(err) {
-			ctx.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("exec failed: %s", err)})
-			return
-		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("exec failed: %s", err)})
+		writeExecStartError(ctx, err)
 		return
 	}
 
 	ctx.JSON(http.StatusCreated, ExecResponse{ExecutionID: execId})
+}
+
+func writeExecStartError(ctx *gin.Context, err error) {
+	if sdkboxlite.IsExecution(err) {
+		ctx.JSON(http.StatusUnprocessableEntity, gin.H{
+			"message": fmt.Sprintf("exec failed: %s", err),
+			"code":    "execution_failed",
+		})
+		return
+	}
+
+	// A stopped or wrong-state box exists but is not accepting execs.
+	if sdkboxlite.IsStopped(err) || sdkboxlite.IsInvalidState(err) {
+		ctx.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("exec failed: %s", err)})
+		return
+	}
+	ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("exec failed: %s", err)})
 }
 
 // allowedExecSignals is the whitelist of POSIX signal numbers callers may

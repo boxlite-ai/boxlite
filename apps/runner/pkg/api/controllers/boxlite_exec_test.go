@@ -11,9 +11,31 @@ import (
 	"sync/atomic"
 	"testing"
 
+	sdkboxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/pkg/boxlite"
 	"github.com/gin-gonic/gin"
 )
+
+func TestWriteExecStartErrorReturnsStructuredExecutionError(t *testing.T) {
+	err := &sdkboxlite.Error{Code: sdkboxlite.ErrExecution, Message: "spawn failed"}
+	w := runHandler(http.MethodPost, "/exec", "/exec", nil, func(ctx *gin.Context) {
+		writeExecStartError(ctx, err)
+	})
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d body=%s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Message string `json:"message"`
+		Code    string `json:"code"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal failed: %v body=%s", err, w.Body.String())
+	}
+	if body.Code != "execution_failed" || !strings.Contains(body.Message, "spawn failed") {
+		t.Fatalf("unexpected response: %+v", body)
+	}
+}
 
 // signalCapturingExec is a minimal boxlite.ExecHandle stub that records
 // every Signal call so tests can assert the controller plumbed the

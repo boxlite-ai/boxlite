@@ -59,6 +59,19 @@ func TestIsInvalidState(t *testing.T) {
 	}
 }
 
+func TestIsExecution(t *testing.T) {
+	err := &Error{Code: ErrExecution, Message: "spawn failed"}
+	if !IsExecution(err) {
+		t.Error("expected IsExecution to return true")
+	}
+	if IsExecution(errors.New("other")) {
+		t.Error("expected IsExecution to return false for non-Error")
+	}
+	if IsExecution(&Error{Code: ErrInternal, Message: "internal"}) {
+		t.Error("expected IsExecution to return false for different code")
+	}
+}
+
 func TestIsStopped(t *testing.T) {
 	err := &Error{Code: ErrStopped, Message: "runtime shut down"}
 	if !IsStopped(err) {
