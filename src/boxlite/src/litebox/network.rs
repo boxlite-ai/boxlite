@@ -2,10 +2,11 @@
 
 use std::future::Future;
 use std::net::SocketAddr;
+use std::os::fd::OwnedFd;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use boxlite_shared::errors::BoxliteResult;
+use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use crate::net::BoxInternalTunnel;
 use crate::runtime::backend::BoxNetworkBackend;
@@ -25,11 +26,20 @@ pub trait BoxConnection: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + U
 
 impl<T> BoxConnection for T where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin {}
 
+/// Endpoint returned for a box service tunnel.
+pub enum BoxEndpoint {
+    /// Public URL for a remote box service.
+    Url(String),
+    /// Owned local Unix-socket descriptor for a local box service.
+    Fd(OwnedFd),
+}
+
 /// A box service tunnel target. Call [`endpoint`](Self::endpoint) first, then
 /// [`connect`](Self::connect) on this handle.
 pub struct BoxTunnel {
     endpoint: Option<String>,
     connector: TunnelConnector,
+    local_endpoint: Arc<tokio::sync::Mutex<Option<OwnedFd>>>,
     stream: Arc<tokio::sync::Mutex<Option<BoxInternalTunnel>>>,
 }
 
@@ -38,26 +48,53 @@ impl BoxTunnel {
         Self {
             endpoint,
             connector,
+            local_endpoint: Arc::new(tokio::sync::Mutex::new(None)),
             stream: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
     /// Resolve the endpoint, fetching a URL remotely or preparing a local stream.
-    pub async fn endpoint(&self) -> BoxliteResult<Option<String>> {
+    pub async fn endpoint(&self) -> BoxliteResult<BoxEndpoint> {
         match &self.endpoint {
-            Some(endpoint) => Ok(Some(endpoint.clone())),
+            Some(endpoint) => Ok(BoxEndpoint::Url(endpoint.clone())),
             None => {
                 let mut stream = self.stream.lock().await;
                 if stream.is_none() {
                     *stream = Some((self.connector)().await?);
                 }
-                Ok(None)
+                let mut local_endpoint = self.local_endpoint.lock().await;
+                if local_endpoint.is_none() {
+                    let tunnel = stream.take().expect("local tunnel was just prepared");
+                    *local_endpoint = tunnel.into_fd();
+                }
+                let endpoint = local_endpoint
+                    .as_ref()
+                    .ok_or_else(|| {
+                        BoxliteError::Network("local tunnel has no file descriptor".into())
+                    })?
+                    .try_clone()
+                    .map_err(|error| {
+                        BoxliteError::Network(format!("clone local tunnel fd: {error}"))
+                    })?;
+                Ok(BoxEndpoint::Fd(endpoint))
             }
         }
     }
 
     /// Consume the prepared local stream or establish the remote stream once.
     pub async fn connect(&self) -> BoxliteResult<Box<dyn BoxConnection>> {
+        if self.endpoint.is_none() {
+            let mut local_endpoint = self.local_endpoint.lock().await;
+            if let Some(fd) = local_endpoint.take() {
+                let stream = std::os::unix::net::UnixStream::from(fd);
+                stream.set_nonblocking(true).map_err(|error| {
+                    BoxliteError::Network(format!("configure local tunnel: {error}"))
+                })?;
+                return Ok(Box::new(tokio::net::UnixStream::from_std(stream).map_err(
+                    |error| BoxliteError::Network(format!("adopt local tunnel: {error}")),
+                )?));
+            }
+        }
         let mut stream = self.stream.lock().await;
         if let Some(stream) = stream.take() {
             return Ok(Box::new(stream));
@@ -134,10 +171,10 @@ mod tests {
 
         // endpoint() returns the already-resolved URL; connect() remains separate.
         let endpoint = tunnel.endpoint().await.unwrap();
-        assert_eq!(
-            endpoint.as_deref(),
-            Some("https://3000-box.proxy.example.test")
-        );
+        assert!(matches!(
+            endpoint,
+            BoxEndpoint::Url(url) if url == "https://3000-box.proxy.example.test"
+        ));
         assert_eq!(backend.connected.load(Ordering::Relaxed), 0);
 
         // Connecting the tunnel triggers exactly one connect.
@@ -182,7 +219,7 @@ mod tests {
 
         let tunnel = network.tunnel(target).await.unwrap();
         let endpoint = tunnel.endpoint().await.unwrap();
-        assert_eq!(endpoint, None);
+        assert!(matches!(endpoint, BoxEndpoint::Fd(_)));
         let mut stream = tunnel.connect().await.unwrap();
         let mut peer = peer.lock().await.take().unwrap();
 
