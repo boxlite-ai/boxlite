@@ -85,12 +85,21 @@ pub(in crate::commands::serve) async fn start_box(
     State(state): State<Arc<AppState>>,
     Path(box_id): Path<String>,
 ) -> Response {
-    // Drop any cached handle first. A box now stops *itself* when its main
-    // command exits, and such a handle is spent — it holds the dead VM's
-    // LiveState and can never boot again (BoxImpl::start refuses it). Take a
-    // fresh one from the runtime, which rebuilds from persisted state, so that
-    // starting a box that ran to completion actually boots it.
-    state.boxes.write().await.remove(&box_id);
+    // A box now stops *itself* when its main command exits, leaving a spent
+    // handle — it holds the dead VM's LiveState and `BoxImpl::start` refuses it.
+    // Drop a spent handle so a fresh one reboots from persisted state. A handle
+    // that is still Running is kept, though: `run --url` attaches (which boots
+    // the box) and only then calls `/start` to run its init, and dropping the
+    // live VM between the two would strand the client's attach on a dead guest.
+    {
+        let mut boxes = state.boxes.write().await;
+        let spent = boxes
+            .get(&box_id)
+            .is_some_and(|b| b.info().status != boxlite::BoxStatus::Running);
+        if spent {
+            boxes.remove(&box_id);
+        }
+    }
 
     let litebox = match get_or_fetch_box(&state, &box_id).await {
         Ok(b) => b,

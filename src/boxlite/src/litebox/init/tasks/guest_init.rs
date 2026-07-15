@@ -1,7 +1,10 @@
 //! Task: Guest initialization.
 //!
-//! Sends init configuration to guest and starts container.
-//! Builds guest volumes from volume manager, uses rootfs config from vmm_config stage.
+//! Sends init configuration to the guest and *creates* the container. Running
+//! its init is a separate, host-driven step (`Container.Start`), so a client can
+//! attach to the created-but-not-started session first and miss none of its
+//! output. Builds guest volumes from the volume manager, uses rootfs config from
+//! the vmm_config stage.
 
 use super::{InitCtx, log_task_error, task_start};
 use crate::images::ContainerImageConfig;
@@ -33,7 +36,6 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             network_spec,
             ca_cert_pem,
             tty,
-            defer_start,
         ) =
             {
                 let mut ctx = ctx.lock().await;
@@ -57,7 +59,6 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                 let network_spec = ctx.config.options.network.clone();
                 let ca_cert_pem = ctx.ca_cert_pem.clone();
                 let tty = ctx.config.options.tty;
-                let defer_start = ctx.defer_container_start;
                 (
                     guest_session,
                     container_image_config,
@@ -68,7 +69,6 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                     network_spec,
                     ca_cert_pem,
                     tty,
-                    defer_start,
                 )
             };
 
@@ -82,7 +82,6 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             &network_spec,
             ca_cert_pem.as_deref(),
             tty,
-            defer_start,
         )
         .await
         .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
@@ -101,7 +100,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
     }
 }
 
-/// Initialize guest and start container.
+/// Initialize the guest and create the container (init is *not* run here).
 #[allow(clippy::too_many_arguments)]
 async fn run_guest_init(
     guest_session: GuestSession,
@@ -113,7 +112,6 @@ async fn run_guest_init(
     network_spec: &NetworkSpec,
     ca_cert_pem: Option<&str>,
     tty: bool,
-    defer_start: bool,
 ) -> BoxliteResult<()> {
     let container_id_str = container_id.as_str();
 
@@ -157,14 +155,9 @@ async fn run_guest_init(
         .await?;
     tracing::info!(container_id = %returned_id, "Container created");
 
-    // Step 3: run init — unless the caller is deferring it to attach first
-    // (`LiteBox::start_attached`), in which case *it* calls Container.Start once
-    // the client is on the stream. The host sequences the two RPCs; the choice
-    // of when to start is host-side, not a flag on the wire.
-    if !defer_start {
-        container_interface.start(container_id_str).await?;
-        tracing::info!(container_id = %returned_id, "Container started");
-    }
+    // Running init is deliberately *not* done here. The container is created and
+    // left standing at the gate; the host runs it with `Container.Start` after a
+    // client has attached, so nothing it prints can be missed however fast it is.
 
     Ok(())
 }

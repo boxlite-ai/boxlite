@@ -102,18 +102,13 @@ impl LiteBox {
     /// runs COMMAND *as* the container init, docker semantics). The
     /// unqualified name follows the ecosystem convention (`docker
     /// attach`, `podman attach`, CRI `Attach`).
+    ///
+    /// Attaching boots the box but does not run the command — call `start()`
+    /// after to run it. This is docker's create → attach → start: attach first
+    /// so a command that finishes instantly cannot outrun the stream, taking its
+    /// output and exit code with it.
     pub async fn attach(&self) -> BoxliteResult<Execution> {
         self.box_backend.attach().await
-    }
-
-    /// Start the box with a client already attached to its main command —
-    /// docker's create → attach → start.
-    ///
-    /// Use this instead of `start()` + `attach()` whenever the main command's
-    /// output and exit code matter. Started first, a command that finishes
-    /// instantly can be gone before the attach lands, taking both with it.
-    pub async fn start_attached(&self) -> BoxliteResult<Execution> {
-        self.box_backend.start_attached().await
     }
 
     /// Reattach to a running exec session by id, returning a fresh

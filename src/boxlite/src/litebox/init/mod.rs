@@ -151,9 +151,6 @@ pub(crate) struct BoxBuilder {
     runtime: SharedRuntimeImpl,
     config: BoxConfig,
     state: BoxState,
-    /// Hold the starting gun: create the container, let the caller attach, and
-    /// only then run its init. See `InitPipelineContext::defer_container_start`.
-    defer_container_start: bool,
 }
 
 impl BoxBuilder {
@@ -172,7 +169,6 @@ impl BoxBuilder {
         runtime: SharedRuntimeImpl,
         config: BoxConfig,
         state: BoxState,
-        defer_container_start: bool,
     ) -> BoxliteResult<Self> {
         // Get options reference from config (no reconstruction needed!)
         let options = &config.options;
@@ -182,7 +178,6 @@ impl BoxBuilder {
             runtime,
             config,
             state,
-            defer_container_start,
         })
     }
 
@@ -200,7 +195,6 @@ impl BoxBuilder {
             runtime,
             config,
             state,
-            defer_container_start,
         } = self;
 
         let status = state.status;
@@ -212,7 +206,6 @@ impl BoxBuilder {
             runtime.clone(),
             reuse_rootfs,
             skip_guest_wait,
-            defer_container_start,
         );
         let ctx = Arc::new(Mutex::new(ctx));
         let ctx_for_cleanup = Arc::clone(&ctx);

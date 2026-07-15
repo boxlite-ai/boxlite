@@ -1023,37 +1023,21 @@ async fn get_or_attach_main_session(
 
     let litebox = get_or_fetch_box(state, box_id).await?;
 
-    // A *cold* box is booted with the client already attached — docker's create →
-    // attach → start. Starting first would race the main command: one that
-    // finishes instantly can be gone before the attach lands, and its output and
-    // exit code die with the VM. Only Configured qualifies for a boot at all: it
-    // has never run, so booting it is what the caller asked for. A Stopped box is
-    // left alone — `attach()` refuses it, where `start()` would have restarted it
-    // and re-run the user's main command.
+    // Attaching boots the box (creating its container) and subscribes to the main
+    // command's session, but does *not* run init — `POST /start` does. So a client
+    // mid `run --url` is registered here, on the stream, before it starts the box:
+    // docker's create → attach → start, split across the two calls it makes.
     //
-    // This happens under the registry write lock, unlike the pre-boot it replaces,
-    // and the cost is real: a cold boot includes pulling the image, which is
-    // unbounded, so every other `/exec`, `/attach` and the reaper wait behind it.
-    // It buys the atomic check-then-open that stops two clients opening two guest
-    // streams for one session — and the guest refuses a second Attach, so one of
-    // them would get a permanently silent Execution. The ordering makes the trade
-    // unavoidable here, because the attach is no longer separable from the boot.
-    //
-    // The way out is a per-box open lock rather than the registry-wide one, so a
-    // cold boot only blocks other attaches to the *same* box. Worth doing; not
-    // worth doing in this change.
-    let is_cold = litebox.info().status == boxlite::BoxStatus::Configured;
-
+    // This runs under the registry write lock, and booting a cold box pulls its
+    // image, which is unbounded, so every other `/exec`, `/attach` and the reaper
+    // wait behind it. The lock buys the atomic check-then-open that stops two
+    // clients opening two guest streams for one session — the guest refuses a
+    // second Attach, so the loser would get a permanently silent Execution. A
+    // per-box open lock would scope that to the same box; worth doing, not here.
     let mut executions = state.executions.write().await;
-    register_main_session(&mut executions, box_id, || async {
-        if is_cold {
-            litebox.start_attached().await
-        } else {
-            litebox.attach().await
-        }
-    })
-    .await
-    .map_err(|e| error_from_boxlite(&e))
+    register_main_session(&mut executions, box_id, || async { litebox.attach().await })
+        .await
+        .map_err(|e| error_from_boxlite(&e))
 }
 
 // ============================================================================

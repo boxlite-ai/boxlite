@@ -174,23 +174,6 @@ impl BoxBackend for RestBox {
         ))
     }
 
-    /// Start the box with a client already attached — over REST, that *is*
-    /// `attach()`.
-    ///
-    /// The server's `/boxes/{id}/attach` boots a cold box with the client on the
-    /// stream (create → attach → start) and refuses a stopped one, so the whole
-    /// ordering happens on the far side of the wire and there is nothing left for
-    /// this end to sequence.
-    ///
-    /// Taking the trait's default here would have been a quiet bug: it is
-    /// `start()` then `attach()` — a `POST /start` that runs the main command to
-    /// completion server-side, followed by an attach that arrives too late to see
-    /// any of it. `boxlite run --url … alpine echo hi` would print a refusal
-    /// instead of `hi`.
-    async fn start_attached(&self) -> BoxliteResult<Execution> {
-        self.attach().await
-    }
-
     /// Attach to the box's main command session — the container's init.
     ///
     /// Hits the container-attach route (docker's
@@ -201,6 +184,11 @@ impl BoxBackend for RestBox {
     /// this returns is a fully ordinary one — signal, resize and kill go
     /// out over the same `/executions/{id}/…` routes as any exec, and the
     /// pump reconnects through them too.
+    ///
+    /// The route boots the box and subscribes to init's session but does not run
+    /// it — `POST /start` does. `run --url` calls `attach()` then `start()`, the
+    /// same create → attach → start it does locally, so a command that finishes
+    /// instantly cannot outrun the stream.
     async fn attach(&self) -> BoxliteResult<Execution> {
         let box_id = self.box_id_str();
 

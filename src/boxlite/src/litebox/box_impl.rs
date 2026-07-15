@@ -122,6 +122,13 @@ pub(crate) struct BoxImpl {
     /// One watcher per BoxImpl: it is armed both when *we* start the box and
     /// when we adopt one that was already running, and those can both happen.
     exit_watcher_armed: std::sync::atomic::AtomicBool,
+
+    /// Runs the container's init exactly once. Booting only *creates* the
+    /// container now (docker's create); running its init is a separate step so a
+    /// client can attach first. This single-flights that step across every
+    /// implicit-boot caller and an explicit `start()`, and is pre-set when we
+    /// reattach to a box whose init is already running.
+    container_start: OnceCell<()>,
 }
 
 impl BoxImpl {
@@ -161,6 +168,7 @@ impl BoxImpl {
             live: OnceCell::new(),
             health_check_task: RwLock::new(None),
             exit_watcher_armed: std::sync::atomic::AtomicBool::new(false),
+            container_start: OnceCell::new(),
         }
     }
 
@@ -219,12 +227,6 @@ impl BoxImpl {
     ///
     /// This is idempotent - calling start() on a Running box is a no-op.
     pub(crate) async fn start(&self) -> BoxliteResult<()> {
-        self.start_booting(false).await
-    }
-
-    /// `start`, saying whether the container's init should be held at the gate
-    /// for a client to attach first (see [`Self::start_attached`]).
-    async fn start_booting(&self, defer_container_start: bool) -> BoxliteResult<()> {
         let t0 = Instant::now();
 
         // Check if already shutdown (via stop() or runtime shutdown)
@@ -234,47 +236,47 @@ impl BoxImpl {
             ));
         }
 
-        // Check current status
         let status = self.state.read().status;
 
-        // Idempotent: already running
-        if status == BoxStatus::Running {
-            return Ok(());
-        }
-
-        // Check if startable
-        if !status.can_start() {
+        // `Running` is admitted alongside `can_start()` on purpose: a box brought
+        // up by a bare `attach()` reports Running with its container *created but
+        // not started*, and this call is what runs it. A spent handle (initialized
+        // but no longer Running) is still refused, by `ensure_booted` below.
+        if status != BoxStatus::Running && !status.can_start() {
             return Err(BoxliteError::InvalidState(format!(
                 "Cannot start box in {} state",
                 status
             )));
         }
 
-        // A spent handle — one whose box stopped itself, leaving a dead VM in the
-        // OnceCell — is refused by `live_state()` below, which is the one funnel
-        // every operation shares. Guarding it only here would have fixed `start`
-        // and left `exec`, `attach`, `cp` and `metrics` serving the corpse.
-        let _ = self.live_state_booting(defer_container_start).await?;
+        // Boot creates the container; running its init is the separate step that
+        // makes `run` docker-shaped — create, attach, then start. `run` slips the
+        // attach between these two calls; every other caller just wants both.
+        let live = self.ensure_booted().await?;
+        let started_now = self.ensure_container_started(live).await?;
 
-        for listener in &self.event_listeners {
-            listener.on_box_started(&self.config.id);
+        // Announce the start only when *this* call actually ran init — not on an
+        // idempotent re-`start()` or a reattach to an already-running box.
+        if started_now {
+            for listener in &self.event_listeners {
+                listener.on_box_started(&self.config.id);
+            }
+            tracing::info!(
+                box_id = %self.config.id,
+                elapsed_ms = t0.elapsed().as_millis() as u64,
+                "Box started"
+            );
         }
-
-        tracing::info!(
-            box_id = %self.config.id,
-            elapsed_ms = t0.elapsed().as_millis() as u64,
-            "Box started"
-        );
         Ok(())
     }
 
     /// Guard every operation that would lazily boot the VM.
     ///
     /// Booting is no longer neutral. The box's init *is* its main command now,
-    /// so a lazy start re-runs the user's workload — and `live_state()` boots
-    /// silently, from any status `can_start()` admits. `exec` / `cp` / `metrics`
-    /// / `attach` on a box that already ran to completion would therefore
-    /// execute it a second time:
+    /// so a lazy start re-runs the user's workload — and `live_state()` both
+    /// boots silently, from any status `can_start()` admits, *and* runs init.
+    /// `exec` / `cp` / `metrics` on a box that already ran to completion would
+    /// therefore execute it a second time:
     ///
     ///   boxlite run --name job alpine sh -c 'send-payment'   # runs, exits
     ///   boxlite cp job:/receipt .                            # sends it again
@@ -470,61 +472,40 @@ impl BoxImpl {
         rx
     }
 
-    /// Start the box with a client already attached to its main command —
-    /// docker's create → attach → start, in that order.
+    /// Attach to the box's main command session — the guest registers the
+    /// container init under execution_id = container_id. This is how `run`
+    /// follows the user command now that it *is* init (docker semantics), reusing
+    /// the exact stream plumbing of exec().
     ///
-    /// The order is the whole point. `start()` runs init, so an `attach()` issued
-    /// after it is a race: a command that finishes immediately (`run alpine echo
-    /// hi`) can be dead before the attach reaches the guest, and once the guest
-    /// powers the VM off, the box is Stopped — at which point attaching is
-    /// refused, because restarting it would run the user's command again. The
-    /// output and the exit code go with it, and `run` prints a refusal instead of
-    /// `hi`. Only a bounded flush window on the guest side hid that, and a window
-    /// is a bet, not a guarantee.
-    ///
-    /// So: create the container, attach to init's session while it is still
-    /// standing at the gate, and only then start it. Nothing it prints and no
-    /// code it exits with can be missed, however fast it is.
-    pub(crate) async fn start_attached(&self) -> BoxliteResult<Execution> {
-        // Only *this* call can hold init at the gate, and only if it is the one
-        // that boots the box. On an already-running box init is long gone from the
-        // gate, so there is nothing to defer and nothing to fire — just attach.
-        if self.live.initialized() {
-            return self.attach().await;
-        }
-
-        // Boot with the container created but not run. Init exists — it has a pid
-        // and its stdio, which is what lets the session below be opened against
-        // it — but it has not started.
-        self.start_booting(true).await?;
-
-        let execution = self.attach().await?;
-
-        // The client is on the stream. Fire.
-        self.live_state()
-            .await?
-            .guest_session
-            .container()
-            .await?
-            .start(self.container_id())
-            .await?;
-
-        Ok(execution)
-    }
-
-    /// Attach to the box's main command session — the guest registers
-    /// the container init under execution_id = container_id. This is how
-    /// `run` follows the user command now that it *is* init (docker
-    /// semantics), reusing the exact stream plumbing of exec().
+    /// Boots the box if needed but only *creates* the container — it does not run
+    /// init. That is what lets `run` be create → attach → start: attach here,
+    /// then `start()`, so a command that finishes instantly cannot outrun the
+    /// stream. Because attaching never runs the user's command, it needs no
+    /// re-run guard (unlike `exec`/`cp`, which do start it).
     pub(crate) async fn attach(&self) -> BoxliteResult<Execution> {
         if self.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(
                 "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
             ));
         }
-        self.ensure_usable_without_rerunning_main("attach")?;
 
-        let live = self.live_state().await?;
+        // Attach follows a box that is running or about to be started (`run`
+        // boots a fresh, `Configured` one and starts it right after). A box that
+        // already stopped has no session to follow, and rebooting it to attach
+        // would be a surprise — refuse it, as docker refuses attaching to a
+        // stopped container.
+        let status = self.state.read().status;
+        if !matches!(
+            status,
+            BoxStatus::Configured | BoxStatus::Running | BoxStatus::Paused
+        ) {
+            return Err(BoxliteError::InvalidState(format!(
+                "Cannot attach to box {}: it is {}",
+                self.config.id, status
+            )));
+        }
+
+        let live = self.ensure_booted().await?;
         let mut exec_interface = live.guest_session.execution().await?;
         let components = exec_interface
             .attach_existing(self.container_id(), self.shutdown_token.clone())
@@ -876,40 +857,33 @@ impl BoxImpl {
     // LIVE STATE INITIALIZATION (internal)
     // ========================================================================
 
-    /// Get LiveState, lazily initializing it if needed.
+    /// The implicit-boot funnel: boot the box and make sure its container's init
+    /// is running. `exec`, `metrics`, `copy_into` and `copy_out` pass through
+    /// here and, as before, get a box whose container is *running* — booting and
+    /// running init used to be one pipeline step. Now booting only creates the
+    /// container, so this starts it (once, and safely alongside an explicit
+    /// `start()`). `attach` deliberately does *not* use this: it boots without
+    /// running init, so a client can attach before `start()`.
+    async fn live_state(&self) -> BoxliteResult<&LiveState> {
+        let live = self.ensure_booted().await?;
+        self.ensure_container_started(live).await?;
+        Ok(live)
+    }
+
+    /// Boot the box to the point its container is *created* — VM up, guest
+    /// connected, `Container.Init` done — without running init.
     ///
-    /// Refuses to hand back a **spent** handle. A box can now stop *itself* —
-    /// its main command exits, the guest powers the VM off, the watcher marks it
+    /// Refuses to hand back a **spent** handle. A box can now stop *itself* — its
+    /// main command exits, the guest powers the VM off, the watcher marks it
     /// Stopped — and this `OnceCell` still holds that dead VM's `LiveState`.
     /// `OnceCell` cannot be re-initialized, so `get_or_try_init` would return the
-    /// corpse: `init_live_state()` would never run, the restart the caller was
-    /// promised would silently not happen, and their `exec` would be dialing a
-    /// guest that is gone.
-    ///
-    /// The guard lives *here*, at the one funnel every operation passes through
-    /// (`start`, `exec`, `attach`, `metrics`, `copy_into`, `copy_out`), rather
-    /// than at any one of them. `ensure_usable_without_rerunning_main` cannot
-    /// stand in for it: that gate deliberately *passes* a stopped box with no
-    /// main command of its own, because the cloud's auto-restart depends on it —
-    /// which makes this the exact path where a corpse would be served.
+    /// corpse and the promised restart would silently not happen. The guard lives
+    /// here, at the one funnel `live_state` and `attach` share.
     ///
     /// A `Stopped` box whose cell is empty is fine: that is a fresh handle, and
     /// booting it is the restart. Only an *initialized* cell on a box that is no
     /// longer Running means the VM behind it is dead.
-    async fn live_state(&self) -> BoxliteResult<&LiveState> {
-        self.live_state_booting(false).await
-    }
-
-    /// `live_state`, saying how to boot the container *if* this call is the one
-    /// that boots it.
-    ///
-    /// `defer_container_start` is a parameter and not a field on purpose. As
-    /// ambient state it survived a failed boot — `get_or_try_init` leaves the
-    /// cell empty on error, and `Failed` is startable — so a later plain
-    /// `start()` would re-enter the pipeline, still find the flag set, create the
-    /// container and never run it: a box reporting Running whose main command
-    /// never happened. Passing it means it cannot outlive the call that meant it.
-    async fn live_state_booting(&self, defer_container_start: bool) -> BoxliteResult<&LiveState> {
+    async fn ensure_booted(&self) -> BoxliteResult<&LiveState> {
         if self.live.initialized() && self.state.read().status != BoxStatus::Running {
             return Err(BoxliteError::Stopped(format!(
                 "Box {} is no longer running and this handle is spent — it still holds the \
@@ -920,9 +894,29 @@ impl BoxImpl {
             )));
         }
 
-        self.live
-            .get_or_try_init(|| self.init_live_state(defer_container_start))
-            .await
+        self.live.get_or_try_init(|| self.init_live_state()).await
+    }
+
+    /// Run the container's init exactly once, returning whether *this* call did
+    /// it (vs. finding it already running). Booting only creates the container;
+    /// this is the separate `Container.Start`. Single-flighted via `OnceCell`, so
+    /// the implicit-boot funnel and an explicit `start()` cannot double-run it,
+    /// and a box reattached with init already running pre-sets the cell.
+    async fn ensure_container_started(&self, live: &LiveState) -> BoxliteResult<bool> {
+        if self.container_start.initialized() {
+            return Ok(false);
+        }
+        self.container_start
+            .get_or_try_init(|| async {
+                live.guest_session
+                    .container()
+                    .await?
+                    .start(self.container_id())
+                    .await?;
+                Ok::<(), BoxliteError>(())
+            })
+            .await?;
+        Ok(true)
     }
 
     /// Initialize LiveState via BoxBuilder.
@@ -934,12 +928,16 @@ impl BoxImpl {
     ///
     /// Note: Lock is allocated in create(), not here. DB persistence also
     /// happens in create().
-    async fn init_live_state(&self, defer_container_start: bool) -> BoxliteResult<LiveState> {
+    async fn init_live_state(&self) -> BoxliteResult<LiveState> {
         use super::BoxBuilder;
         use std::sync::Arc;
 
         let state = self.state.read().clone();
         let is_first_start = state.status == BoxStatus::Configured;
+        // Reattaching to a live box: its init is already running, so mark the
+        // container-start done up front — `ensure_container_started` must not try
+        // to run it a second time.
+        let adopting_running = state.status == BoxStatus::Running;
 
         // Retrieve the lock (allocated in create())
         let lock_id = state.lock_id.ok_or_else(|| {
@@ -964,13 +962,15 @@ impl BoxImpl {
         // The returned cleanup_guard stays armed until we disarm it after all
         // operations succeed. If any operation fails, the guard's Drop will
         // cleanup the VM process and directory.
-        let builder = BoxBuilder::new(
-            Arc::clone(&self.runtime),
-            self.config.clone(),
-            state,
-            defer_container_start,
-        )?;
+        let builder = BoxBuilder::new(Arc::clone(&self.runtime), self.config.clone(), state)?;
         let (live_state, mut cleanup_guard) = builder.build().await?;
+
+        // The box is up. If we adopted one whose init was already running, that
+        // init needs no `Container.Start`; recording it now keeps
+        // `ensure_container_started` a no-op for this handle.
+        if adopting_running {
+            let _ = self.container_start.set(());
+        }
 
         // Read PID from file (single source of truth) and update state.
         //
@@ -1520,10 +1520,6 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
 
     async fn attach(&self) -> BoxliteResult<Execution> {
         self.attach().await
-    }
-
-    async fn start_attached(&self) -> BoxliteResult<Execution> {
-        self.start_attached().await
     }
 
     async fn metrics(&self) -> BoxliteResult<BoxMetrics> {

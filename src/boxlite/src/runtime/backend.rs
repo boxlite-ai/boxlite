@@ -89,15 +89,6 @@ pub(crate) trait BoxBackend: Send + Sync {
         ))
     }
 
-    /// Start the box with a client already attached to its main command
-    /// (docker's create → attach → start). Backends that cannot hold init at the
-    /// gate fall back to start-then-attach, which races a command that finishes
-    /// instantly.
-    async fn start_attached(&self) -> BoxliteResult<Execution> {
-        self.start().await?;
-        self.attach().await
-    }
-
     /// Reattach to an already-running exec session by id (mirrors
     /// docker's `ContainerExecAttach`). The returned `Execution`
     /// carries fresh stdin/stdout/stderr/result channels wired to a

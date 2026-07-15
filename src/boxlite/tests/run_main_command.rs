@@ -242,18 +242,19 @@ async fn a_stopped_no_command_box_refuses_to_serve_its_dead_vm() {
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
-/// A failed `start_attached()` must not poison the handle into creating a
-/// container it never runs.
+/// A failed first boot must not poison the handle into creating a container it
+/// never runs.
 ///
-/// The boot mode — "hold init at the gate, I will attach first" — used to live on
-/// the handle as a flag. `get_or_try_init` leaves its cell empty when a boot
-/// fails, and `Failed` is startable, so the flag outlived the call that meant it:
-/// a later plain `start()` would re-enter the pipeline, still find it set, create
-/// the container and never send `Container.Start`. The box would report Running
-/// with a main command that never ran, and an attach would stream nothing,
-/// forever. Passing the mode as a parameter is what makes that unrepresentable.
+/// `run` foreground boots by `attach()`ing — which now *creates* the container
+/// without running it — and then `start()`ing it. "Create but don't run yet"
+/// used to be a flag threaded into the boot; `get_or_try_init` leaves its cell
+/// empty when a boot fails, so the flag could outlive the call that meant it and
+/// a later plain `start()` would create the container and never send
+/// `Container.Start`. Booting is now unconditionally create-only and running init
+/// is a separate `OnceCell` set only on success, so a failed `attach()` strands
+/// nothing: the next `start()` boots and runs normally.
 #[tokio::test]
-async fn a_failed_attached_start_does_not_poison_the_next_start() {
+async fn a_failed_attach_does_not_poison_the_next_start() {
     use std::os::unix::fs::PermissionsExt;
 
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
@@ -285,7 +286,7 @@ async fn a_failed_attached_start_does_not_poison_the_next_start() {
     readonly.set_mode(0o500);
     std::fs::set_permissions(&boxes_dir, readonly).expect("make read-only");
 
-    let failed = handle.start_attached().await;
+    let failed = handle.attach().await;
 
     std::fs::set_permissions(&boxes_dir, restore).expect("restore permissions");
     assert!(
@@ -468,5 +469,77 @@ async fn a_self_stopped_box_refuses_to_restart_on_the_spent_handle() {
 
     let _ = fresh.stop().await;
     let _ = runtime.remove(fresh.id().as_str(), true).await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
+}
+
+/// `attach()` refuses a stopped box.
+///
+/// Attaching now boots the box create-only and subscribes — it never runs the
+/// command, so it dropped the re-run guard `exec`/`cp` keep. What it must still
+/// refuse is a box that has already stopped: there is no session to follow, and
+/// silently rebooting one just to attach would surprise the caller (docker
+/// refuses attaching to a stopped container too).
+#[tokio::test]
+async fn attach_refuses_a_stopped_box() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+
+    // A main command that exits on its own — the box stops itself. Its name holds
+    // neither "attach" nor "stopped", so the assertion below tests the real
+    // message, not the id echoed back into it.
+    let handle = runtime
+        .create(
+            main_command_opts(&["sh", "-c", "exit 0"], false),
+            Some("exit-job".to_string()),
+        )
+        .await
+        .expect("create box");
+    handle.start().await.expect("start box");
+
+    // Wait for the watcher to mark it Stopped.
+    let mut info = handle.info();
+    for _ in 0..60 {
+        info = handle.info();
+        if info.status != boxlite::BoxStatus::Running {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    assert_ne!(
+        info.status,
+        boxlite::BoxStatus::Running,
+        "precondition: the box must stop itself once its main command exits"
+    );
+
+    // A *fresh* handle on the stopped box — not spent (its `live` cell is empty),
+    // so the only thing that can refuse the attach is attach()'s own status gate,
+    // not the spent-handle guard.
+    drop(handle);
+    let stopped = runtime
+        .get("exit-job")
+        .await
+        .expect("get box")
+        .expect("box exists");
+    assert_eq!(
+        stopped.info().status,
+        boxlite::BoxStatus::Stopped,
+        "precondition: a fresh handle on the box reports it Stopped"
+    );
+
+    // `Execution` is not `Debug`, so match rather than `expect_err`.
+    let msg = match stopped.attach().await {
+        Ok(_) => panic!("attaching to a stopped box must fail, not reboot it"),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        msg.contains("attach") && msg.contains("stopped"),
+        "the refusal must name the operation and the state, got: {msg}"
+    );
+
+    let _ = runtime.remove(stopped.id().as_str(), true).await;
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }

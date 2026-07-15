@@ -80,10 +80,12 @@ impl BoxRunner {
             return Ok(0);
         }
 
-        // Foreground: attach *before* the command runs. Starting first races it —
-        // `run alpine echo hi` can finish before the attach lands, and its output
-        // and exit code die with the VM.
-        let mut execution = litebox.start_attached().await?;
+        // Foreground: attach *before* the command runs, then start it. Starting
+        // first races it — `run alpine echo hi` can finish before the attach
+        // lands, and its output and exit code die with the VM. Attaching only
+        // creates the container; `start()` runs its init.
+        let mut execution = litebox.attach().await?;
+        litebox.start().await?;
 
         // --tty implies --interactive when stdin is a terminal
         // (validate_flags already ensures stdin is a terminal when --tty is set)

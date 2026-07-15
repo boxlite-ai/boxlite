@@ -276,10 +276,6 @@ pub struct InitPipelineContext {
     pub runtime: SharedRuntimeImpl,
     pub guard: CleanupGuard,
     pub reuse_rootfs: bool,
-    /// Create the container but do not run its init process — the caller will,
-    /// after attaching to it. Docker's create → attach → start; without it a
-    /// command that finishes instantly can be gone before the attach lands.
-    pub defer_container_start: bool,
     /// Skip waiting for guest ready signal (for reattach to running box).
     pub skip_guest_wait: bool,
 
@@ -304,7 +300,6 @@ impl InitPipelineContext {
         runtime: SharedRuntimeImpl,
         reuse_rootfs: bool,
         skip_guest_wait: bool,
-        defer_container_start: bool,
     ) -> Self {
         let guard = CleanupGuard::new(runtime.clone(), config.id.clone());
         Self {
@@ -312,7 +307,6 @@ impl InitPipelineContext {
             runtime,
             guard,
             reuse_rootfs,
-            defer_container_start,
             skip_guest_wait,
             layout: None,
             container_image_config: None,
