@@ -21,7 +21,7 @@ import hashlib
 
 import boxlite
 import pytest
-from boxlite.boxlite import CommandStartError
+from boxlite.boxlite import _ExecStartError
 
 from conftest import drain
 
@@ -254,7 +254,7 @@ async def test_env_does_not_leak_across_execs(box):
 @pytest.mark.asyncio
 async def test_exec_cwd_nonexistent_returns_error(box):
     """Exec with a non-existent cwd should be a typed start failure."""
-    with pytest.raises(CommandStartError):
+    with pytest.raises(_ExecStartError):
         await box.exec("pwd", [], cwd="/nonexistent/path/xyz")
 
 
@@ -276,7 +276,7 @@ async def test_exec_cwd_with_spaces(box):
 @pytest.mark.asyncio
 async def test_nonexistent_command_returns_error(box):
     """A missing binary should be reported as a typed start failure."""
-    with pytest.raises(CommandStartError) as exc_info:
+    with pytest.raises(_ExecStartError) as exc_info:
         await box.exec("this_binary_does_not_exist_xyz", [])
     assert "not found" in str(exc_info.value).lower()
 

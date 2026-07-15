@@ -13,11 +13,11 @@ from ..errors import ExecError, _command_start_exit_code
 from ..exec import ExecResult
 
 try:
-    from ..boxlite import CommandStartError as _CommandStartError
+    from ..boxlite import _ExecStartError
 except ImportError:
 
-    class _CommandStartError(RuntimeError):
-        """Fallback for native extensions built before CommandStartError."""
+    class _ExecStartError(RuntimeError):
+        """Fallback for native extensions built before _ExecStartError."""
 
         pass
 
@@ -208,7 +208,7 @@ class SyncSimpleBox:
                 execution = await async_box.exec(
                     cmd, arg_list, env_list, user=user, timeout_secs=timeout, cwd=cwd
                 )
-            except _CommandStartError as e:
+            except _ExecStartError as e:
                 message = str(e)
                 raise ExecError(
                     command_display, _command_start_exit_code(message), message
