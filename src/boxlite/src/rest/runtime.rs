@@ -41,7 +41,10 @@ impl AuthBackend for RestRuntime {
 #[async_trait::async_trait]
 impl VolumeBackend for RestRuntime {
     async fn create_volume(&self) -> BoxliteResult<VolumeInfo> {
-        let resp: VolumeResponse = self.client.post("/volumes", &CreateVolumeRequest {}).await?;
+        let resp: VolumeResponse = self
+            .client
+            .post("/volumes", &CreateVolumeRequest {})
+            .await?;
         Ok(resp.to_volume_info())
     }
 

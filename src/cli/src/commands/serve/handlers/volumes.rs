@@ -27,7 +27,9 @@ pub(in crate::commands::serve) async fn create_volume(
     }
 }
 
-pub(in crate::commands::serve) async fn list_volumes(State(state): State<Arc<AppState>>) -> Response {
+pub(in crate::commands::serve) async fn list_volumes(
+    State(state): State<Arc<AppState>>,
+) -> Response {
     let handle = match state.runtime.volumes() {
         Ok(h) => h,
         Err(e) => return error_from_boxlite(&e),

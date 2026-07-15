@@ -72,12 +72,7 @@ impl PyVolumeHandle {
     }
 
     #[pyo3(signature = (id, force=false))]
-    fn remove<'py>(
-        &self,
-        py: Python<'py>,
-        id: String,
-        force: bool,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    fn remove<'py>(&self, py: Python<'py>, id: String, force: bool) -> PyResult<Bound<'py, PyAny>> {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             handle.remove(&id, force).await.map_err(map_err)?;

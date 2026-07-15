@@ -717,9 +717,7 @@ fn box_info_to_response(info: &BoxInfo) -> BoxResponse {
     }
 }
 
-fn volume_info_to_response(
-    info: &boxlite::runtime::types::VolumeInfo,
-) -> types::VolumeResponse {
+fn volume_info_to_response(info: &boxlite::runtime::types::VolumeInfo) -> types::VolumeResponse {
     types::VolumeResponse {
         id: info.id.clone(),
         created_at: info.created_at.to_rfc3339(),
@@ -1065,9 +1063,7 @@ async fn get_or_attach_main_session(
 // ============================================================================
 
 fn build_router(state: Arc<AppState>) -> Router {
-    use handlers::{
-        advanced, boxes, config, executions, files, me, metrics, snapshots, volumes,
-    };
+    use handlers::{advanced, boxes, config, executions, files, me, metrics, snapshots, volumes};
 
     Router::new()
         // Identity (no tenant prefix)
