@@ -68,6 +68,7 @@ type attachExec interface {
 	WriteStdin(data []byte) (int, error)
 	DoneCh() <-chan struct{}
 	ExitCodeValue() int
+	TimedOutValue() bool
 	IsTTY() bool
 	Resize(rows, cols int) error
 	Signal(sig int) error
@@ -289,6 +290,7 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 			_ = writeJSONFrame(conn, &writeMu, map[string]any{
 				"type":      "exit",
 				"exit_code": exec.ExitCodeValue(),
+				"timed_out": exec.TimedOutValue(),
 			})
 			closeWS(websocket.CloseNormalClosure, "")
 		} else {
@@ -486,6 +488,7 @@ func (m managedExecAttach) Subscribe(bufSize int) (stdout, stderr <-chan []byte,
 func (m managedExecAttach) WriteStdin(data []byte) (int, error) { return m.me.AttachWriteStdin(data) }
 func (m managedExecAttach) DoneCh() <-chan struct{}             { return m.me.Done }
 func (m managedExecAttach) ExitCodeValue() int                  { return m.me.ExitCode }
+func (m managedExecAttach) TimedOutValue() bool                 { return m.me.TimedOut }
 func (m managedExecAttach) IsTTY() bool                         { return m.me.TTY }
 func (m managedExecAttach) Resize(rows, cols int) error         { return m.me.AttachResize(rows, cols) }
 func (m managedExecAttach) Signal(sig int) error                { return m.me.AttachSignal(sig) }
