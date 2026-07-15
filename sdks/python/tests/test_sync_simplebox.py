@@ -9,11 +9,9 @@ from __future__ import annotations
 
 import pytest
 
-import boxlite
-
 # Try to import sync API - skip if greenlet not installed
 try:
-    from boxlite import SyncSimpleBox
+    from boxlite import SyncSimpleBox, TimeoutError as BoxliteTimeoutError
 
     SYNC_AVAILABLE = True
 except ImportError:
@@ -119,7 +117,7 @@ class TestSyncSimpleBox:
     def test_exec_with_timeout(self, shared_sync_runtime):
         """Per-exec timeout raises a typed TimeoutError."""
         with SyncSimpleBox(image="alpine:latest", runtime=shared_sync_runtime) as box:
-            with pytest.raises(boxlite.TimeoutError):
+            with pytest.raises(BoxliteTimeoutError):
                 box.exec("sleep", "60", timeout=2)
 
     def test_exec_combined_options(self, shared_sync_runtime):
