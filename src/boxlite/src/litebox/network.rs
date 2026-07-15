@@ -95,7 +95,7 @@ impl NetworkHandle {
     ///
     /// This is the single tunnel entry point: callers that only want the raw
     /// stream use the SDK-specific `connect()` wrapper.
-    pub async fn box_tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
+    pub async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
         self.network_backend.tunnel(target).await
     }
 }
@@ -147,7 +147,7 @@ mod tests {
         let target = "192.168.127.2:3000".parse().unwrap();
 
         // Obtaining the tunnel does no work — no describe, no connect.
-        let tunnel = network.box_tunnel(target).await.unwrap();
+        let tunnel = network.tunnel(target).await.unwrap();
         assert_eq!(backend.described.load(Ordering::Relaxed), 0);
         assert_eq!(backend.connected.load(Ordering::Relaxed), 0);
 
@@ -198,7 +198,7 @@ mod tests {
         }));
         let target = "192.168.127.2:3000".parse().unwrap();
 
-        let tunnel = network.box_tunnel(target).await.unwrap();
+        let tunnel = network.tunnel(target).await.unwrap();
         let endpoint = tunnel.endpoint().await.unwrap();
         assert_eq!(endpoint, None);
         let TunnelStream::Local(mut stream) = tunnel.connect().await.unwrap();
