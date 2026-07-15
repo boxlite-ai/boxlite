@@ -10,7 +10,11 @@ __all__ = ["BoxliteError", "ExecError", "TimeoutError", "ParseError"]
 def _command_start_exit_code(message: str) -> int:
     """Translate a pre-exec spawn failure to the conventional shell code."""
     detail = message.casefold()
-    not_found_markers = ("not found in $path", "no such file or directory", "os error 2")
+    not_found_markers = (
+        "not found in $path",
+        "no such file or directory",
+        "os error 2",
+    )
     return 127 if any(marker in detail for marker in not_found_markers) else 126
 
 

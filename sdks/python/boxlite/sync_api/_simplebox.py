@@ -21,6 +21,7 @@ except ImportError:
 
         pass
 
+
 if TYPE_CHECKING:
     from ._boxlite import SyncBoxlite
     from ._box import SyncBox

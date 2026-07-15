@@ -21,6 +21,7 @@ except ImportError:
 
         pass
 
+
 if TYPE_CHECKING:
     from .boxlite import Boxlite
 
