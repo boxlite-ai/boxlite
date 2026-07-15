@@ -9,6 +9,7 @@ use crate::info::PyBoxInfo;
 use crate::metrics::PyRuntimeMetrics;
 use crate::options::{PyBoxOptions, PyBoxliteRestOptions, PyOptions};
 use crate::util::map_err;
+use crate::volumes::PyVolumeHandle;
 
 #[pyclass(name = "Boxlite")]
 pub(crate) struct PyBoxlite {
@@ -165,6 +166,14 @@ impl PyBoxlite {
     fn images(&self) -> PyResult<PyImageHandle> {
         let handle = self.runtime.images().map_err(map_err)?;
         Ok(PyImageHandle {
+            handle: Arc::new(handle),
+        })
+    }
+
+    #[getter]
+    fn volumes(&self) -> PyResult<PyVolumeHandle> {
+        let handle = self.runtime.volumes().map_err(map_err)?;
+        Ok(PyVolumeHandle {
             handle: Arc::new(handle),
         })
     }

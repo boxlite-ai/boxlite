@@ -17,6 +17,7 @@ mod runtime;
 mod snapshot_options;
 mod snapshots;
 mod util;
+mod volumes;
 
 // Re-export all public types
 pub use advanced_options::JsSecurityOptions;
@@ -33,3 +34,4 @@ pub use options::{
 pub use runtime::JsBoxlite; // re-export for dist bundling
 pub use snapshot_options::{JsCloneOptions, JsExportOptions, JsSnapshotOptions};
 pub use snapshots::{JsSnapshotHandle, JsSnapshotInfo};
+pub use volumes::{JsVolumeHandle, JsVolumeInfo};

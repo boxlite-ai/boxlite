@@ -23,6 +23,7 @@ mod runtime;
 #[cfg(test)]
 mod tests;
 mod util;
+mod volumes;
 
 /// Test-only counter incremented every time `free_str` reclaims a
 /// `CString::from_raw`'d inner pointer. Lets nested-leak reproducer
@@ -46,6 +47,7 @@ pub type CBoxHandle = box_handle::BoxHandle;
 pub type CBoxNetworkHandle = network::BoxNetworkHandle;
 pub type CBoxTunnelHandle = network::BoxTunnelHandle;
 pub type CBoxliteImageHandle = images::ImageHandle;
+pub type CBoxliteVolumeHandle = volumes::VolumeHandle;
 pub type CBoxliteOptions = options::OptionsHandle;
 pub type CBoxliteCredential = rest::CredentialHandle;
 pub type CBoxliteRestOptions = rest::RestOptionsHandle;
@@ -58,6 +60,8 @@ pub type CBoxMetrics = metrics::CBoxMetrics;
 pub type CExecutionHandle = exec::ExecutionHandle;
 pub type CImageInfoList = images::CImageInfoList;
 pub type CImagePullResult = images::CImagePullResult;
+pub type CVolumeInfo = volumes::CVolumeInfo;
+pub type CVolumeInfoList = volumes::CVolumeInfoList;
 pub type CRuntimeMetrics = metrics::CRuntimeMetrics;
 pub type BoxliteCommand = exec::BoxliteCommand;
 pub type CAdvancedBoxOptions = advanced_options::AdvancedBoxOptionsHandle;
@@ -76,3 +80,4 @@ pub use options::*;
 pub use rest::*;
 pub use runtime::*;
 pub use util::*;
+pub use volumes::*;

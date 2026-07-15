@@ -34,6 +34,8 @@ export type {
   ImageHandle,
   ImageInfo,
   ImagePullResult,
+  VolumeHandle,
+  VolumeInfo,
   JsImageRegistry,
   JsImageRegistryAuth,
   JsOptions,

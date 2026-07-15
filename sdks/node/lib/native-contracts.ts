@@ -27,6 +27,20 @@ export interface ImageHandle {
   list(): Promise<ImageInfo[]>;
 }
 
+export interface VolumeInfo {
+  name: string;
+  mountpoint: string;
+  createdAt: string;
+  sizeBytes?: number;
+}
+
+export interface VolumeHandle {
+  create(name: string, sizeGb?: number | null): Promise<VolumeInfo>;
+  list(): Promise<VolumeInfo[]>;
+  get(name: string): Promise<VolumeInfo>;
+  remove(name: string, force?: boolean | null): Promise<void>;
+}
+
 export interface JsEnvVar {
   key: string;
   value: string;
@@ -323,6 +337,7 @@ export interface JsBoxlite {
   get(idOrName: string): Promise<JsBox | null>;
   metrics(): Promise<JsRuntimeMetrics>;
   readonly images: ImageHandle;
+  readonly volumes: VolumeHandle;
   remove(idOrName: string, force?: boolean | null): Promise<void>;
   close(): void;
   shutdown(timeout?: number | null): Promise<void>;

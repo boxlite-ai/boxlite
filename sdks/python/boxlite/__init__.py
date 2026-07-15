@@ -39,6 +39,8 @@ try:
         SnapshotHandle,
         SnapshotInfo,
         SnapshotOptions,
+        VolumeHandle,
+        VolumeInfo,
     )
 
     __all__ = [
@@ -73,6 +75,8 @@ try:
         "SnapshotOptions",
         "CloneOptions",
         "ExportOptions",
+        "VolumeHandle",
+        "VolumeInfo",
     ]
     # Credential abstraction (ABC + virtual-registered native classes)
     from .credential import Credential  # noqa: F401

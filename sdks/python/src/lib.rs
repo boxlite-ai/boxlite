@@ -11,6 +11,7 @@ mod runtime;
 mod snapshot_options;
 mod snapshots;
 mod util;
+mod volumes;
 
 use crate::advanced_options::{PyAdvancedBoxOptions, PyHealthCheckOptions, PySecurityOptions};
 use crate::box_handle::PyBox;
@@ -25,6 +26,7 @@ use crate::options::{
 use crate::runtime::PyBoxlite;
 use crate::snapshot_options::{PyCloneOptions, PyExportOptions, PySnapshotOptions};
 use crate::snapshots::{PySnapshotHandle, PySnapshotInfo};
+use crate::volumes::{PyVolumeHandle, PyVolumeInfo};
 use pyo3::prelude::*;
 
 #[pymodule(name = "boxlite")]
@@ -45,6 +47,8 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyImageHandle>()?;
     m.add_class::<PyImageInfo>()?;
     m.add_class::<PyImagePullResult>()?;
+    m.add_class::<PyVolumeHandle>()?;
+    m.add_class::<PyVolumeInfo>()?;
     m.add_class::<PyBoxInfo>()?;
     m.add_class::<PyBoxStateInfo>()?;
     m.add_class::<PyHealthState>()?;

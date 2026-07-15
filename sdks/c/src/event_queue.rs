@@ -14,6 +14,7 @@ use boxlite::BoxliteError;
 use crate::images::{CImageInfoList, CImagePullResult};
 use crate::info::{CBoxInfo, CBoxInfoList};
 use crate::metrics::{CBoxMetrics, CRuntimeMetrics};
+use crate::volumes::{CVolumeInfo, CVolumeInfoList};
 
 /// Maximum number of buffered events before producer tasks yield.
 pub const QUEUE_CAPACITY: usize = 4096;
@@ -117,6 +118,30 @@ pub type CBoxImageListCb =
     Option<extern "C" fn(*mut CImageInfoList, *mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxImageListFn =
     extern "C" fn(*mut CImageInfoList, *mut crate::CBoxliteError, *mut c_void);
+
+/// Volume create completion.
+pub type CBoxVolumeCreateCb =
+    Option<extern "C" fn(*mut CVolumeInfo, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxVolumeCreateFn =
+    extern "C" fn(*mut CVolumeInfo, *mut crate::CBoxliteError, *mut c_void);
+
+/// Volume get completion. Distinct typedef from `CBoxVolumeCreateCb` even
+/// though the shape is identical so callers can route create and get
+/// callbacks to different handlers without relying on positional inference.
+pub type CBoxVolumeGetCb =
+    Option<extern "C" fn(*mut CVolumeInfo, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxVolumeGetFn =
+    extern "C" fn(*mut CVolumeInfo, *mut crate::CBoxliteError, *mut c_void);
+
+/// Volume list completion.
+pub type CBoxVolumeListCb =
+    Option<extern "C" fn(*mut CVolumeInfoList, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxVolumeListFn =
+    extern "C" fn(*mut CVolumeInfoList, *mut crate::CBoxliteError, *mut c_void);
+
+/// Volume remove completion.
+pub type CBoxVolumeRemoveCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxVolumeRemoveFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
 
 /// Copy (into / out of) completion.
 pub type CBoxCopyCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
@@ -318,6 +343,26 @@ pub enum RuntimeEvent {
         cb: CBoxImageListFn,
         user_data: usize,
         result: Result<OwnedFfiPtr<CImageInfoList>, BoxliteError>,
+    },
+    VolumeCreate {
+        cb: CBoxVolumeCreateFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<CVolumeInfo>, BoxliteError>,
+    },
+    VolumeGet {
+        cb: CBoxVolumeGetFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<CVolumeInfo>, BoxliteError>,
+    },
+    VolumeList {
+        cb: CBoxVolumeListFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<CVolumeInfoList>, BoxliteError>,
+    },
+    VolumeRemove {
+        cb: CBoxVolumeRemoveFn,
+        user_data: usize,
+        result: Result<(), BoxliteError>,
     },
     Copy {
         cb: CBoxCopyFn,

@@ -235,6 +235,76 @@ func goBoxliteOnImageList(list *C.CImageInfoList, errPtr *C.CBoxliteError, userD
 	ch <- imageListResult{value: images}
 }
 
+// ─── Volume callbacks ──────────────────────────────────────────────────────
+
+// goBoxliteOnVolume delivers a single CVolumeInfo. Shared by Create and Get
+// (their C typedefs differ but the payload shape is identical).
+//
+//export goBoxliteOnVolume
+func goBoxliteOnVolume(info *C.CVolumeInfo, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	if !claimOrFreePayload(h, &info, func(i **C.CVolumeInfo) {
+		if i != nil && *i != nil {
+			C.boxlite_free_volume_info(*i)
+		}
+	}) {
+		return
+	}
+	defer h.Delete()
+	ch, ok := h.Value().(chan volumeResult)
+	if !ok {
+		return
+	}
+	if err := errorFromCError(errPtr); err != nil {
+		ch <- volumeResult{err: err}
+		return
+	}
+	if info == nil {
+		ch <- volumeResult{}
+		return
+	}
+	v := cVolumeInfoToGo(info)
+	C.boxlite_free_volume_info(info)
+	ch <- volumeResult{value: &v}
+}
+
+//export goBoxliteOnVolumeList
+func goBoxliteOnVolumeList(list *C.CVolumeInfoList, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	if !claimOrFreePayload(h, &list, func(l **C.CVolumeInfoList) {
+		if l != nil && *l != nil {
+			C.boxlite_free_volume_info_list(*l)
+		}
+	}) {
+		return
+	}
+	defer h.Delete()
+	ch, ok := h.Value().(chan volumeListResult)
+	if !ok {
+		return
+	}
+	if err := errorFromCError(errPtr); err != nil {
+		ch <- volumeListResult{err: err}
+		return
+	}
+	volumes := convertVolumeInfoList(list)
+	if list != nil {
+		C.boxlite_free_volume_info_list(list)
+	}
+	ch <- volumeListResult{value: volumes}
+}
+
+//export goBoxliteOnVolumeRemove
+func goBoxliteOnVolumeRemove(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	deliverUnitResult(userData, errPtr)
+}
+
 // ─── Info callbacks ────────────────────────────────────────────────────────
 
 //export goBoxliteOnInfo
@@ -477,6 +547,16 @@ type imagePullResult struct {
 
 type imageListResult struct {
 	value []ImageInfo
+	err   error
+}
+
+type volumeResult struct {
+	value *VolumeInfo
+	err   error
+}
+
+type volumeListResult struct {
+	value []VolumeInfo
 	err   error
 }
 

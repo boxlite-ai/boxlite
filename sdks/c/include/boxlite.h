@@ -122,6 +122,9 @@ typedef struct RestOptionsHandle RestOptionsHandle;
 // per-runtime event queue used by the post-and-drain callback API.
 typedef struct RuntimeHandle RuntimeHandle;
 
+// Opaque handle to runtime named-volume operations.
+typedef struct VolumeHandle VolumeHandle;
+
 typedef struct AdvancedBoxOptionsHandle CAdvancedBoxOptions;
 
 // Extended error information for C API.
@@ -329,8 +332,37 @@ typedef struct BoxliteImageRegistry {
   const char *bearer_token;
 } BoxliteImageRegistry;
 
+typedef struct VolumeHandle CBoxliteVolumeHandle;
+
 // Runtime shutdown completion.
 typedef void (*CRuntimeShutdownCb)(CBoxliteError*, void*);
+
+typedef struct CVolumeInfo {
+  char *name;
+  char *mountpoint;
+  char *created_at;
+  uint64_t size_bytes;
+  int has_size;
+} CVolumeInfo;
+
+// Volume create completion.
+typedef void (*CBoxVolumeCreateCb)(struct CVolumeInfo*, CBoxliteError*, void*);
+
+typedef struct CVolumeInfoList {
+  struct CVolumeInfo *items;
+  int count;
+} CVolumeInfoList;
+
+// Volume list completion.
+typedef void (*CBoxVolumeListCb)(struct CVolumeInfoList*, CBoxliteError*, void*);
+
+// Volume get completion. Distinct typedef from `CBoxVolumeCreateCb` even
+// though the shape is identical so callers can route create and get
+// callbacks to different handlers without relying on positional inference.
+typedef void (*CBoxVolumeGetCb)(struct CVolumeInfo*, CBoxliteError*, void*);
+
+// Volume remove completion.
+typedef void (*CBoxVolumeRemoveCb)(CBoxliteError*, void*);
 
 #ifdef __cplusplus
 extern "C" {
@@ -779,6 +811,10 @@ enum BoxliteErrorCode boxlite_runtime_images(CBoxliteRuntime *runtime,
                                              CBoxliteImageHandle **out_handle,
                                              CBoxliteError *out_error);
 
+enum BoxliteErrorCode boxlite_runtime_volumes(CBoxliteRuntime *runtime,
+                                              CBoxliteVolumeHandle **out_handle,
+                                              CBoxliteError *out_error);
+
 // Async + callback variant of runtime shutdown.
 //
 // Spawns a Tokio task that calls `BoxliteRuntime::shutdown` and posts a
@@ -804,6 +840,38 @@ void boxlite_runtime_free(CBoxliteRuntime *runtime);
 int boxlite_runtime_drain(CBoxliteRuntime *runtime, int timeout_ms, CBoxliteError *out_error);
 
 void boxlite_free_string(char *s);
+
+enum BoxliteErrorCode boxlite_volume_create(CBoxliteVolumeHandle *handle,
+                                            const char *name,
+                                            uint64_t size_gb,
+                                            int has_size_gb,
+                                            CBoxVolumeCreateCb cb,
+                                            void *user_data,
+                                            CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_volume_list(CBoxliteVolumeHandle *handle,
+                                          CBoxVolumeListCb cb,
+                                          void *user_data,
+                                          CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_volume_get(CBoxliteVolumeHandle *handle,
+                                         const char *name,
+                                         CBoxVolumeGetCb cb,
+                                         void *user_data,
+                                         CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_volume_remove(CBoxliteVolumeHandle *handle,
+                                            const char *name,
+                                            int force,
+                                            CBoxVolumeRemoveCb cb,
+                                            void *user_data,
+                                            CBoxliteError *out_error);
+
+void boxlite_volume_free(CBoxliteVolumeHandle *handle);
+
+void boxlite_free_volume_info(struct CVolumeInfo *info);
+
+void boxlite_free_volume_info_list(struct CVolumeInfoList *list);
 
 #ifdef __cplusplus
 }  // extern "C"
