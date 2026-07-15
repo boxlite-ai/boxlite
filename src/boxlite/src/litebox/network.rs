@@ -201,9 +201,7 @@ mod tests {
         let tunnel = network.box_tunnel(target).await.unwrap();
         let endpoint = tunnel.endpoint().await.unwrap();
         assert_eq!(endpoint, None);
-        let mut stream = match tunnel.connect().await.unwrap() {
-            TunnelStream::Local(stream) => stream,
-        };
+        let TunnelStream::Local(mut stream) = tunnel.connect().await.unwrap();
         let mut peer = peer.lock().await.take().unwrap();
 
         peer.write_all(b"local").await.unwrap();
