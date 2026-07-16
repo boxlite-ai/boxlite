@@ -85,6 +85,11 @@ pub(crate) type ExitAction = Box<dyn FnOnce(ExitStatus) + Send>;
 pub(crate) struct ExitSlot(watch::Receiver<Option<ExitStatus>>);
 
 impl ExitSlot {
+    /// Return the exit status without waiting when the reaper has settled it.
+    pub(crate) fn try_get(&self) -> Option<ExitStatus> {
+        *self.0.borrow()
+    }
+
     /// The pid's exit status, awaiting it if it has not exited yet.
     pub(crate) async fn get(&self) -> ExitStatus {
         let mut rx = self.0.clone();

@@ -44,14 +44,13 @@ pub(super) fn start_timeout_watcher(
             "SIGTERM on timeout; grace before SIGKILL"
         );
 
-        // Stage 2: wait for the grace window. `exec_state.kill` already
-        // returns false once the process is reaped, so we do not need to
-        // poll — we just sleep the full grace then ask for SIGKILL.
+        // Stage 2: wait for the grace window. We do not need to poll; before
+        // SIGKILL, kill_for_timeout rechecks whether the process was reaped.
         tokio::time::sleep(TIMEOUT_GRACE).await;
 
         // Stage 3: SIGKILL fallback. Returns false if SIGTERM was honored
         // during the grace window (clean exit, no escalation needed).
-        if exec_state.kill(Signal::SIGKILL).await {
+        if exec_state.kill_for_timeout(Signal::SIGKILL).await {
             warn!(
                 execution_id = %exec_id,
                 "SIGKILL after grace expired; workload did not exit on SIGTERM"

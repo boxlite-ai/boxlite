@@ -294,6 +294,10 @@ impl ExecutionState {
     pub async fn kill_for_timeout(&self, signal: nix::sys::signal::Signal) -> bool {
         let mut inner = self.inner.lock().await;
 
+        if self.exit.try_get().is_some() {
+            return false;
+        }
+
         if let Some(ref handle) = inner.handle {
             let sent = handle.kill(signal).is_ok();
             if sent {
