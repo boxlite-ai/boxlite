@@ -5,6 +5,8 @@
 
 import { Inject, Injectable, Logger } from '@nestjs/common'
 import type { IncomingMessage } from 'http'
+import { request as httpRequest } from 'http'
+import { request as httpsRequest } from 'https'
 import type { Socket } from 'net'
 import { createProxyMiddleware, type RequestHandler } from 'http-proxy-middleware'
 import { ApiKeyService } from '../api-key/api-key.service'
@@ -19,13 +21,18 @@ type RunnerUpgradeRequest = IncomingMessage & {
   __boxliteRunnerBoxId?: string
 }
 
-// Matches /api/v1/boxes/<id>/executions/<id>/attach and the
-// /api/v1/<tenant>/boxes/<id>/executions/<id>/attach shape with optional query string.
+// Matches WebSocket box data-plane routes:
+// /api/v1/boxes/<id>/executions/<id>/attach,
+// and the /api/v1/<tenant>/boxes/... shape with optional query string.
 // Named groups: `tenant` (optional org id / path prefix) and `boxId`.
-const ATTACH_PATH = /^\/api\/v1\/(?:(?<tenant>[^/]+)\/)?boxes\/(?<boxId>[^/]+)\/executions\/[^/]+\/attach(?:\?.*)?$/
+const BOX_WS_PATH =
+  /^\/api\/v1\/(?:(?<tenant>[^/]+)\/)?boxes\/(?<boxId>[^/]+)\/executions\/[^/]+\/attach(?:\?.*)?$/
+
+const NETWORK_CONNECT_PATH =
+  /^\/api\/v1\/(?:(?<tenant>[^/]+)\/)?boxes\/(?<boxId>[^/]+)\/network\/tunnel(?:\?.*)?$/
 
 /**
- * Singleton WebSocket proxy for `/attach` upgrades.
+ * Singleton stream proxy for WebSocket and CONNECT upgrades.
  *
  * Express middleware/guards don't run on Node's `upgrade` event, so the
  * NestJS controller `@Get(':boxId/executions/:execId/attach')` route never
@@ -81,14 +88,25 @@ export class BoxliteWsProxyService {
   }
 
   /**
-   * Box id (+ optional tenant/org id) when the URL is an `/attach` WS upgrade.
+   * Box id (+ optional tenant/org id) when the URL is a box WS upgrade.
    * The tenant is the organization for JWT auth (an API key carries its own org).
    */
-  matchAttachPath(url: string | undefined): { boxId: string; tenant?: string } | null {
+  matchBoxWsPath(url: string | undefined): { boxId: string; tenant?: string } | null {
     if (!url) return null
-    const groups = url.match(ATTACH_PATH)?.groups as { boxId: string; tenant?: string } | undefined
+    const groups = url.match(BOX_WS_PATH)?.groups as { boxId: string; tenant?: string } | undefined
     if (!groups) return null
     return { boxId: groups.boxId, tenant: groups.tenant }
+  }
+
+  matchNetworkConnectPath(url: string | undefined): { boxId: string; tenant?: string } | null {
+    if (!url) return null
+    const groups = url.match(NETWORK_CONNECT_PATH)?.groups as { boxId: string; tenant?: string } | undefined
+    if (!groups) return null
+    return { boxId: groups.boxId, tenant: groups.tenant }
+  }
+
+  matchAttachPath(url: string | undefined): { boxId: string; tenant?: string } | null {
+    return this.matchBoxWsPath(url)
   }
 
   /**
@@ -96,7 +114,7 @@ export class BoxliteWsProxyService {
    * proxy middleware. Closes the socket cleanly on any failure.
    */
   async upgrade(req: IncomingMessage, socket: Socket, head: Buffer): Promise<void> {
-    const match = this.matchAttachPath(req.url)
+    const match = this.matchBoxWsPath(req.url)
     if (!match) {
       socket.destroy()
       return
@@ -135,6 +153,71 @@ export class BoxliteWsProxyService {
     } catch (err) {
       this.logger.warn(`upgrade failed for ${req.url}: ${(err as Error).message}`)
       this.respondAndClose(socket, 404, 'Not Found')
+    }
+  }
+
+  /**
+   * Forward an SDK/CLI HTTP CONNECT to the runner without introducing a
+   * WebSocket framing layer. Node's HTTP client owns the CONNECT handshake;
+   * after the 200 response both sockets are plain byte streams.
+   */
+  async connect(req: IncomingMessage, socket: Socket): Promise<void> {
+    const match = this.matchNetworkConnectPath(req.url)
+    if (!match) {
+      socket.destroy()
+      return
+    }
+
+    const auth = await this.authenticate(req, match.tenant)
+    if (!auth) {
+      this.respondAndClose(socket, 401, 'Unauthorized')
+      return
+    }
+
+    try {
+      const box = await this.boxService.findOneByIdOrName(match.boxId, auth.organizationId)
+      if (!box?.runnerId) {
+        this.respondAndClose(socket, 404, 'Not Found')
+        return
+      }
+      const runner = await this.runnerService.findOne(box.runnerId)
+      if (!runner) {
+        this.respondAndClose(socket, 404, 'Not Found')
+        return
+      }
+
+      const runnerUrl = new URL(runner.apiUrl || (runner as Runner & { proxyUrl?: string }).proxyUrl || '')
+      const runnerPath = req.url!.replace(/^\/api\/v1\/(?:[^/]+\/)?boxes\/[^/]+/, `/v1/boxes/${box.id}`)
+      const request = runnerUrl.protocol === 'https:' ? httpsRequest : httpRequest
+      const upstream = request({
+        protocol: runnerUrl.protocol,
+        hostname: runnerUrl.hostname,
+        port: runnerUrl.port || (runnerUrl.protocol === 'https:' ? 443 : 80),
+        method: 'CONNECT',
+        path: runnerPath,
+        headers: runner.apiKey ? { Authorization: `Bearer ${runner.apiKey}` } : undefined,
+      })
+
+      upstream.once('connect', (res, upstreamSocket, head) => {
+        if (res.statusCode !== 200) {
+          upstreamSocket.destroy()
+          this.respondAndClose(socket, res.statusCode || 502, 'Bad Gateway')
+          return
+        }
+        if (head.length > 0) socket.write(head)
+        socket.pipe(upstreamSocket)
+        upstreamSocket.pipe(socket)
+        socket.once('close', () => upstreamSocket.destroy())
+        upstreamSocket.once('close', () => socket.destroy())
+      })
+      upstream.once('error', (err) => {
+        this.logger.warn(`CONNECT proxy failed for ${req.url}: ${(err as Error).message}`)
+        socket.destroy()
+      })
+      upstream.end()
+    } catch (err) {
+      this.logger.warn(`CONNECT setup failed for ${req.url}: ${(err as Error).message}`)
+      this.respondAndClose(socket, 502, 'Bad Gateway')
     }
   }
 

@@ -125,6 +125,8 @@ tags:
     description: File upload and download
   - name: Metrics
     description: Runtime and per-box metrics
+  - name: Network
+    description: Box networking and service access
   - name: Images
     description: Container image management
 
@@ -821,6 +823,60 @@ paths:
           $ref: "#/components/responses/ConflictError"
 
   # -------------------------------------------------------------------------
+  # Network
+  # -------------------------------------------------------------------------
+  /{prefix}/boxes/{box_id}/network/tunnel:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - name: port
+        in: query
+        required: true
+        description: TCP port listened to by the service inside the box
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        example: 3000
+    post:
+      operationId: describeBoxTunnel
+      summary: Describe a box service tunnel
+      description: |
+        Returns the public service URL for a remote box. The returned descriptor
+        does not open a data-plane connection; use the WebSocket `GET` operation
+        below when a raw SDK tunnel is required.
+      tags: [Network]
+      responses:
+        "200":
+          description: Public service tunnel descriptor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BoxServiceEndpoint"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+    get:
+      operationId: openBoxNetworkTunnel
+      summary: Open a raw TCP tunnel to a box service port (WebSocket)
+      description: |
+        Upgrades to a bidirectional WebSocket. Each binary frame carries raw
+        TCP bytes; the server sends binary frames containing bytes received
+        from the destination. This is the SDK transport primitive for box
+        network access, not a public browser preview endpoint.
+      tags: [Network]
+      responses:
+        "101":
+          description: WebSocket upgrade successful; bidirectional tunnel begins.
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "502":
+          $ref: "#/components/responses/UpstreamUnavailableError"
+
+  # -------------------------------------------------------------------------
   # Metrics
   # -------------------------------------------------------------------------
   /{prefix}/metrics:
@@ -1155,6 +1211,19 @@ components:
               code: image_pull_failed
               request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
 
+    UpstreamUnavailableError:
+      description: The target box or runner could not accept the network connection
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              message: "guest network connection failed"
+              type: NetworkError
+              code: upstream_unavailable
+              request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
+
   # -------------------------------------------------------------------------
   # Schemas
   # -------------------------------------------------------------------------
@@ -1257,6 +1326,15 @@ components:
               type: string
               description: How long idempotency keys are retained (ISO 8601 duration)
               example: PT24H
+
+    BoxServiceEndpoint:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: Public URL for the box service.
 
     # =======================================================================
     # Authentication

@@ -16,6 +16,10 @@ import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 
+jest.mock('http-proxy-middleware', () => ({
+  createProxyMiddleware: jest.fn(),
+  fixRequestBody: jest.fn(),
+}))
 jest.mock('uuid', () => ({
   v4: jest.fn(() => 'mock-uuid'),
   validate: jest.fn(() => true),
@@ -94,5 +98,18 @@ describe('BoxLite REST routing', () => {
       boxId: 'box-1',
       tenant: 'default',
     })
+  })
+
+  it('matches CONNECT network tunnels with or without a routing prefix', () => {
+    const service = new BoxliteWsProxyService({} as any, {} as any, {} as any, {} as any, {} as any)
+
+    expect(service.matchNetworkConnectPath('/api/v1/boxes/box-1/network/tunnel?port=3000')).toEqual({
+      boxId: 'box-1',
+    })
+    expect(service.matchNetworkConnectPath('/api/v1/org-1/boxes/box-1/network/tunnel?port=3000')).toEqual({
+      boxId: 'box-1',
+      tenant: 'org-1',
+    })
+    expect(service.matchBoxWsPath('/api/v1/org-1/boxes/box-1/network/tunnel?port=3000')).toEqual(null)
   })
 })

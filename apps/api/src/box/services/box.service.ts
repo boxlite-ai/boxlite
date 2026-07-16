@@ -677,21 +677,18 @@ export class BoxService {
     if (port < 1 || port > 65535) {
       throw new BadRequestError('Invalid port')
     }
-    if (port !== TERMINAL_PREVIEW_PORT) {
-      throw new BadRequestError(`Port preview is only supported for terminal port ${TERMINAL_PREVIEW_PORT}`)
-    }
 
     const proxyDomain = this.configService.getOrThrow('proxy.domain')
     const proxyProtocol = this.configService.getOrThrow('proxy.protocol')
 
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+    const encodedBoxId = encodeDirectPreviewBoxId(box.id)
 
-    let url = `${proxyProtocol}://${port}-${box.id}.${proxyDomain}`
+    let url = `${proxyProtocol}://${port}-${encodedBoxId}.${proxyDomain}`
 
     const region = await this.regionService.findOne(box.region, true)
     if (region && region.proxyUrl) {
-      // Insert port and box.id into the custom proxy URL
-      url = region.proxyUrl.replace(/(https?:\/)(\/)/, `$1/${port}-${box.id}.`)
+      url = region.proxyUrl.replace(/(https?:\/)(\/)/, `$1/${port}-${encodedBoxId}.`)
     }
 
     return {
@@ -1571,4 +1568,8 @@ export class BoxService {
 
     return { valid: true, boxId: sshAccess.box.id }
   }
+}
+
+function encodeDirectPreviewBoxId(boxId: string): string {
+  return Buffer.from(boxId, 'utf8').toString('hex')
 }

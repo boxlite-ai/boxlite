@@ -216,6 +216,14 @@ async function bootstrap() {
       }
       socket.destroy()
     })
+    httpServer.on('connect', (req: IncomingMessage, socket: Socket) => {
+      const match = wsProxy.matchNetworkConnectPath(req.url)
+      if (!match) {
+        socket.destroy()
+        return
+      }
+      void wsProxy.connect(req, socket)
+    })
   } else {
     await app.init()
     app.flushLogs()
