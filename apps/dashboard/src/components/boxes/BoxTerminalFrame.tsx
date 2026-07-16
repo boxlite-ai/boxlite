@@ -14,9 +14,10 @@ interface BoxTerminalFrameProps {
   sessionUrl: string
   fullscreenHref?: string
   className?: string
+  onCurrentDirChange?: (path: string) => void
 }
 
-export function BoxTerminalFrame({ sessionUrl, fullscreenHref, className }: BoxTerminalFrameProps) {
+export function BoxTerminalFrame({ sessionUrl, fullscreenHref, className, onCurrentDirChange }: BoxTerminalFrameProps) {
   const deregisterRef = useRef<(() => void) | null>(null)
   const iframeSrc = buildTerminalIframeSrc(sessionUrl)
 
@@ -24,7 +25,7 @@ export function BoxTerminalFrame({ sessionUrl, fullscreenHref, className }: BoxT
     const frame = event.currentTarget.contentWindow
     if (!frame) return
     deregisterRef.current?.()
-    deregisterRef.current = registerActiveTerminalFrame(frame, sessionUrl)
+    deregisterRef.current = registerActiveTerminalFrame(frame, sessionUrl, { onCurrentDirChange })
   }
 
   useEffect(() => {

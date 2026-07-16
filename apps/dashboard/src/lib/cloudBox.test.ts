@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest'
-import { toBoxApiCreateRequest } from './cloudBox'
+import { describe, expect, it, vi } from 'vitest'
+import type { ApiClient } from '@/api/apiClient'
+import { createBoxUploadDirectoryItem } from './box-upload'
+import { toBoxApiCreateRequest, uploadBoxItemViaBoxApi } from './cloudBox'
 
 describe('toBoxApiCreateRequest', () => {
   it('converts dashboard GiB memory into Box API MiB', () => {
@@ -32,5 +34,23 @@ describe('toBoxApiCreateRequest', () => {
   it('leaves memory undefined when no resources are given', () => {
     expect(toBoxApiCreateRequest({}).memory_mib).toBeUndefined()
     expect(toBoxApiCreateRequest().memory_mib).toBeUndefined()
+  })
+
+  it('uploads directory files under the returned directory path', async () => {
+    const put = vi.fn().mockResolvedValue({})
+    const api = { axiosInstance: { put } } as unknown as ApiClient
+    const item = createBoxUploadDirectoryItem('project', [
+      { file: new File(['console.log(1)'], 'index.ts'), relativePath: 'src/index.ts' },
+      { file: new File(['# Project'], 'README.md'), relativePath: 'README.md' },
+    ])
+
+    const remotePath = await uploadBoxItemViaBoxApi(api, 'org-1', 'box-1', item, '/workspace')
+
+    expect(remotePath).toBe('/workspace/project')
+    expect(put).toHaveBeenCalledTimes(2)
+    expect(put.mock.calls.map((call) => call[2]?.params?.path)).toEqual([
+      '/workspace/project/src/index.ts',
+      '/workspace/project/README.md',
+    ])
   })
 })

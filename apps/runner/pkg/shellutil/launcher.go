@@ -52,6 +52,8 @@ package shellutil
 func DefaultInteractiveShell() (command string, args []string) {
 	return "/bin/sh", []string{"-c",
 		`cd "${HOME:-/root}" 2>/dev/null || cd /; ` +
+			`__boxlite_osc7='printf "\033]7;file://boxlite%s\007" "$PWD"'; ` +
+			`export PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND; }$__boxlite_osc7"; ` +
 			`exec $(command -v bash || command -v ash || command -v sh) -l`,
 	}
 }

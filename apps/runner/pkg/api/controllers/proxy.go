@@ -116,7 +116,67 @@ fitAddon.fit();
 var proto=location.protocol==='https:'?'wss:':'ws:';
 var ws=new WebSocket(proto+'//'+location.host+location.pathname+location.search);
 ws.onopen=function(){term.focus();};
-ws.onmessage=function(e){term.write(e.data);};
+var parentOrigin='';
+try{parentOrigin=new URL(document.referrer).origin;}catch(_){}
+function postParent(message){
+  if(!parentOrigin)return;
+  parent.postMessage(message,parentOrigin);
+}
+var lastCwd='';
+function postCwd(path){
+  if(!path||path.charAt(0)!=='/')return;
+  lastCwd=path;
+  postParent({source:'boxlite-terminal',type:'cwd',value:path});
+}
+function scanCwd(data){
+  var text=String(data);
+  var re=/\x1b\]7;file:\/\/[^/]*(\/[^\x07\x1b]*)(?:\x07|\x1b\\)/g;
+  var match;
+  while((match=re.exec(text))!==null){
+    var path=match[1];
+    try{path=decodeURI(path);}catch(_){}
+    postCwd(path);
+  }
+}
+window.addEventListener('message',function(event){
+  if(event.source!==parent)return;
+  if(!parentOrigin||event.origin!==parentOrigin)return;
+  var msg=event.data||{};
+  if(msg.source!=='boxlite-dashboard')return;
+  if(msg.type==='cwd-request'){
+    if(lastCwd)postCwd(lastCwd);
+    return;
+  }
+});
+function hasDraggedFiles(event){
+  var types=event.dataTransfer&&event.dataTransfer.types;
+  return types&&Array.prototype.indexOf.call(types,'Files')!==-1;
+}
+function postFileDrag(active){
+  postParent({source:'boxlite-terminal',type:'file-drag',value:active?'active':'idle'});
+}
+window.addEventListener('dragenter',function(event){
+  if(!hasDraggedFiles(event))return;
+  event.preventDefault();
+  postFileDrag(true);
+});
+window.addEventListener('dragover',function(event){
+  if(!hasDraggedFiles(event))return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect='copy';
+  postFileDrag(true);
+});
+window.addEventListener('dragleave',function(event){
+  if(event.clientX<=0||event.clientY<=0||event.clientX>=window.innerWidth||event.clientY>=window.innerHeight){
+    postFileDrag(false);
+  }
+});
+window.addEventListener('drop',function(event){
+  if(!hasDraggedFiles(event))return;
+  event.preventDefault();
+  postFileDrag(false);
+});
+ws.onmessage=function(e){scanCwd(e.data);term.write(e.data);};
 ws.onclose=function(){term.write('\r\n[Connection closed]\r\n');};
 ws.onerror=function(){term.write('\r\n[Connection error]\r\n');};
 term.onData(function(data){if(ws.readyState===WebSocket.OPEN)ws.send(data);});

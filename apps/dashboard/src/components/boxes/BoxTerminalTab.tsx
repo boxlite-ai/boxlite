@@ -21,7 +21,13 @@ import { Play, RefreshCw, TerminalSquare } from '@/components/ui/icon'
 import { toast } from 'sonner'
 import { BoxTerminalFrame } from './BoxTerminalFrame'
 
-export function BoxTerminalTab({ box, refreshSignal = 0 }: { box: Box; refreshSignal?: number }) {
+interface BoxTerminalTabProps {
+  box: Box
+  refreshSignal?: number
+  onCurrentDirChange?: (path: string) => void
+}
+
+export function BoxTerminalTab({ box, refreshSignal = 0, onCurrentDirChange }: BoxTerminalTabProps) {
   const running = isStoppable(box)
   const { isTerminalActivated, activateTerminal } = useBoxSessionContext()
   const { authenticatedUserHasPermission } = useSelectedOrganization()
@@ -162,6 +168,7 @@ export function BoxTerminalTab({ box, refreshSignal = 0 }: { box: Box; refreshSi
           sessionUrl={session.url}
           fullscreenHref={fullscreenHref}
           className="h-full"
+          onCurrentDirChange={onCurrentDirChange}
         />
       </div>
     </div>

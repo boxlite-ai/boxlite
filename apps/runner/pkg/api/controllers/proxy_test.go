@@ -3,7 +3,10 @@
 
 package controllers
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestIsTerminalToolboxPath(t *testing.T) {
 	tests := []struct {
@@ -27,5 +30,47 @@ func TestIsTerminalToolboxPath(t *testing.T) {
 				t.Fatalf("isTerminalToolboxPath(%q) = %v, want %v", tt.path, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestTerminalHTMLDoesNotAcceptDashboardShellCommands(t *testing.T) {
+	if !strings.Contains(terminalHTML, "msg.type==='cwd-request'") {
+		t.Fatal("terminalHTML should still allow the dashboard to request terminal metadata")
+	}
+
+	forbidden := []string{
+		"msg.type==='command'",
+		"msg.command==='ls'",
+		"ws.send('ls\\r')",
+	}
+	for _, needle := range forbidden {
+		if strings.Contains(terminalHTML, needle) {
+			t.Fatalf("terminalHTML must not inject shell input from dashboard messages; found %q", needle)
+		}
+	}
+}
+
+func TestTerminalHTMLRequiresTrustedParentOrigin(t *testing.T) {
+	required := []string{
+		"if(!parentOrigin)return;",
+		"parent.postMessage(message,parentOrigin);",
+		"if(!parentOrigin||event.origin!==parentOrigin)return;",
+	}
+	for _, needle := range required {
+		if !strings.Contains(terminalHTML, needle) {
+			t.Fatalf("terminalHTML should require a trusted parent origin; missing %q", needle)
+		}
+	}
+
+	forbidden := []string{
+		"parentOrigin||'*'",
+		"postMessage(message,'*')",
+		"postMessage(message, '*')",
+		"if(parentOrigin&&event.origin!==parentOrigin)return;",
+	}
+	for _, needle := range forbidden {
+		if strings.Contains(terminalHTML, needle) {
+			t.Fatalf("terminalHTML must not fall back to wildcard parent origin; found %q", needle)
+		}
 	}
 }
