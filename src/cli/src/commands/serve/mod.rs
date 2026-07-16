@@ -910,7 +910,7 @@ async fn get_or_fetch_box(state: &AppState, box_id: &str) -> Result<Arc<LiteBox>
     // auto-restart the cloud depends on: its reaper stops idle boxes and the next
     // SDK call is expected to bring them back.
     if let Some(cached) = state.boxes.read().await.get(box_id)
-        && cached.info().status == boxlite::BoxStatus::Running
+        && cached.info().status.is_active()
     {
         return Ok(Arc::clone(cached));
     }
@@ -1035,9 +1035,11 @@ async fn get_or_attach_main_session(
     // second Attach, so the loser would get a permanently silent Execution. A
     // per-box open lock would scope that to the same box; worth doing, not here.
     let mut executions = state.executions.write().await;
-    register_main_session(&mut executions, box_id, || async { litebox.attach(None).await })
-        .await
-        .map_err(|e| error_from_boxlite(&e))
+    register_main_session(&mut executions, box_id, || async {
+        litebox.attach(None).await
+    })
+    .await
+    .map_err(|e| error_from_boxlite(&e))
 }
 
 // ============================================================================

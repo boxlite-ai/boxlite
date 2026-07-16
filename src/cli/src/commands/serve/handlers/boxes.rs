@@ -95,7 +95,7 @@ pub(in crate::commands::serve) async fn start_box(
         let mut boxes = state.boxes.write().await;
         let spent = boxes
             .get(&box_id)
-            .is_some_and(|b| b.info().status != boxlite::BoxStatus::Running);
+            .is_some_and(|b| !b.info().status.is_active());
         if spent {
             boxes.remove(&box_id);
         }

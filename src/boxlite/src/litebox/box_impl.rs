@@ -467,7 +467,7 @@ impl BoxImpl {
         tokio::spawn(async move {
             while let Some(mut result) = upstream.recv().await {
                 if result.exit_code < 0
-                    && let Some(record) = boxlite_shared::layout::ExitRecord::read(&exit_file)
+                    && let Some(record) = Self::read_exit_record_soon(&exit_file).await
                 {
                     tracing::debug!(
                         portal_code = result.exit_code,
@@ -485,6 +485,29 @@ impl BoxImpl {
         });
 
         rx
+    }
+
+    /// Read the exit record, polling briefly for the guest's asynchronous write.
+    ///
+    /// On a signal death the guest's Wait RPC returns a clean `-n` before its
+    /// watcher has finished writing the exit file — nothing orders the two,
+    /// unlike the poweroff path where `sync()` precedes power-off. A bounded poll
+    /// closes that window; if the record never lands (a hard stop that wrote
+    /// nothing), the caller keeps the honest negative code.
+    async fn read_exit_record_soon(
+        exit_file: &std::path::Path,
+    ) -> Option<boxlite_shared::layout::ExitRecord> {
+        const ATTEMPTS: u32 = 10;
+        const INTERVAL: Duration = Duration::from_millis(20);
+        for attempt in 0..ATTEMPTS {
+            if let Some(record) = boxlite_shared::layout::ExitRecord::read(exit_file) {
+                return Some(record);
+            }
+            if attempt + 1 < ATTEMPTS {
+                tokio::time::sleep(INTERVAL).await;
+            }
+        }
+        None
     }
 
     /// Attach to a session in the box. Only the main command session (`None`) is
@@ -928,9 +951,12 @@ impl BoxImpl {
     /// the implicit-boot funnel and an explicit `start()` cannot double-run it,
     /// and a box reattached with init already running pre-sets the cell.
     async fn ensure_container_started(&self, live: &LiveState) -> BoxliteResult<bool> {
-        if self.container_start.initialized() {
-            return Ok(false);
-        }
+        // `get_or_try_init` single-flights the closure but hands every concurrent
+        // caller the same `Ok`, so it cannot tell the winner from the waiters. A
+        // closure-local flag is set only inside the body that actually runs, so
+        // exactly one caller reports that it started the container (and a cell
+        // already set — e.g. a reattached, still-running box — leaves it false).
+        let mut started_here = false;
         self.container_start
             .get_or_try_init(|| async {
                 live.guest_session
@@ -938,10 +964,11 @@ impl BoxImpl {
                     .await?
                     .start(self.container_id())
                     .await?;
+                started_here = true;
                 Ok::<(), BoxliteError>(())
             })
             .await?;
-        Ok(true)
+        Ok(started_here)
     }
 
     /// The box's network control backend (gvproxy ServicesMux client), owned in
@@ -1028,13 +1055,12 @@ impl BoxImpl {
         //
         // Fetched before the state lock — the await must not run under it — and
         // before publishing Running below.
-        let health_guest = if self.config.options.advanced.health_check.is_some()
-            && !adopting_running
-        {
-            Some(live_state.guest_session.guest().await?)
-        } else {
-            None
-        };
+        let health_guest =
+            if self.config.options.advanced.health_check.is_some() && !adopting_running {
+                Some(live_state.guest_session.guest().await?)
+            } else {
+                None
+            };
 
         {
             // PidFile is the single source of truth for shim identity

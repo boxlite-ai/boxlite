@@ -38,7 +38,10 @@ async fn attached_stdout(opts: BoxOptions) -> String {
     let handle = runtime.create(opts, None).await.expect("create box");
     handle.start().await.expect("start box");
 
-    let mut execution = handle.attach(None).await.expect("attach to the main command");
+    let mut execution = handle
+        .attach(None)
+        .await
+        .expect("attach to the main command");
 
     let mut stdout = String::new();
     if let Some(mut stream) = execution.stdout() {

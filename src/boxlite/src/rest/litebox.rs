@@ -1809,16 +1809,16 @@ mod tests {
             });
 
             let rest_box = rest_box_for(port, "box1");
-            let err = match tokio::time::timeout(
-                Duration::from_secs(3),
-                rest_box.attach(Some("exec-x")),
-            )
-            .await
-            {
-                Ok(Ok(_)) => panic!("a rejected upgrade ({status}) must not yield an Execution"),
-                Ok(Err(e)) => e,
-                Err(_) => panic!("attach timed out"),
-            };
+            let err =
+                match tokio::time::timeout(Duration::from_secs(3), rest_box.attach(Some("exec-x")))
+                    .await
+                {
+                    Ok(Ok(_)) => {
+                        panic!("a rejected upgrade ({status}) must not yield an Execution")
+                    }
+                    Ok(Err(e)) => e,
+                    Err(_) => panic!("attach timed out"),
+                };
 
             if expect_reaped {
                 assert!(

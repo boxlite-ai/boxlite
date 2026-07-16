@@ -407,6 +407,18 @@ async fn spawn_with_executor(
                     format!("Invalid {}: missing container_id", executor_const::ENV_VAR),
                 ));
             }
+            // Caller-controllable (a client can override BOXLITE_EXECUTOR in its
+            // exec env) and joined into a filesystem path below, so require a
+            // single normal component — `..`/`/…` must not escape containers/.
+            if !is_single_path_component(container_id) {
+                return Err(spawn_error(
+                    execution_id,
+                    format!(
+                        "Invalid {}: container_id must be a single path component",
+                        executor_const::ENV_VAR
+                    ),
+                ));
+            }
             debug!(
                 execution_id = %execution_id,
                 container_id = %container_id,
@@ -479,5 +491,29 @@ async fn spawn_with_executor(
                 ),
             ))
         }
+    }
+}
+
+/// True when `id` is a single normal path component (no `..`, `/`, or a prefix),
+/// so joining it under `containers/` cannot escape that directory. Real container
+/// ids are 64-char hex, so this never rejects a legitimate one.
+fn is_single_path_component(id: &str) -> bool {
+    let mut components = std::path::Path::new(id).components();
+    matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none()
+}
+
+#[cfg(test)]
+mod container_id_path_tests {
+    use super::is_single_path_component;
+
+    #[test]
+    fn rejects_ids_that_would_escape_the_containers_dir() {
+        for bad in ["../../etc", "/etc/passwd", "a/b", "..", ".", ""] {
+            assert!(!is_single_path_component(bad), "must reject {bad:?}");
+        }
+        assert!(is_single_path_component(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ));
     }
 }

@@ -27,7 +27,6 @@ use super::box_impl::BoxImpl;
 use super::state::{BoxState, HealthStatus};
 use crate::portal::interfaces::GuestInterface;
 use crate::runtime::rt_impl::RuntimeImpl;
-use crate::runtime::types::BoxStatus;
 use crate::{BoxID, HealthCheckOptions, HealthState};
 
 /// The optional health-probing half of a [`BoxWatcher`].
@@ -134,15 +133,19 @@ impl BoxWatcher {
 
     async fn run(mut self) {
         let shim = crate::util::ProcessMonitor::new(self.shim_pid);
-        // Copied out so the sleep future in the loop borrows nothing of `self`.
-        let interval = self.health.as_ref().map(|h| h.interval);
+        // Cloned so the nested probe select can watch shim-exit/cancellation with
+        // locals while `on_health_tick` borrows `self` mutably.
+        let shutdown = self.shutdown.clone();
+        // Copied out so the sleep future borrows nothing of `self`. Cleared once
+        // the box is unhealthy: stop *probing*, but keep watching for exit.
+        let mut interval = self.health.as_ref().map(|h| h.interval);
 
         loop {
             tokio::select! {
                 // stop() / runtime shutdown cancel the token *and* kill the shim
                 // themselves; that path owns and persists the transition, so stand
                 // down rather than race it to the same fields.
-                _ = self.shutdown.cancelled() => return,
+                _ = shutdown.cancelled() => return,
                 _ = shim.wait_for_exit() => {
                     self.on_shim_exit();
                     return;
@@ -150,8 +153,21 @@ impl BoxWatcher {
                 // Disabled (never fires) when there is no probe, degenerating to a
                 // pure exit watcher.
                 _ = tick(interval) => {
-                    if self.on_health_tick().await.is_break() {
-                        return;
+                    // Keep shim-exit and cancellation live *while* probing: a shim
+                    // that dies mid-probe must still be recorded, not mistaken for a
+                    // health failure and left Running forever.
+                    tokio::select! {
+                        _ = shutdown.cancelled() => return,
+                        _ = shim.wait_for_exit() => {
+                            self.on_shim_exit();
+                            return;
+                        }
+                        flow = self.on_health_tick() => {
+                            // Unhealthy: stop probing, keep observing the shim.
+                            if flow.is_break() {
+                                interval = None;
+                            }
+                        }
                     }
                 }
             }
@@ -171,7 +187,7 @@ impl BoxWatcher {
         let stopped = {
             let mut state = self.state.write();
 
-            if state.status == BoxStatus::Running {
+            if state.status.is_active() {
                 crate::runtime::rt_impl::record_main_command_exit(&mut state, &self.exit_file);
             } else if state.exit_code.is_none()
                 && let Some(record) = boxlite_shared::layout::ExitRecord::read(&self.exit_file)

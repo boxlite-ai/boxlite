@@ -52,14 +52,19 @@ pub async fn execute(args: CpArgs, global: &GlobalFlags) -> Result<()> {
             // safe, and refuses when it is not. Starting it here would walk
             // straight past that guard and, for a box whose init is the user's
             // own command, run their workload a second time just to fetch a file.
-            handle
-                .copy_into(&host, &box_path, opts)
-                .await
-                .map_err(anyhow::Error::from)?;
+            let copied = handle.copy_into(&host, &box_path, opts).await;
 
-            if !was_running {
-                handle.stop().await?;
-            }
+            // copy_into boots a stopped box before copying, so a copy that fails
+            // partway (a missing path, say) leaves it running. Restore the box to
+            // the state we found it in on both paths, surfacing the copy error
+            // first so a cleanup failure can't mask it.
+            let stopped = if was_running {
+                Ok(())
+            } else {
+                handle.stop().await
+            };
+            copied.map_err(anyhow::Error::from)?;
+            stopped?;
             Ok(())
         }
         Direction::BoxToHost {
@@ -75,14 +80,17 @@ pub async fn execute(args: CpArgs, global: &GlobalFlags) -> Result<()> {
             //   boxlite run --name job alpine sh -c 'send-payment'
             //   boxlite cp job:/receipt .
             // into a second payment.
-            handle
-                .copy_out(&box_path, &host, opts)
-                .await
-                .map_err(anyhow::Error::from)?;
+            let copied = handle.copy_out(&box_path, &host, opts).await;
 
-            if !was_running {
-                handle.stop().await?;
-            }
+            // Same restore-on-failure as HostToBox: copy_out can boot a stopped
+            // box, and a partial failure must not leave it running.
+            let stopped = if was_running {
+                Ok(())
+            } else {
+                handle.stop().await
+            };
+            copied.map_err(anyhow::Error::from)?;
+            stopped?;
             Ok(())
         }
     }
