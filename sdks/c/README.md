@@ -43,13 +43,13 @@ The C SDK provides two API styles:
    - Advanced features (volumes, networking, etc.)
 
 Both APIs support:
-- ‚úÖ Structured error handling (error codes + messages)
-- ‚úÖ OCI container images
-- ‚úÖ Hardware-accelerated VMs (KVM/Hypervisor.framework)
-- ‚úÖ Command execution with streaming output
-- ‚úÖ Box lifecycle management
-- ‚úÖ Performance metrics
-- ‚úÖ Multi-box management
+- ‚ú?Structured error handling (error codes + messages)
+- ‚ú?OCI container images
+- ‚ú?Hardware-accelerated VMs (KVM/Hypervisor.framework)
+- ‚ú?Command execution with streaming output
+- ‚ú?Box lifecycle management
+- ‚ú?Performance metrics
+- ‚ú?Multi-box management
 
 ---
 
@@ -90,7 +90,7 @@ Both APIs support:
 
 ```bash
 # From repository root
-git clone https://github.com/boxlite/boxlite.git
+git clone https://github.com/boxlite-ai/boxlite.git
 cd boxlite
 
 # Initialize submodules (REQUIRED!)
@@ -314,16 +314,16 @@ void boxlite_simple_free(CBoxliteSimple* box);
 ```
 
 #### When to Use Simple API
-- ‚úÖ Quick prototypes and scripts
-- ‚úÖ Single-box applications
-- ‚úÖ Buffered output is acceptable
-- ‚úÖ Standard resource limits (2 CPUs, 512 MB)
+- ‚ú?Quick prototypes and scripts
+- ‚ú?Single-box applications
+- ‚ú?Buffered output is acceptable
+- ‚ú?Standard resource limits (2 CPUs, 512 MB)
 
 #### When to Use Native API Instead
-- ‚ùå Need streaming output callbacks
-- ‚ùå Custom volumes or networking
-- ‚ùå Multi-box orchestration
-- ‚ùå Advanced configuration (custom box options)
+- ‚ù?Need streaming output callbacks
+- ‚ù?Custom volumes or networking
+- ‚ù?Multi-box orchestration
+- ‚ù?Advanced configuration (custom box options)
 
 ### Native API
 
@@ -653,22 +653,22 @@ make
 ### Rules
 
 1. **All allocated strings must be freed**
-   - `boxlite_box_id()` ‚Üí `boxlite_free_string()`
+   - `boxlite_box_id()` ‚Ü?`boxlite_free_string()`
 
 2. **Error structs must be freed**
-   - `CBoxliteError` ‚Üí `boxlite_error_free()`
+   - `CBoxliteError` ‚Ü?`boxlite_error_free()`
 
 3. **Results must be freed**
-   - `CBoxliteExecResult` ‚Üí `boxlite_result_free()`
-   - `CBoxInfo` ‚Üí `boxlite_free_box_info()`
-   - `CBoxInfoList` ‚Üí `boxlite_free_box_info_list()`
-   - `CImagePullResult` ‚Üí `boxlite_free_image_pull_result()`
-   - `CImageInfoList` ‚Üí `boxlite_free_image_info_list()`
+   - `CBoxliteExecResult` ‚Ü?`boxlite_result_free()`
+   - `CBoxInfo` ‚Ü?`boxlite_free_box_info()`
+   - `CBoxInfoList` ‚Ü?`boxlite_free_box_info_list()`
+   - `CImagePullResult` ‚Ü?`boxlite_free_image_pull_result()`
+   - `CImageInfoList` ‚Ü?`boxlite_free_image_info_list()`
 
 4. **Handles have specific free functions**
-   - `CBoxliteRuntime` ‚Üí `boxlite_runtime_free()` (auto-frees all boxes)
-   - `CBoxHandle` ‚Üí `boxlite_box_free()`
-   - `CBoxliteSimple` ‚Üí `boxlite_simple_free()`
+   - `CBoxliteRuntime` ‚Ü?`boxlite_runtime_free()` (auto-frees all boxes)
+   - `CBoxHandle` ‚Ü?`boxlite_box_free()`
+   - `CBoxliteSimple` ‚Ü?`boxlite_simple_free()`
 
 5. **All cleanup functions are NULL-safe**
 
@@ -717,7 +717,7 @@ leaks -atExit -- ./my_app
 
 ### Thread Safety
 
-- ‚úÖ **`CBoxliteRuntime` is thread-safe** - Multiple threads can call runtime functions concurrently
+- ‚ú?**`CBoxliteRuntime` is thread-safe** - Multiple threads can call runtime functions concurrently
 - ‚ö†Ô∏è **`CBoxHandle` is NOT thread-safe** - Don't share box handles across threads
 - ‚ö†Ô∏è **`CBoxliteSimple` is NOT thread-safe** - Don't share simple boxes across threads
 
@@ -791,11 +791,11 @@ Callbacks are invoked on the **calling thread**. Do not block in callbacks.
 
 | Platform | Architecture | Status | Requirements |
 |----------|-------------|--------|--------------|
-| macOS    | ARM64 (Apple Silicon) | ‚úÖ Full support | macOS 11.0+, Hypervisor.framework |
-| macOS    | x86_64 (Intel) | ‚ùå Not supported | N/A |
-| Linux    | x86_64 | ‚úÖ Full support | KVM enabled |
-| Linux    | ARM64 (aarch64) | ‚úÖ Full support | KVM enabled |
-| Windows  | Any | ‚ùå Not supported | Use WSL2 |
+| macOS    | ARM64 (Apple Silicon) | ‚ú?Full support | macOS 11.0+, Hypervisor.framework |
+| macOS    | x86_64 (Intel) | ‚ù?Not supported | N/A |
+| Linux    | x86_64 | ‚ú?Full support | KVM enabled |
+| Linux    | ARM64 (aarch64) | ‚ú?Full support | KVM enabled |
+| Windows  | Any | ‚ù?Not supported | Use WSL2 |
 
 ### Platform-Specific Notes
 
@@ -846,7 +846,7 @@ boxlite_options_add_port(opts, 8080, 80, BoxlitePortProtocolTcp, NULL);  /* host
 
 **Recommended migrations:**
 
-**1. Simple use cases ‚Üí Simple API**
+**1. Simple use cases ‚Ü?Simple API**
 
 Before (0.1.x):
 ```c
@@ -871,7 +871,7 @@ boxlite_result_free(result);
 boxlite_simple_free(box);
 ```
 
-**2. Error handling ‚Üí Structured errors**
+**2. Error handling ‚Ü?Structured errors**
 
 Before:
 ```c
@@ -999,7 +999,7 @@ The C SDK is a thin wrapper around the Rust `boxlite` crate:
 
 ```
 sdks/c/src/lib.rs
-  ‚Üì (exports C ABI)
+  ‚Ü?(exports C ABI)
 sdks/c/src/runtime.rs    (runtime management)
 sdks/c/src/box_handle.rs (box lifecycle)
 sdks/c/src/exec.rs       (command execution)
@@ -1007,7 +1007,7 @@ sdks/c/src/images.rs     (image operations)
 sdks/c/src/info.rs       (box info)
 sdks/c/src/metrics.rs    (metrics)
 sdks/c/src/copy.rs       (file copy)
-  ‚Üì (wraps)
+  ‚Ü?(wraps)
 boxlite/src/runtime/
 ```
 
