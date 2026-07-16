@@ -158,6 +158,9 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		boxliteApi.PUT("/:boxId/files", controllers.BoxliteFileUpload)
 		boxliteApi.GET("/:boxId/files", controllers.BoxliteFileDownload)
 		boxliteApi.GET("/:boxId/metrics", controllers.BoxliteMetrics)
+		boxliteApi.Handle(http.MethodConnect, "/:boxId/network/tunnel", controllers.BoxliteNetworkConnect(boxControllerLogger))
+		boxliteApi.Any("/:boxId/network/proxy/:port", controllers.BoxliteNetworkProxy(boxControllerLogger))
+		boxliteApi.Any("/:boxId/network/proxy/:port/*path", controllers.BoxliteNetworkProxy(boxControllerLogger))
 	}
 
 	a.httpServer = &http.Server{
