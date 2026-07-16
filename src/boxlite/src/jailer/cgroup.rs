@@ -434,6 +434,55 @@ pub fn build_cgroup_procs_path(box_id: &str) -> Option<std::ffi::CString> {
     std::ffi::CString::new(path.to_string_lossy().as_bytes()).ok()
 }
 
+// ============================================================================
+// Usage Reading (billing/actual metering — read side, mirror of apply_limits)
+// ============================================================================
+
+/// A point-in-time cgroup usage sample for one box.
+///
+/// `cpu_usage_usec` is a monotonic counter (microseconds of CPU consumed);
+/// billing CPU-seconds come from its delta between two reads. `memory_current`
+/// is the instantaneous resident memory (bytes).
+#[allow(dead_code)] // consumed by the box_impl heartbeat in a later step
+pub(crate) struct CgroupUsage {
+    pub cpu_usage_usec: u64,
+    pub memory_current: u64,
+}
+
+/// Read a box's current cgroup usage counters (the read-side mirror of
+/// [`apply_limits`]).
+///
+/// Reads `cpu.stat` (`usage_usec`) and `memory.current` from the box's host
+/// cgroup — the same cgroup the box's process tree joins in `bwrap.rs`, so the
+/// counters cover the whole box (VMM + children). Pure parsing lives in
+/// [`crate::metrics::usage`] so it is unit-tested cross-platform; this function
+/// is the Linux-only I/O wrapper.
+///
+/// # Errors
+/// Returns [`JailerError::Cgroup`] if the cgroup files are missing (e.g. cgroup
+/// setup failed — see `bwrap.rs`, where it is best-effort) or unparseable.
+#[allow(dead_code)] // consumed by the box_impl heartbeat in a later step
+pub(crate) fn read_usage(box_id: &str) -> Result<CgroupUsage, JailerError> {
+    use crate::metrics::usage::{parse_cpu_usage_usec, parse_memory_current};
+
+    let base = cgroup_path(box_id);
+
+    let cpu_stat = fs::read_to_string(base.join("cpu.stat"))
+        .map_err(|e| JailerError::Cgroup(format!("read cpu.stat for {box_id}: {e}")))?;
+    let cpu_usage_usec = parse_cpu_usage_usec(&cpu_stat)
+        .map_err(|e| JailerError::Cgroup(format!("parse cpu.stat for {box_id}: {e:?}")))?;
+
+    let mem = fs::read_to_string(base.join("memory.current"))
+        .map_err(|e| JailerError::Cgroup(format!("read memory.current for {box_id}: {e}")))?;
+    let memory_current = parse_memory_current(&mem)
+        .map_err(|e| JailerError::Cgroup(format!("parse memory.current for {box_id}: {e:?}")))?;
+
+    Ok(CgroupUsage {
+        cpu_usage_usec,
+        memory_current,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

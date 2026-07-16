@@ -32,6 +32,7 @@
 
 mod box_metrics;
 mod runtime_metrics;
+pub(crate) mod usage;
 
 pub use box_metrics::{BoxMetrics, BoxMetricsStorage};
 pub use runtime_metrics::{RuntimeMetrics, RuntimeMetricsStorage};
