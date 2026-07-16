@@ -27,16 +27,48 @@ export interface ImageHandle {
   list(): Promise<ImageInfo[]>;
 }
 
+/** Metadata for a named volume returned by the native runtime. */
 export interface VolumeInfo {
+  /** Server-assigned volume id used by get and remove operations. */
   id: string;
+  /** Creation timestamp formatted as an RFC 3339 string. */
   createdAt: string;
+  /** Volume size in bytes when the backend can report it. */
   sizeBytes?: number;
 }
 
+/** Runtime-scoped handle for named-volume operations. */
 export interface VolumeHandle {
+  /**
+   * Creates a new named volume.
+   *
+   * @returns Metadata for the created volume.
+   * @throws A native BoxLite error when the backend does not support volumes or
+   * the volume cannot be created.
+   */
   create(): Promise<VolumeInfo>;
+  /**
+   * Lists named volumes visible to this runtime.
+   *
+   * @returns Volume metadata entries in backend-defined order.
+   * @throws A native BoxLite error when the backend does not support volumes.
+   */
   list(): Promise<VolumeInfo[]>;
+  /**
+   * Gets metadata for a volume by id.
+   *
+   * @param id Server-assigned volume id.
+   * @returns Metadata for the requested volume.
+   * @throws A native BoxLite error when the id is unknown or volumes are unsupported.
+   */
   get(id: string): Promise<VolumeInfo>;
+  /**
+   * Removes a volume by id.
+   *
+   * @param id Server-assigned volume id.
+   * @param force Treat a missing volume as success when supported by the backend.
+   * @throws A native BoxLite error when removal fails or volumes are unsupported.
+   */
   remove(id: string, force?: boolean | null): Promise<void>;
 }
 

@@ -22,6 +22,11 @@ use crate::runtime::RuntimeLiveness;
 use crate::{CBoxliteError, CBoxliteVolumeHandle};
 
 /// Opaque handle to runtime named-volume operations.
+///
+/// The handle owns a cloneable core volume handle plus the runtime liveness,
+/// Tokio runtime, and event queue needed to submit asynchronous work. C callers
+/// receive this as an opaque `CBoxliteVolumeHandle` and must release it with
+/// `boxlite_volume_free`.
 pub struct VolumeHandle {
     pub handle: CoreVolumeHandle,
     pub tokio_rt: Arc<TokioRuntime>,
@@ -29,6 +34,12 @@ pub struct VolumeHandle {
     pub queue: Arc<EventQueue>,
 }
 
+/// C ABI representation of volume metadata.
+///
+/// `id` and `created_at` are heap-owned C strings allocated by this module.
+/// They are freed by `boxlite_free_volume_info` for standalone values or by
+/// `boxlite_free_volume_info_list` for list entries. `size_bytes` is meaningful
+/// only when `has_size` is non-zero.
 #[repr(C)]
 pub struct CVolumeInfo {
     pub id: *mut c_char,
@@ -37,6 +48,11 @@ pub struct CVolumeInfo {
     pub has_size: c_int,
 }
 
+/// C ABI representation of a volume metadata list.
+///
+/// `items` points to `count` contiguous `CVolumeInfo` entries. The list owns the
+/// array and every string in each entry; callers must free it with
+/// `boxlite_free_volume_info_list` when ownership is transferred to C.
 #[repr(C)]
 pub struct CVolumeInfoList {
     pub items: *mut CVolumeInfo,
@@ -109,6 +125,14 @@ unsafe fn free_str(s: *mut c_char) {
     }
 }
 
+/// Queue asynchronous volume creation.
+///
+/// # Safety
+///
+/// `handle` must be a valid pointer returned by `boxlite_runtime_volumes`, `cb`
+/// must be a valid callback, and `out_error` must be writable. The handle must
+/// remain valid until this function returns. Completion is delivered later when
+/// the parent runtime is drained.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_volume_create(
     handle: *mut CBoxliteVolumeHandle,
@@ -119,6 +143,14 @@ pub unsafe extern "C" fn boxlite_volume_create(
     volume_create(handle, cb, user_data, out_error)
 }
 
+/// Queue asynchronous volume listing.
+///
+/// # Safety
+///
+/// `handle` must be a valid pointer returned by `boxlite_runtime_volumes`, `cb`
+/// must be a valid callback, and `out_error` must be writable. The handle must
+/// remain valid until this function returns. Completion is delivered later when
+/// the parent runtime is drained.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_volume_list(
     handle: *mut CBoxliteVolumeHandle,
@@ -129,6 +161,13 @@ pub unsafe extern "C" fn boxlite_volume_list(
     volume_list(handle, cb, user_data, out_error)
 }
 
+/// Queue asynchronous lookup of a volume by id.
+///
+/// # Safety
+///
+/// `handle` must be valid, `id` must point to a non-null UTF-8 C string, `cb`
+/// must be a valid callback, and `out_error` must be writable. `id` only needs
+/// to remain valid for the duration of this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_volume_get(
     handle: *mut CBoxliteVolumeHandle,
@@ -140,6 +179,13 @@ pub unsafe extern "C" fn boxlite_volume_get(
     volume_get(handle, id, cb, user_data, out_error)
 }
 
+/// Queue asynchronous removal of a volume by id.
+///
+/// # Safety
+///
+/// `handle` must be valid, `id` must point to a non-null UTF-8 C string, `cb`
+/// must be a valid callback, and `out_error` must be writable. `id` only needs
+/// to remain valid for the duration of this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_volume_remove(
     handle: *mut CBoxliteVolumeHandle,
@@ -152,6 +198,13 @@ pub unsafe extern "C" fn boxlite_volume_remove(
     volume_remove(handle, id, force, cb, user_data, out_error)
 }
 
+/// Free a volume handle returned by `boxlite_runtime_volumes`.
+///
+/// # Safety
+///
+/// `handle` must be null or a pointer previously returned by
+/// `boxlite_runtime_volumes` that has not already been freed. Callers must not
+/// use the handle after this function returns.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_volume_free(handle: *mut CBoxliteVolumeHandle) {
     if !handle.is_null() {
@@ -159,11 +212,23 @@ pub unsafe extern "C" fn boxlite_volume_free(handle: *mut CBoxliteVolumeHandle) 
     }
 }
 
+/// Free a standalone `CVolumeInfo` and its owned strings.
+///
+/// # Safety
+///
+/// `info` must be null or a pointer allocated by this module that has not
+/// already been freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_free_volume_info(info: *mut CVolumeInfo) {
     free_volume_info(info)
 }
 
+/// Free a `CVolumeInfoList`, all entries, and their owned strings.
+///
+/// # Safety
+///
+/// `list` must be null or a pointer allocated by this module that has not
+/// already been freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_free_volume_info_list(list: *mut CVolumeInfoList) {
     free_volume_info_list(list)

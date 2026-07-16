@@ -123,6 +123,11 @@ typedef struct RestOptionsHandle RestOptionsHandle;
 typedef struct RuntimeHandle RuntimeHandle;
 
 // Opaque handle to runtime named-volume operations.
+//
+// The handle owns a cloneable core volume handle plus the runtime liveness,
+// Tokio runtime, and event queue needed to submit asynchronous work. C callers
+// receive this as an opaque `CBoxliteVolumeHandle` and must release it with
+// `boxlite_volume_free`.
 typedef struct VolumeHandle VolumeHandle;
 
 typedef struct AdvancedBoxOptionsHandle CAdvancedBoxOptions;
@@ -337,6 +342,12 @@ typedef struct VolumeHandle CBoxliteVolumeHandle;
 // Runtime shutdown completion.
 typedef void (*CRuntimeShutdownCb)(CBoxliteError*, void*);
 
+// C ABI representation of volume metadata.
+//
+// `id` and `created_at` are heap-owned C strings allocated by this module.
+// They are freed by `boxlite_free_volume_info` for standalone values or by
+// `boxlite_free_volume_info_list` for list entries. `size_bytes` is meaningful
+// only when `has_size` is non-zero.
 typedef struct CVolumeInfo {
   char *id;
   char *created_at;
@@ -347,6 +358,11 @@ typedef struct CVolumeInfo {
 // Volume create completion.
 typedef void (*CBoxVolumeCreateCb)(struct CVolumeInfo*, CBoxliteError*, void*);
 
+// C ABI representation of a volume metadata list.
+//
+// `items` points to `count` contiguous `CVolumeInfo` entries. The list owns the
+// array and every string in each entry; callers must free it with
+// `boxlite_free_volume_info_list` when ownership is transferred to C.
 typedef struct CVolumeInfoList {
   struct CVolumeInfo *items;
   int count;
@@ -840,22 +856,52 @@ int boxlite_runtime_drain(CBoxliteRuntime *runtime, int timeout_ms, CBoxliteErro
 
 void boxlite_free_string(char *s);
 
+// Queue asynchronous volume creation.
+//
+// # Safety
+//
+// `handle` must be a valid pointer returned by `boxlite_runtime_volumes`, `cb`
+// must be a valid callback, and `out_error` must be writable. The handle must
+// remain valid until this function returns. Completion is delivered later when
+// the parent runtime is drained.
 enum BoxliteErrorCode boxlite_volume_create(CBoxliteVolumeHandle *handle,
                                             CBoxVolumeCreateCb cb,
                                             void *user_data,
                                             CBoxliteError *out_error);
 
+// Queue asynchronous volume listing.
+//
+// # Safety
+//
+// `handle` must be a valid pointer returned by `boxlite_runtime_volumes`, `cb`
+// must be a valid callback, and `out_error` must be writable. The handle must
+// remain valid until this function returns. Completion is delivered later when
+// the parent runtime is drained.
 enum BoxliteErrorCode boxlite_volume_list(CBoxliteVolumeHandle *handle,
                                           CBoxVolumeListCb cb,
                                           void *user_data,
                                           CBoxliteError *out_error);
 
+// Queue asynchronous lookup of a volume by id.
+//
+// # Safety
+//
+// `handle` must be valid, `id` must point to a non-null UTF-8 C string, `cb`
+// must be a valid callback, and `out_error` must be writable. `id` only needs
+// to remain valid for the duration of this call.
 enum BoxliteErrorCode boxlite_volume_get(CBoxliteVolumeHandle *handle,
                                          const char *id,
                                          CBoxVolumeGetCb cb,
                                          void *user_data,
                                          CBoxliteError *out_error);
 
+// Queue asynchronous removal of a volume by id.
+//
+// # Safety
+//
+// `handle` must be valid, `id` must point to a non-null UTF-8 C string, `cb`
+// must be a valid callback, and `out_error` must be writable. `id` only needs
+// to remain valid for the duration of this call.
 enum BoxliteErrorCode boxlite_volume_remove(CBoxliteVolumeHandle *handle,
                                             const char *id,
                                             int force,
@@ -863,10 +909,29 @@ enum BoxliteErrorCode boxlite_volume_remove(CBoxliteVolumeHandle *handle,
                                             void *user_data,
                                             CBoxliteError *out_error);
 
+// Free a volume handle returned by `boxlite_runtime_volumes`.
+//
+// # Safety
+//
+// `handle` must be null or a pointer previously returned by
+// `boxlite_runtime_volumes` that has not already been freed. Callers must not
+// use the handle after this function returns.
 void boxlite_volume_free(CBoxliteVolumeHandle *handle);
 
+// Free a standalone `CVolumeInfo` and its owned strings.
+//
+// # Safety
+//
+// `info` must be null or a pointer allocated by this module that has not
+// already been freed.
 void boxlite_free_volume_info(struct CVolumeInfo *info);
 
+// Free a `CVolumeInfoList`, all entries, and their owned strings.
+//
+// # Safety
+//
+// `list` must be null or a pointer allocated by this module that has not
+// already been freed.
 void boxlite_free_volume_info_list(struct CVolumeInfoList *list);
 
 #ifdef __cplusplus

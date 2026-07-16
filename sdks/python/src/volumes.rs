@@ -6,13 +6,17 @@ use pyo3::prelude::*;
 
 use crate::util::map_err;
 
+/// Metadata for a named volume.
 #[pyclass(name = "VolumeInfo")]
 #[derive(Clone)]
 pub(crate) struct PyVolumeInfo {
+    /// Server-assigned volume id used by get and remove operations.
     #[pyo3(get)]
     pub(crate) id: String,
+    /// Creation timestamp formatted as an RFC 3339 string.
     #[pyo3(get)]
     pub(crate) created_at: String,
+    /// Volume size in bytes when the backend can report it.
     #[pyo3(get)]
     pub(crate) size_bytes: Option<u64>,
 }
@@ -37,6 +41,7 @@ impl From<VolumeInfo> for PyVolumeInfo {
     }
 }
 
+/// Runtime-scoped handle for named-volume operations.
 #[pyclass(name = "VolumeHandle")]
 pub(crate) struct PyVolumeHandle {
     pub(crate) handle: Arc<VolumeHandle>,
@@ -44,6 +49,7 @@ pub(crate) struct PyVolumeHandle {
 
 #[pymethods]
 impl PyVolumeHandle {
+    /// Create a named volume and return its metadata.
     fn create<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -52,6 +58,7 @@ impl PyVolumeHandle {
         })
     }
 
+    /// List named volumes visible to this runtime.
     fn list<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -63,6 +70,7 @@ impl PyVolumeHandle {
         })
     }
 
+    /// Get metadata for a volume by server-assigned id.
     fn get<'py>(&self, py: Python<'py>, id: String) -> PyResult<Bound<'py, PyAny>> {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -71,6 +79,10 @@ impl PyVolumeHandle {
         })
     }
 
+    /// Remove a volume by id.
+    ///
+    /// When `force` is true, backends that support force removal treat a
+    /// missing volume as success.
     #[pyo3(signature = (id, force=false))]
     fn remove<'py>(&self, py: Python<'py>, id: String, force: bool) -> PyResult<Bound<'py, PyAny>> {
         let handle = Arc::clone(&self.handle);

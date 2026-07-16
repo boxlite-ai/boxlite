@@ -9,6 +9,7 @@ import "C"
 import (
 	"context"
 	"runtime/cgo"
+	"sync"
 	"unsafe"
 )
 
@@ -25,6 +26,7 @@ type VolumeInfo struct {
 
 // Volumes is a runtime-scoped handle for named-volume operations.
 type Volumes struct {
+	mu      sync.RWMutex
 	runtime *Runtime
 	handle  *C.CBoxliteVolumeHandle
 }
@@ -51,7 +53,12 @@ func (r *Runtime) Volumes() (*Volumes, error) {
 
 // Create creates a volume and returns its metadata.
 func (v *Volumes) Create(ctx context.Context) (*VolumeInfo, error) {
-	if v == nil || v.handle == nil {
+	if v == nil {
+		return nil, closedVolumesError()
+	}
+	v.mu.RLock()
+	if v.handle == nil {
+		v.mu.RUnlock()
 		return nil, closedVolumesError()
 	}
 	v.runtime.ensureDrainRunning()
@@ -61,6 +68,7 @@ func (v *Volumes) Create(ctx context.Context) (*VolumeInfo, error) {
 
 	var cerr C.CBoxliteError
 	code := C.boxlite_volume_create(v.handle, C.cbVolumeCreate(), handleToPtr(h), &cerr)
+	v.mu.RUnlock()
 	if code != C.Ok {
 		deleteHandleForDispatch(h)
 		return nil, freeError(&cerr)
@@ -78,9 +86,14 @@ func (v *Volumes) Create(ctx context.Context) (*VolumeInfo, error) {
 	}
 }
 
-// List lists named volumes for this runtime, sorted by name.
+// List lists named volumes for this runtime.
 func (v *Volumes) List(ctx context.Context) ([]VolumeInfo, error) {
-	if v == nil || v.handle == nil {
+	if v == nil {
+		return nil, closedVolumesError()
+	}
+	v.mu.RLock()
+	if v.handle == nil {
+		v.mu.RUnlock()
 		return nil, closedVolumesError()
 	}
 	v.runtime.ensureDrainRunning()
@@ -90,6 +103,7 @@ func (v *Volumes) List(ctx context.Context) ([]VolumeInfo, error) {
 
 	var cerr C.CBoxliteError
 	code := C.boxlite_volume_list(v.handle, C.cbVolumeList(), handleToPtr(h), &cerr)
+	v.mu.RUnlock()
 	if code != C.Ok {
 		deleteHandleForDispatch(h)
 		return nil, freeError(&cerr)
@@ -109,7 +123,12 @@ func (v *Volumes) List(ctx context.Context) ([]VolumeInfo, error) {
 
 // Get returns metadata for a single volume by id.
 func (v *Volumes) Get(ctx context.Context, id string) (*VolumeInfo, error) {
-	if v == nil || v.handle == nil {
+	if v == nil {
+		return nil, closedVolumesError()
+	}
+	v.mu.RLock()
+	if v.handle == nil {
+		v.mu.RUnlock()
 		return nil, closedVolumesError()
 	}
 	v.runtime.ensureDrainRunning()
@@ -122,6 +141,7 @@ func (v *Volumes) Get(ctx context.Context, id string) (*VolumeInfo, error) {
 
 	var cerr C.CBoxliteError
 	code := C.boxlite_volume_get(v.handle, cID, C.cbVolumeGet(), handleToPtr(h), &cerr)
+	v.mu.RUnlock()
 	if code != C.Ok {
 		deleteHandleForDispatch(h)
 		return nil, freeError(&cerr)
@@ -141,7 +161,12 @@ func (v *Volumes) Get(ctx context.Context, id string) (*VolumeInfo, error) {
 
 // Remove removes a volume by id. With force, a missing volume is a no-op.
 func (v *Volumes) Remove(ctx context.Context, id string, force bool) error {
-	if v == nil || v.handle == nil {
+	if v == nil {
+		return closedVolumesError()
+	}
+	v.mu.RLock()
+	if v.handle == nil {
+		v.mu.RUnlock()
 		return closedVolumesError()
 	}
 	v.runtime.ensureDrainRunning()
@@ -159,6 +184,7 @@ func (v *Volumes) Remove(ctx context.Context, id string, force bool) error {
 
 	var cerr C.CBoxliteError
 	code := C.boxlite_volume_remove(v.handle, cID, forceFlag, C.cbVolumeRemove(), handleToPtr(h), &cerr)
+	v.mu.RUnlock()
 	if code != C.Ok {
 		deleteHandleForDispatch(h)
 		return freeError(&cerr)
@@ -178,9 +204,13 @@ func (v *Volumes) Remove(ctx context.Context, id string, force bool) error {
 
 // Close releases the volume handle.
 func (v *Volumes) Close() error {
-	if v != nil && v.handle != nil {
-		C.boxlite_volume_free(v.handle)
-		v.handle = nil
+	if v != nil {
+		v.mu.Lock()
+		defer v.mu.Unlock()
+		if v.handle != nil {
+			C.boxlite_volume_free(v.handle)
+			v.handle = nil
+		}
 	}
 	return nil
 }

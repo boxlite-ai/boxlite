@@ -170,6 +170,11 @@ impl PyBoxlite {
         })
     }
 
+    /// Return the runtime-scoped named-volume handle.
+    ///
+    /// The handle exposes asynchronous create, list, get, and remove operations
+    /// for backends that support named volumes. Unsupported backends raise the
+    /// same BoxLite error they return through the lower-level runtime API.
     #[getter]
     fn volumes(&self) -> PyResult<PyVolumeHandle> {
         let handle = self.runtime.volumes().map_err(map_err)?;
