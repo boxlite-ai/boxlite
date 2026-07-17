@@ -62,6 +62,38 @@ fn test_create_resources() {
     ctx.cleanup_box(name);
 }
 
+#[test]
+fn test_create_env_file_persists_environment() {
+    let env_file = common::temp_env_file("CREATED_FROM=file\nOVERRIDE=file\n");
+
+    let mut ctx = common::boxlite();
+    let name = "create-env-file";
+    ctx.cmd
+        .arg("create")
+        .arg("--name")
+        .arg(name)
+        .arg("--env-file")
+        .arg(env_file.path())
+        .args(["-e", "OVERRIDE=cli", "alpine:latest"])
+        .assert()
+        .success();
+
+    ctx.new_cmd()
+        .args([
+            "exec",
+            name,
+            "--",
+            "sh",
+            "-c",
+            "printf '%s|%s' \"$CREATED_FROM\" \"$OVERRIDE\"",
+        ])
+        .assert()
+        .success()
+        .stdout("file|cli");
+
+    ctx.cleanup_box(name);
+}
+
 // ============================================================================
 // Publish (-p / --publish) Tests
 // ============================================================================

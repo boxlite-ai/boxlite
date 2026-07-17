@@ -6,7 +6,6 @@ use crate::terminal::StreamManager;
 use crate::util::to_shell_exit_code;
 use boxlite::{BoxOptions, BoxliteRuntime, LiteBox, RootfsSpec};
 use clap::Args;
-use std::io::{self, IsTerminal};
 
 #[derive(Args, Debug)]
 pub struct RunArgs {
@@ -52,8 +51,10 @@ pub async fn execute(args: RunArgs, global: &GlobalFlags) -> anyhow::Result<i32>
     args.boot.require_enabled(global.experimental_features())?;
     let (rootfs, command_args) = args.rootfs_and_command()?;
     let command_args = command_args.to_vec();
+    args.process.validate(args.management.detach)?;
+    let environment = args.process.environment.resolve()?;
     let mut runner = BoxRunner::new(args, global)?;
-    runner.run(rootfs, command_args).await
+    runner.run(rootfs, command_args, environment).await
 }
 
 struct BoxRunner {
@@ -70,14 +71,16 @@ impl BoxRunner {
         Ok(Self { args, rt, home })
     }
 
-    async fn run(&mut self, rootfs: RootfsSpec, command_args: Vec<String>) -> anyhow::Result<i32> {
-        // Validate flags and environment
-        self.validate_flags()?;
-
+    async fn run(
+        &mut self,
+        rootfs: RootfsSpec,
+        command_args: Vec<String>,
+        environment: Vec<(String, String)>,
+    ) -> anyhow::Result<i32> {
         // COMMAND becomes the container's init (docker semantics — it replaces
         // the image CMD via options.cmd in create_box), so there is nothing to
         // spawn here: attach to the init session instead.
-        let litebox = self.create_box(rootfs, &command_args).await?;
+        let litebox = self.create_box(rootfs, &command_args, &environment).await?;
 
         // Detach mode: start it and get out of the way. Nobody is reading the
         // output, so there is nothing to be attached for.
@@ -95,7 +98,7 @@ impl BoxRunner {
         litebox.start().await?;
 
         // --tty implies --interactive when stdin is a terminal
-        // (validate_flags already ensures stdin is a terminal when --tty is set)
+        // (ProcessFlags::validate already checked stdin before runtime creation)
         if self.args.process.tty {
             self.args.process.interactive = true;
         }
@@ -122,6 +125,7 @@ impl BoxRunner {
         &self,
         rootfs: RootfsSpec,
         command_args: &[String],
+        environment: &[(String, String)],
     ) -> anyhow::Result<LiteBox> {
         let mut options = BoxOptions::default();
         self.args.resource.apply_to(&mut options);
@@ -132,7 +136,7 @@ impl BoxRunner {
             .volume
             .apply_to(&mut options, self.home.as_deref())?;
         self.args.network.apply_to(&mut options)?;
-        self.args.process.apply_to(&mut options)?;
+        self.args.process.apply_to(&mut options, environment)?;
 
         // Detached boxes keep manual lifecycle control: detach silently
         // overrides --rm (historical CLI behavior).
@@ -155,15 +159,6 @@ impl BoxRunner {
             .await?;
 
         Ok(litebox)
-    }
-
-    fn validate_flags(&self) -> anyhow::Result<()> {
-        // Check TTY availability if requested
-        if self.args.process.tty && !io::stdin().is_terminal() {
-            anyhow::bail!("the input device is not a TTY.");
-        }
-
-        Ok(())
     }
 }
 

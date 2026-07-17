@@ -256,13 +256,14 @@ takes the command's exit code; `boxlite ps` shows it stopped and
 
 - Default (foreground): streams stdout/stderr to the terminal, exits with the box command's exit code. If the command was killed by signal *N*, exits with `128 + N` (Unix convention, see [Exit Codes](#exit-codes)).
 - `-d`/`--detach`: prints the box ID to stdout and exits `0` immediately; `auto_remove` is force-disabled in this mode so the box outlives the CLI process.
-- `--tty` with non-TTY stdin: fails with `the input device is not a TTY.`
+- Foreground `--tty` with non-TTY stdin: fails with `the input device is not a TTY.` Detached `-d -t` is allowed because the command does not attach to local stdin.
 
 **Examples:**
 
 ```bash
 boxlite run alpine:latest echo "Hello"
 boxlite run -it --rm alpine:latest /bin/sh
+boxlite run --env-file .env -e DEBUG=1 python:slim python app.py
 boxlite run -d --name web -p 8080:80 nginx:alpine
 boxlite run -v $(pwd):/work -w /work alpine:latest ls -la
 boxlite run --cpus 4 --memory 4096 python:slim python -c "print(2+2)"
@@ -291,6 +292,7 @@ Run a command in a *running* box. The `--` separator is required (`src/cli/src/c
 boxlite exec mybox -- echo "hello"
 boxlite exec -it mybox -- /bin/sh
 boxlite exec -e DEBUG=1 -w /app mybox -- pytest tests/
+boxlite exec --env-file test.env mybox -- pytest tests/
 ```
 
 ---
@@ -319,16 +321,20 @@ implicitly, because starting it runs that command. Start it deliberately with
 |------|-------|-------------|
 | `--rootfs PATH` | — | Use a prepared rootfs path instead of pulling/resolving an image |
 | `--env KEY=VALUE` | `-e` | Set environment variables (repeatable) |
+| `--env-file FILE` | — | Read environment variables from a file (repeatable) |
 | `--workdir PATH` | `-w` | Working directory inside the box |
 
 Also uses [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`ManagementFlags`](#managementflags).
 
-> Note: `create` accepts `--env` and `--workdir` directly rather than via `ProcessFlags` (no `-i`/`-t`/`-u` here, since no command is being executed).
+> Note: `create` flattens `EnvironmentFlags` directly and defines `--workdir`
+> itself rather than using `ProcessFlags`; it therefore does not expose
+> `-i`/`-t`/`-u`, since no command is executed.
 
 **Examples:**
 
 ```bash
 boxlite create --name mybox alpine:latest
+boxlite create --env-file .env --name configured alpine:latest
 boxlite create -p 8080:80 -v /data:/app/data --name web nginx:alpine
 boxlite create --rootfs /path/to/rootfs --name local-rootfs
 ```
@@ -599,19 +605,36 @@ boxlite completion fish > ~/.config/fish/completions/boxlite.fish
 
 Several commands flatten shared `clap` `Args` structs. Each is documented here once.
 
+### `EnvironmentFlags`
+
+Used by `run`, `create`, and `exec`.
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--env KEY=VALUE` | `-e` | Set an environment variable; a bare key inherits from the host |
+| `--env-file FILE` | — | Read environment variables from a file; repeatable |
+
+Environment files use dotenv syntax, including quoted values, `export`
+prefixes, comments, escapes, and variable substitution. Files are applied in
+command-line order, later files override earlier files, and explicit `-e`
+values have the highest precedence. A bare key is supported by `-e` and
+inherits its value from the host. These values enter the guest; use BoxLite
+secret injection for credentials that must remain outside the VM.
+
 ### `ProcessFlags`
 
-Used by `run` and `exec` (defined at `src/cli/src/cli.rs:208-281`).
+Used by `run` and `exec` and includes [`EnvironmentFlags`](#environmentflags).
 
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--interactive` | `-i` | Keep STDIN open even if not attached |
 | `--tty` | `-t` | Allocate a pseudo-TTY (stdout and stderr are merged in TTY mode) |
-| `--env KEY=VALUE` | `-e` | Set environment variables (repeatable; if value omitted, inherits from host) |
 | `--workdir PATH` | `-w` | Working directory inside the box |
 | `--user NAME[:GROUP]` | `-u` | Run as `name`/`uid`[:`group`/`gid`] |
 
-`--tty` implies `--interactive` when stdin is a TTY. `--tty` without a TTY-attached stdin is a hard error.
+In foreground mode, `--tty` implies `--interactive` when stdin is a TTY and
+fails when stdin is not a TTY. Detached `-d -t` is allowed because the command
+does not attach to local stdin.
 
 ### `ResourceFlags`
 

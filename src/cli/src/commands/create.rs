@@ -1,5 +1,6 @@
 use crate::cli::{
-    GlobalFlags, KernelFlags, NetworkFlags, PublishFlags, ResourceFlags, VolumeFlags,
+    EnvironmentFlags, GlobalFlags, KernelFlags, NetworkFlags, PublishFlags, ResourceFlags,
+    VolumeFlags,
 };
 use boxlite::{BoxOptions, RootfsSpec};
 use clap::Args;
@@ -18,9 +19,8 @@ pub struct CreateArgs {
     #[command(flatten)]
     pub management: crate::cli::ManagementFlags,
 
-    /// Set environment variables
-    #[arg(short = 'e', long = "env")]
-    pub env: Vec<String>,
+    #[command(flatten)]
+    pub environment: EnvironmentFlags,
 
     /// Working directory inside the box
     #[arg(short = 'w', long = "workdir")]
@@ -65,6 +65,7 @@ pub async fn execute(args: CreateArgs, global: &GlobalFlags) -> anyhow::Result<(
 impl CreateArgs {
     fn to_box_options(&self, global: &GlobalFlags) -> anyhow::Result<BoxOptions> {
         self.boot.require_enabled(global.experimental_features())?;
+        let environment = self.environment.resolve()?;
         let mut options = BoxOptions::default();
         self.resource.apply_to(&mut options);
         self.boot.apply_to(&mut options);
@@ -86,13 +87,13 @@ impl CreateArgs {
         options.detach = true;
         options.auto_delete = Some(0);
         options.working_dir = self.workdir.clone();
+        options.env.extend(environment);
         if let Some(ref exec) = self.entrypoint {
             options.entrypoint = Some(vec![exec.clone()]);
         }
         if !self.command.is_empty() {
             options.cmd = Some(self.command.clone());
         }
-        crate::cli::apply_env_vars(&self.env, &mut options);
         options.rootfs = self.rootfs_spec()?;
         Ok(options)
     }
@@ -158,5 +159,40 @@ mod tests {
             .expect_err("competing sources must be rejected");
 
         assert!(err.to_string().contains("either IMAGE or --rootfs"));
+    }
+
+    #[test]
+    fn create_env_file_error_does_not_create_anonymous_volume() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let home = temp_dir.path().join("home");
+        let missing_env_file = temp_dir.path().join("missing.env");
+        let args: Vec<std::ffi::OsString> = vec![
+            "boxlite".into(),
+            "--home".into(),
+            home.as_os_str().to_owned(),
+            "create".into(),
+            "--env-file".into(),
+            missing_env_file.as_os_str().to_owned(),
+            "--volume".into(),
+            "/data".into(),
+            "alpine".into(),
+        ];
+        let cli = Cli::try_parse_from(args).expect("create arguments should parse");
+        let Commands::Create(args) = cli.command else {
+            panic!("expected create command");
+        };
+
+        let err = args
+            .to_box_options(&cli.global)
+            .expect_err("missing environment file must be rejected");
+
+        assert!(
+            format!("{err:#}").contains(&missing_env_file.display().to_string()),
+            "error should identify the missing environment file"
+        );
+        assert!(
+            !home.join("volumes/anonymous").exists(),
+            "environment errors must not create anonymous volumes"
+        );
     }
 }

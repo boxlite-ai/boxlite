@@ -315,6 +315,7 @@ silently restarting it, because restarting would run the command a second time.
 | `--interactive` | `-i` | Keep STDIN open |
 | `--tty` | `-t` | Allocate a pseudo-TTY |
 | `--env KEY=VALUE` | `-e` | Set environment variables (repeatable) |
+| `--env-file FILE` | | Read environment variables from a file (repeatable) |
 | `--workdir PATH` | `-w` | Working directory in the box |
 | `--publish PORT` | `-p` | Publish box port to host (e.g. `8080:80`, `8080:80/tcp`) |
 | `--volume VOLUME` | `-v` | Mount a volume (e.g. `hostPath:boxPath`, `boxPath` for anonymous) |
@@ -329,6 +330,7 @@ silently restarting it, because restarting would run the command a second time.
 ```bash
 boxlite run alpine:latest echo "Hello"
 boxlite run -it --rm alpine:latest /bin/sh
+boxlite run --env-file .env -e DEBUG=1 python:slim python app.py
 boxlite run -d --name openclaw -p 18789:18789 ghcr.io/openclaw/openclaw:main
 boxlite run -v /host/data:/app/data alpine:latest cat /app/data/hello.txt
 boxlite run --rootfs /path/to/rootfs /bin/sh
@@ -354,6 +356,7 @@ default, and `exec` still starts it on demand.
 | `--rootfs PATH` | | Use a prepared rootfs path instead of pulling/resolving an image |
 | `--name NAME` | | Name the box |
 | `--env KEY=VALUE` | `-e` | Environment variables |
+| `--env-file FILE` | | Read environment variables from a file (repeatable) |
 | `--workdir PATH` | `-w` | Working directory |
 | `--publish PORT` | `-p` | Publish box port to host (e.g. `8080:80`) |
 | `--volume VOLUME` | `-v` | Mount a volume (e.g. `hostPath:boxPath`, or box path for anonymous) |
@@ -366,6 +369,7 @@ default, and `exec` still starts it on demand.
 
 ```bash
 boxlite create --name mybox alpine:latest
+boxlite create --env-file .env --name configured alpine:latest
 boxlite create -p 18789:18789 -v /data:/app/data --name openclaw ghcr.io/openclaw/openclaw:main
 boxlite create --rootfs /path/to/rootfs --name local-rootfs
 boxlite start mybox
@@ -383,14 +387,23 @@ Run a command in a running box.
 | `--interactive` | `-i` | Keep STDIN open |
 | `--tty` | `-t` | Allocate a TTY |
 | `--env KEY=VALUE` | `-e` | Environment variables |
+| `--env-file FILE` | | Read environment variables from a file (repeatable) |
 | `--workdir PATH` | `-w` | Working directory |
 | `--detach` | `-d` | Run in background (don’t wait) |
 
 **Example:**
 
 ```bash
-boxlite exec -it mybox /bin/sh
+boxlite exec -it mybox -- /bin/sh
+boxlite exec --env-file test.env mybox -- pytest
 ```
+
+Environment files use dotenv syntax, including quoted values, `export`
+prefixes, comments, escapes, and variable substitution. Later files override
+earlier files, and explicit `-e` values override all files. A bare key is
+supported by `-e` and inherits its value from the host. Environment-file values
+enter the box and should not be used as a substitute for BoxLite secret
+injection.
 
 ### `boxlite list` (alias: `ls`, `ps`)
 

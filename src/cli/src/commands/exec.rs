@@ -31,8 +31,10 @@ pub struct ExecArgs {
 /// below is the graceful path (Guest.Shutdown RPC); Drop is the backstop.
 /// Mirrors the RAII fix in [`super::run::execute`] (#622).
 pub async fn execute(args: ExecArgs, global: &GlobalFlags) -> anyhow::Result<i32> {
+    args.process.validate(args.detach)?;
+    let environment = args.process.environment.resolve()?;
     let mut executor = BoxExecutor::new(args, global)?;
-    executor.execute().await
+    executor.execute(environment).await
 }
 
 struct BoxExecutor {
@@ -46,10 +48,9 @@ impl BoxExecutor {
         Ok(Self { args, rt })
     }
 
-    async fn execute(&mut self) -> anyhow::Result<i32> {
-        self.args.process.validate(self.args.detach)?;
+    async fn execute(&mut self, environment: Vec<(String, String)>) -> anyhow::Result<i32> {
         let litebox = self.get_box().await?;
-        let cmd = self.prepare_command();
+        let cmd = self.prepare_command(&environment);
         let mut execution = litebox.exec(cmd).await?;
 
         // Detach mode: Exit immediately without waiting
@@ -88,8 +89,8 @@ impl BoxExecutor {
             .ok_or_else(|| anyhow::anyhow!("No such box: {}", self.args.target_box))
     }
 
-    fn prepare_command(&self) -> BoxCommand {
+    fn prepare_command(&self, environment: &[(String, String)]) -> BoxCommand {
         let cmd = BoxCommand::new(&self.args.command[0]).args(&self.args.command[1..]);
-        self.args.process.configure_command(cmd)
+        self.args.process.configure_command(cmd, environment)
     }
 }
