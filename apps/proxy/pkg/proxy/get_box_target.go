@@ -22,6 +22,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const activityUpdateTimeout = 10 * time.Second
+
 func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, error) {
 	var targetPort, targetPath, boxIdOrSignedToken string
 
@@ -78,7 +80,8 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, e
 	// Skip last activity update if header is set
 	if ctx.Request.Header.Get(SKIP_LAST_ACTIVITY_UPDATE_HEADER) != "true" {
 		doneCh := make(chan struct{})
-		go p.updateLastActivity(ctx.Request.Context(), boxId, true, doneCh)
+		activityCtx := context.WithoutCancel(ctx.Request.Context())
+		go p.updateLastActivity(activityCtx, boxId, true, doneCh)
 		ctx.Request.Header.Del(SKIP_LAST_ACTIVITY_UPDATE_HEADER)
 		ctx.Set(ACTIVITY_POLL_STOP_KEY, func() {
 			close(doneCh)
@@ -292,8 +295,11 @@ func (p *Proxy) parseHost(host string) (targetPort string, boxIdOrSignedToken st
 // updateLastActivity updates the last activity timestamp for a box.
 // If shouldPollUpdate is true, it starts a goroutine that updates every 50 seconds.
 func (p *Proxy) updateLastActivity(ctx context.Context, boxId string, shouldPollUpdate bool, doneCh chan struct{}) {
+	updateCtx, cancel := context.WithTimeout(ctx, activityUpdateTimeout)
+	defer cancel()
+
 	// Prevent frequent updates by caching the last update
-	cached, err := p.boxLastActivityUpdateCache.Has(ctx, boxId)
+	cached, err := p.boxLastActivityUpdateCache.Has(updateCtx, boxId)
 	if err != nil {
 		// If cache doesn't work, skip the update to avoid spamming the API
 		log.Errorf("failed to check last activity update cache for box %s: %v", boxId, err)
@@ -304,7 +310,7 @@ func (p *Proxy) updateLastActivity(ctx context.Context, boxId string, shouldPoll
 	pollInterval := 50 * time.Second
 
 	if !cached {
-		_, err := p.apiclient.BoxAPI.UpdateLastActivity(ctx, boxId).Execute()
+		_, err := p.apiclient.BoxAPI.UpdateLastActivity(updateCtx, boxId).Execute()
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return
@@ -314,7 +320,7 @@ func (p *Proxy) updateLastActivity(ctx context.Context, boxId string, shouldPoll
 		}
 
 		// Expire a bit before the poll interval to avoid skipping one interval
-		err = p.boxLastActivityUpdateCache.Set(ctx, boxId, true, pollInterval-5*time.Second)
+		err = p.boxLastActivityUpdateCache.Set(updateCtx, boxId, true, pollInterval-5*time.Second)
 		if err != nil {
 			log.Errorf("failed to set last activity update cache for box %s: %v", boxId, err)
 		}
