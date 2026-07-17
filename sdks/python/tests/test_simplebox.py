@@ -23,7 +23,7 @@ async def test_simplebox_command_not_found_raises_exec_error(shared_runtime):
     async with boxlite.SimpleBox(image="alpine:latest", runtime=shared_runtime) as box:
         with pytest.raises(boxlite.ExecError) as exc:
             await box.exec("definitely-not-a-boxlite-command-xyz")
-        assert exc.value.exit_code == 126
+        assert exc.value.exit_code == 127
         stderr = exc.value.stderr.lower()
         assert "failed to spawn" in stderr
 

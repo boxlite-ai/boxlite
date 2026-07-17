@@ -3,6 +3,8 @@ use pyo3::{create_exception, exceptions::PyRuntimeError, prelude::*};
 
 create_exception!(boxlite_python, ExecStartError, PyRuntimeError);
 
+const EXEC_START_REASON: &str = "spawn_failed";
+
 pub(crate) fn map_err(err: impl std::fmt::Display) -> PyErr {
     PyRuntimeError::new_err(err.to_string())
 }
@@ -19,6 +21,7 @@ fn is_exec_start_failure(err: &BoxliteError) -> bool {
     let BoxliteError::Internal(message) = err else {
         return false;
     };
-    let detail = message.to_ascii_lowercase();
-    detail.contains("spawn_failed") && detail.contains("failed to spawn")
+    message
+        .strip_prefix(EXEC_START_REASON)
+        .is_some_and(|detail| detail.starts_with(": "))
 }

@@ -9,7 +9,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Dict, Optional
 
-from ..errors import ExecError
+from ..errors import ExecError, _exec_start_exit_code
 from ..exec import ExecResult
 
 try:
@@ -210,7 +210,9 @@ class SyncSimpleBox:
                 )
             except _ExecStartError as e:
                 message = str(e)
-                raise ExecError(command_display, 126, message) from e
+                raise ExecError(
+                    command_display, _exec_start_exit_code(message), message
+                ) from e
 
             stdout_lines = []
             stderr_lines = []
