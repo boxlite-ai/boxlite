@@ -6,8 +6,10 @@ package proxy
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -16,10 +18,16 @@ import (
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
+	common_proxy "github.com/boxlite-ai/common-go/pkg/proxy"
 	"github.com/boxlite-ai/common-go/pkg/utils"
 	"github.com/gin-gonic/gin"
 
 	log "github.com/sirupsen/logrus"
+)
+
+const (
+	directPreviewBoxIDLength        = 12
+	encodedDirectPreviewBoxIDLength = 24
 )
 
 func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, error) {
@@ -33,7 +41,7 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, e
 		ctx.Error(common_errors.NewBadRequestError(err))
 		return nil, nil, err
 	}
-	targetPath = ctx.Param("path")
+	targetPath = requestEscapedPath(ctx.Request.URL, ctx.Param("path"))
 
 	if targetPort == "" {
 		ctx.Error(common_errors.NewBadRequestError(errors.New("target port is required")))
@@ -46,6 +54,13 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, e
 	}
 
 	boxId := boxIdOrSignedToken
+	if decodedBoxId, ok, decodeErr := decodeDirectPreviewBoxID(boxIdOrSignedToken); decodeErr != nil {
+		ctx.Error(common_errors.NewBadRequestError(decodeErr))
+		return nil, nil, decodeErr
+	} else if ok {
+		boxId = decodedBoxId
+		boxIdOrSignedToken = decodedBoxId
+	}
 
 	isPublic, err := p.getBoxPublic(ctx, boxIdOrSignedToken)
 	if err != nil {
@@ -86,14 +101,7 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, e
 	}
 
 	// Build the target URL
-	targetURL := fmt.Sprintf("%s/boxes/%s/toolbox/proxy/%s", runnerInfo.ApiUrl, boxId, targetPort)
-
-	// Ensure path always has a leading slash but not duplicate slashes
-	if targetPath == "" {
-		targetPath = "/"
-	} else if !strings.HasPrefix(targetPath, "/") {
-		targetPath = "/" + targetPath
-	}
+	targetURL := runnerProxyTargetURL(runnerInfo.ApiUrl, boxId, targetPort)
 
 	// Create the complete target URL with path
 	target, err := url.Parse(fmt.Sprintf("%s%s", targetURL, targetPath))
@@ -102,10 +110,54 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, e
 		return nil, nil, fmt.Errorf("failed to parse target URL: %w", err)
 	}
 
+	forwardedProto := "http"
+	if p.config != nil && p.config.ProxyProtocol != "" {
+		forwardedProto = p.config.ProxyProtocol
+	}
+	forwardedHost := ctx.Request.Host
+	forwardedPort := forwardedPortFromHost(forwardedHost, forwardedProto)
+
 	return target, map[string]string{
 		"X-BoxLite-Authorization": fmt.Sprintf("Bearer %s", runnerInfo.ApiKey),
-		"X-Forwarded-Host":        ctx.Request.Host,
+		"X-Forwarded-Host":        forwardedHost,
+		"X-Forwarded-Proto":       forwardedProto,
+		"X-Forwarded-Port":        forwardedPort,
+		"Forwarded":               common_proxy.FormatForwardedHeader(forwardedHost, forwardedProto),
 	}, nil
+}
+
+func runnerProxyTargetURL(runnerApiURL string, boxId string, targetPort string) string {
+	if targetPort == TERMINAL_PORT {
+		return fmt.Sprintf("%s/boxes/%s/toolbox/proxy/%s", runnerApiURL, boxId, targetPort)
+	}
+	return fmt.Sprintf("%s/v1/boxes/%s/network/proxy/%s", runnerApiURL, boxId, targetPort)
+}
+
+func requestEscapedPath(requestURL *url.URL, fallbackPath string) string {
+	path := fallbackPath
+	if requestURL != nil && requestURL.EscapedPath() != "" {
+		path = requestURL.EscapedPath()
+	}
+	if path == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(path, "/") {
+		return "/" + path
+	}
+	return path
+}
+
+func forwardedPortFromHost(host string, proto string) string {
+	if _, port, err := net.SplitHostPort(host); err == nil {
+		return port
+	}
+	if strings.EqualFold(proto, "https") {
+		return "443"
+	}
+	if strings.EqualFold(proto, "http") {
+		return "80"
+	}
+	return ""
 }
 
 func (p *Proxy) getBoxRunnerInfo(ctx context.Context, boxId string) (*RunnerInfo, error) {
@@ -287,6 +339,40 @@ func (p *Proxy) parseHost(host string) (targetPort string, boxIdOrSignedToken st
 	baseHost = strings.Join(parts[1:], ".")
 
 	return targetPort, boxIdOrSignedToken, baseHost, nil
+}
+
+func decodeDirectPreviewBoxID(value string) (string, bool, error) {
+	if len(value) != encodedDirectPreviewBoxIDLength {
+		return value, false, nil
+	}
+
+	decoded, err := hex.DecodeString(value)
+	if err != nil {
+		return value, false, nil
+	}
+	if len(decoded) == 0 {
+		return "", true, errors.New("invalid direct preview box ID: empty decoded box ID")
+	}
+
+	boxId := string(decoded)
+	if !isValidDirectPreviewBoxID(boxId) {
+		return "", true, errors.New("invalid direct preview box ID")
+	}
+
+	return boxId, true, nil
+}
+
+func isValidDirectPreviewBoxID(value string) bool {
+	if len(value) != directPreviewBoxIDLength {
+		return false
+	}
+	for _, ch := range value {
+		if (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // updateLastActivity updates the last activity timestamp for a box.

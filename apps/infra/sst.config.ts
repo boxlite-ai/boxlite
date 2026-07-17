@@ -545,7 +545,7 @@ export default $config({
         PROXY_DOMAIN: envOr('PROXY_DOMAIN', `proxy.${stackDomain}`),
         PROXY_PROTOCOL: envOr('PROXY_PROTOCOL', 'https'),
         PROXY_API_KEY: envOr('PROXY_API_KEY', proxyApiKey.result),
-        PROXY_TEMPLATE_URL: envOr('PROXY_TEMPLATE_URL', `https://proxy.${stackDomain}`),
+        PROXY_TEMPLATE_URL: envOr('PROXY_TEMPLATE_URL', `https://{{PORT}}-{{boxId}}.proxy.${stackDomain}`),
 
         // SSH Gateway — friendly hostname `ssh.<stackDomain>` is provisioned
         // as a Cloudflare CNAME pointing at the SshGateway NLB further below.
