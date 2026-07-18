@@ -9,6 +9,21 @@ import { IsBoolean, IsNumber, IsOptional, IsString } from 'class-validator'
 import { TypedConfigService } from '../typed-config.service'
 import { EndSessionState, isValidHttpUrl } from '../oidc-metadata.service'
 
+@ApiSchema({ name: 'SystemImagesConfig' })
+export class SystemImagesConfig {
+  @ApiProperty({ description: 'Curated Base image reference' })
+  @IsString()
+  base: string
+
+  @ApiProperty({ description: 'Curated Python image reference' })
+  @IsString()
+  python: string
+
+  @ApiProperty({ description: 'Curated Node.js image reference' })
+  @IsString()
+  node: string
+}
+
 @ApiSchema({ name: 'Announcement' })
 export class Announcement {
   @ApiProperty({
@@ -150,6 +165,12 @@ export class ConfigurationDto {
   oidc: OidcConfig
 
   @ApiProperty({
+    description: 'Curated system images available for Box creation',
+    type: SystemImagesConfig,
+  })
+  systemImages: SystemImagesConfig
+
+  @ApiProperty({
     description: 'Whether linked accounts are enabled',
     example: true,
   })
@@ -264,6 +285,7 @@ export class ConfigurationDto {
           ? validatedEndSessionEndpoint(configService.get('oidc.endSessionEndpoint'))
           : undefined,
     }
+    this.systemImages = configService.getOrThrow('systemImages')
     this.linkedAccountsEnabled = configService.get('oidc.managementApi.enabled')
     this.proxyTemplateUrl = configService.getOrThrow('proxy.templateUrl')
     this.proxyToolboxUrl = configService.getOrThrow('proxy.toolboxUrl')

@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { RoutePath } from '@/enums/RoutePath'
 import { useCreateBoxMutation } from '@/hooks/mutations/useCreateBoxMutation'
+import { useConfig } from '@/hooks/useConfig'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { getBoxRouteId } from '@/lib/box-identity'
 import { handleApiError } from '@/lib/error-handling'
@@ -18,12 +19,6 @@ import { generatePath, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 
 const NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
-
-const SUPPORTED_BOX_IMAGES = [
-  { id: 'base', name: 'Base', ref: 'ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3', isDefault: true },
-  { id: 'python', name: 'Python', ref: 'ghcr.io/boxlite-ai/boxlite-agent-python:20260605-p0-r3', isDefault: false },
-  { id: 'node', name: 'Node.js', ref: 'ghcr.io/boxlite-ai/boxlite-agent-node:20260605-p0-r3', isDefault: false },
-] as const
 
 const DEFAULTS = { cpu: 1, memory: 1, disk: 10 }
 
@@ -205,8 +200,14 @@ export const CreateBoxDialog = ({
   const setOpen = onOpenChange ?? setInternalOpen
 
   const { selectedOrganization } = useSelectedOrganization()
+  const { systemImages } = useConfig()
   const createBoxMutation = useCreateBoxMutation()
-  const defaultImage = SUPPORTED_BOX_IMAGES.find((i) => i.isDefault) ?? SUPPORTED_BOX_IMAGES[0]
+  const supportedBoxImages = [
+    { id: 'base', name: 'Base', ref: systemImages.base, isDefault: true },
+    { id: 'python', name: 'Python', ref: systemImages.python, isDefault: false },
+    { id: 'node', name: 'Node.js', ref: systemImages.node, isDefault: false },
+  ] as const
+  const defaultImage = supportedBoxImages[0]
 
   // Per-box ceilings for the current org (backend rejects a create above these).
   const limits = resolvePerBoxLimits(selectedOrganization)
@@ -267,7 +268,7 @@ export const CreateBoxDialog = ({
     }))
   }, [open, cpu, memory, disk, limits.cpu, limits.memory, limits.disk])
 
-  const selectedImage = SUPPORTED_BOX_IMAGES.find((i) => i.ref === imageRef) ?? defaultImage
+  const selectedImage = supportedBoxImages.find((i) => i.ref === imageRef) ?? defaultImage
   const nameValid = !name || NAME_REGEX.test(name)
 
   const handleCreate = async () => {
@@ -352,7 +353,7 @@ export const CreateBoxDialog = ({
                 align="start"
                 className="min-w-[var(--radix-dropdown-menu-trigger-width)] font-mono text-[12px]"
               >
-                {SUPPORTED_BOX_IMAGES.map((img) => (
+                {supportedBoxImages.map((img) => (
                   <DropdownMenuItem
                     key={img.id}
                     className={cn('cursor-pointer', img.ref === imageRef && 'text-brand')}

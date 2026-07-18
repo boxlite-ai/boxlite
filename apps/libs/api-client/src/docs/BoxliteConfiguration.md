@@ -8,6 +8,7 @@ Name | Type | Description | Notes
 **version** | **string** | BoxLite version | [default to undefined]
 **posthog** | [**PosthogConfig**](PosthogConfig.md) | PostHog configuration | [optional] [default to undefined]
 **oidc** | [**OidcConfig**](OidcConfig.md) | OIDC configuration | [default to undefined]
+**systemImages** | [**SystemImagesConfig**](SystemImagesConfig.md) | Curated system images available for Box creation | [default to undefined]
 **linkedAccountsEnabled** | **boolean** | Whether linked accounts are enabled | [default to undefined]
 **announcements** | [**{ [key: string]: Announcement; }**](Announcement.md) | System announcements | [default to undefined]
 **pylonAppId** | **string** | Pylon application ID | [optional] [default to undefined]
@@ -31,6 +32,7 @@ const instance: BoxliteConfiguration = {
     version,
     posthog,
     oidc,
+    systemImages,
     linkedAccountsEnabled,
     announcements,
     pylonAppId,

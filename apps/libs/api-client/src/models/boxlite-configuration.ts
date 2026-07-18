@@ -25,6 +25,9 @@ import type { PosthogConfig } from './posthog-config';
 // May contain unused imports in some cases
 // @ts-ignore
 import type { RateLimitConfig } from './rate-limit-config';
+// May contain unused imports in some cases
+// @ts-ignore
+import type { SystemImagesConfig } from './system-images-config';
 
 export interface BoxliteConfiguration {
     /**
@@ -39,6 +42,10 @@ export interface BoxliteConfiguration {
      * OIDC configuration
      */
     'oidc': OidcConfig;
+    /**
+     * Curated system images available for Box creation
+     */
+    'systemImages': SystemImagesConfig;
     /**
      * Whether linked accounts are enabled
      */
@@ -92,4 +99,3 @@ export interface BoxliteConfiguration {
      */
     'rateLimit'?: RateLimitConfig;
 }
-
