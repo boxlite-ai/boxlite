@@ -132,6 +132,26 @@ mod tests {
     }
 
     #[test]
+    fn later_env_file_overrides_earlier_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_file = temp_dir.path().join("base.env");
+        let override_file = temp_dir.path().join("override.env");
+        fs::write(&base_file, "FILE_VALUE=base\n").unwrap();
+        fs::write(&override_file, "FILE_VALUE=override\n").unwrap();
+        let flags = EnvironmentFlags {
+            env_files: vec![base_file, override_file],
+            env: Vec::new(),
+        };
+
+        let resolved = flags.resolve_with_lookup(|_| None).unwrap();
+
+        assert_eq!(
+            resolved,
+            vec![("FILE_VALUE".to_string(), "override".to_string())]
+        );
+    }
+
+    #[test]
     fn preserves_existing_explicit_environment_entry_behavior() {
         let flags = EnvironmentFlags {
             env_files: Vec::new(),
@@ -157,6 +177,18 @@ mod tests {
         let flags = EnvironmentFlags {
             env_files: vec![env_file],
             env: vec!["TOKEN".to_string()],
+        };
+
+        let resolved = flags.resolve_with_lookup(|_| None).unwrap();
+
+        assert!(resolved.is_empty());
+    }
+
+    #[test]
+    fn bare_explicit_key_without_host_or_prior_value_stays_unset() {
+        let flags = EnvironmentFlags {
+            env_files: Vec::new(),
+            env: vec!["MISSING_TOKEN".to_string()],
         };
 
         let resolved = flags.resolve_with_lookup(|_| None).unwrap();
