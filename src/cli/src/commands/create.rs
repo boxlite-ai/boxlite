@@ -1,6 +1,6 @@
 use crate::cli::{
-    EnvironmentFlags, GlobalFlags, KernelFlags, NetworkFlags, PublishFlags, ResourceFlags,
-    VolumeFlags,
+    BoxProcessOptions, EnvironmentFlags, GlobalFlags, KernelFlags, NetworkFlags, PublishFlags,
+    ResourceFlags, VolumeFlags,
 };
 use boxlite::{BoxOptions, RootfsSpec};
 use clap::Args;
@@ -73,7 +73,6 @@ impl CreateArgs {
         self.publish.apply_to(&mut options)?;
         self.volume.apply_to(&mut options, global.home.as_deref())?;
         self.network.apply_to(&mut options)?;
-
         // A `create`d box is a background box: `create` then `start`/`exec` runs
         // its main command detached (docker's create → start), so the launching
         // CLI's exit must not tear it down. Foreground/interactive lifecycles go
@@ -86,11 +85,12 @@ impl CreateArgs {
         // rejected at sanitize).
         options.detach = true;
         options.auto_delete = Some(0);
-        options.working_dir = self.workdir.clone();
-        options.env.extend(environment);
-        if let Some(ref exec) = self.entrypoint {
-            options.entrypoint = Some(vec![exec.clone()]);
-        }
+        BoxProcessOptions::new(
+            self.workdir.as_deref(),
+            &environment,
+            self.entrypoint.as_deref(),
+        )
+        .apply_to(&mut options);
         if !self.command.is_empty() {
             options.cmd = Some(self.command.clone());
         }

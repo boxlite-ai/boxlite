@@ -136,7 +136,7 @@ impl BoxRunner {
             .volume
             .apply_to(&mut options, self.home.as_deref())?;
         self.args.network.apply_to(&mut options)?;
-        self.args.process.apply_to(&mut options, environment)?;
+        self.args.process.apply_to(&mut options, environment);
 
         // Detached boxes keep manual lifecycle control: detach silently
         // overrides --rm (historical CLI behavior).

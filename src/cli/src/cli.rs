@@ -352,6 +352,34 @@ impl GlobalFlags {
 // PROCESS FLAGS
 // ============================================================================
 
+pub(crate) struct BoxProcessOptions<'a> {
+    working_dir: Option<&'a str>,
+    environment: &'a [(String, String)],
+    entrypoint: Option<&'a str>,
+}
+
+impl<'a> BoxProcessOptions<'a> {
+    pub(crate) fn new(
+        working_dir: Option<&'a str>,
+        environment: &'a [(String, String)],
+        entrypoint: Option<&'a str>,
+    ) -> Self {
+        Self {
+            working_dir,
+            environment,
+            entrypoint,
+        }
+    }
+
+    pub(crate) fn apply_to(&self, opts: &mut BoxOptions) {
+        opts.working_dir = self.working_dir.map(str::to_string);
+        opts.env.extend(self.environment.iter().cloned());
+        if let Some(exec) = self.entrypoint {
+            opts.entrypoint = Some(vec![exec.to_string()]);
+        }
+    }
+}
+
 #[derive(Args, Debug, Clone)]
 pub struct ProcessFlags {
     /// Keep STDIN open even if not attached
@@ -383,23 +411,20 @@ pub struct ProcessFlags {
 
 impl ProcessFlags {
     /// Apply process configuration to BoxOptions
-    pub fn apply_to(
-        &self,
-        opts: &mut BoxOptions,
-        environment: &[(String, String)],
-    ) -> anyhow::Result<()> {
-        opts.working_dir = self.workdir.clone();
-        opts.env.extend(environment.iter().cloned());
-        if let Some(ref exec) = self.entrypoint {
-            opts.entrypoint = Some(vec![exec.clone()]);
-        }
+    pub fn apply_to(&self, opts: &mut BoxOptions, environment: &[(String, String)]) {
+        BoxProcessOptions::new(
+            self.workdir.as_deref(),
+            environment,
+            self.entrypoint.as_deref(),
+        )
+        .apply_to(opts);
+
         if let Some(ref user) = self.user {
             opts.user = Some(user.clone());
         }
         // `-t` is a property of the container's init, which COMMAND now is, so
         // it has to be decided here at create time rather than at attach.
         opts.tty = self.tty;
-        Ok(())
     }
 
     /// Validate process flags
@@ -1356,9 +1381,7 @@ mod tests {
         // --entrypoint <EXEC> reaches BoxOptions.entrypoint as a single-token
         // argv, which container_rootfs applies as config.entrypoint.
         let mut opts = BoxOptions::default();
-        process_flags_with_entrypoint(Some("/bin/bash"))
-            .apply_to(&mut opts, &[])
-            .expect("entrypoint apply");
+        process_flags_with_entrypoint(Some("/bin/bash")).apply_to(&mut opts, &[]);
 
         assert_eq!(opts.entrypoint, Some(vec!["/bin/bash".to_string()]));
     }
@@ -1375,7 +1398,7 @@ mod tests {
 
         let mut flags = process_flags_with_entrypoint(None);
         flags.tty = true;
-        flags.apply_to(&mut opts).expect("tty apply");
+        flags.apply_to(&mut opts, &[]);
 
         assert!(opts.tty, "-t must make the main command a terminal");
     }
@@ -1385,11 +1408,22 @@ mod tests {
         // No --entrypoint leaves BoxOptions.entrypoint None so the image's
         // own entrypoint is used unchanged.
         let mut opts = BoxOptions::default();
-        process_flags_with_entrypoint(None)
-            .apply_to(&mut opts, &[])
-            .expect("no-op apply");
+        process_flags_with_entrypoint(None).apply_to(&mut opts, &[]);
 
         assert_eq!(opts.entrypoint, None);
+    }
+
+    #[test]
+    fn box_process_options_apply_box_level_process_configuration() {
+        let environment = vec![("KEY".to_string(), "value".to_string())];
+        let mut opts = BoxOptions::default();
+
+        BoxProcessOptions::new(Some("/workspace"), &environment, Some("/bin/sh"))
+            .apply_to(&mut opts);
+
+        assert_eq!(opts.working_dir.as_deref(), Some("/workspace"));
+        assert_eq!(opts.env, environment);
+        assert_eq!(opts.entrypoint, Some(vec!["/bin/sh".to_string()]));
     }
 
     #[test]
