@@ -39,9 +39,25 @@ impl EnvironmentFlags {
             let contents = contents.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&contents);
             let entries = dotenvy::from_read_iter(contents);
             for entry in entries {
-                let (key, value) = entry.with_context(|| {
-                    format!("failed to parse environment file '{}'", path.display())
-                })?;
+                let (key, value) = match entry {
+                    Ok(entry) => entry,
+                    // dotenvy includes the raw line in LineParse's Display output.
+                    Err(dotenvy::Error::LineParse(_, error_index)) => anyhow::bail!(
+                        "failed to parse environment file '{}': invalid dotenv syntax at index {}",
+                        path.display(),
+                        error_index
+                    ),
+                    Err(dotenvy::Error::Io(error)) => {
+                        return Err(error).with_context(|| {
+                            format!("failed to read environment file '{}'", path.display())
+                        });
+                    }
+                    Err(error) => {
+                        return Err(error).with_context(|| {
+                            format!("failed to process environment file '{}'", path.display())
+                        });
+                    }
+                };
                 set_environment_value(&mut resolved, key, value);
             }
         }
@@ -184,10 +200,12 @@ mod tests {
     }
 
     #[test]
-    fn reports_file_and_invalid_line_for_parse_error() {
+    fn redacts_invalid_line_from_parse_error() {
+        const SECRET: &str = "p@ss'w0rd";
+
         let temp_dir = TempDir::new().unwrap();
         let env_file = temp_dir.path().join("invalid.env");
-        fs::write(&env_file, "VALID=yes\nNOT VALID=no\n").unwrap();
+        fs::write(&env_file, format!("DB_PASS={SECRET}\n")).unwrap();
         let flags = EnvironmentFlags {
             env_files: vec![env_file.clone()],
             env: Vec::new(),
@@ -199,7 +217,29 @@ mod tests {
 
         let message = format!("{error:#}");
         assert!(message.contains(&env_file.display().to_string()));
-        assert!(message.contains("NOT VALID"));
+        assert!(!message.contains(SECRET));
+        assert!(!message.contains("DB_PASS="));
+        assert!(message.contains("invalid dotenv syntax"));
+    }
+
+    #[test]
+    fn reports_directory_as_read_error() {
+        let temp_dir = TempDir::new().unwrap();
+        let env_dir = temp_dir.path().join("env-dir");
+        fs::create_dir(&env_dir).unwrap();
+        let flags = EnvironmentFlags {
+            env_files: vec![env_dir.clone()],
+            env: Vec::new(),
+        };
+
+        let error = flags
+            .resolve_with_lookup(|_| None)
+            .expect_err("directory must fail as an environment file");
+
+        let message = format!("{error:#}");
+        assert!(message.contains(&env_dir.display().to_string()));
+        assert!(message.contains("failed to read environment file"));
+        assert!(!message.contains("failed to parse environment file"));
     }
 
     #[test]
