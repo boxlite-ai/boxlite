@@ -400,11 +400,14 @@ boxlite exec --env-file test.env mybox -- pytest
 
 Environment files use dotenv syntax, including quoted values, `export`
 prefixes, comments, escapes, and variable substitution. Later files override
-earlier files, and explicit `-e` values override all files. Variable
-substitution is evaluated independently for each file, so references cannot
-use values defined by an earlier `--env-file`. A bare key is supported by `-e`
-and inherits its value from the host. Environment-file values enter the box and
-should not be used as a substitute for BoxLite secret injection.
+earlier files, and explicit `-e` values override all files. During variable
+substitution, host values take precedence over values defined earlier in the
+same file; if the host variable is unset, an earlier same-file value is used.
+Substitution is evaluated independently for each file, so references cannot use
+values defined by an earlier `--env-file`. A UTF-8 BOM at the start of a file is
+ignored. A bare key is supported by `-e` and inherits its value from the host.
+Environment-file values enter the box and should not be used as a substitute
+for BoxLite secret injection.
 
 ### `boxlite list` (alias: `ls`, `ps`)
 

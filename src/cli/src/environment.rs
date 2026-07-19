@@ -2,6 +2,7 @@
 
 use anyhow::Context;
 use clap::Args;
+use std::fs;
 use std::path::PathBuf;
 
 /// Environment variables shared by `run`, `create`, and `exec`.
@@ -33,8 +34,10 @@ impl EnvironmentFlags {
         let mut resolved = Vec::new();
 
         for path in &self.env_files {
-            let entries = dotenvy::from_path_iter(path)
-                .with_context(|| format!("failed to open environment file '{}'", path.display()))?;
+            let contents = fs::read(path)
+                .with_context(|| format!("failed to read environment file '{}'", path.display()))?;
+            let contents = contents.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&contents);
+            let entries = dotenvy::from_read_iter(contents);
             for entry in entries {
                 let (key, value) = entry.with_context(|| {
                     format!("failed to parse environment file '{}'", path.display())
@@ -158,6 +161,25 @@ mod tests {
                 (source_key, "demo".to_string()),
                 (service_key, "-api".to_string()),
             ]
+        );
+    }
+
+    #[test]
+    fn ignores_utf8_bom_at_start_of_env_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let env_file = temp_dir.path().join("bom.env");
+        fs::write(&env_file, b"\xEF\xBB\xBFBOXLITE_BOM_VALUE=present\n").unwrap();
+
+        let flags = EnvironmentFlags {
+            env_files: vec![env_file],
+            env: Vec::new(),
+        };
+
+        let resolved = flags.resolve_with_lookup(|_| None).unwrap();
+
+        assert_eq!(
+            resolved,
+            vec![("BOXLITE_BOM_VALUE".to_string(), "present".to_string())]
         );
     }
 
