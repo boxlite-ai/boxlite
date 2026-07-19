@@ -27,6 +27,8 @@ type BoxliteConfiguration struct {
 	Posthog *PosthogConfig `json:"posthog,omitempty"`
 	// OIDC configuration
 	Oidc OidcConfig `json:"oidc"`
+	// Curated system images available for Box creation
+	SystemImages SystemImagesConfig `json:"systemImages"`
 	// Whether linked accounts are enabled
 	LinkedAccountsEnabled bool `json:"linkedAccountsEnabled"`
 	// System announcements
@@ -62,10 +64,11 @@ type _BoxliteConfiguration BoxliteConfiguration
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewBoxliteConfiguration(version string, oidc OidcConfig, linkedAccountsEnabled bool, announcements map[string]Announcement, proxyTemplateUrl string, proxyToolboxUrl string, dashboardUrl string, maintananceMode bool, environment string) *BoxliteConfiguration {
+func NewBoxliteConfiguration(version string, oidc OidcConfig, systemImages SystemImagesConfig, linkedAccountsEnabled bool, announcements map[string]Announcement, proxyTemplateUrl string, proxyToolboxUrl string, dashboardUrl string, maintananceMode bool, environment string) *BoxliteConfiguration {
 	this := BoxliteConfiguration{}
 	this.Version = version
 	this.Oidc = oidc
+	this.SystemImages = systemImages
 	this.LinkedAccountsEnabled = linkedAccountsEnabled
 	this.Announcements = announcements
 	this.ProxyTemplateUrl = proxyTemplateUrl
@@ -162,6 +165,30 @@ func (o *BoxliteConfiguration) GetOidcOk() (*OidcConfig, bool) {
 // SetOidc sets field value
 func (o *BoxliteConfiguration) SetOidc(v OidcConfig) {
 	o.Oidc = v
+}
+
+// GetSystemImages returns the SystemImages field value
+func (o *BoxliteConfiguration) GetSystemImages() SystemImagesConfig {
+	if o == nil {
+		var ret SystemImagesConfig
+		return ret
+	}
+
+	return o.SystemImages
+}
+
+// GetSystemImagesOk returns a tuple with the SystemImages field value
+// and a boolean to check if the value has been set.
+func (o *BoxliteConfiguration) GetSystemImagesOk() (*SystemImagesConfig, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.SystemImages, true
+}
+
+// SetSystemImages sets field value
+func (o *BoxliteConfiguration) SetSystemImages(v SystemImagesConfig) {
+	o.SystemImages = v
 }
 
 // GetLinkedAccountsEnabled returns the LinkedAccountsEnabled field value
@@ -539,6 +566,7 @@ func (o BoxliteConfiguration) ToMap() (map[string]interface{}, error) {
 		toSerialize["posthog"] = o.Posthog
 	}
 	toSerialize["oidc"] = o.Oidc
+	toSerialize["systemImages"] = o.SystemImages
 	toSerialize["linkedAccountsEnabled"] = o.LinkedAccountsEnabled
 	toSerialize["announcements"] = o.Announcements
 	if !IsNil(o.PylonAppId) {
@@ -579,6 +607,7 @@ func (o *BoxliteConfiguration) UnmarshalJSON(data []byte) (err error) {
 	requiredProperties := []string{
 		"version",
 		"oidc",
+		"systemImages",
 		"linkedAccountsEnabled",
 		"announcements",
 		"proxyTemplateUrl",
@@ -618,6 +647,7 @@ func (o *BoxliteConfiguration) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "version")
 		delete(additionalProperties, "posthog")
 		delete(additionalProperties, "oidc")
+		delete(additionalProperties, "systemImages")
 		delete(additionalProperties, "linkedAccountsEnabled")
 		delete(additionalProperties, "announcements")
 		delete(additionalProperties, "pylonAppId")
