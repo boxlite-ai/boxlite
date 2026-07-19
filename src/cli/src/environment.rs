@@ -49,7 +49,7 @@ impl EnvironmentFlags {
         }
 
         for entry in &self.env {
-            apply_explicit_environment_entry(&mut resolved, entry, &lookup)?;
+            apply_explicit_environment_entry(&mut resolved, entry, &lookup);
         }
 
         Ok(resolved)
@@ -60,18 +60,13 @@ fn apply_explicit_environment_entry<F>(
     resolved: &mut Vec<(String, String)>,
     entry: &str,
     lookup: &F,
-) -> anyhow::Result<()>
-where
+) where
     F: Fn(&str) -> Option<String>,
 {
     let (key, explicit_value) = match entry.split_once('=') {
         Some((key, value)) => (key, Some(value.to_string())),
         None => (entry, None),
     };
-
-    if key.is_empty() || key.chars().any(char::is_whitespace) {
-        anyhow::bail!("invalid environment variable name '{}' in --env", key);
-    }
 
     let value = explicit_value.or_else(|| lookup(key));
     let Some(value) = value else {
@@ -80,11 +75,10 @@ where
             source = "--env",
             "Environment variable not found on host, skipping"
         );
-        return Ok(());
+        return;
     };
 
     set_environment_value(resolved, key.to_string(), value);
-    Ok(())
 }
 
 fn set_environment_value(resolved: &mut Vec<(String, String)>, key: String, value: String) {
@@ -132,6 +126,24 @@ mod tests {
                 ("EXPORTED".to_string(), "yes".to_string()),
                 ("EMPTY".to_string(), String::new()),
                 ("HOST_VALUE".to_string(), "host".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn preserves_existing_explicit_environment_entry_behavior() {
+        let flags = EnvironmentFlags {
+            env_files: Vec::new(),
+            env: vec![String::new(), "=value".to_string(), "A B=value".to_string()],
+        };
+
+        let resolved = flags.resolve_with_lookup(|_| None).unwrap();
+
+        assert_eq!(
+            resolved,
+            vec![
+                (String::new(), "value".to_string()),
+                ("A B".to_string(), "value".to_string()),
             ]
         );
     }
