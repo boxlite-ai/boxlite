@@ -614,18 +614,24 @@ Used by `run`, `create`, and `exec`.
 | `--env KEY=VALUE` | `-e` | Set an environment variable; a bare key inherits from the host |
 | `--env-file FILE` | — | Read environment variables from a file; repeatable |
 
-Environment files use dotenv syntax, including quoted values, `export`
-prefixes, comments, escapes, and variable substitution. Files are applied in
-command-line order, later files override earlier files, and explicit `-e`
-values have the highest precedence. During variable substitution, host values
-take precedence over values defined earlier in the same file; if the host
-variable is unset, an earlier same-file value is used. Substitution is evaluated
-independently for each file, so references cannot use values defined by an
-earlier `--env-file`. A UTF-8 BOM at the start of a file is ignored. A bare key
-is supported by `-e` and inherits its value from the host. If the key is absent
-from the host, it remains unset and removes any value loaded from an earlier
-`--env-file`. These values enter the guest; use BoxLite secret injection for
-credentials that must remain outside the VM.
+Environment behavior:
+
+- **Syntax:** Environment files use dotenv syntax, including quoted values,
+  `export` prefixes, comments, escapes, and variable substitution. A UTF-8 BOM
+  at the start of a file is ignored.
+- **Precedence:** Files are applied in command-line order. Later files override
+  earlier files, and explicit `-e` values have the highest precedence. During
+  substitution, host values take precedence over values defined earlier in the
+  same file. If the host variable is unset, an earlier same-file value is used.
+- **Substitution scope:** Each file is evaluated independently, so references
+  cannot use values defined by an earlier `--env-file`.
+- **Undefined substitutions:** An undefined reference expands to an empty string
+  without a warning. Escape `$` or use single quotes to preserve it literally.
+- **Bare `-e` keys:** A bare key inherits its value from the host. If absent
+  there, it remains unset and removes any value loaded from an earlier
+  `--env-file`.
+- **Secrets:** Environment-file values enter the guest. Use BoxLite secret
+  injection for credentials that must remain outside the VM.
 
 ### `ProcessFlags`
 
