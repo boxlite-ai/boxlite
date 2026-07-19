@@ -70,10 +70,11 @@ fn apply_explicit_environment_entry<F>(
 
     let value = explicit_value.or_else(|| lookup(key));
     let Some(value) = value else {
+        resolved.retain(|(name, _)| name != key);
         tracing::warn!(
             env_key = key,
             source = "--env",
-            "Environment variable not found on host, skipping"
+            "Environment variable not found on host, leaving unset"
         );
         return;
     };
@@ -146,6 +147,21 @@ mod tests {
                 ("A B".to_string(), "value".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn bare_explicit_key_without_host_value_removes_file_value() {
+        let temp_dir = TempDir::new().unwrap();
+        let env_file = temp_dir.path().join("base.env");
+        fs::write(&env_file, "TOKEN=file-value\n").unwrap();
+        let flags = EnvironmentFlags {
+            env_files: vec![env_file],
+            env: vec!["TOKEN".to_string()],
+        };
+
+        let resolved = flags.resolve_with_lookup(|_| None).unwrap();
+
+        assert!(resolved.is_empty());
     }
 
     #[test]

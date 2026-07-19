@@ -622,9 +622,10 @@ take precedence over values defined earlier in the same file; if the host
 variable is unset, an earlier same-file value is used. Substitution is evaluated
 independently for each file, so references cannot use values defined by an
 earlier `--env-file`. A UTF-8 BOM at the start of a file is ignored. A bare key
-is supported by `-e` and inherits its value from the host. These values enter the
-guest; use BoxLite secret injection for credentials that must remain outside the
-VM.
+is supported by `-e` and inherits its value from the host. If the key is absent
+from the host, it remains unset and removes any value loaded from an earlier
+`--env-file`. These values enter the guest; use BoxLite secret injection for
+credentials that must remain outside the VM.
 
 ### `ProcessFlags`
 
