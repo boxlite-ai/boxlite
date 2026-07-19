@@ -147,6 +147,15 @@ pub unsafe extern "C" fn boxlite_options_set_detach(opts: *mut CBoxliteOptions, 
     options_set_detach(opts, val)
 }
 
+/// Set the idle auto-stop interval in seconds. Passing 0 disables auto-stop.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_auto_stop_interval(
+    opts: *mut CBoxliteOptions,
+    interval: u32,
+) {
+    options_set_auto_stop_interval(opts, interval)
+}
+
 /// Apply a `CAdvancedBoxOptions` (security, mount isolation, health check) to a
 /// `CBoxliteOptions`. Clones the advanced configuration into the box options —
 /// the caller retains ownership of `advanced_opts` and is responsible for
@@ -267,6 +276,14 @@ pub unsafe fn options_set_disk_size_gb(handle: *mut OptionsHandle, disk_size_gb:
     unsafe {
         if !handle.is_null() && disk_size_gb > 0 {
             (*handle).options.disk_size_gb = Some(disk_size_gb as u64);
+        }
+    }
+}
+
+pub unsafe fn options_set_auto_stop_interval(handle: *mut OptionsHandle, interval: u32) {
+    unsafe {
+        if !handle.is_null() {
+            (*handle).options.auto_stop_interval = Some(interval);
         }
     }
 }

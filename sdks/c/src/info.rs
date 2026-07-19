@@ -27,6 +27,7 @@ pub struct CBoxInfo {
     pub cpus: c_int,
     pub memory_mib: c_int,
     pub created_at: i64,
+    pub auto_stop_interval: u32,
 }
 
 #[repr(C)]
@@ -69,6 +70,7 @@ impl CBoxInfo {
             cpus: info.cpus as c_int,
             memory_mib: info.memory_mib as c_int,
             created_at: info.created_at.timestamp(),
+            auto_stop_interval: info.auto_stop_interval.unwrap_or(0),
         }
     }
 }

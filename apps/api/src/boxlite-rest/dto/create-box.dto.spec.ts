@@ -93,3 +93,25 @@ describe('CreateBoxDto network validation', () => {
     expect(JSON.stringify(errors)).toContain('isIn')
   })
 })
+
+describe('CreateBoxDto auto-stop interval bounds', () => {
+  it('rejects values outside the database integer range', async () => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { auto_stop_interval: 2_147_483_648 }))
+
+    expect(JSON.stringify(errors)).toContain('max')
+  })
+})
+
+describe('CreateBoxDto auto-stop validation', () => {
+  it.each([0, 1, 300])('accepts non-negative integer seconds: %s', async (interval) => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { auto_stop_interval: interval }))
+
+    expect(errors).toHaveLength(0)
+  })
+
+  it.each([-1, 1.5])('rejects invalid auto-stop interval: %s', async (interval) => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { auto_stop_interval: interval }))
+
+    expect(JSON.stringify(errors)).toMatch(/(min|isInt)/)
+  })
+})

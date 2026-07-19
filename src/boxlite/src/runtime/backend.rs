@@ -97,6 +97,14 @@ pub(crate) trait BoxBackend: Send + Sync {
 
     async fn stop(&self) -> BoxliteResult<()>;
 
+    /// Update the hosted REST auto-stop policy. Local backends do not have a
+    /// control-plane scheduler and use the default unsupported response.
+    async fn set_auto_stop_interval(&self, _interval: u32) -> BoxliteResult<()> {
+        Err(BoxliteError::Unsupported(
+            "auto-stop interval updates are only supported by REST backends".into(),
+        ))
+    }
+
     async fn copy_into(
         &self,
         host_src: &Path,

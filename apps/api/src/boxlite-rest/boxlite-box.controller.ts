@@ -77,6 +77,7 @@ export class BoxliteBoxController {
         cmd: req.body?.cmd,
         auto_remove: req.body?.auto_remove,
         detach: req.body?.detach,
+        auto_stop_interval: req.body?.auto_stop_interval,
       }),
     },
   })
@@ -199,6 +200,34 @@ export class BoxliteBoxController {
     @Param('boxId') boxId: string,
   ): Promise<BoxResponseDto> {
     const box = await this.boxService.stop(boxId, authContext.organizationId)
+    const dto = await this.boxService.toBoxDto(box)
+    return boxToBoxResponse(dto)
+  }
+
+  @Post(':boxId/autostop/:interval')
+  @ApiResponse({
+    status: 200,
+    description: 'Auto-stop interval updated',
+    type: BoxResponseDto,
+  })
+  @HttpCode(200)
+  @Audit({
+    action: AuditAction.SET_AUTO_STOP_INTERVAL,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    targetIdFromResult: (result: BoxResponseDto) => result?.box_id,
+    requestMetadata: {
+      params: (req) => ({
+        interval: req.params.interval,
+      }),
+    },
+  })
+  async setAutoStopInterval(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Param('interval') interval: number,
+  ): Promise<BoxResponseDto> {
+    const box = await this.boxService.setAutoStopInterval(boxId, interval, authContext.organizationId)
     const dto = await this.boxService.toBoxDto(box)
     return boxToBoxResponse(dto)
   }

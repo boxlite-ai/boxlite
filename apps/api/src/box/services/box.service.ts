@@ -19,6 +19,7 @@ import { BoxError } from '../../exceptions/box-error.exception'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
+import { MAX_AUTO_STOP_INTERVAL_SECONDS } from '../constants/auto-stop.constants'
 import { assertSupportedImage } from '../constants/curated-images.constant'
 import { BoxWarmPoolService } from './box-warm-pool.service'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
@@ -1303,7 +1304,7 @@ export class BoxService {
     }
   }
 
-  async setAutostopInterval(boxIdOrName: string, interval: number, organizationId?: string): Promise<Box> {
+  async setAutoStopInterval(boxIdOrName: string, interval: number, organizationId?: string): Promise<Box> {
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
 
     const updateData: Partial<Box> = {
@@ -1469,8 +1470,12 @@ export class BoxService {
   }
 
   private resolveAutoStopInterval(autoStopInterval: number): number {
-    if (autoStopInterval < 0) {
-      throw new BadRequestError('Auto-stop interval must be non-negative')
+    if (
+      !Number.isSafeInteger(autoStopInterval) ||
+      autoStopInterval < 0 ||
+      autoStopInterval > MAX_AUTO_STOP_INTERVAL_SECONDS
+    ) {
+      throw new BadRequestError('Auto-stop interval must be a non-negative integer number of seconds')
     }
 
     return autoStopInterval

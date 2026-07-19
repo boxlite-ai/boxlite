@@ -165,7 +165,7 @@ uses a credential class: `ApiKeyCredential` is a concrete
 implementation of the `Credential` ABC.
 
 ```python
-from boxlite import Boxlite, BoxliteRestOptions, ApiKeyCredential
+from boxlite import Boxlite, BoxliteRestOptions, ApiKeyCredential, BoxOptions
 
 rt = Boxlite.rest(BoxliteRestOptions(
     url="http://localhost:8100",
@@ -178,6 +178,18 @@ cred = ApiKeyCredential.from_env()
 
 # Or read everything (BOXLITE_REST_URL + BOXLITE_API_KEY) from the env:
 rt = Boxlite.rest(BoxliteRestOptions.from_env())
+
+# Hosted REST lifecycle policy: seconds; 0 disables auto-stop.
+box = await rt.create(
+    BoxOptions(
+        image="alpine:latest",
+        auto_stop_interval=300,
+    ),
+    name="short-lived",
+)
+
+# The policy can also be changed after creation.
+await box.set_auto_stop_interval(900)
 ```
 
 `isinstance(ApiKeyCredential(k), Credential)` is `True` (registered as

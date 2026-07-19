@@ -354,6 +354,37 @@ paths:
         "409":
           $ref: "#/components/responses/ConflictError"
 
+  /{prefix}/boxes/{box_id}/autostop/{interval}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - name: interval
+        in: path
+        required: true
+        description: Auto-stop interval in non-negative integer seconds; 0 disables auto-stop
+        schema:
+          type: integer
+          minimum: 0
+    post:
+      operationId: setAutoStopInterval
+      summary: Set the box auto-stop interval
+      description: |
+        Updates the inactivity interval used by the hosted control plane.
+        The scheduler stops a running box after the interval elapses without
+        recorded activity. A value of 0 disables auto-stop.
+      tags: [Boxes]
+      responses:
+        "200":
+          description: Auto-stop interval updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Box"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+
   # -------------------------------------------------------------------------
   # Snapshot / Portability
   # -------------------------------------------------------------------------
@@ -1438,7 +1469,7 @@ components:
     Box:
       type: object
       description: Box metadata (maps to BoxInfo)
-      required: [box_id, status, created_at, updated_at, image, cpus, memory_mib]
+      required: [box_id, status, created_at, updated_at, image, cpus, memory_mib, auto_stop_interval]
       properties:
         box_id:
           type: string
@@ -1487,6 +1518,12 @@ components:
           minimum: 128
           description: Allocated memory in MiB
           example: 512
+        auto_stop_interval:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+          description: Hosted REST auto-stop interval in seconds; 0 disables auto-stop
+          example: 900
         labels:
           type: object
           additionalProperties:
@@ -1597,6 +1634,12 @@ components:
           type: boolean
           description: Box survives parent process exit
           default: false
+        auto_stop_interval:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+          description: Hosted REST auto-stop interval in seconds; 0 disables auto-stop
+          example: 900
         security:
           $ref: "#/components/schemas/SecurityPreset"
 

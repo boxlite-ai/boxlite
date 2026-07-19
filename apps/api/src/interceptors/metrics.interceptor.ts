@@ -152,7 +152,7 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
             this.captureUpdatePublicStatus(props, request.params.boxIdOrName, request.params.isPublic === 'true')
             break
           case '/api/box/:boxIdOrName/autostop/:interval':
-            this.captureSetAutostopInterval(props, request.params.boxIdOrName, parseInt(request.params.interval))
+            this.captureSetAutoStopInterval(props, request.params.boxIdOrName, parseInt(request.params.interval))
             break
           case '/api/box/:boxIdOrName/autodelete/:interval':
             this.captureSetAutoDeleteInterval(props, request.params.boxIdOrName, parseInt(request.params.interval))
@@ -473,7 +473,7 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
     })
   }
 
-  private captureSetAutostopInterval(props: CommonCaptureProps, boxId: string, interval: number) {
+  private captureSetAutoStopInterval(props: CommonCaptureProps, boxId: string, interval: number) {
     this.capture('api_box_autostop_interval_updated', props, 'api_box_autostop_interval_update_failed', {
       box_id: boxId,
       box_autostop_interval: interval,

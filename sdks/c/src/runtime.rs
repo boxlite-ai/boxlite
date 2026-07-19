@@ -499,6 +499,11 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_unit_event(result, user_data, cb),
+            RuntimeEvent::SetAutoStopInterval {
+                cb,
+                user_data,
+                result,
+            } => dispatch_unit_event(result, user_data, cb),
             RuntimeEvent::GetBox {
                 cb,
                 user_data,

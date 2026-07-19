@@ -205,6 +205,15 @@ impl BoxBackend for RestBox {
         Ok(())
     }
 
+    async fn set_auto_stop_interval(&self, interval: u32) -> BoxliteResult<()> {
+        let box_id = self.box_id_str();
+        let path = format!("/boxes/{}/autostop/{}", box_id, interval);
+        let resp: BoxResponse = self.client.post_empty(&path).await?;
+        let new_info = resp.to_box_info()?;
+        *self.cached_info.write() = new_info;
+        Ok(())
+    }
+
     async fn copy_into(
         &self,
         host_src: &Path,

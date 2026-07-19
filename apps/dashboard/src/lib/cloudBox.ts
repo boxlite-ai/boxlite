@@ -28,6 +28,7 @@ export type CreateBoxParams = {
   envVars?: Record<string, string>
   network?: BoxApiNetworkSpec
   resources?: Resources
+  autoStopInterval?: number
 }
 
 // Request body shape defined by openapi/box.openapi.yaml CreateBoxRequest.
@@ -40,6 +41,7 @@ export type BoxApiCreateRequest = {
   env?: Record<string, string>
   user?: string
   network?: BoxApiNetworkSpec
+  auto_stop_interval?: number
 }
 
 export type BoxApiBoxResponse = {
@@ -51,6 +53,7 @@ export type BoxApiBoxResponse = {
   image: string
   cpus: number
   memory_mib: number
+  auto_stop_interval: number
   labels: Record<string, string>
 }
 
@@ -65,6 +68,7 @@ export function toBoxApiCreateRequest(params?: CreateBoxParams): BoxApiCreateReq
     // The dashboard form works in GiB; the Box API contract takes MiB.
     memory_mib: p.resources?.memory !== undefined ? p.resources.memory * 1024 : undefined,
     disk_size_gb: p.resources?.disk,
+    auto_stop_interval: p.autoStopInterval,
     network: p.network,
   }
 }

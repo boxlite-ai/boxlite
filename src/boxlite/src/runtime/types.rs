@@ -310,6 +310,10 @@ pub struct BoxInfo {
     /// Allocated memory in MiB.
     pub memory_mib: u32,
 
+    /// Hosted REST auto-stop interval in seconds. `None` means the backend
+    /// did not provide lifecycle policy metadata (for example, local mode).
+    pub auto_stop_interval: Option<u32>,
+
     /// User-defined labels for filtering and organization.
     pub labels: HashMap<String, String>,
 
@@ -336,6 +340,7 @@ impl BoxInfo {
             },
             cpus: config.options.cpus.unwrap_or(DEFAULT_CPUS),
             memory_mib: config.options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
+            auto_stop_interval: config.options.auto_stop_interval,
             labels: HashMap::new(),
             health_status: state.health_status,
         }
@@ -351,6 +356,7 @@ impl PartialEq for BoxInfo {
             && self.image == other.image
             && self.cpus == other.cpus
             && self.memory_mib == other.memory_mib
+            && self.auto_stop_interval == other.auto_stop_interval
             && self.labels == other.labels
             && self.health_status == other.health_status
     }

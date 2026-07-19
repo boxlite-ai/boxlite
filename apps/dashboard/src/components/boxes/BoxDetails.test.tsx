@@ -106,6 +106,10 @@ vi.mock('@/hooks/mutations/useDeleteBoxMutation', () => ({
   useDeleteBoxMutation: () => ({ isPending: false, mutateAsync: mocks.mutateAsync }),
 }))
 
+vi.mock('@/hooks/mutations/useSetAutoStopIntervalMutation', () => ({
+  useSetAutoStopIntervalMutation: () => ({ isPending: false, mutateAsync: mocks.mutateAsync }),
+}))
+
 vi.mock('./BoxTerminalFrame', () => ({
   BoxTerminalFrame: ({ sessionUrl }: { sessionUrl: string }) => <div data-testid="terminal-frame">{sessionUrl}</div>,
 }))

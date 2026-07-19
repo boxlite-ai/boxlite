@@ -328,6 +328,15 @@ pub struct BoxOptions {
     pub volumes: Vec<VolumeSpec>,
     pub network: NetworkSpec,
     pub ports: Vec<PortSpec>,
+
+    /// Hosted REST lifecycle policy: automatically stop the box after this
+    /// many seconds without activity. `None` leaves the server default in
+    /// effect; `Some(0)` disables auto-stop. Local runtimes do not run the
+    /// hosted control-plane scheduler, so this option is only serialized by
+    /// the REST backend.
+    #[serde(default)]
+    pub auto_stop_interval: Option<u32>,
+
     /// Automatically remove box when stopped.
     ///
     /// When true (default), the box is removed from the database and its
@@ -490,6 +499,7 @@ impl Default for BoxOptions {
             volumes: Vec::new(),
             network: NetworkSpec::default(),
             ports: Vec::new(),
+            auto_stop_interval: None,
             auto_remove: default_auto_remove(),
             detach: default_detach(),
             advanced: AdvancedBoxOptions::default(),
@@ -527,6 +537,20 @@ impl BoxOptions {
                 "isolate_mounts is only supported on Linux".to_string(),
             ));
         }
+        Ok(())
+    }
+
+    /// Validate options for the local runtime. Hosted auto-stop is enforced by
+    /// the control plane scheduler and is not implemented by local runtimes.
+    pub fn sanitize_local(&self) -> BoxliteResult<()> {
+        self.sanitize()?;
+
+        if self.auto_stop_interval.is_some() {
+            return Err(boxlite_shared::errors::BoxliteError::Unsupported(
+                "auto-stop interval is only supported by REST runtimes".to_string(),
+            ));
+        }
+
         Ok(())
     }
 }
@@ -873,6 +897,17 @@ mod tests {
             ..Default::default()
         };
         assert!(opts3.sanitize().is_ok());
+    }
+
+    #[test]
+    fn test_sanitize_local_rejects_hosted_auto_stop() {
+        let opts = BoxOptions {
+            auto_stop_interval: Some(300),
+            ..Default::default()
+        };
+
+        let error = opts.sanitize_local().unwrap_err().to_string();
+        assert!(error.contains("only supported by REST runtimes"));
     }
 
     // ========================================================================

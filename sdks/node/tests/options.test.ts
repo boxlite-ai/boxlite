@@ -102,6 +102,11 @@ describe("SimpleBoxOptions", () => {
     expect(opts.diskSizeGb).toBeUndefined();
   });
 
+  test("accepts autoStopInterval in seconds", () => {
+    const opts: SimpleBoxOptions = { autoStopInterval: 300 };
+    expect(opts.autoStopInterval).toBe(300);
+  });
+
   test("accepts diskSizeGb number", () => {
     const opts: SimpleBoxOptions = {
       image: "python:slim",

@@ -10,6 +10,7 @@ import { useCreateBoxMutation } from '@/hooks/mutations/useCreateBoxMutation'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { getBoxRouteId } from '@/lib/box-identity'
 import { handleApiError } from '@/lib/error-handling'
+import { AUTO_STOP_INTERVAL_OPTIONS, DEFAULT_AUTO_STOP_INTERVAL } from '@/lib/autoStopInterval'
 import { cn } from '@/lib/utils'
 import type { Box } from '@boxlite-ai/api-client'
 import { ChevronDown, Plus } from '@/components/ui/icon'
@@ -26,7 +27,6 @@ const SUPPORTED_BOX_IMAGES = [
 ] as const
 
 const DEFAULTS = { cpu: 1, memory: 1, disk: 10 }
-
 const SUPPORT_EMAIL = 'support@boxlite.ai'
 
 type OrgPerBoxLimits = {
@@ -223,6 +223,7 @@ export const CreateBoxDialog = ({
   const [cpu, setCpu] = useState(initialCpu)
   const [memory, setMemory] = useState(initialMemory)
   const [disk, setDisk] = useState(initialDisk)
+  const [autoStopInterval, setAutoStopInterval] = useState<number>(DEFAULT_AUTO_STOP_INTERVAL)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [capped, setCapped] = useState({ cpu: false, memory: false, disk: false })
@@ -244,6 +245,7 @@ export const CreateBoxDialog = ({
     setCpu(initialCpu)
     setMemory(initialMemory)
     setDisk(initialDisk)
+    setAutoStopInterval(DEFAULT_AUTO_STOP_INTERVAL)
     setAdvancedOpen(false)
     setSubmitting(false)
     setCapped({ cpu: false, memory: false, disk: false })
@@ -286,6 +288,7 @@ export const CreateBoxDialog = ({
         image: imageRef || defaultImage.ref,
         network: { mode: 'enabled' },
         resources: { cpu, memory, disk },
+        autoStopInterval,
       })
       onCreated?.(box)
       toast.success('Box created')
@@ -415,6 +418,21 @@ export const CreateBoxDialog = ({
                     capped.disk && limits.disk != null && { label: 'Disk', unit: 'GiB', max: limits.disk },
                   ].filter((r): r is { label: string; unit: string; max: number } => Boolean(r))}
                 />
+                <label className="flex flex-col gap-[9px]">
+                  <span className="font-mono text-[10px] uppercase tracking-[1px]">Auto-stop interval</span>
+                  <select
+                    aria-label="Auto-stop interval"
+                    value={autoStopInterval}
+                    onChange={(event) => setAutoStopInterval(Number(event.target.value))}
+                    className="border border-border bg-card px-[13px] py-[11px] font-mono text-[13px] text-foreground outline-none focus:border-brand"
+                  >
+                    {AUTO_STOP_INTERVAL_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               </div>
             )}
           </div>

@@ -425,6 +425,24 @@ fn set_advanced_applies_security_profile_to_options() {
 }
 
 #[test]
+fn set_auto_stop_interval_applies_seconds_to_options() {
+    let image = CString::new("alpine:latest").expect("image cstring");
+    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
+    let mut error = FFIError::default();
+    let code =
+        unsafe { boxlite_options_new(image.as_ptr(), &mut opts as *mut _, &mut error as *mut _) };
+    assert_eq!(code, BoxliteErrorCode::Ok);
+
+    unsafe { boxlite_options_set_auto_stop_interval(opts, 300) };
+    assert_eq!(unsafe { (*opts).options.auto_stop_interval }, Some(300));
+
+    unsafe { boxlite_options_set_auto_stop_interval(opts, 0) };
+    assert_eq!(unsafe { (*opts).options.auto_stop_interval }, Some(0));
+
+    unsafe { boxlite_options_free(opts) };
+}
+
+#[test]
 fn runtime_metrics_rejects_null_callback() {
     let (runtime, home_dir) = unsafe { new_test_runtime_handle("null-cb-rtmet") };
     let mut error = FFIError::default();

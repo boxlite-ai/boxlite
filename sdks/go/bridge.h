@@ -16,6 +16,7 @@ extern CBoxGetOrCreateBoxCb cbGetOrCreateBox(void);
 extern CBoxGetBoxCb cbGetBox(void);
 extern CBoxStartBoxCb cbStartBox(void);
 extern CBoxStopBoxCb cbStopBox(void);
+extern CBoxSetAutoStopIntervalCb cbSetAutoStopInterval(void);
 extern CBoxRemoveBoxCb cbRemoveBox(void);
 extern CBoxCopyCb cbCopy(void);
 

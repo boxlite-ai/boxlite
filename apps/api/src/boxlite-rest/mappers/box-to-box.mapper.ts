@@ -20,6 +20,7 @@ export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
     image: box.image || '',
     cpus: box.cpu || 1,
     memory_mib: (box.memory || 1) * 1024,
+    auto_stop_interval: box.autoStopInterval ?? 900,
     labels: box.labels || {},
   }
 }
@@ -33,6 +34,7 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
   createDto.cpu = dto.cpus
   createDto.memory = dto.memory_mib ? Math.ceil(dto.memory_mib / 1024) : undefined
   createDto.disk = dto.disk_size_gb
+  createDto.autoStopInterval = dto.auto_stop_interval
   createDto.target = target
   if (dto.network) {
     const allowNet = dto.network.allow_net?.map((entry) => entry.trim()).filter(Boolean)

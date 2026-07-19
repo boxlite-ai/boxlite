@@ -183,6 +183,9 @@ export interface SimpleBoxOptions {
   /** Remove box when stopped (default: true) */
   autoRemove?: boolean;
 
+  /** Idle auto-stop interval in non-negative integer seconds; 0 disables auto-stop. */
+  autoStopInterval?: number;
+
   /** If true, reuse an existing box with the same name instead of failing (default: false) */
   reuseExisting?: boolean;
 
@@ -350,6 +353,7 @@ export class SimpleBox {
       memoryMib: options.memoryMib,
       diskSizeGb: options.diskSizeGb,
       autoRemove: options.autoRemove ?? true,
+      autoStopInterval: options.autoStopInterval,
       detach: options.detach ?? false,
       workingDir: options.workingDir,
       env: options.env
@@ -695,6 +699,16 @@ export class SimpleBox {
       return;
     }
     await this._box.stop();
+  }
+
+  /**
+   * Set the hosted REST idle auto-stop interval in seconds. Pass `0` to
+   * disable it. Non-integer and negative values are rejected.
+   * Local runtimes report an unsupported-operation error.
+   */
+  async setAutoStopInterval(interval: number): Promise<void> {
+    const box = await this._ensureBox();
+    await box.setAutoStopInterval(interval);
   }
 
   /**

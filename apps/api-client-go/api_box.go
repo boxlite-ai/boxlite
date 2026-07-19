@@ -270,18 +270,18 @@ type BoxAPI interface {
 	SetAutoDeleteIntervalExecute(r BoxAPISetAutoDeleteIntervalRequest) (*Box, *http.Response, error)
 
 	/*
-	SetAutostopInterval Set box auto-stop interval
+	SetAutoStopInterval Set box auto-stop interval
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param boxIdOrName ID or name of the box
-	@param interval Auto-stop interval in minutes (0 to disable)
-	@return BoxAPISetAutostopIntervalRequest
+	@param interval Auto-stop interval in non-negative integer seconds (0 to disable)
+	@return BoxAPISetAutoStopIntervalRequest
 	*/
-	SetAutostopInterval(ctx context.Context, boxIdOrName string, interval float32) BoxAPISetAutostopIntervalRequest
+	SetAutoStopInterval(ctx context.Context, boxIdOrName string, interval int32) BoxAPISetAutoStopIntervalRequest
 
-	// SetAutostopIntervalExecute executes the request
+	// SetAutoStopIntervalExecute executes the request
 	//  @return Box
-	SetAutostopIntervalExecute(r BoxAPISetAutostopIntervalRequest) (*Box, *http.Response, error)
+	SetAutoStopIntervalExecute(r BoxAPISetAutoStopIntervalRequest) (*Box, *http.Response, error)
 
 	/*
 	UpdateBoxState Update box state
@@ -2840,34 +2840,34 @@ func (a *BoxAPIService) SetAutoDeleteIntervalExecute(r BoxAPISetAutoDeleteInterv
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
-type BoxAPISetAutostopIntervalRequest struct {
+type BoxAPISetAutoStopIntervalRequest struct {
 	ctx context.Context
 	ApiService BoxAPI
 	boxIdOrName string
-	interval float32
+	interval int32
 	xBoxLiteOrganizationID *string
 }
 
 // Use with JWT to specify the organization ID
-func (r BoxAPISetAutostopIntervalRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) BoxAPISetAutostopIntervalRequest {
+func (r BoxAPISetAutoStopIntervalRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) BoxAPISetAutoStopIntervalRequest {
 	r.xBoxLiteOrganizationID = &xBoxLiteOrganizationID
 	return r
 }
 
-func (r BoxAPISetAutostopIntervalRequest) Execute() (*Box, *http.Response, error) {
-	return r.ApiService.SetAutostopIntervalExecute(r)
+func (r BoxAPISetAutoStopIntervalRequest) Execute() (*Box, *http.Response, error) {
+	return r.ApiService.SetAutoStopIntervalExecute(r)
 }
 
 /*
-SetAutostopInterval Set box auto-stop interval
+SetAutoStopInterval Set box auto-stop interval
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param boxIdOrName ID or name of the box
- @param interval Auto-stop interval in minutes (0 to disable)
- @return BoxAPISetAutostopIntervalRequest
+ @param interval Auto-stop interval in non-negative integer seconds (0 to disable)
+ @return BoxAPISetAutoStopIntervalRequest
 */
-func (a *BoxAPIService) SetAutostopInterval(ctx context.Context, boxIdOrName string, interval float32) BoxAPISetAutostopIntervalRequest {
-	return BoxAPISetAutostopIntervalRequest{
+func (a *BoxAPIService) SetAutoStopInterval(ctx context.Context, boxIdOrName string, interval int32) BoxAPISetAutoStopIntervalRequest {
+	return BoxAPISetAutoStopIntervalRequest{
 		ApiService: a,
 		ctx: ctx,
 		boxIdOrName: boxIdOrName,
@@ -2877,7 +2877,7 @@ func (a *BoxAPIService) SetAutostopInterval(ctx context.Context, boxIdOrName str
 
 // Execute executes the request
 //  @return Box
-func (a *BoxAPIService) SetAutostopIntervalExecute(r BoxAPISetAutostopIntervalRequest) (*Box, *http.Response, error) {
+func (a *BoxAPIService) SetAutoStopIntervalExecute(r BoxAPISetAutoStopIntervalRequest) (*Box, *http.Response, error) {
 	var (
 		localVarHTTPMethod   = http.MethodPost
 		localVarPostBody     interface{}
@@ -2885,7 +2885,7 @@ func (a *BoxAPIService) SetAutostopIntervalExecute(r BoxAPISetAutostopIntervalRe
 		localVarReturnValue  *Box
 	)
 
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxAPIService.SetAutostopInterval")
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxAPIService.SetAutoStopInterval")
 	if err != nil {
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}

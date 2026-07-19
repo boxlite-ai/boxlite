@@ -88,6 +88,9 @@ export interface JsBoxOptions {
   network?: JsNetworkSpec;
   ports?: JsPortSpec[];
   autoRemove?: boolean;
+  /** Idle auto-stop interval in seconds; 0 disables it. */
+  /** Non-negative integer seconds; 0 disables auto-stop. */
+  autoStopInterval?: number;
   detach?: boolean;
   entrypoint?: string[];
   cmd?: string[];
@@ -171,6 +174,8 @@ export interface JsBoxInfo {
   cpus: number;
   memoryMib: number;
   healthStatus: JsHealthStatus;
+  /** Idle auto-stop interval in seconds; 0 disables it. */
+  autoStopInterval?: number;
 }
 
 export interface JsRuntimeMetrics {
@@ -279,6 +284,8 @@ export interface JsBox {
   export(dest: string, options?: JsExportOptions | null): Promise<string>;
   start(): Promise<void>;
   stop(): Promise<void>;
+  /** Set a non-negative integer interval in seconds; 0 disables auto-stop. */
+  setAutoStopInterval(interval: number): Promise<void>;
   metrics(): Promise<JsBoxMetrics>;
   copyIn(
     hostPath: string,

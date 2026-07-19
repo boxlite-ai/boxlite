@@ -12,6 +12,24 @@ use napi_derive::napi;
 
 use crate::advanced_options::JsSecurityOptions;
 
+/// Validate the JavaScript-facing auto-stop interval before converting it to
+/// the integer used by the core and REST APIs.
+pub(crate) fn parse_auto_stop_interval(
+    interval: f64,
+) -> Result<u32, boxlite_shared::errors::BoxliteError> {
+    if !interval.is_finite()
+        || interval < 0.0
+        || interval.fract() != 0.0
+        || interval > u32::MAX as f64
+    {
+        return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+            "autoStopInterval must be a non-negative integer number of seconds".into(),
+        ));
+    }
+
+    Ok(interval as u32)
+}
+
 /// Health check options for boxes.
 ///
 /// Defines how to periodically check if a box's guest agent is responsive.
@@ -196,6 +214,11 @@ pub struct JsBoxOptions {
     /// Automatically remove box when stopped (default: false)
     pub auto_remove: Option<bool>,
 
+    /// Automatically stop an idle box after this many seconds. `0` disables
+    /// auto-stop. `None` uses the runtime default.
+    #[napi(js_name = "autoStopInterval")]
+    pub auto_stop_interval: Option<f64>,
+
     /// Run box in detached mode (survives parent process exit, default: false)
     pub detach: Option<bool>,
 
@@ -358,6 +381,11 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             None => NetworkSpec::default(),
         };
 
+        let auto_stop_interval = js_opts
+            .auto_stop_interval
+            .map(parse_auto_stop_interval)
+            .transpose()?;
+
         // Convert ports
         let ports = js_opts
             .ports
@@ -422,6 +450,7 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
                 ..Default::default()
             },
             auto_remove: js_opts.auto_remove.unwrap_or(false),
+            auto_stop_interval,
             detach: js_opts.detach.unwrap_or(false),
             entrypoint: js_opts.entrypoint,
             cmd: js_opts.cmd,
@@ -702,6 +731,7 @@ mod tests {
             }),
             ports: None,
             auto_remove: None,
+            auto_stop_interval: Some(300.0),
             detach: None,
             entrypoint: None,
             cmd: None,
@@ -712,11 +742,26 @@ mod tests {
         };
 
         let opts = BoxOptions::try_from(js).unwrap();
+        assert_eq!(opts.auto_stop_interval, Some(300));
         match opts.network {
             NetworkSpec::Enabled { allow_net } => {
                 assert_eq!(allow_net, vec!["example.com", "*.openai.com"]);
             }
             NetworkSpec::Disabled => panic!("network should be enabled"),
+        }
+    }
+
+    #[test]
+    fn auto_stop_interval_accepts_non_negative_integer_seconds() {
+        assert_eq!(parse_auto_stop_interval(0.0).unwrap(), 0);
+        assert_eq!(parse_auto_stop_interval(300.0).unwrap(), 300);
+        assert_eq!(parse_auto_stop_interval(u32::MAX as f64).unwrap(), u32::MAX);
+    }
+
+    #[test]
+    fn auto_stop_interval_rejects_negative_fractional_and_non_finite_values() {
+        for value in [-1.0, 1.5, f64::NAN, f64::INFINITY, (u32::MAX as f64) + 1.0] {
+            assert!(parse_auto_stop_interval(value).is_err(), "value={value}");
         }
     }
 
@@ -734,6 +779,7 @@ mod tests {
             network: None,
             ports: None,
             auto_remove: None,
+            auto_stop_interval: None,
             detach: None,
             entrypoint: None,
             cmd: None,

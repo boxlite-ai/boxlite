@@ -32,6 +32,8 @@ type BoxInfo struct {
 	CPUs      int
 	MemoryMiB int
 	CreatedAt time.Time
+	// AutoStopInterval is the idle auto-stop interval in seconds. 0 disables it.
+	AutoStopInterval uint32
 }
 
 // Info returns information about the box.
@@ -112,15 +114,16 @@ func (r *Runtime) GetInfo(ctx context.Context, idOrName string) (*BoxInfo, error
 func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 	pid := int(info.pid)
 	return BoxInfo{
-		ID:        cString(info.id),
-		Name:      cString(info.name),
-		Image:     cString(info.image),
-		State:     State(cString(info.status)),
-		Running:   info.running != 0,
-		PID:       pid,
-		CPUs:      int(info.cpus),
-		MemoryMiB: int(info.memory_mib),
-		CreatedAt: time.Unix(int64(info.created_at), 0),
+		ID:               cString(info.id),
+		Name:             cString(info.name),
+		Image:            cString(info.image),
+		State:            State(cString(info.status)),
+		Running:          info.running != 0,
+		PID:              pid,
+		CPUs:             int(info.cpus),
+		MemoryMiB:        int(info.memory_mib),
+		CreatedAt:        time.Unix(int64(info.created_at), 0),
+		AutoStopInterval: uint32(info.auto_stop_interval),
 	}
 }
 

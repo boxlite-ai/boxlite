@@ -44,6 +44,12 @@ describe('box-to-box mapper', () => {
     expect(dto.disk).toBe(8)
   })
 
+  it('maps the auto-stop interval as seconds', () => {
+    const dto = createBoxToCreateBox({ auto_stop_interval: 300 })
+
+    expect(dto.autoStopInterval).toBe(300)
+  })
+
   it('maps disabled network onto the internal create dto', () => {
     const dto = createBoxToCreateBox({
       network: { mode: 'disabled' },

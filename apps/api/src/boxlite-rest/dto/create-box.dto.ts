@@ -13,6 +13,8 @@ import {
   IsBoolean,
   IsObject,
   IsArray,
+  IsInt,
+  Max,
   Min,
   IsIn,
   Validate,
@@ -21,6 +23,7 @@ import {
   ValidatorConstraintInterface,
 } from 'class-validator'
 import { isValidNetworkAllowEntry, MAX_NETWORK_ALLOW_LIST_ENTRIES } from '../../box/utils/network-validation.util'
+import { MAX_AUTO_STOP_INTERVAL_SECONDS } from '../../box/constants/auto-stop.constants'
 
 @ValidatorConstraint({ name: 'isNetworkAllowEntry', async: false })
 class IsNetworkAllowEntryConstraint implements ValidatorConstraintInterface {
@@ -99,6 +102,12 @@ export class CreateBoxDto {
   @IsOptional()
   @IsBoolean()
   detach?: boolean
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(MAX_AUTO_STOP_INTERVAL_SECONDS)
+  auto_stop_interval?: number
 
   @IsOptional()
   @ValidateNested()

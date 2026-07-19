@@ -20,6 +20,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { LocalStorageKey } from '@/enums/LocalStorageKey'
 import { RoutePath } from '@/enums/RoutePath'
 import { useDeleteBoxMutation } from '@/hooks/mutations/useDeleteBoxMutation'
+import { useSetAutoStopIntervalMutation } from '@/hooks/mutations/useSetAutoStopIntervalMutation'
 import { useRecoverBoxMutation } from '@/hooks/mutations/useRecoverBoxMutation'
 import { useStartBoxMutation } from '@/hooks/mutations/useStartBoxMutation'
 import { useStopBoxMutation } from '@/hooks/mutations/useStopBoxMutation'
@@ -39,6 +40,11 @@ import {
   type OnboardingProgress,
 } from '@/lib/onboarding-progress'
 import { getRelativeTimeString } from '@/lib/utils'
+import {
+  AUTO_STOP_INTERVAL_OPTIONS,
+  DEFAULT_AUTO_STOP_INTERVAL,
+  autoStopIntervalLabel,
+} from '@/lib/autoStopInterval'
 import { isRecoverable, isStartable, isStoppable, isTransitioning } from '@/lib/utils/box'
 import { Box, BoxState, OrganizationRolePermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { isAxiosError } from 'axios'
@@ -176,12 +182,17 @@ export default function BoxDetails() {
   const stopMutation = useStopBoxMutation()
   const recoverMutation = useRecoverBoxMutation()
   const deleteMutation = useDeleteBoxMutation()
+  const autoStopMutation = useSetAutoStopIntervalMutation()
 
   const writePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
   const deletePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.DELETE_BOXES)
   const transitioning = box ? isTransitioning(box) : false
   const anyMutating =
-    startMutation.isPending || stopMutation.isPending || recoverMutation.isPending || deleteMutation.isPending
+    startMutation.isPending ||
+    stopMutation.isPending ||
+    recoverMutation.isPending ||
+    deleteMutation.isPending ||
+    autoStopMutation.isPending
   const actionsDisabled = anyMutating || transitioning
 
   const handleStart = async () => {
@@ -232,6 +243,16 @@ export default function BoxDetails() {
       navigate(RoutePath.BOXES)
     } catch (error) {
       handleApiError(error, 'Failed to delete box')
+    }
+  }
+
+  const handleAutoStopIntervalChange = async (interval: number) => {
+    if (!box) return
+    try {
+      await autoStopMutation.mutateAsync({ boxId: box.id, interval })
+      toast.success('Auto-stop interval updated')
+    } catch (error) {
+      handleApiError(error, 'Failed to update auto-stop interval')
     }
   }
 
@@ -436,6 +457,29 @@ export default function BoxDetails() {
               <SpecRow label="cpu">{box.cpu} vcpu</SpecRow>
               <SpecRow label="memory">{box.memory} gib</SpecRow>
               <SpecRow label="disk">{box.disk} gib</SpecRow>
+
+              <SectionHeader title="lifecycle" />
+              <label className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">auto-stop</span>
+                <select
+                  aria-label="Auto-stop interval"
+                  value={box.autoStopInterval ?? DEFAULT_AUTO_STOP_INTERVAL}
+                  onChange={(event) => void handleAutoStopIntervalChange(Number(event.target.value))}
+                  disabled={!writePermitted || actionsDisabled}
+                  className="min-w-0 max-w-[66%] border border-border bg-transparent px-2 py-1 text-right outline-none focus:border-brand disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {!AUTO_STOP_INTERVAL_OPTIONS.some(({ value }) => value === (box.autoStopInterval ?? DEFAULT_AUTO_STOP_INTERVAL)) && (
+                    <option value={box.autoStopInterval ?? DEFAULT_AUTO_STOP_INTERVAL}>
+                      {autoStopIntervalLabel(box.autoStopInterval ?? DEFAULT_AUTO_STOP_INTERVAL)}
+                    </option>
+                  )}
+                  {AUTO_STOP_INTERVAL_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
 
               <SectionHeader title="timestamps" />
               <SpecRow label="created">{getRelativeTimeString(box.createdAt).relativeTimeString}</SpecRow>

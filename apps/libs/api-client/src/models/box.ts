@@ -101,7 +101,7 @@ export interface Box {
      */
     'recoverable'?: boolean;
     /**
-     * Auto-stop interval in minutes (0 means disabled)
+     * Auto-stop interval in non-negative integer seconds (0 means disabled)
      */
     'autoStopInterval'?: number;
     /**

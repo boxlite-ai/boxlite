@@ -219,7 +219,7 @@ export class BoxliteProxyController {
     }
 
     // Any SDK-initiated proxy
-    // call counts as user activity, so the autostop cron does not reap an
+    // call counts as user activity, so the auto-stop cron does not reap an
     // actively used box. Best-effort: never block the proxy on this.
     this.boxService
       .updateLastActivityAt(box.id, new Date())

@@ -2155,7 +2155,7 @@ paths:
       - box
   /box/{boxIdOrName}/autostop/{interval}:
     post:
-      operationId: setAutostopInterval
+      operationId: setAutoStopInterval
       parameters:
       - description: Use with JWT to specify the organization ID
         explode: false
@@ -2173,13 +2173,14 @@ paths:
         schema:
           type: string
         style: simple
-      - description: Auto-stop interval in minutes (0 to disable)
+      - description: Auto-stop interval in non-negative integer seconds (0 to disable)
         explode: false
         in: path
         name: interval
         required: true
         schema:
-          type: number
+          format: int32
+          type: integer
         style: simple
       responses:
         "200":
@@ -6370,7 +6371,7 @@ components:
         desiredState: destroyed
         errorReason: The box is not running
         recoverable: true
-        autoStopInterval: 30
+        autoStopInterval: 1800
         autoDeleteInterval: 30
         volumes:
         - volumeId: volume123
@@ -6472,9 +6473,10 @@ components:
           example: true
           type: boolean
         autoStopInterval:
-          description: Auto-stop interval in minutes (0 means disabled)
-          example: 30
-          type: number
+          description: Auto-stop interval in non-negative integer seconds (0 means disabled)
+          example: 1800
+          format: int32
+          type: integer
         autoDeleteInterval:
           description: "Auto-delete interval in minutes (negative value means disabled,\
             \ 0 means delete immediately upon stopping)"
@@ -6554,7 +6556,7 @@ components:
           desiredState: destroyed
           errorReason: The box is not running
           recoverable: true
-          autoStopInterval: 30
+        autoStopInterval: 1800
           autoDeleteInterval: 30
           volumes:
           - volumeId: volume123
@@ -6590,7 +6592,7 @@ components:
           desiredState: destroyed
           errorReason: The box is not running
           recoverable: true
-          autoStopInterval: 30
+        autoStopInterval: 1800
           autoDeleteInterval: 30
           volumes:
           - volumeId: volume123

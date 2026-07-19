@@ -59,8 +59,8 @@ type Box struct {
 	ErrorReason *string `json:"errorReason,omitempty"`
 	// Whether the box error is recoverable.
 	Recoverable *bool `json:"recoverable,omitempty"`
-	// Auto-stop interval in minutes (0 means disabled)
-	AutoStopInterval *float32 `json:"autoStopInterval,omitempty"`
+	// Auto-stop interval in non-negative integer seconds (0 means disabled)
+	AutoStopInterval *int32 `json:"autoStopInterval,omitempty"`
 	// Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping)
 	AutoDeleteInterval *float32 `json:"autoDeleteInterval,omitempty"`
 	// Array of volumes attached to the box
@@ -619,9 +619,9 @@ func (o *Box) SetRecoverable(v bool) {
 }
 
 // GetAutoStopInterval returns the AutoStopInterval field value if set, zero value otherwise.
-func (o *Box) GetAutoStopInterval() float32 {
+func (o *Box) GetAutoStopInterval() int32 {
 	if o == nil || IsNil(o.AutoStopInterval) {
-		var ret float32
+		var ret int32
 		return ret
 	}
 	return *o.AutoStopInterval
@@ -629,7 +629,7 @@ func (o *Box) GetAutoStopInterval() float32 {
 
 // GetAutoStopIntervalOk returns a tuple with the AutoStopInterval field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *Box) GetAutoStopIntervalOk() (*float32, bool) {
+func (o *Box) GetAutoStopIntervalOk() (*int32, bool) {
 	if o == nil || IsNil(o.AutoStopInterval) {
 		return nil, false
 	}
@@ -645,8 +645,8 @@ func (o *Box) HasAutoStopInterval() bool {
 	return false
 }
 
-// SetAutoStopInterval gets a reference to the given float32 and assigns it to the AutoStopInterval field.
-func (o *Box) SetAutoStopInterval(v float32) {
+// SetAutoStopInterval gets a reference to the given int32 and assigns it to the AutoStopInterval field.
+func (o *Box) SetAutoStopInterval(v int32) {
 	o.AutoStopInterval = &v
 }
 
@@ -1092,5 +1092,4 @@ func (v *NullableBox) UnmarshalJSON(src []byte) error {
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }
-
 

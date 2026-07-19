@@ -122,6 +122,14 @@ impl LiteBox {
         self.box_backend.stop().await
     }
 
+    /// Set the hosted REST auto-stop interval in seconds.
+    ///
+    /// `0` disables auto-stop. This operation is supported by REST-backed
+    /// boxes; local runtimes do not run the hosted control-plane scheduler.
+    pub async fn set_auto_stop_interval(&self, interval: u32) -> BoxliteResult<()> {
+        self.box_backend.set_auto_stop_interval(interval).await
+    }
+
     /// Copy files/directories from host into the container rootfs.
     pub async fn copy_into(
         &self,

@@ -99,6 +99,9 @@ class TestBoxInfoStructure:
     def test_has_memory_mib(self, box_info_cls):
         assert "memory_mib" in dir(box_info_cls)
 
+    def test_has_auto_stop_interval(self, box_info_cls):
+        assert "auto_stop_interval" in dir(box_info_cls)
+
     def test_has_repr(self, box_info_cls):
         assert hasattr(box_info_cls, "__repr__")
 
@@ -121,6 +124,39 @@ class TestBoxStateInfoStructure:
 
     def test_has_repr(self, state_info_cls):
         assert hasattr(state_info_cls, "__repr__")
+
+
+class TestBoxLifecycleMethods:
+    """Test hosted lifecycle controls are exposed on Box handles."""
+
+    def test_set_auto_stop_interval_exists(self):
+        assert hasattr(boxlite.Box, "set_auto_stop_interval")
+
+    def test_box_options_preserves_existing_positional_argument_order(self):
+        options = boxlite.BoxOptions(
+            "alpine:3.23",
+            None,
+            2,
+            512,
+            3,
+            "/workspace",
+            [("KEY", "value")],
+            [],
+            None,
+            [],
+            True,
+            False,
+            ["/bin/sh"],
+            ["-c", "echo ok"],
+            "1000",
+            None,
+            [],
+        )
+
+        assert options.auto_remove is True
+        assert options.detach is False
+        assert options.entrypoint == ["/bin/sh"]
+        assert options.cmd == ["-c", "echo ok"]
 
 
 class TestBoxliteManagementMethods:

@@ -141,6 +141,10 @@ typedef void (*CBoxGetOrCreateBoxCb)(CBoxHandle*, bool, CBoxliteError*, void*);
 // Box stop completion.
 typedef void (*CBoxStopBoxCb)(CBoxliteError*, void*);
 
+// Box auto-stop interval update completion. The callback shape matches a
+// lifecycle operation because the setter only reports success or failure.
+typedef void (*CBoxSetAutoStopIntervalCb)(CBoxliteError*, void*);
+
 // Box attach (get) completion.
 typedef void (*CBoxGetBoxCb)(CBoxHandle*, CBoxliteError*, void*);
 
@@ -254,6 +258,7 @@ typedef struct CBoxInfo {
   int cpus;
   int memory_mib;
   int64_t created_at;
+  uint32_t auto_stop_interval;
 } CBoxInfo;
 
 // Box info completion.
@@ -361,6 +366,13 @@ enum BoxliteErrorCode boxlite_stop_box(CBoxHandle *handle,
                                        CBoxStopBoxCb cb,
                                        void *user_data,
                                        CBoxliteError *out_error);
+
+// Set the idle auto-stop interval in seconds. Passing 0 disables auto-stop.
+enum BoxliteErrorCode boxlite_set_auto_stop_interval(CBoxHandle *handle,
+                                                     uint32_t interval,
+                                                     CBoxSetAutoStopIntervalCb cb,
+                                                     void *user_data,
+                                                     CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_get(CBoxliteRuntime *runtime,
                                   const char *id_or_name,
@@ -580,6 +592,9 @@ void boxlite_options_add_secret(CBoxliteOptions *opts,
 void boxlite_options_set_auto_remove(CBoxliteOptions *opts, int val);
 
 void boxlite_options_set_detach(CBoxliteOptions *opts, int val);
+
+// Set the idle auto-stop interval in seconds. Passing 0 disables auto-stop.
+void boxlite_options_set_auto_stop_interval(CBoxliteOptions *opts, uint32_t interval);
 
 // Apply a `CAdvancedBoxOptions` (security, mount isolation, health check) to a
 // `CBoxliteOptions`. Clones the advanced configuration into the box options —

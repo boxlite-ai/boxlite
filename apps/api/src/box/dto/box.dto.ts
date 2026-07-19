@@ -170,8 +170,10 @@ export class BoxDto {
   recoverable?: boolean
 
   @ApiPropertyOptional({
-    description: 'Auto-stop interval in minutes (0 means disabled)',
-    example: 30,
+    description: 'Auto-stop interval in non-negative integer seconds (0 means disabled)',
+    example: 1800,
+    type: 'integer',
+    maximum: 2147483647,
     required: false,
   })
   @IsOptional()

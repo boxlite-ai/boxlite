@@ -35,6 +35,21 @@ class TestBoxOptionsDefaults:
         # Python side defaults to None, Rust side defaults to False
         assert opts.detach is None
 
+    def test_auto_stop_interval_default_is_none(self):
+        """None lets the hosted REST service apply its default."""
+        opts = boxlite.BoxOptions()
+        assert opts.auto_stop_interval is None
+
+    @pytest.mark.parametrize("interval", [0, 1, 300, 900])
+    def test_auto_stop_interval_is_non_negative_seconds(self, interval):
+        opts = boxlite.BoxOptions(auto_stop_interval=interval)
+        assert opts.auto_stop_interval == interval
+
+    @pytest.mark.parametrize("interval", [-1, 1.5])
+    def test_auto_stop_interval_rejects_negative_or_fractional_values(self, interval):
+        with pytest.raises((OverflowError, TypeError, ValueError)):
+            boxlite.BoxOptions(auto_stop_interval=interval)
+
     def test_explicit_auto_remove_true(self):
         """Test setting auto_remove=True explicitly."""
         opts = boxlite.BoxOptions(image="alpine:latest", auto_remove=True)

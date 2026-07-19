@@ -69,7 +69,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
   @WithInstrumentation()
   @LogExecution('auto-stop-check')
   @WithInstrumentation()
-  async autostopCheck(): Promise<void> {
+  async autoStopCheck(): Promise<void> {
     const lockKey = 'auto-stop-check-worker-selected'
     //  lock the sync to only run one instance at a time
     if (!(await this.redisLockProvider.lock(lockKey, 60))) {
@@ -95,7 +95,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
             })
             .andWhere('box.pending != true')
             .andWhere('box."autoStopInterval" != 0')
-            .andWhere('activity."lastActivityAt" < NOW() - INTERVAL \'1 minute\' * box."autoStopInterval"')
+            .andWhere('activity."lastActivityAt" < NOW() - INTERVAL \'1 second\' * box."autoStopInterval"')
             .limit(100)
             .getMany()
 
@@ -118,7 +118,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
               }
 
               this.logger.log(
-                `Auto-stopping box ${box.id}: autoStopInterval=${box.autoStopInterval}min, autoDeleteInterval=${box.autoDeleteInterval}`,
+                `Auto-stopping box ${box.id}: autoStopInterval=${box.autoStopInterval}s, autoDeleteInterval=${box.autoDeleteInterval}min`,
               )
 
               try {

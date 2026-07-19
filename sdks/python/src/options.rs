@@ -383,6 +383,9 @@ pub(crate) struct PyBoxOptions {
     #[pyo3(get, set)]
     pub(crate) network: Option<PyNetworkSpec>,
     pub(crate) ports: Vec<PyPortSpec>,
+    /// Hosted REST auto-stop interval in seconds. `0` disables auto-stop.
+    #[pyo3(get, set)]
+    pub(crate) auto_stop_interval: Option<u32>,
     #[pyo3(get, set)]
     pub(crate) auto_remove: Option<bool>,
     #[pyo3(get, set)]
@@ -431,6 +434,7 @@ impl PyBoxOptions {
         user=None,
         advanced=None,
         secrets=vec![],
+        auto_stop_interval=None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -451,6 +455,7 @@ impl PyBoxOptions {
         user: Option<String>,
         advanced: Option<PyAdvancedBoxOptions>,
         secrets: Vec<PySecret>,
+        auto_stop_interval: Option<u32>,
     ) -> Self {
         Self {
             image,
@@ -463,6 +468,7 @@ impl PyBoxOptions {
             volumes,
             network,
             ports,
+            auto_stop_interval,
             auto_remove,
             detach,
             entrypoint,
@@ -475,11 +481,12 @@ impl PyBoxOptions {
 
     fn __repr__(&self) -> String {
         format!(
-            "BoxOptions(image={:?}, rootfs_path={:?}, cpus={:?}, memory_mib={:?}, advanced={:?})",
+            "BoxOptions(image={:?}, rootfs_path={:?}, cpus={:?}, memory_mib={:?}, auto_stop_interval={:?}, advanced={:?})",
             self.image,
             self.rootfs_path,
             self.cpus,
             self.memory_mib,
+            self.auto_stop_interval,
             self.advanced.is_some()
         )
     }
@@ -520,6 +527,7 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
             volumes,
             network,
             ports,
+            auto_stop_interval: py_opts.auto_stop_interval,
             entrypoint: py_opts.entrypoint,
             cmd: py_opts.cmd,
             user: py_opts.user,

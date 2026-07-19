@@ -4,10 +4,11 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { IsEnum, IsObject, IsOptional, IsString, IsNumber, IsBoolean, IsArray } from 'class-validator'
+import { IsEnum, IsObject, IsOptional, IsString, IsNumber, IsBoolean, IsArray, IsInt, Max, Min } from 'class-validator'
 import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxVolume } from './box.dto'
+import { MAX_AUTO_STOP_INTERVAL_SECONDS } from '../constants/auto-stop.constants'
 
 @ApiSchema({ name: 'CreateBox' })
 export class CreateBoxDto {
@@ -133,12 +134,14 @@ export class CreateBoxDto {
   disk?: number
 
   @ApiPropertyOptional({
-    description: 'Auto-stop interval in minutes (0 means disabled)',
-    example: 30,
+    description: 'Auto-stop interval in non-negative integer seconds (0 means disabled)',
+    example: 1800,
     type: 'integer',
   })
   @IsOptional()
-  @IsNumber()
+  @IsInt()
+  @Min(0)
+  @Max(MAX_AUTO_STOP_INTERVAL_SECONDS)
   autoStopInterval?: number
 
   @ApiPropertyOptional({

@@ -22,7 +22,7 @@ All URIs are relative to *http://localhost:3000*
 |[**resizeBox**](#resizebox) | **POST** /box/{boxIdOrName}/resize | Resize box resources|
 |[**revokeSshAccess**](#revokesshaccess) | **DELETE** /box/{boxIdOrName}/ssh-access | Revoke SSH access for box|
 |[**setAutoDeleteInterval**](#setautodeleteinterval) | **POST** /box/{boxIdOrName}/autodelete/{interval} | Set box auto-delete interval|
-|[**setAutostopInterval**](#setautostopinterval) | **POST** /box/{boxIdOrName}/autostop/{interval} | Set box auto-stop interval|
+|[**setAutoStopInterval**](#setautostopinterval) | **POST** /box/{boxIdOrName}/autostop/{interval} | Set box auto-stop interval|
 |[**updateBoxState**](#updateboxstate) | **PUT** /box/{boxId}/state | Update box state|
 |[**updateLastActivity**](#updatelastactivity) | **POST** /box/{boxId}/last-activity | Update box last activity|
 |[**updatePublicStatus**](#updatepublicstatus) | **POST** /box/{boxIdOrName}/public/{isPublic} | Update public status|
@@ -1123,8 +1123,8 @@ const { status, data } = await apiInstance.setAutoDeleteInterval(
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
-# **setAutostopInterval**
-> Box setAutostopInterval()
+# **setAutoStopInterval**
+> Box setAutoStopInterval()
 
 
 ### Example
@@ -1139,10 +1139,10 @@ const configuration = new Configuration();
 const apiInstance = new BoxApi(configuration);
 
 let boxIdOrName: string; //ID or name of the box (default to undefined)
-let interval: number; //Auto-stop interval in minutes (0 to disable) (default to undefined)
+let interval: number; //Auto-stop interval in non-negative integer seconds (0 to disable) (default to undefined)
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
-const { status, data } = await apiInstance.setAutostopInterval(
+const { status, data } = await apiInstance.setAutoStopInterval(
     boxIdOrName,
     interval,
     xBoxLiteOrganizationID
@@ -1154,7 +1154,7 @@ const { status, data } = await apiInstance.setAutostopInterval(
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
 | **boxIdOrName** | [**string**] | ID or name of the box | defaults to undefined|
-| **interval** | [**number**] | Auto-stop interval in minutes (0 to disable) | defaults to undefined|
+| **interval** | [**number**] | Auto-stop interval in non-negative integer seconds (0 to disable) | defaults to undefined|
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -1397,4 +1397,3 @@ const { status, data } = await apiInstance.validateSshAccess(
 |**200** | SSH access validation result |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-

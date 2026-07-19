@@ -117,6 +117,8 @@ pub(crate) struct CreateBoxRequest {
     pub auto_remove: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detach: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_stop_interval: Option<u32>,
 }
 
 impl CreateBoxRequest {
@@ -167,6 +169,7 @@ impl CreateBoxRequest {
             secrets,
             auto_remove: Some(options.auto_remove),
             detach: Some(options.detach),
+            auto_stop_interval: options.auto_stop_interval,
         }
     }
 }
@@ -224,6 +227,8 @@ pub(crate) struct BoxResponse {
     pub cpus: u8,
     pub memory_mib: u32,
     #[serde(default)]
+    pub auto_stop_interval: Option<u32>,
+    #[serde(default)]
     pub labels: HashMap<String, String>,
 }
 
@@ -260,6 +265,7 @@ impl BoxResponse {
             image: self.image.clone(),
             cpus: self.cpus,
             memory_mib: self.memory_mib,
+            auto_stop_interval: self.auto_stop_interval,
             labels: self.labels.clone(),
             health_status: crate::litebox::HealthStatus::new(), // REST API doesn't provide health status
         })
@@ -502,6 +508,7 @@ mod tests {
             }]),
             auto_remove: Some(true),
             detach: None,
+            auto_stop_interval: Some(300),
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"name\":\"mybox\""));
@@ -511,6 +518,7 @@ mod tests {
             json.contains("\"network\":{\"mode\":\"enabled\",\"allow_net\":[\"api.openai.com\"]}")
         );
         assert!(json.contains("\"secrets\""));
+        assert!(json.contains("\"auto_stop_interval\":300"));
         // None fields should be skipped
         assert!(!json.contains("rootfs_path"));
         assert!(!json.contains("disk_size_gb"));
@@ -527,6 +535,7 @@ mod tests {
             network: NetworkSpec::Enabled {
                 allow_net: vec!["api.openai.com".into()],
             },
+            auto_stop_interval: Some(300),
             secrets: vec![Secret {
                 name: "openai".into(),
                 value: "sk-test".into(),
@@ -541,6 +550,7 @@ mod tests {
         assert!(req.rootfs_path.is_none());
         assert_eq!(req.cpus, Some(4));
         assert_eq!(req.memory_mib, Some(1024));
+        assert_eq!(req.auto_stop_interval, Some(300));
         assert_eq!(
             req.network.as_ref().map(|n| n.mode.as_str()),
             Some("enabled")
@@ -639,6 +649,7 @@ mod tests {
             image: "python:3.11".to_string(),
             cpus: 2,
             memory_mib: 512,
+            auto_stop_interval: Some(900),
             labels: HashMap::new(),
         };
         let info = resp.to_box_info().expect("valid ULID box_id should parse");
@@ -662,6 +673,7 @@ mod tests {
             image: "alpine:latest".to_string(),
             cpus: 1,
             memory_mib: 256,
+            auto_stop_interval: None,
             labels: HashMap::new(),
         };
         let info = resp.to_box_info().expect("UUID box_id should parse");
@@ -686,6 +698,7 @@ mod tests {
             image: "alpine:latest".to_string(),
             cpus: 1,
             memory_mib: 256,
+            auto_stop_interval: None,
             labels: HashMap::new(),
         };
         assert!(mk("").to_box_info().is_err(), "empty");
@@ -754,6 +767,7 @@ mod tests {
             image: "python:3.11".to_string(),
             cpus: 2,
             memory_mib: 512,
+            auto_stop_interval: None,
             labels: HashMap::new(),
         };
 

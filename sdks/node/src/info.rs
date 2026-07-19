@@ -125,6 +125,10 @@ pub struct JsBoxInfo {
 
     /// Health status
     pub health_status: JsHealthStatus,
+
+    /// Auto-stop interval in seconds. `0` disables auto-stop.
+    #[napi(js_name = "autoStopInterval")]
+    pub auto_stop_interval: Option<u32>,
 }
 
 impl From<BoxInfo> for JsBoxInfo {
@@ -146,6 +150,7 @@ impl From<BoxInfo> for JsBoxInfo {
             cpus: info.cpus,
             memory_mib: info.memory_mib,
             health_status,
+            auto_stop_interval: info.auto_stop_interval,
         }
     }
 }

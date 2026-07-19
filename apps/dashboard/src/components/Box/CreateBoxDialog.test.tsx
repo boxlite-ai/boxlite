@@ -9,14 +9,17 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CreateBoxDialog, resolvePerBoxLimits } from './CreateBoxDialog'
 
-// Mutable org returned by the mocked hook; each test sets `state.org`.
-const state = vi.hoisted(() => ({ org: null as unknown }))
+// Mutable test state returned by the mocked hooks; each test sets `state.org`.
+const state = vi.hoisted(() => ({
+  org: null as unknown,
+  mutateAsync: vi.fn(),
+}))
 
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({ selectedOrganization: state.org }),
 }))
 vi.mock('@/hooks/mutations/useCreateBoxMutation', () => ({
-  useCreateBoxMutation: () => ({ mutateAsync: vi.fn() }),
+  useCreateBoxMutation: () => ({ mutateAsync: state.mutateAsync }),
 }))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 vi.mock('react-router-dom', async (importOriginal) => {
@@ -65,6 +68,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
     state.org = makeOrg({ maxCpuPerBox: 4, maxMemoryPerBox: 8, maxDiskPerBox: 10 })
+    state.mutateAsync.mockResolvedValue({ id: 'box-1' })
   })
 
   afterEach(() => {
@@ -99,6 +103,27 @@ describe('CreateBoxDialog per-org resource cap', () => {
   function nameInput() {
     return document.querySelector<HTMLInputElement>('input[placeholder="my-new-box"]')
   }
+
+  it('shows 15 minutes by default and submits the selected interval in seconds', async () => {
+    await renderOpen()
+
+    const interval = document.querySelector<HTMLSelectElement>('select[aria-label="Auto-stop interval"]')
+    expect(interval?.value).toBe('900')
+    expect(interval?.selectedOptions[0]?.textContent).toBe('15 minutes')
+
+    await act(async () => {
+      if (!interval) throw new Error('expected auto-stop interval select to be rendered')
+      interval.value = '300'
+      interval.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await flush()
+
+    const createButton = [...document.querySelectorAll('button')].find((button) => button.textContent?.includes('Create Box'))
+    await act(async () => createButton?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await flush()
+
+    expect(state.mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ autoStopInterval: 300 }))
+  })
 
   it('clamps an over-max CPU input to the org maximum and shows a red contact-support hint', async () => {
     await renderOpen()

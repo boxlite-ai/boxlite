@@ -1099,16 +1099,16 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
          * 
          * @summary Set box auto-stop interval
          * @param {string} boxIdOrName ID or name of the box
-         * @param {number} interval Auto-stop interval in minutes (0 to disable)
+         * @param {number} interval Auto-stop interval in non-negative integer seconds (0 to disable)
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        setAutostopInterval: async (boxIdOrName: string, interval: number, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        setAutoStopInterval: async (boxIdOrName: string, interval: number, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             // verify required parameter 'boxIdOrName' is not null or undefined
-            assertParamExists('setAutostopInterval', 'boxIdOrName', boxIdOrName)
+            assertParamExists('setAutoStopInterval', 'boxIdOrName', boxIdOrName)
             // verify required parameter 'interval' is not null or undefined
-            assertParamExists('setAutostopInterval', 'interval', interval)
+            assertParamExists('setAutoStopInterval', 'interval', interval)
             const localVarPath = `/box/{boxIdOrName}/autostop/{interval}`
                 .replace('{boxIdOrName}', encodeURIComponent(String(boxIdOrName)))
                 .replace('{interval}', encodeURIComponent(String(interval)));
@@ -1639,15 +1639,15 @@ export const BoxApiFp = function(configuration?: Configuration) {
          * 
          * @summary Set box auto-stop interval
          * @param {string} boxIdOrName ID or name of the box
-         * @param {number} interval Auto-stop interval in minutes (0 to disable)
+         * @param {number} interval Auto-stop interval in non-negative integer seconds (0 to disable)
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async setAutostopInterval(boxIdOrName: string, interval: number, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Box>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.setAutostopInterval(boxIdOrName, interval, xBoxLiteOrganizationID, options);
+        async setAutoStopInterval(boxIdOrName: string, interval: number, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Box>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.setAutoStopInterval(boxIdOrName, interval, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.setAutostopInterval']?.[localVarOperationServerIndex]?.url;
+            const localVarOperationServerBasePath = operationServerMap['BoxApi.setAutoStopInterval']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -1964,13 +1964,13 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
          * 
          * @summary Set box auto-stop interval
          * @param {string} boxIdOrName ID or name of the box
-         * @param {number} interval Auto-stop interval in minutes (0 to disable)
+         * @param {number} interval Auto-stop interval in non-negative integer seconds (0 to disable)
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        setAutostopInterval(boxIdOrName: string, interval: number, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Box> {
-            return localVarFp.setAutostopInterval(boxIdOrName, interval, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        setAutoStopInterval(boxIdOrName: string, interval: number, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Box> {
+            return localVarFp.setAutoStopInterval(boxIdOrName, interval, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -2290,13 +2290,13 @@ export class BoxApi extends BaseAPI {
      * 
      * @summary Set box auto-stop interval
      * @param {string} boxIdOrName ID or name of the box
-     * @param {number} interval Auto-stop interval in minutes (0 to disable)
+     * @param {number} interval Auto-stop interval in non-negative integer seconds (0 to disable)
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public setAutostopInterval(boxIdOrName: string, interval: number, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).setAutostopInterval(boxIdOrName, interval, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    public setAutoStopInterval(boxIdOrName: string, interval: number, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return BoxApiFp(this.configuration).setAutoStopInterval(boxIdOrName, interval, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

@@ -501,7 +501,7 @@ export class BoxController {
   @Post(':boxIdOrName/autostop/:interval')
   @ApiOperation({
     summary: 'Set box auto-stop interval',
-    operationId: 'setAutostopInterval',
+    operationId: 'setAutoStopInterval',
   })
   @ApiParam({
     name: 'boxIdOrName',
@@ -510,8 +510,8 @@ export class BoxController {
   })
   @ApiParam({
     name: 'interval',
-    description: 'Auto-stop interval in minutes (0 to disable)',
-    type: 'number',
+    description: 'Auto-stop interval in non-negative integer seconds (0 to disable)',
+    type: 'integer',
   })
   @ApiResponse({
     status: 200,
@@ -531,12 +531,12 @@ export class BoxController {
       }),
     },
   })
-  async setAutostopInterval(
+  async setAutoStopInterval(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxIdOrName') boxIdOrName: string,
     @Param('interval') interval: number,
   ): Promise<BoxDto> {
-    const box = await this.boxService.setAutostopInterval(boxIdOrName, interval, authContext.organizationId)
+    const box = await this.boxService.setAutoStopInterval(boxIdOrName, interval, authContext.organizationId)
     return this.boxService.toBoxDto(box)
   }
 

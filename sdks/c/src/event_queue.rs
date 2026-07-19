@@ -96,6 +96,11 @@ pub(crate) type CBoxStartBoxFn = extern "C" fn(*mut crate::CBoxliteError, *mut c
 pub type CBoxStopBoxCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxStopBoxFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
 
+/// Box auto-stop interval update completion. The callback shape matches a
+/// lifecycle operation because the setter only reports success or failure.
+pub type CBoxSetAutoStopIntervalCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxSetAutoStopIntervalFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
+
 /// Box attach (get) completion.
 pub type CBoxGetBoxCb =
     Option<extern "C" fn(*mut crate::CBoxHandle, *mut crate::CBoxliteError, *mut c_void)>;
@@ -296,6 +301,11 @@ pub enum RuntimeEvent {
     },
     StopBox {
         cb: CBoxStopBoxFn,
+        user_data: usize,
+        result: Result<(), BoxliteError>,
+    },
+    SetAutoStopInterval {
+        cb: CBoxSetAutoStopIntervalFn,
         user_data: usize,
         result: Result<(), BoxliteError>,
     },
@@ -1137,6 +1147,7 @@ mod owned_ffi_ptr_nested_leak_tests {
             cpus: 1,
             memory_mib: 256,
             created_at: 0,
+            auto_stop_interval: 0,
         });
 
         let owned = OwnedFfiPtr::new_with(payload, crate::info::free_box_info_ptr);
@@ -1204,6 +1215,7 @@ mod owned_ffi_ptr_nested_leak_tests {
             cpus: 2,
             memory_mib: 512,
             created_at: 0,
+            auto_stop_interval: 0,
         }];
         let items_ptr = items_vec.as_mut_ptr();
         let items_len = items_vec.len();
