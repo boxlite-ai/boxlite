@@ -132,6 +132,36 @@ mod tests {
     }
 
     #[test]
+    fn each_env_file_has_independent_substitution_scope() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_file = temp_dir.path().join("base.env");
+        let service_file = temp_dir.path().join("service.env");
+        let source_key = format!("BOXLITE_TEST_{}", ulid::Ulid::new());
+        let service_key = format!("{source_key}_SERVICE");
+        fs::write(&base_file, format!("{source_key}=demo\n")).unwrap();
+        fs::write(
+            &service_file,
+            format!("{service_key}=${{{source_key}}}-api\n"),
+        )
+        .unwrap();
+
+        let flags = EnvironmentFlags {
+            env_files: vec![base_file, service_file],
+            env: Vec::new(),
+        };
+
+        let resolved = flags.resolve_with_lookup(|_| None).unwrap();
+
+        assert_eq!(
+            resolved,
+            vec![
+                (source_key, "demo".to_string()),
+                (service_key, "-api".to_string()),
+            ]
+        );
+    }
+
+    #[test]
     fn reports_file_and_invalid_line_for_parse_error() {
         let temp_dir = TempDir::new().unwrap();
         let env_file = temp_dir.path().join("invalid.env");

@@ -617,9 +617,11 @@ Used by `run`, `create`, and `exec`.
 Environment files use dotenv syntax, including quoted values, `export`
 prefixes, comments, escapes, and variable substitution. Files are applied in
 command-line order, later files override earlier files, and explicit `-e`
-values have the highest precedence. A bare key is supported by `-e` and
-inherits its value from the host. These values enter the guest; use BoxLite
-secret injection for credentials that must remain outside the VM.
+values have the highest precedence. Variable substitution is evaluated
+independently for each file, so references cannot use values defined by an
+earlier `--env-file`. A bare key is supported by `-e` and inherits its value
+from the host. These values enter the guest; use BoxLite secret injection for
+credentials that must remain outside the VM.
 
 ### `ProcessFlags`
 
