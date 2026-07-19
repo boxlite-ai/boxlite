@@ -39,25 +39,11 @@ impl EnvironmentFlags {
             let contents = contents.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&contents);
             let entries = dotenvy::from_read_iter(contents);
             for entry in entries {
-                let (key, value) = match entry {
-                    Ok(entry) => entry,
-                    // dotenvy includes the raw line in LineParse's Display output.
-                    Err(dotenvy::Error::LineParse(_, error_index)) => anyhow::bail!(
-                        "failed to parse environment file '{}': invalid dotenv syntax at index {}",
-                        path.display(),
-                        error_index
-                    ),
-                    Err(dotenvy::Error::Io(error)) => {
-                        return Err(error).with_context(|| {
-                            format!("failed to read environment file '{}'", path.display())
-                        });
-                    }
-                    Err(error) => {
-                        return Err(error).with_context(|| {
-                            format!("failed to process environment file '{}'", path.display())
-                        });
-                    }
-                };
+                // dotenvy errors can include the raw line, so do not preserve
+                // the original error in the user-visible error chain.
+                let (key, value) = entry.map_err(|_| {
+                    anyhow::anyhow!("failed to process environment file '{}'", path.display())
+                })?;
                 set_environment_value(&mut resolved, key, value);
             }
         }
@@ -200,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn redacts_invalid_line_from_parse_error() {
+    fn redacts_invalid_line_from_processing_error() {
         const SECRET: &str = "p@ss'w0rd";
 
         let temp_dir = TempDir::new().unwrap();
@@ -219,7 +205,7 @@ mod tests {
         assert!(message.contains(&env_file.display().to_string()));
         assert!(!message.contains(SECRET));
         assert!(!message.contains("DB_PASS="));
-        assert!(message.contains("invalid dotenv syntax"));
+        assert!(message.contains("failed to process environment file"));
     }
 
     #[test]
