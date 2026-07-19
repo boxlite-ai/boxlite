@@ -16,6 +16,8 @@ mod network;
 #[cfg(target_os = "linux")]
 mod overlayfs;
 #[cfg(target_os = "linux")]
+mod reaper;
+#[cfg(target_os = "linux")]
 mod service;
 #[cfg(target_os = "linux")]
 mod storage;
@@ -120,6 +122,12 @@ async fn async_main() -> BoxliteResult<()> {
     // Needed because virtio-fs doesn't support open-unlink-fstat pattern
     mounts::mount_essential_tmpfs()?;
     eprintln!("[guest] T+{}ms: tmpfs mounted", boot_elapsed_ms());
+
+    // Install the child-reaper before serving: one waitpid(-1) loop reaps the
+    // container init, exec tenants (both reparent to us via as_sibling), and
+    // guest processes, so a finished command is observed and the box stops
+    // itself. See the reaper module.
+    let _ = reaper::REAPER.set(reaper::Reaper::install());
 
     // Parse command-line arguments with clap
     let args = GuestArgs::parse();

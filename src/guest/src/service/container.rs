@@ -320,6 +320,16 @@ impl ContainerService for GuestServer {
                 // container.
                 let init_state = match container.take_init_exec_handle() {
                     Ok(Some(handle)) => {
+                        // Claim init's pid so its exit is held until the watcher
+                        // asks. Init is created but not yet started here — it
+                        // blocks on libcontainer's exec fifo — so it cannot have
+                        // exited, and `now` is a sound cutoff: anything already
+                        // cached under this pid is a recycled-pid leftover.
+                        crate::reaper::REAPER
+                            .get()
+                            .expect("reaper installed at startup")
+                            .expect_waiter(handle.pid(), std::time::Instant::now())
+                            .await;
                         let state =
                             crate::service::exec::state::ExecutionState::new_init_session(handle);
                         self.registry

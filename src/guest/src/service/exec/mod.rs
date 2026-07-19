@@ -293,10 +293,25 @@ async fn spawn_execution(
 ) -> Result<ExecResponse, ExecResponse> {
     let started_at_ms = now_ms();
 
+    // Read the clock before the spawn: the tenant is built in the zygote and is
+    // already running when its pid comes back over IPC, so it can exit before we
+    // ever see the pid. Anything reaped after this instant is therefore ours;
+    // anything older belongs to a previous owner of a recycled pid.
+    let spawned_at = std::time::Instant::now();
+
     // Step 1: Spawn process using executor selected by BOXLITE_EXECUTOR env var
     let (child, container_ref) = spawn_with_executor(server, &req, &execution_id).await?;
 
     let pid = child.pid().as_raw() as u32;
+
+    // Claim the pid with the reaper. A detached exec sends no Wait until its
+    // caller chooses to, so an exit arriving with no waiter must be held rather
+    // than aged out as an ownerless stray.
+    crate::reaper::REAPER
+        .get()
+        .expect("reaper installed at startup")
+        .expect_waiter(child.pid(), spawned_at)
+        .await;
 
     // Step 2: Create execution state and register
     // If running inside a container, pass the init health checker for death detection

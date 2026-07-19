@@ -195,10 +195,14 @@ impl BlockDeviceMount {
             device.display()
         );
 
-        let output = Command::new("resize2fs")
-            .arg(device)
-            .output()
-            .map_err(|e| BoxliteError::Storage(format!("Failed to execute resize2fs: {}", e)))?;
+        // Fence the reaper for the whole spawn-and-wait: output() waits for its
+        // own child, and the reaper's waitpid(-1) would otherwise reap it first,
+        // leaving us with ECHILD. See reaper::reap_fence.
+        let output = {
+            let _fence = crate::reaper::reap_fence();
+            Command::new("resize2fs").arg(device).output()
+        }
+        .map_err(|e| BoxliteError::Storage(format!("Failed to execute resize2fs: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -240,11 +244,16 @@ impl BlockDeviceMount {
         }
 
         let mkfs_cmd = format!("mkfs.{}", filesystem);
-        let output = Command::new(&mkfs_cmd)
-            .arg("-F") // Force, don't prompt
-            .arg(device)
-            .output()
-            .map_err(|e| BoxliteError::Storage(format!("Failed to run {}: {}", mkfs_cmd, e)))?;
+        // Fence the reaper across spawn-and-wait (see reap_fence): output()
+        // self-waits and would otherwise race waitpid(-1) into ECHILD.
+        let output = {
+            let _fence = crate::reaper::reap_fence();
+            Command::new(&mkfs_cmd)
+                .arg("-F") // Force, don't prompt
+                .arg(device)
+                .output()
+        }
+        .map_err(|e| BoxliteError::Storage(format!("Failed to run {}: {}", mkfs_cmd, e)))?;
 
         if !output.status.success() {
             return Err(BoxliteError::Storage(format!(

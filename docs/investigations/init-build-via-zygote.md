@@ -82,13 +82,18 @@ registration, the exit watcher — is unchanged.
 
 ## Invariants this preserves (verified, must stay documented in code)
 
-1. **Wait routing is UNCHANGED — `WaitVia::Direct` stays.** The zygote sets no
-   `PR_SET_CHILD_SUBREAPER`; libcontainer's intermediate exits inside
-   `build()`, so init reparents to the VM's PID 1 (boxlite-guest main) whether
-   the clone3 happened in the guest or in the zygote. Couple these facts in a
-   comment at `new_init_session` (state.rs): *if the zygote ever becomes a
-   subreaper, init's parent flips to the zygote and this route must flip to
-   `WaitVia::Zygote` in the same change.*
+> **Superseded (2026-07-18):** the tenant reparenting unification landed first.
+> `WaitVia` is gone — every session now waits via the guest-wide reaper
+> (`crate::reaper`), and exec tenants are cloned `CLONE_PARENT` (`as_sibling`)
+> so they reparent to guest main like init already did. Also corrected below:
+> guest main is a regular process (empirically pid ~204), **not** the VM's PID 1
+> — reparenting comes from `CLONE_PARENT`, not PID-1 adoption. When this
+> init-build change lands there is no `WaitVia` to preserve.
+
+1. **Wait routing.** The zygote sets no `PR_SET_CHILD_SUBREAPER`; libcontainer's
+   intermediate exits inside `build()`, and init reparents to guest main whether
+   the clone3 happens in the guest or the zygote — so moving the init build does
+   not change who reaps init (still the reaper).
 2. **Mount visibility.** The zygote shares the guest's mount namespace (plain
    fork, no unshare), so bundle/rootfs mounts performed *after* zygote start
    (virtiofs, container rootfs) are visible to it. No path staging needed.
@@ -128,10 +133,12 @@ than papered over):
   targeted waits; needs a single wait-dispatcher or `waitid(WNOWAIT)`).
   `setsid` is optional session hygiene here, not the mechanism — reparenting
   comes from the intermediate's exit.
-- **`CLONE_PARENT` on the tenant clone**: same unification, but requires
-  patching vendored libcontainer's clone flags and inherits clone-flag edge
-  rules (`EINVAL` with `CLONE_NEWPID`, pid-ns-init callers). Strictly worse
-  than deliberate orphaning; rejected.
+- **`CLONE_PARENT` on the tenant clone** (IMPLEMENTED 2026-07-18): youki exposes
+  this as `TenantContainerBuilder::as_sibling(true)` — no libcontainer patch
+  needed, and the feared `CLONE_NEWPID` edge rule does not apply (the flag
+  governs the *intermediate* clone, which carries no new pid-ns). Empirically the
+  tenant reparents to guest main (PPid == guest-main pid). This shipped for the
+  tenant unification; deliberate orphaning was not needed.
 - **Kata-style re-exec of the agent per container**: rejected — a second
   spawn mechanism beside the existing zygote.
 - **Zygote push-reaping (conmon-style exit events)** — if wait latency ever

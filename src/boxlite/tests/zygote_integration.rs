@@ -155,6 +155,46 @@ async fn test_zygote_high_concurrency_16() {
     cleanup_concurrent_box(handle, runtime).await;
 }
 
+/// 16 concurrent execs, each exiting with a DISTINCT code. Beyond the deadlock
+/// guard above, this catches cross-delivery: the guest reaper is pid-keyed, so
+/// every waiter must receive ITS tenant's exit and never another's, even when
+/// many exits are reaped and delivered under contention.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_zygote_concurrent_distinct_exit_codes() {
+    let (home, runtime) = create_test_runtime();
+    let handle = create_concurrent_box(&runtime).await;
+    let box_id = handle.id().to_string();
+
+    let mut tasks = Vec::new();
+    for i in 0..16i32 {
+        let h = handle.clone();
+        tasks.push(tokio::spawn(async move {
+            let code = i + 1; // 1..=16 — all distinct, all below the signal range
+            let execution = h
+                .exec(BoxCommand::new("sh").arg("-c").arg(format!("exit {code}")))
+                .await?;
+            let result = execution.wait().await?;
+            Ok::<(i32, i32), BoxliteError>((code, result.exit_code))
+        }));
+    }
+
+    let outcome =
+        tokio::time::timeout(Duration::from_secs(120), futures::future::join_all(tasks)).await;
+    dump_guest_logs(&home.path, &box_id);
+
+    let results =
+        outcome.expect("TIMEOUT after 120s: 16 concurrent distinct-exit execs — likely deadlock");
+    for result in results {
+        let (want, got) = result.unwrap().unwrap();
+        assert_eq!(
+            got, want,
+            "concurrent exec `exit {want}` returned {got} — exit codes crossed under concurrency"
+        );
+    }
+
+    cleanup_concurrent_box(handle, runtime).await;
+}
+
 /// 3 rounds of 8 concurrent execs with 1s gap between rounds.
 ///
 /// Tests zygote recovery and reuse across bursts. The zygote process must

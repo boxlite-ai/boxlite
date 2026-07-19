@@ -67,36 +67,15 @@ pub(crate) enum BuildResult {
     Failed { error: String },
 }
 
-/// Process exit outcome from waitpid, serialized over IPC.
-///
-/// The zygote is the only process that can call waitpid on container
-/// processes (it's their parent via clone3). This enum carries the exit
-/// status back to the main process over the SEQPACKET socket.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub(crate) enum WaitResult {
-    /// Process called exit(code). Code 0 = success.
-    Exited { code: i32 },
-    /// Process was killed by signal (e.g., SIGKILL=9).
-    Signaled { signal: i32 },
-    /// Process is still running (WNOHANG returned StillAlive).
-    /// The caller should retry after a short delay.
-    StillAlive,
-    /// waitpid failed or returned unexpected status.
-    Failed { error: String },
-}
-
 /// Tagged IPC request from parent to zygote.
 ///
-/// Allows multiplexing build and wait operations on a single SEQPACKET socket.
+/// A single-variant enum today; the tag keeps the wire format stable for
+/// future request kinds (e.g. an init build) without a breaking change.
 /// The parent's Mutex ensures only one request is in-flight at a time.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 enum ZygoteRequest {
     /// Build a new container process. May include SCM_RIGHTS fds for stdio pipes.
     Build(BuildSpec),
-    /// Wait for a container process to exit and return its exit status.
-    /// The zygote must handle this because it's the parent of all container
-    /// processes (they were created by clone3() inside the zygote).
-    Wait { pid: i32 },
 }
 
 /// Tagged IPC response from zygote to parent, matched 1:1 with requests.
@@ -106,7 +85,6 @@ enum ZygoteRequest {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 enum ZygoteResponse {
     Build(BuildResult),
-    Wait(WaitResult),
 }
 
 impl Zygote {
@@ -157,32 +135,6 @@ impl Zygote {
             ZygoteResponse::Build(BuildResult::Failed { error }) => {
                 Err(BoxliteError::Internal(error))
             }
-            other => Err(BoxliteError::Internal(format!(
-                "expected Build response, got: {other:?}"
-            ))),
-        }
-    }
-
-    /// Wait for a container process to exit. Returns exit status.
-    ///
-    /// Container processes are direct children of the zygote (created by
-    /// clone3 inside build()). Only the zygote can waitpid on them — the
-    /// main process gets ECHILD because it's not the parent.
-    ///
-    /// This sends a Wait request over IPC to the zygote, which calls
-    /// waitpid(pid, 0) and returns the result.
-    ///
-    /// Blocks until the process exits. Call from spawn_blocking to avoid
-    /// blocking the tokio runtime.
-    pub fn wait(&self, pid: Pid) -> BoxliteResult<WaitResult> {
-        let sock = self.sock.lock().unwrap();
-        let fd = sock.as_raw_fd();
-        send_request(fd, &ZygoteRequest::Wait { pid: pid.as_raw() }, None)?;
-        match recv_response(fd)? {
-            ZygoteResponse::Wait(result) => Ok(result),
-            other => Err(BoxliteError::Internal(format!(
-                "expected Wait response, got: {other:?}"
-            ))),
         }
     }
 }
@@ -193,13 +145,12 @@ impl Zygote {
 
 /// Zygote main loop. Runs in the forked child, single-threaded, never returns.
 ///
-/// Handles two types of requests:
-/// - Build: create a container process via ContainerBuilder::build()
-/// - Wait: call waitpid on a container process and return its exit status
-///
-/// Both are serialized — one request at a time. This is safe because:
-/// - Build requests are fast (~ms, just clone3 + setup)
-/// - Wait requests return immediately for already-exited processes (zombies)
+/// Handles Build requests: create a container process via
+/// `ContainerBuilder::build()`. Requests are serialized — one at a time —
+/// which is safe because a build is fast (~ms: clone3 + setup). The zygote
+/// never waits on container processes: tenants are cloned `CLONE_PARENT`
+/// (`as_sibling`), so they reparent to guest main, which reaps them via its
+/// own SIGCHLD loop (see the `reaper` module).
 fn serve(sock: OwnedFd) -> ! {
     let fd = sock.as_raw_fd();
     std::mem::forget(sock); // Keep fd alive for the process lifetime
@@ -209,13 +160,6 @@ fn serve(sock: OwnedFd) -> ! {
             Ok((ZygoteRequest::Build(spec), fds)) => {
                 let result = do_build(spec, fds);
                 if let Err(e) = send_response(fd, &ZygoteResponse::Build(result)) {
-                    eprintln!("[zygote] send_response failed: {e}");
-                    std::process::exit(1);
-                }
-            }
-            Ok((ZygoteRequest::Wait { pid }, _)) => {
-                let result = do_wait(pid);
-                if let Err(e) = send_response(fd, &ZygoteResponse::Wait(result)) {
                     eprintln!("[zygote] send_response failed: {e}");
                     std::process::exit(1);
                 }
@@ -261,8 +205,8 @@ fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
             // TTY exec: hand youki a process.json with terminal=true (via
             // with_process) and detach=true, so it allocates the PTY, relays
             // the master fd over the console socket (received by ConsoleSocket),
-            // and returns the pid (the zygote reaps it via waitpid). The PTY
-            // path passes no stdio fds — youki wires the PTY slave instead.
+            // and returns the pid (guest main reaps it — see as_sibling below).
+            // The PTY path passes no stdio fds — youki wires the PTY slave instead.
             let env_vec: Vec<String> = spec.env.iter().map(|(k, v)| format!("{k}={v}")).collect();
             let cwd = spec.cwd.to_str().unwrap_or("/");
             let process =
@@ -277,6 +221,7 @@ fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
                 .map_err(|e| format!("write tty process.json: {e}"))?;
             let result = builder
                 .as_tenant()
+                .as_sibling(true) // reparent to guest main; see the non-TTY arm
                 .with_detach(true)
                 .with_process(Some(process_path.clone()))
                 .build()
@@ -288,6 +233,9 @@ fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
             // terminal=false, non-detached.
             builder
                 .as_tenant()
+                // CLONE_PARENT so the tenant reparents to guest main (not the
+                // zygote); guest main's reaper owns its exit. The zygote never waits.
+                .as_sibling(true)
                 .with_capabilities(capability_names())
                 .with_no_new_privs(false)
                 .with_detach(false)
@@ -338,30 +286,6 @@ fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
     }
 }
 
-/// Check if a container process has exited (non-blocking).
-///
-/// Called inside the zygote process (single-threaded). Uses WNOHANG so it
-/// returns immediately even if the process is still running. This prevents
-/// the zygote's Mutex from being held for the entire lifetime of long-running
-/// processes, which would block all other concurrent waits and builds.
-///
-/// Returns `StillAlive` if the process hasn't exited yet. The caller (main
-/// process) retries in a loop with short async sleeps between attempts.
-fn do_wait(pid: i32) -> WaitResult {
-    use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
-    match waitpid(Pid::from_raw(pid), Some(WaitPidFlag::WNOHANG)) {
-        Ok(WaitStatus::StillAlive) => WaitResult::StillAlive,
-        Ok(WaitStatus::Exited(_, code)) => WaitResult::Exited { code },
-        Ok(WaitStatus::Signaled(_, sig, _)) => WaitResult::Signaled { signal: sig as i32 },
-        Ok(other) => WaitResult::Failed {
-            error: format!("unexpected wait status: {other:?}"),
-        },
-        Err(e) => WaitResult::Failed {
-            error: format!("waitpid failed: {e}"),
-        },
-    }
-}
-
 // ============================================================================
 // IPC: SEQPACKET + SCM_RIGHTS
 // ============================================================================
@@ -373,8 +297,8 @@ const MAX_MSG_SIZE: usize = 1_048_576;
 
 /// Send a ZygoteRequest to the zygote, optionally with pipe fds via SCM_RIGHTS.
 ///
-/// Fds are only attached for Build requests (stdio pipes). Wait requests
-/// pass None for fds since no file descriptors need to cross the IPC boundary.
+/// Fds (stdio pipes) ride along with a non-TTY build; None otherwise — a TTY
+/// build passes its PTY over the console socket, not via SCM_RIGHTS.
 fn send_request(
     sock: RawFd,
     request: &ZygoteRequest,
@@ -407,7 +331,7 @@ fn send_request(
 /// Receive a ZygoteRequest from the parent, with optional pipe fds via SCM_RIGHTS.
 ///
 /// Returns the deserialized request and any SCM_RIGHTS fds that were attached.
-/// Build requests may include stdio pipe fds; Wait requests never have fds.
+/// A non-TTY build carries stdio pipe fds; other builds have none.
 fn recv_request(sock: RawFd) -> BoxliteResult<(ZygoteRequest, Option<[RawFd; 3]>)> {
     let mut buf = vec![0u8; MAX_MSG_SIZE];
     let mut cmsg_buf = nix::cmsg_space!([RawFd; 3]);
@@ -540,35 +464,6 @@ mod tests {
         assert_eq!(result, decoded);
     }
 
-    // --- WaitResult serde tests ---
-    // WaitResult crosses the IPC boundary; verify it survives JSON serialization.
-
-    #[test]
-    fn wait_result_exited_serde_roundtrip() {
-        let result = WaitResult::Exited { code: 42 };
-        let json = serde_json::to_vec(&result).unwrap();
-        let decoded: WaitResult = serde_json::from_slice(&json).unwrap();
-        assert_eq!(result, decoded);
-    }
-
-    #[test]
-    fn wait_result_signaled_serde_roundtrip() {
-        let result = WaitResult::Signaled { signal: 9 };
-        let json = serde_json::to_vec(&result).unwrap();
-        let decoded: WaitResult = serde_json::from_slice(&json).unwrap();
-        assert_eq!(result, decoded);
-    }
-
-    #[test]
-    fn wait_result_failed_serde_roundtrip() {
-        let result = WaitResult::Failed {
-            error: "waitpid failed: ECHILD".to_string(),
-        };
-        let json = serde_json::to_vec(&result).unwrap();
-        let decoded: WaitResult = serde_json::from_slice(&json).unwrap();
-        assert_eq!(result, decoded);
-    }
-
     // --- ZygoteRequest/ZygoteResponse tagged enum serde tests ---
     // Verify the enum discriminant survives JSON serialization.
 
@@ -578,21 +473,8 @@ mod tests {
         let json = serde_json::to_vec(&request).unwrap();
         let decoded: ZygoteRequest = serde_json::from_slice(&json).unwrap();
         // Verify it decoded as Build variant with matching spec
-        match decoded {
-            ZygoteRequest::Build(spec) => assert_eq!(spec, sample_spec()),
-            other => panic!("expected Build, got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn zygote_request_wait_serde_roundtrip() {
-        let request = ZygoteRequest::Wait { pid: 12345 };
-        let json = serde_json::to_vec(&request).unwrap();
-        let decoded: ZygoteRequest = serde_json::from_slice(&json).unwrap();
-        match decoded {
-            ZygoteRequest::Wait { pid } => assert_eq!(pid, 12345),
-            other => panic!("expected Wait, got: {other:?}"),
-        }
+        let ZygoteRequest::Build(spec) = decoded;
+        assert_eq!(spec, sample_spec());
     }
 
     #[test]
@@ -635,10 +517,8 @@ mod tests {
         send_request(fd_a, &ZygoteRequest::Build(spec.clone()), None).unwrap();
 
         let (received, fds) = recv_request(fd_b).unwrap();
-        match received {
-            ZygoteRequest::Build(recv_spec) => assert_eq!(spec, recv_spec),
-            other => panic!("expected Build request, got: {other:?}"),
-        }
+        let ZygoteRequest::Build(recv_spec) = received;
+        assert_eq!(spec, recv_spec);
         assert!(fds.is_none());
     }
 
@@ -664,10 +544,8 @@ mod tests {
         send_request(fd_a, &ZygoteRequest::Build(spec.clone()), Some(send_fds)).unwrap();
 
         let (received, recv_fds) = recv_request(fd_b).unwrap();
-        match received {
-            ZygoteRequest::Build(recv_spec) => assert_eq!(spec, recv_spec),
-            other => panic!("expected Build request, got: {other:?}"),
-        }
+        let ZygoteRequest::Build(recv_spec) = received;
+        assert_eq!(spec, recv_spec);
         let recv_fds = recv_fds.expect("should have received fds");
 
         // Verify fd passing: write through original, read through received
@@ -685,28 +563,6 @@ mod tests {
         write(recv_w1, b"test1").unwrap();
         let n = read(r1.as_raw_fd(), &mut buf).unwrap();
         assert_eq!(&buf[..n], b"test1");
-    }
-
-    #[test]
-    fn ipc_send_recv_wait_request() {
-        let (a, b) = socketpair(
-            AddressFamily::Unix,
-            SockType::SeqPacket,
-            None,
-            SockFlag::SOCK_CLOEXEC,
-        )
-        .unwrap();
-        let fd_a = a.as_raw_fd();
-        let fd_b = b.as_raw_fd();
-
-        send_request(fd_a, &ZygoteRequest::Wait { pid: 12345 }, None).unwrap();
-
-        let (received, fds) = recv_request(fd_b).unwrap();
-        match received {
-            ZygoteRequest::Wait { pid } => assert_eq!(pid, 12345),
-            other => panic!("expected Wait request, got: {other:?}"),
-        }
-        assert!(fds.is_none());
     }
 
     #[test]
@@ -758,50 +614,6 @@ mod tests {
     }
 
     #[test]
-    fn ipc_send_recv_wait_response_exited() {
-        let (a, b) = socketpair(
-            AddressFamily::Unix,
-            SockType::SeqPacket,
-            None,
-            SockFlag::SOCK_CLOEXEC,
-        )
-        .unwrap();
-        let fd_a = a.as_raw_fd();
-        let fd_b = b.as_raw_fd();
-
-        let response = ZygoteResponse::Wait(WaitResult::Exited { code: 42 });
-        send_response(fd_a, &response).unwrap();
-
-        let received = recv_response(fd_b).unwrap();
-        match received {
-            ZygoteResponse::Wait(WaitResult::Exited { code }) => assert_eq!(code, 42),
-            other => panic!("expected Wait(Exited) response, got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn ipc_send_recv_wait_response_signaled() {
-        let (a, b) = socketpair(
-            AddressFamily::Unix,
-            SockType::SeqPacket,
-            None,
-            SockFlag::SOCK_CLOEXEC,
-        )
-        .unwrap();
-        let fd_a = a.as_raw_fd();
-        let fd_b = b.as_raw_fd();
-
-        let response = ZygoteResponse::Wait(WaitResult::Signaled { signal: 9 });
-        send_response(fd_a, &response).unwrap();
-
-        let received = recv_response(fd_b).unwrap();
-        match received {
-            ZygoteResponse::Wait(WaitResult::Signaled { signal }) => assert_eq!(signal, 9),
-            other => panic!("expected Wait(Signaled) response, got: {other:?}"),
-        }
-    }
-
-    #[test]
     fn ipc_large_build_request() {
         let (a, b) = socketpair(
             AddressFamily::Unix,
@@ -833,10 +645,8 @@ mod tests {
 
         send_request(fd_a, &ZygoteRequest::Build(spec.clone()), None).unwrap();
         let (received, fds) = recv_request(fd_b).unwrap();
-        match received {
-            ZygoteRequest::Build(recv_spec) => assert_eq!(spec, recv_spec),
-            other => panic!("expected Build request, got: {other:?}"),
-        }
+        let ZygoteRequest::Build(recv_spec) = received;
+        assert_eq!(spec, recv_spec);
         assert!(fds.is_none());
     }
 
@@ -982,15 +792,10 @@ mod tests {
         let responder = thread::spawn(move || {
             for i in 0..4 {
                 let (request, _fds) = recv_request(child_fd).unwrap();
-                match request {
-                    ZygoteRequest::Build(spec) => {
-                        assert!(spec.container_id.starts_with("concurrent-"));
-                        let response =
-                            ZygoteResponse::Build(BuildResult::Spawned { pid: 1000 + i });
-                        send_response(child_fd, &response).unwrap();
-                    }
-                    other => panic!("expected Build request, got: {other:?}"),
-                }
+                let ZygoteRequest::Build(spec) = request;
+                assert!(spec.container_id.starts_with("concurrent-"));
+                let response = ZygoteResponse::Build(BuildResult::Spawned { pid: 1000 + i });
+                send_response(child_fd, &response).unwrap();
             }
             // SAFETY: We own this fd via mem::forget above
             unsafe { nix::libc::close(child_fd) };

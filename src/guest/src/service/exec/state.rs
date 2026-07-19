@@ -21,14 +21,6 @@ pub(crate) trait InitHealthCheck: Send + Sync {
     fn diagnose_exit(&mut self) -> String;
 }
 
-/// How to wait for the process: container processes are children of the
-/// zygote (only it can waitpid them), guest processes are waited directly.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum WaitVia {
-    Zygote,
-    Direct,
-}
-
 /// Inner state that requires synchronization.
 struct Inner {
     /// The process handle (owns pid, pty_controller, stdin, stdout, stderr)
@@ -41,8 +33,6 @@ struct Inner {
     /// Optional init health checker for the container this exec runs in.
     /// Used to detect container init death when exec gets SIGKILL.
     init_health: Option<Arc<Mutex<dyn InitHealthCheck>>>,
-    /// Wait mechanism for this process.
-    wait_via: WaitVia,
 }
 
 /// Execution state.
@@ -52,10 +42,10 @@ struct Inner {
 #[derive(Clone)]
 pub(crate) struct ExecutionState {
     inner: Arc<Mutex<Inner>>,
-    /// Cached exit status. The zygote reaps a pid exactly once — a second
-    /// concurrent waitpid would race the first and see ECHILD — so the
-    /// first waiter performs the wait and every other caller (concurrent
-    /// or later) awaits/reads the cached result.
+    /// Cached exit status. The reaper delivers each pid's exit exactly once,
+    /// so the first waiter records it here and every other caller (concurrent
+    /// or later) reads the cached result instead of registering a second
+    /// waiter that would never fire.
     exit: Arc<tokio::sync::OnceCell<crate::service::exec::exec_handle::ExitStatus>>,
 }
 
@@ -67,14 +57,13 @@ impl ExecutionState {
         }
     }
 
-    /// Create new execution state (guest process, waited directly).
+    /// Create new execution state for a guest-side process.
     pub(super) fn new(handle: ExecHandle) -> Self {
         Self::from_inner(Inner {
             handle: Some(handle),
             output_tasks: Vec::new(),
             timed_out: false,
             init_health: None,
-            wait_via: WaitVia::Direct,
         })
     }
 
@@ -91,24 +80,20 @@ impl ExecutionState {
             output_tasks: Vec::new(),
             timed_out: false,
             init_health: Some(init_health),
-            wait_via: WaitVia::Zygote,
         })
     }
 
     /// Create execution state for the container's init process itself.
     ///
-    /// Init is waited *directly*, not via the zygote: libcontainer spawns
-    /// init through an intermediate process (zygote → intermediate → init)
-    /// and the intermediate exits after handoff, so init reparents to
-    /// boxlite-guest (the VM's PID 1). The zygote was never its parent —
-    /// a zygote waitpid would return ECHILD immediately.
+    /// Like every session, init is waited via the guest-wide reaper: it
+    /// reparents to guest main (the boxlite-guest agent process), which owns
+    /// `waitpid(-1)`. See `wait_process`.
     pub(crate) fn new_init_session(handle: ExecHandle) -> Self {
         Self::from_inner(Inner {
             handle: Some(handle),
             output_tasks: Vec::new(),
             timed_out: false,
             init_health: None,
-            wait_via: WaitVia::Direct,
         })
     }
 
@@ -187,100 +172,36 @@ impl ExecutionState {
 
     /// Wait for process to exit.
     ///
-    /// Routes to the correct wait mechanism (`wait_via`), which is decided by
-    /// who actually parents the process — only a parent may reap it:
-    /// - Exec tenants → zygote IPC polling (the zygote forked them)
-    /// - Container init → direct waitpid: libcontainer's intermediate exits
-    ///   after handoff, so init reparents to the guest (PID 1), not the zygote
-    /// - Guest processes → direct waitpid
+    /// Every process we wait on — the container init and exec tenants alike —
+    /// reparents to guest main (tenants via `as_sibling`/`CLONE_PARENT`; init
+    /// the same way), so the guest-wide reaper owns `waitpid(-1)` for all of
+    /// them. We just ask it for this pid's exit.
     ///
-    /// Multi-waiter safe: the first caller performs the underlying wait and
-    /// the result is cached; concurrent and later callers get the cached
-    /// status instead of racing the reap (waitpid succeeds exactly once).
+    /// Multi-waiter safe: the first caller records the exit in `exit` and every
+    /// other caller (concurrent or later) reads the cached result; the reaper
+    /// delivers each pid's exit exactly once.
     pub async fn wait_process(
         &self,
     ) -> Result<crate::service::exec::exec_handle::ExitStatus, Status> {
-        let (pid, wait_via) = {
+        let pid = {
             let inner = self.inner.lock().await;
-            let pid = inner
+            inner
                 .handle
                 .as_ref()
                 .ok_or_else(|| Status::failed_precondition("Handle not available"))?
-                .pid();
-            (pid, inner.wait_via)
+                .pid()
         };
 
         self.exit
             .get_or_try_init(|| async move {
-                match wait_via {
-                    WaitVia::Zygote => Self::wait_via_zygote(pid).await,
-                    WaitVia::Direct => Self::wait_direct(pid).await,
-                }
+                Ok(crate::reaper::REAPER
+                    .get()
+                    .expect("reaper installed at startup")
+                    .wait(pid)
+                    .await)
             })
             .await
             .copied()
-    }
-
-    /// Wait for a container process via zygote WNOHANG polling.
-    ///
-    /// Container processes are children of the zygote (created by clone3).
-    /// Uses WNOHANG to avoid holding the zygote Mutex for the process lifetime.
-    /// Retries every 10ms until the process exits.
-    async fn wait_via_zygote(
-        pid: nix::unistd::Pid,
-    ) -> Result<crate::service::exec::exec_handle::ExitStatus, Status> {
-        use crate::container::zygote;
-        use crate::service::exec::exec_handle::ExitStatus;
-
-        loop {
-            let result = tokio::task::spawn_blocking(move || {
-                zygote::ZYGOTE.get().expect("zygote not started").wait(pid)
-            })
-            .await
-            .map_err(|e| Status::internal(format!("spawn_blocking failed: {e}")))?
-            .map_err(|e| Status::internal(format!("zygote wait failed: {e}")))?;
-
-            match result {
-                zygote::WaitResult::StillAlive => {
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                    continue;
-                }
-                zygote::WaitResult::Exited { code } => return Ok(ExitStatus::Code(code)),
-                zygote::WaitResult::Signaled { signal } => {
-                    return Ok(ExitStatus::Signal(
-                        nix::sys::signal::Signal::try_from(signal)
-                            .unwrap_or(nix::sys::signal::Signal::SIGKILL),
-                    ))
-                }
-                zygote::WaitResult::Failed { error } => {
-                    return Err(Status::internal(format!("wait failed: {error}")))
-                }
-            }
-        }
-    }
-
-    /// Wait for a guest process via direct waitpid.
-    ///
-    /// Guest processes are spawned by std::process::Command and are direct
-    /// children of this process. Blocking waitpid is fine here since it
-    /// doesn't hold any shared mutex.
-    async fn wait_direct(
-        pid: nix::unistd::Pid,
-    ) -> Result<crate::service::exec::exec_handle::ExitStatus, Status> {
-        use crate::service::exec::exec_handle::ExitStatus;
-        use nix::sys::wait::{waitpid, WaitStatus};
-
-        #[allow(clippy::result_large_err)] // Status is the standard error type in this module
-        tokio::task::spawn_blocking(move || match waitpid(pid, None) {
-            Ok(WaitStatus::Exited(_, code)) => Ok(ExitStatus::Code(code)),
-            Ok(WaitStatus::Signaled(_, signal, _)) => Ok(ExitStatus::Signal(signal)),
-            Ok(other) => Err(Status::internal(format!(
-                "unexpected wait status: {other:?}"
-            ))),
-            Err(e) => Err(Status::internal(format!("waitpid({pid}) failed: {e}"))),
-        })
-        .await
-        .map_err(|e| Status::internal(format!("spawn_blocking failed: {e}")))?
     }
 
     /// Attach to execution output.
