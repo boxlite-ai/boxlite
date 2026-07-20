@@ -42,29 +42,31 @@ struct Inner {
 #[derive(Clone)]
 pub(crate) struct ExecutionState {
     inner: Arc<Mutex<Inner>>,
-    /// Cached exit status. The reaper delivers each pid's exit exactly once,
-    /// so the first waiter records it here and every other caller (concurrent
-    /// or later) reads the cached result instead of registering a second
-    /// waiter that would never fire.
-    exit: Arc<tokio::sync::OnceCell<crate::service::exec::exec_handle::ExitStatus>>,
+    /// This execution's exit, claimed from the reaper at spawn. Level-triggered,
+    /// so every caller — concurrent or long after the fact — reads the same
+    /// status, and one that arrives before the process exits simply waits.
+    exit: crate::reaper::ExitSlot,
 }
 
 impl ExecutionState {
-    fn from_inner(inner: Inner) -> Self {
+    fn from_inner(inner: Inner, exit: crate::reaper::ExitSlot) -> Self {
         Self {
             inner: Arc::new(Mutex::new(inner)),
-            exit: Arc::new(tokio::sync::OnceCell::new()),
+            exit,
         }
     }
 
     /// Create new execution state for a guest-side process.
-    pub(super) fn new(handle: ExecHandle) -> Self {
-        Self::from_inner(Inner {
-            handle: Some(handle),
-            output_tasks: Vec::new(),
-            timed_out: false,
-            init_health: None,
-        })
+    pub(super) fn new(handle: ExecHandle, exit: crate::reaper::ExitSlot) -> Self {
+        Self::from_inner(
+            Inner {
+                handle: Some(handle),
+                output_tasks: Vec::new(),
+                timed_out: false,
+                init_health: None,
+            },
+            exit,
+        )
     }
 
     /// Create execution state with an init health checker.
@@ -74,13 +76,17 @@ impl ExecutionState {
     pub(super) fn new_with_init_health(
         handle: ExecHandle,
         init_health: Arc<Mutex<dyn InitHealthCheck>>,
+        exit: crate::reaper::ExitSlot,
     ) -> Self {
-        Self::from_inner(Inner {
-            handle: Some(handle),
-            output_tasks: Vec::new(),
-            timed_out: false,
-            init_health: Some(init_health),
-        })
+        Self::from_inner(
+            Inner {
+                handle: Some(handle),
+                output_tasks: Vec::new(),
+                timed_out: false,
+                init_health: Some(init_health),
+            },
+            exit,
+        )
     }
 
     /// Create execution state for the container's init process itself.
@@ -88,13 +94,16 @@ impl ExecutionState {
     /// Like every session, init is waited via the guest-wide reaper: it
     /// reparents to guest main (the boxlite-guest agent process), which owns
     /// `waitpid(-1)`. See `wait_process`.
-    pub(crate) fn new_init_session(handle: ExecHandle) -> Self {
-        Self::from_inner(Inner {
-            handle: Some(handle),
-            output_tasks: Vec::new(),
-            timed_out: false,
-            init_health: None,
-        })
+    pub(crate) fn new_init_session(handle: ExecHandle, exit: crate::reaper::ExitSlot) -> Self {
+        Self::from_inner(
+            Inner {
+                handle: Some(handle),
+                output_tasks: Vec::new(),
+                timed_out: false,
+                init_health: None,
+            },
+            exit,
+        )
     }
 
     /// Check if the container init process died.
@@ -177,31 +186,10 @@ impl ExecutionState {
     /// the same way), so the guest-wide reaper owns `waitpid(-1)` for all of
     /// them. We just ask it for this pid's exit.
     ///
-    /// Multi-waiter safe: the first caller records the exit in `exit` and every
-    /// other caller (concurrent or later) reads the cached result; the reaper
-    /// delivers each pid's exit exactly once.
-    pub async fn wait_process(
-        &self,
-    ) -> Result<crate::service::exec::exec_handle::ExitStatus, Status> {
-        let pid = {
-            let inner = self.inner.lock().await;
-            inner
-                .handle
-                .as_ref()
-                .ok_or_else(|| Status::failed_precondition("Handle not available"))?
-                .pid()
-        };
-
-        self.exit
-            .get_or_try_init(|| async move {
-                Ok(crate::reaper::REAPER
-                    .get()
-                    .expect("reaper installed at startup")
-                    .wait(pid)
-                    .await)
-            })
-            .await
-            .copied()
+    /// Multi-waiter safe, and repeatable: the slot is level-triggered, so
+    /// concurrent callers and any number of later ones all read the same status.
+    pub async fn wait_process(&self) -> crate::service::exec::exec_handle::ExitStatus {
+        self.exit.get().await
     }
 
     /// Attach to execution output.

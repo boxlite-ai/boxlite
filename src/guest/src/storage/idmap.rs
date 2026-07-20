@@ -210,9 +210,12 @@ fn create_userns(uid_mappings: &[IdMapping], gid_mappings: &[IdMapping]) -> io::
     // reaper's `waitpid(-1)` could sweep the zombie and free the pid, leaving
     // our `kill`/`waitpid` aimed at whatever process inherits that number next
     // — which for a recycled tenant pid means swallowing its exit and stranding
-    // the waiter. See `reaper::reap_fence`. The hold spans the pipe read below,
-    // which blocks the sweep for its duration — bounded, because dropping our
-    // own write end first turns a dead child into EOF instead of a stall.
+    // the waiter. See `reaper::reap_fence`. The hold spans the pipe read and
+    // the /proc writes below, delaying the sweep for their duration: a child
+    // that dies without writing yields EOF, since we drop our own write end
+    // first, but one that hangs before writing would stall exit delivery for
+    // the whole guest — acceptable only because it does nothing but unshare
+    // and write.
     let _fence = crate::reaper::reap_fence();
 
     // Pipe for child→parent synchronization

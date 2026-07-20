@@ -138,7 +138,7 @@ impl Execution for GuestServer {
             .ok_or_else(|| Status::not_found(format!("Execution not found: {}", exec_id)))?;
 
         // Wait for process to exit
-        let exit_status = state.wait_process().await?;
+        let exit_status = state.wait_process().await;
 
         let (exit_code, signal, error_message) = match exit_status {
             ExitStatus::Code(code) => {
@@ -304,13 +304,13 @@ async fn spawn_execution(
 
     let pid = child.pid().as_raw() as u32;
 
-    // Claim the pid with the reaper. A detached exec sends no Wait until its
-    // caller chooses to, so an exit arriving with no waiter must be held rather
-    // than aged out as an ownerless stray.
-    crate::reaper::REAPER
+    // Claim this pid's exit slot. A detached exec sends no Wait until its caller
+    // chooses to, so the slot must exist from the spawn rather than from the
+    // wait, or the exit would age out as an ownerless stray in between.
+    let exit = crate::reaper::REAPER
         .get()
         .expect("reaper installed at startup")
-        .expect_waiter(child.pid(), spawned_at)
+        .register(child.pid(), spawned_at)
         .await;
 
     // Step 2: Create execution state and register
@@ -318,9 +318,9 @@ async fn spawn_execution(
     let state = match container_ref {
         Some(container) => {
             let health: std::sync::Arc<tokio::sync::Mutex<dyn InitHealthCheck>> = container;
-            state::ExecutionState::new_with_init_health(child, health)
+            state::ExecutionState::new_with_init_health(child, health, exit)
         }
-        None => state::ExecutionState::new(child),
+        None => state::ExecutionState::new(child, exit),
     };
     server
         .registry

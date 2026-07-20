@@ -320,18 +320,19 @@ impl ContainerService for GuestServer {
                 // container.
                 let init_state = match container.take_init_exec_handle() {
                     Ok(Some(handle)) => {
-                        // Claim init's pid so its exit is held until the watcher
-                        // asks. Init is created but not yet started here — it
-                        // blocks on libcontainer's exec fifo — so it cannot have
-                        // exited, and `now` is a sound cutoff: anything already
-                        // cached under this pid is a recycled-pid leftover.
-                        crate::reaper::REAPER
+                        // Claim init's exit slot before the watcher asks. Init is
+                        // created but not yet started here — it blocks on
+                        // libcontainer's exec fifo — so it cannot have exited,
+                        // and `now` is a sound cutoff: any slot already under
+                        // this pid is a recycled-pid leftover.
+                        let exit = crate::reaper::REAPER
                             .get()
                             .expect("reaper installed at startup")
-                            .expect_waiter(handle.pid(), std::time::Instant::now())
+                            .register(handle.pid(), std::time::Instant::now())
                             .await;
-                        let state =
-                            crate::service::exec::state::ExecutionState::new_init_session(handle);
+                        let state = crate::service::exec::state::ExecutionState::new_init_session(
+                            handle, exit,
+                        );
                         self.registry
                             .register(init_execution_id.clone(), state.clone())
                             .await;
@@ -368,10 +369,9 @@ impl ContainerService for GuestServer {
                 );
 
                 // Follow init's lifecycle (docker semantics: the box stops
-                // when init exits). The watcher is the first waiter — the
-                // exit status is cached in ExecutionState, so a concurrent
-                // host Wait RPC observes the same result instead of racing
-                // the reap.
+                // when init exits). The watcher is just one reader of init's
+                // exit slot, so a concurrent host Wait RPC observes the same
+                // status instead of racing the reap.
                 {
                     let state = init_state;
                     let registry = self.registry.clone();
@@ -380,13 +380,7 @@ impl ContainerService for GuestServer {
                     let cid = container_id.clone();
                     let watcher = tokio::spawn(async move {
                         use crate::service::exec::exec_handle::ExitStatus;
-                        let status = match state.wait_process().await {
-                            Ok(s) => s,
-                            Err(e) => {
-                                warn!(container_id = %cid, error = %e, "init wait failed");
-                                return;
-                            }
-                        };
+                        let status = state.wait_process().await;
                         // Docker exit-code convention: signal death = 128+n.
                         // The true status is logged, not stored — the code is
                         // what every reader consumes.
