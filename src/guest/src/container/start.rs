@@ -186,6 +186,8 @@ pub(crate) fn create_container(
             ))
         })?;
 
+    save_init_process_identity(container_id, state_root)?;
+
     tracing::info!(container_id, "Created OCI container");
     Ok(())
 }
@@ -229,6 +231,8 @@ pub(crate) fn create_container_with_stdio(
                 e
             ))
         })?;
+
+    save_init_process_identity(container_id, state_root)?;
 
     tracing::info!(container_id, "Created OCI container with custom stdio");
     Ok(())
@@ -295,7 +299,7 @@ pub(crate) fn load_container_status(
     let status = container.status();
     if matches!(status, ContainerStatus::Running) {
         match container.pid() {
-            Some(pid) if init_process_is_alive(pid) => {}
+            Some(pid) if init_process_is_alive(pid, container_state_path) => {}
             Some(pid) => {
                 tracing::warn!(
                     container_state_path = %container_state_path.display(),
@@ -317,31 +321,107 @@ pub(crate) fn load_container_status(
     Ok(status)
 }
 
+fn save_init_process_identity(container_id: &str, state_root: &Path) -> BoxliteResult<()> {
+    let container_state_path = state_root.join(container_id);
+    let container = LibContainer::load(container_state_path.clone()).map_err(|e| {
+        BoxliteError::Internal(format!(
+            "Failed to load container {} from {}: {}",
+            container_id,
+            container_state_path.display(),
+            e
+        ))
+    })?;
+
+    let pid = container.pid().ok_or_else(|| {
+        BoxliteError::Internal(format!(
+            "Container {} was created without an init pid",
+            container_id
+        ))
+    })?;
+
+    save_init_pid_record(&container_state_path, pid)
+}
+
 #[cfg(target_os = "linux")]
-fn init_process_is_alive(pid: nix::unistd::Pid) -> bool {
+fn save_init_pid_record(container_state_path: &Path, pid: nix::unistd::Pid) -> BoxliteResult<()> {
+    let start_time = process_start_time(pid).ok_or_else(|| {
+        BoxliteError::Internal(format!(
+            "Failed to read start time for container init pid {}",
+            pid.as_raw()
+        ))
+    })?;
+    fs::write(
+        init_pid_record_path(container_state_path),
+        format!("{}\n{}\n", pid.as_raw(), start_time),
+    )
+    .map_err(|e| BoxliteError::Internal(format!("Failed to write init pid record: {}", e)))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn save_init_pid_record(_container_state_path: &Path, _pid: nix::unistd::Pid) -> BoxliteResult<()> {
+    Ok(())
+}
+
+fn init_pid_record_path(container_state_path: &Path) -> PathBuf {
+    container_state_path.join("init.pid")
+}
+
+#[cfg(target_os = "linux")]
+fn init_process_is_alive(pid: nix::unistd::Pid, container_state_path: &Path) -> bool {
+    use procfs::process::{ProcState, Process};
+
     let raw_pid = pid.as_raw();
     if raw_pid <= 0 {
         return false;
     }
 
-    if unsafe { nix::libc::kill(raw_pid, 0) } != 0 {
+    let Ok(process) = Process::new(raw_pid) else {
+        return false;
+    };
+    let Ok(stat) = process.stat() else {
+        return false;
+    };
+
+    if matches!(stat.state(), Ok(ProcState::Zombie | ProcState::Dead)) {
         return false;
     }
 
-    let status_path = format!("/proc/{raw_pid}/status");
-    let Ok(status) = std::fs::read_to_string(status_path) else {
+    let Some(record) = read_init_pid_record(container_state_path) else {
         return true;
     };
+    if record != (raw_pid, stat.starttime) {
+        return false;
+    }
 
-    status.lines().find_map(|line| {
-        line.strip_prefix("State:")
-            .and_then(|state| state.trim_start().chars().next())
-    }) != Some('Z')
+    true
 }
 
 #[cfg(not(target_os = "linux"))]
-fn init_process_is_alive(_pid: nix::unistd::Pid) -> bool {
+fn init_process_is_alive(_pid: nix::unistd::Pid, _container_state_path: &Path) -> bool {
     true
+}
+
+#[cfg(target_os = "linux")]
+fn read_init_pid_record(container_state_path: &Path) -> Option<(i32, u64)> {
+    let raw = fs::read_to_string(init_pid_record_path(container_state_path)).ok()?;
+    let mut lines = raw.lines();
+    let pid = lines.next()?.trim().parse().ok()?;
+    let start_time = lines.next()?.trim().parse().ok()?;
+    Some((pid, start_time))
+}
+
+#[cfg(target_os = "linux")]
+fn process_start_time(pid: nix::unistd::Pid) -> Option<u64> {
+    let raw_pid = pid.as_raw();
+    if raw_pid <= 0 {
+        return None;
+    }
+
+    procfs::process::Process::new(raw_pid)
+        .ok()?
+        .stat()
+        .ok()
+        .map(|stat| stat.starttime)
 }
 
 #[cfg(test)]
@@ -390,6 +470,37 @@ mod tests {
 
         assert_eq!(status, ContainerStatus::Stopped);
         child.wait().expect("reap child");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn load_container_status_treats_unrelated_live_pid_as_stopped() {
+        let dir = tempfile::TempDir::new().expect("create temp dir");
+        let mut container = LibContainer::new(
+            "test-container",
+            ContainerStatus::Running,
+            Some(i32::try_from(std::process::id()).expect("current pid fits in i32")),
+            dir.path(),
+            dir.path(),
+        )
+        .expect("create libcontainer state");
+        container
+            .set_status(ContainerStatus::Created)
+            .set_status(ContainerStatus::Running)
+            .save()
+            .expect("save libcontainer state");
+        let pid =
+            nix::unistd::Pid::from_raw(i32::try_from(std::process::id()).expect("pid fits i32"));
+        let start_time = process_start_time(pid).expect("read current process start time");
+        fs::write(
+            init_pid_record_path(dir.path()),
+            format!("{}\n{}\n", pid.as_raw(), start_time + 1),
+        )
+        .expect("write mismatched init pid record");
+
+        let status = load_container_status(dir.path()).expect("load container status");
+
+        assert_eq!(status, ContainerStatus::Stopped);
     }
 
     #[cfg(target_os = "linux")]
