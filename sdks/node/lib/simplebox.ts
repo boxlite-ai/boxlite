@@ -702,16 +702,6 @@ export class SimpleBox {
   }
 
   /**
-   * Set the hosted REST idle auto-stop interval in minutes. Pass `0` to
-   * disable it. Non-integer and negative values are rejected.
-   * Local runtimes report an unsupported-operation error.
-   */
-  async setAutoStopInterval(interval: number): Promise<void> {
-    const box = await this._ensureBox();
-    await box.setAutoStopInterval(interval);
-  }
-
-  /**
    * Implement async disposable pattern (TypeScript 5.2+).
    *
    * Allows using `await using` syntax for automatic cleanup:

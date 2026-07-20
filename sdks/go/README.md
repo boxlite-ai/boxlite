@@ -62,10 +62,6 @@ func main() {
 	if err := box.Start(ctx); err != nil {
 		log.Fatal(err)
 	}
-	if err := box.SetAutoStopInterval(ctx, 15); err != nil {
-		log.Fatal(err)
-	}
-
 	fmt.Println("Box started successfully!")
 }
 ```

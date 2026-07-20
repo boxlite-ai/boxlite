@@ -228,9 +228,6 @@ int main() {
     }
     boxlite_options_free(opts);
 
-    // The persisted policy can also be changed asynchronously after creation:
-    // boxlite_set_auto_stop_interval(box, 15, interval_callback, NULL, &error);
-
     // Start command with streaming output, then wait for completion
     int exit_code = 0;
     const char* args[] = {"-la", "/"};

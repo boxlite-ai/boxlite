@@ -120,26 +120,6 @@ impl PyBox {
         })
     }
 
-    /// Set the hosted REST auto-stop interval in minutes.
-    ///
-    /// `0` disables auto-stop. Local runtimes return an unsupported-operation
-    /// error because they do not run the hosted control-plane scheduler.
-    fn set_auto_stop_interval<'a>(
-        &self,
-        py: Python<'a>,
-        interval: u32,
-    ) -> PyResult<Bound<'a, PyAny>> {
-        let handle = Arc::clone(&self.handle);
-
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            handle
-                .set_auto_stop_interval(interval)
-                .await
-                .map_err(map_err)?;
-            Ok(())
-        })
-    }
-
     fn metrics<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
         let handle = Arc::clone(&self.handle);
 

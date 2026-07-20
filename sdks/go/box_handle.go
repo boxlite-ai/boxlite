@@ -91,40 +91,6 @@ func (b *Box) Stop(ctx context.Context) error {
 	}
 }
 
-// SetAutoStopInterval sets the hosted REST idle auto-stop interval in
-// minutes. Passing 0 disables auto-stop. Local runtimes return an
-// unsupported-operation error.
-func (b *Box) SetAutoStopInterval(ctx context.Context, interval uint32) error {
-	b.runtime.ensureDrainRunning()
-
-	ch := make(chan error, 1)
-	h := registerHandleForDispatch(cgo.NewHandle(ch))
-
-	var cerr C.CBoxliteError
-	code := C.boxlite_set_auto_stop_interval(
-		b.handle,
-		C.uint32_t(interval),
-		C.cbSetAutoStopInterval(),
-		handleToPtr(h),
-		&cerr,
-	)
-	if code != C.Ok {
-		deleteHandleForDispatch(h)
-		return freeError(&cerr)
-	}
-
-	select {
-	case err := <-ch:
-		return err
-	case <-ctx.Done():
-		abandonAsyncErr(ch, h, b.runtime.closing)
-		return ctx.Err()
-	case <-b.runtime.closing:
-		abandonAsyncErr(ch, h, b.runtime.closing)
-		return ErrRuntimeClosed
-	}
-}
-
 // Close releases the box handle. The box itself continues to exist in the runtime.
 func (b *Box) Close() error {
 	if b.handle != nil {

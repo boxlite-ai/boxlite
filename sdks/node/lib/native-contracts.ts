@@ -284,8 +284,6 @@ export interface JsBox {
   export(dest: string, options?: JsExportOptions | null): Promise<string>;
   start(): Promise<void>;
   stop(): Promise<void>;
-  /** Set a non-negative integer interval in minutes; 0 disables auto-stop. */
-  setAutoStopInterval(interval: number): Promise<void>;
   metrics(): Promise<JsBoxMetrics>;
   copyIn(
     hostPath: string,

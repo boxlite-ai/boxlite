@@ -8,7 +8,6 @@ use crate::copy::{JsCopyOptions, into_copy_options};
 use crate::exec::JsExecution;
 use crate::info::JsBoxInfo;
 use crate::metrics::JsBoxMetrics;
-use crate::options::parse_auto_stop_interval;
 use crate::snapshot_options::{JsCloneOptions, JsExportOptions};
 use crate::snapshots::JsSnapshotHandle;
 use crate::util::map_err;
@@ -148,16 +147,6 @@ impl JsBox {
     #[napi]
     pub async fn stop(&self) -> Result<()> {
         self.handle.stop().await.map_err(map_err)
-    }
-
-    /// Set the idle auto-stop interval in minutes. `0` disables auto-stop.
-    #[napi(js_name = "setAutoStopInterval")]
-    pub async fn set_auto_stop_interval(&self, interval: f64) -> Result<()> {
-        let interval = parse_auto_stop_interval(interval).map_err(map_err)?;
-        self.handle
-            .set_auto_stop_interval(interval)
-            .await
-            .map_err(map_err)
     }
 
     /// Get box metrics.

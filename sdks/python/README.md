@@ -188,8 +188,6 @@ box = await rt.create(
     name="short-lived",
 )
 
-# The policy can also be changed after creation.
-await box.set_auto_stop_interval(15)
 ```
 
 `isinstance(ApiKeyCredential(k), Credential)` is `True` (registered as

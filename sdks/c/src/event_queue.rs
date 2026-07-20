@@ -96,11 +96,6 @@ pub(crate) type CBoxStartBoxFn = extern "C" fn(*mut crate::CBoxliteError, *mut c
 pub type CBoxStopBoxCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxStopBoxFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
 
-/// Box auto-stop interval update completion. The callback shape matches a
-/// lifecycle operation because the setter only reports success or failure.
-pub type CBoxSetAutoStopIntervalCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
-pub(crate) type CBoxSetAutoStopIntervalFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
-
 /// Box attach (get) completion.
 pub type CBoxGetBoxCb =
     Option<extern "C" fn(*mut crate::CBoxHandle, *mut crate::CBoxliteError, *mut c_void)>;
@@ -301,11 +296,6 @@ pub enum RuntimeEvent {
     },
     StopBox {
         cb: CBoxStopBoxFn,
-        user_data: usize,
-        result: Result<(), BoxliteError>,
-    },
-    SetAutoStopInterval {
-        cb: CBoxSetAutoStopIntervalFn,
         user_data: usize,
         result: Result<(), BoxliteError>,
     },

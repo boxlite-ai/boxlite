@@ -19,7 +19,7 @@ use boxlite::litebox::LiteBox;
 use crate::error::{BoxliteErrorCode, FFIError, null_pointer_error, write_error};
 use crate::event_queue::{
     CBoxCreateBoxCb, CBoxGetBoxCb, CBoxGetOrCreateBoxCb, CBoxRemoveBoxCb,
-    CBoxSetAutoStopIntervalCb, CBoxStartBoxCb, CBoxStopBoxCb, EventQueue, RuntimeEvent, push_event,
+    CBoxStartBoxCb, CBoxStopBoxCb, EventQueue, RuntimeEvent, push_event,
 };
 use crate::options::OptionsHandle;
 use crate::runtime::RuntimeHandle;
@@ -75,18 +75,6 @@ pub unsafe extern "C" fn boxlite_stop_box(
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
     stop_box(handle, cb, user_data, out_error)
-}
-
-/// Set the idle auto-stop interval in minutes. Passing 0 disables auto-stop.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_set_auto_stop_interval(
-    handle: *mut CBoxHandle,
-    interval: u32,
-    cb: CBoxSetAutoStopIntervalCb,
-    user_data: *mut c_void,
-    out_error: *mut CBoxliteError,
-) -> BoxliteErrorCode {
-    set_auto_stop_interval(handle, interval, cb, user_data, out_error)
 }
 
 #[unsafe(no_mangle)]
@@ -270,42 +258,6 @@ unsafe fn stop_box(
             push_event(
                 &queue,
                 RuntimeEvent::StopBox {
-                    cb,
-                    user_data: user_data_addr,
-                    result,
-                },
-            )
-            .await;
-        });
-
-        BoxliteErrorCode::Ok
-    }
-}
-
-unsafe fn set_auto_stop_interval(
-    handle: *mut BoxHandle,
-    interval: u32,
-    cb: CBoxSetAutoStopIntervalCb,
-    user_data: *mut c_void,
-    out_error: *mut FFIError,
-) -> BoxliteErrorCode {
-    unsafe {
-        if handle.is_null() {
-            write_error(out_error, null_pointer_error("handle"));
-            return BoxliteErrorCode::InvalidArgument;
-        }
-        let cb = crate::unwrap_cb_or_return!(cb, out_error);
-
-        let handle_ref = &*handle;
-        let lite = handle_ref.handle.clone();
-        let queue = handle_ref.queue.clone();
-        let user_data_addr = user_data as usize;
-
-        handle_ref.tokio_rt.spawn(async move {
-            let result = lite.set_auto_stop_interval(interval).await;
-            push_event(
-                &queue,
-                RuntimeEvent::SetAutoStopInterval {
                     cb,
                     user_data: user_data_addr,
                     result,

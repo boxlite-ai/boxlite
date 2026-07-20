@@ -141,10 +141,6 @@ typedef void (*CBoxGetOrCreateBoxCb)(CBoxHandle*, bool, CBoxliteError*, void*);
 // Box stop completion.
 typedef void (*CBoxStopBoxCb)(CBoxliteError*, void*);
 
-// Box auto-stop interval update completion. The callback shape matches a
-// lifecycle operation because the setter only reports success or failure.
-typedef void (*CBoxSetAutoStopIntervalCb)(CBoxliteError*, void*);
-
 // Box attach (get) completion.
 typedef void (*CBoxGetBoxCb)(CBoxHandle*, CBoxliteError*, void*);
 
@@ -366,13 +362,6 @@ enum BoxliteErrorCode boxlite_stop_box(CBoxHandle *handle,
                                        CBoxStopBoxCb cb,
                                        void *user_data,
                                        CBoxliteError *out_error);
-
-// Set the idle auto-stop interval in minutes. Passing 0 disables auto-stop.
-enum BoxliteErrorCode boxlite_set_auto_stop_interval(CBoxHandle *handle,
-                                                     uint32_t interval,
-                                                     CBoxSetAutoStopIntervalCb cb,
-                                                     void *user_data,
-                                                     CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_get(CBoxliteRuntime *runtime,
                                   const char *id_or_name,

@@ -203,9 +203,6 @@ const box = new SimpleBox({
 const result = await box.exec('ls', '-la', '/');
 console.log(result.exitCode, result.stdout, result.stderr);
 
-// Update the persisted hosted REST idle auto-stop policy while the box exists.
-await box.setAutoStopInterval(15);
-
 // Execute with options (cwd, user, timeout)
 const pwdResult = await box.exec('pwd', [], undefined, {
   cwd: '/tmp',

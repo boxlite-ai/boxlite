@@ -159,11 +159,6 @@ func goBoxliteOnStopBox(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	deliverUnitResult(userData, errPtr)
 }
 
-//export goBoxliteOnSetAutoStopInterval
-func goBoxliteOnSetAutoStopInterval(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
-	deliverUnitResult(userData, errPtr)
-}
-
 //export goBoxliteOnRemoveBox
 func goBoxliteOnRemoveBox(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	deliverUnitResult(userData, errPtr)
