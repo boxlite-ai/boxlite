@@ -2179,7 +2179,6 @@ paths:
         name: interval
         required: true
         schema:
-          format: int32
           type: integer
         style: simple
       responses:
@@ -6475,7 +6474,7 @@ components:
         autoStopInterval:
           description: Auto-stop interval in minutes (0 means disabled)
           example: 30
-          format: int32
+          maximum: 2147483647
           type: integer
         autoDeleteInterval:
           description: "Auto-delete interval in minutes (negative value means disabled,\
