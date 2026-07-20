@@ -310,7 +310,7 @@ pub struct BoxInfo {
     /// Allocated memory in MiB.
     pub memory_mib: u32,
 
-    /// Hosted REST auto-stop interval in seconds. `None` means the backend
+    /// Hosted REST auto-stop interval in minutes. `None` means the backend
     /// did not provide lifecycle policy metadata (for example, local mode).
     pub auto_stop_interval: Option<u32>,
 

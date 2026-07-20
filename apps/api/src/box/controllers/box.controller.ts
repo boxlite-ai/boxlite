@@ -510,7 +510,7 @@ export class BoxController {
   })
   @ApiParam({
     name: 'interval',
-    description: 'Auto-stop interval in non-negative integer seconds (0 to disable)',
+    description: 'Auto-stop interval in minutes (0 to disable)',
     type: 'integer',
   })
   @ApiResponse({

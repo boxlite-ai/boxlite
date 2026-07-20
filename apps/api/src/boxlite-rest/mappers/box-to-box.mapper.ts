@@ -20,7 +20,7 @@ export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
     image: box.image || '',
     cpus: box.cpu || 1,
     memory_mib: (box.memory || 1) * 1024,
-    auto_stop_interval: box.autoStopInterval ?? 900,
+    auto_stop_interval: box.autoStopInterval ?? 15,
     labels: box.labels || {},
   }
 }

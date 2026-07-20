@@ -120,7 +120,7 @@ impl PyBox {
         })
     }
 
-    /// Set the hosted REST auto-stop interval in seconds.
+    /// Set the hosted REST auto-stop interval in minutes.
     ///
     /// `0` disables auto-stop. Local runtimes return an unsupported-operation
     /// error because they do not run the hosted control-plane scheduler.

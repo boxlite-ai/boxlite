@@ -59,7 +59,7 @@ type Box struct {
 	ErrorReason *string `json:"errorReason,omitempty"`
 	// Whether the box error is recoverable.
 	Recoverable *bool `json:"recoverable,omitempty"`
-	// Auto-stop interval in non-negative integer seconds (0 means disabled)
+	// Auto-stop interval in minutes (0 means disabled)
 	AutoStopInterval *int32 `json:"autoStopInterval,omitempty"`
 	// Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping)
 	AutoDeleteInterval *float32 `json:"autoDeleteInterval,omitempty"`
@@ -1092,4 +1092,3 @@ func (v *NullableBox) UnmarshalJSON(src []byte) error {
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }
-

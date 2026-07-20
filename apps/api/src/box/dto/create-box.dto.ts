@@ -8,7 +8,7 @@ import { IsEnum, IsObject, IsOptional, IsString, IsNumber, IsBoolean, IsArray, I
 import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxVolume } from './box.dto'
-import { MAX_AUTO_STOP_INTERVAL_SECONDS } from '../constants/auto-stop.constants'
+import { MAX_AUTO_STOP_INTERVAL_MINUTES } from '../constants/auto-stop.constants'
 
 @ApiSchema({ name: 'CreateBox' })
 export class CreateBoxDto {
@@ -134,14 +134,13 @@ export class CreateBoxDto {
   disk?: number
 
   @ApiPropertyOptional({
-    description: 'Auto-stop interval in non-negative integer seconds (0 means disabled)',
-    example: 1800,
+    description: 'Auto-stop interval in minutes (0 means disabled)',
     type: 'integer',
   })
   @IsOptional()
   @IsInt()
   @Min(0)
-  @Max(MAX_AUTO_STOP_INTERVAL_SECONDS)
+  @Max(MAX_AUTO_STOP_INTERVAL_MINUTES)
   autoStopInterval?: number
 
   @ApiPropertyOptional({

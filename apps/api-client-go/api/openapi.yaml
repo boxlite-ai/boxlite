@@ -2173,7 +2173,7 @@ paths:
         schema:
           type: string
         style: simple
-      - description: Auto-stop interval in non-negative integer seconds (0 to disable)
+      - description: Auto-stop interval in minutes (0 to disable)
         explode: false
         in: path
         name: interval
@@ -6371,7 +6371,7 @@ components:
         desiredState: destroyed
         errorReason: The box is not running
         recoverable: true
-        autoStopInterval: 1800
+        autoStopInterval: 30
         autoDeleteInterval: 30
         volumes:
         - volumeId: volume123
@@ -6473,8 +6473,8 @@ components:
           example: true
           type: boolean
         autoStopInterval:
-          description: Auto-stop interval in non-negative integer seconds (0 means disabled)
-          example: 1800
+          description: Auto-stop interval in minutes (0 means disabled)
+          example: 30
           format: int32
           type: integer
         autoDeleteInterval:
@@ -6556,7 +6556,7 @@ components:
           desiredState: destroyed
           errorReason: The box is not running
           recoverable: true
-        autoStopInterval: 1800
+          autoStopInterval: 30
           autoDeleteInterval: 30
           volumes:
           - volumeId: volume123
@@ -6592,7 +6592,7 @@ components:
           desiredState: destroyed
           errorReason: The box is not running
           recoverable: true
-        autoStopInterval: 1800
+          autoStopInterval: 30
           autoDeleteInterval: 30
           volumes:
           - volumeId: volume123

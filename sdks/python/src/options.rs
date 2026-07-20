@@ -383,7 +383,7 @@ pub(crate) struct PyBoxOptions {
     #[pyo3(get, set)]
     pub(crate) network: Option<PyNetworkSpec>,
     pub(crate) ports: Vec<PyPortSpec>,
-    /// Hosted REST auto-stop interval in seconds. `0` disables auto-stop.
+    /// Hosted REST auto-stop interval in minutes. `0` disables auto-stop.
     #[pyo3(get, set)]
     pub(crate) auto_stop_interval: Option<u32>,
     #[pyo3(get, set)]

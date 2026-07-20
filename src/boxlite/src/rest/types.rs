@@ -508,7 +508,7 @@ mod tests {
             }]),
             auto_remove: Some(true),
             detach: None,
-            auto_stop_interval: Some(300),
+            auto_stop_interval: Some(5),
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"name\":\"mybox\""));
@@ -518,7 +518,7 @@ mod tests {
             json.contains("\"network\":{\"mode\":\"enabled\",\"allow_net\":[\"api.openai.com\"]}")
         );
         assert!(json.contains("\"secrets\""));
-        assert!(json.contains("\"auto_stop_interval\":300"));
+        assert!(json.contains("\"auto_stop_interval\":5"));
         // None fields should be skipped
         assert!(!json.contains("rootfs_path"));
         assert!(!json.contains("disk_size_gb"));
@@ -535,7 +535,7 @@ mod tests {
             network: NetworkSpec::Enabled {
                 allow_net: vec!["api.openai.com".into()],
             },
-            auto_stop_interval: Some(300),
+            auto_stop_interval: Some(5),
             secrets: vec![Secret {
                 name: "openai".into(),
                 value: "sk-test".into(),
@@ -550,7 +550,7 @@ mod tests {
         assert!(req.rootfs_path.is_none());
         assert_eq!(req.cpus, Some(4));
         assert_eq!(req.memory_mib, Some(1024));
-        assert_eq!(req.auto_stop_interval, Some(300));
+        assert_eq!(req.auto_stop_interval, Some(5));
         assert_eq!(
             req.network.as_ref().map(|n| n.mode.as_str()),
             Some("enabled")
@@ -649,7 +649,7 @@ mod tests {
             image: "python:3.11".to_string(),
             cpus: 2,
             memory_mib: 512,
-            auto_stop_interval: Some(900),
+            auto_stop_interval: Some(15),
             labels: HashMap::new(),
         };
         let info = resp.to_box_info().expect("valid ULID box_id should parse");

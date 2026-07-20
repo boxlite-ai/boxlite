@@ -95,7 +95,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
             })
             .andWhere('box.pending != true')
             .andWhere('box."autoStopInterval" != 0')
-            .andWhere('activity."lastActivityAt" < NOW() - INTERVAL \'1 second\' * box."autoStopInterval"')
+            .andWhere('activity."lastActivityAt" < NOW() - INTERVAL \'1 minute\' * box."autoStopInterval"')
             .limit(100)
             .getMany()
 
@@ -118,7 +118,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
               }
 
               this.logger.log(
-                `Auto-stopping box ${box.id}: autoStopInterval=${box.autoStopInterval}s, autoDeleteInterval=${box.autoDeleteInterval}min`,
+                `Auto-stopping box ${box.id}: autoStopInterval=${box.autoStopInterval}min, autoDeleteInterval=${box.autoDeleteInterval}min`,
               )
 
               try {

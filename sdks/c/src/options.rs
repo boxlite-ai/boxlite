@@ -147,7 +147,7 @@ pub unsafe extern "C" fn boxlite_options_set_detach(opts: *mut CBoxliteOptions, 
     options_set_detach(opts, val)
 }
 
-/// Set the idle auto-stop interval in seconds. Passing 0 disables auto-stop.
+/// Set the idle auto-stop interval in minutes. Passing 0 disables auto-stop.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_set_auto_stop_interval(
     opts: *mut CBoxliteOptions,

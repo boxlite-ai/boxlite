@@ -19,7 +19,7 @@ import { BoxError } from '../../exceptions/box-error.exception'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
-import { MAX_AUTO_STOP_INTERVAL_SECONDS } from '../constants/auto-stop.constants'
+import { MAX_AUTO_STOP_INTERVAL_MINUTES } from '../constants/auto-stop.constants'
 import { assertSupportedImage } from '../constants/curated-images.constant'
 import { BoxWarmPoolService } from './box-warm-pool.service'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
@@ -1473,9 +1473,9 @@ export class BoxService {
     if (
       !Number.isSafeInteger(autoStopInterval) ||
       autoStopInterval < 0 ||
-      autoStopInterval > MAX_AUTO_STOP_INTERVAL_SECONDS
+      autoStopInterval > MAX_AUTO_STOP_INTERVAL_MINUTES
     ) {
-      throw new BadRequestError('Auto-stop interval must be a non-negative integer number of seconds')
+      throw new BadRequestError('Auto-stop interval must be non-negative')
     }
 
     return autoStopInterval

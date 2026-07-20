@@ -4,7 +4,7 @@ import { validate } from 'class-validator'
 import { CreateBoxDto } from './create-box.dto'
 
 describe('CreateBoxDto auto-stop interval', () => {
-  it.each([0, 1, 300])('accepts non-negative integer seconds: %s', async (interval) => {
+  it.each([0, 1, 30])('accepts non-negative minute values: %s', async (interval) => {
     const errors = await validate(plainToInstance(CreateBoxDto, { autoStopInterval: interval }))
 
     expect(errors).toHaveLength(0)

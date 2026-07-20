@@ -44,7 +44,7 @@ func main() {
 		boxlite.WithName("my-box"),
 		boxlite.WithCPUs(1),
 		boxlite.WithMemory(512),
-		boxlite.WithAutoStopInterval(300), // hosted REST seconds; 0 disables
+		boxlite.WithAutoStopInterval(5), // hosted REST minutes; 0 disables
 		boxlite.WithNetwork(boxlite.NetworkSpec{
 			Mode:     boxlite.NetworkModeEnabled,
 			AllowNet: []string{"api.openai.com"},
@@ -62,7 +62,7 @@ func main() {
 	if err := box.Start(ctx); err != nil {
 		log.Fatal(err)
 	}
-	if err := box.SetAutoStopInterval(ctx, 900); err != nil {
+	if err := box.SetAutoStopInterval(ctx, 15); err != nil {
 		log.Fatal(err)
 	}
 

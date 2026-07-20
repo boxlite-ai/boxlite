@@ -92,7 +92,7 @@ func (b *Box) Stop(ctx context.Context) error {
 }
 
 // SetAutoStopInterval sets the hosted REST idle auto-stop interval in
-// seconds. Passing 0 disables auto-stop. Local runtimes return an
+// minutes. Passing 0 disables auto-stop. Local runtimes return an
 // unsupported-operation error.
 func (b *Box) SetAutoStopInterval(ctx context.Context, interval uint32) error {
 	b.runtime.ensureDrainRunning()

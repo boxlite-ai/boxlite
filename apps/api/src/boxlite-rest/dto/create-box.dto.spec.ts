@@ -103,7 +103,7 @@ describe('CreateBoxDto auto-stop interval bounds', () => {
 })
 
 describe('CreateBoxDto auto-stop validation', () => {
-  it.each([0, 1, 300])('accepts non-negative integer seconds: %s', async (interval) => {
+  it.each([0, 1, 30])('accepts non-negative minute values: %s', async (interval) => {
     const errors = await validate(plainToInstance(CreateBoxDto, { auto_stop_interval: interval }))
 
     expect(errors).toHaveLength(0)

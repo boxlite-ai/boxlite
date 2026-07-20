@@ -179,17 +179,17 @@ cred = ApiKeyCredential.from_env()
 # Or read everything (BOXLITE_REST_URL + BOXLITE_API_KEY) from the env:
 rt = Boxlite.rest(BoxliteRestOptions.from_env())
 
-# Hosted REST lifecycle policy: seconds; 0 disables auto-stop.
+# Hosted REST lifecycle policy: minutes; 0 disables auto-stop.
 box = await rt.create(
     BoxOptions(
         image="alpine:latest",
-        auto_stop_interval=300,
+        auto_stop_interval=5,
     ),
     name="short-lived",
 )
 
 # The policy can also be changed after creation.
-await box.set_auto_stop_interval(900)
+await box.set_auto_stop_interval(15)
 ```
 
 `isinstance(ApiKeyCredential(k), Credential)` is `True` (registered as

@@ -102,9 +102,9 @@ describe("SimpleBoxOptions", () => {
     expect(opts.diskSizeGb).toBeUndefined();
   });
 
-  test("accepts autoStopInterval in seconds", () => {
-    const opts: SimpleBoxOptions = { autoStopInterval: 300 };
-    expect(opts.autoStopInterval).toBe(300);
+  test("accepts autoStopInterval in minutes", () => {
+    const opts: SimpleBoxOptions = { autoStopInterval: 5 };
+    expect(opts.autoStopInterval).toBe(5);
   });
 
   test("accepts diskSizeGb number", () => {

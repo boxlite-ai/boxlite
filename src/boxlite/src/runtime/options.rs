@@ -330,7 +330,7 @@ pub struct BoxOptions {
     pub ports: Vec<PortSpec>,
 
     /// Hosted REST lifecycle policy: automatically stop the box after this
-    /// many seconds without activity. `None` leaves the server default in
+    /// many minutes without activity. `None` leaves the server default in
     /// effect; `Some(0)` disables auto-stop. Local runtimes do not run the
     /// hosted control-plane scheduler, so this option is only serialized by
     /// the REST backend.
@@ -902,7 +902,7 @@ mod tests {
     #[test]
     fn test_sanitize_local_rejects_hosted_auto_stop() {
         let opts = BoxOptions {
-            auto_stop_interval: Some(300),
+            auto_stop_interval: Some(5),
             ..Default::default()
         };
 

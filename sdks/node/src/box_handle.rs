@@ -150,7 +150,7 @@ impl JsBox {
         self.handle.stop().await.map_err(map_err)
     }
 
-    /// Set the idle auto-stop interval in seconds. `0` disables auto-stop.
+    /// Set the idle auto-stop interval in minutes. `0` disables auto-stop.
     #[napi(js_name = "setAutoStopInterval")]
     pub async fn set_auto_stop_interval(&self, interval: f64) -> Result<()> {
         let interval = parse_auto_stop_interval(interval).map_err(map_err)?;

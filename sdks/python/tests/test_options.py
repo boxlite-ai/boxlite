@@ -40,8 +40,8 @@ class TestBoxOptionsDefaults:
         opts = boxlite.BoxOptions()
         assert opts.auto_stop_interval is None
 
-    @pytest.mark.parametrize("interval", [0, 1, 300, 900])
-    def test_auto_stop_interval_is_non_negative_seconds(self, interval):
+    @pytest.mark.parametrize("interval", [0, 1, 5, 15])
+    def test_auto_stop_interval_is_non_negative_minutes(self, interval):
         opts = boxlite.BoxOptions(auto_stop_interval=interval)
         assert opts.auto_stop_interval == interval
 

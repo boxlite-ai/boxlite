@@ -104,16 +104,16 @@ describe('CreateBoxDialog per-org resource cap', () => {
     return document.querySelector<HTMLInputElement>('input[placeholder="my-new-box"]')
   }
 
-  it('shows 15 minutes by default and submits the selected interval in seconds', async () => {
+  it('shows 15 minutes by default and submits the selected interval in minutes', async () => {
     await renderOpen()
 
     const interval = document.querySelector<HTMLSelectElement>('select[aria-label="Auto-stop interval"]')
-    expect(interval?.value).toBe('900')
+    expect(interval?.value).toBe('15')
     expect(interval?.selectedOptions[0]?.textContent).toBe('15 minutes')
 
     await act(async () => {
       if (!interval) throw new Error('expected auto-stop interval select to be rendered')
-      interval.value = '300'
+      interval.value = '5'
       interval.dispatchEvent(new Event('change', { bubbles: true }))
     })
     await flush()
@@ -122,7 +122,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
     await act(async () => createButton?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     await flush()
 
-    expect(state.mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ autoStopInterval: 300 }))
+    expect(state.mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ autoStopInterval: 5 }))
   })
 
   it('clamps an over-max CPU input to the org maximum and shows a red contact-support hint', async () => {

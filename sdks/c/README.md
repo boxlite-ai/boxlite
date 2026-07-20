@@ -217,7 +217,7 @@ int main() {
         return 1;
     }
     boxlite_options_set_network_enabled(opts);
-    boxlite_options_set_auto_stop_interval(opts, 300); // seconds; 0 disables
+    boxlite_options_set_auto_stop_interval(opts, 5); // minutes; 0 disables
 
     if (boxlite_create_box(runtime, opts, &box, &error) != Ok) {
         fprintf(stderr, "Error %d: %s\n", error.code, error.message);
@@ -229,7 +229,7 @@ int main() {
     boxlite_options_free(opts);
 
     // The persisted policy can also be changed asynchronously after creation:
-    // boxlite_set_auto_stop_interval(box, 900, interval_callback, NULL, &error);
+    // boxlite_set_auto_stop_interval(box, 15, interval_callback, NULL, &error);
 
     // Start command with streaming output, then wait for completion
     int exit_code = 0;

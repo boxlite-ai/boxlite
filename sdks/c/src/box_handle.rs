@@ -77,7 +77,7 @@ pub unsafe extern "C" fn boxlite_stop_box(
     stop_box(handle, cb, user_data, out_error)
 }
 
-/// Set the idle auto-stop interval in seconds. Passing 0 disables auto-stop.
+/// Set the idle auto-stop interval in minutes. Passing 0 disables auto-stop.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_set_auto_stop_interval(
     handle: *mut CBoxHandle,

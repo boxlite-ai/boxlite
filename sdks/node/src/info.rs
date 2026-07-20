@@ -126,7 +126,7 @@ pub struct JsBoxInfo {
     /// Health status
     pub health_status: JsHealthStatus,
 
-    /// Auto-stop interval in seconds. `0` disables auto-stop.
+    /// Auto-stop interval in minutes. `0` disables auto-stop.
     #[napi(js_name = "autoStopInterval")]
     pub auto_stop_interval: Option<u32>,
 }

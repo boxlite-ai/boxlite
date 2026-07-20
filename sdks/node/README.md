@@ -177,7 +177,7 @@ const box = new SimpleBox({
   cpus: 2,           // Number of CPU cores
   name: 'my-box',    // Optional name
   autoRemove: true,  // Auto-remove on stop (default: true)
-  autoStopInterval: 300, // Hosted REST idle interval in seconds; 0 disables
+  autoStopInterval: 5, // Hosted REST idle interval in minutes; 0 disables
   workingDir: '/app',
   network: {
     mode: 'enabled',
@@ -204,7 +204,7 @@ const result = await box.exec('ls', '-la', '/');
 console.log(result.exitCode, result.stdout, result.stderr);
 
 // Update the persisted hosted REST idle auto-stop policy while the box exists.
-await box.setAutoStopInterval(900);
+await box.setAutoStopInterval(15);
 
 // Execute with options (cwd, user, timeout)
 const pwdResult = await box.exec('pwd', [], undefined, {

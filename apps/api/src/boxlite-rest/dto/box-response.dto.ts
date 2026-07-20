@@ -63,8 +63,9 @@ export class BoxResponseDto {
   memory_mib: number
 
   @ApiProperty({
-    description: 'Auto-stop interval in non-negative integer seconds (0 means disabled)',
-    example: 900,
+    description: 'Auto-stop interval in minutes (0 means disabled)',
+    example: 15,
+    type: 'integer',
   })
   auto_stop_interval: number
 

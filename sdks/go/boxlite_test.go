@@ -210,7 +210,7 @@ func TestBoxOptions(t *testing.T) {
 		AllowNet: []string{"example.com", "*.openai.com"},
 	})(cfg)
 	WithSecret(Secret{Name: "openai", Value: "sk-test"})(cfg)
-	WithAutoStopInterval(300)(cfg)
+	WithAutoStopInterval(5)(cfg)
 
 	if cfg.name != "test-box" {
 		t.Errorf("name: got %q", cfg.name)
@@ -221,7 +221,7 @@ func TestBoxOptions(t *testing.T) {
 	if cfg.memoryMiB != 1024 {
 		t.Errorf("memoryMiB: got %d", cfg.memoryMiB)
 	}
-	if cfg.autoStopInterval == nil || *cfg.autoStopInterval != 300 {
+	if cfg.autoStopInterval == nil || *cfg.autoStopInterval != 5 {
 		t.Errorf("autoStopInterval: got %v", cfg.autoStopInterval)
 	}
 	if len(cfg.env) != 1 || cfg.env[0] != [2]string{"FOO", "bar"} {

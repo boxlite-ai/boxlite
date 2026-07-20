@@ -23,7 +23,7 @@ import {
   ValidatorConstraintInterface,
 } from 'class-validator'
 import { isValidNetworkAllowEntry, MAX_NETWORK_ALLOW_LIST_ENTRIES } from '../../box/utils/network-validation.util'
-import { MAX_AUTO_STOP_INTERVAL_SECONDS } from '../../box/constants/auto-stop.constants'
+import { MAX_AUTO_STOP_INTERVAL_MINUTES } from '../../box/constants/auto-stop.constants'
 
 @ValidatorConstraint({ name: 'isNetworkAllowEntry', async: false })
 class IsNetworkAllowEntryConstraint implements ValidatorConstraintInterface {
@@ -106,7 +106,7 @@ export class CreateBoxDto {
   @IsOptional()
   @IsInt()
   @Min(0)
-  @Max(MAX_AUTO_STOP_INTERVAL_SECONDS)
+  @Max(MAX_AUTO_STOP_INTERVAL_MINUTES)
   auto_stop_interval?: number
 
   @IsOptional()

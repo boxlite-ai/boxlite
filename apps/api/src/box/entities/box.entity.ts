@@ -146,9 +146,10 @@ export class Box {
   @OneToOne(() => BoxLastActivity, (lastActivity) => lastActivity.box)
   lastActivityAt?: BoxLastActivity
 
-  // This is the interval in seconds after which the box will be stopped if lastActivityAt is not updated; 0 disables auto-stop.
-  @Column({ default: 900, type: 'int' })
-  autoStopInterval: number | undefined = 900
+  //  this is the interval in minutes after which the box will be stopped if lastActivityAt is not updated
+  //  if set to 0, auto stop will be disabled
+  @Column({ default: 15, type: 'int' })
+  autoStopInterval: number | undefined = 15
 
   //  this is the interval in minutes after which a continuously stopped workspace will be automatically deleted
   //  if set to negative value, auto delete will be disabled

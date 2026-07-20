@@ -23,7 +23,7 @@ pub(crate) fn parse_auto_stop_interval(
         || interval > u32::MAX as f64
     {
         return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
-            "autoStopInterval must be a non-negative integer number of seconds".into(),
+            "autoStopInterval must be a non-negative integer number of minutes".into(),
         ));
     }
 
@@ -214,7 +214,7 @@ pub struct JsBoxOptions {
     /// Automatically remove box when stopped (default: false)
     pub auto_remove: Option<bool>,
 
-    /// Automatically stop an idle box after this many seconds. `0` disables
+    /// Automatically stop an idle box after this many minutes. `0` disables
     /// auto-stop. `None` uses the runtime default.
     #[napi(js_name = "autoStopInterval")]
     pub auto_stop_interval: Option<f64>,
@@ -731,7 +731,7 @@ mod tests {
             }),
             ports: None,
             auto_remove: None,
-            auto_stop_interval: Some(300.0),
+            auto_stop_interval: Some(5.0),
             detach: None,
             entrypoint: None,
             cmd: None,
@@ -742,7 +742,7 @@ mod tests {
         };
 
         let opts = BoxOptions::try_from(js).unwrap();
-        assert_eq!(opts.auto_stop_interval, Some(300));
+        assert_eq!(opts.auto_stop_interval, Some(5));
         match opts.network {
             NetworkSpec::Enabled { allow_net } => {
                 assert_eq!(allow_net, vec!["example.com", "*.openai.com"]);
@@ -752,9 +752,9 @@ mod tests {
     }
 
     #[test]
-    fn auto_stop_interval_accepts_non_negative_integer_seconds() {
+    fn auto_stop_interval_accepts_non_negative_integer_minutes() {
         assert_eq!(parse_auto_stop_interval(0.0).unwrap(), 0);
-        assert_eq!(parse_auto_stop_interval(300.0).unwrap(), 300);
+        assert_eq!(parse_auto_stop_interval(5.0).unwrap(), 5);
         assert_eq!(parse_auto_stop_interval(u32::MAX as f64).unwrap(), u32::MAX);
     }
 

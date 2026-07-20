@@ -32,7 +32,7 @@ type BoxInfo struct {
 	CPUs      int
 	MemoryMiB int
 	CreatedAt time.Time
-	// AutoStopInterval is the idle auto-stop interval in seconds. 0 disables it.
+	// AutoStopInterval is the idle auto-stop interval in minutes. 0 disables it.
 	AutoStopInterval uint32
 }
 

@@ -301,10 +301,10 @@ func WithAutoRemove(v bool) BoxOption {
 	return func(c *boxConfig) { c.autoRemove = &v }
 }
 
-// WithAutoStopInterval sets the idle auto-stop interval in seconds.
+// WithAutoStopInterval sets the idle auto-stop interval in minutes.
 // Passing 0 disables auto-stop; omitting this option uses the runtime default.
-func WithAutoStopInterval(seconds uint32) BoxOption {
-	return func(c *boxConfig) { c.autoStopInterval = &seconds }
+func WithAutoStopInterval(minutes uint32) BoxOption {
+	return func(c *boxConfig) { c.autoStopInterval = &minutes }
 }
 
 // WithDetach sets whether the box survives parent process exit.

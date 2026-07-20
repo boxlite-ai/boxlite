@@ -10,7 +10,7 @@ sandbox SDKs:
   public SDK reference defines the timeout unit and the fact that the setter
   resets the deadline: [`sandbox#change-sandbox-timeout-during-runtime`](https://e2b.dev/docs/sandbox#change-sandbox-timeout-during-runtime).
 
-BoxLite applies the same lifecycle split while using seconds consistently:
+BoxLite applies the same lifecycle split while using minutes consistently:
 
 - create/update REST DTOs validate a non-negative integer before persistence;
 - hosted SDKs expose creation options plus a box instance setter;

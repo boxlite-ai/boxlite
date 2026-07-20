@@ -34,7 +34,7 @@ describe('toBoxApiCreateRequest', () => {
     expect(toBoxApiCreateRequest().memory_mib).toBeUndefined()
   })
 
-  it('passes auto-stop interval in seconds using the REST field name', () => {
-    expect(toBoxApiCreateRequest({ autoStopInterval: 300 }).auto_stop_interval).toBe(300)
+  it('passes auto-stop interval in minutes using the REST field name', () => {
+    expect(toBoxApiCreateRequest({ autoStopInterval: 5 }).auto_stop_interval).toBe(5)
   })
 })

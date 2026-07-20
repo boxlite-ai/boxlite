@@ -122,7 +122,7 @@ impl LiteBox {
         self.box_backend.stop().await
     }
 
-    /// Set the hosted REST auto-stop interval in seconds.
+    /// Set the hosted REST auto-stop interval in minutes.
     ///
     /// `0` disables auto-stop. This operation is supported by REST-backed
     /// boxes; local runtimes do not run the hosted control-plane scheduler.

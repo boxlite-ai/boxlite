@@ -361,7 +361,7 @@ paths:
       - name: interval
         in: path
         required: true
-        description: Auto-stop interval in non-negative integer seconds; 0 disables auto-stop
+        description: Auto-stop interval in minutes; 0 disables auto-stop
         schema:
           type: integer
           minimum: 0
@@ -1522,8 +1522,8 @@ components:
           type: integer
           minimum: 0
           maximum: 2147483647
-          description: Hosted REST auto-stop interval in seconds; 0 disables auto-stop
-          example: 900
+          description: Hosted REST auto-stop interval in minutes; 0 disables auto-stop
+          example: 15
         labels:
           type: object
           additionalProperties:
@@ -1638,8 +1638,8 @@ components:
           type: integer
           minimum: 0
           maximum: 2147483647
-          description: Hosted REST auto-stop interval in seconds; 0 disables auto-stop
-          example: 900
+          description: Hosted REST auto-stop interval in minutes; 0 disables auto-stop
+          example: 15
         security:
           $ref: "#/components/schemas/SecurityPreset"
 

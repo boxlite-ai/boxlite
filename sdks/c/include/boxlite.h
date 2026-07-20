@@ -367,7 +367,7 @@ enum BoxliteErrorCode boxlite_stop_box(CBoxHandle *handle,
                                        void *user_data,
                                        CBoxliteError *out_error);
 
-// Set the idle auto-stop interval in seconds. Passing 0 disables auto-stop.
+// Set the idle auto-stop interval in minutes. Passing 0 disables auto-stop.
 enum BoxliteErrorCode boxlite_set_auto_stop_interval(CBoxHandle *handle,
                                                      uint32_t interval,
                                                      CBoxSetAutoStopIntervalCb cb,
@@ -593,7 +593,7 @@ void boxlite_options_set_auto_remove(CBoxliteOptions *opts, int val);
 
 void boxlite_options_set_detach(CBoxliteOptions *opts, int val);
 
-// Set the idle auto-stop interval in seconds. Passing 0 disables auto-stop.
+// Set the idle auto-stop interval in minutes. Passing 0 disables auto-stop.
 void boxlite_options_set_auto_stop_interval(CBoxliteOptions *opts, uint32_t interval);
 
 // Apply a `CAdvancedBoxOptions` (security, mount isolation, health check) to a

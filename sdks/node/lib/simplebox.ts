@@ -183,7 +183,7 @@ export interface SimpleBoxOptions {
   /** Remove box when stopped (default: true) */
   autoRemove?: boolean;
 
-  /** Idle auto-stop interval in non-negative integer seconds; 0 disables auto-stop. */
+  /** Idle auto-stop interval in non-negative integer minutes; 0 disables auto-stop. */
   autoStopInterval?: number;
 
   /** If true, reuse an existing box with the same name instead of failing (default: false) */
@@ -702,7 +702,7 @@ export class SimpleBox {
   }
 
   /**
-   * Set the hosted REST idle auto-stop interval in seconds. Pass `0` to
+   * Set the hosted REST idle auto-stop interval in minutes. Pass `0` to
    * disable it. Non-integer and negative values are rejected.
    * Local runtimes report an unsupported-operation error.
    */
