@@ -60,6 +60,22 @@ pub(crate) struct BuildSpec {
     pub gid: u32,
 }
 
+/// What init to build. Serialized over IPC to the zygote.
+///
+/// A separate type from `BuildSpec` because the inputs genuinely differ: an
+/// init build is driven by the bundle's config.json (bundle/state paths),
+/// not by a process spec (args/env/cwd/user).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub(crate) struct InitBuildSpec {
+    pub container_id: String,
+    pub state_root: PathBuf,
+    pub bundle_path: PathBuf,
+    /// PTY init (`run -t`): libcontainer allocates the PTY and relays the
+    /// master over this socket. Mutually exclusive with SCM_RIGHTS stdio fds,
+    /// exactly as in a tenant build.
+    pub console_socket: Option<String>,
+}
+
 /// Build outcome. Invalid states are unrepresentable.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub(crate) enum BuildResult {
@@ -69,22 +85,25 @@ pub(crate) enum BuildResult {
 
 /// Tagged IPC request from parent to zygote.
 ///
-/// A single-variant enum today; the tag keeps the wire format stable for
-/// future request kinds (e.g. an init build) without a breaking change.
 /// The parent's Mutex ensures only one request is in-flight at a time.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 enum ZygoteRequest {
-    /// Build a new container process. May include SCM_RIGHTS fds for stdio pipes.
+    /// Build a container tenant process. May include SCM_RIGHTS fds for stdio pipes.
     Build(BuildSpec),
+    /// Build a container's init process. Same fd-passing contract as `Build`.
+    BuildInit(InitBuildSpec),
 }
 
 /// Tagged IPC response from zygote to parent, matched 1:1 with requests.
 ///
 /// The protocol is strictly request-response (no unsolicited messages),
-/// serialized by the parent's Mutex.
+/// serialized by the parent's Mutex. Each request kind gets its own response
+/// tag so a mismatched reply is a detectable protocol violation, not a
+/// silently misattributed pid.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 enum ZygoteResponse {
     Build(BuildResult),
+    BuildInit(BuildResult),
 }
 
 impl Zygote {
@@ -135,6 +154,30 @@ impl Zygote {
             ZygoteResponse::Build(BuildResult::Failed { error }) => {
                 Err(BoxliteError::Internal(error))
             }
+            other => Err(BoxliteError::Internal(format!(
+                "zygote protocol violation: Build answered with {other:?}"
+            ))),
+        }
+    }
+
+    /// Build a container's init process via the zygote. Returns init's pid.
+    ///
+    /// Same transport as `build`: one request-response under the socket mutex,
+    /// stdio pipe fds (if any) ride via SCM_RIGHTS. Blocks until the build
+    /// completes — callers on an async runtime decide whether that needs
+    /// `spawn_blocking`.
+    pub fn build_init(&self, spec: InitBuildSpec, fds: Option<[RawFd; 3]>) -> BoxliteResult<Pid> {
+        let sock = self.sock.lock().unwrap();
+        let fd = sock.as_raw_fd();
+        send_request(fd, &ZygoteRequest::BuildInit(spec), fds)?;
+        match recv_response(fd)? {
+            ZygoteResponse::BuildInit(BuildResult::Spawned { pid }) => Ok(Pid::from_raw(pid)),
+            ZygoteResponse::BuildInit(BuildResult::Failed { error }) => {
+                Err(BoxliteError::Internal(error))
+            }
+            other => Err(BoxliteError::Internal(format!(
+                "zygote protocol violation: BuildInit answered with {other:?}"
+            ))),
         }
     }
 }
@@ -157,9 +200,14 @@ fn serve(sock: OwnedFd) -> ! {
 
     loop {
         match recv_request(fd) {
-            Ok((ZygoteRequest::Build(spec), fds)) => {
-                let result = do_build(spec, fds);
-                if let Err(e) = send_response(fd, &ZygoteResponse::Build(result)) {
+            Ok((request, fds)) => {
+                let response = match request {
+                    ZygoteRequest::Build(spec) => ZygoteResponse::Build(do_build(spec, fds)),
+                    ZygoteRequest::BuildInit(spec) => {
+                        ZygoteResponse::BuildInit(do_build_init(spec, fds))
+                    }
+                };
+                if let Err(e) = send_response(fd, &response) {
                     eprintln!("[zygote] send_response failed: {e}");
                     std::process::exit(1);
                 }
@@ -180,6 +228,18 @@ fn serve(sock: OwnedFd) -> ! {
 /// moved here to run in the zygote's single-threaded context where clone3() is safe.
 fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
     let build_fn = || -> Result<Pid, String> {
+        // Own the received fds before any fallible step: they arrived via
+        // SCM_RIGHTS and this process must close them on every path, or each
+        // failed build leaks three fds into the long-lived zygote.
+        // SAFETY: fds were received via SCM_RIGHTS, we own them exclusively.
+        let owned_fds = fds.map(|raw| unsafe {
+            (
+                OwnedFd::from_raw_fd(raw[0]),
+                OwnedFd::from_raw_fd(raw[1]),
+                OwnedFd::from_raw_fd(raw[2]),
+            )
+        });
+
         let mut builder = ContainerBuilder::new(spec.container_id.clone(), SyscallType::default())
             .with_root_path(spec.state_root.clone())
             .map_err(|e| format!("Failed to set container root path: {e}"))?
@@ -187,11 +247,7 @@ fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
             .validate_id()
             .map_err(|e| format!("Invalid container ID: {e}"))?;
 
-        if let Some(raw_fds) = fds {
-            // SAFETY: fds were received via SCM_RIGHTS, we own them exclusively.
-            let stdin = unsafe { OwnedFd::from_raw_fd(raw_fds[0]) };
-            let stdout = unsafe { OwnedFd::from_raw_fd(raw_fds[1]) };
-            let stderr = unsafe { OwnedFd::from_raw_fd(raw_fds[2]) };
+        if let Some((stdin, stdout, stderr)) = owned_fds {
             builder = builder
                 .with_stdin(stdin)
                 .with_stdout(stdout)
@@ -251,23 +307,110 @@ fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
         Ok(pid)
     };
 
-    // Restore the default SIGPIPE disposition across the fork so the container
-    // init — and the user process it execs — does not inherit the guest agent's
-    // process-wide SIG_IGN.
-    //
-    // The agent is a Rust program, and the Rust runtime installs SIG_IGN for
-    // SIGPIPE at startup; that disposition is inherited by the zygote and by
-    // every container process youki forks here. With SIGPIPE ignored, a process
-    // that writes to a pipe whose reader has exited (e.g. the producer in
-    // `yes | head`, or `while :; do echo; done | head`) gets EPIPE instead of
-    // being killed by SIGPIPE. A producer that loops without checking write
-    // errors then never terminates: it spins, the pipeline never completes, the
-    // exec never exits, and Wait hangs forever while a vCPU stays pegged.
-    //
-    // youki's init does not reset SIGPIPE, so set SIG_DFL just for the fork and
-    // restore SIG_IGN immediately after — the long-lived single-threaded zygote
-    // keeps the agent's EPIPE-as-error behavior on its own IPC socket, while the
-    // forked child (and everything it execs) starts with the standard default.
+    build_with_default_sigpipe(build_fn)
+}
+
+/// Execute a container init build. Called inside the zygote (single-threaded).
+///
+/// Body of the guest's old in-place init build (`start.rs`), moved here so
+/// libcontainer's clone3 dance — main → intermediate → init — runs fork-safe.
+///
+/// `as_sibling(true)` below is load-bearing, not hygiene: libcontainer clones
+/// init `CLONE_PARENT` off the intermediate, so init's parent is whoever the
+/// intermediate's parent is — plain, that is the process calling `build()`.
+/// In-guest that made init the guest's child by accident of location; built
+/// here it would make init the *zygote's* child, whose exit nobody reaps
+/// (the zygote never waits on container processes), starving the guest
+/// reaper's `Wait` and losing the box's exit code. With `as_sibling` the
+/// intermediate itself is cloned `CLONE_PARENT` too, so the whole chain
+/// parents to guest main — the same topology as before the move, and the same
+/// contract tenants already use. The intermediate then dies as a guest-main
+/// stray (reaped by the sweep, aged out; see `reaper` docs), and
+/// libcontainer's own `waitpid(intermediate)` sees ECHILD, which it tolerates
+/// by design (readiness travels over its pipes, not the exit code).
+fn do_build_init(spec: InitBuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
+    let build_fn = || -> Result<Pid, String> {
+        // Own the received fds before any fallible step — see `do_build`.
+        // SAFETY: fds were received via SCM_RIGHTS, we own them exclusively.
+        let owned_fds = fds.map(|raw| unsafe {
+            (
+                OwnedFd::from_raw_fd(raw[0]),
+                OwnedFd::from_raw_fd(raw[1]),
+                OwnedFd::from_raw_fd(raw[2]),
+            )
+        });
+
+        let builder = ContainerBuilder::new(spec.container_id.clone(), SyscallType::default())
+            .with_root_path(spec.state_root.clone())
+            .map_err(|e| format!("Failed to set container root path: {e}"))?
+            .validate_id()
+            .map_err(|e| format!("Invalid container ID: {e}"))?;
+
+        // Init's stdio is exactly one of pipes or a PTY console socket —
+        // validate the wire input here at the boundary rather than letting
+        // libcontainer fail later with a less pointed error.
+        let builder = match (owned_fds, spec.console_socket) {
+            (Some((stdin, stdout, stderr)), None) => builder
+                .with_stdin(stdin)
+                .with_stdout(stdout)
+                .with_stderr(stderr),
+            (None, Some(socket)) => builder.with_console_socket(Some(socket)),
+            (Some(_), Some(_)) => {
+                return Err("init build: got both stdio fds and a console socket".to_string())
+            }
+            (None, None) => {
+                return Err("init build: needs stdio fds or a console socket".to_string())
+            }
+        };
+
+        let container = builder
+            .as_init(&spec.bundle_path)
+            // Parent init to guest main, not the zygote — see the fn doc.
+            .as_sibling(true)
+            .with_systemd(false)
+            .with_detach(true)
+            .build()
+            .map_err(|e| format!("build failed: {e}"))?;
+
+        container
+            .pid()
+            .ok_or_else(|| "built container state has no init pid".to_string())
+    };
+
+    let result = build_with_default_sigpipe(build_fn);
+
+    // Greppable from the guest console: proves init creation actually routed
+    // through the zygote rather than silently reverting to an in-guest build.
+    match &result {
+        BuildResult::Spawned { pid } => eprintln!(
+            "[zygote] init build: container_id={} pid={}",
+            spec.container_id, pid
+        ),
+        BuildResult::Failed { error } => eprintln!(
+            "[zygote] init build failed: container_id={} error={}",
+            spec.container_id, error
+        ),
+    }
+    result
+}
+
+/// Run a build with the default SIGPIPE disposition, restoring the agent's
+/// afterwards.
+///
+/// The Rust runtime installs SIG_IGN for SIGPIPE at startup; that disposition
+/// is inherited by the zygote and by every container process youki forks here.
+/// With SIGPIPE ignored, a process that writes to a pipe whose reader has
+/// exited (e.g. the producer in `yes | head`, or `while :; do echo; done |
+/// head`) gets EPIPE instead of being killed by SIGPIPE. A producer that loops
+/// without checking write errors then never terminates: it spins, the pipeline
+/// never completes, the exec never exits, and Wait hangs forever while a vCPU
+/// stays pegged.
+///
+/// youki's init does not reset SIGPIPE, so set SIG_DFL just for the fork and
+/// restore SIG_IGN immediately after — the long-lived single-threaded zygote
+/// keeps the agent's EPIPE-as-error behavior on its own IPC socket, while the
+/// forked child (and everything it execs) starts with the standard default.
+fn build_with_default_sigpipe(build_fn: impl FnOnce() -> Result<Pid, String>) -> BuildResult {
     use nix::sys::signal::{signal, SigHandler, Signal};
     let prev_sigpipe = unsafe { signal(Signal::SIGPIPE, SigHandler::SigDfl) };
 
@@ -473,7 +616,9 @@ mod tests {
         let json = serde_json::to_vec(&request).unwrap();
         let decoded: ZygoteRequest = serde_json::from_slice(&json).unwrap();
         // Verify it decoded as Build variant with matching spec
-        let ZygoteRequest::Build(spec) = decoded;
+        let ZygoteRequest::Build(spec) = decoded else {
+            panic!("expected Build variant");
+        };
         assert_eq!(spec, sample_spec());
     }
 
@@ -517,7 +662,9 @@ mod tests {
         send_request(fd_a, &ZygoteRequest::Build(spec.clone()), None).unwrap();
 
         let (received, fds) = recv_request(fd_b).unwrap();
-        let ZygoteRequest::Build(recv_spec) = received;
+        let ZygoteRequest::Build(recv_spec) = received else {
+            panic!("expected Build variant");
+        };
         assert_eq!(spec, recv_spec);
         assert!(fds.is_none());
     }
@@ -544,7 +691,9 @@ mod tests {
         send_request(fd_a, &ZygoteRequest::Build(spec.clone()), Some(send_fds)).unwrap();
 
         let (received, recv_fds) = recv_request(fd_b).unwrap();
-        let ZygoteRequest::Build(recv_spec) = received;
+        let ZygoteRequest::Build(recv_spec) = received else {
+            panic!("expected Build variant");
+        };
         assert_eq!(spec, recv_spec);
         let recv_fds = recv_fds.expect("should have received fds");
 
@@ -645,7 +794,9 @@ mod tests {
 
         send_request(fd_a, &ZygoteRequest::Build(spec.clone()), None).unwrap();
         let (received, fds) = recv_request(fd_b).unwrap();
-        let ZygoteRequest::Build(recv_spec) = received;
+        let ZygoteRequest::Build(recv_spec) = received else {
+            panic!("expected Build variant");
+        };
         assert_eq!(spec, recv_spec);
         assert!(fds.is_none());
     }
@@ -792,7 +943,9 @@ mod tests {
         let responder = thread::spawn(move || {
             for i in 0..4 {
                 let (request, _fds) = recv_request(child_fd).unwrap();
-                let ZygoteRequest::Build(spec) = request;
+                let ZygoteRequest::Build(spec) = request else {
+                    panic!("expected Build variant");
+                };
                 assert!(spec.container_id.starts_with("concurrent-"));
                 let response = ZygoteResponse::Build(BuildResult::Spawned { pid: 1000 + i });
                 send_response(child_fd, &response).unwrap();
@@ -826,5 +979,425 @@ mod tests {
 
         responder.join().unwrap();
         // parent_sock (OwnedFd inside zygote.sock) is cleaned up when zygote drops
+    }
+
+    // ========================================================================
+    // Init build: protocol + fd-ownership tests
+    // ========================================================================
+
+    fn init_spec_named(container_id: &str) -> InitBuildSpec {
+        InitBuildSpec {
+            container_id: container_id.to_string(),
+            state_root: PathBuf::from("/run/boxlite/c1/state"),
+            bundle_path: PathBuf::from("/run/boxlite/c1"),
+            console_socket: None,
+        }
+    }
+
+    fn sample_init_spec() -> InitBuildSpec {
+        init_spec_named("init-container-1")
+    }
+
+    fn tenant_spec_named(container_id: &str) -> BuildSpec {
+        BuildSpec {
+            container_id: container_id.to_string(),
+            state_root: PathBuf::from("/run"),
+            console_socket: None,
+            cwd: PathBuf::from("/"),
+            env: HashMap::new(),
+            args: vec!["true".to_string()],
+            uid: 0,
+            gid: 0,
+        }
+    }
+
+    #[test]
+    fn init_build_spec_serde_roundtrip() {
+        let spec = sample_init_spec();
+        let json = serde_json::to_vec(&spec).unwrap();
+        let decoded: InitBuildSpec = serde_json::from_slice(&json).unwrap();
+        assert_eq!(spec, decoded);
+    }
+
+    #[test]
+    fn zygote_request_build_init_serde_roundtrip() {
+        let request = ZygoteRequest::BuildInit(sample_init_spec());
+        let json = serde_json::to_vec(&request).unwrap();
+        let decoded: ZygoteRequest = serde_json::from_slice(&json).unwrap();
+        let ZygoteRequest::BuildInit(spec) = decoded else {
+            panic!("expected BuildInit variant");
+        };
+        assert_eq!(spec, sample_init_spec());
+    }
+
+    #[test]
+    fn zygote_response_build_init_serde_roundtrip() {
+        let response = ZygoteResponse::BuildInit(BuildResult::Spawned { pid: 7 });
+        let json = serde_json::to_vec(&response).unwrap();
+        let decoded: ZygoteResponse = serde_json::from_slice(&json).unwrap();
+        let ZygoteResponse::BuildInit(BuildResult::Spawned { pid }) = decoded else {
+            panic!("expected BuildInit(Spawned) variant");
+        };
+        assert_eq!(pid, 7);
+    }
+
+    /// The stdio pipe fds ride SCM_RIGHTS on a BuildInit exactly as on a Build.
+    #[test]
+    fn ipc_send_recv_build_init_request_with_fds() {
+        let (a, b) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+
+        let (r0, _w0) = nix::unistd::pipe().unwrap();
+        let (_r1, w1) = nix::unistd::pipe().unwrap();
+        let (_r2, w2) = nix::unistd::pipe().unwrap();
+
+        let spec = sample_init_spec();
+        let send_fds = [r0.as_raw_fd(), w1.as_raw_fd(), w2.as_raw_fd()];
+        send_request(
+            a.as_raw_fd(),
+            &ZygoteRequest::BuildInit(spec.clone()),
+            Some(send_fds),
+        )
+        .unwrap();
+
+        let (received, recv_fds) = recv_request(b.as_raw_fd()).unwrap();
+        let ZygoteRequest::BuildInit(recv_spec) = received else {
+            panic!("expected BuildInit variant");
+        };
+        assert_eq!(spec, recv_spec);
+        assert!(recv_fds.is_some(), "stdio fds must ride the BuildInit");
+    }
+
+    /// RACE: tenant builds and init builds interleaving from many threads must
+    /// each get their own response. The socket mutex serializes one
+    /// request-response pair at a time and the per-kind response tags make any
+    /// cross-pairing loud; the responder answers in arrival order with a pid
+    /// derived from the request's own container id, so a swapped or
+    /// cross-tagged reply fails the caller's assertion instead of handing a
+    /// container someone else's pid.
+    #[test]
+    fn mixed_concurrent_builds_and_init_builds_stay_paired() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let (parent_sock, child_sock) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let child_fd = child_sock.as_raw_fd();
+        std::mem::forget(child_sock); // Responder thread manages this fd's lifetime
+
+        let responder = thread::spawn(move || {
+            for _ in 0..8 {
+                let (request, _fds) = recv_request(child_fd).unwrap();
+                let response = match request {
+                    ZygoteRequest::Build(spec) => {
+                        let i: i32 = spec
+                            .container_id
+                            .trim_start_matches("mix-b-")
+                            .parse()
+                            .expect("tenant id carries its index");
+                        ZygoteResponse::Build(BuildResult::Spawned { pid: 2000 + i })
+                    }
+                    ZygoteRequest::BuildInit(spec) => {
+                        let i: i32 = spec
+                            .container_id
+                            .trim_start_matches("mix-i-")
+                            .parse()
+                            .expect("init id carries its index");
+                        ZygoteResponse::BuildInit(BuildResult::Spawned { pid: 3000 + i })
+                    }
+                };
+                send_response(child_fd, &response).unwrap();
+            }
+            // SAFETY: We own this fd via mem::forget above
+            unsafe { nix::libc::close(child_fd) };
+        });
+
+        let zygote = Arc::new(Zygote {
+            sock: Mutex::new(parent_sock),
+        });
+        let mut handles = Vec::new();
+        for i in 0..4i32 {
+            let z = Arc::clone(&zygote);
+            handles.push(thread::spawn(move || {
+                let pid = z
+                    .build(tenant_spec_named(&format!("mix-b-{i}")), None)
+                    .unwrap();
+                assert_eq!(
+                    pid.as_raw(),
+                    2000 + i,
+                    "tenant build {i} got another request's response"
+                );
+            }));
+            let z = Arc::clone(&zygote);
+            handles.push(thread::spawn(move || {
+                let pid = z
+                    .build_init(init_spec_named(&format!("mix-i-{i}")), None)
+                    .unwrap();
+                assert_eq!(
+                    pid.as_raw(),
+                    3000 + i,
+                    "init build {i} got another request's response"
+                );
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        responder.join().unwrap();
+    }
+
+    /// FAILURE: a Failed init build's error text must reach the caller intact —
+    /// the box-start error the user sees is built from it.
+    #[test]
+    fn build_init_failure_error_reaches_the_caller() {
+        use std::thread;
+
+        let (parent_sock, child_sock) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let child_fd = child_sock.as_raw_fd();
+
+        let responder = thread::spawn(move || {
+            let (request, _fds) = recv_request(child_fd).unwrap();
+            let ZygoteRequest::BuildInit(_) = request else {
+                panic!("expected BuildInit request");
+            };
+            let response = ZygoteResponse::BuildInit(BuildResult::Failed {
+                error: "bundle exploded: no config.json".to_string(),
+            });
+            send_response(child_fd, &response).unwrap();
+            drop(child_sock);
+        });
+
+        let zygote = Zygote {
+            sock: Mutex::new(parent_sock),
+        };
+        let err = zygote
+            .build_init(sample_init_spec(), None)
+            .expect_err("a Failed build must surface as an error");
+        assert!(
+            err.to_string().contains("bundle exploded"),
+            "the zygote's error text must not be swallowed, got: {err}"
+        );
+        responder.join().unwrap();
+    }
+
+    /// FAILURE: the zygote dying between request and response must be a clean
+    /// error at the caller, not a hang — a crashed zygote during box start has
+    /// to fail the start.
+    #[test]
+    fn build_init_errors_cleanly_when_the_zygote_dies_mid_request() {
+        use std::thread;
+
+        let (parent_sock, child_sock) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let child_fd = child_sock.as_raw_fd();
+
+        let responder = thread::spawn(move || {
+            let (request, _fds) = recv_request(child_fd).unwrap();
+            let ZygoteRequest::BuildInit(_) = request else {
+                panic!("expected BuildInit request");
+            };
+            drop(child_sock); // die without replying
+        });
+
+        let zygote = Zygote {
+            sock: Mutex::new(parent_sock),
+        };
+        let err = zygote
+            .build_init(sample_init_spec(), None)
+            .expect_err("a dead zygote must fail the build, not hang it");
+        assert!(
+            err.to_string()
+                .contains("zygote process exited unexpectedly"),
+            "unexpected error: {err}"
+        );
+        responder.join().unwrap();
+    }
+
+    /// The client refuses a response whose tag does not match its request —
+    /// a mismatched reply must be a loud protocol error, never a
+    /// misattributed pid.
+    #[test]
+    fn build_init_mismatched_response_is_protocol_error() {
+        use std::thread;
+
+        let (parent_sock, child_sock) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let child_fd = child_sock.as_raw_fd();
+
+        let responder = thread::spawn(move || {
+            let (request, _fds) = recv_request(child_fd).unwrap();
+            let ZygoteRequest::BuildInit(_) = request else {
+                panic!("expected BuildInit request");
+            };
+            // Deliberately answer with the wrong tag.
+            let response = ZygoteResponse::Build(BuildResult::Spawned { pid: 1 });
+            send_response(child_fd, &response).unwrap();
+            drop(child_sock);
+        });
+
+        let zygote = Zygote {
+            sock: Mutex::new(parent_sock),
+        };
+        let err = zygote
+            .build_init(sample_init_spec(), None)
+            .expect_err("a Build reply to a BuildInit must not pass as a pid");
+        assert!(
+            err.to_string().contains("protocol violation"),
+            "unexpected error: {err}"
+        );
+        responder.join().unwrap();
+    }
+
+    /// Serializes tests that run a build: `build_with_default_sigpipe` flips
+    /// the process-wide SIGPIPE disposition around the build, and two builds
+    /// interleaving their save/restore pairs can strand it at SIG_DFL for the
+    /// whole multi-threaded test harness.
+    static SIGPIPE_DANCE: Mutex<()> = Mutex::new(());
+
+    /// A failed build must close the fds it received via SCM_RIGHTS.
+    ///
+    /// The zygote is long-lived; if an early builder error returns before the
+    /// raw fds are wrapped, each failed build leaks three fds forever. Checked
+    /// through pipe object identity, not fd numbers (immune to fd reuse by
+    /// parallel tests): once the build closed its read end, the held write end
+    /// polls POLLERR; once it closed its write ends, reading the held read
+    /// ends returns EOF. The stdin probe is poll, deliberately not a write —
+    /// a write to a readerless pipe raises SIGPIPE, which is fatal whenever
+    /// some concurrent build has the disposition at SIG_DFL.
+    fn assert_build_failure_closes_fds(build: impl FnOnce([RawFd; 3]) -> BuildResult) {
+        use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
+        use nix::unistd::{pipe, read};
+        use std::os::fd::{AsFd, IntoRawFd};
+
+        let _serialize = SIGPIPE_DANCE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let (r0, w0) = pipe().unwrap();
+        let (r1, w1) = pipe().unwrap();
+        let (r2, w2) = pipe().unwrap();
+
+        // Transfer ownership of one end of each pipe to the build, as
+        // recv_request's SCM_RIGHTS does.
+        let sent = [r0.into_raw_fd(), w1.into_raw_fd(), w2.into_raw_fd()];
+        let result = build(sent);
+        assert!(
+            matches!(result, BuildResult::Failed { .. }),
+            "the build was meant to fail, got: {result:?}"
+        );
+
+        // stdin read end closed → the held write end polls POLLERR.
+        let mut probe = [PollFd::new(w0.as_fd(), PollFlags::POLLOUT)];
+        poll(&mut probe, PollTimeout::ZERO).expect("poll stdin probe");
+        assert!(
+            probe[0]
+                .revents()
+                .expect("stdin probe revents")
+                .contains(PollFlags::POLLERR),
+            "failed build left its stdin fd open"
+        );
+        // stdout/stderr write ends closed → read ends see EOF.
+        let mut buf = [0u8; 1];
+        assert_eq!(
+            read(r1.as_raw_fd(), &mut buf).expect("read stdout probe"),
+            0,
+            "failed build left its stdout fd open"
+        );
+        assert_eq!(
+            read(r2.as_raw_fd(), &mut buf).expect("read stderr probe"),
+            0,
+            "failed build left its stderr fd open"
+        );
+    }
+
+    #[test]
+    fn failed_tenant_build_closes_received_fds() {
+        let state_root = tempfile::TempDir::new().unwrap();
+        assert_build_failure_closes_fds(|fds| {
+            let spec = BuildSpec {
+                // '/' fails validate_id before any clone happens.
+                container_id: "../invalid".to_string(),
+                state_root: state_root.path().to_path_buf(),
+                console_socket: None,
+                cwd: PathBuf::from("/"),
+                env: HashMap::new(),
+                args: vec!["true".to_string()],
+                uid: 0,
+                gid: 0,
+            };
+            do_build(spec, Some(fds))
+        });
+    }
+
+    #[test]
+    fn failed_init_build_closes_received_fds() {
+        let state_root = tempfile::TempDir::new().unwrap();
+        assert_build_failure_closes_fds(|fds| {
+            let spec = InitBuildSpec {
+                container_id: "../invalid".to_string(),
+                state_root: state_root.path().to_path_buf(),
+                bundle_path: state_root.path().to_path_buf(),
+                console_socket: None,
+            };
+            do_build_init(spec, Some(fds))
+        });
+    }
+
+    /// Both-or-neither stdio is rejected at the boundary; the fds still close.
+    #[test]
+    fn init_build_rejects_conflicting_stdio() {
+        let state_root = tempfile::TempDir::new().unwrap();
+        assert_build_failure_closes_fds(|fds| {
+            let spec = InitBuildSpec {
+                container_id: "valid-id".to_string(),
+                state_root: state_root.path().to_path_buf(),
+                bundle_path: state_root.path().to_path_buf(),
+                console_socket: Some("/tmp/console.sock".to_string()),
+            };
+            do_build_init(spec, Some(fds))
+        });
+
+        let _serialize = SIGPIPE_DANCE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let result = do_build_init(
+            InitBuildSpec {
+                container_id: "valid-id".to_string(),
+                state_root: state_root.path().to_path_buf(),
+                bundle_path: state_root.path().to_path_buf(),
+                console_socket: None,
+            },
+            None,
+        );
+        let BuildResult::Failed { error } = result else {
+            panic!("an init build without any stdio must fail, got: {result:?}");
+        };
+        assert!(error.contains("stdio"), "unexpected error: {error}");
     }
 }

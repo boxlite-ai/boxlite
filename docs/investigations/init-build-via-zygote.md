@@ -1,7 +1,8 @@
 # Container Init Creation via the Zygote
 
 **Date:** 2026-07-14
-**Status:** Design — pending review, no code changed
+**Status:** Implemented 2026-07-21 (`ZygoteRequest::BuildInit`; deltas from the
+design noted inline)
 **Depends on:** run-command-semantics-fix.md (implemented; makes init the user's
 command, raising the stakes of init-creation reliability)
 
@@ -75,10 +76,18 @@ exactly as it does in the guest today — just in a fork-safe process.
 ### 3. Guest-side: `Container::start` calls the zygote client
 
 `start.rs::create_container_with_stdio` becomes a thin client:
-`ZYGOTE.get().build_init(spec, fds)` via `spawn_blocking` (mirror the tenant
-build call pattern in `command.rs`). Everything around it — bundle creation,
+`ZYGOTE.get().build_init(spec, fds)`. Everything around it — bundle creation,
 rootfs mounts, the immediate-exit `is_running` diagnostic, session
 registration, the exit watcher — is unchanged.
+
+> **As implemented:** no `spawn_blocking` — the callers are `Container::start`,
+> a synchronous path that previously blocked right here for the in-place
+> build; blocking on the IPC recv instead is the same latency in the same
+> place. The design's spawn_blocking note assumed an async caller that does
+> not exist. Also folded in: libcontainer's own `waitpid(intermediate)` inside
+> `build()` used to run unfenced against the guest reaper's `waitpid(-1)`
+> sweep (`start.rs` never took `reap_fence`); in the zygote there is no
+> reaper, so that race is gone rather than fenced.
 
 ## Invariants this preserves (verified, must stay documented in code)
 
@@ -90,10 +99,19 @@ registration, the exit watcher — is unchanged.
 > — reparenting comes from `CLONE_PARENT`, not PID-1 adoption. When this
 > init-build change lands there is no `WaitVia` to preserve.
 
-1. **Wait routing.** The zygote sets no `PR_SET_CHILD_SUBREAPER`; libcontainer's
-   intermediate exits inside `build()`, and init reparents to guest main whether
-   the clone3 happens in the guest or the zygote — so moving the init build does
-   not change who reaps init (still the reaper).
+1. **Wait routing.** ~~init reparents to guest main whether the clone3 happens
+   in the guest or the zygote~~ — **falsified at implementation.** libcontainer
+   clones init `CLONE_PARENT` off the intermediate
+   (`container_intermediate_process.rs:196` @4b2f0e0), so init's parent is the
+   process that calls `build()` — there is no reparenting step at all. Built in
+   the zygote without more, init becomes the *zygote's* child, nobody reaps it,
+   and the box exit code is lost (run_init_semantics went 1/9). The fix is
+   `.as_sibling(true)` on the init build: the intermediate is then also cloned
+   `CLONE_PARENT` (`container_main_process.rs:97-103`), parenting the whole
+   chain to guest main — the identical pre-move topology, and the same contract
+   tenant builds already use. The intermediate dies as a guest-main stray
+   (the reaper's `stray_since` case) and libcontainer's `waitpid(intermediate)`
+   tolerates the resulting ECHILD by design (`container_main_process.rs:288`).
 2. **Mount visibility.** The zygote shares the guest's mount namespace (plain
    fork, no unshare), so bundle/rootfs mounts performed *after* zygote start
    (virtiofs, container rootfs) are visible to it. No path staging needed.
@@ -155,10 +173,15 @@ than papered over):
   is strictly worse than one.
 - Subreaper changes; multi-container boxes.
 
-## Open questions
+## Open questions — resolved at implementation
 
-1. Return init pid from the zygote (proposed) vs keep re-loading libcontainer
-   state in the guest — proposed saves a state load and matches
-   `BuildResult::Spawned{pid}`'s existing shape.
-2. Is the grep-the-log mechanism assertion (Verification #2) acceptable test
-   style here, or prefer exposing a counter via the metrics surface?
+1. Return init pid from the zygote vs re-load libcontainer state — **both,
+   half each**: the wire carries the pid (`BuildResult::Spawned{pid}`, read
+   from the built container state zygote-side) and the client logs it, but
+   `Container::init_pid()` still loads state on demand. Threading the returned
+   pid through `Container` would touch lifecycle + service for an optimization
+   nobody measured; deferred.
+2. Grep-the-log accepted: `test_init_build_routes_through_zygote`
+   (zygote_integration.rs) asserts the `[zygote] init build:` marker in the
+   box's `logs/console.log` — the file `krun_set_console_output` writes; the
+   guest console does *not* land in shim.stderr.

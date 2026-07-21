@@ -143,6 +143,24 @@ way it is closed today: `register` claims the pid the moment the spawn
 returns it, carrying the instant read *before* the spawn so a recycled pid's
 stale exit is told apart from our own.
 
+## Rejected: a pid-keyed `wait`
+
+A later draft collapsed `register`/`ExitSlot` into `claim(pid)` + `wait(pid)` —
+the reaper as a pure store, read by pid, no receiver handed out. Rejected
+because a read that re-resolves by pid picks up the wrong incarnation once the
+kernel recycles it:
+
+    claim(701); deliver(701, code 1)   A exits; its status is stored
+    wait(701) → 1                      A's late Wait reads its own exit
+    deliver(701, code 2)               pid recycled; B exits before claiming
+    wait(701) → 2                      A reads again → B's exit  ✗ must stay 1
+
+`a_recycled_deliver_does_not_overwrite_the_previous_owner` pins exactly this;
+it passes today because the receiver a claim holds stays attached to the
+detached slot. That receiver is what pins one process incarnation — the
+in-process analogue of a pidfd — so any pid-keyed API that fixes the trace
+re-grows a per-claim handle and lands back on `ExitSlot`.
+
 ## Verification
 
 1. `reaper.rs` unit tests, run in-box (Linux-only): existing coverage adapted,

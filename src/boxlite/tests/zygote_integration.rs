@@ -833,6 +833,55 @@ async fn test_zygote_concurrent_stdin_pipes() {
     cleanup_concurrent_box(handle, runtime).await;
 }
 
+// ============================================================================
+// INIT BUILD ROUTING
+// ============================================================================
+
+/// Mechanism proof: box start's init creation routes through the zygote.
+///
+/// The refactor moving the init build into the zygote is intentionally
+/// behavior-identical, so its honest check is that the path is actually taken:
+/// the zygote prints a marker to the guest console (captured in the box's
+/// logs/console.log) when it builds an init. A started box without the marker means init
+/// creation silently reverted to an in-guest ContainerBuilder call — the
+/// clone3-in-threaded-musl hazard this routing exists to prevent.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_init_build_routes_through_zygote() {
+    const MARKER: &str = "[zygote] init build: container_id=";
+
+    let (home, runtime) = create_test_runtime();
+    let handle = create_concurrent_box(&runtime).await;
+    let box_id = handle.id().to_string();
+
+    // The marker was printed during box start, before the warmup exec that
+    // create_concurrent_box already ran; poll briefly for console flush lag.
+    // The guest's serial console lands in logs/console.log
+    // (layout::console_output_path), not in shim.stderr.
+    let console_log = home
+        .path
+        .join("boxes")
+        .join(&box_id)
+        .join("logs")
+        .join("console.log");
+    let mut console = String::new();
+    for _ in 0..50 {
+        console = std::fs::read_to_string(&console_log).unwrap_or_default();
+        if console.contains(MARKER) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        console.contains(MARKER),
+        "guest console has no zygote init-build marker — init creation \
+         bypassed the zygote?\nconsole ({}):\n{}",
+        console_log.display(),
+        console
+    );
+
+    cleanup_concurrent_box(handle, runtime).await;
+}
+
 /// Run 20 sequential execs and verify the box's fd count doesn't grow.
 ///
 /// Regression: if pipe fds leak (not closed by zygote after build), each

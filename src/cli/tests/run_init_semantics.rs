@@ -401,3 +401,111 @@ fn test_init_semantics_exec_after_exit_refused_without_restarting() {
 
     ctx.cleanup_box("init-sem-exec");
 }
+
+/// S-restart: a deliberate second `start` re-runs the stored command through a
+/// fresh VM, zygote, and init build, and re-records its exit.
+///
+/// The command's exit code differs by run — 7 first, 8 once its marker file
+/// exists — so a stale first-run exit record surviving into the second run is
+/// distinguishable from a genuinely fresh one: `inspect` must report 7, then 8.
+#[test]
+fn test_init_semantics_restart_reruns_init_and_rerecords_exit() {
+    let ctx = common::boxlite();
+    ctx.cleanup_box("init-sem-restart");
+
+    ctx.new_cmd()
+        .args([
+            "run",
+            "-d",
+            "--name",
+            "init-sem-restart",
+            "alpine:latest",
+            "sh",
+            "-c",
+            "test -e /ran && exit 8; touch /ran; exit 7",
+        ])
+        .assert()
+        .success();
+
+    let stopped = wait_for_stopped(&ctx, "init-sem-restart", Duration::from_secs(30));
+    assert!(
+        stopped.contains("stopped") || stopped.contains("exited"),
+        "first run must end the box, got {stopped:?}"
+    );
+    ctx.new_cmd()
+        .args(["inspect", "-f", "{{.State.ExitCode}}", "init-sem-restart"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("7"));
+
+    // Second, deliberate start: the restart pipeline rebuilds init in the new
+    // boot's zygote; the guest clears the stale exit file before running it.
+    ctx.new_cmd()
+        .args(["start", "init-sem-restart"])
+        .assert()
+        .success();
+    let stopped = wait_for_stopped(&ctx, "init-sem-restart", Duration::from_secs(30));
+    assert!(
+        stopped.contains("stopped") || stopped.contains("exited"),
+        "restarted run must end the box again, got {stopped:?}"
+    );
+    ctx.new_cmd()
+        .args(["inspect", "-f", "{{.State.ExitCode}}", "init-sem-restart"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("8"));
+
+    ctx.cleanup_box("init-sem-restart");
+}
+
+/// S-fail: a failing init build must surface as a start error carrying the
+/// create-container context — not a hang, not a half-created running box —
+/// and must leave nothing wedged: the failed box is removable by name and a
+/// fresh box on the same home runs fine afterwards.
+#[test]
+fn test_init_semantics_failed_init_build_reports_and_recovers() {
+    let ctx = common::boxlite();
+    ctx.cleanup_boxes(&["init-sem-badwd", "init-sem-goodwd"]);
+
+    // A workdir that cannot be entered fails libcontainer's init build inside
+    // the zygote; the box-start error is built from that build failure.
+    ctx.new_cmd()
+        .args([
+            "run",
+            "--workdir",
+            "/nonexistent/deep",
+            "--name",
+            "init-sem-badwd",
+            "alpine:latest",
+            "true",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Failed to create container"));
+
+    // Nothing wedged: the failed box can be removed by name...
+    ctx.new_cmd()
+        .args(["rm", "-f", "init-sem-badwd"])
+        .assert()
+        .success();
+
+    // ...and a fresh box on the same home boots and runs to completion.
+    ctx.new_cmd()
+        .args([
+            "run",
+            "--name",
+            "init-sem-goodwd",
+            "alpine:latest",
+            "sh",
+            "-c",
+            "exit 0",
+        ])
+        .assert()
+        .success();
+    let stopped = wait_for_stopped(&ctx, "init-sem-goodwd", Duration::from_secs(30));
+    assert!(
+        stopped.contains("stopped") || stopped.contains("exited"),
+        "the recovery box must run and stop cleanly, got {stopped:?}"
+    );
+    ctx.cleanup_box("init-sem-goodwd");
+}
