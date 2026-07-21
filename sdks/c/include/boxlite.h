@@ -176,6 +176,11 @@ typedef struct BoxliteCommand {
   double timeout_secs;
   // Enable TTY mode for interactive programs.
   int tty;
+  // Pin the execution id instead of letting the guest mint one. NULL/empty
+  // = guest mints a uuid. Supply a stable id when the caller must reattach
+  // to this exec later by the same id (e.g. `boxlite_box_attach_execution`
+  // after a runner restart).
+  const char *execution_id;
 } BoxliteCommand;
 
 typedef struct ExecutionHandle CExecutionHandle;
@@ -404,6 +409,19 @@ enum BoxliteErrorCode boxlite_box_exec(CBoxHandle *handle,
                                        const struct BoxliteCommand *cmd,
                                        CExecutionHandle **out_execution,
                                        CBoxliteError *out_error);
+
+// Re-attach to an already-running execution by its id.
+//
+// Mirrors `boxlite_box_exec` but, instead of spawning a new process, looks up
+// a live execution in the guest and rebuilds the replayable stdout/stderr/exit
+// streams. Used to reconnect to a long-running interactive process after the
+// original terminal session was dropped (e.g. a runner update). The returned
+// handle behaves identically to one from `boxlite_box_exec`: register
+// `_on_stdout`/`_on_stderr`/`_on_exit`, write stdin, wait, kill, resize.
+enum BoxliteErrorCode boxlite_box_attach_execution(CBoxHandle *handle,
+                                                   const char *execution_id,
+                                                   CExecutionHandle **out_execution,
+                                                   CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_execution_on_stdout(CExecutionHandle *execution,
                                                   CBoxStdoutCb cb,

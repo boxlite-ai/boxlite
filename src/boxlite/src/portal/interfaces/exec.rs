@@ -46,13 +46,6 @@ impl ExecutionInterface {
         command: BoxCommand,
         shutdown_token: CancellationToken,
     ) -> BoxliteResult<ExecComponents> {
-        // Create channels
-        let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let (stdout_tx, stdout_rx) = mpsc::unbounded_channel::<String>();
-        let (stderr_tx, stderr_rx) = mpsc::unbounded_channel::<String>();
-        let (result_tx, result_rx) = mpsc::unbounded_channel();
-
-        // Build request
         let request = ExecProtocol::build_exec_request(&command);
 
         tracing::debug!(command = %command.command, "exec RPC: sending request");
@@ -67,8 +60,37 @@ impl ExecutionInterface {
         }
 
         let execution_id = exec_response.execution_id.clone();
-
         tracing::debug!(execution_id = %execution_id, "spawning background streams");
+        Ok(self.wire_streams(execution_id, shutdown_token))
+    }
+
+    /// Reattach to an already-running execution by id.
+    ///
+    /// Skips the exec RPC and wires fresh stdin/attach/wait pumps against the
+    /// existing `execution_id`. The guest replays recent scrollback then tails
+    /// live output, so a reconnecting client resumes a still-running process
+    /// (e.g. after a runner update dropped the previous terminal session).
+    pub async fn attach(
+        &mut self,
+        execution_id: &str,
+        shutdown_token: CancellationToken,
+    ) -> BoxliteResult<ExecComponents> {
+        tracing::debug!(execution_id = %execution_id, "reattaching to existing execution");
+        Ok(self.wire_streams(execution_id.to_string(), shutdown_token))
+    }
+
+    /// Create per-stream channels and spawn the stdin/attach/wait pumps for an
+    /// `execution_id`. Shared by `exec` (after the exec RPC starts the process)
+    /// and `attach` (which reconnects without re-spawning).
+    fn wire_streams(
+        &self,
+        execution_id: String,
+        shutdown_token: CancellationToken,
+    ) -> ExecComponents {
+        let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (stdout_tx, stdout_rx) = mpsc::unbounded_channel::<String>();
+        let (stderr_tx, stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (result_tx, result_rx) = mpsc::unbounded_channel();
 
         // Spawn stdin pump (cancellable — exits cleanly during shutdown)
         ExecProtocol::spawn_stdin(
@@ -95,13 +117,13 @@ impl ExecutionInterface {
             shutdown_token,
         );
 
-        Ok(ExecComponents {
+        ExecComponents {
             execution_id,
             stdin_tx,
             stdout_rx,
             stderr_rx,
             result_rx,
-        })
+        }
     }
 
     /// Wait for execution to complete.
@@ -207,7 +229,7 @@ impl ExecProtocol {
         use boxlite_shared::TtyConfig;
 
         ExecRequest {
-            execution_id: None,
+            execution_id: command.execution_id.clone(),
             program: command.command.clone(),
             args: command.args.clone(),
             env: command

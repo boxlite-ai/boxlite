@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -13,6 +14,16 @@ import (
 )
 
 var execManager = boxlite.NewExecManager()
+
+// ConfigureExecPersistence installs the durable exec store on the package
+// exec manager and reattaches to any executions that survived a prior runner
+// process (e.g. a rolling update of a detached box's runner). Call once at
+// startup, before the API server begins serving /attach, so recovered execs
+// are already registered when the first client reconnects.
+func ConfigureExecPersistence(ctx context.Context, store boxlite.ExecStore, fetch boxlite.BoxFetcher) {
+	execManager.SetStore(store)
+	execManager.Recover(ctx, fetch)
+}
 
 type ExecRequest struct {
 	Command        string            `json:"command"`

@@ -11,7 +11,7 @@
 //! channel inside `ExecStdin::write` and never block on a Tokio worker.
 
 use futures::StreamExt;
-use std::os::raw::{c_int, c_void};
+use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -41,6 +41,7 @@ use crate::event_queue::{
     CExecutionKillCb, CExecutionResizeCb, CExecutionSignalCb, CExecutionWaitCb, EventQueue,
     RuntimeEvent, push_event,
 };
+use crate::util::c_str_to_string;
 use crate::{CBoxHandle, CBoxliteError, CExecutionHandle};
 
 /// Opaque handle to a running command execution.
@@ -102,6 +103,24 @@ pub unsafe extern "C" fn boxlite_box_exec(
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
     box_exec(handle, cmd, out_execution, out_error)
+}
+
+/// Re-attach to an already-running execution by its id.
+///
+/// Mirrors `boxlite_box_exec` but, instead of spawning a new process, looks up
+/// a live execution in the guest and rebuilds the replayable stdout/stderr/exit
+/// streams. Used to reconnect to a long-running interactive process after the
+/// original terminal session was dropped (e.g. a runner update). The returned
+/// handle behaves identically to one from `boxlite_box_exec`: register
+/// `_on_stdout`/`_on_stderr`/`_on_exit`, write stdin, wait, kill, resize.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_box_attach_execution(
+    handle: *mut CBoxHandle,
+    execution_id: *const c_char,
+    out_execution: *mut *mut CExecutionHandle,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    box_attach_execution(handle, execution_id, out_execution, out_error)
 }
 
 #[unsafe(no_mangle)]
@@ -246,6 +265,75 @@ unsafe fn box_exec(
         // which only sets up channels; it does not spawn the process loop.
         let lite = handle_ref.handle.clone();
         let result = handle_ref.tokio_rt.block_on(lite.exec(command));
+
+        match result {
+            Ok(mut execution) => {
+                let stdin = execution.stdin();
+                let stdout = execution.stdout();
+                let stderr = execution.stderr();
+
+                let exec_handle = ExecutionHandle {
+                    execution: Arc::new(Mutex::new(Some(execution))),
+                    stdin,
+                    pending_stdout: stdout,
+                    pending_stderr: stderr,
+                    pumps: Mutex::new(Vec::new()),
+                    exit_pump_handle: Mutex::new(None),
+                    stream_done_rx: Mutex::new(Vec::new()),
+                    exit_dispatch: Mutex::new(None),
+                    queue: handle_ref.queue.clone(),
+                    tokio_rt: handle_ref.tokio_rt.clone(),
+                    process_completed: Arc::new(AtomicBool::new(false)),
+                    exit_dispatched: Arc::new(AtomicBool::new(false)),
+                };
+                *out_execution = Box::into_raw(Box::new(exec_handle));
+                BoxliteErrorCode::Ok
+            }
+            Err(e) => {
+                let code = error_to_code(&e);
+                write_error(out_error, e);
+                code
+            }
+        }
+    }
+}
+
+unsafe fn box_attach_execution(
+    handle: *mut BoxHandle,
+    execution_id: *const c_char,
+    out_execution: *mut *mut ExecutionHandle,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if handle.is_null() {
+            write_error(out_error, null_pointer_error("handle"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        if execution_id.is_null() {
+            write_error(out_error, null_pointer_error("execution_id"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        if out_execution.is_null() {
+            write_error(out_error, null_pointer_error("out_execution"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        *out_execution = ptr::null_mut();
+
+        let handle_ref = &*handle;
+        let exec_id = match c_str_to_string(execution_id) {
+            Ok(id) => id,
+            Err(e) => {
+                let code = error_to_code(&e);
+                write_error(out_error, e);
+                return code;
+            }
+        };
+
+        // Synchronous handle creation: block on attach, which only re-wires the
+        // replay/stream channels against the live guest execution; it does not
+        // spawn a new process.
+        let lite = handle_ref.handle.clone();
+        let result = handle_ref.tokio_rt.block_on(lite.attach(&exec_id));
 
         match result {
             Ok(mut execution) => {
@@ -889,6 +977,7 @@ mod tests {
             user: ptr::null(),
             timeout_secs: 0.0,
             tty: 1,
+            execution_id: ptr::null(),
         };
         let mut execution: *mut ExecutionHandle = ptr::null_mut();
         let mut error = FFIError::default();

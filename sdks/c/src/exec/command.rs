@@ -28,6 +28,11 @@ pub struct BoxliteCommand {
     pub timeout_secs: f64,
     /// Enable TTY mode for interactive programs.
     pub tty: c_int,
+    /// Pin the execution id instead of letting the guest mint one. NULL/empty
+    /// = guest mints a uuid. Supply a stable id when the caller must reattach
+    /// to this exec later by the same id (e.g. `boxlite_box_attach_execution`
+    /// after a runner restart).
+    pub execution_id: *const c_char,
 }
 
 pub(super) unsafe fn parse_boxlite_command(
@@ -59,6 +64,10 @@ pub(super) unsafe fn parse_boxlite_command(
 
         if cmd.tty != 0 {
             box_cmd = box_cmd.tty(true);
+        }
+
+        if !cmd.execution_id.is_null() {
+            box_cmd = box_cmd.execution_id(c_str_to_string(cmd.execution_id)?);
         }
 
         Ok(box_cmd)

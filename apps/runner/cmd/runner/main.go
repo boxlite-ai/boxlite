@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/boxlite-ai/runner/internal"
 	"github.com/boxlite-ai/runner/internal/metrics"
 	"github.com/boxlite-ai/runner/pkg/api"
+	"github.com/boxlite-ai/runner/pkg/api/controllers"
 	"github.com/boxlite-ai/runner/pkg/backend"
 	blclient "github.com/boxlite-ai/runner/pkg/boxlite"
 	"github.com/boxlite-ai/runner/pkg/runner"
@@ -220,6 +222,22 @@ func run() int {
 			logger.Info("Starting poller service")
 			pollerService.Start(ctx)
 		}()
+	}
+
+	// Reattach to executions that survived a prior runner process (rolling
+	// update of a detached box's runner). Persistence lives under the boxlite
+	// home dir; recovery must complete before the API server serves /attach so
+	// a reconnecting client finds the re-registered exec. Best-effort: a
+	// missing/unwritable store only forfeits cross-restart reconnect.
+	if cfg.BoxliteHomeDir != "" {
+		execStore, err := blclient.NewFileExecStore(filepath.Join(cfg.BoxliteHomeDir, "runner-state", "execs"))
+		if err != nil {
+			logger.Warn("Failed to open exec store; cross-restart reconnect disabled", "error", err)
+		} else {
+			controllers.ConfigureExecPersistence(ctx, execStore, boxliteClient)
+		}
+	} else {
+		logger.Warn("BOXLITE_HOME_DIR unset; cross-restart exec reconnect disabled")
 	}
 
 	apiServer := api.NewApiServer(api.ApiServerConfig{

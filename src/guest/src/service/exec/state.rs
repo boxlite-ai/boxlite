@@ -1,4 +1,5 @@
 use crate::service::exec::exec_handle::ExecHandle;
+use crate::service::exec::output::{OutputBuffer, StreamKind};
 use boxlite_shared::ExecOutput;
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
@@ -23,10 +24,17 @@ pub(crate) trait InitHealthCheck: Send + Sync {
 
 /// Inner state that requires synchronization.
 struct Inner {
-    /// The process handle (owns pid, pty_controller, stdin, stdout, stderr)
+    /// The process handle (owns pid, pty_controller, stdin).
+    /// stdout/stderr are taken out at construction to feed the drain tasks.
     handle: Option<ExecHandle>,
-    /// Stdout/stderr forwarding tasks (set on attach)
-    output_tasks: Vec<JoinHandle<()>>,
+    /// Replayable stdout buffer (always present; drained for the exec lifetime).
+    stdout: Option<Arc<OutputBuffer>>,
+    /// Replayable stderr buffer (None in PTY mode, where stderr is merged).
+    stderr: Option<Arc<OutputBuffer>>,
+    /// Permanent drain tasks copying process output into the ring buffers.
+    /// Detached on drop; they end on their own when the process output hits EOF.
+    #[allow(dead_code)] // Held for ownership; lifecycle is driven by EOF.
+    drain_tasks: Vec<JoinHandle<()>>,
     /// Timeout flag
     #[allow(dead_code)] // Will be used for timeout handling
     timed_out: bool,
@@ -35,10 +43,43 @@ struct Inner {
     init_health: Option<Arc<Mutex<dyn InitHealthCheck>>>,
 }
 
+/// Build inner state, starting the permanent output drains.
+///
+/// stdout/stderr are taken from the handle and handed to per-stream
+/// [`OutputBuffer`]s. The drains hold the underlying fds for the whole exec
+/// lifetime, so a client disconnect never closes the PTY master.
+fn build_inner(
+    mut handle: ExecHandle,
+    init_health: Option<Arc<Mutex<dyn InitHealthCheck>>>,
+) -> Inner {
+    let mut drain_tasks = Vec::new();
+
+    let stdout = handle.stdout().map(|stream| {
+        let (buffer, task) = OutputBuffer::spawn(StreamKind::Stdout, stream);
+        drain_tasks.push(task);
+        buffer
+    });
+    let stderr = handle.stderr().map(|stream| {
+        let (buffer, task) = OutputBuffer::spawn(StreamKind::Stderr, stream);
+        drain_tasks.push(task);
+        buffer
+    });
+
+    Inner {
+        handle: Some(handle),
+        stdout,
+        stderr,
+        drain_tasks,
+        timed_out: false,
+        init_health,
+    }
+}
+
 /// Execution state.
 ///
-/// Handle owns pid, pty_controller, stdin, stdout, stderr.
-/// stdin is taken on send_input(), stdout/stderr are taken on attach().
+/// The handle owns pid, pty_controller, and stdin (taken on send_input()).
+/// stdout/stderr are drained at construction into replayable [`OutputBuffer`]s,
+/// so attach() is re-entrant and survives client disconnects.
 #[derive(Clone)]
 pub(crate) struct ExecutionState {
     inner: Arc<Mutex<Inner>>,
@@ -47,15 +88,8 @@ pub(crate) struct ExecutionState {
 impl ExecutionState {
     /// Create new execution state.
     pub(super) fn new(handle: ExecHandle) -> Self {
-        let inner = Inner {
-            handle: Some(handle),
-            output_tasks: Vec::new(),
-            timed_out: false,
-            init_health: None,
-        };
-
         Self {
-            inner: Arc::new(Mutex::new(inner)),
+            inner: Arc::new(Mutex::new(build_inner(handle, None))),
         }
     }
 
@@ -67,15 +101,8 @@ impl ExecutionState {
         handle: ExecHandle,
         init_health: Arc<Mutex<dyn InitHealthCheck>>,
     ) -> Self {
-        let inner = Inner {
-            handle: Some(handle),
-            output_tasks: Vec::new(),
-            timed_out: false,
-            init_health: Some(init_health),
-        };
-
         Self {
-            inner: Arc::new(Mutex::new(inner)),
+            inner: Arc::new(Mutex::new(build_inner(handle, Some(init_health)))),
         }
     }
 
@@ -241,81 +268,26 @@ impl ExecutionState {
 
     /// Attach to execution output.
     ///
-    /// Takes stdout/stderr from handle and starts forwarding tasks.
-    /// Returns stream of output chunks.
+    /// Re-entrant: each call replays recent scrollback from the per-stream ring
+    /// buffers, then tails live output. Multiple concurrent attaches are
+    /// supported, and a client disconnect only ends that subscriber — the
+    /// process and its drains keep running. This is what lets a dropped
+    /// terminal session (e.g. a runner update) reconnect to a live process.
     pub async fn attach(
         &self,
         exec_id: &str,
     ) -> Result<mpsc::Receiver<Result<ExecOutput, Status>>, Status> {
-        use boxlite_shared::{exec_output, Stderr, Stdout};
-        use futures::StreamExt;
-
         let (tx, rx) = mpsc::channel(100);
 
-        // Take stdout/stderr from handle
-        let (stdout, stderr) = {
-            let mut inner = self.inner.lock().await;
-
-            if !inner.output_tasks.is_empty() {
-                return Err(Status::already_exists("Already attached"));
-            }
-
-            let handle = inner
-                .handle
-                .as_mut()
-                .ok_or_else(|| Status::failed_precondition("Handle not available"))?;
-
-            let stdout = handle.stdout();
-            let stderr = handle.stderr();
-
-            (stdout, stderr)
-        };
-
-        // Spawn forwarding tasks
-        let mut tasks = Vec::new();
-
-        // Spawn stdout forwarding task
-        let exec_id_string = exec_id.to_string();
-        if let Some(mut stdout) = stdout {
-            let tx = tx.clone();
-            let handle = tokio::spawn(async move {
-                while let Some(chunk) = stdout.next().await {
-                    let msg = ExecOutput {
-                        event: Some(exec_output::Event::Stdout(Stdout { data: chunk })),
-                    };
-                    if tx.send(Ok(msg)).await.is_err() {
-                        break;
-                    }
-                }
-                info!(execution = ?exec_id_string, "Stdout forwarding task ended");
-            });
-            tasks.push(handle);
+        let inner = self.inner.lock().await;
+        if let Some(stdout) = &inner.stdout {
+            stdout.attach(tx.clone());
+        }
+        if let Some(stderr) = &inner.stderr {
+            stderr.attach(tx.clone());
         }
 
-        // Spawn stderr forwarding task
-        let exec_id_string = exec_id.to_string();
-        if let Some(mut stderr) = stderr {
-            let tx = tx.clone();
-            let handle = tokio::spawn(async move {
-                while let Some(chunk) = stderr.next().await {
-                    let msg = ExecOutput {
-                        event: Some(exec_output::Event::Stderr(Stderr { data: chunk })),
-                    };
-                    if tx.send(Ok(msg)).await.is_err() {
-                        break;
-                    }
-                }
-                info!(execution = ?exec_id_string, "Stderr forwarding task ended");
-            });
-            tasks.push(handle);
-        }
-
-        // Store tasks
-        {
-            let mut inner = self.inner.lock().await;
-            inner.output_tasks = tasks;
-        }
-
+        info!(execution = %exec_id, "attach: replaying scrollback and tailing live output");
         Ok(rx)
     }
 

@@ -35,6 +35,12 @@ pub struct BoxCommand {
     pub(crate) working_dir: Option<String>,
     pub(crate) tty: bool,
     pub(crate) user: Option<String>,
+    /// Caller-supplied execution id. `None` lets the guest mint a fresh uuid.
+    /// A caller that needs a stable id across a reconnect (e.g. the runner,
+    /// which persists it to reattach after a restart) supplies its own so the
+    /// same id keys the guest registry, the caller's bookkeeping, and the
+    /// later `attach`.
+    pub(crate) execution_id: Option<String>,
 }
 
 impl BoxCommand {
@@ -48,6 +54,7 @@ impl BoxCommand {
             working_dir: None,
             tty: false,
             user: None,
+            execution_id: None,
         }
     }
 
@@ -102,6 +109,16 @@ impl BoxCommand {
     pub fn user(mut self, spec: impl Into<String>) -> Self {
         let s = spec.into();
         self.user = if s.trim().is_empty() { None } else { Some(s) };
+        self
+    }
+
+    /// Pin the execution id instead of letting the guest mint one.
+    ///
+    /// Empty is treated as unset (guest mints a uuid). Supply a stable id when
+    /// you must reattach to this exec later by the same id (see field docs).
+    pub fn execution_id(mut self, id: impl Into<String>) -> Self {
+        let s = id.into();
+        self.execution_id = if s.trim().is_empty() { None } else { Some(s) };
         self
     }
 }

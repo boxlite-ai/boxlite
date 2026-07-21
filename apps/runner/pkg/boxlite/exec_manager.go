@@ -86,6 +86,12 @@ type ExecManager struct {
 	// stop signals cleanupLoop to exit (graceful shutdown / test teardown).
 	stopOnce sync.Once
 	stop     chan struct{}
+
+	// store persists ExecRecords so a runner restart can reattach to
+	// still-running guest processes (PR-3). nil disables persistence — the
+	// default for tests, which use Register + SetExecHandle instead of Start.
+	// Set once at startup via SetStore before the API server accepts requests.
+	store ExecStore
 }
 
 type ManagedExec struct {
@@ -290,6 +296,115 @@ func NewExecManager() *ExecManager {
 	return m
 }
 
+// SetStore installs the persistence backend used to survive runner restarts.
+// Call once at startup, before Start is invoked, so every started exec is
+// recorded. A nil store leaves persistence disabled.
+func (m *ExecManager) SetStore(store ExecStore) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.store = store
+}
+
+func (m *ExecManager) getStore() ExecStore {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.store
+}
+
+// persist records an exec so Recover can reattach after a restart. Failure is
+// logged, not fatal: a missing record only costs the ability to reconnect
+// after a restart, which is strictly better than failing the exec itself.
+func (m *ExecManager) persist(rec ExecRecord) {
+	store := m.getStore()
+	if store == nil {
+		return
+	}
+	if err := store.Save(rec); err != nil {
+		slog.Warn("boxlite: failed to persist exec record",
+			"exec_id", rec.ExecID, "box_id", rec.BoxID, "err", err)
+	}
+}
+
+// deletePersisted removes an exec's record once it exits or is reaped, so a
+// later restart does not try to reattach to a dead process. nil-store safe.
+func (m *ExecManager) deletePersisted(execID string) {
+	store := m.getStore()
+	if store == nil {
+		return
+	}
+	if err := store.Delete(execID); err != nil {
+		slog.Warn("boxlite: failed to delete exec record", "exec_id", execID, "err", err)
+	}
+}
+
+// BoxFetcher is the subset of the boxlite client Recover needs. The runner's
+// *Client satisfies it directly (GetBox recovers detached boxes from the
+// runtime), so no adapter is needed at the call site.
+type BoxFetcher interface {
+	GetBox(ctx context.Context, boxID string) (*boxlite.Box, error)
+}
+
+// Recover reattaches to every persisted exec whose box is still alive. Called
+// once at startup after the boxlite client is ready and before the API server
+// accepts /attach requests. A record whose box is gone, or whose process has
+// already exited (attach fails), is dropped — recovery is best-effort and must
+// never block startup on a single stale entry.
+func (m *ExecManager) Recover(ctx context.Context, fetch BoxFetcher) {
+	store := m.getStore()
+	if store == nil {
+		return
+	}
+	records, err := store.List()
+	if err != nil {
+		slog.Warn("boxlite: failed to list persisted execs, skipping recovery", "err", err)
+		return
+	}
+	if len(records) == 0 {
+		return
+	}
+	slog.Info("boxlite: recovering executions", "count", len(records))
+	for _, rec := range records {
+		bx, err := fetch.GetBox(ctx, rec.BoxID)
+		if err != nil {
+			slog.Info("boxlite: dropping exec record, box unavailable",
+				"exec_id", rec.ExecID, "box_id", rec.BoxID, "err", err)
+			m.deletePersisted(rec.ExecID)
+			continue
+		}
+		if err := m.Attach(ctx, bx, rec); err != nil {
+			slog.Info("boxlite: dropping exec record, reattach failed",
+				"exec_id", rec.ExecID, "box_id", rec.BoxID, "err", err)
+			m.deletePersisted(rec.ExecID)
+			continue
+		}
+		slog.Info("boxlite: reattached execution", "exec_id", rec.ExecID, "box_id", rec.BoxID)
+	}
+}
+
+// Attach reattaches to an already-running execution via the SDK and registers
+// a fresh ManagedExec so /attach can find it. Mirrors Start but skips process
+// creation: the guest replays recent scrollback into the new streamBus, then
+// tails live output.
+func (m *ExecManager) Attach(ctx context.Context, bx *boxlite.Box, rec ExecRecord) error {
+	exec := newManagedExec(rec.ExecID, rec.BoxID, rec.TTY)
+	// Preserve the original creation time so the session-lifetime cap counts
+	// from the real start, not from this restart.
+	if rec.CreatedUnix > 0 {
+		exec.created = time.Unix(rec.CreatedUnix, 0)
+	}
+
+	execution, err := bx.AttachExecution(ctx, rec.ExecID, &boxlite.ExecutionOptions{
+		TTY:    rec.TTY,
+		Stdout: exec.stdoutBus,
+		Stderr: exec.stderrBus,
+	})
+	if err != nil {
+		return fmt.Errorf("attach execution %s: %w", rec.ExecID, err)
+	}
+	m.adopt(exec, execution)
+	return nil
+}
+
 // resolveDuration reads an env var as a Go duration, falling back to fallback
 // if unset, empty, or unparseable. A bad value is logged once at startup so
 // operators don't silently inherit the default.
@@ -347,39 +462,66 @@ type StartOptions struct {
 
 func (m *ExecManager) Start(ctx context.Context, bx *boxlite.Box, boxID string, opts StartOptions) (string, error) {
 	id := uuid.New().String()
-
-	now := time.Now()
-	exec := &ManagedExec{
-		ID:        id,
-		BoxID:     boxID,
-		stdoutBus: newStreamBus(streamBusBacklogCap),
-		stderrBus: newStreamBus(streamBusBacklogCap),
-		Done:      make(chan struct{}),
-		TTY:       opts.TTY,
-		created:   now,
-		// Start the reap clock from creation so a client that never
-		// calls /attach still escalates through SIGHUP→SIGTERM→SIGKILL
-		// at the reconnect_grace boundary. The first successful
-		// MarkConnected() zeros LastDisconnectAt, pausing the clock.
-		LastDisconnectAt: now,
-	}
+	exec := newManagedExec(id, boxID, opts.TTY)
 
 	// Pass the streamBus sinks directly to the SDK — no io.Pipe between
 	// the producer and the fan-out. The SDK's pump calls bus.Write, which
 	// captures into the bounded backlog AND fans out to live subscribers
 	// in one mutex-guarded operation. Subscribers attached before any
 	// Write observe the backlog snapshot on Subscribe.
+	// Pin the guest execution id to our own id so the same value keys the
+	// registry map, the persisted record, and a later AttachExecution after a
+	// restart. Without this the guest would mint its own uuid and recovery
+	// could never find the process to reattach.
 	execution, err := bx.StartExecution(ctx, opts.Command, opts.Args, &boxlite.ExecutionOptions{
-		TTY:        opts.TTY,
-		Stdout:     exec.stdoutBus,
-		Stderr:     exec.stderrBus,
-		Env:        opts.Env,
-		WorkingDir: opts.WorkingDir,
-		Timeout:    opts.Timeout,
+		TTY:         opts.TTY,
+		Stdout:      exec.stdoutBus,
+		Stderr:      exec.stderrBus,
+		Env:         opts.Env,
+		WorkingDir:  opts.WorkingDir,
+		Timeout:     opts.Timeout,
+		ExecutionID: id,
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to start execution: %w", err)
 	}
+	m.adopt(exec, execution)
+
+	// Persist AFTER registration so a restart can reattach. Best-effort:
+	// a failed write only forfeits post-restart reconnect, never the exec.
+	m.persist(ExecRecord{
+		ExecID:      id,
+		BoxID:       boxID,
+		TTY:         opts.TTY,
+		CreatedUnix: exec.created.Unix(),
+	})
+
+	return id, nil
+}
+
+// newManagedExec builds a ManagedExec with fresh per-stream buses and the reap
+// clock started from creation, so a client that never calls /attach still
+// escalates through SIGHUP→SIGTERM→SIGKILL at the reconnect_grace boundary.
+// The first successful MarkConnected() zeros LastDisconnectAt, pausing it.
+func newManagedExec(id, boxID string, tty bool) *ManagedExec {
+	now := time.Now()
+	return &ManagedExec{
+		ID:               id,
+		BoxID:            boxID,
+		stdoutBus:        newStreamBus(streamBusBacklogCap),
+		stderrBus:        newStreamBus(streamBusBacklogCap),
+		Done:             make(chan struct{}),
+		TTY:              tty,
+		created:          now,
+		LastDisconnectAt: now,
+	}
+}
+
+// adopt wires an SDK execution into a ManagedExec, starts the wait goroutine,
+// and registers it. Shared by Start (fresh process) and Attach (reconnect):
+// both end with a live handle whose exit must close Done, drain the buses,
+// close the handle, and drop the persisted record.
+func (m *ExecManager) adopt(exec *ManagedExec, execution *boxlite.Execution) {
 	handle := sdkExec{inner: execution}
 	exec.execution = handle
 	exec.stdinW = execution.Stdin
@@ -394,6 +536,8 @@ func (m *ExecManager) Start(ctx context.Context, bx *boxlite.Box, boxID string, 
 			exec.closed = true
 			exec.handleMu.Unlock()
 		}()
+		// The process is done; a restart must not reattach to it.
+		defer m.deletePersisted(exec.ID)
 
 		exitCode, err := handle.Wait(context.Background())
 		exec.ExitCode = exitCode
@@ -401,10 +545,8 @@ func (m *ExecManager) Start(ctx context.Context, bx *boxlite.Box, boxID string, 
 	}()
 
 	m.mu.Lock()
-	m.execs[id] = exec
+	m.execs[exec.ID] = exec
 	m.mu.Unlock()
-
-	return id, nil
 }
 
 // Subscribe registers a fan-out subscriber on both the stdout and stderr
@@ -495,6 +637,7 @@ func (m *ExecManager) Kill(id string) error {
 	m.mu.Lock()
 	delete(m.execs, id)
 	m.mu.Unlock()
+	m.deletePersisted(id)
 
 	if e.stdoutBus != nil {
 		e.stdoutBus.close()
@@ -757,6 +900,7 @@ func (m *ExecManager) killAndEvict(e *ManagedExec) {
 	m.mu.Lock()
 	delete(m.execs, e.ID)
 	m.mu.Unlock()
+	m.deletePersisted(e.ID)
 
 	if e.stdoutBus != nil {
 		e.stdoutBus.close()
@@ -780,6 +924,7 @@ func (m *ExecManager) evictExited(e *ManagedExec) {
 	}
 	delete(m.execs, e.ID)
 	m.mu.Unlock()
+	m.deletePersisted(e.ID)
 
 	if e.stdoutBus != nil {
 		e.stdoutBus.close()

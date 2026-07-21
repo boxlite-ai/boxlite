@@ -306,6 +306,35 @@ impl BoxImpl {
         ))
     }
 
+    /// Reattach to an already-running execution by id.
+    ///
+    /// Mirrors [`exec`](Self::exec) but skips spawning a process: it wires
+    /// fresh stdin/stdout/stderr/result channels to the existing execution so
+    /// a dropped terminal session can resume a still-running process. The
+    /// guest replays recent scrollback then tails live output.
+    pub(crate) async fn attach(&self, execution_id: &str) -> BoxliteResult<Execution> {
+        if self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+            ));
+        }
+
+        let live = self.live_state().await?;
+        let mut exec_interface = live.guest_session.execution().await?;
+        let components = exec_interface
+            .attach(execution_id, self.shutdown_token.clone())
+            .await?;
+
+        Ok(Execution::new(
+            components.execution_id,
+            Box::new(exec_interface),
+            components.result_rx,
+            Some(ExecStdin::new(components.stdin_tx)),
+            Some(ExecStdout::new(components.stdout_rx)),
+            Some(ExecStderr::new(components.stderr_rx)),
+        ))
+    }
+
     pub(crate) async fn metrics(&self) -> BoxliteResult<BoxMetrics> {
         // Check if box is stopped before proceeding (via stop() or runtime shutdown)
         if self.shutdown_token.is_cancelled() {
@@ -1118,6 +1147,10 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
 
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {
         self.exec(command).await
+    }
+
+    async fn attach(&self, execution_id: &str) -> BoxliteResult<Execution> {
+        self.attach(execution_id).await
     }
 
     async fn metrics(&self) -> BoxliteResult<BoxMetrics> {

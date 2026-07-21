@@ -19,6 +19,7 @@
 #[cfg(target_os = "linux")]
 pub mod exec_handle;
 pub(in crate::service) mod executor;
+mod output;
 pub(in crate::service) mod registry;
 mod state;
 mod timeout;
