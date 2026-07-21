@@ -321,6 +321,9 @@ class TestCmdIntegration:
             )
         )
         try:
+            # A box with a cmd is the user's main command: exec refuses to boot
+            # it as a side effect, so start it explicitly first.
+            sandbox.start()
             # Run a command to verify the box started successfully with cmd
             execution = sandbox.exec("echo", ["cmd-override-works"])
             stdout_lines = list(execution.stdout())
