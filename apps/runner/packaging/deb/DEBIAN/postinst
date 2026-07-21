@@ -13,6 +13,7 @@ if [ ! -f /etc/boxlite/runner.env ]; then
 # Add your configuration here, for example:
 # BOXLITE_API_URL=https://api.boxlite.io
 # BOXLITE_RUNNER_TOKEN=your-token-here
+# VOLUME_BUCKET_PREFIX=boxlite-production-volume-
 EOF
     chmod 600 /etc/boxlite/runner.env
 fi

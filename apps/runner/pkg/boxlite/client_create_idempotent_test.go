@@ -32,7 +32,7 @@ func boolPtr(b bool) *bool { return &b }
 func TestIntegrationCreateBoxIdempotentOnReplay(t *testing.T) {
 	ctx := context.Background()
 
-	client, err := NewClient(ctx, ClientConfig{HomeDir: t.TempDir()})
+	client, err := NewClient(ctx, ClientConfig{HomeDir: t.TempDir(), VolumeBucketPrefix: "boxlite-test-volume-"})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}

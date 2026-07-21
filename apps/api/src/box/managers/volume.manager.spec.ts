@@ -4,7 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
+import { CreateBucketCommand, ListObjectsV2Command, PutBucketTaggingCommand, S3Client } from '@aws-sdk/client-s3'
+import { Volume } from '../entities/volume.entity'
+import { VolumeState } from '../enums/volume-state.enum'
+import * as deleteS3BucketUtils from '../../common/utils/delete-s3-bucket'
 import { VolumeManager } from './volume.manager'
 
 const mockSend = jest.fn()
@@ -86,5 +89,78 @@ describe('VolumeManager S3 client setup', () => {
     expect(() => buildManager({ 's3.endpoint': 'http://minio:9000', 's3.region': 'us-east-1' })).toThrow(
       /MinIO requires S3_ACCESS_KEY and S3_SECRET_KEY/,
     )
+  })
+
+  it('creates buckets using the configured volume bucket prefix and volume id', async () => {
+    mockSend.mockResolvedValue({})
+    const volume = new Volume()
+    volume.id = 'volume-1'
+    volume.organizationId = 'org-1'
+    volume.state = VolumeState.PENDING_CREATE
+
+    const volumeRepository = {
+      find: jest.fn(async () => [volume]),
+      save: jest.fn(async (value) => value),
+    }
+    const redis = { setex: jest.fn() }
+    const redisLockProvider = {
+      lock: jest.fn(async () => true),
+      unlock: jest.fn(async () => undefined),
+    }
+    const manager = new VolumeManager(
+      volumeRepository as any,
+      {
+        get: jest.fn((key: string) => ({ ...awsConfig, 's3.volumeBucketPrefix': 'boxlite-dev-volume-', environment: 'test' })[key]),
+        getOrThrow: jest.fn((key: string) => ({ ...awsConfig, 's3.volumeBucketPrefix': 'boxlite-dev-volume-', environment: 'test' })[key]),
+      } as any,
+      redis as any,
+      redisLockProvider as any,
+      {} as any,
+    )
+
+    await manager.processPendingVolumes()
+
+    expect(CreateBucketCommand).toHaveBeenCalledWith({ Bucket: 'boxlite-dev-volume-volume-1' })
+    expect(PutBucketTaggingCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ Bucket: 'boxlite-dev-volume-volume-1' }),
+    )
+  })
+
+  it('deletes buckets using the configured volume bucket prefix and volume id', async () => {
+    const deleteBucket = jest.spyOn(deleteS3BucketUtils, 'deleteS3Bucket').mockResolvedValue(undefined)
+    try {
+      const volume = new Volume()
+      volume.id = 'volume-1'
+      volume.organizationId = 'org-1'
+      volume.name = 'data'
+      volume.state = VolumeState.PENDING_DELETE
+
+      const volumeRepository = {
+        find: jest.fn(async () => [volume]),
+        delete: jest.fn(async () => undefined),
+        save: jest.fn(async (value) => value),
+      }
+      const redis = { setex: jest.fn() }
+      const redisLockProvider = {
+        lock: jest.fn(async () => true),
+        unlock: jest.fn(async () => undefined),
+      }
+      const manager = new VolumeManager(
+        volumeRepository as any,
+        {
+          get: jest.fn((key: string) => ({ ...awsConfig, 's3.volumeBucketPrefix': 'boxlite-dev-volume-' })[key]),
+          getOrThrow: jest.fn((key: string) => ({ ...awsConfig, 's3.volumeBucketPrefix': 'boxlite-dev-volume-' })[key]),
+        } as any,
+        redis as any,
+        redisLockProvider as any,
+        {} as any,
+      )
+
+      await manager.processPendingVolumes()
+
+      expect(deleteBucket).toHaveBeenCalledWith(expect.anything(), 'boxlite-dev-volume-volume-1')
+    } finally {
+      deleteBucket.mockRestore()
+    }
   })
 })

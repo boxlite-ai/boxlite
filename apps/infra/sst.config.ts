@@ -278,6 +278,13 @@ export default $config({
     const s3AccessRoleName = `${$app.name}-${$app.stage}-s3-access`
     const s3AccessRoleArn = $interpolate`arn:aws:iam::${aws.getCallerIdentityOutput().accountId}:role/${s3AccessRoleName}`
 
+    // WARNING: Immutable after volumes exist. Changing this orphans existing volume buckets.
+    const volumeBucketPrefix = requireEnv(
+      'VOLUME_BUCKET_PREFIX',
+      'to preserve volume bucket identity across deployments',
+    )
+    const volumeBucketArn = `arn:aws:s3:::${volumeBucketPrefix}*`
+    const volumeObjectArn = `arn:aws:s3:::${volumeBucketPrefix}*/*`
     // ─── 4. AUTH ─────────────────────────────────────────────────────────────
     // OIDC is delegated to an external provider (Auth0/Okta/etc.) via
     // OIDC_ISSUER_BASE_URL. No in-cluster Dex — removes one ALB + ACM cert +
@@ -443,7 +450,7 @@ export default $config({
             's3:DeleteObjectVersion',
             's3:DeleteBucket',
           ],
-          resources: ['arn:aws:s3:::boxlite-volume-*', 'arn:aws:s3:::boxlite-volume-*/*'],
+          resources: [volumeBucketArn, volumeObjectArn],
         },
       ],
       scaling: { min: 1, max: 4 },
@@ -540,7 +547,7 @@ export default $config({
         S3_DEFAULT_BUCKET: storage.name,
         S3_ACCOUNT_ID: aws.getCallerIdentityOutput().accountId,
         S3_ROLE_NAME: s3AccessRoleName,
-
+        VOLUME_BUCKET_PREFIX: volumeBucketPrefix,
         // Proxy
         PROXY_DOMAIN: envOr('PROXY_DOMAIN', `proxy.${stackDomain}`),
         PROXY_PROTOCOL: envOr('PROXY_PROTOCOL', 'https'),
@@ -823,12 +830,12 @@ export default $config({
           {
             Effect: 'Allow',
             Action: ['s3:ListBucket'],
-            Resource: ['arn:aws:s3:::boxlite-volume-*'],
+            Resource: [volumeBucketArn],
           },
           {
             Effect: 'Allow',
             Action: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject', 's3:AbortMultipartUpload'],
-            Resource: ['arn:aws:s3:::boxlite-volume-*/*'],
+            Resource: [volumeObjectArn],
           },
         ],
       }),
@@ -905,8 +912,16 @@ export default $config({
       defaultRunnerApiKey.result,
       otelCollectorOtlpHttpUrl,
       ghcrSecret ? ghcrSecret.arn : '',
-    ]).apply(([apiUrl, token, otelEndpoint, ghcrSecretArn]) =>
-      buildRunnerUserData({ apiUrl, token, otelEndpoint, ghcrSecretArn: ghcrSecretArn || undefined, ghcrUsername }),
+      volumeBucketPrefix,
+    ]).apply(([apiUrl, token, otelEndpoint, ghcrSecretArn, resolvedVolumeBucketPrefix]) =>
+      buildRunnerUserData({
+        apiUrl,
+        token,
+        otelEndpoint,
+        ghcrSecretArn: ghcrSecretArn || undefined,
+        ghcrUsername,
+        volumeBucketPrefix: resolvedVolumeBucketPrefix,
+      }),
     )
 
     // Runners hold load-bearing box state (/var/lib/boxlite + in-memory libkrun VMs).
@@ -935,8 +950,8 @@ export default $config({
           iamInstanceProfile: runnerInstanceProfile.name,
           cpuOptions: { nestedVirtualization: 'enabled' },
           // Enforce IMDSv2 + a 1-hop limit so a container escape or SSRF on this
-          // untrusted-code host can't read the instance-role creds (S3
-          // boxlite-volume-*, the ghcr token in Secrets Manager, SSM).
+          // untrusted-code host can't read the instance-role creds (stage-scoped
+          // volume buckets, the ghcr token in Secrets Manager, SSM).
           metadataOptions: { httpEndpoint: 'enabled', httpTokens: 'required', httpPutResponseHopLimit: 1 },
           userDataBase64: userData,
           rootBlockDevice: { volumeSize: RUNNER.rootDiskGB },
@@ -975,9 +990,16 @@ export default $config({
       const instance = makeRunner(
         `Runner-${name}`,
         `boxlite-runner-${index}`,
-        $resolve([api.url, apiKey.result, otelCollectorOtlpHttpUrl, ghcrSecret ? ghcrSecret.arn : '']).apply(
-          ([apiUrl, token, otelEndpoint, ghcrSecretArn]) =>
-            buildRunnerUserData({ apiUrl, token, otelEndpoint, ghcrSecretArn: ghcrSecretArn || undefined, ghcrUsername }),
+        $resolve([api.url, apiKey.result, otelCollectorOtlpHttpUrl, ghcrSecret ? ghcrSecret.arn : '', volumeBucketPrefix]).apply(
+          ([apiUrl, token, otelEndpoint, ghcrSecretArn, resolvedVolumeBucketPrefix]) =>
+            buildRunnerUserData({
+              apiUrl,
+              token,
+              otelEndpoint,
+              ghcrSecretArn: ghcrSecretArn || undefined,
+              ghcrUsername,
+              volumeBucketPrefix: resolvedVolumeBucketPrefix,
+            }),
         ),
       )
       return { name, apiKey, instance }
@@ -1018,6 +1040,7 @@ async function buildRunnerUserData(input: {
   otelEndpoint: string
   ghcrSecretArn?: string
   ghcrUsername?: string
+  volumeBucketPrefix: string
 }): Promise<string> {
   const { readFileSync } = await import('fs')
   const { resolve } = await import('path')
@@ -1134,6 +1157,7 @@ Environment=API_PORT=${PORTS.RUNNER}
 Environment=RUNNER_DOMAIN=\$HOST_IP
 Environment=BOXLITE_HOME_DIR=/var/lib/boxlite
 Environment=AWS_REGION=${REGION}
+Environment=VOLUME_BUCKET_PREFIX=${input.volumeBucketPrefix}
 Environment=OTEL_LOGGING_ENABLED=true
 Environment=OTEL_TRACING_ENABLED=true
 Environment=OTEL_EXPORTER_OTLP_ENDPOINT=${input.otelEndpoint}${input.ghcrSecretArn ? `

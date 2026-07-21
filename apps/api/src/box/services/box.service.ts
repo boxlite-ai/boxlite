@@ -170,10 +170,9 @@ export class BoxService {
 
       this.organizationService.assertOrganizationIsNotSuspended(organization)
 
-      if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
-        const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
-        await this.volumeService.validateVolumes(organization.id, volumeIdOrNames)
-      } else if (image) {
+      const boxVolumes = await this.resolveVolumes(organization.id, createBoxDto.volumes)
+
+      if (!boxVolumes.length && image) {
         //  No volumes requested — try to claim a pre-warmed box matching this image/spec
         //  before creating a fresh one.
         const skipWarmPool = (await this.redis.exists(`warm-pool:skip:${image}`)) === 1
@@ -238,9 +237,7 @@ export class BoxService {
         box.autoDeleteInterval = createBoxDto.autoDeleteInterval
       }
 
-      if (createBoxDto.volumes !== undefined) {
-        box.volumes = this.resolveVolumes(createBoxDto.volumes)
-      }
+      box.volumes = boxVolumes
 
       box.runnerId = runner.id
       box.pending = true
@@ -1486,20 +1483,35 @@ export class BoxService {
     return networkAllowList
   }
 
-  private resolveVolumes(volumes: BoxVolume[]): BoxVolume[] {
+  private async resolveVolumes(organizationId: string, volumes?: BoxVolume[]): Promise<BoxVolume[]> {
+    if (!volumes?.length) {
+      return []
+    }
+
+    const readyVolumes = await this.volumeService.resolveReadyVolumes(
+      organizationId,
+      volumes.map((volume) => volume.volumeId),
+    )
+
+    const resolvedVolumes = volumes.map((volume, index) => ({
+      volumeId: readyVolumes[index].id,
+      mountPath: volume.mountPath,
+      ...(volume.subpath !== undefined ? { subpath: volume.subpath } : {}),
+    }))
+
     try {
-      validateMountPaths(volumes)
+      validateMountPaths(resolvedVolumes)
     } catch (error) {
       throw new BadRequestError(error instanceof Error ? error.message : 'Invalid volume mount configuration')
     }
 
     try {
-      validateSubpaths(volumes)
+      validateSubpaths(resolvedVolumes)
     } catch (error) {
       throw new BadRequestError(error instanceof Error ? error.message : 'Invalid volume subpath configuration')
     }
 
-    return volumes
+    return resolvedVolumes
   }
 
   async createSshAccess(boxIdOrName: string, expiresInMinutes = 60, organizationId?: string): Promise<SshAccessDto> {

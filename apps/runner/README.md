@@ -590,6 +590,7 @@ BOXLITE_RUNNER_TOKEN=dev-secret \
 API_PORT=3003 \
 RUNNER_DOMAIN=localhost \
 BOXLITE_HOME_DIR=/var/lib/boxlite \
+VOLUME_BUCKET_PREFIX=boxlite-dev-volume- \
   ./bin/boxlite-runner
 ```
 

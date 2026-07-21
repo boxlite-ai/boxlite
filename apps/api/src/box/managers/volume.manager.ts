@@ -16,6 +16,7 @@ import { Redis } from 'ioredis'
 import { RedisLockProvider } from '../common/redis-lock.provider'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { deleteS3Bucket } from '../../common/utils/delete-s3-bucket'
+import { resolveVolumeBucketName } from '../../common/utils/volume-bucket-name'
 
 import { TrackableJobExecutions } from '../../common/interfaces/trackable-job-executions'
 import { TrackJobExecution } from '../../common/decorators/track-job-execution.decorator'
@@ -74,6 +75,10 @@ export class VolumeManager
       ...(accessKeyId && secretAccessKey ? { credentials: { accessKeyId, secretAccessKey } } : {}),
       forcePathStyle: true,
     })
+  }
+
+  private getVolumeBucketName(volume: Volume): string {
+    return resolveVolumeBucketName(this.configService.getOrThrow('s3.volumeBucketPrefix'), volume.id)
   }
 
   async onModuleInit() {
@@ -211,16 +216,17 @@ export class VolumeManager
       // Refresh lock before S3 operation
       await this.redis.setex(lockKey, 30, '1')
 
-      // Create bucket in Minio/S3
+      const bucketName = this.getVolumeBucketName(volume)
+
       const createBucketCommand = new CreateBucketCommand({
-        Bucket: volume.getBucketName(),
+        Bucket: bucketName,
       })
 
       await this.s3Client.send(createBucketCommand)
 
       await this.s3Client.send(
         new PutBucketTaggingCommand({
-          Bucket: volume.getBucketName(),
+          Bucket: bucketName,
           Tagging: {
             TagSet: [
               {
@@ -275,7 +281,7 @@ export class VolumeManager
 
       // Delete bucket from Minio/S3
       try {
-        await deleteS3Bucket(this.s3Client, volume.getBucketName())
+        await deleteS3Bucket(this.s3Client, this.getVolumeBucketName(volume))
       } catch (error) {
         if (error.name === 'NoSuchBucket') {
           this.logger.warn(`Bucket for volume ${volume.id} does not exist, treating as already deleted`)

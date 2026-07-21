@@ -159,9 +159,9 @@ export class VolumeService {
     return volume
   }
 
-  async validateVolumes(organizationId: string, volumeIdOrNames: string[]): Promise<void> {
+  async resolveReadyVolumes(organizationId: string, volumeIdOrNames: string[]): Promise<Volume[]> {
     if (!volumeIdOrNames.length) {
-      return
+      return []
     }
 
     const volumes = await this.volumeRepository.find({
@@ -171,21 +171,21 @@ export class VolumeService {
       ],
     })
 
-    // Check if all requested volumes were found and are in a READY state
-    const foundIds = new Set(volumes.map((v) => v.id))
-    const foundNames = new Set(volumes.map((v) => v.name))
+    const volumesById = new Map(volumes.map((volume) => [volume.id, volume]))
+    const volumesByName = new Map(volumes.map((volume) => [volume.name, volume]))
 
-    for (const idOrName of volumeIdOrNames) {
-      if (!foundIds.has(idOrName) && !foundNames.has(idOrName)) {
+    return volumeIdOrNames.map((idOrName) => {
+      const volume = volumesById.get(idOrName) || volumesByName.get(idOrName)
+      if (!volume) {
         throw new NotFoundException(`Volume '${idOrName}' not found`)
       }
-    }
 
-    for (const volume of volumes) {
       if (volume.state !== VolumeState.READY) {
         throw new BadRequestError(`Volume '${volume.name}' is not in a ready state. Current state: ${volume.state}`)
       }
-    }
+
+      return volume
+    })
   }
 
   async getOrganizationId(params: { id: string } | { name: string; organizationId: string }): Promise<string> {

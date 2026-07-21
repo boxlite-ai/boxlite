@@ -21,7 +21,6 @@ import (
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 )
 
-const volumeMountPrefix = "boxlite-volume-"
 const volumeMountRecordDir = ".boxlite-volume-mounts"
 
 type volumeCleanupConfig struct {
@@ -50,24 +49,23 @@ func getVolumeMountBasePath() string {
 
 func (c *Client) getVolumeMounts(ctx context.Context, volumes []dto.VolumeDTO) ([]volumeMount, error) {
 	volumeMounts := make([]volumeMount, 0, len(volumes))
-
 	fuseMountedVolumes := make(map[string]bool)
 
 	for _, vol := range volumes {
-		volumeIdPrefixed := fmt.Sprintf("%s%s", volumeMountPrefix, vol.VolumeId)
-		baseMountPath := filepath.Join(getVolumeMountBasePath(), volumeIdPrefixed)
+		bucketName := fmt.Sprintf("%s%s", c.volumeBucketPrefix, vol.VolumeId)
+		baseMountPath := filepath.Join(getVolumeMountBasePath(), bucketName)
 
 		subpathStr := ""
 		if vol.Subpath != nil {
 			subpathStr = *vol.Subpath
 		}
 
-		if !fuseMountedVolumes[volumeIdPrefixed] {
-			err := c.ensureVolumeFuseMounted(ctx, volumeIdPrefixed, baseMountPath)
+		if !fuseMountedVolumes[vol.VolumeId] {
+			err := c.ensureVolumeFuseMounted(ctx, vol.VolumeId, bucketName, baseMountPath)
 			if err != nil {
 				return nil, err
 			}
-			fuseMountedVolumes[volumeIdPrefixed] = true
+			fuseMountedVolumes[vol.VolumeId] = true
 		}
 
 		bindSource := baseMountPath
@@ -82,7 +80,7 @@ func (c *Client) getVolumeMounts(ctx context.Context, volumes []dto.VolumeDTO) (
 			}
 		}
 
-		c.logger.DebugContext(ctx, "binding volume subpath", "volumeId", volumeIdPrefixed, "subpath", subpathStr, "mountPath", vol.MountPath)
+		c.logger.DebugContext(ctx, "binding volume subpath", "volumeId", vol.VolumeId, "bucketName", bucketName, "subpath", subpathStr, "mountPath", vol.MountPath)
 		volumeMounts = append(volumeMounts, volumeMount{
 			hostPath:  bindSource,
 			mountPath: vol.MountPath,
@@ -119,7 +117,7 @@ func (c *Client) ensureVolumeMountsFromMetadata(ctx context.Context, boxID strin
 	return c.recordBoxVolumeMounts(ctx, boxID, volumeMounts)
 }
 
-func (c *Client) ensureVolumeFuseMounted(ctx context.Context, volumeId string, mountPath string) error {
+func (c *Client) ensureVolumeFuseMounted(ctx context.Context, volumeId string, bucketName string, mountPath string) error {
 	c.volumeMutexesMutex.Lock()
 	volumeMutex, exists := c.volumeMutexes[volumeId]
 	if !exists {
@@ -132,7 +130,7 @@ func (c *Client) ensureVolumeFuseMounted(ctx context.Context, volumeId string, m
 	defer volumeMutex.Unlock()
 
 	if c.isDirectoryMounted(mountPath) {
-		c.logger.DebugContext(ctx, "volume already mounted", "volumeId", volumeId, "mountPath", mountPath)
+		c.logger.DebugContext(ctx, "volume already mounted", "volumeId", volumeId, "bucketName", bucketName, "mountPath", mountPath)
 		return nil
 	}
 
@@ -144,9 +142,9 @@ func (c *Client) ensureVolumeFuseMounted(ctx context.Context, volumeId string, m
 		return fmt.Errorf("failed to create mount directory %s: %s", mountPath, err)
 	}
 
-	c.logger.InfoContext(ctx, "mounting S3 volume", "volumeId", volumeId, "mountPath", mountPath)
+	c.logger.InfoContext(ctx, "mounting S3 volume", "volumeId", volumeId, "bucketName", bucketName, "mountPath", mountPath)
 
-	cmd := c.getMountCmd(ctx, volumeId, mountPath)
+	cmd := c.getMountCmd(ctx, bucketName, mountPath)
 	err = cmd.Run()
 	if err != nil {
 		if !dirExisted {
@@ -155,7 +153,7 @@ func (c *Client) ensureVolumeFuseMounted(ctx context.Context, volumeId string, m
 				c.logger.WarnContext(ctx, "failed to remove mount directory", "path", mountPath, "error", removeErr)
 			}
 		}
-		return fmt.Errorf("failed to mount S3 volume %s to %s: %s", volumeId, mountPath, err)
+		return fmt.Errorf("failed to mount S3 volume (volumeId=%s, bucketName=%s) to %s: %w", volumeId, bucketName, mountPath, err)
 	}
 
 	err = c.waitForMountReady(ctx, mountPath)
@@ -173,7 +171,7 @@ func (c *Client) ensureVolumeFuseMounted(ctx context.Context, volumeId string, m
 		return fmt.Errorf("mount %s not ready after mounting: %s", mountPath, err)
 	}
 
-	c.logger.InfoContext(ctx, "mounted S3 volume", "volumeId", volumeId, "mountPath", mountPath)
+	c.logger.InfoContext(ctx, "mounted S3 volume", "volumeId", volumeId, "bucketName", bucketName, "mountPath", mountPath)
 	return nil
 }
 
@@ -322,7 +320,7 @@ func (c *Client) CleanupOrphanedVolumeMounts(ctx context.Context) {
 	}
 	c.lastVolumeCleanup = time.Now()
 
-	mountDirs, err := filepath.Glob(filepath.Join(getVolumeMountBasePath(), volumeMountPrefix+"*"))
+	mountDirs, err := filepath.Glob(filepath.Join(getVolumeMountBasePath(), c.volumeBucketPrefix+"*"))
 	if err != nil || len(mountDirs) == 0 {
 		return
 	}
@@ -380,7 +378,7 @@ func (c *Client) getRecordedVolumeMounts() (map[string]bool, error) {
 
 		for _, path := range record.Paths {
 			cleanPath := normalizeVolumePath(path)
-			if strings.HasPrefix(cleanPath, filepath.Join(getVolumeMountBasePath(), volumeMountPrefix)) {
+			if strings.HasPrefix(cleanPath, filepath.Join(getVolumeMountBasePath(), c.volumeBucketPrefix)) {
 				inUse[cleanPath] = true
 			}
 		}
@@ -391,7 +389,7 @@ func (c *Client) getRecordedVolumeMounts() (map[string]bool, error) {
 
 func (c *Client) unmountAndRemoveDir(ctx context.Context, path string) {
 	mountBasePath := getVolumeMountBasePath()
-	volumeMountPath := filepath.Join(mountBasePath, volumeMountPrefix)
+	volumeMountPath := filepath.Join(mountBasePath, c.volumeBucketPrefix)
 	cleanPath := normalizeVolumePath(path)
 	if !strings.HasPrefix(cleanPath, volumeMountPath) {
 		return
@@ -416,7 +414,7 @@ func (c *Client) unmountAndRemoveDir(ctx context.Context, path string) {
 	}
 
 	timestamp := time.Now().Unix()
-	garbagePath := filepath.Join(mountBasePath, fmt.Sprintf("garbage-%d-%s", timestamp, strings.TrimPrefix(filepath.Base(cleanPath), volumeMountPrefix)))
+	garbagePath := filepath.Join(mountBasePath, fmt.Sprintf("garbage-%d-%s", timestamp, strings.TrimPrefix(filepath.Base(cleanPath), c.volumeBucketPrefix)))
 	c.logger.DebugContext(ctx, "renaming non-empty volume directory", "path", garbagePath)
 	if err := os.Rename(cleanPath, garbagePath); err != nil {
 		c.logger.ErrorContext(ctx, "failed to rename directory", "path", cleanPath, "error", err)

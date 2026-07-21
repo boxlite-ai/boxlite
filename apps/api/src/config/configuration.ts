@@ -4,6 +4,16 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { validateVolumeBucketPrefix } from '../common/utils/volume-bucket-name'
+
+function requiredEnv(key: string): string {
+  const value = process.env[key]
+  if (!value) {
+    throw new Error(`${key} is required`)
+  }
+  return value
+}
+
 function csvEnv(value?: string): string[] {
   return (value ?? '')
     .split(',')
@@ -93,6 +103,7 @@ const configuration = {
     defaultBucket: process.env.S3_DEFAULT_BUCKET,
     accountId: process.env.S3_ACCOUNT_ID,
     roleName: process.env.S3_ROLE_NAME,
+    volumeBucketPrefix: validateVolumeBucketPrefix(requiredEnv('VOLUME_BUCKET_PREFIX')),
   },
   notificationGatewayDisabled: process.env.NOTIFICATION_GATEWAY_DISABLED === 'true',
   skipConnections: process.env.SKIP_CONNECTIONS === 'true',
