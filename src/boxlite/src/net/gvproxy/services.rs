@@ -1065,6 +1065,5 @@ mod tests {
         let tunnel = backend.tunnel(target).await.expect("tunnel handshake");
         assert_eq!(tunnel.peer_addr(), target);
         // The owned OS fd is recoverable for an SDK handoff.
-        assert!(tunnel.into_fd().is_some());
     }
 }

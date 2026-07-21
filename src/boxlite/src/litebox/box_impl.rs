@@ -44,6 +44,16 @@ use crate::{BoxID, BoxInfo, HealthCheckOptions, HealthState};
 /// Shared reference to BoxImpl.
 pub type SharedBoxImpl = Arc<BoxImpl>;
 
+async fn create_local_tunnel(
+    network: Arc<dyn NetworkBackend>,
+    target: SocketAddr,
+) -> BoxliteResult<BoxTunnel> {
+    Ok(BoxTunnel::new(None, move || {
+        let network = Arc::clone(&network);
+        async move { network.tunnel(target).await }
+    }))
+}
+
 // ============================================================================
 // LIVE STATE
 // ============================================================================
@@ -1175,21 +1185,13 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
 #[async_trait::async_trait]
 impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
     async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
-        // Local boxes have no public URL; the tunnel carries a connector that
-        // opens the raw stream through the guest-network backend on demand.
         let network = self
             .live_state()
             .await?
             .network
             .clone()
             .ok_or_else(|| BoxliteError::Unsupported("box networking is disabled".into()))?;
-        Ok(BoxTunnel::new(
-            None,
-            Arc::new(move || {
-                let network = Arc::clone(&network);
-                Box::pin(async move { network.tunnel(target).await })
-            }),
-        ))
+        create_local_tunnel(network, target).await
     }
 }
 

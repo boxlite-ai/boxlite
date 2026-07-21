@@ -125,6 +125,8 @@ tags:
     description: File upload and download
   - name: Metrics
     description: Runtime and per-box metrics
+  - name: Network
+    description: Box networking and service access
   - name: Images
     description: Container image management
 
@@ -821,6 +823,41 @@ paths:
           $ref: "#/components/responses/ConflictError"
 
   # -------------------------------------------------------------------------
+  # Network
+  # -------------------------------------------------------------------------
+  /{prefix}/boxes/{box_id}/network/tunnel:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - name: port
+        in: query
+        required: true
+        description: TCP port listened to by the service inside the box
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        example: 3000
+    post:
+      operationId: describeBoxTunnel
+      summary: Prepare a box service tunnel connection
+      description: |
+        Returns the public service URI, CONNECT proxy URI, and a short-lived
+        single-use CONNECT credential.
+      tags: [Network]
+      responses:
+        "200":
+          description: Service tunnel descriptor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BoxServiceEndpoint"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+
+  # -------------------------------------------------------------------------
   # Metrics
   # -------------------------------------------------------------------------
   /{prefix}/metrics:
@@ -1257,6 +1294,15 @@ components:
               type: string
               description: How long idempotency keys are retained (ISO 8601 duration)
               example: PT24H
+
+    BoxServiceEndpoint:
+      type: object
+      required: [uri]
+      properties:
+        uri:
+          type: string
+          format: uri
+          description: Public URI for the box service.
 
     # =======================================================================
     # Authentication

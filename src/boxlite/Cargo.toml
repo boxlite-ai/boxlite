@@ -29,7 +29,7 @@ bubblewrap = ["dep:bubblewrap-sys"]                          # Bundled bwrap for
 krunfw = ["dep:libkrun-sys", "libkrun-sys/krunfw"]           # Package libkrunfw artifacts
 krunfw-source = ["krunfw", "libkrun-sys/krunfw-source"]      # Package source-built raw kernel and shared library; static musl packages only the raw kernel
 krun = ["krunfw", "libkrun-sys/krun"]                         # Compile the vendored libkrun runtime (and package required libkrunfw artifacts)
-rest = ["dep:reqwest", "dep:urlencoding", "dep:tokio-tungstenite"]  # REST API client backend
+rest = ["dep:hyper-rustls", "dep:reqwest", "dep:rustls", "dep:urlencoding", "dep:tokio-tungstenite"]  # REST API client backend
 embedded-runtime = []                                        # Embed runtime binaries via include_bytes!
 test-support = []                                            # Expose internal constructors for cross-crate tests
 
@@ -54,6 +54,8 @@ tower = "0.5"
 hyper-util = { version = "0.1", features = ["tokio"] }
 # gvproxy ServicesMux control client (HTTP/1.1 over the per-box unix socket).
 hyper = { version = "1", features = ["client", "http1"] }
+hyper-rustls = { version = "0.27", features = ["http1", "rustls-native-certs"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"], optional = true }
 http-body-util = "0.1"
 bytes = "1"
 uuid = { version = "1.10", features = ["v4"] }

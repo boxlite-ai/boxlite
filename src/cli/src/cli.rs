@@ -96,6 +96,9 @@ pub enum Commands {
     /// Display resource usage statistics for a box
     Stats(crate::commands::stats::StatsArgs),
 
+    /// Print the public URL for a box service port
+    Tunnel(crate::commands::tunnel::TunnelArgs),
+
     /// Start a long-running REST API server
     Serve(crate::commands::serve::ServeArgs),
 

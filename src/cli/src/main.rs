@@ -119,6 +119,7 @@ async fn run_cli(cli: Cli) -> i32 {
         cli::Commands::Info(args) => commands::info::execute(args, &global).await.map(|_| 0),
         cli::Commands::Logs(args) => commands::logs::execute(args, &global).await.map(|_| 0),
         cli::Commands::Stats(args) => commands::stats::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Tunnel(args) => commands::tunnel::execute(args, &global).await.map(|_| 0),
         cli::Commands::Serve(args) => commands::serve::execute(args, &global).await.map(|_| 0),
         cli::Commands::Auth(args) => commands::auth::run(args, &global).await.map(|_| 0),
         // Handled in main() before tokio; never reaches run_cli
