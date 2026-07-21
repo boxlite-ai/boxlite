@@ -442,15 +442,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@astrojs/internal-helpers@npm:0.8.0":
-  version: 0.8.0
-  resolution: "@astrojs/internal-helpers@npm:0.8.0"
-  dependencies:
-    picomatch: "npm:^4.0.3"
-  checksum: 10c0/1befdd71b295e028d0a940cc7d72bb75d574c7543497836fb4daaa6332fb6187cb99196d49be5ca605cc75cb9f8b87c8eeb08543ca99b0aead8295fbf3aa1245
-  languageName: node
-  linkType: hard
-
 "@astrojs/markdown-remark@npm:5.0.0":
   version: 5.0.0
   resolution: "@astrojs/markdown-remark@npm:5.0.0"
@@ -567,16 +558,16 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@astrojs/node@npm:10.0.5":
-  version: 10.0.5
-  resolution: "@astrojs/node@npm:10.0.5"
+"@astrojs/node@npm:11.0.2":
+  version: 11.0.2
+  resolution: "@astrojs/node@npm:11.0.2"
   dependencies:
-    "@astrojs/internal-helpers": "npm:0.8.0"
+    "@astrojs/internal-helpers": "npm:0.10.1"
     send: "npm:^1.2.1"
     server-destroy: "npm:^1.0.1"
   peerDependencies:
-    astro: ^6.0.0
-  checksum: 10c0/1711cdbf63fec84de0f9df8f98f882db27d9a07c38e2ad02767ba9f744f88485c8da2e84ce29771f703b866c8c521f0d88a5ceebca88ee85d9ad35252e78d15f
+    astro: ^7.0.0
+  checksum: 10c0/71a149a8726ebc870e924921f83e41a111e640783ba82b767e624da825a5f794dfdfb3e2e25d0e26823e6703ea613190c218f41e7322de1e1412755fc209b7b8
   languageName: node
   linkType: hard
 
@@ -16689,15 +16680,15 @@ __metadata:
   languageName: node
   linkType: hard
 
-"axios@npm:^1.18.0":
-  version: 1.18.0
-  resolution: "axios@npm:1.18.0"
+"axios@npm:^1.18.1":
+  version: 1.18.1
+  resolution: "axios@npm:1.18.1"
   dependencies:
     follow-redirects: "npm:^1.16.0"
     form-data: "npm:^4.0.5"
     https-proxy-agent: "npm:^5.0.1"
     proxy-from-env: "npm:^2.1.0"
-  checksum: 10c0/f88aae13fd9dd395dea3053c7299178fee62f436f20424a1d6d79ec11ffb7656ba664b4630defbadab2c387b6ea07e29afb9f28b26d8e0e49d45be766983290d
+  checksum: 10c0/9d9378a3af0d0ad730a52ad9d15ec7201f3926ad6e7e8bbffc5ae21ca2835ad11d1d9598698f5dd9718917486039f55ea1d7dc23d8e44fa827a55cc3262c02fc
   languageName: node
   linkType: hard
 
@@ -17301,7 +17292,7 @@ __metadata:
   resolution: "boxlite@workspace:."
   dependencies:
     "@astrojs/mdx": "npm:2.2.4"
-    "@astrojs/node": "npm:10.0.5"
+    "@astrojs/node": "npm:11.0.2"
     "@astrojs/react": "npm:^3.1.1"
     "@astrojs/starlight": "npm:0.30.0"
     "@astrojs/starlight-tailwind": "npm:^2.0.1"
@@ -17443,7 +17434,7 @@ __metadata:
     astro-expressive-code: "npm:^0.41.2"
     autoprefixer: "npm:10.4.13"
     aws4: "npm:^1.13.2"
-    axios: "npm:^1.18.0"
+    axios: "npm:^1.18.1"
     axios-debug-log: "npm:^1.0.0"
     axios-retry: "npm:^4.5.0"
     busboy: "npm:^1.0.0"
@@ -17566,7 +17557,7 @@ __metadata:
     uuid: "npm:^14.0.1"
     vaul: "npm:^1.1.2"
     verdaccio: "npm:6.0.5"
-    vite: "npm:^8.1.3"
+    vite: "npm:^8.1.4"
     vite-bundle-analyzer: "npm:^1.3.6"
     vite-plugin-checker: "npm:^0.8.0"
     vite-plugin-node-polyfills: "npm:^0.24.0"
@@ -34472,7 +34463,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"rolldown@npm:~1.1.3, rolldown@npm:~1.1.5":
+"rolldown@npm:~1.1.4, rolldown@npm:~1.1.5":
   version: 1.1.5
   resolution: "rolldown@npm:1.1.5"
   dependencies:
@@ -39482,15 +39473,15 @@ __metadata:
   languageName: node
   linkType: hard
 
-"vite@npm:^8.1.3":
-  version: 8.1.3
-  resolution: "vite@npm:8.1.3"
+"vite@npm:^8.1.4":
+  version: 8.1.4
+  resolution: "vite@npm:8.1.4"
   dependencies:
     fsevents: "npm:~2.3.3"
     lightningcss: "npm:^1.32.0"
-    picomatch: "npm:^4.0.4"
+    picomatch: "npm:^4.0.5"
     postcss: "npm:^8.5.16"
-    rolldown: "npm:~1.1.3"
+    rolldown: "npm:~1.1.4"
     tinyglobby: "npm:^0.2.17"
   peerDependencies:
     "@types/node": ^20.19.0 || >=22.12.0
@@ -39535,7 +39526,7 @@ __metadata:
       optional: true
   bin:
     vite: bin/vite.js
-  checksum: 10c0/e3c95e95f9c19b36be3c9d1c4de7f57d24d5af71613a221cfa22f1fd1568adebdb640e30ef9a7f2361fbb15478883955c9d8932e4fa5566280dd7a16bffa64f9
+  checksum: 10c0/4262cdd0dd00ca99b00a8aef91fc00e58b66e80b54adbef49353bfbbae7342c2d6ddf1180351956086ff53ad186bec03784f57b96e36ab4dad1246547236d79b
   languageName: node
   linkType: hard
 
