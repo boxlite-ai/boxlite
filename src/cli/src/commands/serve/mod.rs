@@ -680,7 +680,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
     })
 }
 
-fn build_box_command(req: &ExecRequest) -> BoxCommand {
+fn build_box_command(req: &ExecRequest) -> Result<BoxCommand, boxlite::BoxliteError> {
     let mut cmd = BoxCommand::new(&req.command).args(req.args.iter().map(String::as_str));
 
     if let Some(ref env_map) = req.env {
@@ -695,9 +695,9 @@ fn build_box_command(req: &ExecRequest) -> BoxCommand {
         cmd = cmd.tty(true);
     }
     if let Some(secs) = req.timeout_seconds {
-        cmd = cmd.timeout(std::time::Duration::from_secs_f64(secs));
+        cmd = cmd.timeout_seconds(secs)?;
     }
-    cmd
+    Ok(cmd)
 }
 
 // ============================================================================
@@ -1022,6 +1022,27 @@ mod tests {
         assert!(!constant_time_eq(b"abc", b"abd"));
         assert!(!constant_time_eq(b"abc", b"abcd"));
         assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn build_box_command_rejects_invalid_timeout_seconds() {
+        for seconds in [-1.0, f64::NAN, f64::INFINITY] {
+            let req = ExecRequest {
+                command: "true".to_string(),
+                args: Vec::new(),
+                stdin: None,
+                env: None,
+                timeout_seconds: Some(seconds),
+                working_dir: None,
+                tty: false,
+            };
+
+            let err = build_box_command(&req).expect_err("invalid timeout should fail");
+            assert!(
+                matches!(err, boxlite::BoxliteError::InvalidArgument(ref msg) if msg.contains("timeout_seconds")),
+                "unexpected error for {seconds:?}: {err}"
+            );
+        }
     }
 
     // ============================================================

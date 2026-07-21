@@ -28,7 +28,10 @@ pub(in crate::commands::serve) async fn start_execution(
     };
 
     let stdin_data = req.stdin.clone();
-    let cmd = build_box_command(&req);
+    let cmd = match build_box_command(&req) {
+        Ok(cmd) => cmd,
+        Err(e) => return error_from_boxlite(&e),
+    };
 
     let mut execution = match litebox.exec(cmd).await {
         Ok(e) => e,

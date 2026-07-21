@@ -53,8 +53,8 @@ pub(super) unsafe fn parse_boxlite_command(
             box_cmd = box_cmd.user(c_str_to_string(cmd.user)?);
         }
 
-        if cmd.timeout_secs > 0.0 {
-            box_cmd = box_cmd.timeout(std::time::Duration::from_secs_f64(cmd.timeout_secs));
+        if cmd.timeout_secs != 0.0 {
+            box_cmd = box_cmd.timeout_seconds(cmd.timeout_secs)?;
         }
 
         if cmd.tty != 0 {
@@ -62,5 +62,39 @@ pub(super) unsafe fn parse_boxlite_command(
         }
 
         Ok(box_cmd)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::CString;
+    use std::ptr;
+
+    use super::*;
+
+    #[test]
+    fn parse_boxlite_command_rejects_invalid_timeout_secs() {
+        let command = CString::new("true").expect("command cstring");
+
+        for timeout_secs in [-1.0, f64::NAN, f64::INFINITY] {
+            let cmd = BoxliteCommand {
+                command: command.as_ptr(),
+                args: ptr::null(),
+                argc: 0,
+                env_pairs: ptr::null(),
+                env_count: 0,
+                workdir: ptr::null(),
+                user: ptr::null(),
+                timeout_secs,
+                tty: 0,
+            };
+
+            let err =
+                unsafe { parse_boxlite_command(&cmd) }.expect_err("invalid timeout should fail");
+            assert!(
+                matches!(err, BoxliteError::InvalidArgument(ref msg) if msg.contains("timeout_seconds")),
+                "unexpected error for {timeout_secs:?}: {err}"
+            );
+        }
     }
 }

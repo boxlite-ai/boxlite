@@ -72,7 +72,7 @@ impl PyBox {
                 cmd = cmd.user(user);
             }
             if let Some(secs) = timeout_secs {
-                cmd = cmd.timeout(std::time::Duration::from_secs_f64(secs));
+                cmd = cmd.timeout_seconds(secs).map_err(map_err)?;
             }
             if let Some(cwd) = cwd {
                 cmd = cmd.working_dir(cwd);
