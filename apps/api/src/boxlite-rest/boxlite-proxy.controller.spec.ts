@@ -23,6 +23,7 @@ function makeHarness() {
   const boxService = {
     findOneByIdOrName: jest.fn().mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1', autoResume: true }),
     updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
+    getPortPreviewUrl: jest.fn().mockResolvedValue({ url: 'https://3000-box.proxy.test' }),
   }
   const runnerService = {
     findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }),
@@ -50,6 +51,16 @@ describe('BoxliteProxyController', () => {
     expect(pathRewrite('/api/v1/boxes/public-box/exec', req)).toBe('/v1/boxes/box-uuid/exec')
     expect(boxService.findOneByIdOrName).toHaveBeenCalledWith('public-box', 'org-1')
     expect(proxyHandler).toHaveBeenCalledWith(req, res, next)
+  })
+
+  it('returns the public endpoint for JSON tunnel requests', async () => {
+    const { controller, boxService } = makeHarness()
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() }
+
+    await controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, res as never)
+
+    expect(boxService.getPortPreviewUrl).toHaveBeenCalledWith('public-box', 'org-1', 3000)
+    expect(res.json).toHaveBeenCalledWith({ uri: 'https://3000-box.proxy.test' })
   })
 
   it('auto-resumes exec and files but treats metrics as observation-only', async () => {

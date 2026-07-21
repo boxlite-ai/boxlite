@@ -57,7 +57,8 @@ export class CreateBoxDto {
 
   @ApiPropertyOptional({
     description: 'Whether the box http preview is publicly accessible',
-    example: false,
+    default: true,
+    example: true,
   })
   @IsOptional()
   @IsBoolean()

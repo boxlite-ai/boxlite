@@ -6,8 +6,10 @@ package proxy
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -16,10 +18,17 @@ import (
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
+	common_proxy "github.com/boxlite-ai/common-go/pkg/proxy"
 	"github.com/boxlite-ai/common-go/pkg/utils"
 	"github.com/gin-gonic/gin"
 
 	log "github.com/sirupsen/logrus"
+)
+
+const (
+	directPreviewBoxIDLength       = 12
+	directPreviewBoxIDPrefix       = "d-"
+	legacyDirectPreviewBoxIDLength = directPreviewBoxIDLength * 2
 )
 
 func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, error) {
@@ -33,7 +42,7 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, e
 		ctx.Error(common_errors.NewBadRequestError(err))
 		return nil, nil, err
 	}
-	targetPath = ctx.Param("path")
+	targetPath = requestEscapedPath(ctx.Request.URL, ctx.Param("path"))
 
 	if targetPort == "" {
 		ctx.Error(common_errors.NewBadRequestError(errors.New("target port is required")))
@@ -46,6 +55,13 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, e
 	}
 
 	boxId := boxIdOrSignedToken
+	if decodedBoxId, ok, decodeErr := decodeDirectPreviewBoxID(boxIdOrSignedToken); decodeErr != nil {
+		ctx.Error(common_errors.NewBadRequestError(decodeErr))
+		return nil, nil, decodeErr
+	} else if ok {
+		boxId = decodedBoxId
+		boxIdOrSignedToken = decodedBoxId
+	}
 
 	isPublic, err := p.getBoxPublic(ctx, boxIdOrSignedToken)
 	if err != nil {
@@ -75,15 +91,18 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, e
 		return nil, nil, fmt.Errorf("failed to get runner info: %w", err)
 	}
 
-	// Build the target URL
-	targetURL := fmt.Sprintf("%s/boxes/%s/toolbox/proxy/%s", runnerInfo.ApiUrl, boxId, targetPort)
-
-	// Ensure path always has a leading slash but not duplicate slashes
-	if targetPath == "" {
-		targetPath = "/"
-	} else if !strings.HasPrefix(targetPath, "/") {
-		targetPath = "/" + targetPath
+	// Skip last activity update if header is set
+	if ctx.Request.Header.Get(SKIP_LAST_ACTIVITY_UPDATE_HEADER) != "true" {
+		doneCh := make(chan struct{})
+		go p.updateLastActivity(ctx.Request.Context(), boxId, true, doneCh)
+		ctx.Request.Header.Del(SKIP_LAST_ACTIVITY_UPDATE_HEADER)
+		ctx.Set(ACTIVITY_POLL_STOP_KEY, func() {
+			close(doneCh)
+		})
 	}
+
+	// Build the target URL
+	targetURL := runnerProxyTargetURL(runnerInfo.ApiUrl, boxId, targetPort)
 
 	// Create the complete target URL with path
 	target, err := url.Parse(fmt.Sprintf("%s%s", targetURL, targetPath))
@@ -92,10 +111,54 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, e
 		return nil, nil, fmt.Errorf("failed to parse target URL: %w", err)
 	}
 
+	forwardedProto := "http"
+	if p.config != nil && p.config.ProxyProtocol != "" {
+		forwardedProto = p.config.ProxyProtocol
+	}
+	forwardedHost := ctx.Request.Host
+	forwardedPort := forwardedPortFromHost(forwardedHost, forwardedProto)
+
 	return target, map[string]string{
 		"X-BoxLite-Authorization": fmt.Sprintf("Bearer %s", runnerInfo.ApiKey),
-		"X-Forwarded-Host":        ctx.Request.Host,
+		"X-Forwarded-Host":        forwardedHost,
+		"X-Forwarded-Proto":       forwardedProto,
+		"X-Forwarded-Port":        forwardedPort,
+		"Forwarded":               common_proxy.FormatForwardedHeader(forwardedHost, forwardedProto),
 	}, nil
+}
+
+func runnerProxyTargetURL(runnerApiURL string, boxId string, targetPort string) string {
+	if targetPort == TERMINAL_PORT {
+		return fmt.Sprintf("%s/boxes/%s/toolbox/proxy/%s", runnerApiURL, boxId, targetPort)
+	}
+	return fmt.Sprintf("%s/v1/boxes/%s/network/proxy/%s", runnerApiURL, boxId, targetPort)
+}
+
+func requestEscapedPath(requestURL *url.URL, fallbackPath string) string {
+	path := fallbackPath
+	if requestURL != nil && requestURL.EscapedPath() != "" {
+		path = requestURL.EscapedPath()
+	}
+	if path == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(path, "/") {
+		return "/" + path
+	}
+	return path
+}
+
+func forwardedPortFromHost(host string, proto string) string {
+	if _, port, err := net.SplitHostPort(host); err == nil {
+		return port
+	}
+	if strings.EqualFold(proto, "https") {
+		return "443"
+	}
+	if strings.EqualFold(proto, "http") {
+		return "80"
+	}
+	return ""
 }
 
 func (p *Proxy) getBoxRunnerInfo(ctx context.Context, boxId string) (*RunnerInfo, error) {
@@ -277,4 +340,92 @@ func (p *Proxy) parseHost(host string) (targetPort string, boxIdOrSignedToken st
 	baseHost = strings.Join(parts[1:], ".")
 
 	return targetPort, boxIdOrSignedToken, baseHost, nil
+}
+
+func decodeDirectPreviewBoxID(value string) (string, bool, error) {
+	encoded, ok := strings.CutPrefix(value, directPreviewBoxIDPrefix)
+	if !ok {
+		// Keep URLs generated before direct IDs gained an explicit prefix working.
+		if len(value) != legacyDirectPreviewBoxIDLength {
+			return value, false, nil
+		}
+		encoded = value
+	}
+
+	decoded, err := hex.DecodeString(encoded)
+	if err != nil {
+		return value, false, nil
+	}
+	if len(decoded) == 0 {
+		return "", true, errors.New("invalid direct preview box ID: empty decoded box ID")
+	}
+
+	boxId := string(decoded)
+	if !isValidDirectPreviewBoxID(boxId) {
+		return "", true, errors.New("invalid direct preview box ID")
+	}
+
+	return boxId, true, nil
+}
+
+func isValidDirectPreviewBoxID(value string) bool {
+	if len(value) != directPreviewBoxIDLength {
+		return false
+	}
+	for _, ch := range value {
+		if (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// updateLastActivity updates the last activity timestamp for a box.
+// If shouldPollUpdate is true, it starts a goroutine that updates every 50 seconds.
+func (p *Proxy) updateLastActivity(ctx context.Context, boxId string, shouldPollUpdate bool, doneCh chan struct{}) {
+	// Prevent frequent updates by caching the last update
+	cached, err := p.boxLastActivityUpdateCache.Has(ctx, boxId)
+	if err != nil {
+		// If cache doesn't work, skip the update to avoid spamming the API
+		log.Errorf("failed to check last activity update cache for box %s: %v", boxId, err)
+		return
+	}
+
+	// Poll interval is 50 seconds to avoid spamming the API which will also cache updates for 45 seconds
+	pollInterval := 50 * time.Second
+
+	if !cached {
+		_, err := p.apiclient.BoxAPI.UpdateLastActivity(ctx, boxId).Execute()
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return
+			}
+			log.Errorf("failed to update last activity for box %s", boxId)
+			return
+		}
+
+		// Expire a bit before the poll interval to avoid skipping one interval
+		err = p.boxLastActivityUpdateCache.Set(ctx, boxId, true, pollInterval-5*time.Second)
+		if err != nil {
+			log.Errorf("failed to set last activity update cache for box %s: %v", boxId, err)
+		}
+	}
+
+	if shouldPollUpdate {
+		// Update keep alive every pollInterval until stopped
+		go func() {
+			ticker := time.NewTicker(pollInterval)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-ticker.C:
+					p.updateLastActivity(context.WithoutCancel(ctx), boxId, false, doneCh)
+				case <-doneCh:
+					return
+				}
+			}
+		}()
+	}
 }

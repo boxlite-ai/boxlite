@@ -226,7 +226,7 @@ export class BoxService {
       box.mem = mem
       box.disk = disk
 
-      box.public = createBoxDto.public || false
+      box.public = createBoxDto.public ?? true
 
       if (createBoxDto.networkBlockAll !== undefined) {
         box.networkBlockAll = createBoxDto.networkBlockAll
@@ -287,7 +287,7 @@ export class BoxService {
   ): Promise<BoxDto> {
     const now = new Date()
     const updateData: Partial<Box> = {
-      public: createBoxDto.public || false,
+      public: createBoxDto.public ?? true,
       labels: createBoxDto.labels || {},
       organizationId: organization.id,
       createdAt: now,
@@ -685,21 +685,20 @@ export class BoxService {
     if (port < 1 || port > 65535) {
       throw new BadRequestError('Invalid port')
     }
-    if (port !== TERMINAL_PREVIEW_PORT) {
-      throw new BadRequestError(`Port preview is only supported for terminal port ${TERMINAL_PREVIEW_PORT}`)
-    }
 
     const proxyDomain = this.configService.getOrThrow('proxy.domain')
     const proxyProtocol = this.configService.getOrThrow('proxy.protocol')
 
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+    // Keep the established terminal hostname stable. Service previews use an
+    // encoded ID so mixed-case box IDs remain safe in DNS hostnames.
+    const previewBoxId = port === TERMINAL_PREVIEW_PORT ? box.id : encodeDirectPreviewBoxId(box.id)
 
-    let url = `${proxyProtocol}://${port}-${box.id}.${proxyDomain}`
+    let url = `${proxyProtocol}://${port}-${previewBoxId}.${proxyDomain}`
 
     const region = await this.regionService.findOne(box.region, true)
     if (region && region.proxyUrl) {
-      // Insert port and box.id into the custom proxy URL
-      url = region.proxyUrl.replace(/(https?:\/)(\/)/, `$1/${port}-${box.id}.`)
+      url = region.proxyUrl.replace(/(https?:\/)(\/)/, `$1/${port}-${previewBoxId}.`)
     }
 
     return {
@@ -1547,4 +1546,8 @@ export class BoxService {
 
     return { valid: true, boxId: sshAccess.box.id }
   }
+}
+
+function encodeDirectPreviewBoxId(boxId: string): string {
+  return `d-${Buffer.from(boxId, 'utf8').toString('hex')}`
 }

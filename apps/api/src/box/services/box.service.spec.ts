@@ -57,6 +57,120 @@ const stoppedBox = {
   pending: false,
 }
 
+function makePreviewUrlService() {
+  const configService = {
+    getOrThrow: jest.fn((key: string) => {
+      if (key === 'proxy.domain') return 'proxy.example.test'
+      if (key === 'proxy.protocol') return 'https'
+      throw new Error(`unexpected config key ${key}`)
+    }),
+  } as any
+  const redis = { setex: jest.fn() } as any
+  const regionService = { findOne: jest.fn().mockResolvedValue(null) } as any
+  const noop = {} as any
+  const service = new BoxService(
+    noop, // boxRepository
+    noop, // runnerRepository
+    noop, // sshAccessRepository
+    noop, // runnerService
+    noop, // volumeService
+    configService, // configService
+    noop, // warmPoolService
+    noop, // eventEmitter
+    noop, // organizationService
+    noop, // runnerAdapterFactory
+    noop, // redisLockProvider
+    redis, // redis
+    regionService, // regionService
+    noop, // boxLookupCacheInvalidationService
+    noop, // boxActivityService
+  )
+  jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
+    id: 'MixedCaseBox',
+    authToken: 'preview-token',
+    region: 'region-1',
+  } as any)
+
+  return { service, redis }
+}
+
+describe('BoxService preview URLs', () => {
+  it('creates case-safe direct preview URLs for service ports', async () => {
+    const { service } = makePreviewUrlService()
+
+    const result = await service.getPortPreviewUrl('MixedCaseBox', 'org-1', 3000)
+
+    expect(result.boxId).toBe('MixedCaseBox')
+    expect(result.url).toBe('https://3000-d-4d6978656443617365426f78.proxy.example.test')
+    expect(result.token).toBe('preview-token')
+  })
+
+  it('keeps the existing direct preview URL format for terminal', async () => {
+    const { service } = makePreviewUrlService()
+
+    const result = await service.getPortPreviewUrl('MixedCaseBox', 'org-1', 22222)
+
+    expect(result.url).toBe('https://22222-MixedCaseBox.proxy.example.test')
+  })
+})
+
+describe('BoxService public preview defaults', () => {
+  function makeCreateService() {
+    const boxRepository = {
+      insert: jest.fn(async (box: any) => box),
+    } as any
+    const service = Object.create(BoxService.prototype) as BoxService
+    Object.assign(service as any, {
+      getValidatedOrDefaultRegion: jest.fn().mockResolvedValue({ id: 'region-1' }),
+      getValidatedOrDefaultClass: jest.fn().mockReturnValue('small'),
+      organizationService: { assertOrganizationIsNotSuspended: jest.fn() },
+      redis: { exists: jest.fn().mockResolvedValue(1) },
+      runnerService: { getRandomAvailableRunner: jest.fn().mockResolvedValue({ id: 'runner-1' }) },
+      boxRepository,
+      eventEmitter: { emitAsync: jest.fn().mockResolvedValue(undefined) },
+      toBoxDto: jest.fn((box) => box),
+    })
+    return { service, boxRepository }
+  }
+
+  it.each([
+    [undefined, true],
+    [false, false],
+  ])('defaults a fresh box to public=%s', async (requestedPublic, expectedPublic) => {
+    const { service, boxRepository } = makeCreateService()
+
+    await service.create({ name: 'fresh-box', public: requestedPublic } as any, { id: 'org-1' } as any)
+
+    expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ public: expectedPublic }))
+  })
+
+  it.each([
+    [undefined, true],
+    [false, false],
+  ])('defaults an assigned warm-pool box to public=%s', async (requestedPublic, expectedPublic) => {
+    const warmPoolBox = { id: 'warm-box', runnerId: 'runner-1', name: 'warm-box' } as any
+    const update = jest.fn().mockResolvedValue(warmPoolBox)
+    const service = Object.create(BoxService.prototype) as BoxService
+    Object.assign(service as any, {
+      boxRepository: { update },
+      boxLookupCacheInvalidationService: { invalidateOrgId: jest.fn() },
+      eventEmitter: { emit: jest.fn() },
+      toBoxDto: jest.fn((box) => box),
+    })
+
+    await (service as any).assignWarmPoolBox(
+      warmPoolBox,
+      { name: 'assigned-box', public: requestedPublic },
+      { id: 'org-1' },
+    )
+
+    expect(update).toHaveBeenCalledWith(
+      'warm-box',
+      expect.objectContaining({ updateData: expect.objectContaining({ public: expectedPublic }) }),
+    )
+  })
+})
+
 describe('BoxService.ensureStartedForProxy', () => {
   // The control plane never writes box.state directly; like start(), it flips
   // desiredState and lets the runner's reported state catch up. The proxied

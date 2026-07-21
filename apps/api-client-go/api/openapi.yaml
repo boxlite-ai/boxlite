@@ -6709,7 +6709,7 @@ components:
     PortPreviewUrl:
       example:
         boxId: "123456"
-        url: "https://{port}-{boxId}.{proxyDomain}"
+        url: "https://{port}-{encodedBoxId}.{proxyDomain}"
         token: ul67qtv-jl6wb9z5o3eii-ljqt9qed6l
       properties:
         boxId:
@@ -6718,7 +6718,7 @@ components:
           type: string
         url:
           description: Preview url
-          example: "https://{port}-{boxId}.{proxyDomain}"
+          example: "https://{port}-{encodedBoxId}.{proxyDomain}"
           type: string
         token:
           description: Access token

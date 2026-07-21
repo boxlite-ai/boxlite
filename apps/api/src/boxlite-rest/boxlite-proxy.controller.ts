@@ -17,6 +17,9 @@ import {
   Logger,
   NotFoundException,
   ForbiddenException,
+  ParseIntPipe,
+  Post,
+  Query,
 } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth, ApiExcludeController } from '@nestjs/swagger'
 import { createProxyMiddleware, fixRequestBody, Options } from 'http-proxy-middleware'
@@ -191,6 +194,21 @@ export class BoxliteProxyController {
       next,
       OBSERVATION_ONLY,
     )
+  }
+
+  @Post(':boxId/network/tunnel')
+  async proxyNetworkTunnel(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Query('port', ParseIntPipe) port: number,
+    @Res() res: Response,
+  ) {
+    if (port < 1 || port > 65535) {
+      return res.status(400).json({ error: 'port must be between 1 and 65535' })
+    }
+
+    const { url: uri } = await this.boxService.getPortPreviewUrl(boxId, authContext.organizationId, port)
+    return res.status(200).json({ uri })
   }
 
   private async proxyToRunner(
