@@ -258,8 +258,6 @@ async fn a_stopped_no_command_box_refuses_to_serve_its_dead_vm() {
 /// nothing: the next `start()` boots and runs normally.
 #[tokio::test]
 async fn a_failed_attach_does_not_poison_the_next_start() {
-    use std::os::unix::fs::PermissionsExt;
-
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
@@ -279,22 +277,23 @@ async fn a_failed_attach_does_not_poison_the_next_start() {
     // the same handle must be startable afterwards. A permanent failure (a bad
     // image) could never expose a stranded flag, because the retry would fail for
     // the same reason and never reach the pipeline — which is exactly the hole a
-    // reviewer caught in the first version of this test. Making the boxes
-    // directory unwritable stops the box's own directory from being created, and
-    // is undone immediately.
+    // reviewer caught in the first version of this test. Putting a regular *file*
+    // where the boxes directory belongs stops the box's own directory from being
+    // created, and is undone immediately. (A read-only directory is not enough:
+    // mode bits do not bind root, and CI runs this suite as root.)
     let boxes_dir = home.path.join("boxes");
-    std::fs::create_dir_all(&boxes_dir).expect("boxes dir");
-    let restore = std::fs::metadata(&boxes_dir).expect("stat").permissions();
-    let mut readonly = restore.clone();
-    readonly.set_mode(0o500);
-    std::fs::set_permissions(&boxes_dir, readonly).expect("make read-only");
+    if boxes_dir.exists() {
+        std::fs::remove_dir_all(&boxes_dir).expect("clear boxes dir");
+    }
+    std::fs::write(&boxes_dir, b"").expect("plant file where the boxes dir belongs");
 
     let failed = handle.attach(None).await;
 
-    std::fs::set_permissions(&boxes_dir, restore).expect("restore permissions");
+    std::fs::remove_file(&boxes_dir).expect("remove planted file");
+    std::fs::create_dir_all(&boxes_dir).expect("restore boxes dir");
     assert!(
         failed.is_err(),
-        "precondition: the boot must fail while the boxes directory is unwritable"
+        "precondition: the boot must fail while the boxes path is not a directory"
     );
 
     // Same box, same BoxImpl. A boot mode stranded on the handle would now create

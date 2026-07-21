@@ -395,8 +395,20 @@ impl ContainerService for GuestServer {
                                 ))
                                 .await;
                                 info!(container_id = %cid, "powering off VM (init exited)");
+                                // RESTART, not POWER_OFF. The x86_64 microVM
+                                // kernel has no pm_power_off backend (no
+                                // ACPI), so POWER_OFF degrades to "System
+                                // halted" with the VM left running forever —
+                                // the box never stops. RESTART is the one
+                                // command every backend turns into a VMM
+                                // process exit: the kernel's reboot=k path
+                                // ends in an i8042 CPU reset on x86, and a
+                                // PSCI SYSTEM_RESET on aarch64, both trapped
+                                // as a shutdown. It is also exactly what the
+                                // VMM's own bundled init issues when its
+                                // workload exits.
                                 unsafe {
-                                    nix::libc::reboot(nix::libc::LINUX_REBOOT_CMD_POWER_OFF);
+                                    nix::libc::reboot(nix::libc::LINUX_REBOOT_CMD_RESTART);
                                 }
                             });
                         });

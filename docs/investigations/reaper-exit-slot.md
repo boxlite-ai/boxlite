@@ -150,10 +150,12 @@ the reaper as a pure store, read by pid, no receiver handed out. Rejected
 because a read that re-resolves by pid picks up the wrong incarnation once the
 kernel recycles it:
 
-    claim(701); deliver(701, code 1)   A exits; its status is stored
-    wait(701) → 1                      A's late Wait reads its own exit
-    deliver(701, code 2)               pid recycled; B exits before claiming
-    wait(701) → 2                      A reads again → B's exit  ✗ must stay 1
+```text
+claim(701); deliver(701, code 1)   A exits; its status is stored
+wait(701) → 1                      A's late Wait reads its own exit
+deliver(701, code 2)               pid recycled; B exits before claiming
+wait(701) → 2                      A reads again → B's exit  ✗ must stay 1
+```
 
 `a_recycled_deliver_does_not_overwrite_the_previous_owner` pins exactly this;
 it passes today because the receiver a claim holds stays attached to the

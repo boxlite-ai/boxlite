@@ -19,6 +19,11 @@ use crate::runtime::auth::Principal;
 /// Re-request a token once it is within this leeway of `expires_at`.
 const REFRESH_LEEWAY: Duration = Duration::from_secs(60);
 
+/// Bound on the WebSocket handshake (TCP + TLS + HTTP upgrade). Without it a
+/// stalled connect blocks the attach caller indefinitely — unlike HTTP calls,
+/// which ride the reqwest client's own timeout.
+const WS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// An upgraded attach WebSocket.
 pub(crate) type WsStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -323,9 +328,18 @@ impl ApiClient {
             request.headers_mut().insert("Authorization", value);
         }
 
-        tokio_tungstenite::connect_async(request)
-            .await
-            .map_err(map_ws_error)
+        tokio::time::timeout(
+            WS_HANDSHAKE_TIMEOUT,
+            tokio_tungstenite::connect_async(request),
+        )
+        .await
+        .map_err(|_| {
+            BoxliteError::Network(format!(
+                "WebSocket handshake timed out after {}s",
+                WS_HANDSHAKE_TIMEOUT.as_secs()
+            ))
+        })?
+        .map_err(map_ws_error)
     }
 
     /// Build an authorized request (for custom operations like file upload/download).
