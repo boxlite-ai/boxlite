@@ -168,6 +168,8 @@ const runtime = new JsBoxlite({
 
 Basic container for command execution.
 
+Note: `autoStopInterval` requires a REST runtime; the default local runtime rejects this option.
+
 ```typescript
 import { SimpleBox } from 'boxlite';
 

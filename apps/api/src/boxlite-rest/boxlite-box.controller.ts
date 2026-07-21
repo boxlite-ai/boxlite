@@ -17,6 +17,7 @@ import {
   UseGuards,
   Logger,
   Res,
+  ParseIntPipe,
 } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth, ApiResponse, ApiExcludeController } from '@nestjs/swagger'
 import { Response } from 'express'
@@ -225,7 +226,7 @@ export class BoxliteBoxController {
   async setAutoStopInterval(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
-    @Param('interval') interval: number,
+    @Param('interval', ParseIntPipe) interval: number,
   ): Promise<BoxResponseDto> {
     const box = await this.boxService.setAutoStopInterval(boxId, interval, authContext.organizationId)
     const dto = await this.boxService.toBoxDto(box)

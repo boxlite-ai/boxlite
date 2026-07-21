@@ -127,7 +127,7 @@ class TestBoxStateInfoStructure:
 
 
 class TestBoxLifecycleMethods:
-    """Test hosted lifecycle controls are exposed on Box handles."""
+    """Test option-based lifecycle configuration on Box handles."""
 
     def test_auto_stop_interval_setter_is_not_exposed(self):
         assert not hasattr(boxlite.Box, "set_auto_stop_interval")
