@@ -92,8 +92,8 @@ impl GuestService for GuestServer {
     ) -> Result<Response<ShutdownResponse>, Status> {
         info!("Received shutdown request - graceful shutdown starting");
 
-        // Host owns this teardown — tell the exit watcher to stand down
-        // (it would otherwise race us with its own VM power-off).
+        // Host owns this teardown — tell the reaper's init-exit action to
+        // stand down (it would otherwise race us with its own VM power-off).
         self.shutting_down
             .store(true, std::sync::atomic::Ordering::SeqCst);
 
@@ -116,29 +116,35 @@ impl GuestService for GuestServer {
         }
         drop(containers);
 
-        // Step 2b: wait for each init watcher to finish writing its exit record.
+        // Step 2b: write each init's exit record before answering the host.
         //
-        // Killing init above is what *wakes* the watcher; the write happens on
-        // the watcher's own task. Returning from this RPC without joining would
-        // let the host read the exit file before the record it wants is in it —
-        // and the host reports that code as the box's exit status (docker leaves
-        // ExitCode 137 after a `docker stop`). The watcher is already awake and
-        // has nothing to wait on itself: `shutting_down` is set, so it writes
-        // and returns instead of powering the VM off.
-        let watchers: Vec<_> = self.init_watchers.lock().await.drain().collect();
-        for (container_id, watcher) in watchers {
+        // Killing init above gets it reaped and its exit slot filled. The
+        // reaper's action writes this record too, but on its own task, with
+        // nothing here to wait for it — so this RPC writes the record itself.
+        // Both writers derive it from the same level-triggered slot, so the
+        // bytes agree whichever runs first; what this write adds is ordering:
+        // the record is on disk before the RPC returns and the host reads the
+        // exit file (its `stop()` reports that code as the box's exit status —
+        // docker leaves ExitCode 137 after a `docker stop`).
+        let init_exits: Vec<_> = self.init_exits.lock().await.drain().collect();
+        for (container_id, exit_slot) in init_exits {
             match tokio::time::timeout(
                 std::time::Duration::from_millis(CONTAINER_SHUTDOWN_TIMEOUT_MS),
-                watcher,
+                exit_slot.get(),
             )
             .await
             {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    warn!(container_id = %container_id, error = %e, "init watcher panicked")
+                Ok(status) => {
+                    let record = boxlite_shared::layout::ExitRecord {
+                        exit_code: status.shell_code(),
+                    };
+                    let exit_file = self.layout.shared().container(&container_id).exit_file();
+                    if let Err(e) = record.write(&exit_file) {
+                        warn!(container_id = %container_id, error = %e, "failed to write exit file");
+                    }
                 }
                 Err(_) => {
-                    warn!(container_id = %container_id, "init watcher did not finish in time")
+                    warn!(container_id = %container_id, "init exit not observed in time; no exit record written")
                 }
             }
         }

@@ -164,6 +164,17 @@ impl ExitStatus {
     pub fn success(&self) -> bool {
         matches!(self, ExitStatus::Code(0))
     }
+
+    /// The code as a POSIX shell reports it: the exit code for a normal exit,
+    /// `128 + n` for death by signal `n`. This is what the exit record stores —
+    /// the true status is worth logging, but the code is what every reader
+    /// consumes.
+    pub fn shell_code(&self) -> i32 {
+        match self {
+            ExitStatus::Code(c) => *c,
+            ExitStatus::Signal(s) => 128 + *s as i32,
+        }
+    }
 }
 
 /// PTY configuration

@@ -313,30 +313,106 @@ impl ContainerService for GuestServer {
                 // exactly like any exec (Attach/SendInput/Wait RPCs).
                 //
                 // Failing to register is fatal, not a warning. Without the
-                // session there is nothing to attach to and no exit watcher, so
+                // session there is nothing to attach to and no exit action, so
                 // the box would sit Running behind a main command nobody can
                 // see or reap — precisely the bug this whole path exists to
                 // kill. A container we cannot address is not a started
                 // container.
-                let init_state = match container.take_init_exec_handle() {
+                let init_exit = match container.take_init_exec_handle() {
                     Ok(Some(handle)) => {
-                        // Claim init's exit slot before the watcher asks. Init is
-                        // created but not yet started here — it blocks on
-                        // libcontainer's exec fifo — so it cannot have exited,
-                        // and `now` is a sound cutoff: any slot already under
-                        // this pid is a recycled-pid leftover.
+                        // Claim init's exit slot and register the follow-up the
+                        // reaper fires on delivery (docker semantics: the box
+                        // stops when init exits). Init is created but not yet
+                        // started here — it blocks on libcontainer's exec fifo —
+                        // so it cannot have exited, and `now` is a sound cutoff:
+                        // any slot already under this pid is a recycled-pid
+                        // leftover.
+                        let registry = self.registry.clone();
+                        let shutting_down = self.shutting_down.clone();
+                        let exit_file = self.layout.shared().container(&container_id).exit_file();
+                        let cid = container_id.clone();
+                        let action: crate::reaper::ExitAction = Box::new(move |status| {
+                            // The reaper only fires this; the long work runs on
+                            // its own task.
+                            tokio::spawn(async move {
+                                let exit_code = status.shell_code();
+                                info!(container_id = %cid, ?status, exit_code, "container init exited");
+
+                                // Crosses the virtiofs shared dir to the host,
+                                // which reads it to surface the box's exit
+                                // status. The Shutdown RPC writes the same
+                                // record from the same slot, so a host-driven
+                                // stop does not depend on this task's timing.
+                                let record = boxlite_shared::layout::ExitRecord { exit_code };
+                                if let Err(e) = record.write(&exit_file) {
+                                    warn!(container_id = %cid, error = %e, "failed to write exit file");
+                                }
+
+                                if shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+                                    return; // host-driven stop owns VM teardown
+                                }
+
+                                // Drain the execs still running beside init,
+                                // flush disks, then power off. The shim sees the
+                                // VM exit and the host marks the box stopped.
+                                registry
+                                    .shutdown_all(
+                                        crate::service::exec::registry::SHUTDOWN_TIMEOUT_MS,
+                                    )
+                                    .await;
+                                unsafe { nix::libc::sync() };
+
+                                // A best-effort flush window for whatever output
+                                // is still in flight to the host — and nothing
+                                // more than that.
+                                //
+                                // It is not load-bearing, and that claim now
+                                // survives inspection, which it did not before:
+                                //
+                                // - The client is *already attached* when the
+                                //   main command runs. The host creates the
+                                //   container, attaches, and only then calls
+                                //   Container.Start (docker's create → attach →
+                                //   start). So no client can miss the session by
+                                //   being late — the race this window used to be
+                                //   papering over is gone by construction, not
+                                //   by timing.
+                                // - The exit code is durable. Power-off can
+                                //   still cut the in-flight Wait, and the host
+                                //   then has no code — but it reads the real one
+                                //   back from the exit file written above
+                                //   (`BoxImpl::exit_code_from_file_when_portal_has_none`).
+                                //
+                                // What is left is trailing stdout, whose
+                                // delivery has no event to await: the protocol
+                                // carries no ack, so the guest can never know
+                                // the host received the last bytes. A bounded
+                                // window is the only thing available, and it is
+                                // spent on output, not on truth.
+                                const RESPONSE_FLUSH_MS: u64 = 500;
+                                tokio::time::sleep(std::time::Duration::from_millis(
+                                    RESPONSE_FLUSH_MS,
+                                ))
+                                .await;
+                                info!(container_id = %cid, "powering off VM (init exited)");
+                                unsafe {
+                                    nix::libc::reboot(nix::libc::LINUX_REBOOT_CMD_POWER_OFF);
+                                }
+                            });
+                        });
                         let exit = crate::reaper::REAPER
                             .get()
                             .expect("reaper installed at startup")
-                            .register(handle.pid(), std::time::Instant::now())
+                            .on_exit(handle.pid(), std::time::Instant::now(), action)
                             .await;
                         let state = crate::service::exec::state::ExecutionState::new_init_session(
-                            handle, exit,
+                            handle,
+                            exit.clone(),
                         );
                         self.registry
-                            .register(init_execution_id.clone(), state.clone())
+                            .register(init_execution_id.clone(), state)
                             .await;
-                        state
+                        exit
                     }
                     Ok(None) => {
                         error!(container_id = %container_id, "init has no pid or its stdio was already taken");
@@ -368,90 +444,17 @@ impl ContainerService for GuestServer {
                     std::sync::Arc::new(tokio::sync::Mutex::new(container)),
                 );
 
-                // Follow init's lifecycle (docker semantics: the box stops
-                // when init exits). The watcher is just one reader of init's
-                // exit slot, so a concurrent host Wait RPC observes the same
-                // status instead of racing the reap.
-                {
-                    let state = init_state;
-                    let registry = self.registry.clone();
-                    let shutting_down = self.shutting_down.clone();
-                    let exit_file = self.layout.shared().container(&container_id).exit_file();
-                    let cid = container_id.clone();
-                    let watcher = tokio::spawn(async move {
-                        use crate::service::exec::exec_handle::ExitStatus;
-                        let status = state.wait_process().await;
-                        // Docker exit-code convention: signal death = 128+n.
-                        // The true status is logged, not stored — the code is
-                        // what every reader consumes.
-                        let exit_code = match status {
-                            ExitStatus::Code(c) => c,
-                            ExitStatus::Signal(s) => 128 + s as i32,
-                        };
-                        info!(container_id = %cid, ?status, exit_code, "container init exited");
-
-                        // Crosses the virtiofs shared dir to the host, which
-                        // reads it to surface the box's exit status.
-                        let record = boxlite_shared::layout::ExitRecord { exit_code };
-                        if let Err(e) = record.write(&exit_file) {
-                            warn!(container_id = %cid, error = %e, "failed to write exit file");
-                        }
-
-                        if shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
-                            return; // host-driven stop owns VM teardown
-                        }
-
-                        // Drain the execs still running beside init, flush
-                        // disks, then power off. The shim sees the VM exit and
-                        // the host marks the box stopped.
-                        registry
-                            .shutdown_all(crate::service::exec::registry::SHUTDOWN_TIMEOUT_MS)
-                            .await;
-                        unsafe { nix::libc::sync() };
-
-                        // A best-effort flush window for whatever output is still
-                        // in flight to the host — and nothing more than that.
-                        //
-                        // It is not load-bearing, and that claim now survives
-                        // inspection, which it did not before:
-                        //
-                        // - The client is *already attached* when the main
-                        //   command runs. The host creates the container,
-                        //   attaches, and only then calls Container.Start
-                        //   (docker's create → attach → start). So no client can
-                        //   miss the session by being late — the race this window
-                        //   used to be papering over is gone by construction, not
-                        //   by timing.
-                        // - The exit code is durable. Power-off can still cut the
-                        //   in-flight Wait, and the host then has no code — but it
-                        //   reads the real one back from the exit file written
-                        //   above (`BoxImpl::exit_code_from_file_when_portal_has_none`).
-                        //
-                        // What is left is trailing stdout, whose delivery has no
-                        // event to await: the protocol carries no ack, so the guest
-                        // can never know the host received the last bytes. A
-                        // bounded window is the only thing available, and it is
-                        // spent on output, not on truth.
-                        const RESPONSE_FLUSH_MS: u64 = 500;
-                        tokio::time::sleep(std::time::Duration::from_millis(RESPONSE_FLUSH_MS))
-                            .await;
-                        info!(container_id = %cid, "powering off VM (init exited)");
-                        unsafe {
-                            nix::libc::reboot(nix::libc::LINUX_REBOOT_CMD_POWER_OFF);
-                        }
-                    });
-
-                    // Shutdown joins this, so the exit record is on disk before
-                    // the RPC returns and the host reads it.
-                    self.init_watchers
-                        .lock()
-                        .await
-                        .insert(container_id.clone(), watcher);
-                }
+                // The Shutdown RPC reads this slot to write the exit record
+                // itself before answering the host — the reaper's action may
+                // still be running on its own task when that RPC returns.
+                self.init_exits
+                    .lock()
+                    .await
+                    .insert(container_id.clone(), init_exit);
 
                 // Everything that must exist *before* the main command runs now
-                // does — the session is registered and the watcher is armed — and
-                // init has *not* run. The host calls Container.Start to run it,
+                // does — the session is registered and the exit action is armed —
+                // and init has *not* run. The host calls Container.Start to run it,
                 // after attaching if it wants to.
                 Ok(Response::new(ContainerInitResponse {
                     result: Some(container_init_response::Result::Success(
@@ -506,7 +509,7 @@ impl GuestServer {
     /// The old check called that a failure, and only passed because reading
     /// procfs usually beat init's `execvp`; it was a bet, of exactly the kind the
     /// attach-before-start ordering exists to remove. A genuinely broken command
-    /// still surfaces, and more precisely than before: the exit watcher records
+    /// still surfaces, and more precisely than before: the exit action records
     /// its code (127 for not-found, 126 for not-executable), the box stops with
     /// it, and the client that is already attached sees whatever it printed.
     async fn run_container_init(&self, container_id: &str) -> Result<(), String> {

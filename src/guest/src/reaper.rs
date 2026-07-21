@@ -5,7 +5,9 @@
 //! that drains `waitpid(-1, WNOHANG)` on every `SIGCHLD` and deposits each pid's
 //! exit into an `ExitSlot`. The reaper answers no queries: callers claim a slot
 //! at spawn and park on it, so there is one place a caller ever waits, and an
-//! exit that lands early is simply already there. The container init and exec
+//! exit that lands early is simply already there. A claim may also register an
+//! `ExitAction` (`on_exit`) — a follow-up the reaper fires exactly once, after
+//! the delivery, outside its lock. The container init and exec
 //! tenants are cloned `CLONE_PARENT` (youki `as_sibling`) so they are our
 //! direct children;
 //! the agent also sets `PR_SET_CHILD_SUBREAPER` as a net for any other orphaned
@@ -64,6 +66,14 @@ pub(crate) fn reap_fence() -> RwLockReadGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// A follow-up the reaper runs when a pid's exit is delivered.
+///
+/// Fired exactly once, after the registry lock is released — never under it,
+/// so an action may call back into the reaper. The reaper only *invokes* it;
+/// anything long-running (draining sessions, powering off) must spawn its own
+/// task inside the closure.
+pub(crate) type ExitAction = Box<dyn FnOnce(ExitStatus) + Send>;
+
 /// A pid's exit, readable by any number of callers any number of times.
 ///
 /// The reaper deposits into it and never reads; holders park on `get`. Backed by
@@ -119,6 +129,10 @@ struct Slot {
     /// a status until the guest exits. Only this timestamp can tell that corpse
     /// apart from a fresh spawn's own exit after the kernel recycles the pid.
     settled_at: Option<Instant>,
+    /// Parked by `on_exit`, taken by `deliver` while settling — so a settled
+    /// slot never holds an unfired action, and the recycle guards that drop or
+    /// detach settled slots can never discard one.
+    action: Option<ExitAction>,
 }
 
 impl Inner {
@@ -128,6 +142,7 @@ impl Inner {
             tx: watch::channel(None).0,
             stray_since,
             settled_at: None,
+            action: None,
         })
     }
 
@@ -187,7 +202,11 @@ impl Reaper {
     /// await.
     async fn drain(&self) {
         for (pid, status) in Self::sweep_exits() {
-            self.deliver(pid, status).await;
+            if let Some(action) = self.deliver(pid, status).await {
+                // Fired here, after deliver released the registry lock, so a
+                // slow or re-entrant action cannot block other deliveries.
+                action(status);
+            }
         }
     }
 
@@ -254,10 +273,50 @@ impl Reaper {
         ExitSlot(slot.tx.subscribe())
     }
 
+    /// Claim this pid's exit slot *and* register the follow-up the reaper runs
+    /// when the exit is delivered. Same claim semantics as `register` — the
+    /// returned slot serves any number of readers — plus one action, fired
+    /// exactly once.
+    ///
+    /// If the exit already landed (a fast child reaped before its owner could
+    /// register), the action runs right here with the stored status instead of
+    /// waiting for a deliver that already happened.
+    pub(crate) async fn on_exit(
+        &self,
+        pid: Pid,
+        spawned_at: Instant,
+        action: ExitAction,
+    ) -> ExitSlot {
+        let mut action = Some(action);
+        let (slot_rx, fire_with) = {
+            let mut inner = self.inner.lock().await;
+            if inner
+                .slots
+                .get(&pid)
+                .is_some_and(|slot| slot.settled_at.is_some_and(|at| at < spawned_at))
+            {
+                inner.slots.remove(&pid);
+            }
+            let slot = inner.slot(pid, None);
+            slot.stray_since = None;
+            let fire_with = *slot.tx.borrow();
+            if fire_with.is_none() {
+                slot.action = action.take();
+            }
+            (ExitSlot(slot.tx.subscribe()), fire_with)
+        };
+        if let (Some(status), Some(action)) = (fire_with, action) {
+            // Outside the lock, like every action invocation.
+            action(status);
+        }
+        slot_rx
+    }
+
     /// Deposit a reaped exit. Never blocks on a reader, so an exit that lands
     /// before its owner registers is simply already there when the owner
-    /// arrives.
-    async fn deliver(&self, pid: Pid, status: ExitStatus) {
+    /// arrives. Returns the pid's registered action, if any, for the caller to
+    /// fire once the lock is released.
+    async fn deliver(&self, pid: Pid, status: ExitStatus) -> Option<ExitAction> {
         let mut inner = self.inner.lock().await;
 
         // We are the only writer, and the kernel reaps a pid once per
@@ -292,6 +351,7 @@ impl Reaper {
         let slot = inner.slot(pid, (!claimed).then_some(now));
         slot.settled_at = Some(now);
         slot.tx.send_replace(Some(status));
+        slot.action.take()
     }
 }
 
@@ -324,6 +384,7 @@ mod tests {
             tx: watch::channel(Some(status)).0,
             stray_since: Some(since),
             settled_at: Some(since),
+            action: None,
         }
     }
 
@@ -351,6 +412,79 @@ mod tests {
         Instant::now()
             .checked_sub(REAPED_TTL + Duration::from_secs(1))
             .expect("test host uptime should exceed REAPED_TTL")
+    }
+
+    /// An action registered before the exit fires exactly once, with the
+    /// delivered status — and a later deliver on the recycled pid does not
+    /// re-fire it.
+    #[tokio::test]
+    async fn an_action_fires_once_with_the_delivered_status() {
+        let r = bare();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let slot = r
+            .on_exit(
+                pid(801),
+                Instant::now(),
+                Box::new(move |status| {
+                    tx.send(status).expect("test channel");
+                }),
+            )
+            .await;
+
+        if let Some(action) = r.deliver(pid(801), ExitStatus::Code(5)).await {
+            action(ExitStatus::Code(5));
+        }
+        assert_eq!(
+            code(rx.recv().expect("the action must fire")),
+            Some(5),
+            "the action must see the delivered status"
+        );
+
+        // Pid recycled: a second deliver settles a fresh slot with no action.
+        if let Some(action) = r.deliver(pid(801), ExitStatus::Code(6)).await {
+            action(ExitStatus::Code(6));
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "a recycled pid's exit must not re-fire the previous owner's action"
+        );
+
+        // The claim's readers still work like any register-claimed slot.
+        assert_eq!(code(slot.get().await), Some(5));
+    }
+
+    /// The exit can beat the registration — a fast child is reaped before its
+    /// owner calls `on_exit`. The action must fire immediately with the stored
+    /// status, not wait for a deliver that already happened.
+    #[tokio::test]
+    async fn an_action_registered_after_the_exit_fires_immediately() {
+        let r = bare();
+        let spawned_at = Instant::now();
+        r.deliver(pid(802), ExitStatus::Code(3)).await;
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let slot = r
+            .on_exit(
+                pid(802),
+                spawned_at,
+                Box::new(move |status| {
+                    tx.send(status).expect("test channel");
+                }),
+            )
+            .await;
+
+        assert_eq!(
+            code(
+                rx.recv()
+                    .expect("a settled slot must fire the action at registration")
+            ),
+            Some(3)
+        );
+        assert_eq!(
+            code(slot.get().await),
+            Some(3),
+            "readers see the same status"
+        );
     }
 
     /// Normal path: the owner claims a slot, then the reaper deposits into it.
