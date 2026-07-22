@@ -1326,6 +1326,24 @@ mod tests {
     use crate::commands::auth::AuthCommand;
     use clap::Parser;
 
+    // ─── tunnel parse tests ────────────────────────────────────────────────
+
+    #[test]
+    fn tunnel_parses_box_and_port() {
+        let cli = Cli::try_parse_from(["boxlite", "tunnel", "mybox", "3000"]).expect("parse");
+        let Commands::Tunnel(args) = cli.command else {
+            panic!("expected Commands::Tunnel");
+        };
+        assert_eq!(args.target, "mybox");
+        assert_eq!(args.port, 3000);
+    }
+
+    #[test]
+    fn tunnel_rejects_port_zero_at_parse() {
+        let result = Cli::try_parse_from(["boxlite", "tunnel", "mybox", "0"]);
+        assert!(result.is_err(), "port 0 must be rejected by the parser");
+    }
+
     #[test]
     fn auth_login_parses_with_no_flags() {
         let cli = Cli::try_parse_from(["boxlite", "auth", "login"]).expect("parse");

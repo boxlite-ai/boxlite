@@ -32,6 +32,7 @@ For a quick start, see [`src/cli/README.md`](../../../src/cli/README.md).
   - [`boxlite info`](#boxlite-info)
   - [`boxlite logs`](#boxlite-logs)
   - [`boxlite stats`](#boxlite-stats)
+  - [`boxlite tunnel`](#boxlite-tunnel)
   - [`boxlite serve`](#boxlite-serve)
   - [`boxlite completion`](#boxlite-completion)
 - [Shared Flag Groups](#shared-flag-groups)
@@ -526,6 +527,15 @@ Display resource usage statistics for a box.
 |------|-------|---------|-------------|
 | `--format FMT` | — | `table` | Output format (see [Output Formats](#output-formats)) |
 | `--stream` | `-s` | `false` | Refresh every second until Ctrl-C |
+
+---
+
+### `boxlite tunnel`
+
+**Synopsis:** `boxlite tunnel BOX PORT`
+
+Print the public URL for a box service port. Requires a remote REST profile
+(`--url` or `--profile`); local boxes have no public ingress.
 
 ---
 

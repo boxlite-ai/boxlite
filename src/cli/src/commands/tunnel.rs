@@ -14,16 +14,12 @@ pub struct TunnelArgs {
     #[arg(value_name = "BOX")]
     pub target: String,
 
-    /// Guest port listened to by the service
-    #[arg(value_name = "PORT")]
+    /// Guest port the service listens on
+    #[arg(value_name = "PORT", value_parser = clap::value_parser!(u16).range(1..))]
     pub port: u16,
 }
 
 pub async fn execute(args: TunnelArgs, global: &GlobalFlags) -> Result<()> {
-    if args.port == 0 {
-        return Err(anyhow!("port must be in range 1-65535"));
-    }
-
     let runtime = global.create_runtime()?;
     let box_handle = runtime
         .get(&args.target)
