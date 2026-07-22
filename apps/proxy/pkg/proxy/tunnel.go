@@ -8,7 +8,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -152,21 +151,5 @@ func dialRunnerTunnel(ctx context.Context, runnerInfo *RunnerInfo, boxID string,
 		conn.Close()
 		return nil, err
 	}
-	return &bufferedConn{Conn: conn, reader: reader}, nil
-}
-
-type bufferedConn struct {
-	net.Conn
-	reader *bufio.Reader
-}
-
-func (c *bufferedConn) Read(payload []byte) (int, error) {
-	return c.reader.Read(payload)
-}
-
-func (c *bufferedConn) CloseWrite() error {
-	if conn, ok := c.Conn.(interface{ CloseWrite() error }); ok {
-		return conn.CloseWrite()
-	}
-	return errors.ErrUnsupported
+	return common_proxy.NewBufferedConn(conn, reader), nil
 }

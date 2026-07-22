@@ -14,6 +14,7 @@ import (
 	"time"
 
 	common_cache "github.com/boxlite-ai/common-go/pkg/cache"
+	common_proxy "github.com/boxlite-ai/common-go/pkg/proxy"
 )
 
 type closeWriteConn struct {
@@ -117,9 +118,13 @@ func TestBufferedConnForwardsCloseWrite(t *testing.T) {
 	defer conn.Close()
 	defer peer.Close()
 	tracked := &closeWriteConn{Conn: conn}
-	buffered := &bufferedConn{Conn: tracked, reader: bufio.NewReader(conn)}
+	buffered := common_proxy.NewBufferedConn(tracked, bufio.NewReader(conn))
 
-	if err := buffered.CloseWrite(); err != nil {
+	closeWriter, ok := buffered.(interface{ CloseWrite() error })
+	if !ok {
+		t.Fatal("buffered connection does not support CloseWrite")
+	}
+	if err := closeWriter.CloseWrite(); err != nil {
 		t.Fatal(err)
 	}
 	if !tracked.called {

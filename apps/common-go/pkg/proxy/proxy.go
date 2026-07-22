@@ -5,6 +5,8 @@
 package proxy
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -16,6 +18,27 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+type bufferedConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+// NewBufferedConn preserves bytes already read from conn into reader.
+func NewBufferedConn(conn net.Conn, reader *bufio.Reader) net.Conn {
+	return &bufferedConn{Conn: conn, reader: reader}
+}
+
+func (c *bufferedConn) Read(payload []byte) (int, error) {
+	return c.reader.Read(payload)
+}
+
+func (c *bufferedConn) CloseWrite() error {
+	if conn, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return conn.CloseWrite()
+	}
+	return errors.ErrUnsupported
+}
 
 // ProxyBidirectionalStream relays both directions until both streams close.
 func ProxyBidirectionalStream(left, right net.Conn) {

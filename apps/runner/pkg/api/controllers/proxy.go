@@ -128,7 +128,7 @@ func BoxliteNetworkTunnel(logger *slog.Logger) gin.HandlerFunc {
 		guestConn, err := r.Boxlite.DialGuestPort(ctx.Request.Context(), boxId, uint16(port64))
 		if err != nil {
 			logger.WarnContext(ctx.Request.Context(), "guest tunnel dial failed", "box", boxId, "port", port64, "error", err)
-			ctx.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+			ctx.JSON(http.StatusBadGateway, gin.H{"error": "guest tunnel unavailable"})
 			return
 		}
 
@@ -151,7 +151,7 @@ func BoxliteNetworkTunnel(logger *slog.Logger) gin.HandlerFunc {
 		if err := buffered.Flush(); err != nil {
 			return
 		}
-		common_proxy.ProxyBidirectionalStream(clientConn, guestConn)
+		common_proxy.ProxyBidirectionalStream(common_proxy.NewBufferedConn(clientConn, buffered.Reader), guestConn)
 	}
 }
 

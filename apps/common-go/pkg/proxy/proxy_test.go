@@ -4,6 +4,7 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"io"
 	"net"
@@ -57,6 +58,29 @@ func TestProxyBidirectionalStreamRelaysBothDirections(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("proxy did not return after both directions finished")
+	}
+}
+
+func TestBufferedConnPreservesBufferedBytes(t *testing.T) {
+	conn, peer := net.Pipe()
+	defer conn.Close()
+	defer peer.Close()
+
+	reader := bufio.NewReader(conn)
+	go func() {
+		_, _ = peer.Write([]byte("buffered-and-live"))
+	}()
+	if got, err := reader.Peek(len("buffered")); err != nil || string(got) != "buffered" {
+		t.Fatalf("Peek() = %q, %v", got, err)
+	}
+
+	wrapped := NewBufferedConn(conn, reader)
+	payload := make([]byte, len("buffered-and-live"))
+	if _, err := io.ReadFull(wrapped, payload); err != nil {
+		t.Fatal(err)
+	}
+	if string(payload) != "buffered-and-live" {
+		t.Fatalf("Read() = %q", payload)
 	}
 }
 

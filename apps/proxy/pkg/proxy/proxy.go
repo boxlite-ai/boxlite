@@ -174,8 +174,9 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 	})
 
 	httpServer := &http.Server{
-		Addr:    fmt.Sprintf(":%d", config.ProxyPort),
-		Handler: connectAwareHandler(http.HandlerFunc(proxy.handleTunnelConnect), router, shutdownWg),
+		Addr:              fmt.Sprintf(":%d", config.ProxyPort),
+		Handler:           connectAwareHandler(http.HandlerFunc(proxy.handleTunnelConnect), router, shutdownWg),
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	listener, err := net.Listen("tcp", httpServer.Addr)
