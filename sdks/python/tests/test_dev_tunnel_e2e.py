@@ -219,9 +219,7 @@ async def _wait_for_binary_server(box, port: int) -> None:
             await connection.write(struct.pack("!Q", 0))
             response = bytearray()
             while len(response) < len(expected):
-                chunk = await asyncio.wait_for(
-                    connection.read(4096), timeout=2
-                )
+                chunk = await asyncio.wait_for(connection.read(4096), timeout=2)
                 if not chunk:
                     break
                 response.extend(chunk)
