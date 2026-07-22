@@ -31,7 +31,6 @@ def _required_env(name: str) -> str:
 
 async def _http_get(tunnel, host: str, marker: bytes) -> bytes:
     connection = await tunnel.connect()
-    loop = asyncio.get_running_loop()
     request = (f"GET / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n").encode()
 
     try:

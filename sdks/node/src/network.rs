@@ -9,6 +9,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::util::map_err;
 
+type ConnectionReader = tokio::io::ReadHalf<Box<dyn boxlite::BoxConnection>>;
+type ConnectionWriter = tokio::io::WriteHalf<Box<dyn boxlite::BoxConnection>>;
+
 /// Handle for network operations on a box.
 #[napi]
 pub struct JsNetworkHandle {
@@ -23,8 +26,8 @@ pub struct JsBoxTunnel {
 
 #[napi]
 pub struct JsBoxConnection {
-    reader: Arc<tokio::sync::Mutex<Option<tokio::io::ReadHalf<Box<dyn boxlite::BoxConnection>>>>>,
-    writer: Arc<tokio::sync::Mutex<Option<tokio::io::WriteHalf<Box<dyn boxlite::BoxConnection>>>>>,
+    reader: Arc<tokio::sync::Mutex<Option<ConnectionReader>>>,
+    writer: Arc<tokio::sync::Mutex<Option<ConnectionWriter>>>,
 }
 
 #[napi]
