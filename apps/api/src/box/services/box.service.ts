@@ -26,6 +26,7 @@ import { BoxError } from '../../exceptions/box-error.exception'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
+import type { BoxBillingContext } from '../interfaces/box-billing-context.interface'
 import { assertSupportedImage } from '../constants/curated-images.constant'
 import { BoxWarmPoolService } from './box-warm-pool.service'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
@@ -205,7 +206,11 @@ export class BoxService {
     return box
   }
 
-  async create(createBoxDto: CreateBoxDto, organization: Organization): Promise<BoxDto> {
+  async create(
+    createBoxDto: CreateBoxDto,
+    organization: Organization,
+    billingContext: BoxBillingContext,
+  ): Promise<BoxDto> {
     const region = await this.getValidatedOrDefaultRegion(organization, createBoxDto.target)
 
     try {
@@ -254,7 +259,7 @@ export class BoxService {
               })
 
               if (warmPoolBox) {
-                return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization)
+                return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization, billingContext)
               }
             }
           }
@@ -267,6 +272,7 @@ export class BoxService {
           const box = new Box(region.id, createBoxDto.name)
 
           box.organizationId = organization.id
+          box.billingUserId = billingContext.billingUserId
 
           //  TODO: make configurable
           box.class = boxClass
@@ -340,12 +346,14 @@ export class BoxService {
     warmPoolBox: Box,
     createBoxDto: CreateBoxDto,
     organization: Organization,
+    billingContext: BoxBillingContext,
   ): Promise<BoxDto> {
     const now = new Date()
     const updateData: Partial<Box> = {
       public: createBoxDto.public || false,
       labels: createBoxDto.labels || {},
       organizationId: organization.id,
+      billingUserId: billingContext.billingUserId,
       createdAt: now,
     }
 

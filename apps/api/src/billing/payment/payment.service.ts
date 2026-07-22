@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { BadRequestException, Inject, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common'
+import { BadRequestException, Inject, Injectable, Logger, Optional, ServiceUnavailableException } from '@nestjs/common'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { InjectRepository } from '@nestjs/typeorm'
 import { randomUUID } from 'node:crypto'
@@ -14,6 +14,7 @@ import { TopUpRecord } from '../entities/top-up-record.entity'
 import { WalletTransaction } from '../entities/wallet-transaction.entity'
 import { BillingStatus, Wallet } from '../entities/wallet.entity'
 import { WalletService } from '../wallet.service'
+import { SubscriptionService } from '../subscription/subscription.service'
 import {
   PAYMENT_PROVIDER,
   PaymentProvider,
@@ -59,6 +60,8 @@ export class PaymentService {
     @Inject(PAYMENT_PROVIDER)
     private readonly provider: PaymentProvider,
     private readonly configService: TypedConfigService,
+    @Optional()
+    private readonly subscriptionService?: SubscriptionService,
   ) {}
 
   async getPaymentState(organizationId: string) {
@@ -683,7 +686,14 @@ export class PaymentService {
         })
         if (existing?.status === 'processed') return
 
-        if (event.kind === 'setup_succeeded' || event.kind === 'setup_failed') {
+        if (
+          event.kind === 'subscription_synced' ||
+          event.kind === 'subscription_period_paid' ||
+          event.kind === 'subscription_checkout_expired'
+        ) {
+          if (!this.subscriptionService) throw new Error('subscription service is unavailable')
+          await this.subscriptionService.applyProviderEvent(manager, event)
+        } else if (event.kind === 'setup_succeeded' || event.kind === 'setup_failed') {
           await this.applySetupEvent(manager, event)
         } else if (event.kind === 'top_up_adjusted') {
           await this.applyTopUpAdjustment(manager, event)

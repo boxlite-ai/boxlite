@@ -148,6 +148,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
     }
     usagePeriod.disk = event.box.disk
     usagePeriod.organizationId = event.box.organizationId
+    usagePeriod.billingUserId = event.box.billingUserId
     usagePeriod.region = event.box.region
     usagePeriod.boxClass = event.box.class
     usagePeriod.regionType = await this.getRegionType(event.box.region)
@@ -245,7 +246,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
       )
       const rows = await transactionalEntityManager.query<ArchiveBatchResult[]>(
         `WITH claimed AS (
-          SELECT p.id, p."boxId", p."organizationId", p."startAt", p."endAt",
+          SELECT p.id, p."boxId", p."organizationId", p."billingUserId", p."startAt", p."endAt",
                  p.cpu, p.gpu, p.mem, p.disk, p.region, p."boxClass", p."regionType"
           FROM ${activeTable} p
           WHERE p."endAt" IS NOT NULL
@@ -254,10 +255,10 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
           FOR UPDATE OF p SKIP LOCKED
         ), inserted AS (
           INSERT INTO ${archiveTable} (
-            id, "boxId", "organizationId", "startAt", "endAt",
+            id, "boxId", "organizationId", "billingUserId", "startAt", "endAt",
             cpu, gpu, mem, disk, region, "boxClass", "regionType"
           )
-          SELECT id, "boxId", "organizationId", "startAt", "endAt",
+          SELECT id, "boxId", "organizationId", "billingUserId", "startAt", "endAt",
                  cpu, gpu, mem, disk, region, "boxClass", "regionType"
           FROM claimed
           ON CONFLICT (id) DO NOTHING

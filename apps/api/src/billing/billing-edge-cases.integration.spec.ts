@@ -256,7 +256,10 @@ describeWithDatabase('Billing common edge cases with PostgreSQL', () => {
       repository.create({
         usagePeriodArchiveId: randomUUID(),
         organizationId,
+        billingUserId: null,
         boxId: `edge-box-${randomUUID()}`,
+        usageStartAt: new Date('1900-01-01T00:00:00.000Z'),
+        usageEndAt: new Date('1900-01-01T00:01:00.000Z'),
         pricingSegments: [],
         usageTotals: { cpuSeconds: '60', memGibSeconds: '0', diskGibSeconds: '0', gpuSeconds: '0' },
         billedSeconds: '60',

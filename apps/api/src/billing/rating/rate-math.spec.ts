@@ -4,6 +4,7 @@
  */
 
 import {
+  computeResourceCosts,
   computeRatedCents,
   periodBillableTotals,
   ratePeriodByPlans,
@@ -65,6 +66,15 @@ describe('periodBillableTotals', () => {
 })
 
 describe('computeRatedCents', () => {
+  it('keeps each resource cost available before multiplier adjustments', () => {
+    expect(
+      computeResourceCosts(
+        { cpuSeconds: '120', memGibSeconds: '240', diskGibSeconds: '600', gpuSeconds: '60' },
+        rates(),
+      ),
+    ).toEqual({ cpuCents: '240', memCents: '240', diskCents: '300', gpuCents: '600' })
+  })
+
   it('keeps sub-cent precision and rounds the final cents half-up', () => {
     expect(
       computeRatedCents(
@@ -114,6 +124,7 @@ describe('ratePeriodByPlans', () => {
           endAt: '2026-07-08T00:01:00.000Z',
           billedSeconds: '60',
           unitRates: rates(),
+          resourceCosts: { cpuCents: '240', memCents: '240', diskCents: '300', gpuCents: '600' },
           preciseCents: '1380',
         },
       ],
@@ -142,7 +153,7 @@ describe('ratePeriodByPlans', () => {
     ])
 
     expect(result.pricingSegments).toHaveLength(2)
-    expect(result.pricingSegments.map((segment) => segment.pricingVersion)).toEqual([1, 2])
+    expect(result.pricingSegments.every((segment) => segment.userMultipliers.cpu === '1')).toBe(true)
     expect(result.pricingSegments.map((segment) => segment.preciseCents)).toEqual(['0.3', '0.6'])
     expect(result).toMatchObject({ billedSeconds: '60', preciseCents: '0.9', ratedCents: '1' })
   })
@@ -163,5 +174,37 @@ describe('ratePeriodByPlans', () => {
         plan({ version: 2, effectiveFrom: new Date('2026-07-08T00:00:30Z') }),
       ]),
     ).toThrow('pricing overlap')
+  })
+
+  it('splits at a user multiplier boundary and snapshots resource-specific factors', () => {
+    const boundary = new Date('2026-07-08T00:00:30Z')
+    const result = ratePeriodByPlans(
+      period({ cpu: 1, mem: 1, disk: 0, gpu: 0 }),
+      [plan({ cpuRateCentsPerSec: '1', memRateCentsPerSec: '1', diskRateCentsPerSec: '0', gpuRateCentsPerSec: '0' })],
+      [
+        { cpu: '1', mem: '1', disk: '1', gpu: '1', effectiveFrom: new Date('2026-01-01T00:00:00Z'), effectiveTo: boundary },
+        { cpu: '2', mem: '0.5', disk: '1', gpu: '1', effectiveFrom: boundary, effectiveTo: null },
+      ],
+    )
+
+    expect(result.pricingSegments).toHaveLength(2)
+    expect(result.pricingSegments.map((segment) => segment.userMultipliers)).toEqual([
+      { cpu: '1', mem: '1', disk: '1', gpu: '1' },
+      { cpu: '2', mem: '0.5', disk: '1', gpu: '1' },
+    ])
+    expect(result.pricingSegments.map((segment) => segment.resourceCosts)).toEqual([
+      { cpuCents: '30', memCents: '30', diskCents: '0', gpuCents: '0' },
+      { cpuCents: '60', memCents: '15', diskCents: '0', gpuCents: '0' },
+    ])
+    expect(result.preciseCents).toBe('135')
+  })
+
+  it('rejects overlapping user multiplier versions', () => {
+    expect(() =>
+      ratePeriodByPlans(period(), [plan()], [
+        { cpu: '1', mem: '1', disk: '1', gpu: '1', effectiveFrom: new Date('2026-01-01T00:00:00Z'), effectiveTo: null },
+        { cpu: '2', mem: '1', disk: '1', gpu: '1', effectiveFrom: new Date('2026-07-08T00:00:10Z'), effectiveTo: null },
+      ]),
+    ).toThrow('user multiplier overlap')
   })
 })

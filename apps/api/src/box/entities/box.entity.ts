@@ -45,6 +45,10 @@ export class Box {
   })
   organizationId: string
 
+  // Immutable attribution used when new usage periods are opened for this box.
+  @Column({ type: 'character varying', nullable: true })
+  billingUserId: string | null = null
+
   @Column()
   name: string
 

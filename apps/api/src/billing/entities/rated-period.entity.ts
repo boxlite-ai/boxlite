@@ -9,6 +9,7 @@ import type { PricingSegment, UsageTotals } from '../rating/rate-math'
 @Entity('rated_period')
 @Index('rated_period_usage_archive_idx', ['usagePeriodArchiveId'], { unique: true })
 @Index('rated_period_org_rated_at_idx', ['organizationId', 'ratedAt'])
+@Index('rated_period_org_usage_start_idx', ['organizationId', 'usageStartAt', 'id'])
 export class RatedPeriod {
   @PrimaryGeneratedColumn('uuid')
   id: string
@@ -19,8 +20,17 @@ export class RatedPeriod {
   @Column({ type: 'uuid' })
   organizationId: string
 
+  @Column({ type: 'character varying', nullable: true })
+  billingUserId: string | null
+
   @Column()
   boxId: string
+
+  @Column({ type: 'timestamp with time zone' })
+  usageStartAt: Date
+
+  @Column({ type: 'timestamp with time zone' })
+  usageEndAt: Date
 
   @Column({ type: 'jsonb' })
   pricingSegments: PricingSegment[]

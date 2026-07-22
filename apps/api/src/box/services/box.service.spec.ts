@@ -107,9 +107,13 @@ describe('BoxService billing admission', () => {
       billingError: insufficientBalance,
     })
 
-    await expect(service.create({ target: 'region-1', cpu: 2, memory: 4, disk: 20 }, activeOrg)).rejects.toBe(
-      insufficientBalance,
-    )
+    await expect(
+      service.create(
+        { target: 'region-1', cpu: 2, memory: 4, disk: 20 },
+        activeOrg,
+        { billingUserId: 'user-1' },
+      ),
+    ).rejects.toBe(insufficientBalance)
 
     expect(billingAccessService.assertHasAccess).toHaveBeenCalledWith(
       'org-1',

@@ -22,6 +22,9 @@ export class BoxUsagePeriod {
   // Redundant property to optimize billing queries.
   organizationId: string
 
+  @Column({ type: 'character varying', nullable: true })
+  billingUserId: string | null
+
   @Column({ type: 'timestamp with time zone' })
   startAt: Date
 
@@ -53,6 +56,7 @@ export class BoxUsagePeriod {
     const usagePeriodEntity = new BoxUsagePeriod()
     usagePeriodEntity.boxId = usagePeriod.boxId
     usagePeriodEntity.organizationId = usagePeriod.organizationId
+    usagePeriodEntity.billingUserId = usagePeriod.billingUserId
     usagePeriodEntity.startAt = usagePeriod.startAt
     usagePeriodEntity.endAt = usagePeriod.endAt
     usagePeriodEntity.cpu = usagePeriod.cpu

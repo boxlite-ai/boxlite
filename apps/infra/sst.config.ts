@@ -112,6 +112,7 @@ export default $config({
     const { config } = await import('dotenv')
     config()
 
+
     // Strip trailing slash from service.url so path concat produces clean URLs
     // (api.url = "https://api.dev.boxlite.ai/" → apiBase = "https://api.dev.boxlite.ai").
     const stripTrailingSlash = (url: $util.Output<string>) => url.apply((u) => (u.endsWith('/') ? u.slice(0, -1) : u))
@@ -217,6 +218,13 @@ export default $config({
     // object-level overwrite/delete (which `removal` never covers). Redis is a
     // transient cache, so it needs neither.
     const isProd = $app.stage === 'production'
+    const billingPaymentProvider = isProd
+      ? requireEnv('BILLING_PAYMENT_PROVIDER', 'for production billing')
+      : envOr('BILLING_PAYMENT_PROVIDER', 'fake')
+    const subscriptionPrice = (key: string) =>
+      billingPaymentProvider === 'stripe'
+        ? requireEnv(key, 'when Stripe subscription billing is enabled')
+        : envOr(key, '')
     // Unique-but-stable suffix for the DB final snapshot: a fixed name would collide
     // with the snapshot a prior teardown of the same stage already created (RDS requires
     // unique final-snapshot ids). RandomId is stable across deploys (no drift) and is
@@ -463,12 +471,13 @@ export default $config({
         BILLING_TRIAL_DURATION_DAYS: envOr('BILLING_TRIAL_DURATION_DAYS', '30'),
         BILLING_ENFORCEMENT_ENABLED: envOr('BILLING_ENFORCEMENT_ENABLED', 'false'),
         BILLING_ENFORCEMENT_RISK_WINDOW_SECONDS: envOr('BILLING_ENFORCEMENT_RISK_WINDOW_SECONDS', '120'),
-        BILLING_PAYMENT_PROVIDER: isProd
-          ? requireEnv('BILLING_PAYMENT_PROVIDER', 'for production billing')
-          : envOr('BILLING_PAYMENT_PROVIDER', 'fake'),
+        BILLING_PAYMENT_PROVIDER: billingPaymentProvider,
         STRIPE_SECRET_KEY: stripeSecretKey.value,
         STRIPE_WEBHOOK_SECRET: stripeWebhookSecret.value,
         STRIPE_WEBHOOK_SECRET_PREVIOUS: stripePreviousWebhookSecret.value,
+        STRIPE_SUBSCRIPTION_PRICE_STARTER: subscriptionPrice('STRIPE_SUBSCRIPTION_PRICE_STARTER'),
+        STRIPE_SUBSCRIPTION_PRICE_PRO: subscriptionPrice('STRIPE_SUBSCRIPTION_PRICE_PRO'),
+        STRIPE_SUBSCRIPTION_PRICE_MAX: subscriptionPrice('STRIPE_SUBSCRIPTION_PRICE_MAX'),
         // Box base images: only the three digest-pinned *_IMAGE refs below are live — the
         // API gates box creation to that curated set (apps/api curated-images.constant.ts)
         // and the runner pulls them straight from ghcr.io with its GHCR_TOKEN. IMAGE_TAG and

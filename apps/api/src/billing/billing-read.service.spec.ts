@@ -12,7 +12,10 @@ function ratedPeriod(overrides: Partial<RatedPeriod> = {}): RatedPeriod {
     id: 'rated-1',
     usagePeriodArchiveId: 'archive-1',
     organizationId: 'org-1',
+    billingUserId: null,
     boxId: 'box-1',
+    usageStartAt: new Date('2026-07-10T10:00:00.000Z'),
+    usageEndAt: new Date('2026-07-10T10:10:00.000Z'),
     pricingSegments: [
       {
         pricingVersion: 1,
@@ -30,6 +33,12 @@ function ratedPeriod(overrides: Partial<RatedPeriod> = {}): RatedPeriod {
           memGibSeconds: '2400',
           diskGibSeconds: '6000',
           gpuSeconds: '0',
+        },
+        resourceCosts: {
+          cpuCents: '1.68',
+          memCents: '1.08',
+          diskCents: '0.018',
+          gpuCents: '0',
         },
         preciseCents: '2.778',
       },

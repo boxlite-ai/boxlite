@@ -11,6 +11,11 @@ import {
   PaymentReconcileResult,
   PaymentSetupInput,
   PaymentSetupResult,
+  ProviderSubscriptionSnapshot,
+  SubscriptionChangeInput,
+  SubscriptionChangeResult,
+  SubscriptionCheckoutInput,
+  SubscriptionCheckoutResult,
   ProviderWebhookEvent,
   TopUpPaymentInput,
   TopUpPaymentResult,
@@ -93,6 +98,73 @@ export class StripePaymentProvider implements PaymentProvider {
     }
   }
 
+  async createSubscriptionCheckout(input: SubscriptionCheckoutInput): Promise<SubscriptionCheckoutResult> {
+    const session = await this.stripe.checkout.sessions.create(
+      {
+        mode: 'subscription',
+        customer: input.providerCustomerId ?? undefined,
+        line_items: [{ price: input.providerPriceId, quantity: 1 }],
+        success_url: input.successUrl,
+        cancel_url: input.cancelUrl,
+        client_reference_id: input.organizationId,
+        metadata: { organizationId: input.organizationId, planCode: input.planCode, operation: 'subscription' },
+        subscription_data: {
+          metadata: { organizationId: input.organizationId, planCode: input.planCode, operation: 'subscription' },
+        },
+      },
+      { idempotencyKey: `subscription-checkout:${input.organizationId}:${input.idempotencyKey}` }
+    )
+    if (!session.url) throw new Error(`Stripe subscription session ${session.id} did not return a checkout URL`)
+    return { checkoutUrl: session.url, providerReference: session.id, snapshot: null }
+  }
+
+  async upgradeSubscription(input: SubscriptionChangeInput): Promise<SubscriptionChangeResult> {
+    const subscription = await this.stripe.subscriptions.retrieve(input.providerSubscriptionId)
+    const item = subscription.items.data[0]
+    if (!item) throw new Error(`Stripe subscription ${subscription.id} has no item`)
+    if (input.providerScheduleId) await this.stripe.subscriptionSchedules.release(input.providerScheduleId)
+    const updated = await this.stripe.subscriptions.update(
+      subscription.id,
+      {
+        items: [{ id: item.id, price: input.providerPriceId }],
+        proration_behavior: 'always_invoice',
+        metadata: { organizationId: input.organizationId, planCode: input.planCode, operation: 'subscription' },
+      },
+      { idempotencyKey: `subscription-upgrade:${subscription.id}:${input.idempotencyKey}` }
+    )
+    return { snapshot: this.subscriptionSnapshot(updated), providerScheduleId: null }
+  }
+
+  async scheduleSubscriptionDowngrade(input: SubscriptionChangeInput): Promise<SubscriptionChangeResult> {
+    const subscription = await this.stripe.subscriptions.retrieve(input.providerSubscriptionId)
+    const currentItem = subscription.items.data[0]
+    if (!currentItem) throw new Error(`Stripe subscription ${subscription.id} has no item`)
+    if (input.providerScheduleId) await this.stripe.subscriptionSchedules.release(input.providerScheduleId)
+    const schedule = await this.stripe.subscriptionSchedules.create(
+      { from_subscription: subscription.id },
+      { idempotencyKey: `subscription-schedule:${subscription.id}:${input.idempotencyKey}` }
+    )
+    const period = this.subscriptionPeriod(subscription)
+    const updatedSchedule = await this.stripe.subscriptionSchedules.update(schedule.id, {
+      end_behavior: 'release',
+      phases: [
+        {
+          start_date: Math.floor(period.start.getTime() / 1000),
+          end_date: Math.floor(period.end.getTime() / 1000),
+          items: [{ price: currentItem.price.id, quantity: currentItem.quantity ?? 1 }],
+          proration_behavior: 'none',
+        },
+        {
+          start_date: Math.floor(period.end.getTime() / 1000),
+          items: [{ price: input.providerPriceId, quantity: 1 }],
+          iterations: 1,
+          metadata: { organizationId: input.organizationId, planCode: input.planCode, operation: 'subscription' },
+        },
+      ],
+    })
+    return { snapshot: this.subscriptionSnapshot(subscription, updatedSchedule.id), providerScheduleId: updatedSchedule.id }
+  }
+
   async chargeSavedMethod(input: TopUpPaymentInput): Promise<TopUpPaymentResult> {
     try {
       const paymentIntent = await this.stripe.paymentIntents.create(
@@ -146,9 +218,10 @@ export class StripePaymentProvider implements PaymentProvider {
   async reconcile(input: PaymentReconcileInput): Promise<PaymentReconcileResult> {
     if (input.providerReference.startsWith('cs_')) {
       const session = await this.stripe.checkout.sessions.retrieve(input.providerReference, {
-        expand: ['payment_intent.latest_charge'],
+        expand: input.operation === 'top_up' ? ['payment_intent.latest_charge'] : ['subscription'],
       })
       if (input.operation === 'setup') return this.reconcileSetupSession(session)
+      if (input.operation === 'subscription') return this.reconcileSubscriptionSession(session)
       return this.reconcileTopUpSession(session)
     }
 
@@ -183,16 +256,33 @@ export class StripePaymentProvider implements PaymentProvider {
       if (session.mode === 'payment' && session.payment_status === 'paid') {
         return this.checkoutPaidEvent(event.id, session)
       }
+      if (session.mode === 'subscription' && session.subscription) {
+        const subscription = await this.resolveSubscription(session.subscription)
+        return this.subscriptionSyncedEvent(event.id, subscription)
+      }
     }
 
     if (event.type === 'checkout.session.async_payment_failed') {
-      return this.checkoutFailedEvent(event.id, event.data.object)
+      const session = event.data.object
+      if (session.mode === 'payment') return this.checkoutFailedEvent(event.id, session)
+      if (session.mode === 'subscription' && session.subscription) {
+        const subscription = await this.resolveSubscription(session.subscription)
+        return this.subscriptionSyncedEvent(event.id, subscription)
+      }
     }
 
     if (event.type === 'checkout.session.expired') {
-      return event.data.object.mode === 'setup'
-        ? this.setupFailedEvent(event.id, event.data.object)
-        : this.checkoutFailedEvent(event.id, event.data.object, 'checkout_expired')
+      const session = event.data.object
+      if (session.mode === 'setup') return this.setupFailedEvent(event.id, session)
+      if (session.mode === 'subscription') {
+        return {
+          kind: 'subscription_checkout_expired',
+          providerEventId: event.id,
+          providerReference: session.id,
+          organizationId: this.requiredMetadata(session, 'organizationId'),
+        }
+      }
+      return this.checkoutFailedEvent(event.id, session, 'checkout_expired')
     }
 
     if (event.type === 'payment_intent.succeeded' && event.data.object.metadata?.operation === 'auto_reload') {
@@ -213,6 +303,35 @@ export class StripePaymentProvider implements PaymentProvider {
       event.type === 'charge.dispute.funds_reinstated'
     ) {
       return this.disputeEvent(event.id, event.type, event.data.object)
+    }
+
+    if (
+      event.type === 'customer.subscription.created' ||
+      event.type === 'customer.subscription.updated' ||
+      event.type === 'customer.subscription.deleted'
+    ) {
+      return this.subscriptionSyncedEvent(event.id, event.data.object)
+    }
+
+    if (event.type === 'invoice.paid') {
+      const subscriptionId = this.invoiceSubscriptionId(event.data.object)
+      if (subscriptionId) {
+        const subscription = await this.stripe.subscriptions.retrieve(subscriptionId)
+        return {
+          kind: 'subscription_period_paid',
+          providerEventId: event.id,
+          providerReference: event.data.object.id,
+          snapshot: this.subscriptionSnapshot(subscription),
+        }
+      }
+    }
+
+    if (event.type === 'invoice.payment_failed') {
+      const subscriptionId = this.invoiceSubscriptionId(event.data.object)
+      if (subscriptionId) {
+        const subscription = await this.stripe.subscriptions.retrieve(subscriptionId)
+        return this.subscriptionSyncedEvent(event.id, subscription)
+      }
     }
 
     return null
@@ -281,6 +400,31 @@ export class StripePaymentProvider implements PaymentProvider {
       return {
         status: 'resolved',
         event: this.setupFailedEvent(`reconcile:${session.id}:expired`, session),
+      }
+    }
+    return { status: 'pending' }
+  }
+
+  private async reconcileSubscriptionSession(session: Stripe.Checkout.Session): Promise<PaymentReconcileResult> {
+    if (session.mode !== 'subscription') {
+      throw new Error(`Stripe Checkout session ${session.id} is not a subscription session`)
+    }
+    if (session.status === 'complete' && session.subscription) {
+      const subscription = await this.resolveSubscription(session.subscription)
+      return {
+        status: 'resolved',
+        event: this.subscriptionSyncedEvent(`reconcile:${session.id}:subscription_synced`, subscription),
+      }
+    }
+    if (session.status === 'expired') {
+      return {
+        status: 'resolved',
+        event: {
+          kind: 'subscription_checkout_expired',
+          providerEventId: `reconcile:${session.id}:expired`,
+          providerReference: session.id,
+          organizationId: this.requiredMetadata(session, 'organizationId'),
+        },
       }
     }
     return { status: 'pending' }
@@ -447,6 +591,67 @@ export class StripePaymentProvider implements PaymentProvider {
     if (typeof value === 'string') return value
     if (value?.id) return value.id
     throw new Error(`Stripe object is missing ${name}`)
+  }
+
+  private subscriptionSyncedEvent(providerEventId: string, subscription: Stripe.Subscription): ProviderWebhookEvent {
+    return {
+      kind: 'subscription_synced',
+      providerEventId,
+      providerReference: subscription.id,
+      snapshot: this.subscriptionSnapshot(subscription),
+    }
+  }
+
+  private subscriptionSnapshot(
+    subscription: Stripe.Subscription,
+    providerScheduleId?: string | null,
+  ): ProviderSubscriptionSnapshot {
+    const item = subscription.items.data[0]
+    if (!item) throw new Error(`Stripe subscription ${subscription.id} has no item`)
+    const period = this.subscriptionPeriod(subscription)
+    return {
+      organizationId: this.requiredMetadata(subscription, 'organizationId'),
+      providerSubscriptionId: subscription.id,
+      providerCustomerId: this.objectId(subscription.customer, 'customer'),
+      providerPriceId: item.price.id,
+      providerScheduleId: providerScheduleId === undefined ? this.nullableObjectId(subscription.schedule) : providerScheduleId,
+      status: this.subscriptionStatus(subscription.status),
+      currentPeriodStart: period.start.toISOString(),
+      currentPeriodEnd: period.end.toISOString(),
+    }
+  }
+
+  private subscriptionPeriod(subscription: Stripe.Subscription): { start: Date; end: Date } {
+    const rawSubscription = subscription as unknown as { current_period_start?: number; current_period_end?: number }
+    const rawItem = subscription.items.data[0] as unknown as { current_period_start?: number; current_period_end?: number }
+    const start = rawSubscription.current_period_start ?? rawItem.current_period_start
+    const end = rawSubscription.current_period_end ?? rawItem.current_period_end
+    if (!start || !end) throw new Error(`Stripe subscription ${subscription.id} is missing its billing period`)
+    return { start: new Date(start * 1000), end: new Date(end * 1000) }
+  }
+
+  private subscriptionStatus(status: Stripe.Subscription.Status): ProviderSubscriptionSnapshot['status'] {
+    if (status === 'active' || status === 'trialing') return 'active'
+    if (status === 'canceled' || status === 'unpaid' || status === 'incomplete_expired') return 'canceled'
+    if (status === 'past_due' || status === 'paused') return 'past_due'
+    return 'pending'
+  }
+
+  private invoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
+    const value = (invoice as unknown as {
+      subscription?: string | { id: string } | null
+      parent?: { subscription_details?: { subscription?: string | { id: string } | null } }
+    }).subscription ?? (invoice as unknown as { parent?: { subscription_details?: { subscription?: string | { id: string } | null } } }).parent?.subscription_details?.subscription
+    return typeof value === 'string' ? value : value?.id ?? null
+  }
+
+  private resolveSubscription(value: string | Stripe.Subscription): Promise<Stripe.Subscription> {
+    return typeof value === 'string' ? this.stripe.subscriptions.retrieve(value) : Promise.resolve(value)
+  }
+
+  private nullableObjectId(value: string | { id: string } | null): string | null {
+    if (typeof value === 'string') return value
+    return value?.id ?? null
   }
 
   private requiredMetadata(object: { id: string; metadata: Stripe.Metadata }, key: string): string {

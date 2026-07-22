@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Injectable, NotFoundException } from '@nestjs/common'
+import { Injectable, NotFoundException, Optional } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import Decimal from 'decimal.js'
@@ -15,10 +15,13 @@ import { RatedPeriod } from './entities/rated-period.entity'
 import { WalletTransaction } from './entities/wallet-transaction.entity'
 import { BillingStatus, Wallet } from './entities/wallet.entity'
 import { BillingEvents, WalletBalanceChangedEvent } from './billing-events'
+import { SubscriptionPeriodPendingError, SubscriptionSettlementService } from './subscription/subscription-settlement.service'
 
 const PG_UNIQUE_VIOLATION = '23505'
 const WALLET_DEBIT_BATCH_SIZE = 100
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1000
+
+class RatedPeriodAlreadyDebitedError extends Error {}
 
 function isUniqueViolation(error: unknown): boolean {
   return (
@@ -41,6 +44,8 @@ export class WalletService {
     private readonly ratedPeriods: Repository<RatedPeriod>,
     private readonly configService: TypedConfigService,
     private readonly eventEmitter: EventEmitter2,
+    @Optional()
+    private readonly subscriptionSettlement?: SubscriptionSettlementService,
   ) {}
 
   getOrCreateWallet(organizationId: string): Promise<Wallet> {
@@ -67,14 +72,18 @@ export class WalletService {
     let transaction: WalletTransaction | null
     try {
       transaction = await this.wallets.manager.transaction(async (manager) => {
-        const wallet = await this.findWalletForUpdate(manager, period.organizationId)
         const transactionRepository = manager.getRepository(WalletTransaction)
-        const existing = await transactionRepository.findOne({ where: { ratedPeriodId: period.id } })
-        if (existing) {
-          return null
-        }
+        const previouslyDebited = await transactionRepository.findOne({ where: { ratedPeriodId: period.id } })
+        if (previouslyDebited) return null
 
-        const preciseCents = new Decimal(period.preciseCents)
+        const subscriptionSettlement = this.subscriptionSettlement
+          ? await this.subscriptionSettlement.settle(manager, period)
+          : { preciseChargeCents: period.preciseCents, quotaCoveredPreciseCents: '0', slices: [] }
+        const wallet = await this.findWalletForUpdate(manager, period.organizationId)
+        const concurrentlyDebited = await transactionRepository.findOne({ where: { ratedPeriodId: period.id } })
+        if (concurrentlyDebited) throw new RatedPeriodAlreadyDebitedError()
+
+        const preciseCents = new Decimal(subscriptionSettlement.preciseChargeCents)
         if (preciseCents.isNegative()) {
           throw new Error(`rated period ${period.id} has a negative charge`)
         }
@@ -104,7 +113,10 @@ export class WalletService {
             source: 'rated_period',
             ratedPeriodId: period.id,
             metadata: {
-              preciseCents: period.preciseCents,
+              ratedPreciseCents: period.preciseCents,
+              preciseCents: subscriptionSettlement.preciseChargeCents,
+              quotaCoveredPreciseCents: subscriptionSettlement.quotaCoveredPreciseCents,
+              subscriptionSlices: subscriptionSettlement.slices,
               remainderBeforeCents: remainderBefore.toString(),
               remainderAfterCents: wallet.settlementRemainderCents,
               freeDebitCents: freeDebitCents.toString(),
@@ -114,7 +126,11 @@ export class WalletService {
         )
       })
     } catch (error) {
-      if (isUniqueViolation(error)) {
+      if (
+        error instanceof RatedPeriodAlreadyDebitedError ||
+        error instanceof SubscriptionPeriodPendingError ||
+        isUniqueViolation(error)
+      ) {
         return null
       }
       throw error
@@ -134,7 +150,8 @@ export class WalletService {
       .andWhere('rp."organizationId" <> :warmPoolOrganizationId', {
         warmPoolOrganizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
       })
-      .orderBy('rp.ratedAt', 'ASC')
+      .orderBy('rp.usageStartAt', 'ASC')
+      .addOrderBy('rp.id', 'ASC')
       .take(Math.max(1, Math.min(1000, Math.trunc(limit))))
       .getMany()
   }

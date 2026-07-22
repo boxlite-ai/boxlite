@@ -178,6 +178,11 @@ const configuration = {
       secretKey: process.env.STRIPE_SECRET_KEY,
       webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
       previousWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET_PREVIOUS,
+      subscriptionPriceIds: {
+        starter: process.env.STRIPE_SUBSCRIPTION_PRICE_STARTER,
+        pro: process.env.STRIPE_SUBSCRIPTION_PRICE_PRO,
+        max: process.env.STRIPE_SUBSCRIPTION_PRICE_MAX,
+      },
     },
   },
   analyticsApiUrl: process.env.ANALYTICS_API_URL,

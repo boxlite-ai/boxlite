@@ -83,6 +83,7 @@ function archivedPeriod(overrides: Partial<BoxUsagePeriodArchive> = {}): BoxUsag
     id: 'b3fbf3a8-0c33-4962-bd77-8ae77313baf1',
     boxId: 'box-1',
     organizationId: 'f5de33a9-4eb2-4279-a8de-9f02d63cc4f0',
+    billingUserId: 'user-1',
     region: 'us',
     startAt: new Date('2026-07-08T00:00:00Z'),
     endAt: new Date('2026-07-08T00:01:00Z'),
@@ -129,7 +130,10 @@ describe('RatingService', () => {
     expect(ratedPeriods.rows[0]).toMatchObject({
       usagePeriodArchiveId: 'b3fbf3a8-0c33-4962-bd77-8ae77313baf1',
       organizationId: 'f5de33a9-4eb2-4279-a8de-9f02d63cc4f0',
+      billingUserId: 'user-1',
       boxId: 'box-1',
+      usageStartAt: new Date('2026-07-08T00:00:00Z'),
+      usageEndAt: new Date('2026-07-08T00:01:00Z'),
       billedSeconds: '60',
       preciseCents: '1380',
       ratedCents: '1380',

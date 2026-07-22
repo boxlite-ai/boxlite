@@ -114,6 +114,7 @@ class FakeRatedPeriodRepository implements RepositoryWithRows {
         return builder
       },
       orderBy: () => builder,
+      addOrderBy: () => builder,
       take: () => builder,
       getMany: async () => this.rows.filter((row) => row.organizationId !== excludedOrganizationId),
     }
@@ -150,7 +151,10 @@ function ratedPeriod(overrides: Partial<RatedPeriod> = {}): RatedPeriod {
     id: 'rated-1',
     usagePeriodArchiveId: 'e2591ad4-2a0e-48b9-b414-75a45f56d3cc',
     organizationId: 'f5de33a9-4eb2-4279-a8de-9f02d63cc4f0',
+    billingUserId: null,
     boxId: 'box-1',
+    usageStartAt: new Date('2026-07-10T00:00:00Z'),
+    usageEndAt: new Date('2026-07-10T00:00:01Z'),
     pricingSegments: [],
     usageTotals: { cpuSeconds: '0', memGibSeconds: '0', diskGibSeconds: '0', gpuSeconds: '0' },
     billedSeconds: '1',
@@ -161,7 +165,7 @@ function ratedPeriod(overrides: Partial<RatedPeriod> = {}): RatedPeriod {
   }
 }
 
-function createService() {
+function createService(subscriptionSettlement?: { settle: jest.Mock }) {
   const manager = new FakeEntityManager()
   const wallets = new FakeWalletRepository()
   const transactions = new FakeWalletTransactionRepository()
@@ -179,6 +183,7 @@ function createService() {
     ratedPeriods as never,
     new FakeBillingConfig() as never,
     eventEmitter as never,
+    subscriptionSettlement as never,
   )
   return { service, wallets, transactions, ratedPeriods, organizations, eventEmitter }
 }
@@ -266,6 +271,36 @@ describe('WalletService', () => {
 
     expect(transactions.rows.filter((row) => row.ratedPeriodId === period.id)).toHaveLength(1)
     expect(wallets.lockModes).toContain('pessimistic_write')
+  })
+
+  it('settles subscription quota before locking and mutating the wallet', async () => {
+    let wallets: FakeWalletRepository
+    const subscriptionSettlement = {
+      settle: jest.fn(async () => {
+        expect(wallets.lockModes).toEqual([])
+        return { preciseChargeCents: '0', quotaCoveredPreciseCents: '1', slices: [] }
+      }),
+    }
+    const harness = createService(subscriptionSettlement)
+    wallets = harness.wallets
+
+    await harness.service.debitRatedPeriod(ratedPeriod())
+
+    expect(subscriptionSettlement.settle).toHaveBeenCalledTimes(1)
+    expect(wallets.lockModes).toContain('pessimistic_write')
+  })
+
+  it('does not consume quota again when the rated period was already debited', async () => {
+    const subscriptionSettlement = {
+      settle: jest.fn(async () => ({ preciseChargeCents: '0', quotaCoveredPreciseCents: '1', slices: [] })),
+    }
+    const { service } = createService(subscriptionSettlement)
+    const period = ratedPeriod()
+
+    await service.debitRatedPeriod(period)
+    await service.debitRatedPeriod(period)
+
+    expect(subscriptionSettlement.settle).toHaveBeenCalledTimes(1)
   })
 
   it('rolls back the wallet mutation when the ledger insert fails', async () => {

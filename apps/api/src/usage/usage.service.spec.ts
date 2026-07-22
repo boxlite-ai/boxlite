@@ -220,6 +220,7 @@ function makeBox(state: BoxState, desiredState: BoxDesiredState = BoxDesiredStat
   return {
     id: 'box-1',
     organizationId: 'org-1',
+    billingUserId: 'user-1',
     region: 'us',
     state,
     desiredState,
@@ -294,6 +295,7 @@ describe('UsageService', () => {
     const warmPoolBox = {
       ...makeBox(BoxState.STARTED),
       organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+      billingUserId: null,
     } as Box
 
     await service.handleBoxStateUpdate({ box: warmPoolBox, newState: BoxState.STARTED } as never)
@@ -305,16 +307,18 @@ describe('UsageService', () => {
     const warmPoolBox = {
       ...makeBox(BoxState.STARTED),
       organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+      billingUserId: null,
     } as Box
     await service.handleBoxStateUpdate({ box: warmPoolBox, newState: BoxState.STARTED } as never)
 
-    const assignedBox = { ...warmPoolBox, organizationId: 'org-1' } as Box
+    const assignedBox = { ...warmPoolBox, organizationId: 'org-1', billingUserId: 'user-1' } as Box
     await service.handleBoxStateUpdate({ box: assignedBox, newState: BoxState.STARTED } as never)
 
     expect(periods.rows).toHaveLength(1)
     expect(periods.rows[0]).toMatchObject({
       boxId: assignedBox.id,
       organizationId: 'org-1',
+      billingUserId: 'user-1',
       cpu: assignedBox.cpu,
       mem: assignedBox.mem,
       disk: assignedBox.disk,
@@ -327,6 +331,7 @@ describe('UsageService', () => {
     const warmPoolBox = {
       ...makeBox(BoxState.STARTED),
       organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+      billingUserId: null,
     } as Box
     boxes.boxes.set(warmPoolBox.id, warmPoolBox)
     await periods.save({
@@ -368,6 +373,7 @@ describe('UsageService', () => {
       id: 'period-1',
       boxId: 'box-1',
       organizationId: 'org-1',
+      billingUserId: 'user-1',
       endAt: closedAt,
     })
     expect(locks.locks).not.toContain('archive-usage-periods')
@@ -408,6 +414,7 @@ describe('UsageService', () => {
       id: 'period-conflict',
       boxId: 'box-1',
       organizationId: 'org-1',
+      billingUserId: 'user-1',
       startAt: new Date('2026-07-08T00:00:00Z'),
       endAt: new Date('2026-07-08T00:01:00Z'),
       cpu: 1,
@@ -440,7 +447,9 @@ describe('usage period persistence', () => {
     expect(tables.find((table) => table.target === BoxUsagePeriodArchive)?.name).toBe('box_usage_period_archive')
 
     const columns = getMetadataArgsStorage().columns.filter((column) => column.target === BoxUsagePeriod)
-    expect(columns.map((column) => column.propertyName)).toEqual(expect.arrayContaining(['boxClass', 'regionType']))
+    expect(columns.map((column) => column.propertyName)).toEqual(
+      expect.arrayContaining(['billingUserId', 'boxClass', 'regionType']),
+    )
   })
 
   it('preserves the active period identity when creating an archive value', () => {
@@ -448,6 +457,7 @@ describe('usage period persistence', () => {
       id: 'source-period-id',
       boxId: 'box-1',
       organizationId: 'org-1',
+      billingUserId: 'user-1',
       startAt: new Date('2026-07-08T00:00:00Z'),
       endAt: new Date('2026-07-08T00:01:00Z'),
       cpu: 1,
@@ -459,6 +469,9 @@ describe('usage period persistence', () => {
       regionType: RegionType.SHARED,
     })
 
-    expect(BoxUsagePeriodArchive.fromBoxUsagePeriod(period).id).toBe(period.id)
+    expect(BoxUsagePeriodArchive.fromBoxUsagePeriod(period)).toMatchObject({
+      id: period.id,
+      billingUserId: 'user-1',
+    })
   })
 })
