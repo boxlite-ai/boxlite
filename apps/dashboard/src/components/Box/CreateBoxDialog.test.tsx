@@ -10,13 +10,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CreateBoxDialog, resolvePerBoxLimits } from './CreateBoxDialog'
 
 // Mutable org returned by the mocked hook; each test sets `state.org`.
-const state = vi.hoisted(() => ({ org: null as unknown }))
+const state = vi.hoisted(() => ({
+  org: null as unknown,
+  systemImages: {
+    base: 'ghcr.io/boxlite-ai/boxlite-agent-base:test-base',
+    python: 'ghcr.io/boxlite-ai/boxlite-agent-python:test-python',
+    node: 'ghcr.io/boxlite-ai/boxlite-agent-node:test-node',
+  },
+  mutateAsync: vi.fn(),
+}))
 
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({ selectedOrganization: state.org }),
 }))
+vi.mock('@/hooks/useConfig', () => ({
+  useConfig: () => ({ systemImages: state.systemImages }),
+}))
 vi.mock('@/hooks/mutations/useCreateBoxMutation', () => ({
-  useCreateBoxMutation: () => ({ mutateAsync: vi.fn() }),
+  useCreateBoxMutation: () => ({ mutateAsync: state.mutateAsync }),
 }))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 vi.mock('react-router-dom', async (importOriginal) => {
@@ -65,6 +76,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
     state.org = makeOrg({ maxCpuPerBox: 4, maxMemoryPerBox: 8, maxDiskPerBox: 10 })
+    state.mutateAsync.mockResolvedValue({ id: 'box-1' })
   })
 
   afterEach(() => {
@@ -99,6 +111,17 @@ describe('CreateBoxDialog per-org resource cap', () => {
   function nameInput() {
     return document.querySelector<HTMLInputElement>('input[placeholder="my-new-box"]')
   }
+
+  it('uses the API-provided system image refs and defaults to the API Base image', async () => {
+    await renderOpen()
+
+    expect(document.body.textContent).toContain('Base')
+    const createButton = [...document.querySelectorAll('button')].find((button) => button.textContent?.includes('Create Box'))
+    await act(async () => createButton?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await flush()
+
+    expect(state.mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ image: state.systemImages.base }))
+  })
 
   it('clamps an over-max CPU input to the org maximum and shows a red contact-support hint', async () => {
     await renderOpen()

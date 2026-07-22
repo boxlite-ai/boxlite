@@ -11,8 +11,6 @@
  * Do not edit the class manually.
  */
 
-import * as packageJson from '../package.json';
-
 interface AWSv4Configuration {
   options?: {
     region?: string
@@ -100,7 +98,6 @@ export class Configuration {
         this.baseOptions = {
             ...param.baseOptions,
             headers: {
-                'User-Agent': `api-client-typescript/${packageJson.version}`,
                 ...param.baseOptions?.headers,
             },
         };

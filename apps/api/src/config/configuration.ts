@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { configuredSystemImages } from '../common/constants/system-images.constant'
+
 function csvEnv(value?: string): string[] {
   return (value ?? '')
     .split(',')
@@ -73,6 +75,7 @@ const configuration = {
   dashboardUrl: process.env.DASHBOARD_URL,
   // Default to empty string - dashboard will then hit '/api'
   dashboardBaseApiUrl: process.env.DASHBOARD_BASE_API_URL || '',
+  systemImages: configuredSystemImages(),
   // Currently unconsumed (Daytona-port residue): nothing reads `systemSourceRegistry`.
   // Box images are a fixed curated set of digest-pinned ghcr.io refs pulled directly by
   // the runner (see box/constants/curated-images.constant.ts), not mirrored from a source

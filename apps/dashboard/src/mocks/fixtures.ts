@@ -44,6 +44,11 @@ export function buildMockConfig(billingApiUrl: string): BoxliteConfiguration {
       clientId: 'mock-client',
       audience: 'https://mock.local/api',
     },
+    systemImages: {
+      base: 'ghcr.io/boxlite-ai/boxlite-agent-base:mock',
+      python: 'ghcr.io/boxlite-ai/boxlite-agent-python:mock',
+      node: 'ghcr.io/boxlite-ai/boxlite-agent-node:mock',
+    },
     linkedAccountsEnabled: false,
     announcements: {},
     proxyTemplateUrl: 'https://mock.local',

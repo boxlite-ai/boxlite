@@ -5,6 +5,7 @@
  */
 
 import { BadRequestError } from '../../exceptions/bad-request.exception'
+import { configuredSystemImages } from '../../common/constants/system-images.constant'
 
 /**
  * Temporary curated-image gate: boxes may only boot from this fixed set of curated OCI
@@ -17,29 +18,10 @@ import { BadRequestError } from '../../exceptions/bad-request.exception'
  * Env overrides (set on the Api service in apps/infra/sst.config.ts) allow ref
  * rotation without a code deploy; the fallbacks cover local/dev runs.
  */
-type SupportedImageSource = {
-  envVar: string
-  fallbackRef: string
-}
-
-const SUPPORTED_IMAGE_SOURCES: SupportedImageSource[] = [
-  {
-    envVar: 'BOXLITE_SYSTEM_BASE_IMAGE',
-    fallbackRef: 'ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3',
-  },
-  {
-    envVar: 'BOXLITE_SYSTEM_PYTHON_IMAGE',
-    fallbackRef: 'ghcr.io/boxlite-ai/boxlite-agent-python:20260605-p0-r3',
-  },
-  {
-    envVar: 'BOXLITE_SYSTEM_NODE_IMAGE',
-    fallbackRef: 'ghcr.io/boxlite-ai/boxlite-agent-node:20260605-p0-r3',
-  },
-]
-
 /** Curated OCI refs a box may boot from. The first entry is the default image. */
 export function supportedImages(): string[] {
-  return SUPPORTED_IMAGE_SOURCES.map(({ envVar, fallbackRef }) => process.env[envVar] || fallbackRef)
+  const images = configuredSystemImages()
+  return [images.base, images.python, images.node]
 }
 
 /**

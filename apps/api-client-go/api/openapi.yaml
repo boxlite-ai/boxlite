@@ -5112,6 +5112,22 @@ components:
       - clientId
       - issuer
       type: object
+    SystemImagesConfig:
+      properties:
+        base:
+          description: Curated Base image reference
+          type: string
+        python:
+          description: Curated Python image reference
+          type: string
+        node:
+          description: Curated Node.js image reference
+          type: string
+      required:
+      - base
+      - node
+      - python
+      type: object
     RateLimitEntry:
       properties:
         ttl:
@@ -5147,6 +5163,7 @@ components:
         version: 0.0.1
         posthog: ""
         oidc: ""
+        systemImages: ""
         linkedAccountsEnabled: true
         announcements:
           feature-update:
@@ -5176,6 +5193,10 @@ components:
           allOf:
           - $ref: "#/components/schemas/OidcConfig"
           description: OIDC configuration
+        systemImages:
+          allOf:
+          - $ref: "#/components/schemas/SystemImagesConfig"
+          description: Curated system images available for Box creation
         linkedAccountsEnabled:
           description: Whether linked accounts are enabled
           example: true
@@ -5242,6 +5263,7 @@ components:
       - oidc
       - proxyTemplateUrl
       - proxyToolboxUrl
+      - systemImages
       - version
       type: object
     CreateApiKey:
