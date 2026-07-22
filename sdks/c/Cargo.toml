@@ -17,12 +17,12 @@ crate-type = ["cdylib", "staticlib"]
 default = []
 
 [dependencies]
-boxlite = { workspace = true, features = ["rest"] }
+boxlite = { workspace = true, features = ["rest", "gvproxy"] }
 futures = "0.3"
-tokio = { version = "1.37", features = ["rt", "rt-multi-thread"] }
+tokio = { version = "1.37", features = ["io-util", "net", "rt", "rt-multi-thread"] }
 
 [dev-dependencies]
-boxlite = { workspace = true, features = ["rest"] }
+boxlite = { workspace = true, features = ["rest", "gvproxy"] }
 
 [build-dependencies]
 cbindgen = "0.29"

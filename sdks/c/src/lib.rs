@@ -16,6 +16,7 @@ mod exec;
 mod images;
 mod info;
 mod metrics;
+mod network;
 mod options;
 mod rest;
 mod runtime;
@@ -42,6 +43,8 @@ pub(crate) static FREE_STR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(()
 
 pub type CBoxliteRuntime = runtime::RuntimeHandle;
 pub type CBoxHandle = box_handle::BoxHandle;
+pub type CBoxNetworkHandle = network::BoxNetworkHandle;
+pub type CBoxTunnelHandle = network::BoxTunnelHandle;
 pub type CBoxliteImageHandle = images::ImageHandle;
 pub type CBoxliteOptions = options::OptionsHandle;
 pub type CBoxliteCredential = rest::CredentialHandle;
@@ -68,6 +71,7 @@ pub use exec::*;
 pub use images::*;
 pub use info::*;
 pub use metrics::*;
+pub use network::*;
 pub use options::*;
 pub use rest::*;
 pub use runtime::*;

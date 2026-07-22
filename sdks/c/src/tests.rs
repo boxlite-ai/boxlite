@@ -188,6 +188,24 @@ fn test_runtime_images_null_pointer_validation() {
 }
 
 #[test]
+fn test_box_network_null_pointer_validation() {
+    unsafe {
+        let mut error = FFIError::default();
+        let mut network: *mut CBoxNetworkHandle = ptr::null_mut();
+        let code = boxlite_box_network(ptr::null_mut(), &mut network, &mut error as *mut _);
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        boxlite_error_free(&mut error as *mut _);
+
+        let handle = std::ptr::NonNull::<CBoxHandle>::dangling().as_ptr();
+        let code = boxlite_box_network(handle, ptr::null_mut(), &mut error as *mut _);
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        boxlite_error_free(&mut error as *mut _);
+    }
+}
+
+#[test]
 fn test_c_string_conversion_logic() {
     let test_str = CString::new("hello").unwrap();
     unsafe {
@@ -203,6 +221,8 @@ fn test_free_functions_null_safe() {
         boxlite_runtime_free(ptr::null_mut());
         boxlite_image_free(ptr::null_mut());
         boxlite_box_free(ptr::null_mut());
+        boxlite_network_free(ptr::null_mut());
+        boxlite_tunnel_free(ptr::null_mut());
         boxlite_free_string(ptr::null_mut());
         boxlite_error_free(ptr::null_mut());
         boxlite_result_free(ptr::null_mut());
