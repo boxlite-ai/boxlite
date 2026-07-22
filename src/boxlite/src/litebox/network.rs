@@ -38,14 +38,12 @@ pub struct BoxTunnel {
 }
 
 impl BoxTunnel {
-    pub(crate) async fn local<C>(connection: C) -> BoxliteResult<Self>
-    where
-        C: BoxConnection + 'static,
-    {
-        let fd = connection_fd(connection).await?;
-        Ok(Self {
+    /// Wrap an owned transport descriptor. The fd *is* the tunnel — no bridge
+    /// copy in between: `endpoint()` lends it out, `connect()` consumes it.
+    pub(crate) fn local(fd: OwnedFd) -> Self {
+        Self {
             state: tokio::sync::Mutex::new(TunnelState::LocalReady(fd)),
-        })
+        }
     }
 
     #[cfg(feature = "rest")]
@@ -95,21 +93,6 @@ impl BoxTunnel {
             )),
         }
     }
-}
-
-async fn connection_fd<C>(mut connection: C) -> BoxliteResult<OwnedFd>
-where
-    C: BoxConnection + 'static,
-{
-    let (sdk, mut bridge) = tokio::net::UnixStream::pair().map_err(|error| {
-        BoxliteError::Network(format!("create tunnel descriptor bridge: {error}"))
-    })?;
-    tokio::spawn(async move {
-        let _ = tokio::io::copy_bidirectional(&mut connection, &mut bridge).await;
-    });
-    sdk.into_std()
-        .map(OwnedFd::from)
-        .map_err(|error| BoxliteError::Network(format!("export tunnel descriptor: {error}")))
 }
 
 /// Handle for network operations on a LiteBox.
@@ -162,12 +145,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_tunnel_exposes_fd_and_consumes_prepared_connection() {
+    async fn local_tunnel_hands_back_the_transport_fd() {
         let (stream, mut peer) = UnixStream::pair().unwrap();
-        let tunnel = BoxTunnel::local(stream).await.unwrap();
+        let fd = OwnedFd::from(stream.into_std().unwrap());
+        let transport_fd = fd.as_raw_fd();
+        let tunnel = BoxTunnel::local(fd);
 
+        // Zero-copy contract: the endpoint IS the transport fd, not a bridge.
         let endpoint = tunnel.endpoint().await.unwrap();
-        assert!(matches!(endpoint, BoxEndpoint::FileDescriptor(fd) if fd >= 0));
+        assert_eq!(endpoint, BoxEndpoint::FileDescriptor(transport_fd));
         let same_endpoint = tunnel.endpoint().await.unwrap();
         assert_eq!(endpoint, same_endpoint);
 

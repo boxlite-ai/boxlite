@@ -13,6 +13,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use serde_json::Value;
 use std::io;
 use std::net::SocketAddr;
+use std::os::fd::OwnedFd;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -255,6 +256,19 @@ impl BoxInternalTunnel {
     /// The guest `ip:port` this tunnel targets.
     pub fn peer_addr(&self) -> SocketAddr {
         self.peer
+    }
+
+    /// Recover the transport's owned OS fd — the fd *is* the tunnel, so the
+    /// consumer holds the real socket with no bridge in between.
+    ///
+    /// tokio → std deregisters the socket from the reactor before the fd
+    /// changes hands.
+    pub(crate) fn into_owned_fd(self) -> BoxliteResult<OwnedFd> {
+        match self.stream {
+            TunnelStream::Local(stream) => stream.into_std().map(OwnedFd::from).map_err(|error| {
+                BoxliteError::Network(format!("detach tunnel socket for handoff: {error}"))
+            }),
+        }
     }
 }
 

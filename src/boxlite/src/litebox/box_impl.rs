@@ -1181,7 +1181,9 @@ impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
             .network
             .clone()
             .ok_or_else(|| BoxliteError::Unsupported("box networking is disabled".into()))?;
-        BoxTunnel::local(network.tunnel(target).await?).await
+        Ok(BoxTunnel::local(
+            network.tunnel(target).await?.into_owned_fd()?,
+        ))
     }
 }
 
