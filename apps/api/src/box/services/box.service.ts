@@ -685,20 +685,20 @@ export class BoxService {
     if (port < 1 || port > 65535) {
       throw new BadRequestError('Invalid port')
     }
-    if (port !== TERMINAL_PREVIEW_PORT) {
-      throw new BadRequestError(`Port preview is only supported for terminal port ${TERMINAL_PREVIEW_PORT}`)
-    }
 
     const proxyDomain = this.configService.getOrThrow('proxy.domain')
     const proxyProtocol = this.configService.getOrThrow('proxy.protocol')
 
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
-    let url = `${proxyProtocol}://${port}-${box.id}.${proxyDomain}`
+    // Keep the established terminal hostname stable. Service previews use an
+    // encoded ID so mixed-case box IDs remain safe in DNS hostnames.
+    const previewBoxId = port === TERMINAL_PREVIEW_PORT ? box.id : encodeDirectPreviewBoxId(box.id)
+
+    let url = `${proxyProtocol}://${port}-${previewBoxId}.${proxyDomain}`
 
     const region = await this.regionService.findOne(box.region, true)
     if (region && region.proxyUrl) {
-      // Insert port and box.id into the custom proxy URL
-      url = region.proxyUrl.replace(/(https?:\/)(\/)/, `$1/${port}-${box.id}.`)
+      url = region.proxyUrl.replace(/(https?:\/)(\/)/, `$1/${port}-${previewBoxId}.`)
     }
 
     return {
@@ -716,7 +716,7 @@ export class BoxService {
     const proxyDomain = this.configService.getOrThrow('proxy.domain')
     const proxyProtocol = this.configService.getOrThrow('proxy.protocol')
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
-    const endpointId = `d-${Buffer.from(box.id, 'utf8').toString('hex')}`
+    const endpointId = encodeDirectPreviewBoxId(box.id)
 
     let url = `${proxyProtocol}://${port}-${endpointId}.${proxyDomain}`
     const region = await this.regionService.findOne(box.region, true)
@@ -1445,13 +1445,11 @@ export class BoxService {
     return interval * 60
   }
 
-  private resolveLifecyclePolicy(
-    input: {
-      autoPause?: number
-      autoDelete?: number
-      autoResume?: boolean
-    },
-  ): { autoPause: number; autoDelete: number; autoResume: boolean } {
+  private resolveLifecyclePolicy(input: { autoPause?: number; autoDelete?: number; autoResume?: boolean }): {
+    autoPause: number
+    autoDelete: number
+    autoResume: boolean
+  } {
     const autoPause = input.autoPause ?? DEFAULT_AUTO_PAUSE_SECONDS
     const autoDelete = input.autoDelete ?? AUTO_DELETE_DISABLED
     const autoResume = input.autoResume ?? DEFAULT_AUTO_RESUME
@@ -1564,4 +1562,8 @@ export class BoxService {
 
     return { valid: true, boxId: sshAccess.box.id }
   }
+}
+
+function encodeDirectPreviewBoxId(boxId: string): string {
+  return `d-${Buffer.from(boxId, 'utf8').toString('hex')}`
 }

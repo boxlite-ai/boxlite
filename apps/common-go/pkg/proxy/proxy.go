@@ -8,11 +8,13 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -88,6 +90,24 @@ var proxyTransport = &http.Transport{
 	}).DialContext,
 }
 
+type RequestTarget struct {
+	URL       *url.URL
+	Host      string
+	Headers   map[string]string
+	Transport http.RoundTripper
+}
+
+func FormatForwardedHeader(host string, proto string) string {
+	parts := make([]string, 0, 2)
+	if host != "" {
+		parts = append(parts, fmt.Sprintf("host=%q", host))
+	}
+	if proto != "" {
+		parts = append(parts, "proto="+proto)
+	}
+	return strings.Join(parts, ";")
+}
+
 // ProxyRequest handles proxying requests to a box's container
 //
 //	@Tags			toolbox
@@ -103,35 +123,46 @@ var proxyTransport = &http.Transport{
 //	@Failure		409			{object}	string	"Box container conflict"
 //	@Failure		500			{object}	string	"Internal server error"
 //	@Router			/workspaces/{workspaceId}/{projectId}/toolbox/{path} [get]
-func NewProxyRequestHandler(getProxyTarget func(*gin.Context) (targetUrl *url.URL, extraHeaders map[string]string, err error), modifyResponse func(*http.Response) error) gin.HandlerFunc {
+func NewProxyRequestHandler(getProxyTarget func(*gin.Context) (*RequestTarget, error), modifyResponse func(*http.Response) error) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		target, extraHeaders, err := getProxyTarget(ctx)
+		target, err := getProxyTarget(ctx)
 		if err != nil {
 			// Error already sent to the context
 			return
 		}
 
-		if target == nil {
+		if target == nil || target.URL == nil {
 			return
 		}
 
 		reverseProxy := &httputil.ReverseProxy{
-			Director: func(req *http.Request) {
-				req.Host = target.Host
-				req.URL.Scheme = target.Scheme
-				req.URL.Host = target.Host
-				req.URL.Path = target.Path
-				if target.RawQuery == "" || req.URL.RawQuery == "" {
-					req.URL.RawQuery = target.RawQuery + req.URL.RawQuery
+			Rewrite: func(req *httputil.ProxyRequest) {
+				req.Out.Host = target.Host
+				req.Out.URL.Scheme = target.URL.Scheme
+				req.Out.URL.Host = target.URL.Host
+				req.Out.URL.Path = target.URL.Path
+				req.Out.URL.RawPath = target.URL.RawPath
+				if target.URL.RawQuery == "" || req.In.URL.RawQuery == "" {
+					req.Out.URL.RawQuery = target.URL.RawQuery + req.In.URL.RawQuery
 				} else {
-					req.URL.RawQuery = target.RawQuery + "&" + req.URL.RawQuery
+					req.Out.URL.RawQuery = target.URL.RawQuery + "&" + req.In.URL.RawQuery
 				}
-				for key, value := range extraHeaders {
-					req.Header.Add(key, value)
+
+				req.Out.Header.Del("Forwarded")
+				req.Out.Header.Del("X-Forwarded-Port")
+				req.Out.Header.Del("X-Real-IP")
+				req.SetXForwarded()
+				for key, value := range target.Headers {
+					if value != "" {
+						req.Out.Header.Set(key, value)
+					}
 				}
 			},
-			Transport:      proxyTransport,
+			Transport:      target.Transport,
 			ModifyResponse: modifyResponse,
+		}
+		if reverseProxy.Transport == nil {
+			reverseProxy.Transport = proxyTransport
 		}
 
 		reverseProxy.ServeHTTP(ctx.Writer, ctx.Request)

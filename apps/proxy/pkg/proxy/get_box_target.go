@@ -6,8 +6,10 @@ package proxy
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -16,13 +18,21 @@ import (
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
+	common_proxy "github.com/boxlite-ai/common-go/pkg/proxy"
 	"github.com/boxlite-ai/common-go/pkg/utils"
 	"github.com/gin-gonic/gin"
 
 	log "github.com/sirupsen/logrus"
 )
 
-func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, error) {
+const (
+	activityUpdateTimeout          = 10 * time.Second
+	directPreviewBoxIDLength       = 12
+	directPreviewBoxIDPrefix       = "d-"
+	legacyDirectPreviewBoxIDLength = directPreviewBoxIDLength * 2
+)
+
+func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, error) {
 	var targetPort, targetPath, boxIdOrSignedToken string
 
 	// Extract port and box ID from the host header.
@@ -31,33 +41,40 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, e
 	targetPort, boxIdOrSignedToken, _, err = p.parseHost(ctx.Request.Host)
 	if err != nil {
 		ctx.Error(common_errors.NewBadRequestError(err))
-		return nil, nil, err
+		return nil, err
 	}
-	targetPath = ctx.Param("path")
+	targetPath = requestEscapedPath(ctx.Request.URL, ctx.Param("path"))
 
 	if targetPort == "" {
 		ctx.Error(common_errors.NewBadRequestError(errors.New("target port is required")))
-		return nil, nil, errors.New("target port is required")
+		return nil, errors.New("target port is required")
 	}
 
 	if boxIdOrSignedToken == "" {
 		ctx.Error(common_errors.NewBadRequestError(errors.New("box ID or signed token is required")))
-		return nil, nil, errors.New("box ID or signed token is required")
+		return nil, errors.New("box ID or signed token is required")
 	}
 
 	boxId := boxIdOrSignedToken
+	if decodedBoxId, ok, decodeErr := decodeDirectPreviewBoxID(boxIdOrSignedToken); decodeErr != nil {
+		ctx.Error(common_errors.NewBadRequestError(decodeErr))
+		return nil, decodeErr
+	} else if ok {
+		boxId = decodedBoxId
+		boxIdOrSignedToken = decodedBoxId
+	}
 
 	isPublic, err := p.getBoxPublic(ctx, boxIdOrSignedToken)
 	if err != nil {
 		ctx.Error(common_errors.NewBadRequestError(fmt.Errorf("failed to get box public status: %w", err)))
-		return nil, nil, fmt.Errorf("failed to get box public status: %w", err)
+		return nil, fmt.Errorf("failed to get box public status: %w", err)
 	}
 
 	if !*isPublic || targetPort == TERMINAL_PORT {
 		portFloat, err := strconv.ParseFloat(targetPort, 64)
 		if err != nil {
 			ctx.Error(common_errors.NewBadRequestError(fmt.Errorf("failed to parse target port: %w", err)))
-			return nil, nil, fmt.Errorf("failed to parse target port: %w", err)
+			return nil, fmt.Errorf("failed to parse target port: %w", err)
 		}
 		var didRedirect bool
 		boxId, didRedirect, err = p.Authenticate(ctx, boxIdOrSignedToken, float32(portFloat))
@@ -65,37 +82,102 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, e
 			if !didRedirect {
 				ctx.Error(err)
 			}
-			return nil, nil, err
+			return nil, err
 		}
+	}
+
+	doneCh := make(chan struct{})
+	activityCtx := context.WithoutCancel(ctx.Request.Context())
+	go p.updateLastActivity(activityCtx, boxId, true, doneCh)
+	ctx.Set(ACTIVITY_POLL_STOP_KEY, func() { close(doneCh) })
+
+	forwardedProto := "http"
+	if p.config != nil && p.config.ProxyProtocol != "" {
+		forwardedProto = p.config.ProxyProtocol
+	}
+	forwardedHost := ctx.Request.Host
+	forwardedPort := forwardedPortFromHost(forwardedHost, forwardedProto)
+
+	headers := map[string]string{
+		"X-Forwarded-Host":  forwardedHost,
+		"X-Forwarded-Proto": forwardedProto,
+		"X-Forwarded-Port":  forwardedPort,
+		"Forwarded":         common_proxy.FormatForwardedHeader(forwardedHost, forwardedProto),
+	}
+
+	if targetPort != TERMINAL_PORT {
+		if _, err := strconv.ParseUint(targetPort, 10, 16); err != nil {
+			return nil, fmt.Errorf("invalid target port: %w", err)
+		}
+		target, err := url.Parse("http://" + net.JoinHostPort(boxId, targetPort) + targetPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse guest target URL: %w", err)
+		}
+		return &common_proxy.RequestTarget{
+			URL:       target,
+			Host:      forwardedHost,
+			Headers:   headers,
+			Transport: p.guestPortTransport,
+		}, nil
 	}
 
 	runnerInfo, err := p.getBoxRunnerInfo(ctx, boxId)
 	if err != nil {
 		ctx.Error(common_errors.NewBadRequestError(fmt.Errorf("failed to get runner info: %w", err)))
-		return nil, nil, fmt.Errorf("failed to get runner info: %w", err)
+		return nil, fmt.Errorf("failed to get runner info: %w", err)
 	}
-
-	// Build the target URL
-	targetURL := fmt.Sprintf("%s/boxes/%s/toolbox/proxy/%s", runnerInfo.ApiUrl, boxId, targetPort)
-
-	// Ensure path always has a leading slash but not duplicate slashes
-	if targetPath == "" {
-		targetPath = "/"
-	} else if !strings.HasPrefix(targetPath, "/") {
-		targetPath = "/" + targetPath
-	}
-
-	// Create the complete target URL with path
-	target, err := url.Parse(fmt.Sprintf("%s%s", targetURL, targetPath))
+	target, err := url.Parse(fmt.Sprintf("%s/boxes/%s/toolbox/proxy/%s%s", strings.TrimRight(runnerInfo.ApiUrl, "/"), boxId, targetPort, targetPath))
 	if err != nil {
-		ctx.Error(common_errors.NewBadRequestError(fmt.Errorf("failed to parse target URL: %w", err)))
-		return nil, nil, fmt.Errorf("failed to parse target URL: %w", err)
+		return nil, fmt.Errorf("failed to parse terminal target URL: %w", err)
 	}
+	headers["X-BoxLite-Authorization"] = fmt.Sprintf("Bearer %s", runnerInfo.ApiKey)
+	return &common_proxy.RequestTarget{URL: target, Host: target.Host, Headers: headers}, nil
+}
 
-	return target, map[string]string{
-		"X-BoxLite-Authorization": fmt.Sprintf("Bearer %s", runnerInfo.ApiKey),
-		"X-Forwarded-Host":        ctx.Request.Host,
-	}, nil
+func (p *Proxy) dialGuestPort(ctx context.Context, network string, address string) (net.Conn, error) {
+	if network != "tcp" && network != "tcp4" && network != "tcp6" {
+		return nil, fmt.Errorf("unsupported network %q", network)
+	}
+	boxID, rawPort, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("parse guest endpoint: %w", err)
+	}
+	port, err := strconv.ParseUint(rawPort, 10, 16)
+	if err != nil || port == 0 {
+		return nil, fmt.Errorf("invalid guest port %q", rawPort)
+	}
+	runnerInfo, err := p.getBoxRunnerInfo(ctx, boxID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve runner for box %s: %w", boxID, err)
+	}
+	return dialRunnerTunnel(ctx, runnerInfo, boxID, uint16(port))
+}
+
+func requestEscapedPath(requestURL *url.URL, fallbackPath string) string {
+	path := fallbackPath
+	if requestURL != nil && requestURL.EscapedPath() != "" {
+		path = requestURL.EscapedPath()
+	}
+	if path == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(path, "/") {
+		return "/" + path
+	}
+	return path
+}
+
+func forwardedPortFromHost(host string, proto string) string {
+	if _, port, err := net.SplitHostPort(host); err == nil {
+		return port
+	}
+	if strings.EqualFold(proto, "https") {
+		return "443"
+	}
+	if strings.EqualFold(proto, "http") {
+		return "80"
+	}
+	return ""
 }
 
 func (p *Proxy) getBoxRunnerInfo(ctx context.Context, boxId string) (*RunnerInfo, error) {
@@ -170,7 +252,7 @@ func (p *Proxy) getBoxPublic(ctx context.Context, boxId string) (*bool, error) {
 		return nil, err
 	}
 
-	if cacheErr := p.boxPublicCache.Set(ctx, boxId, isPublic, 1*time.Hour); cacheErr != nil {
+	if cacheErr := p.boxPublicCache.Set(ctx, boxId, isPublic, 3*time.Second); cacheErr != nil {
 		log.Errorf("Failed to set box public in cache: %v", cacheErr)
 	}
 
@@ -277,4 +359,82 @@ func (p *Proxy) parseHost(host string) (targetPort string, boxIdOrSignedToken st
 	baseHost = strings.Join(parts[1:], ".")
 
 	return targetPort, boxIdOrSignedToken, baseHost, nil
+}
+
+func decodeDirectPreviewBoxID(value string) (string, bool, error) {
+	encoded, ok := strings.CutPrefix(value, directPreviewBoxIDPrefix)
+	if !ok {
+		// Keep URLs generated before direct IDs gained an explicit prefix working.
+		if len(value) != legacyDirectPreviewBoxIDLength {
+			return value, false, nil
+		}
+		encoded = value
+	}
+
+	decoded, err := hex.DecodeString(encoded)
+	if err != nil {
+		return value, false, nil
+	}
+	if len(decoded) == 0 {
+		return "", true, errors.New("invalid direct preview box ID: empty decoded box ID")
+	}
+
+	boxId := string(decoded)
+	if !isValidDirectPreviewBoxID(boxId) {
+		return "", true, errors.New("invalid direct preview box ID")
+	}
+
+	return boxId, true, nil
+}
+
+func isValidDirectPreviewBoxID(value string) bool {
+	if len(value) != directPreviewBoxIDLength {
+		return false
+	}
+	for _, ch := range value {
+		if (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func (p *Proxy) updateLastActivity(ctx context.Context, boxId string, shouldPoll bool, done <-chan struct{}) {
+	updateCtx, cancel := context.WithTimeout(ctx, activityUpdateTimeout)
+	defer cancel()
+
+	cached, err := p.boxLastActivityUpdateCache.Has(updateCtx, boxId)
+	if err != nil {
+		log.Errorf("failed to check last activity cache for box %s: %v", boxId, err)
+		return
+	}
+
+	const pollInterval = 50 * time.Second
+	if !cached {
+		if _, err := p.apiclient.BoxAPI.UpdateLastActivity(updateCtx, boxId).Execute(); err != nil {
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				log.Errorf("failed to update last activity for box %s: %v", boxId, err)
+			}
+			return
+		}
+		if err := p.boxLastActivityUpdateCache.Set(updateCtx, boxId, true, pollInterval-5*time.Second); err != nil {
+			log.Errorf("failed to cache last activity update for box %s: %v", boxId, err)
+		}
+	}
+
+	if shouldPoll {
+		go func() {
+			ticker := time.NewTicker(pollInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					p.updateLastActivity(ctx, boxId, false, done)
+				case <-done:
+					return
+				}
+			}
+		}()
+	}
 }
