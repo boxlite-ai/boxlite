@@ -1,7 +1,7 @@
 package boxlite
 
 /*
-#include "boxlite.h"
+#include <boxlite.h>
 #include <stdlib.h>
 */
 import "C"
