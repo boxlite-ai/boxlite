@@ -1,36 +1,13 @@
 use std::net::SocketAddr;
-use std::os::fd::{AsRawFd, BorrowedFd, IntoRawFd, OwnedFd};
 use std::sync::{Arc, Mutex};
 
 use boxlite::LiteBox;
 use boxlite::litebox::{BoxEndpoint, BoxTunnel};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::PyBytes;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::util::map_err;
-
-async fn bridge_connection_fd(
-    mut connection: Box<dyn boxlite::BoxConnection>,
-) -> std::result::Result<std::os::fd::OwnedFd, boxlite::BoxliteError> {
-    let (sdk, mut bridge) = tokio::net::UnixStream::pair().map_err(|error| {
-        boxlite::BoxliteError::Network(format!("create SDK socket bridge: {error}"))
-    })?;
-    tokio::spawn(async move {
-        let _ = tokio::io::copy_bidirectional(&mut connection, &mut bridge).await;
-    });
-    sdk.into_std()
-        .map(std::os::fd::OwnedFd::from)
-        .map_err(|error| boxlite::BoxliteError::Network(format!("export SDK socket: {error}")))
-}
-
-fn clone_connection_fd(fd: i32) -> std::result::Result<OwnedFd, boxlite::BoxliteError> {
-    // SAFETY: BoxTunnel owns this descriptor for the duration of the clone.
-    unsafe { BorrowedFd::borrow_raw(fd) }
-        .try_clone_to_owned()
-        .map_err(|error| {
-            boxlite::BoxliteError::Network(format!("clone tunnel descriptor: {error}"))
-        })
-}
 
 /// Handle for network operations on a box.
 #[pyclass(name = "NetworkHandle")]
@@ -42,6 +19,13 @@ pub(crate) struct PyNetworkHandle {
 #[pyclass(name = "BoxTunnel")]
 pub(crate) struct PyBoxTunnel {
     handle: Arc<Mutex<Option<BoxTunnel>>>,
+}
+
+/// A bidirectional byte stream returned by a box tunnel.
+#[pyclass(name = "BoxConnection")]
+pub(crate) struct PyBoxConnection {
+    reader: Arc<tokio::sync::Mutex<Option<tokio::io::ReadHalf<Box<dyn boxlite::BoxConnection>>>>>,
+    writer: Arc<tokio::sync::Mutex<Option<tokio::io::WriteHalf<Box<dyn boxlite::BoxConnection>>>>>,
 }
 
 #[pymethods]
@@ -105,25 +89,75 @@ impl PyBoxTunnel {
                         "tunnel connection has already been consumed".into(),
                     ))
                 })?;
-            let endpoint = tunnel.endpoint();
-            let fd = match endpoint {
-                BoxEndpoint::FileDescriptor(fd) => clone_connection_fd(fd).map_err(map_err)?,
-                BoxEndpoint::Uri(_) => {
-                    let connection = tunnel.connect().map_err(map_err)?;
-                    bridge_connection_fd(connection).await.map_err(map_err)?
-                }
-            };
-            Python::attach(move |py| {
-                let kwargs = PyDict::new(py);
-                kwargs.set_item("fileno", fd.as_raw_fd())?;
-                let socket = py
-                    .import("socket")?
-                    .getattr("socket")?
-                    .call((), Some(&kwargs))?;
-                let _ = fd.into_raw_fd();
-                socket.call_method1("setblocking", (false,))?;
-                Ok(socket.unbind())
+            let connection = tunnel.connect().map_err(map_err)?;
+            let (reader, writer) = tokio::io::split(connection);
+            Ok(PyBoxConnection {
+                reader: Arc::new(tokio::sync::Mutex::new(Some(reader))),
+                writer: Arc::new(tokio::sync::Mutex::new(Some(writer))),
             })
+        })
+    }
+}
+
+#[pymethods]
+impl PyBoxConnection {
+    fn read<'py>(&self, py: Python<'py>, max_bytes: usize) -> PyResult<Bound<'py, PyAny>> {
+        if max_bytes == 0 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "max_bytes must be non-zero",
+            ));
+        }
+        let reader = Arc::clone(&self.reader);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mut guard = reader.lock().await;
+            let stream = guard.as_mut().ok_or_else(|| {
+                map_err(boxlite::BoxliteError::InvalidState(
+                    "connection is closed".into(),
+                ))
+            })?;
+            let mut buffer = vec![0; max_bytes];
+            let read = stream.read(&mut buffer).await.map_err(|error| {
+                map_err(boxlite::BoxliteError::Network(format!(
+                    "read tunnel connection: {error}"
+                )))
+            })?;
+            buffer.truncate(read);
+            Python::attach(|py| Ok(PyBytes::new(py, &buffer).unbind()))
+        })
+    }
+
+    fn write<'py>(&self, py: Python<'py>, data: Vec<u8>) -> PyResult<Bound<'py, PyAny>> {
+        let writer = Arc::clone(&self.writer);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mut guard = writer.lock().await;
+            let stream = guard.as_mut().ok_or_else(|| {
+                map_err(boxlite::BoxliteError::InvalidState(
+                    "connection is closed".into(),
+                ))
+            })?;
+            stream.write_all(&data).await.map_err(|error| {
+                map_err(boxlite::BoxliteError::Network(format!(
+                    "write tunnel connection: {error}"
+                )))
+            })?;
+            Ok(data.len())
+        })
+    }
+
+    fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let reader = Arc::clone(&self.reader);
+        let writer = Arc::clone(&self.writer);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mut writer = writer.lock().await;
+            if let Some(mut stream) = writer.take() {
+                stream.shutdown().await.map_err(|error| {
+                    map_err(boxlite::BoxliteError::Network(format!(
+                        "close tunnel connection: {error}"
+                    )))
+                })?;
+            }
+            reader.lock().await.take();
+            Ok(())
         })
     }
 }

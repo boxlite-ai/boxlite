@@ -35,11 +35,11 @@ async def _http_get(tunnel, host: str, marker: bytes) -> bytes:
     request = (f"GET / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n").encode()
 
     try:
-        await asyncio.wait_for(loop.sock_sendall(connection, request), timeout=10)
+        await asyncio.wait_for(connection.write(request), timeout=10)
         response = bytearray()
         while True:
             chunk = await asyncio.wait_for(
-                loop.sock_recv(connection, 64 * 1024),
+                connection.read(64 * 1024),
                 timeout=10,
             )
             if not chunk:
@@ -49,7 +49,7 @@ async def _http_get(tunnel, host: str, marker: bytes) -> bytes:
                 break
         return bytes(response)
     finally:
-        connection.close()
+        await connection.close()
 
 
 async def _wait_for_http_server(
@@ -179,12 +179,12 @@ async def _binary_round_trip(box, port: int, connection_index: int) -> None:
     chunk_sizes = (1, 7, 31, 257, 4093, 16384, 65521)
 
     async def send() -> None:
-        await loop.sock_sendall(connection, struct.pack("!Q", len(payload)))
+        await connection.write(struct.pack("!Q", len(payload)))
         offset = 0
         chunk_index = 0
         while offset < len(payload):
             size = chunk_sizes[chunk_index % len(chunk_sizes)]
-            await loop.sock_sendall(connection, payload[offset : offset + size])
+            await connection.write(payload[offset : offset + size])
             offset += size
             chunk_index += 1
 
@@ -192,7 +192,7 @@ async def _binary_round_trip(box, port: int, connection_index: int) -> None:
         response = bytearray()
         expected_size = len(payload) + len(trailer)
         while len(response) < expected_size:
-            chunk = await loop.sock_recv(connection, 64 * 1024)
+            chunk = await connection.read(64 * 1024)
             if not chunk:
                 break
             response.extend(chunk)
@@ -204,7 +204,7 @@ async def _binary_round_trip(box, port: int, connection_index: int) -> None:
         )
         assert response == payload + trailer
     finally:
-        connection.close()
+        await connection.close()
 
 
 async def _wait_for_binary_server(box, port: int) -> None:
@@ -217,11 +217,11 @@ async def _wait_for_binary_server(box, port: int) -> None:
         connection = None
         try:
             connection = await tunnel.connect()
-            await loop.sock_sendall(connection, struct.pack("!Q", 0))
+            await connection.write(struct.pack("!Q", 0))
             response = bytearray()
             while len(response) < len(expected):
                 chunk = await asyncio.wait_for(
-                    loop.sock_recv(connection, 4096), timeout=2
+                    connection.read(4096), timeout=2
                 )
                 if not chunk:
                     break
@@ -233,7 +233,7 @@ async def _wait_for_binary_server(box, port: int) -> None:
             last_error = f"{type(error).__name__}: {error}"
         finally:
             if connection is not None:
-                connection.close()
+                await connection.close()
         await asyncio.sleep(0.25)
     raise AssertionError(
         f"binary tunnel server did not become ready; last result: {last_error}"

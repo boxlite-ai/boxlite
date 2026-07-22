@@ -6,7 +6,6 @@ Provides common functionality for all specialized boxes (CodeBox, BrowserBox, et
 
 import asyncio
 import logging
-import socket
 from enum import IntEnum
 from typing import Optional, TYPE_CHECKING
 
@@ -33,8 +32,8 @@ class BoxTunnel:
     def __init__(self, tunnel) -> None:
         self._tunnel = tunnel
 
-    async def connect(self) -> socket.socket:
-        """Open a non-blocking socket to the target service."""
+    async def connect(self):
+        """Consume the tunnel and return its bidirectional byte stream."""
         return await self._tunnel.connect()
 
     def endpoint(self) -> str | int:

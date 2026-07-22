@@ -16,10 +16,8 @@ class SyncBoxTunnel:
         self._tunnel = tunnel
 
     def connect(self):
-        """Open a blocking socket to the target service."""
-        tunnel = self._box._sync(self._tunnel.connect())
-        tunnel.setblocking(True)
-        return tunnel
+        """Consume the tunnel and return its bidirectional byte stream."""
+        return self._box._sync(self._tunnel.connect())
 
     def endpoint(self):
         """Return the cloud URI or borrowed local file descriptor."""

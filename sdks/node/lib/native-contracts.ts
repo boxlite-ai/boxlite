@@ -277,8 +277,14 @@ export interface JsNetworkHandle {
 export interface NativeBoxTunnel {
   /** Return the public endpoint for this tunnel. */
   endpoint(): string | number;
-  /** Open the tunnel and return its native file descriptor. */
-  _connectFd(): Promise<number>;
+  /** Consume the tunnel and return its bidirectional byte stream. */
+  connect(): Promise<NativeBoxConnection>;
+}
+
+export interface NativeBoxConnection {
+  read(maxBytes: number): Promise<Buffer>;
+  write(data: Buffer): Promise<number>;
+  close(): Promise<void>;
 }
 
 export type JsCloneOptions = Record<string, never>;

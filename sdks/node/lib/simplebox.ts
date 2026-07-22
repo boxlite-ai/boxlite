@@ -10,11 +10,11 @@
 
 import type { CopyOptions } from "./copy.js";
 import type { ExecResult } from "./exec.js";
-import { Socket } from "node:net";
 import { getJsBoxlite } from "./native.js";
 import type {
   JsBox,
   JsBoxOptions,
+  NativeBoxConnection,
   NativeBoxTunnel,
   JsExecStderr,
   JsExecStdout,
@@ -288,10 +288,9 @@ export class BoxTunnel {
     return this.tunnel.endpoint();
   }
 
-  /** Consume the tunnel's socket connection. */
-  async connect(): Promise<Socket> {
-    const fd = await this.tunnel._connectFd();
-    return new Socket({ fd, readable: true, writable: true });
+  /** Consume the tunnel and return its bidirectional byte stream. */
+  async connect(): Promise<NativeBoxConnection> {
+    return this.tunnel.connect();
   }
 }
 

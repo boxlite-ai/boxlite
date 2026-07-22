@@ -1,36 +1,13 @@
 use std::net::SocketAddr;
-use std::os::fd::{BorrowedFd, IntoRawFd, OwnedFd};
 use std::sync::{Arc, Mutex};
 
 use boxlite::LiteBox;
 use boxlite::litebox::{BoxEndpoint, BoxTunnel};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::util::map_err;
-
-async fn bridge_connection_fd(
-    mut connection: Box<dyn boxlite::BoxConnection>,
-) -> std::result::Result<std::os::fd::OwnedFd, boxlite::BoxliteError> {
-    let (sdk, mut bridge) = tokio::net::UnixStream::pair().map_err(|error| {
-        boxlite::BoxliteError::Network(format!("create SDK socket bridge: {error}"))
-    })?;
-    tokio::spawn(async move {
-        let _ = tokio::io::copy_bidirectional(&mut connection, &mut bridge).await;
-    });
-    sdk.into_std()
-        .map(std::os::fd::OwnedFd::from)
-        .map_err(|error| boxlite::BoxliteError::Network(format!("export SDK socket: {error}")))
-}
-
-fn clone_connection_fd(fd: i32) -> std::result::Result<OwnedFd, boxlite::BoxliteError> {
-    // SAFETY: BoxTunnel owns this descriptor for the duration of the clone.
-    unsafe { BorrowedFd::borrow_raw(fd) }
-        .try_clone_to_owned()
-        .map_err(|error| {
-            boxlite::BoxliteError::Network(format!("clone tunnel descriptor: {error}"))
-        })
-}
 
 /// Handle for network operations on a box.
 #[napi]
@@ -42,6 +19,12 @@ pub struct JsNetworkHandle {
 #[napi]
 pub struct JsBoxTunnel {
     handle: Arc<Mutex<Option<BoxTunnel>>>,
+}
+
+#[napi]
+pub struct JsBoxConnection {
+    reader: Arc<tokio::sync::Mutex<Option<tokio::io::ReadHalf<Box<dyn boxlite::BoxConnection>>>>>,
+    writer: Arc<tokio::sync::Mutex<Option<tokio::io::WriteHalf<Box<dyn boxlite::BoxConnection>>>>>,
 }
 
 #[napi]
@@ -83,23 +66,66 @@ impl JsBoxTunnel {
         }
     }
 
-    /// Consume the tunnel stream and return its owned Unix file descriptor.
-    #[napi(js_name = "_connectFd")]
-    pub async fn connect_fd(&self) -> Result<i32> {
+    #[napi]
+    pub async fn connect(&self) -> Result<JsBoxConnection> {
         let tunnel = self
             .handle
             .lock()
             .map_err(|_| Error::from_reason("tunnel lock poisoned"))?
             .take()
             .ok_or_else(|| Error::from_reason("tunnel connection has already been consumed"))?;
-        let endpoint = tunnel.endpoint();
-        let fd = match endpoint {
-            BoxEndpoint::FileDescriptor(fd) => clone_connection_fd(fd).map_err(map_err)?,
-            BoxEndpoint::Uri(_) => {
-                let connection = tunnel.connect().map_err(map_err)?;
-                bridge_connection_fd(connection).await.map_err(map_err)?
-            }
-        };
-        Ok(fd.into_raw_fd())
+        let connection = tunnel.connect().map_err(map_err)?;
+        let (reader, writer) = tokio::io::split(connection);
+        Ok(JsBoxConnection {
+            reader: Arc::new(tokio::sync::Mutex::new(Some(reader))),
+            writer: Arc::new(tokio::sync::Mutex::new(Some(writer))),
+        })
+    }
+}
+
+#[napi]
+impl JsBoxConnection {
+    #[napi]
+    pub async fn read(&self, max_bytes: u32) -> Result<Buffer> {
+        if max_bytes == 0 {
+            return Err(Error::from_reason("maxBytes must be non-zero"));
+        }
+        let mut guard = self.reader.lock().await;
+        let stream = guard
+            .as_mut()
+            .ok_or_else(|| Error::from_reason("connection is closed"))?;
+        let mut buffer = vec![0; max_bytes as usize];
+        let read = stream
+            .read(&mut buffer)
+            .await
+            .map_err(|error| Error::from_reason(format!("read tunnel connection: {error}")))?;
+        buffer.truncate(read);
+        Ok(buffer.into())
+    }
+
+    #[napi]
+    pub async fn write(&self, data: Buffer) -> Result<u32> {
+        let mut guard = self.writer.lock().await;
+        let stream = guard
+            .as_mut()
+            .ok_or_else(|| Error::from_reason("connection is closed"))?;
+        stream
+            .write_all(&data)
+            .await
+            .map_err(|error| Error::from_reason(format!("write tunnel connection: {error}")))?;
+        Ok(data.len() as u32)
+    }
+
+    #[napi]
+    pub async fn close(&self) -> Result<()> {
+        let mut writer = self.writer.lock().await;
+        if let Some(mut stream) = writer.take() {
+            stream
+                .shutdown()
+                .await
+                .map_err(|error| Error::from_reason(format!("close tunnel connection: {error}")))?;
+        }
+        self.reader.lock().await.take();
+        Ok(())
     }
 }
