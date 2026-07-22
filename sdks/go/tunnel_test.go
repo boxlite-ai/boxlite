@@ -23,7 +23,7 @@ func TestBoxNetworkRejectsClosedHandle(t *testing.T) {
 }
 
 func TestTunnelMethodsRejectClosedHandle(t *testing.T) {
-	var tunnel *Tunnel
+	var tunnel *BoxTunnel
 	if _, err := tunnel.Endpoint(); !errors.Is(err, ErrRuntimeClosed) {
 		t.Fatalf("Endpoint() error = %v, want ErrRuntimeClosed", err)
 	}
@@ -36,7 +36,7 @@ func TestNetworkAndTunnelCloseAreIdempotent(t *testing.T) {
 	if err := (&Network{}).Close(); err != nil {
 		t.Fatalf("Network.Close() error = %v", err)
 	}
-	if err := (&Tunnel{}).Close(); err != nil {
+	if err := (&BoxTunnel{}).Close(); err != nil {
 		t.Fatalf("Tunnel.Close() error = %v", err)
 	}
 }

@@ -2,7 +2,7 @@
 
 use std::ffi::CString;
 use std::net::SocketAddr;
-use std::os::fd::IntoRawFd;
+use std::os::fd::{BorrowedFd, IntoRawFd};
 use std::os::raw::c_char;
 use std::ptr;
 use std::sync::Arc;
@@ -241,6 +241,28 @@ pub unsafe extern "C" fn boxlite_tunnel_connect(
             write_error(out_error, error);
             return code;
         };
+        if let BoxEndpoint::FileDescriptor(fd) = handle.endpoint() {
+            // The local descriptor is already the tunnel. Duplicate it for the
+            // caller instead of inserting another socket pair and copy task.
+            let fd = BorrowedFd::borrow_raw(fd)
+                .try_clone_to_owned()
+                .map_err(|error| {
+                    BoxliteError::Network(format!("duplicate local tunnel descriptor: {error}"))
+                });
+            drop(handle);
+            return match fd {
+                Ok(fd) => {
+                    *out_fd = fd.into_raw_fd();
+                    BoxliteErrorCode::Ok
+                }
+                Err(error) => {
+                    let code = error_to_code(&error);
+                    write_error(out_error, error);
+                    code
+                }
+            };
+        }
+
         match handle.connect() {
             Ok(connection) => match tunnel_ref.tokio_rt.block_on(connection_fd(connection)) {
                 Ok(fd) => {

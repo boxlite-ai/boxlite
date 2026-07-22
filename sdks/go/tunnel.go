@@ -13,17 +13,17 @@ import (
 	"os"
 )
 
-// EndpointType identifies how clients can reach a box service tunnel.
-type EndpointType int
+// BoxEndpointType identifies how clients can reach a box service tunnel.
+type BoxEndpointType int
 
 const (
-	EndpointTypeURL EndpointType = iota
-	EndpointTypeFileDescriptor
+	BoxEndpointTypeURI BoxEndpointType = iota
+	BoxEndpointTypeFileDescriptor
 )
 
-// Endpoint describes the URI or prepared descriptor for a box service tunnel.
-type Endpoint struct {
-	Type EndpointType
+// BoxEndpoint describes the URI or prepared descriptor for a box service tunnel.
+type BoxEndpoint struct {
+	Type BoxEndpointType
 	URI  string
 	FD   int
 }
@@ -33,8 +33,8 @@ type Network struct {
 	handle *C.CBoxNetworkHandle
 }
 
-// Tunnel is a reusable connection target for a service inside a box.
-type Tunnel struct {
+// BoxTunnel is a one-shot connection target for a service inside a box.
+type BoxTunnel struct {
 	handle *C.CBoxTunnelHandle
 }
 
@@ -64,7 +64,7 @@ func (n *Network) Close() error {
 }
 
 // Tunnel prepares a one-shot endpoint for a service port inside the box.
-func (n *Network) Tunnel(ctx context.Context, port uint16) (*Tunnel, error) {
+func (n *Network) Tunnel(ctx context.Context, port uint16) (*BoxTunnel, error) {
 	if n == nil || n.handle == nil {
 		return nil, ErrRuntimeClosed
 	}
@@ -81,11 +81,11 @@ func (n *Network) Tunnel(ctx context.Context, port uint16) (*Tunnel, error) {
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}
-	return &Tunnel{handle: cTunnel}, nil
+	return &BoxTunnel{handle: cTunnel}, nil
 }
 
 // Close releases the tunnel handle.
-func (t *Tunnel) Close() error {
+func (t *BoxTunnel) Close() error {
 	if t != nil && t.handle != nil {
 		C.boxlite_tunnel_free(t.handle)
 		t.handle = nil
@@ -94,9 +94,9 @@ func (t *Tunnel) Close() error {
 }
 
 // Endpoint returns the remote URI or borrowed local file descriptor.
-func (t *Tunnel) Endpoint() (Endpoint, error) {
+func (t *BoxTunnel) Endpoint() (BoxEndpoint, error) {
 	if t == nil || t.handle == nil {
-		return Endpoint{}, ErrRuntimeClosed
+		return BoxEndpoint{}, ErrRuntimeClosed
 	}
 
 	var endpointType C.enum_BoxliteEndpointType
@@ -105,22 +105,22 @@ func (t *Tunnel) Endpoint() (Endpoint, error) {
 	var cerr C.CBoxliteError
 	code := C.boxlite_tunnel_endpoint(t.handle, &endpointType, &uri, &fd, &cerr)
 	if code != C.Ok {
-		return Endpoint{}, freeError(&cerr)
+		return BoxEndpoint{}, freeError(&cerr)
 	}
 
 	switch endpointType {
 	case C.BoxliteEndpointTypeUri:
 		defer C.boxlite_free_string(uri)
-		return Endpoint{Type: EndpointTypeURL, URI: C.GoString(uri), FD: -1}, nil
+		return BoxEndpoint{Type: BoxEndpointTypeURI, URI: C.GoString(uri), FD: -1}, nil
 	case C.BoxliteEndpointTypeFileDescriptor:
-		return Endpoint{Type: EndpointTypeFileDescriptor, FD: int(fd)}, nil
+		return BoxEndpoint{Type: BoxEndpointTypeFileDescriptor, FD: int(fd)}, nil
 	default:
-		return Endpoint{}, fmt.Errorf("boxlite returned unknown endpoint type %d", endpointType)
+		return BoxEndpoint{}, fmt.Errorf("boxlite returned unknown endpoint type %d", endpointType)
 	}
 }
 
 // Connect consumes the tunnel's single raw byte stream.
-func (t *Tunnel) Connect(ctx context.Context) (net.Conn, error) {
+func (t *BoxTunnel) Connect(ctx context.Context) (net.Conn, error) {
 	if t == nil || t.handle == nil {
 		return nil, ErrRuntimeClosed
 	}
@@ -130,7 +130,10 @@ func (t *Tunnel) Connect(ctx context.Context) (net.Conn, error) {
 
 	var cerr C.CBoxliteError
 	var cFD C.int32_t
-	code := C.boxlite_tunnel_connect(t.handle, &cFD, &cerr)
+	handle := t.handle
+	code := C.boxlite_tunnel_connect(handle, &cFD, &cerr)
+	C.boxlite_tunnel_free(handle)
+	t.handle = nil
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}
