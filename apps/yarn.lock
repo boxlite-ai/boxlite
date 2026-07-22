@@ -4461,6 +4461,33 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@iconify-json/pixelarticons@npm:^1.2.6":
+  version: 1.2.6
+  resolution: "@iconify-json/pixelarticons@npm:1.2.6"
+  dependencies:
+    "@iconify/types": "npm:*"
+  checksum: 10c0/1604eadc6266f85d0ff7e1c581cd70635d24fc346bc7537f1bc15786a5ccaf2bcbaa50190bf808b226f68599479245c98bcc9817cde7c29acacd79f2f78703e3
+  languageName: node
+  linkType: hard
+
+"@iconify/react@npm:^6.0.2":
+  version: 6.0.2
+  resolution: "@iconify/react@npm:6.0.2"
+  dependencies:
+    "@iconify/types": "npm:^2.0.0"
+  peerDependencies:
+    react: ">=16"
+  checksum: 10c0/1f53f588361d658c6f077fefcc31d52f6f5d375f06b63dd13cc73b71fd28cf9409edece921ea8fa5195a79d02ff9162aff8472c14e858c0178067eecc3128460
+  languageName: node
+  linkType: hard
+
+"@iconify/types@npm:*, @iconify/types@npm:^2.0.0":
+  version: 2.0.0
+  resolution: "@iconify/types@npm:2.0.0"
+  checksum: 10c0/65a3be43500c7ccacf360e136d00e1717f050b7b91da644e94370256ac66f582d59212bdb30d00788aab4fc078262e91c95b805d1808d654b72f6d2072a7e4b2
+  languageName: node
+  linkType: hard
+
 "@img/colour@npm:^1.0.0":
   version: 1.1.0
   resolution: "@img/colour@npm:1.1.0"
@@ -16380,6 +16407,8 @@ __metadata:
     "@eslint/js": "npm:^9.8.0"
     "@esm2cjs/cacheable-lookup": "npm:^7.0.0"
     "@iarna/toml": "npm:^2.2.5"
+    "@iconify-json/pixelarticons": "npm:^1.2.6"
+    "@iconify/react": "npm:^6.0.2"
     "@nest-lab/throttler-storage-redis": "npm:^1.1.0"
     "@nestjs-modules/ioredis": "npm:^2.0.2"
     "@nestjs/axios": "npm:^4.0.0"

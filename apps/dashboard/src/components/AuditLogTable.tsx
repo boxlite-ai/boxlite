@@ -12,7 +12,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { getRelativeTimeString } from '@/lib/utils'
 import { AuditLog } from '@boxlite-ai/api-client'
 import { ColumnDef, flexRender, getCoreRowModel, useReactTable } from '@tanstack/react-table'
-import { TextSearch } from 'lucide-react'
+import { TextSearch } from '@/components/ui/icon'
 
 interface Props {
   data: AuditLog[]

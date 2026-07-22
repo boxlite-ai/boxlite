@@ -23,7 +23,7 @@ import { useDocsSearchCommands } from '@/hooks/useDocsSearchCommands'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useSuspensionBanner } from '@/hooks/useSuspensionBanner'
 import { cn } from '@/lib/utils'
-import { BookOpen, BookSearchIcon, MessageCircle, SunMoon } from 'lucide-react'
+import { BookOpen, BookSearchIcon, MessageCircle, SunMoon } from '@/components/ui/icon'
 
 function useDashboardCommands() {
   const { theme, setTheme } = useTheme()

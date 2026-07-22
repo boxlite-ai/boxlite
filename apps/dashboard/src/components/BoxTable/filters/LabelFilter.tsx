@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { Plus, Trash2, X } from 'lucide-react'
+import { Plus, Trash2, X } from '@/components/ui/icon'
 import { useState } from 'react'
 
 interface LabelFilterProps {

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { X, Info } from 'lucide-react'
+import { X, Info } from '@/components/ui/icon'
 import { Button } from './ui/button'
 
 interface AnnouncementBannerProps {

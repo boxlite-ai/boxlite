@@ -15,7 +15,7 @@ import {
   SidebarMenuItem,
   SidebarProvider,
 } from '../sidebar'
-import { HomeIcon, SettingsIcon, UsersIcon } from 'lucide-react'
+import { HomeIcon, SettingsIcon, UsersIcon } from '@/components/ui/icon'
 
 const meta: Meta<typeof Sidebar> = {
   title: 'UI/Sidebar',

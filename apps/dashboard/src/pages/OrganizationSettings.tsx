@@ -4,19 +4,13 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { PageContent, PageHeader, PageLayout, PageTitle } from '@/components/PageLayout'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Field, FieldContent, FieldDescription, FieldLabel } from '@/components/ui/field'
-import { Input } from '@/components/ui/input'
-import { InputGroup, InputGroupButton, InputGroupInput } from '@/components/ui/input-group'
 import { useApi } from '@/hooks/useApi'
 import { useOrganizations } from '@/hooks/useOrganizations'
 import { useRegions } from '@/hooks/useRegions'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
 import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
-import { CheckIcon, CopyIcon } from 'lucide-react'
+import { Check, Copy } from '@/components/ui/icon'
 import React, { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useCopyToClipboard } from 'usehooks-ts'
@@ -76,88 +70,81 @@ const OrganizationSettings: React.FC = () => {
     }
   }
 
+  const inputClass =
+    'w-full border border-border bg-card px-[14px] py-[11px] font-mono text-[13px] text-foreground outline-none focus:border-brand disabled:opacity-60'
+
   return (
-    <PageLayout>
-      <PageHeader>
-        <PageTitle>Settings</PageTitle>
-      </PageHeader>
+    <div className="px-[34px] pb-[26px] pt-[26px]">
+      <h2 className="mb-5 font-mono text-[13px] font-medium uppercase tracking-[3px] text-muted-foreground">
+        Organization Settings
+      </h2>
 
-      <PageContent>
-        <Card>
-          <CardHeader className="p-4">
-            <CardTitle>Organization Details</CardTitle>
-          </CardHeader>
-          <CardContent className="border-t border-border">
-            <Field className="grid sm:grid-cols-2 items-center">
-              <FieldContent className="flex-1">
-                <FieldLabel htmlFor="organization-name">Organization Name</FieldLabel>
-                <FieldDescription>The public name of your organization.</FieldDescription>
-              </FieldContent>
+      <div className="border border-border">
+        <div className="border-b border-border px-5 py-[15px] font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground">
+          Organization Details
+        </div>
 
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                <Input
-                  id="organization-name"
-                  value={organizationName}
-                  onChange={(e) => setOrganizationName(e.target.value)}
-                  readOnly={!isOwner}
-                  disabled={renamingOrganization}
-                  className="flex-1"
-                />
-                {isOwner && (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    onClick={handleRenameOrganization}
-                    disabled={!organizationNameChanged || renamingOrganization}
-                  >
-                    Save
-                  </Button>
-                )}
-              </div>
-            </Field>
-          </CardContent>
+        {/* name */}
+        <div className="grid items-center gap-4 border-b border-border px-5 py-5 sm:grid-cols-2">
+          <div>
+            <label htmlFor="organization-name" className="text-[13px] font-semibold">
+              Organization Name
+            </label>
+            <p className="mt-1 text-[12px] text-muted-foreground">The public name of your organization.</p>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <input
+              id="organization-name"
+              value={organizationName}
+              onChange={(e) => setOrganizationName(e.target.value)}
+              readOnly={!isOwner}
+              disabled={renamingOrganization}
+              className={inputClass}
+            />
+            {isOwner && (
+              <button
+                type="button"
+                onClick={handleRenameOrganization}
+                disabled={!organizationNameChanged || renamingOrganization}
+                className="flex-none bg-primary px-[18px] py-[11px] text-[13px] font-semibold text-primary-foreground transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                Save
+              </button>
+            )}
+          </div>
+        </div>
 
-          <CardContent className="border-t border-border">
-            <Field className="grid sm:grid-cols-2 items-center">
-              <FieldContent className="flex-1">
-                <FieldLabel htmlFor="organization-id">Organization ID</FieldLabel>
-                <FieldDescription>
-                  The unique identifier of your organization.
-                  <br />
-                  Used in CLI and API calls.
-                </FieldDescription>
-              </FieldContent>
-              <InputGroup className="pr-1 flex-1">
-                <InputGroupInput id="organization-id" value={selectedOrganization.id} readOnly />
-                <InputGroupButton
-                  variant="ghost"
-                  size="icon-xs"
-                  onClick={() =>
-                    copyToClipboard(selectedOrganization.id).then(() => toast.success('Copied to clipboard'))
-                  }
-                >
-                  {copied ? <CheckIcon className="h-4 w-4" /> : <CopyIcon className="h-4 w-4" />}
-                </InputGroupButton>
-              </InputGroup>
-            </Field>
-          </CardContent>
-          <CardContent className="border-t border-border">
-            <Field className="grid sm:grid-cols-2 items-center">
-              <FieldContent className="flex-1">
-                <FieldLabel htmlFor="organization-default-region">Default Region</FieldLabel>
-                <FieldDescription>Used automatically when creating boxes.</FieldDescription>
-              </FieldContent>
-              <Input
-                id="organization-default-region"
-                value={defaultRegionLabel}
-                readOnly
-                className="flex-1 uppercase"
-              />
-            </Field>
-          </CardContent>
-        </Card>
-      </PageContent>
-    </PageLayout>
+        {/* id */}
+        <div className="grid items-center gap-4 border-b border-border px-5 py-5 sm:grid-cols-2">
+          <div>
+            <div className="text-[13px] font-semibold">Organization ID</div>
+            <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
+              The unique identifier of your organization. Used in CLI and API calls.
+            </p>
+          </div>
+          <div className="flex items-center border border-border bg-card pr-1">
+            <input value={selectedOrganization.id} readOnly className="w-full bg-transparent px-[14px] py-[11px] font-mono text-[13px] text-foreground outline-none" />
+            <button
+              type="button"
+              title="Copy"
+              onClick={() => copyToClipboard(selectedOrganization.id).then(() => toast.success('Copied to clipboard'))}
+              className="flex-none px-2 text-muted-foreground hover:text-foreground"
+            >
+              {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+            </button>
+          </div>
+        </div>
+
+        {/* default region */}
+        <div className="grid items-center gap-4 px-5 py-5 sm:grid-cols-2">
+          <div>
+            <div className="text-[13px] font-semibold">Default Region</div>
+            <p className="mt-1 text-[12px] text-muted-foreground">Used automatically when creating boxes.</p>
+          </div>
+          <input value={defaultRegionLabel} readOnly className={`${inputClass} uppercase`} />
+        </div>
+      </div>
+    </div>
   )
 }
 

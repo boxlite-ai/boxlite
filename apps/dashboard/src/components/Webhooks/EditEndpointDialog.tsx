@@ -30,7 +30,7 @@ import { WEBHOOK_EVENT_CATEGORIES, WEBHOOK_EVENTS } from '@/constants/webhook-ev
 import { useUpdateWebhookEndpointMutation } from '@/hooks/mutations/useUpdateWebhookEndpointMutation'
 import { handleApiError } from '@/lib/error-handling'
 import { useForm } from '@tanstack/react-form'
-import { ChevronsUpDown } from 'lucide-react'
+import { ChevronsUpDown } from '@/components/ui/icon'
 import React, { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { EndpointOut } from 'svix'

@@ -17,7 +17,7 @@ import { handleApiError } from '@/lib/error-handling'
 import { isStoppable } from '@/lib/utils/box'
 import { Box, OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
 import { Spinner } from '@/components/ui/spinner'
-import { Play, RefreshCw, TerminalSquare } from 'lucide-react'
+import { Play, RefreshCw, TerminalSquare } from '@/components/ui/icon'
 import { toast } from 'sonner'
 import { BoxTerminalFrame } from './BoxTerminalFrame'
 
@@ -52,8 +52,8 @@ export function BoxTerminalTab({ box }: { box: Box }) {
         <div className="flex-1 min-h-0 flex">
           <Empty className="border-0">
             <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <TerminalSquare className="size-4" />
+              <EmptyMedia>
+                <TerminalSquare className="size-12 text-muted-foreground" />
               </EmptyMedia>
               <EmptyTitle>Box is not running</EmptyTitle>
               <EmptyDescription>
@@ -83,8 +83,8 @@ export function BoxTerminalTab({ box }: { box: Box }) {
         <div className="flex-1 min-h-0 flex">
           <Empty className="border-0">
             <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <TerminalSquare className="size-4" />
+              <EmptyMedia>
+                <TerminalSquare className="size-12 text-muted-foreground" />
               </EmptyMedia>
               <EmptyTitle>Terminal</EmptyTitle>
               <EmptyDescription>

@@ -5,7 +5,7 @@
  */
 
 import { cn } from '@/lib/utils'
-import { CpuIcon, HardDriveIcon, MemoryStickIcon } from 'lucide-react'
+import { CpuIcon, HardDriveIcon, MemoryStickIcon } from '@/components/ui/icon'
 import type { ReactNode } from 'react'
 
 interface Props {

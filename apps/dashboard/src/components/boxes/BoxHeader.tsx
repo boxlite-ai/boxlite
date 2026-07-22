@@ -20,7 +20,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { getBoxDisplayName } from '@/lib/box-identity'
 import { isRecoverable, isSshAccessible, isStartable, isStoppable } from '@/lib/utils/box'
 import { Box } from '@boxlite-ai/api-client'
-import { ArrowLeft, MoreHorizontal, Play, RefreshCw, Square, Terminal, Wrench } from 'lucide-react'
+import { ArrowLeft, MoreHorizontal, Play, RefreshCw, Square, Terminal, Wrench } from '@/components/ui/icon'
 
 interface BoxHeaderProps {
   box: Box | undefined

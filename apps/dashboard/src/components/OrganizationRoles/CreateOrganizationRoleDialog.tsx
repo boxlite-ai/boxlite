@@ -21,7 +21,7 @@ import { Label } from '@/components/ui/label'
 import { ORGANIZATION_ROLE_PERMISSIONS_GROUPS } from '@/constants/OrganizationPermissionsGroups'
 import { OrganizationRolePermissionGroup } from '@/types/OrganizationRolePermissionGroup'
 import { OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
-import { Plus } from 'lucide-react'
+import { Plus } from '@/components/ui/icon'
 import React, { useState } from 'react'
 
 interface CreateOrganizationRoleDialogProps {

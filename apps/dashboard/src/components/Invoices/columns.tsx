@@ -7,7 +7,7 @@
 import { Invoice } from '@/billing-api/types/Invoice'
 import { formatAmount } from '@/lib/utils'
 import { ColumnDef } from '@tanstack/react-table'
-import { ArrowDown, ArrowUp } from 'lucide-react'
+import { ArrowDown, ArrowUp } from '@/components/ui/icon'
 import React from 'react'
 import { Badge } from '../ui/badge'
 import { InvoicesTableActions } from './InvoicesTableActions'

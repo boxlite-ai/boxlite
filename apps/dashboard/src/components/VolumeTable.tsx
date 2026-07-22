@@ -31,7 +31,7 @@ import {
   SortingState,
   useReactTable,
 } from '@tanstack/react-table'
-import { AlertTriangle, CheckCircle, HardDrive, Loader2, MoreHorizontal, Timer } from 'lucide-react'
+import { AlertTriangle, CheckCircle, HardDrive, Loader2, MoreHorizontal, Timer } from '@/components/ui/icon'
 import { AnimatePresence } from 'motion/react'
 import { useCallback, useMemo, useState } from 'react'
 import { TableEmptyState } from './TableEmptyState'

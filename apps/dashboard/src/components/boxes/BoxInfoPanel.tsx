@@ -11,7 +11,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { getBoxPublicId, getBoxPublicIdLabel } from '@/lib/box-identity'
 import { getRelativeTimeString } from '@/lib/utils'
 import { Box } from '@boxlite-ai/api-client'
-import { AlertCircle } from 'lucide-react'
+import { AlertCircle } from '@/components/ui/icon'
 import React from 'react'
 
 interface BoxInfoPanelProps {

@@ -14,7 +14,7 @@ import {
   CommandList,
 } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { Loader2, X } from 'lucide-react'
+import { Loader2, X } from '@/components/ui/icon'
 import { FacetedFilterOption } from '../types'
 
 interface RegionFilterProps {

@@ -7,7 +7,7 @@
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { cn, pluralize } from '@/lib/utils'
-import { CommandIcon, XIcon } from 'lucide-react'
+import { CommandIcon, XIcon } from '@/components/ui/icon'
 import { motion } from 'motion/react'
 
 export function SelectionToast({

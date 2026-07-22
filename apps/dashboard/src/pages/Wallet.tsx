@@ -30,7 +30,7 @@ import {
 } from '@/hooks/queries/billingQueries'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { formatAmount } from '@/lib/utils'
-import { ArrowUpRight, CheckCircleIcon, InfoIcon, SparklesIcon, TriangleAlertIcon } from 'lucide-react'
+import { ArrowUpRight, CheckCircleIcon, InfoIcon, SparklesIcon, TriangleAlertIcon } from '@/components/ui/icon'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { NumericFormat } from 'react-number-format'
 import { useAuth } from 'react-oidc-context'
@@ -246,11 +246,7 @@ const Wallet = () => {
 
   return (
     <PageLayout>
-      <PageHeader>
-        <PageTitle>Wallet</PageTitle>
-      </PageHeader>
-
-      <PageContent>
+      <PageContent size="full">
         {isBillingLoading && (
           <div className="flex flex-col gap-6">
             <Card className="flex flex-col gap-4">
@@ -278,96 +274,37 @@ const Wallet = () => {
         )}
         {wallet && (
           <>
-            {user && (
-              <>
-                {!user.profile.email_verified && (
-                  <Alert variant="info">
-                    <TriangleAlertIcon />
-                    <AlertTitle>Verify your email</AlertTitle>
-                    <AlertDescription>
-                      {wallet.balanceCents && wallet.balanceCents > 0 ? (
-                        <>
-                          Please verify your email address to complete your account setup.
-                          <br />A verification email was sent to you.
-                        </>
-                      ) : (
-                        <>
-                          Verify your email address to recieve $100 of credits.
-                          <br />A verification email was sent to you.
-                        </>
-                      )}
-                    </AlertDescription>
-                  </Alert>
-                )}
-                {!wallet.creditCardConnected &&
-                  user.profile.email_verified &&
-                  selectedOrganization?.isDefaultForAuthenticatedUser && (
-                    <Alert variant="neutral">
-                      <SparklesIcon />
-                      <AlertDescription>
-                        Connect a credit card to receive an additional $100 of credits.
-                      </AlertDescription>
-                    </Alert>
-                  )}
-              </>
-            )}
-            {wallet.hasFailedOrPendingInvoice && (
-              <Alert variant="destructive">
-                <TriangleAlertIcon />
-                <AlertTitle>Outstanding invoices</AlertTitle>
-                <AlertDescription>
-                  You have failed or pending invoices that need to be resolved before adding new funds. Please review
-                  your invoices below and complete or void any outstanding payments.
-                </AlertDescription>
-              </Alert>
-            )}
+            {/* TEMP(preview): 已移除 $100 激励 Alert 与 Outstanding invoices Alert
+                （后者属后付费/欠款逻辑，与 BoxLite 纯预付费模型矛盾——预付费无欠款发票） */}
 
-            <Card className="h-full">
+            {/* 1) Payment methods — Stripe 绑卡 */}
+            <Card className="w-full">
               <CardHeader>
-                <CardTitle>Overview</CardTitle>
+                <CardTitle>Payment method</CardTitle>
+                <CardDescription>Connect a credit card via Stripe to enable top-ups.</CardDescription>
               </CardHeader>
-              <CardContent className="">
-                <div className="flex items-start sm:flex-row flex-col gap-4 sm:items-end justify-between">
-                  <div className="flex gap-4 sm:gap-12 sm:flex-row flex-col">
-                    <div className="flex flex-col gap-1">
-                      <div className="">Current balance</div>
-                      <div className="text-xl text-foreground font-semibold">
-                        {formatAmount(wallet.ongoingBalanceCents)}
-                      </div>
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <div className="">Spent this month</div>
-                      <div className="text-xl font-semibold">
-                        {formatAmount(wallet.balanceCents - wallet.ongoingBalanceCents)}
-                      </div>
-                    </div>
-                  </div>
-                  {billingPortalUrlQuery.isLoading ? (
-                    <Skeleton className="h-8 w-[160px]" />
-                  ) : billingPortalUrl ? (
-                    <Button variant="link" asChild className="flex items-center gap-2 !px-0">
-                      <a
-                        href={`${billingPortalUrl}/customer-edit-information`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        Update Billing Info
-                        <ArrowUpRight />
-                      </a>
-                    </Button>
-                  ) : null}
-                </div>
-              </CardContent>
-              <CardContent className="border-t border-border">
-                <div className="flex gap-4 items-center justify-between">
-                  <div className="flex flex-col gap-1 items-start">
-                    <div className="text-sm font-medium">Payment method</div>
+              <CardContent>
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex flex-col items-start gap-1">
                     {!wallet.creditCardConnected ? (
                       <div className="text-sm text-muted-foreground">Payment method not connected</div>
                     ) : (
-                      <div className="text-sm text-muted-foreground flex items-center gap-2">
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
                         <CheckCircleIcon className="w-4 h-4 shrink-0" /> Credit card connected
                       </div>
+                    )}
+                    {billingPortalUrl && (
+                      <Button variant="link" asChild className="!h-auto !px-0">
+                        <a
+                          href={`${billingPortalUrl}/customer-edit-information`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1.5"
+                        >
+                          Update billing info
+                          <ArrowUpRight className="size-3.5" />
+                        </a>
+                      </Button>
                     )}
                   </div>
                   {!wallet.creditCardConnected ? (
@@ -381,38 +318,6 @@ const Wallet = () => {
                   )}
                 </div>
               </CardContent>
-
-              {user?.profile.email_verified && (
-                <CardContent className="border-t border-border">
-                  <div className="flex gap-4 md:items-center justify-between md:flex-row flex-col">
-                    <div className="flex flex-col gap-1 items-start flex-1">
-                      <div className="text-sm font-medium">Redeem coupon</div>
-                      {redeemCouponError ? (
-                        <div className="text-sm text-destructive">{redeemCouponError}</div>
-                      ) : redeemCouponSuccess ? (
-                        <div className="text-sm text-success">{redeemCouponSuccess}</div>
-                      ) : (
-                        <div className="text-sm text-muted-foreground">Enter a coupon code to redeem your credits.</div>
-                      )}
-                    </div>
-
-                    <div className="flex gap-2 items-center">
-                      <Input
-                        placeholder="Enter coupon code"
-                        value={couponCode}
-                        onChange={(e) => setCouponCode(e.target.value)}
-                      />
-                      <Button
-                        variant="secondary"
-                        onClick={handleRedeemCoupon}
-                        disabled={redeemCouponMutation.isPending}
-                      >
-                        {redeemCouponMutation.isPending && <Spinner />} Redeem
-                      </Button>
-                    </div>
-                  </div>
-                </CardContent>
-              )}
             </Card>
 
             {wallet.creditCardConnected && (

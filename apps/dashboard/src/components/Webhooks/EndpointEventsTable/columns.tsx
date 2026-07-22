@@ -11,7 +11,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { WEBHOOK_EVENTS } from '@/constants/webhook-events'
 import { getRelativeTimeString } from '@/lib/utils'
 import { ColumnDef, RowData, Table } from '@tanstack/react-table'
-import { CheckCircle, Clock, MoreHorizontal, XCircle } from 'lucide-react'
+import { CheckCircle, Clock, MoreHorizontal, XCircle } from '@/components/ui/icon'
 import { EndpointMessageOut } from 'svix'
 import { CopyButton } from '../../CopyButton'
 

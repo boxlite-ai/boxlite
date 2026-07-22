@@ -14,7 +14,7 @@ import {
   SelectTrigger,
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
-import { RefreshCw } from 'lucide-react'
+import { RefreshCw } from '@/components/ui/icon'
 import { motion } from 'motion/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 

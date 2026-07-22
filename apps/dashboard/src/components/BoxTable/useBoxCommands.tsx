@@ -6,7 +6,7 @@
 
 import { pluralize } from '@/lib/utils'
 import { BulkActionCounts } from '@/lib/utils/box'
-import { CheckSquare2Icon, MinusSquareIcon, PlayIcon, SquareIcon, TrashIcon } from 'lucide-react'
+import { CheckSquare2Icon, MinusSquareIcon, PlayIcon, SquareIcon, TrashIcon } from '@/components/ui/icon'
 import { useMemo } from 'react'
 import { CommandConfig, useRegisterCommands } from '../CommandPalette'
 

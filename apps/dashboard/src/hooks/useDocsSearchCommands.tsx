@@ -15,7 +15,7 @@ import {
 import { cn } from '@/lib/utils'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { liteClient as algoliasearch } from 'algoliasearch/lite'
-import { BookOpen, Code2, Container, Terminal } from 'lucide-react'
+import { BookOpen, Code2, Container, Terminal } from '@/components/ui/icon'
 import { ReactNode, useEffect, useMemo, useState } from 'react'
 
 const ALGOLIA_APP_ID = import.meta.env.VITE_ALGOLIA_APP_ID

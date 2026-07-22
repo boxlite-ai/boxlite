@@ -7,6 +7,7 @@
 import { OrganizationEmail, OrganizationTier, OrganizationWallet } from '@/billing-api'
 import { Invoice, PaginatedInvoices, PaymentUrl } from '@/billing-api/types/Invoice'
 import { Tier } from '@/billing-api/types/tier'
+import { BillableMetricCode, OrganizationUsage } from '@/billing-api/types/OrganizationUsage'
 import { http, HttpResponse } from 'msw'
 import {
   MOCK_BOXES,
@@ -18,6 +19,34 @@ import {
 
 const BILLING_API_URL = 'http://localhost:3000/api/billing'
 const API_URL = import.meta.env.VITE_API_URL
+
+// 造一期用量账单：offset=0 为当前月，越大越早；金额随时间上升 + 正弦波动。
+function makeMockUsage(offset: number): OrganizationUsage {
+  const to = new Date()
+  to.setDate(1)
+  to.setMonth(to.getMonth() - offset)
+  const from = new Date(to)
+  from.setMonth(from.getMonth() - 1)
+  const trend = 1500 + (12 - Math.min(offset, 12)) * 280
+  const wobble = Math.round(Math.sin(offset * 1.3) * 220)
+  const cpuCents = Math.max(300, trend + wobble)
+  const ramCents = Math.round(cpuCents * 0.62)
+  const diskCents = Math.round(cpuCents * 0.34)
+  const total = cpuCents + ramCents + diskCents
+  return {
+    from,
+    to,
+    issuingDate: to.toISOString(),
+    amountCents: total,
+    totalAmountCents: total,
+    taxesAmountCents: 0,
+    usageCharges: [
+      { units: '1', eventsCount: 1, amountCents: cpuCents, billableMetric: BillableMetricCode.CPU_USAGE },
+      { units: '1', eventsCount: 1, amountCents: ramCents, billableMetric: BillableMetricCode.RAM_USAGE },
+      { units: '1', eventsCount: 1, amountCents: diskCents, billableMetric: BillableMetricCode.DISK_USAGE },
+    ],
+  }
+}
 
 export const handlers = [
   // Core dashboard surface — fully self-contained so `start:mock` needs no
@@ -97,10 +126,20 @@ export const handlers = [
       balanceCents: 1000,
       ongoingBalanceCents: 1000,
       name: 'Wallet',
-      creditCardConnected: false,
-      automaticTopUp: undefined,
-      hasFailedOrPendingInvoice: true,
+      creditCardConnected: true,
+      automaticTopUp: { thresholdAmount: 20, targetAmount: 100 },
+      hasFailedOrPendingInvoice: false,
     })
+  }),
+  // 当前周期用量（CostBreakdown 用）
+  http.get(`${BILLING_API_URL}/organization/:organizationId/usage`, async () => {
+    return HttpResponse.json<OrganizationUsage>(makeMockUsage(0))
+  }),
+  // 过去 N 期用量（默认 12 个月）
+  http.get(`${BILLING_API_URL}/organization/:organizationId/usage/past`, async ({ request }) => {
+    const periods = Number(new URL(request.url).searchParams.get('periods') ?? 12)
+    const list = Array.from({ length: periods }, (_, i) => makeMockUsage(periods - i))
+    return HttpResponse.json<OrganizationUsage[]>(list)
   }),
   http.get(`${BILLING_API_URL}/organization/:organizationId/tier`, async () => {
     return HttpResponse.json<OrganizationTier>({

@@ -11,7 +11,7 @@ import { Calendar } from '@/components/ui/calendar'
 import { Label } from '@/components/ui/label'
 import { useState } from 'react'
 import { format } from 'date-fns'
-import { CalendarIcon, X } from 'lucide-react'
+import { CalendarIcon, X } from '@/components/ui/icon'
 
 interface LastEventFilterProps {
   value: (Date | undefined)[]

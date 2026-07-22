@@ -15,7 +15,7 @@ import { useBoxSessionContext } from '@/hooks/useBoxSessionContext'
 import { useBoxWsSync } from '@/hooks/useBoxWsSync'
 import { getBoxDisplayName, getBoxPublicId } from '@/lib/box-identity'
 import { isStoppable } from '@/lib/utils/box'
-import { Container, Play, RefreshCw, TerminalSquare } from 'lucide-react'
+import { Container, Play, RefreshCw, TerminalSquare } from '@/components/ui/icon'
 import { BoxFullscreenShell } from './BoxFullscreenShell'
 import { BoxTerminalFrame } from './BoxTerminalFrame'
 
@@ -76,8 +76,8 @@ export default function BoxTerminalFullscreen() {
     body = (
       <Empty>
         <EmptyHeader>
-          <EmptyMedia variant="icon">
-            <TerminalSquare className="size-4" />
+          <EmptyMedia>
+            <TerminalSquare className="size-12 text-muted-foreground" />
           </EmptyMedia>
           <EmptyTitle>Box is not running</EmptyTitle>
           <EmptyDescription>Start the box to access the terminal.</EmptyDescription>
@@ -91,8 +91,8 @@ export default function BoxTerminalFullscreen() {
     body = (
       <Empty>
         <EmptyHeader>
-          <EmptyMedia variant="icon">
-            <TerminalSquare className="size-4" />
+          <EmptyMedia>
+            <TerminalSquare className="size-12 text-muted-foreground" />
           </EmptyMedia>
           <EmptyTitle>Terminal</EmptyTitle>
           <EmptyDescription>Connect to an interactive terminal session in your box.</EmptyDescription>

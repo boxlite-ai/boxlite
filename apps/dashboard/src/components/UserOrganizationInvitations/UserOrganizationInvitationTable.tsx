@@ -5,7 +5,7 @@
  */
 
 import { useState } from 'react'
-import { Check, X } from 'lucide-react'
+import { Check, X } from '@/components/ui/icon'
 import {
   ColumnDef,
   flexRender,

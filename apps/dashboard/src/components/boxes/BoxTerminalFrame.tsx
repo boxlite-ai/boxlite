@@ -5,7 +5,7 @@
 
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { ClipboardPaste, Maximize2 } from 'lucide-react'
+import { ClipboardPaste, Maximize2 } from '@/components/ui/icon'
 import { useEffect, useRef, type SyntheticEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { buildTerminalIframeSrc, pasteIntoTerminalIframe, registerActiveTerminalFrame } from './terminalIframeSrc'

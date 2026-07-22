@@ -4,6 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { QuotaOverviewCard } from '@/components/billing/QuotaOverviewCard' // TEMP(preview)
+import { AlertBanners, FreeTrialBanner } from '@/components/billing/AlertBanners' // TEMP(preview)
+import { CostOverTimeChart } from '@/components/billing/CostOverTimeChart' // TEMP(preview)
+import { SectionTitle } from '@/components/billing/ascii' // TEMP(preview)
 import { BillableMetricCode, OrganizationUsage } from '@/billing-api/types/OrganizationUsage'
 import { PageContent, PageHeader, PageLayout, PageTitle } from '@/components/PageLayout'
 import { AggregatedUsageChart, ResourceUsageBreakdown, UsageSummary } from '@/components/spending/AggregatedUsageChart'
@@ -22,7 +26,7 @@ import { usePastOrganizationUsageQuery } from '@/hooks/queries/usePastOrganizati
 import { useConfig } from '@/hooks/useConfig'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { addDays, differenceInCalendarDays, subDays } from 'date-fns'
-import { AlertCircle, BarChart3, RefreshCw } from 'lucide-react'
+import { AlertCircle, BarChart3, RefreshCw } from '@/components/ui/icon'
 import { useFeatureFlagEnabled } from 'posthog-js/react'
 import { useCallback, useMemo, useState } from 'react'
 import { DateRange } from 'react-day-picker'
@@ -107,11 +111,13 @@ const Spending = () => {
 
   return (
     <PageLayout>
-      <PageHeader>
-        <PageTitle>Spending</PageTitle>
-      </PageHeader>
-
-      <PageContent>
+      <PageContent size="full">
+        {/* TEMP(preview): 状态横幅（坏账/停机/倒计时） */}
+        <AlertBanners />
+        {/* TEMP(preview): 订阅配额概览（替换旧钱包余额卡） */}
+        <FreeTrialBanner />
+        <QuotaOverviewCard />
+        <CostOverTimeChart />
         {analyticsAvailable && (
           <Card>
             <CardHeader className="flex flex-row items-center gap-2 space-y-0 border-b p-4">
@@ -207,16 +213,7 @@ const Spending = () => {
           </Card>
         )}
 
-        <CostBreakdown
-          usageData={usageChartData}
-          showTotal
-          isLoading={currentUsageLoading || pastUsageLoading}
-          isError={currentUsageError || pastUsageError}
-          onRetry={() => {
-            if (currentUsageError) refetchCurrentUsage()
-            if (pastUsageError) refetchPastUsage()
-          }}
-        />
+        {/* TEMP(preview): Monthly Cost Breakdown 已由 UsageTrendCharts（四折线图）替换 */}
       </PageContent>
     </PageLayout>
   )

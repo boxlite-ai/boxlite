@@ -5,7 +5,7 @@
 
 import { OrganizationSuspendedError } from '@/api/errors'
 import { OnboardingGuideDialog } from '@/components/OnboardingGuideDialog'
-import { PageLayout } from '@/components/PageLayout'
+import { boxHourlyCost, fmtUsd } from '@/components/billing/rates'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,8 +17,13 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
-import { FeatureFlags } from '@/enums/FeatureFlags'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { LocalStorageKey } from '@/enums/LocalStorageKey'
 import { RoutePath } from '@/enums/RoutePath'
 import { useDeleteBoxMutation } from '@/hooks/mutations/useDeleteBoxMutation'
@@ -30,7 +35,7 @@ import { useConfig } from '@/hooks/useConfig'
 import { useRegions } from '@/hooks/useRegions'
 import { useBoxWsSync } from '@/hooks/useBoxWsSync'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { isBoxContentTabAvailable } from '@/lib/dashboard-features'
+import { getBoxPublicId, getBoxPublicIdLabel } from '@/lib/box-identity'
 import { handleApiError } from '@/lib/error-handling'
 import { setLocalStorageItem } from '@/lib/local-storage'
 import {
@@ -40,22 +45,74 @@ import {
   readOnboardingProgress,
   type OnboardingProgress,
 } from '@/lib/onboarding-progress'
-import { isTransitioning } from '@/lib/utils/box'
-import { OrganizationRolePermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
+import { getRelativeTimeString } from '@/lib/utils'
+import { isRecoverable, isStartable, isStoppable, isTransitioning } from '@/lib/utils/box'
+import { Box, BoxState, OrganizationRolePermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { isAxiosError } from 'axios'
-import { Container, RefreshCw } from 'lucide-react'
-import { useQueryState } from 'nuqs'
-import { useFeatureFlagEnabled } from 'posthog-js/react'
-import { useCallback, useEffect, useState } from 'react'
+import {
+  Check,
+  Container,
+  Copy,
+  KeyRound,
+  MoreVertical,
+  Pause,
+  Play,
+  RefreshCw,
+  RotateCcw,
+  SquareTerminal,
+  Trash2,
+} from '@/components/ui/icon'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { CreateSshAccessDialog } from './CreateSshAccessDialog'
 import { RevokeSshAccessDialog } from './RevokeSshAccessDialog'
-import { BoxContentTabs } from './BoxContentTabs'
-import { BoxHeader } from './BoxHeader'
-import { InfoPanelSkeleton, BoxInfoPanel } from './BoxInfoPanel'
-import { tabParser } from './SearchParams'
+import { BoxTerminalTab } from './BoxTerminalTab'
+
+const STATUS = { running: '#5ad67d', idle: '#e0b341', stopped: '#e0564a', dim: '#8C919C' } as const
+
+function statusOf(box: Box): { label: string; color: string } {
+  switch (box.state) {
+    case BoxState.STARTED:
+      return { label: 'Running', color: STATUS.running }
+    case BoxState.STOPPED:
+      return { label: 'Stopped', color: STATUS.dim }
+    case BoxState.ERROR:
+      return { label: 'Error', color: STATUS.stopped }
+    case BoxState.CREATING:
+    case BoxState.STARTING:
+    case BoxState.RESTORING:
+      return { label: 'Starting', color: STATUS.idle }
+    case BoxState.STOPPING:
+      return { label: 'Stopping', color: STATUS.idle }
+    case BoxState.DESTROYING:
+      return { label: 'Deleting', color: STATUS.idle }
+    default:
+      return { label: (box.state ?? 'Unknown').replace(/^\w/, (c) => c.toUpperCase()), color: STATUS.dim }
+  }
+}
+
+function SectionHeader({ title, right }: { title: string; right?: ReactNode }) {
+  return (
+    <div className="mb-[13px] mt-[26px] flex items-center gap-[9px] first:mt-0">
+      <span className="size-[6px] flex-none bg-brand" />
+      <span className="text-[11px] uppercase tracking-[2px]">{title}</span>
+      <span className="flex-1 border-t border-dashed border-border" />
+      {right}
+    </div>
+  )
+}
+
+function SpecRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="mb-[10px] flex items-baseline gap-2">
+      <span className="whitespace-nowrap text-muted-foreground">{label}</span>
+      <span className="-translate-y-1 flex-1 border-b border-dotted border-border" />
+      <span className="whitespace-nowrap">{children}</span>
+    </div>
+  )
+}
 
 export default function BoxDetails() {
   const { boxId } = useParams<{ boxId: string }>()
@@ -68,14 +125,13 @@ export default function BoxDetails() {
     useSelectedOrganization()
   const { getRegionName } = useRegions()
 
-  const experimentsEnabled = useFeatureFlagEnabled(FeatureFlags.ORGANIZATION_EXPERIMENTS)
-
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [createSshDialogOpen, setCreateSshDialogOpen] = useState(false)
   const [revokeSshDialogOpen, setRevokeSshDialogOpen] = useState(false)
   const [showOnboardingDialog, setShowOnboardingDialog] = useState(false)
   const [onboardingProgress, setOnboardingProgress] = useState<OnboardingProgress>(() => readOnboardingProgress(userId))
-  const [tab, setTab] = useQueryState('tab', tabParser)
+  const [copied, setCopied] = useState(false)
+  const refreshRef = useRef<HTMLSpanElement>(null)
 
   const updateOnboardingProgress = useCallback(
     (progress: OnboardingProgress) => {
@@ -93,55 +149,30 @@ export default function BoxDetails() {
       const progress = (event as CustomEvent<OnboardingProgress>).detail
       setOnboardingProgress(progress ?? readOnboardingProgress(userId))
     }
-
     window.addEventListener(ONBOARDING_PROGRESS_EVENT, handleOnboardingProgress)
     return () => window.removeEventListener(ONBOARDING_PROGRESS_EVENT, handleOnboardingProgress)
   }, [userId])
 
   useEffect(() => {
-    if (!selectedOrganization || !user?.profile.sub) {
-      return
-    }
-
-    if (searchParams.get('onboarding') === '1') {
-      setShowOnboardingDialog(true)
-    }
+    if (!selectedOrganization || !user?.profile.sub) return
+    if (searchParams.get('onboarding') === '1') setShowOnboardingDialog(true)
   }, [searchParams, selectedOrganization, user?.profile.sub])
 
   const clearOnboardingUrlParam = useCallback(() => {
-    if (searchParams.get('onboarding') !== '1') {
-      return
-    }
-
+    if (searchParams.get('onboarding') !== '1') return
     const nextParams = new URLSearchParams(searchParams)
     nextParams.delete('onboarding')
     setSearchParams(nextParams, { replace: true })
   }, [searchParams, setSearchParams])
 
   const closeOnboardingDialog = useCallback(() => {
-    if (userId) {
-      setLocalStorageItem(`${LocalStorageKey.SkipOnboardingPrefix}${userId}`, 'true')
-    }
+    if (userId) setLocalStorageItem(`${LocalStorageKey.SkipOnboardingPrefix}${userId}`, 'true')
     setShowOnboardingDialog(false)
     window.setTimeout(() => {
       window.dispatchEvent(new Event(ONBOARDING_ENTRY_HIGHLIGHT_EVENT))
       clearOnboardingUrlParam()
     }, 220)
   }, [clearOnboardingUrlParam, userId])
-
-  // Overview now renders inline above the tabs, so it is no longer a selectable tab.
-  useEffect(() => {
-    if (tab === 'overview') {
-      setTab(experimentsEnabled ? 'logs' : 'terminal')
-    }
-  }, [tab, setTab, experimentsEnabled])
-
-  // Coerce hidden tabs back to a supported default.
-  useEffect(() => {
-    if (!isBoxContentTabAvailable(tab, { experimentsEnabled })) {
-      setTab('terminal')
-    }
-  }, [experimentsEnabled, tab, setTab])
 
   const { data: box, isLoading, isError, error, refetch, isFetching } = useBoxQuery(boxId ?? '')
   const isNotFound = isError && isAxiosError(error.cause) && error.cause?.status === 404
@@ -152,12 +183,6 @@ export default function BoxDetails() {
       updateOnboardingProgress({ boxCreated: true })
     }
   }, [onboardingProgress.boxCreated, box, updateOnboardingProgress])
-
-  useEffect(() => {
-    if (box && tab === 'terminal' && !onboardingProgress.terminalOpened) {
-      updateOnboardingProgress({ boxCreated: true, terminalOpened: true })
-    }
-  }, [onboardingProgress.terminalOpened, box, tab, updateOnboardingProgress])
 
   const startMutation = useStartBoxMutation()
   const stopMutation = useStopBoxMutation()
@@ -222,81 +247,246 @@ export default function BoxDetails() {
     }
   }
 
+  const handleRefresh = () => {
+    refetch()
+    const el = refreshRef.current
+    if (el) {
+      el.style.animation = 'none'
+      void el.offsetWidth
+      el.style.animation = 'spin .6s ease'
+    }
+  }
+
+  const copyId = () => {
+    const id = box ? getBoxPublicId(box) : null
+    if (!id) return
+    try {
+      navigator.clipboard?.writeText(id)
+    } catch {
+      /* clipboard may be unavailable */
+    }
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1300)
+  }
+
+  const formatAutoStop = (box: Box) => (box.autoStopInterval ? `${box.autoStopInterval}m` : 'disabled')
+  const formatAutoDelete = (box: Box) => {
+    const v = box.autoDeleteInterval
+    if (v == null || v < 0) return 'disabled'
+    if (v === 0) return 'on stop'
+    return `${v}m`
+  }
+
   return (
-    <PageLayout className="!h-auto min-h-[var(--app-content-height,calc(100svh_-_3.5rem))]">
+    <div className="flex h-[calc(100svh-60px)] min-h-0 flex-col gap-[14px] px-6 pb-[22px] pt-4 font-mono text-[13px]">
       <OnboardingGuideDialog
         open={showOnboardingDialog}
-        onOpenChange={(isOpen) => {
-          if (!isOpen) {
-            closeOnboardingDialog()
-          } else {
-            setShowOnboardingDialog(true)
-          }
-        }}
+        onOpenChange={(isOpen) => (isOpen ? setShowOnboardingDialog(true) : closeOnboardingDialog())}
         onProgressChange={updateOnboardingProgress}
         progress={onboardingProgress}
       />
-      <BoxHeader
-        box={box}
-        isLoading={isLoading}
-        writePermitted={writePermitted}
-        deletePermitted={deletePermitted}
-        actionsDisabled={actionsDisabled}
-        isFetching={isFetching}
-        onStart={handleStart}
-        onStop={handleStop}
-        onRecover={handleRecover}
-        onDelete={() => setDeleteDialogOpen(true)}
-        onRefresh={() => refetch()}
-        onBack={() => navigate(RoutePath.BOXES)}
-        onCreateSshAccess={() => setCreateSshDialogOpen(true)}
-        onRevokeSshAccess={() => setRevokeSshDialogOpen(true)}
-        mutations={{
-          start: startMutation.isPending,
-          stop: stopMutation.isPending,
-          recover: recoverMutation.isPending,
-        }}
-      />
+
+      {/* breadcrumb */}
+      <div className="flex flex-none items-center gap-[9px] text-[12px] text-muted-foreground">
+        <button type="button" onClick={() => navigate(RoutePath.BOXES)} className="hover:text-foreground">
+          boxes
+        </button>
+        <span className="text-border">/</span>
+        <span className="text-foreground">{box ? getBoxPublicIdLabel(box).toLowerCase() : boxId?.toLowerCase()}</span>
+      </div>
 
       {isNotFound ? (
-        <div className="flex min-h-[60vh] items-center justify-center">
-          <Empty>
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <Container className="size-4" />
-              </EmptyMedia>
-              <EmptyTitle>Box not found</EmptyTitle>
-              <EmptyDescription>Are you sure you're in the right organization?</EmptyDescription>
-            </EmptyHeader>
-            <Button variant="outline" size="sm" onClick={() => navigate(RoutePath.BOXES)}>
-              Back to Boxes
-            </Button>
-          </Empty>
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center text-muted-foreground">
+          <Container className="size-8" strokeWidth={1.3} />
+          <div className="text-foreground">Box not found</div>
+          <div className="text-[12px]">Are you sure you&apos;re in the right organization?</div>
+          <button
+            type="button"
+            onClick={() => navigate(RoutePath.BOXES)}
+            className="mt-2 border border-border px-4 py-2 text-[13px] transition-colors hover:bg-card"
+          >
+            Back to Boxes
+          </button>
+        </div>
+      ) : isLoading || !box ? (
+        <div className="flex flex-1 items-center justify-center gap-2 text-muted-foreground">
+          {isError ? (
+            <button
+              type="button"
+              onClick={() => refetch()}
+              className="inline-flex items-center gap-2 border border-border px-4 py-2 transition-colors hover:bg-card"
+            >
+              <RefreshCw className="size-4" /> Retry
+            </button>
+          ) : (
+            <>
+              <RefreshCw className="size-4 animate-spin" /> Loading box…
+            </>
+          )}
         </div>
       ) : (
-        <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-4 px-4 pt-6 pb-10 sm:px-5">
-          {isLoading ? (
-            <InfoPanelSkeleton />
-          ) : isError || !box ? (
-            <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-border p-8 text-center text-muted-foreground">
-              <p className="text-sm">Failed to load box details.</p>
-              <Button variant="outline" size="sm" onClick={() => refetch()}>
-                <RefreshCw className="size-4" />
-                Retry
-              </Button>
+        <>
+          {/* identity strip */}
+          <div className="flex flex-none items-center gap-[18px] border-b border-dashed border-border pb-[14px]">
+            <div className="flex min-w-0 flex-1 items-center gap-[14px]">
+              <span className="max-w-[360px] truncate text-[22px] font-medium tracking-[-0.4px]">
+                {getBoxPublicIdLabel(box)}
+              </span>
+              <span className="flex flex-none items-center gap-2 text-[13px]">
+                <span
+                  className="size-[8px] rounded-[2px]"
+                  style={{ background: statusOf(box).color, boxShadow: `0 0 6px ${statusOf(box).color}` }}
+                />
+                <span className="font-medium">{statusOf(box).label}</span>
+              </span>
+              {box.image && (
+                <span className="flex-none truncate border border-border px-[9px] py-[3px] text-[11px] tracking-[0.5px] text-muted-foreground">
+                  {box.image}
+                </span>
+              )}
             </div>
-          ) : (
-            <BoxInfoPanel box={box} getRegionName={getRegionName} />
-          )}
 
-          <BoxContentTabs
-            box={box}
-            isLoading={isLoading}
-            experimentsEnabled={experimentsEnabled}
-            tab={tab}
-            onTabChange={setTab}
-          />
-        </div>
+            <div className="flex flex-none items-center gap-[10px]">
+              {writePermitted && isRecoverable(box) && (
+                <button
+                  type="button"
+                  onClick={handleRecover}
+                  disabled={actionsDisabled}
+                  className="flex items-center gap-2 border border-border px-[15px] py-2 text-[13px] font-medium transition-colors hover:bg-background disabled:opacity-50"
+                >
+                  <RotateCcw className="size-[14px]" /> recover
+                </button>
+              )}
+              {writePermitted && isStartable(box) && (
+                <button
+                  type="button"
+                  onClick={handleStart}
+                  disabled={actionsDisabled}
+                  className="flex items-center gap-2 border border-border px-[15px] py-2 text-[13px] font-medium transition-colors hover:bg-background disabled:opacity-50"
+                >
+                  <Play className="size-[14px]" fill="currentColor" /> start
+                </button>
+              )}
+              {writePermitted && isStoppable(box) && (
+                <button
+                  type="button"
+                  onClick={handleStop}
+                  disabled={actionsDisabled}
+                  className="flex items-center gap-2 border border-border px-[15px] py-2 text-[13px] font-medium transition-colors hover:bg-background disabled:opacity-50"
+                >
+                  <Pause className="size-[13px]" fill="currentColor" /> stop
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setCreateSshDialogOpen(true)}
+                className="flex items-center gap-2 border border-border px-[15px] py-2 text-[13px] font-medium transition-colors hover:bg-background"
+              >
+                <SquareTerminal className="size-[15px]" /> Remote SSH
+              </button>
+              <DropdownMenu>
+                <DropdownMenuTrigger className="flex size-[34px] items-center justify-center border border-border outline-none transition-colors hover:bg-background data-[state=open]:bg-background">
+                  <MoreVertical className="size-[18px]" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-[12rem]">
+                  <DropdownMenuItem className="cursor-pointer" onClick={() => setCreateSshDialogOpen(true)}>
+                    <KeyRound className="size-4" /> Create SSH access
+                  </DropdownMenuItem>
+                  <DropdownMenuItem className="cursor-pointer" onClick={() => setRevokeSshDialogOpen(true)}>
+                    <KeyRound className="size-4" /> Revoke SSH access
+                  </DropdownMenuItem>
+                  {deletePermitted && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        className="cursor-pointer text-destructive focus:text-destructive"
+                        onClick={() => setDeleteDialogOpen(true)}
+                      >
+                        <Trash2 className="size-4" /> Delete
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <button
+                type="button"
+                onClick={handleRefresh}
+                title="refresh"
+                className="flex size-[34px] items-center justify-center border border-border transition-colors hover:bg-background"
+              >
+                <span ref={refreshRef} className="inline-flex">
+                  <RefreshCw className="size-4" />
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {/* body */}
+          <div className="flex min-h-0 flex-1 gap-[14px]">
+            {/* spec readout */}
+            <div className="ov w-[404px] flex-none overflow-y-auto pb-6 pr-6">
+              <SectionHeader title="general" />
+              <SpecRow label="box id">
+                <span className="flex items-center gap-[7px]">
+                  {getBoxPublicIdLabel(box)}
+                  <button type="button" onClick={copyId} title="copy" className="text-muted-foreground hover:text-foreground">
+                    {copied ? (
+                      <Check className="size-[14px]" style={{ color: STATUS.running }} />
+                    ) : (
+                      <Copy className="size-[14px]" />
+                    )}
+                  </button>
+                </span>
+              </SpecRow>
+              <SpecRow label="image">{box.image ?? '—'}</SpecRow>
+              <SpecRow label="region">{(getRegionName(box.target) ?? box.target ?? '—').toUpperCase()}</SpecRow>
+
+              <SectionHeader title="resources" right={<span className="text-[10px] tracking-[1px] text-muted-foreground">quota</span>} />
+              <SpecRow label="cpu">{box.cpu} vcpu</SpecRow>
+              <SpecRow label="memory">{box.memory} gib</SpecRow>
+              <SpecRow label="disk">{box.disk} gib</SpecRow>
+
+              <SectionHeader title="cost" right={<span className="text-[10px] tracking-[1px] text-muted-foreground">est.</span>} />
+              <SpecRow label="rate">{fmtUsd(boxHourlyCost(box).total)} / hr</SpecRow>
+              <SpecRow label="this box">{fmtUsd(boxHourlyCost(box).total * 6.5, 2)}</SpecRow>
+
+              <SectionHeader title="lifecycle" />
+              <SpecRow label="auto-stop">{formatAutoStop(box)}</SpecRow>
+              <SpecRow label="auto-delete">
+                <span className="text-muted-foreground">{formatAutoDelete(box)}</span>
+              </SpecRow>
+
+              <SectionHeader title="timestamps" />
+              <SpecRow label="created">{getRelativeTimeString(box.createdAt).relativeTimeString}</SpecRow>
+              <SpecRow label="last event">{getRelativeTimeString(box.updatedAt).relativeTimeString}</SpecRow>
+
+              {box.errorReason && (
+                <>
+                  <SectionHeader title="error" />
+                  <p className="text-[12px] leading-relaxed" style={{ color: STATUS.stopped }}>
+                    {box.errorReason}
+                  </p>
+                </>
+              )}
+            </div>
+
+            {/* shell */}
+            <div className="flex min-h-0 flex-1 flex-col border border-border bg-[hsl(var(--code-background))]">
+              <div className="flex flex-none items-center justify-between border-b border-dashed border-border px-5 py-[15px]">
+                <span className="flex items-center gap-[9px] text-[11px] uppercase tracking-[2px]">
+                  <span className="size-[6px] flex-none bg-brand" />
+                  shell
+                  <span className="ml-0.5 tracking-[0.5px] text-muted-foreground normal-case">
+                    {getBoxPublicIdLabel(box)}
+                  </span>
+                </span>
+              </div>
+              <div className="flex min-h-0 flex-1 flex-col">
+                <BoxTerminalTab box={box} />
+              </div>
+            </div>
+          </div>
+        </>
       )}
 
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
@@ -322,6 +512,6 @@ export default function BoxDetails() {
           <RevokeSshAccessDialog boxId={boxId} open={revokeSshDialogOpen} onOpenChange={setRevokeSshDialogOpen} />
         </>
       )}
-    </PageLayout>
+    </div>
   )
 }

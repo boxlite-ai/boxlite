@@ -5,7 +5,7 @@
 
 import { pluralize } from '@/lib/utils'
 import { VolumeDto, VolumeState } from '@boxlite-ai/api-client'
-import { CheckSquare2Icon, MinusSquareIcon, PlusIcon, TrashIcon } from 'lucide-react'
+import { CheckSquare2Icon, MinusSquareIcon, PlusIcon, TrashIcon } from '@/components/ui/icon'
 import { useMemo } from 'react'
 import { CommandConfig, useRegisterCommands } from '../CommandPalette'
 

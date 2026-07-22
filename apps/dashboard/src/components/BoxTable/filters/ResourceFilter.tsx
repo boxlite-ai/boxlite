@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useMemo } from 'react'
 
-import { X } from 'lucide-react'
+import { X } from '@/components/ui/icon'
 
 export interface ResourceFilterValue {
   cpu?: { min?: number; max?: number }

@@ -5,7 +5,7 @@
  */
 
 import { usePrivacyConsent } from '@/hooks/usePrivacyConsent'
-import { Cookie, Settings } from 'lucide-react'
+import { Cookie, Settings } from '@/components/ui/icon'
 import { useState } from 'react'
 import { PrivacyPreferencesDialog } from './PrivacyPreferencesDialog'
 import { Button } from './ui/button'

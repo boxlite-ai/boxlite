@@ -6,7 +6,7 @@
 import { CopyButton } from '@/components/CopyButton'
 import { Button } from '@/components/ui/button'
 import { RoutePath } from '@/enums/RoutePath'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft } from '@/components/ui/icon'
 import { type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 
