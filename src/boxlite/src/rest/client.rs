@@ -20,6 +20,9 @@ use crate::runtime::auth::Principal;
 const REFRESH_LEEWAY: Duration = Duration::from_secs(60);
 const TUNNEL_SETUP_TIMEOUT: Duration = Duration::from_secs(30);
 
+type TunnelConnector =
+    hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>;
+
 /// HTTP client for the BoxLite REST API.
 ///
 /// Handles base URL construction, bearer auth (any [`Credential`] impl),
@@ -27,6 +30,7 @@ const TUNNEL_SETUP_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Clone)]
 pub(crate) struct ApiClient {
     http: Client,
+    tunnel_connector: TunnelConnector,
     base_url: String,
     /// Routing-slot value substituted into the `{prefix}` URL segment
     /// on box-scoped requests. `None` or empty → URL skips the segment
@@ -50,12 +54,19 @@ impl ApiClient {
             .timeout(std::time::Duration::from_secs(300))
             .build()
             .map_err(|e| BoxliteError::Config(format!("failed to create HTTP client: {}", e)))?;
+        let tunnel_connector = hyper_rustls::HttpsConnectorBuilder::new()
+            .with_native_roots()
+            .map_err(|e| BoxliteError::Config(format!("failed to load TLS roots: {e}")))?
+            .https_or_http()
+            .enable_http1()
+            .build();
 
         let base_url = config.url.trim_end_matches('/').to_string();
         let path_prefix = config.path_prefix.clone();
 
         Ok(Self {
             http,
+            tunnel_connector,
             base_url,
             path_prefix,
             credential: config.credential.clone(),
@@ -325,7 +336,6 @@ impl ApiClient {
     ) -> BoxliteResult<tokio::io::DuplexStream> {
         use http_body_util::Empty;
         use hyper::{Method, Request, Uri};
-        use hyper_rustls::HttpsConnectorBuilder;
         use hyper_util::rt::TokioIo;
         use tower::Service;
 
@@ -336,12 +346,7 @@ impl ApiClient {
             .authority()
             .ok_or_else(|| BoxliteError::Config("CONNECT URI has no authority".into()))?
             .clone();
-        let mut connector = HttpsConnectorBuilder::new()
-            .with_native_roots()
-            .map_err(|e| BoxliteError::Config(format!("failed to load TLS roots: {e}")))?
-            .https_or_http()
-            .enable_http1()
-            .build();
+        let mut connector = self.tunnel_connector.clone();
         let io = tokio::time::timeout(TUNNEL_SETUP_TIMEOUT, connector.call(uri.clone()))
             .await
             .map_err(|_| BoxliteError::Network("CONNECT socket setup timed out".into()))?
