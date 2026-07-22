@@ -120,26 +120,30 @@ pub(crate) type CBoxImageListFn =
     extern "C" fn(*mut CImageInfoList, *mut crate::CBoxliteError, *mut c_void);
 
 /// Volume create completion.
+///
+/// On success the callback takes ownership of the non-null metadata pointer and
+/// must release it with `boxlite_free_volume_info`. On failure the pointer is
+/// null. The error pointer is borrowed for callback dispatch only.
 pub type CBoxVolumeCreateCb =
     Option<extern "C" fn(*mut CVolumeInfo, *mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxVolumeCreateFn =
     extern "C" fn(*mut CVolumeInfo, *mut crate::CBoxliteError, *mut c_void);
 
-/// Volume get completion. Distinct typedef from `CBoxVolumeCreateCb` even
-/// though the shape is identical so callers can route create and get
-/// callbacks to different handlers without relying on positional inference.
+/// Volume get completion with the same ownership contract as volume create.
 pub type CBoxVolumeGetCb =
     Option<extern "C" fn(*mut CVolumeInfo, *mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxVolumeGetFn =
     extern "C" fn(*mut CVolumeInfo, *mut crate::CBoxliteError, *mut c_void);
 
-/// Volume list completion.
+/// Volume list completion. A successful callback owns the list and must release
+/// it with `boxlite_free_volume_info_list`; the error pointer is callback-scoped.
 pub type CBoxVolumeListCb =
     Option<extern "C" fn(*mut CVolumeInfoList, *mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxVolumeListFn =
     extern "C" fn(*mut CVolumeInfoList, *mut crate::CBoxliteError, *mut c_void);
 
-/// Volume remove completion.
+/// Volume remove completion. The error pointer is borrowed for callback dispatch
+/// only and no result allocation is produced.
 pub type CBoxVolumeRemoveCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxVolumeRemoveFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
 

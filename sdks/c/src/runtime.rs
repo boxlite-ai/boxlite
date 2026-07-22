@@ -121,6 +121,17 @@ pub unsafe extern "C" fn boxlite_runtime_images(
 }
 
 #[unsafe(no_mangle)]
+/// Create a runtime-scoped named-volume handle.
+///
+/// On success ownership of `*out_handle` transfers to the caller, which must
+/// release it with `boxlite_volume_free`. The handle may submit operations from
+/// multiple threads; callbacks run only while the parent runtime is drained.
+/// `out_error` may be null and otherwise receives synchronous failures.
+///
+/// # Safety
+///
+/// `runtime` must be a live runtime pointer and `out_handle` must be non-null
+/// and writable. The returned handle must not be used after it is freed.
 pub unsafe extern "C" fn boxlite_runtime_volumes(
     runtime: *mut CBoxliteRuntime,
     out_handle: *mut *mut CBoxliteVolumeHandle,

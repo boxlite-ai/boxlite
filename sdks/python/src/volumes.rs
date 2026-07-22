@@ -49,7 +49,10 @@ pub(crate) struct PyVolumeHandle {
 
 #[pymethods]
 impl PyVolumeHandle {
-    /// Create a named volume and return its metadata.
+    /// Create a named volume.
+    ///
+    /// Returns an awaitable that resolves to the new `VolumeInfo`. Backend
+    /// failures are raised when the awaitable is awaited.
     fn create<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -59,6 +62,8 @@ impl PyVolumeHandle {
     }
 
     /// List named volumes visible to this runtime.
+    ///
+    /// Returns an awaitable that resolves to a list of `VolumeInfo` objects.
     fn list<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -71,6 +76,9 @@ impl PyVolumeHandle {
     }
 
     /// Get metadata for a volume by server-assigned id.
+    ///
+    /// `id` is copied before this method returns. The returned awaitable resolves
+    /// to `VolumeInfo` or raises when the volume does not exist.
     fn get<'py>(&self, py: Python<'py>, id: String) -> PyResult<Bound<'py, PyAny>> {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -79,7 +87,7 @@ impl PyVolumeHandle {
         })
     }
 
-    /// Remove a volume by id.
+    /// Remove a volume by id and return an awaitable resolving to `None`.
     ///
     /// When `force` is true, backends that support force removal treat a
     /// missing volume as success.

@@ -36,10 +36,11 @@ pub struct VolumeHandle {
 
 /// C ABI representation of volume metadata.
 ///
-/// `id` and `created_at` are heap-owned C strings allocated by this module.
-/// They are freed by `boxlite_free_volume_info` for standalone values or by
-/// `boxlite_free_volume_info_list` for list entries. `size_bytes` is meaningful
-/// only when `has_size` is non-zero.
+/// `id` and `created_at` are non-null, heap-owned C strings. A standalone value
+/// is transferred to the callback and must be released exactly once with
+/// `boxlite_free_volume_info`. List entries remain owned by their enclosing
+/// [`CVolumeInfoList`] and must not be freed individually. `size_bytes` is
+/// meaningful only when `has_size` is non-zero.
 #[repr(C)]
 pub struct CVolumeInfo {
     pub id: *mut c_char,
@@ -50,9 +51,10 @@ pub struct CVolumeInfo {
 
 /// C ABI representation of a volume metadata list.
 ///
-/// `items` points to `count` contiguous `CVolumeInfo` entries. The list owns the
-/// array and every string in each entry; callers must free it with
-/// `boxlite_free_volume_info_list` when ownership is transferred to C.
+/// `items` points to `count` contiguous [`CVolumeInfo`] entries and may be null
+/// only when `count` is zero. The callback recipient owns the list, its array,
+/// and all entry strings and must release them together with
+/// `boxlite_free_volume_info_list`.
 #[repr(C)]
 pub struct CVolumeInfoList {
     pub items: *mut CVolumeInfo,
@@ -127,12 +129,17 @@ unsafe fn free_str(s: *mut c_char) {
 
 /// Queue asynchronous volume creation.
 ///
+/// `Ok` means queueing succeeded. The callback runs later on the thread calling
+/// `boxlite_runtime_drain`; successful metadata ownership transfers to it.
+/// Calls may be submitted concurrently. `user_data` is passed through unchanged
+/// and must remain usable by the caller until callback dispatch.
+///
 /// # Safety
 ///
-/// `handle` must be a valid pointer returned by `boxlite_runtime_volumes`, `cb`
-/// must be a valid callback, and `out_error` must be writable. The handle must
-/// remain valid until this function returns. Completion is delivered later when
-/// the parent runtime is drained.
+/// `handle` and `cb` must be non-null. `out_error` may be null; otherwise it must
+/// be writable and receives synchronous queueing failures only. The handle must
+/// remain valid until this function returns. A successful callback must release
+/// its metadata with `boxlite_free_volume_info`; the error pointer is borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_volume_create(
     handle: *mut CBoxliteVolumeHandle,
@@ -143,14 +150,13 @@ pub unsafe extern "C" fn boxlite_volume_create(
     volume_create(handle, cb, user_data, out_error)
 }
 
-/// Queue asynchronous volume listing.
+/// Queue asynchronous volume listing with the same dispatch, concurrency, and
+/// `user_data` contract as [`boxlite_volume_create`].
 ///
 /// # Safety
 ///
-/// `handle` must be a valid pointer returned by `boxlite_runtime_volumes`, `cb`
-/// must be a valid callback, and `out_error` must be writable. The handle must
-/// remain valid until this function returns. Completion is delivered later when
-/// the parent runtime is drained.
+/// `handle` and `cb` must be non-null; `out_error` may be null. A successful
+/// callback owns its list and must call `boxlite_free_volume_info_list`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_volume_list(
     handle: *mut CBoxliteVolumeHandle,
@@ -161,13 +167,14 @@ pub unsafe extern "C" fn boxlite_volume_list(
     volume_list(handle, cb, user_data, out_error)
 }
 
-/// Queue asynchronous lookup of a volume by id.
+/// Queue asynchronous lookup of a volume by id with the same dispatch,
+/// concurrency, and `user_data` contract as [`boxlite_volume_create`].
 ///
 /// # Safety
 ///
-/// `handle` must be valid, `id` must point to a non-null UTF-8 C string, `cb`
-/// must be a valid callback, and `out_error` must be writable. `id` only needs
-/// to remain valid for the duration of this call.
+/// `handle`, `id`, and `cb` must be non-null. `id` must contain UTF-8 and only
+/// needs to remain valid for this call. `out_error` may be null. A successful
+/// callback owns its metadata and must call `boxlite_free_volume_info`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_volume_get(
     handle: *mut CBoxliteVolumeHandle,
@@ -179,13 +186,15 @@ pub unsafe extern "C" fn boxlite_volume_get(
     volume_get(handle, id, cb, user_data, out_error)
 }
 
-/// Queue asynchronous removal of a volume by id.
+/// Queue asynchronous removal of a volume by id with the same dispatch,
+/// concurrency, and `user_data` contract as [`boxlite_volume_create`]. A
+/// non-zero `force` requests success when the volume is absent.
 ///
 /// # Safety
 ///
-/// `handle` must be valid, `id` must point to a non-null UTF-8 C string, `cb`
-/// must be a valid callback, and `out_error` must be writable. `id` only needs
-/// to remain valid for the duration of this call.
+/// `handle`, `id`, and `cb` must be non-null. `id` must contain UTF-8 and only
+/// needs to remain valid for this call. `out_error` may be null. Callback
+/// arguments are borrowed for dispatch and require no result deallocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_volume_remove(
     handle: *mut CBoxliteVolumeHandle,
