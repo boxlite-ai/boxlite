@@ -398,7 +398,7 @@ boxlite exec -it mybox -- /bin/sh
 boxlite exec --env-file test.env mybox -- pytest
 ```
 
-Environment behavior:
+#### Environment behavior for `run`, `create`, and `exec`
 
 - **Syntax:** Environment files use dotenv syntax, including quoted values,
   `export` prefixes, comments, escapes, and variable substitution. A UTF-8 BOM
