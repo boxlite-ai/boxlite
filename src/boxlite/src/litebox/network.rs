@@ -24,6 +24,7 @@ impl<T> BoxConnection for T where T: tokio::io::AsyncRead + tokio::io::AsyncWrit
 
 enum TunnelState {
     LocalReady(OwnedFd),
+    #[cfg(feature = "rest")]
     RemoteReady {
         uri: String,
         connection: Box<dyn BoxConnection>,
@@ -47,6 +48,7 @@ impl BoxTunnel {
         })
     }
 
+    #[cfg(feature = "rest")]
     pub(crate) fn remote<C>(uri: String, connection: C) -> Self
     where
         C: BoxConnection + 'static,
@@ -63,6 +65,7 @@ impl BoxTunnel {
     pub async fn endpoint(&self) -> BoxliteResult<BoxEndpoint> {
         match &*self.state.lock().await {
             TunnelState::LocalReady(fd) => Ok(BoxEndpoint::FileDescriptor(fd.as_raw_fd())),
+            #[cfg(feature = "rest")]
             TunnelState::RemoteReady { uri, .. } => Ok(BoxEndpoint::Uri(uri.clone())),
             TunnelState::Connected => Err(BoxliteError::InvalidState(
                 "tunnel connection has already been consumed".into(),
@@ -85,6 +88,7 @@ impl BoxTunnel {
                         BoxliteError::Network(format!("open tunnel descriptor: {error}"))
                     })
             }
+            #[cfg(feature = "rest")]
             TunnelState::RemoteReady { connection, .. } => Ok(connection),
             TunnelState::Connected => Err(BoxliteError::InvalidState(
                 "tunnel connection has already been consumed".into(),
@@ -135,6 +139,7 @@ mod tests {
 
     use super::*;
 
+    #[cfg(feature = "rest")]
     #[tokio::test]
     async fn remote_tunnel_exposes_and_consumes_prepared_connection() {
         let (stream, mut peer) = UnixStream::pair().unwrap();
