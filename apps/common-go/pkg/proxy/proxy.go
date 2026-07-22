@@ -19,17 +19,19 @@ import (
 
 // ProxyBidirectionalStream relays both directions until both streams close.
 func ProxyBidirectionalStream(left, right net.Conn) {
-	done := make(chan struct{}, 2)
 	copyStream := func(dst, src net.Conn) {
 		_, _ = io.Copy(dst, src)
 		if closeWriter, ok := dst.(interface{ CloseWrite() error }); ok {
 			_ = closeWriter.CloseWrite()
 		}
-		done <- struct{}{}
 	}
-	go copyStream(left, right)
-	go copyStream(right, left)
-	<-done
+
+	done := make(chan struct{})
+	go func() {
+		copyStream(left, right)
+		close(done)
+	}()
+	copyStream(right, left)
 	<-done
 }
 
