@@ -275,7 +275,7 @@ export interface JsNetworkHandle {
 
 export interface JsBoxTunnel {
   /** Return the public endpoint for this tunnel. */
-  endpoint(): Promise<string | number>;
+  endpoint(): string | number;
   /** Open the tunnel and return its native file descriptor. */
   _connectFd(): Promise<number>;
 }

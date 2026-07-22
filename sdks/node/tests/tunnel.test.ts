@@ -36,7 +36,7 @@ describe("SimpleBox tunnels", () => {
 
   test("endpoint returns the prepared local file descriptor", async () => {
     const { SimpleBox } = await import("../lib/simplebox.js");
-    const endpoint = vi.fn(async () => 42);
+    const endpoint = vi.fn(() => 42);
     const nativeTunnel = { endpoint, _connectFd: vi.fn(async () => 42) };
     const tunnelNative = vi.fn(async () => nativeTunnel);
     const box = new SimpleBox({ image: "alpine:latest" }) as SimpleBox & {
@@ -45,7 +45,7 @@ describe("SimpleBox tunnels", () => {
     box._box = { network: { tunnel: tunnelNative } };
 
     const tunnel = await box.network.tunnel(3000);
-    await expect(tunnel.endpoint()).resolves.toBe(42);
+    expect(tunnel.endpoint()).toBe(42);
     expect(tunnelNative).toHaveBeenCalledWith(3000);
     expect(nativeTunnel._connectFd).not.toHaveBeenCalled();
   });

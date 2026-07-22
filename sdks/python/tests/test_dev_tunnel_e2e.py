@@ -264,7 +264,7 @@ async def _assert_tunnel_endpoint_and_one_shot_connects(
 
     try:
         first_tunnel = await box.network.tunnel(port)
-        endpoint = await first_tunnel.endpoint()
+        endpoint = first_tunnel.endpoint()
         assert_endpoint(endpoint)
 
         host = _host_for_endpoint(endpoint)

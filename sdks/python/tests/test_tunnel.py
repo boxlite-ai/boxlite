@@ -12,7 +12,7 @@ class _FakeTunnel:
         self.sockets = sockets
         self.endpoint_value = endpoint
 
-    async def endpoint(self) -> str | int:
+    def endpoint(self) -> str | int:
         return self.endpoint_value
 
     async def connect(self) -> socket.socket:
@@ -41,7 +41,7 @@ async def test_endpoint_returns_local_file_descriptor():
     box._box = _FakeBox(_FakeTunnel([], 42))
 
     tunnel = await box.network.tunnel(3000)
-    assert await tunnel.endpoint() == 42
+    assert tunnel.endpoint() == 42
     assert box._box.network.ports == [3000]
 
 

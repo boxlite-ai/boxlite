@@ -267,7 +267,7 @@ export interface SimpleBoxOptions {
 }
 
 /** Box-scoped network operations for a SimpleBox. */
-export class NetworkHandler {
+export class NetworkHandle {
   /** @internal */
   constructor(private readonly ensureBox: () => Promise<BoxLike>) {}
 
@@ -284,7 +284,7 @@ export class BoxTunnel {
   constructor(private readonly tunnel: JsBoxTunnel) {}
 
   /** Return the public endpoint for this service. */
-  async endpoint(): Promise<string | number> {
+  endpoint(): string | number {
     return this.tunnel.endpoint();
   }
 
@@ -341,7 +341,7 @@ export class SimpleBox {
   protected _boxOpts: JsBoxOptions;
   protected _reuseExisting: boolean;
   protected _created: boolean | null = null;
-  readonly network: NetworkHandler;
+  readonly network: NetworkHandle;
 
   /**
    * Create a new SimpleBox.
@@ -412,7 +412,7 @@ export class SimpleBox {
 
     this._name = options.name;
     this._reuseExisting = options.reuseExisting ?? false;
-    this.network = new NetworkHandler(() => this._ensureBox());
+    this.network = new NetworkHandle(() => this._ensureBox());
   }
 
   /**

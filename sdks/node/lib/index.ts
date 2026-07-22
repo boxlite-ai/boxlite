@@ -94,7 +94,7 @@ export { getNativeModule, getJsBoxlite };
 export {
   SimpleBox,
   BoxTunnel,
-  NetworkHandler,
+  NetworkHandle,
   type NetworkSpec,
   type SimpleBoxOptions,
   type SecurityOptions,

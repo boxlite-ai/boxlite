@@ -23,7 +23,7 @@ class SyncBoxTunnel:
 
     def endpoint(self):
         """Return the cloud URI or borrowed local file descriptor."""
-        return self._box._sync(self._tunnel.endpoint())
+        return self._tunnel.endpoint()
 
 
 class SyncNetworkHandle:

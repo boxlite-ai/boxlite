@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::os::fd::{AsRawFd, IntoRawFd};
+use std::os::fd::{AsRawFd, BorrowedFd, IntoRawFd, OwnedFd};
 use std::sync::{Arc, Mutex};
 
 use boxlite::LiteBox;
@@ -9,7 +9,7 @@ use pyo3::types::PyDict;
 
 use crate::util::map_err;
 
-async fn connection_fd(
+async fn bridge_connection_fd(
     mut connection: Box<dyn boxlite::BoxConnection>,
 ) -> std::result::Result<std::os::fd::OwnedFd, boxlite::BoxliteError> {
     let (sdk, mut bridge) = tokio::net::UnixStream::pair().map_err(|error| {
@@ -21,6 +21,15 @@ async fn connection_fd(
     sdk.into_std()
         .map(std::os::fd::OwnedFd::from)
         .map_err(|error| boxlite::BoxliteError::Network(format!("export SDK socket: {error}")))
+}
+
+fn clone_connection_fd(fd: i32) -> std::result::Result<OwnedFd, boxlite::BoxliteError> {
+    // SAFETY: BoxTunnel owns this descriptor for the duration of the clone.
+    unsafe { BorrowedFd::borrow_raw(fd) }
+        .try_clone_to_owned()
+        .map_err(|error| {
+            boxlite::BoxliteError::Network(format!("clone tunnel descriptor: {error}"))
+        })
 }
 
 /// Handle for network operations on a box.
@@ -58,28 +67,26 @@ impl PyNetworkHandle {
 
 #[pymethods]
 impl PyBoxTunnel {
-    fn endpoint<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let handle = Arc::clone(&self.handle);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let endpoint = handle
-                .lock()
-                .map_err(|_| {
-                    map_err(boxlite::BoxliteError::Internal(
-                        "tunnel lock poisoned".into(),
-                    ))
-                })?
-                .as_ref()
-                .ok_or_else(|| {
-                    map_err(boxlite::BoxliteError::InvalidState(
-                        "tunnel connection has already been consumed".into(),
-                    ))
-                })?
-                .endpoint();
-            Python::attach(move |py| match endpoint {
-                BoxEndpoint::Uri(uri) => Ok(uri.into_pyobject(py)?.into_any().unbind()),
-                BoxEndpoint::FileDescriptor(fd) => Ok(fd.into_pyobject(py)?.into_any().unbind()),
-            })
-        })
+    fn endpoint(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let endpoint = self
+            .handle
+            .lock()
+            .map_err(|_| {
+                map_err(boxlite::BoxliteError::Internal(
+                    "tunnel lock poisoned".into(),
+                ))
+            })?
+            .as_ref()
+            .ok_or_else(|| {
+                map_err(boxlite::BoxliteError::InvalidState(
+                    "tunnel connection has already been consumed".into(),
+                ))
+            })?
+            .endpoint();
+        match endpoint {
+            BoxEndpoint::Uri(uri) => Ok(uri.into_pyobject(py)?.into_any().unbind()),
+            BoxEndpoint::FileDescriptor(fd) => Ok(fd.into_pyobject(py)?.into_any().unbind()),
+        }
     }
 
     fn connect<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
@@ -98,8 +105,14 @@ impl PyBoxTunnel {
                         "tunnel connection has already been consumed".into(),
                     ))
                 })?;
-            let connection = tunnel.connect().map_err(map_err)?;
-            let fd = connection_fd(connection).await.map_err(map_err)?;
+            let endpoint = tunnel.endpoint();
+            let fd = match endpoint {
+                BoxEndpoint::FileDescriptor(fd) => clone_connection_fd(fd).map_err(map_err)?,
+                BoxEndpoint::Uri(_) => {
+                    let connection = tunnel.connect().map_err(map_err)?;
+                    bridge_connection_fd(connection).await.map_err(map_err)?
+                }
+            };
             Python::attach(move |py| {
                 let kwargs = PyDict::new(py);
                 kwargs.set_item("fileno", fd.as_raw_fd())?;

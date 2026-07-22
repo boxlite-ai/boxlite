@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("boxlite.simplebox")
 
-__all__ = ["BoxTunnel", "SimpleBox"]
+__all__ = ["BoxTunnel", "NetworkHandle", "SimpleBox"]
 
 
 class StreamType(IntEnum):
@@ -37,12 +37,12 @@ class BoxTunnel:
         """Open a non-blocking socket to the target service."""
         return await self._tunnel.connect()
 
-    async def endpoint(self) -> str | int:
+    def endpoint(self) -> str | int:
         """Return the cloud URI or borrowed local file descriptor."""
-        return await self._tunnel.endpoint()
+        return self._tunnel.endpoint()
 
 
-class _SimpleBoxNetwork:
+class NetworkHandle:
     """Network operations for a ``SimpleBox``."""
 
     def __init__(self, box: "SimpleBox") -> None:
@@ -135,7 +135,7 @@ class SimpleBox:
         self._box = None
         self._started = False
         self._created: Optional[bool] = None
-        self._network = _SimpleBoxNetwork(self)
+        self._network = NetworkHandle(self)
 
     async def _create_tunnel(self, port: int):
         """Establish a native tunnel handle for a service port."""
@@ -214,10 +214,10 @@ class SimpleBox:
         return self._created
 
     @property
-    def network(self) -> _SimpleBoxNetwork:
+    def network(self) -> NetworkHandle:
         """Get the box-scoped network handle."""
         if not hasattr(self, "_network"):
-            self._network = _SimpleBoxNetwork(self)
+            self._network = NetworkHandle(self)
         return self._network
 
     async def exec(

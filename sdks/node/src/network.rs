@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::os::fd::IntoRawFd;
+use std::os::fd::{BorrowedFd, IntoRawFd, OwnedFd};
 use std::sync::{Arc, Mutex};
 
 use boxlite::LiteBox;
@@ -9,7 +9,7 @@ use napi_derive::napi;
 
 use crate::util::map_err;
 
-async fn connection_fd(
+async fn bridge_connection_fd(
     mut connection: Box<dyn boxlite::BoxConnection>,
 ) -> std::result::Result<std::os::fd::OwnedFd, boxlite::BoxliteError> {
     let (sdk, mut bridge) = tokio::net::UnixStream::pair().map_err(|error| {
@@ -21,6 +21,15 @@ async fn connection_fd(
     sdk.into_std()
         .map(std::os::fd::OwnedFd::from)
         .map_err(|error| boxlite::BoxliteError::Network(format!("export SDK socket: {error}")))
+}
+
+fn clone_connection_fd(fd: i32) -> std::result::Result<OwnedFd, boxlite::BoxliteError> {
+    // SAFETY: BoxTunnel owns this descriptor for the duration of the clone.
+    unsafe { BorrowedFd::borrow_raw(fd) }
+        .try_clone_to_owned()
+        .map_err(|error| {
+            boxlite::BoxliteError::Network(format!("clone tunnel descriptor: {error}"))
+        })
 }
 
 /// Handle for network operations on a box.
@@ -60,7 +69,7 @@ impl JsNetworkHandle {
 #[napi]
 impl JsBoxTunnel {
     #[napi]
-    pub async fn endpoint(&self) -> Result<Either<String, i32>> {
+    pub fn endpoint(&self) -> Result<Either<String, i32>> {
         let handle = self
             .handle
             .lock()
@@ -83,10 +92,14 @@ impl JsBoxTunnel {
             .map_err(|_| Error::from_reason("tunnel lock poisoned"))?
             .take()
             .ok_or_else(|| Error::from_reason("tunnel connection has already been consumed"))?;
-        let connection = tunnel.connect().map_err(map_err)?;
-        Ok(connection_fd(connection)
-            .await
-            .map_err(map_err)?
-            .into_raw_fd())
+        let endpoint = tunnel.endpoint();
+        let fd = match endpoint {
+            BoxEndpoint::FileDescriptor(fd) => clone_connection_fd(fd).map_err(map_err)?,
+            BoxEndpoint::Uri(_) => {
+                let connection = tunnel.connect().map_err(map_err)?;
+                bridge_connection_fd(connection).await.map_err(map_err)?
+            }
+        };
+        Ok(fd.into_raw_fd())
     }
 }
