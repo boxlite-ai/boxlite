@@ -91,16 +91,6 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, e
 		return nil, nil, fmt.Errorf("failed to get runner info: %w", err)
 	}
 
-	// Skip last activity update if header is set
-	if ctx.Request.Header.Get(SKIP_LAST_ACTIVITY_UPDATE_HEADER) != "true" {
-		doneCh := make(chan struct{})
-		go p.updateLastActivity(ctx.Request.Context(), boxId, true, doneCh)
-		ctx.Request.Header.Del(SKIP_LAST_ACTIVITY_UPDATE_HEADER)
-		ctx.Set(ACTIVITY_POLL_STOP_KEY, func() {
-			close(doneCh)
-		})
-	}
-
 	// Build the target URL
 	targetURL := runnerProxyTargetURL(runnerInfo.ApiUrl, boxId, targetPort)
 
@@ -379,53 +369,4 @@ func isValidDirectPreviewBoxID(value string) bool {
 		return false
 	}
 	return true
-}
-
-// updateLastActivity updates the last activity timestamp for a box.
-// If shouldPollUpdate is true, it starts a goroutine that updates every 50 seconds.
-func (p *Proxy) updateLastActivity(ctx context.Context, boxId string, shouldPollUpdate bool, doneCh chan struct{}) {
-	// Prevent frequent updates by caching the last update
-	cached, err := p.boxLastActivityUpdateCache.Has(ctx, boxId)
-	if err != nil {
-		// If cache doesn't work, skip the update to avoid spamming the API
-		log.Errorf("failed to check last activity update cache for box %s: %v", boxId, err)
-		return
-	}
-
-	// Poll interval is 50 seconds to avoid spamming the API which will also cache updates for 45 seconds
-	pollInterval := 50 * time.Second
-
-	if !cached {
-		_, err := p.apiclient.BoxAPI.UpdateLastActivity(ctx, boxId).Execute()
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return
-			}
-			log.Errorf("failed to update last activity for box %s", boxId)
-			return
-		}
-
-		// Expire a bit before the poll interval to avoid skipping one interval
-		err = p.boxLastActivityUpdateCache.Set(ctx, boxId, true, pollInterval-5*time.Second)
-		if err != nil {
-			log.Errorf("failed to set last activity update cache for box %s: %v", boxId, err)
-		}
-	}
-
-	if shouldPollUpdate {
-		// Update keep alive every pollInterval until stopped
-		go func() {
-			ticker := time.NewTicker(pollInterval)
-			defer ticker.Stop()
-
-			for {
-				select {
-				case <-ticker.C:
-					p.updateLastActivity(context.WithoutCancel(ctx), boxId, false, doneCh)
-				case <-doneCh:
-					return
-				}
-			}
-		}()
-	}
 }
