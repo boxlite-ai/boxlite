@@ -83,35 +83,61 @@ impl BoxRunner {
             return Ok(0);
         }
 
-        // Foreground: attach *before* the command runs, then start it. Starting
-        // first races it — `run alpine echo hi` can finish before the attach
-        // lands, and its output and exit code die with the VM. Attaching only
-        // creates the container; `start()` runs its init.
-        let mut execution = litebox.attach(None).await?;
-        litebox.start().await?;
+        // Keep the execution handle inside this scope so its local stream or
+        // remote WebSocket is dropped before an explicit `--rm` deletion.
+        let run_result: anyhow::Result<i32> = async {
+            // Foreground: attach *before* the command runs, then start it.
+            // Starting first races it — `run alpine echo hi` can finish before
+            // the attach lands, and its output and exit code die with the VM.
+            // Attaching only creates the container; `start()` runs its init.
+            let mut execution = litebox.attach(None).await?;
+            litebox.start().await?;
 
-        // --tty implies --interactive when stdin is a terminal
-        // (validate_flags already ensures stdin is a terminal when --tty is set)
-        if self.args.process.tty {
-            self.args.process.interactive = true;
+            // --tty implies --interactive when stdin is a terminal
+            // (validate_flags already ensures stdin is a terminal when --tty is set)
+            if self.args.process.tty {
+                self.args.process.interactive = true;
+            }
+
+            // IO streaming and signal handling via shared StreamManager
+            let streamer = StreamManager::new(
+                &mut execution,
+                self.args.process.interactive,
+                self.args.process.tty,
+            );
+
+            let exit_code = streamer.start().await?;
+            Ok(to_shell_exit_code(exit_code))
+        }
+        .await;
+
+        if self.args.management.rm {
+            // The stream can finish just before the box watcher persists
+            // Stopped. Force removal makes `--rm` deterministic across local
+            // and REST runtimes without turning it into an AutoDelete timer.
+            let box_id = litebox.id().to_string();
+            if let Err(remove_error) = self.rt.remove(&box_id, true).await {
+                // A successful command must report failed cleanup. For a
+                // non-zero command or a run error, preserve the primary result
+                // and surface cleanup failure as a warning.
+                if matches!(&run_result, Ok(0)) {
+                    return Err(anyhow::anyhow!(
+                        "failed to remove box {box_id} after run: {remove_error}"
+                    ));
+                }
+                tracing::warn!(
+                    box_id,
+                    error = %remove_error,
+                    "Failed to remove box after unsuccessful run"
+                );
+            }
         }
 
-        // IO streaming and signal handling via shared StreamManager
-        let streamer = StreamManager::new(
-            &mut execution,
-            self.args.process.interactive,
-            self.args.process.tty,
-        );
-
-        let exit_code = streamer.start().await?;
-        // Just return the shell exit code. Returning (vs. calling
-        // `std::process::exit` here) lets `execution`, `litebox`, and the
-        // owning `BoxliteRuntime` drop normally, so `RuntimeImpl::Drop`
-        // runs `shutdown_sync()` and tears the box's shim down — the RAII
-        // teardown the success path already relied on. `std::process::exit`
-        // bypasses Drop entirely and leaked the shim on the non-zero path
-        // (#622).
-        Ok(to_shell_exit_code(exit_code))
+        // Returning (vs. calling `std::process::exit` here) lets `litebox` and
+        // the owning `BoxliteRuntime` drop normally, so `RuntimeImpl::Drop`
+        // runs `shutdown_sync()` on every path. `std::process::exit` bypasses
+        // Drop entirely and leaked the shim on the non-zero path (#622).
+        run_result
     }
 
     async fn create_box(
@@ -128,12 +154,6 @@ impl BoxRunner {
             .apply_to(&mut options, self.home.as_deref())?;
         self.args.network.apply_to(&mut options)?;
         self.args.process.apply_to(&mut options)?;
-
-        // Detached boxes keep manual lifecycle control: detach silently
-        // overrides --rm (historical CLI behavior).
-        if self.args.management.detach {
-            options.auto_delete = Some(0);
-        }
 
         // Docker semantics: the user COMMAND replaces the image CMD (the image
         // ENTRYPOINT is preserved and prepended) and the result runs as the

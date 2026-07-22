@@ -42,9 +42,8 @@ jobs:
   #   - Runtime/libkrun built in container (needs glibc 2.28)
   # - macOS: Builds directly on runner (ARM64 only)
   #
-  # After building, fix-go-symbols.sh localizes Go runtime symbols from
-  # embedded libgvproxy in the static library, preventing conflicts when
-  # linked into a Go binary.
+  # make dist:c builds and prepares the static archive locally, including
+  # the Go symbol fix and any required bundled unwinder.
   # ============================================================================
   build:
     name: Build (${{ matrix.target }})
@@ -124,11 +123,8 @@ jobs:
           export PATH="/usr/local/go/bin:$CARGO_HOME/bin:$PATH"
           make setup:build runtime
 
-          # Build the C FFI library (static + shared)
-          cargo build --release -p boxlite-c
-
-          # Fix Go runtime symbol conflicts in the static library
-          bash scripts/build/fix-go-symbols.sh target/release/libboxlite.a
+          # Build and prepare the C FFI libraries through the local entrypoint.
+          make dist:c
 
           command -v sccache &>/dev/null && sccache --show-stats || true
           CONTAINER_SCRIPT
@@ -153,11 +149,8 @@ jobs:
         run: |
           make setup:build runtime
 
-          # Build the C FFI library (static + shared)
-          cargo build --release -p boxlite-c
-
-          # Fix Go runtime symbol conflicts in the static library
-          bash scripts/build/fix-go-symbols.sh target/release/libboxlite.a
+          # Build and prepare the C FFI libraries through the local entrypoint.
+          make dist:c
 
           command -v sccache &>/dev/null && sccache --show-stats || true
 

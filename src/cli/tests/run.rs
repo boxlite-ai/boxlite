@@ -68,6 +68,19 @@ fn test_run_rm_non_zero_exit_does_not_leak_shim() {
          shutdown_sync; tearing the runtime down via a normal return is\
          what reaps the shim (see #622)."
     );
+
+    let remaining_boxes = std::fs::read_dir(&boxes_dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| entry.path().is_dir())
+                .count()
+        })
+        .unwrap_or(0);
+    assert_eq!(
+        remaining_boxes, 0,
+        "--rm must delete the box record and directory, not only stop its shim"
+    );
 }
 
 /// Companion to `test_run_rm_non_zero_exit_does_not_leak_shim`. The RAII

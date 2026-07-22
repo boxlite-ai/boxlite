@@ -28,6 +28,7 @@
 //! ```
 
 use super::{PathAccess, Sandbox, SandboxContext};
+use crate::jailer::process_env::shim_process_env;
 use boxlite_shared::errors::BoxliteResult;
 use std::ffi::CStr;
 use std::path::{Path, PathBuf};
@@ -115,6 +116,12 @@ impl Sandbox for SeatbeltSandbox {
         );
         let mut new_cmd = Command::new(sandbox_cmd);
         new_cmd.args(sandbox_args);
+        new_cmd.env_clear();
+        new_cmd.env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin");
+        new_cmd.env("HOME", "/root");
+        for (name, value) in shim_process_env() {
+            new_cmd.env(name, value);
+        }
         new_cmd.arg(&binary);
         new_cmd.args(&args);
         *cmd = new_cmd;
@@ -377,6 +384,48 @@ mod tests {
     fn test_sandbox_exec_path_is_absolute() {
         assert!(SANDBOX_EXEC_PATH.starts_with('/'));
         assert_eq!(SANDBOX_EXEC_PATH, "/usr/bin/sandbox-exec");
+    }
+
+    #[test]
+    fn test_apply_sanitizes_env() {
+        let shim = "/var/lib/boxlite/boxes/abc/bin/boxlite-shim";
+        let mut cmd = Command::new(shim);
+        cmd.arg("--test-arg");
+        cmd.env("SHOULD_NOT_SURVIVE", "host-value");
+
+        let resource_limits = crate::runtime::advanced_options::ResourceLimits::default();
+        let ctx = SandboxContext {
+            id: "test-box",
+            paths: vec![],
+            resource_limits: &resource_limits,
+            network_enabled: false,
+            sandbox_profile: Some(Path::new("/tmp/test.sbpl")),
+            detached: false,
+        };
+        SeatbeltSandbox::new().apply(&ctx, &mut cmd);
+
+        assert_eq!(cmd.get_program(), SANDBOX_EXEC_PATH);
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(&args[..2], ["-f", "/tmp/test.sbpl"]);
+        assert_eq!(&args[args.len() - 2..], [shim, "--test-arg"]);
+        let envs: std::collections::HashMap<_, _> = cmd.get_envs().collect();
+        assert_eq!(
+            envs.get(std::ffi::OsStr::new("PATH"))
+                .and_then(|value| *value),
+            Some(std::ffi::OsStr::new("/usr/bin:/bin:/usr/sbin:/sbin"))
+        );
+        assert_eq!(
+            envs.get(std::ffi::OsStr::new("HOME"))
+                .and_then(|value| *value),
+            Some(std::ffi::OsStr::new("/root"))
+        );
+        assert!(
+            !envs.contains_key(std::ffi::OsStr::new("SHOULD_NOT_SURVIVE")),
+            "seatbelt must not inherit arbitrary command environment variables"
+        );
     }
 
     #[test]

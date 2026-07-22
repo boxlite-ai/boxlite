@@ -784,9 +784,10 @@ pub struct ManagementFlags {
 impl ManagementFlags {
     pub fn apply_to(&self, opts: &mut BoxOptions) -> anyhow::Result<()> {
         opts.detach = self.detach;
-        // `--rm` is the CLI spelling of "delete when stopped"; the CLI
-        // default (like `docker run`) is to keep the box.
-        opts.auto_delete = Some(if self.rm { 1 } else { 0 });
+        // `--rm` is an operation-scoped CLI behavior, not a lifecycle timer.
+        // `run` removes the box explicitly after its foreground command exits;
+        // all other command paths keep manual lifecycle control.
+        opts.auto_delete = Some(0);
         if let Some(ref preset) = self.security {
             // Bubble the typo'd-preset error all the way back to the
             // CLI exit so the operator sees the offending value.
@@ -1482,6 +1483,25 @@ mod tests {
             panic!("expected AuthCommand::Login");
         };
         assert!(login.api_key_stdin);
+    }
+
+    #[test]
+    fn management_rm_is_not_encoded_as_auto_delete_timer() {
+        for rm in [false, true] {
+            let flags = ManagementFlags {
+                name: None,
+                detach: false,
+                rm,
+                security: None,
+            };
+            let mut opts = BoxOptions::default();
+            flags.apply_to(&mut opts).expect("flags must apply");
+            assert_eq!(
+                opts.auto_delete,
+                Some(0),
+                "--rm={rm} must leave lifecycle AutoDelete disabled"
+            );
+        }
     }
 
     // ============================================================

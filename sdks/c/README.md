@@ -108,18 +108,16 @@ cargo build --release -p boxlite-c
 ### Option 1: Direct Linking (Development)
 
 ```bash
-# Copy library and header to your project
-cp target/release/libboxlite.{dylib,so} /path/to/your/project/lib/
+# Copy the static library and header to your project
+cp target/release/libboxlite.a /path/to/your/project/lib/
 cp sdks/c/include/boxlite.h /path/to/your/project/include/
 
-# Compile your program
-gcc -I/path/to/include -L/path/to/lib -lboxlite your_program.c -o your_program
+# Linux
+cc your_program.c /path/to/lib/libboxlite.a -I/path/to/include -o your_program
+./your_program
 
-# macOS: Set runtime library path
-install_name_tool -add_rpath /path/to/lib your_program
-
-# Linux: Set LD_LIBRARY_PATH
-export LD_LIBRARY_PATH=/path/to/lib:$LD_LIBRARY_PATH
+# macOS
+cc your_program.c /path/to/lib/libboxlite.a -I/path/to/include -o your_program
 ./your_program
 ```
 
@@ -138,14 +136,7 @@ set(BOXLITE_LIB_DIR "${BOXLITE_ROOT}/target/release")
 include_directories(${BOXLITE_INCLUDE_DIR})
 
 add_executable(my_app main.c)
-target_link_libraries(my_app ${BOXLITE_LIB_DIR}/libboxlite.dylib)
-
-# Set RPATH
-if(APPLE)
-    set_target_properties(my_app PROPERTIES
-        BUILD_RPATH "${BOXLITE_LIB_DIR}"
-    )
-endif()
+target_link_libraries(my_app PRIVATE ${BOXLITE_LIB_DIR}/libboxlite.a)
 ```
 
 ---

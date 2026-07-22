@@ -152,18 +152,24 @@ int main() {
 
 ### Building
 
+Static linking is the same on macOS and Linux:
+
 ```bash
-# Compile with the BoxLite library
-gcc -I/path/to/boxlite/sdks/c/include \
-    -L/path/to/boxlite/target/release \
-    -lboxlite \
-    my_program.c -o my_program
+cc my_program.c /path/to/boxlite/target/release/libboxlite.a \
+    -I/path/to/boxlite/sdks/c/include -o my_program
+```
 
-# macOS: Set library path
-export DYLD_LIBRARY_PATH=/path/to/boxlite/target/release:$DYLD_LIBRARY_PATH
+Dynamic linking uses the platform shared library:
 
-# Linux: Set library path
-export LD_LIBRARY_PATH=/path/to/boxlite/target/release:$LD_LIBRARY_PATH
+```bash
+cc my_program.c -I/path/to/boxlite/sdks/c/include \
+    -L/path/to/boxlite/target/release -lboxlite -o my_program
+
+# macOS
+DYLD_LIBRARY_PATH=/path/to/boxlite/target/release ./my_program
+
+# Linux
+LD_LIBRARY_PATH=/path/to/boxlite/target/release ./my_program
 ```
 
 ---
@@ -1155,6 +1161,8 @@ boxlite_free_box_info_list(list);  // Correct
 
 ### CMake
 
+Static library:
+
 ```cmake
 cmake_minimum_required(VERSION 3.15)
 project(my_app)
@@ -1162,32 +1170,49 @@ project(my_app)
 set(BOXLITE_INCLUDE "/path/to/boxlite/sdks/c/include")
 set(BOXLITE_LIB_DIR "/path/to/boxlite/target/release")
 
-include_directories(${BOXLITE_INCLUDE})
+add_executable(my_app main.c)
+target_include_directories(my_app PRIVATE ${BOXLITE_INCLUDE})
+target_link_libraries(my_app PRIVATE ${BOXLITE_LIB_DIR}/libboxlite.a)
+```
+
+Shared library:
+
+```cmake
+cmake_minimum_required(VERSION 3.15)
+project(my_app)
+
+set(BOXLITE_INCLUDE "/path/to/boxlite/sdks/c/include")
+set(BOXLITE_LIB_DIR "/path/to/boxlite/target/release")
 
 add_executable(my_app main.c)
-target_link_libraries(my_app ${BOXLITE_LIB_DIR}/libboxlite.dylib)
+target_include_directories(my_app PRIVATE ${BOXLITE_INCLUDE})
+target_link_directories(my_app PRIVATE ${BOXLITE_LIB_DIR})
+target_link_libraries(my_app PRIVATE boxlite)
 ```
 
 ### Direct Compilation
 
-```bash
-# macOS
-gcc -o myapp myapp.c \
-    -I/path/to/boxlite/sdks/c/include \
-    -L/path/to/boxlite/target/release \
-    -lboxlite
+Static linking is the same on macOS and Linux:
 
-export DYLD_LIBRARY_PATH=/path/to/boxlite/target/release:$DYLD_LIBRARY_PATH
+```bash
+cc -o myapp myapp.c \
+    /path/to/boxlite/target/release/libboxlite.a \
+    -I/path/to/boxlite/sdks/c/include
 ./myapp
+```
+
+Dynamic linking:
+
+```bash
+cc -o myapp myapp.c \
+    -I/path/to/boxlite/sdks/c/include \
+    -L/path/to/boxlite/target/release -lboxlite
+
+# macOS
+DYLD_LIBRARY_PATH=/path/to/boxlite/target/release ./myapp
 
 # Linux
-gcc -o myapp myapp.c \
-    -I/path/to/boxlite/sdks/c/include \
-    -L/path/to/boxlite/target/release \
-    -lboxlite
-
-export LD_LIBRARY_PATH=/path/to/boxlite/target/release:$LD_LIBRARY_PATH
-./myapp
+LD_LIBRARY_PATH=/path/to/boxlite/target/release ./myapp
 ```
 
 ---
