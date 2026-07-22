@@ -33,7 +33,7 @@ pub async fn execute(args: TunnelArgs, global: &GlobalFlags) -> Result<()> {
         .network()
         .tunnel(SocketAddr::new(guest_ip, args.port))
         .await?;
-    let url = match tunnel.endpoint().await? {
+    let url = match tunnel.endpoint() {
         BoxEndpoint::Uri(uri) => uri,
         BoxEndpoint::FileDescriptor(_) => {
             return Err(anyhow!(

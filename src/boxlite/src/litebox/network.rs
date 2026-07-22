@@ -22,27 +22,34 @@ pub trait BoxConnection: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + U
 
 impl<T> BoxConnection for T where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin {}
 
-enum TunnelState {
-    LocalReady(OwnedFd),
+/// The transport a [`BoxTunnel`] was built over — fixed at construction,
+/// never transitions. Not a state machine.
+enum TunnelTransport {
+    /// Owned descriptor for the local transport; the fd *is* the tunnel.
+    Local(OwnedFd),
+    /// Live remote stream plus the public URI it was opened against.
     #[cfg(feature = "rest")]
-    RemoteReady {
+    Remote {
         uri: String,
         connection: Box<dyn BoxConnection>,
     },
-    Connected,
 }
 
 /// A one-shot box service tunnel target.
+///
+/// [`endpoint`](Self::endpoint) lends the descriptor; [`connect`](Self::connect)
+/// consumes the tunnel, so a second connect is a move error at compile time
+/// rather than a runtime state check.
 pub struct BoxTunnel {
-    state: tokio::sync::Mutex<TunnelState>,
+    transport: TunnelTransport,
 }
 
 impl BoxTunnel {
     /// Wrap an owned transport descriptor. The fd *is* the tunnel — no bridge
-    /// copy in between: `endpoint()` lends it out, `connect()` consumes it.
+    /// copy in between.
     pub(crate) fn local(fd: OwnedFd) -> Self {
         Self {
-            state: tokio::sync::Mutex::new(TunnelState::LocalReady(fd)),
+            transport: TunnelTransport::Local(fd),
         }
     }
 
@@ -52,30 +59,29 @@ impl BoxTunnel {
         C: BoxConnection + 'static,
     {
         Self {
-            state: tokio::sync::Mutex::new(TunnelState::RemoteReady {
+            transport: TunnelTransport::Remote {
                 uri,
                 connection: Box::new(connection),
-            }),
+            },
         }
     }
 
     /// Describe the prepared tunnel without opening another connection.
-    pub async fn endpoint(&self) -> BoxliteResult<BoxEndpoint> {
-        match &*self.state.lock().await {
-            TunnelState::LocalReady(fd) => Ok(BoxEndpoint::FileDescriptor(fd.as_raw_fd())),
+    pub fn endpoint(&self) -> BoxEndpoint {
+        match &self.transport {
+            TunnelTransport::Local(fd) => BoxEndpoint::FileDescriptor(fd.as_raw_fd()),
             #[cfg(feature = "rest")]
-            TunnelState::RemoteReady { uri, .. } => Ok(BoxEndpoint::Uri(uri.clone())),
-            TunnelState::Connected => Err(BoxliteError::InvalidState(
-                "tunnel connection has already been consumed".into(),
-            )),
+            TunnelTransport::Remote { uri, .. } => BoxEndpoint::Uri(uri.clone()),
         }
     }
 
-    /// Consume this tunnel's single connection.
-    pub async fn connect(&self) -> BoxliteResult<Box<dyn BoxConnection>> {
-        let mut state = self.state.lock().await;
-        match std::mem::replace(&mut *state, TunnelState::Connected) {
-            TunnelState::LocalReady(fd) => {
+    /// Consume this tunnel into its single connection.
+    ///
+    /// Must run inside a tokio runtime — the local descriptor is registered
+    /// with the reactor here.
+    pub fn connect(self) -> BoxliteResult<Box<dyn BoxConnection>> {
+        match self.transport {
+            TunnelTransport::Local(fd) => {
                 let stream = std::os::unix::net::UnixStream::from(fd);
                 stream.set_nonblocking(true).map_err(|error| {
                     BoxliteError::Network(format!("configure tunnel descriptor: {error}"))
@@ -87,10 +93,7 @@ impl BoxTunnel {
                     })
             }
             #[cfg(feature = "rest")]
-            TunnelState::RemoteReady { connection, .. } => Ok(connection),
-            TunnelState::Connected => Err(BoxliteError::InvalidState(
-                "tunnel connection has already been consumed".into(),
-            )),
+            TunnelTransport::Remote { connection, .. } => Ok(connection),
         }
     }
 }
@@ -116,32 +119,30 @@ impl NetworkHandle {
 
 #[cfg(test)]
 mod tests {
-    use boxlite_shared::errors::BoxliteError;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::UnixStream;
 
     use super::*;
 
+    // Double-connect and endpoint-after-connect need no runtime tests: connect()
+    // takes `self`, so both are move errors at compile time.
+
     #[cfg(feature = "rest")]
     #[tokio::test]
-    async fn remote_tunnel_exposes_and_consumes_prepared_connection() {
+    async fn remote_tunnel_exposes_uri_and_yields_its_connection() {
         let (stream, mut peer) = UnixStream::pair().unwrap();
         let tunnel = BoxTunnel::remote("https://3000-box.proxy.example.test".to_string(), stream);
 
         assert_eq!(
-            tunnel.endpoint().await.unwrap(),
+            tunnel.endpoint(),
             BoxEndpoint::Uri("https://3000-box.proxy.example.test".to_string())
         );
 
-        let mut first = tunnel.connect().await.unwrap();
+        let mut connection = tunnel.connect().unwrap();
         peer.write_all(b"one").await.unwrap();
-        let mut first_response = [0; 3];
-        first.read_exact(&mut first_response).await.unwrap();
-        assert_eq!(&first_response, b"one");
-        assert!(matches!(
-            tunnel.connect().await,
-            Err(BoxliteError::InvalidState(_))
-        ));
+        let mut response = [0; 3];
+        connection.read_exact(&mut response).await.unwrap();
+        assert_eq!(&response, b"one");
     }
 
     #[tokio::test]
@@ -152,23 +153,13 @@ mod tests {
         let tunnel = BoxTunnel::local(fd);
 
         // Zero-copy contract: the endpoint IS the transport fd, not a bridge.
-        let endpoint = tunnel.endpoint().await.unwrap();
-        assert_eq!(endpoint, BoxEndpoint::FileDescriptor(transport_fd));
-        let same_endpoint = tunnel.endpoint().await.unwrap();
-        assert_eq!(endpoint, same_endpoint);
+        assert_eq!(tunnel.endpoint(), BoxEndpoint::FileDescriptor(transport_fd));
+        assert_eq!(tunnel.endpoint(), BoxEndpoint::FileDescriptor(transport_fd));
 
-        let mut first = tunnel.connect().await.unwrap();
+        let mut connection = tunnel.connect().unwrap();
         peer.write_all(b"one").await.unwrap();
-        let mut first_response = [0; 3];
-        first.read_exact(&mut first_response).await.unwrap();
-        assert_eq!(&first_response, b"one");
-        assert!(matches!(
-            tunnel.connect().await,
-            Err(BoxliteError::InvalidState(_))
-        ));
-        assert!(matches!(
-            tunnel.endpoint().await,
-            Err(BoxliteError::InvalidState(_))
-        ));
+        let mut response = [0; 3];
+        connection.read_exact(&mut response).await.unwrap();
+        assert_eq!(&response, b"one");
     }
 }
