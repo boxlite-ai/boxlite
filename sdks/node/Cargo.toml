@@ -22,7 +22,7 @@ napi = { version = "3", features = ["async", "napi8", "tokio_rt"] }
 napi-derive = "3"
 
 # Async runtime
-tokio = { version = "1.37", features = ["sync", "rt-multi-thread"] }
+tokio = { version = "1.37", features = ["io-util", "net", "sync", "rt-multi-thread"] }
 futures = "0.3"
 
 # Logging

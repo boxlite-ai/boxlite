@@ -45,13 +45,17 @@ export type {
 // `sdks/node/src/options.rs`, mirroring the Python SDK). This subclass
 // only restates `rest` over the bag; `new`, `withDefaultConfig`, and
 // `initDefault` inherit unchanged from the native class.
-// `Omit` over the constructor interface preserves the inherited statics
-// but drops both `rest` (a key) and the `new(...)` construct signature
-// (construct signatures are not keys). The intersection re-adds the
-// construct signature plus the bag-taking `rest`.
-export type BoxliteConstructor = Omit<JsBoxliteConstructor, "rest"> & {
-  new (options: JsOptions): JsBoxliteInstance;
-  rest(options: BoxliteRestOptions): JsBoxliteInstance;
+// The constructor type only replaces the native positional `rest` factory;
+// instance methods and the other static factories remain native.
+export type Boxlite = JsBoxliteInstance;
+
+export type BoxliteConstructor = Omit<
+  JsBoxliteConstructor,
+  "rest" | "withDefaultConfig"
+> & {
+  new (options: JsOptions): Boxlite;
+  withDefaultConfig(): Boxlite;
+  rest(options: BoxliteRestOptions): Boxlite;
 };
 
 const nativeBoxlite = getJsBoxlite();
@@ -60,13 +64,11 @@ const NativeBoxliteRestOptions = getNativeBoxliteRestOptions();
 class BoxliteWithBagRest extends (nativeBoxlite as unknown as {
   new (options: JsOptions): JsBoxliteInstance;
 }) {
-  static rest(options: BoxliteRestOptions): JsBoxliteInstance {
+  static rest(options: BoxliteRestOptions): Boxlite {
     return nativeBoxlite.rest(
       new NativeBoxliteRestOptions(
         options.url,
         options.credential ?? null,
-        // Positional order matches the napi `JsBoxliteRestOptions::new`
-        // signature: (url, credential, path_prefix).
         options.pathPrefix ?? null,
       ),
     );
@@ -91,6 +93,8 @@ export { getNativeModule, getJsBoxlite };
 // Re-export TypeScript wrappers
 export {
   SimpleBox,
+  BoxTunnel,
+  NetworkHandler,
   type NetworkSpec,
   type SimpleBoxOptions,
   type SecurityOptions,

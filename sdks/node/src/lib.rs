@@ -12,6 +12,7 @@ mod exec;
 mod images;
 mod info;
 mod metrics;
+mod network;
 mod options;
 mod runtime;
 mod snapshot_options;
@@ -26,6 +27,7 @@ pub use exec::{JsExecResult, JsExecStderr, JsExecStdin, JsExecStdout, JsExecutio
 pub use images::{JsImageHandle, JsImageInfo, JsImagePullResult};
 pub use info::{JsBoxInfo, JsBoxStateInfo, JsHealthState, JsHealthStatus};
 pub use metrics::{JsBoxMetrics, JsRuntimeMetrics};
+pub use network::{JsBoxTunnel, JsNetworkHandle};
 pub use options::{
     ApiKeyCredential, JsAccessToken, JsBoxOptions, JsEnvVar, JsHealthCheckOptions, JsImageRegistry,
     JsImageRegistryAuth, JsNetworkSpec, JsOptions, JsPortSpec, JsSecret, JsVolumeSpec,

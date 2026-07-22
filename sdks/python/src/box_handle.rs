@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::exec::PyExecution;
 use crate::info::PyBoxInfo;
 use crate::metrics::PyBoxMetrics;
+use crate::network::PyNetworkHandle;
 use crate::snapshot_options::{PyCloneOptions, PyExportOptions};
 use crate::snapshots::PySnapshotHandle;
 use crate::util::map_err;
@@ -36,6 +37,14 @@ impl PyBox {
     #[getter]
     fn snapshot(&self) -> PySnapshotHandle {
         PySnapshotHandle {
+            handle: Arc::clone(&self.handle),
+        }
+    }
+
+    /// Get the network handle for this box.
+    #[getter]
+    fn network(&self) -> PyNetworkHandle {
+        PyNetworkHandle {
             handle: Arc::clone(&self.handle),
         }
     }

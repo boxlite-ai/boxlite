@@ -268,6 +268,18 @@ export interface JsSnapshotHandle {
   restore(name: string): Promise<void>;
 }
 
+export interface JsNetworkHandle {
+  /** Establish a tunnel to a service port inside the box. */
+  tunnel(port: number): Promise<JsBoxTunnel>;
+}
+
+export interface JsBoxTunnel {
+  /** Return the public endpoint for this tunnel. */
+  endpoint(): Promise<string | number>;
+  /** Open the tunnel and return its native file descriptor. */
+  _connectFd(): Promise<number>;
+}
+
 export type JsCloneOptions = Record<string, never>;
 
 export type JsExportOptions = Record<string, never>;
@@ -286,6 +298,7 @@ export interface JsBox {
     workingDir?: string | null,
   ): Promise<JsExecution>;
   readonly snapshot: JsSnapshotHandle;
+  readonly network: JsNetworkHandle;
   cloneBox(
     options?: JsCloneOptions | null,
     name?: string | null,
@@ -339,6 +352,9 @@ export interface JsBoxliteConstructor {
 
 export interface NativeModule {
   JsBoxlite: JsBoxliteConstructor;
+  JsBoxTunnel: {
+    readonly prototype: JsBoxTunnel & { connect?: () => Promise<unknown> };
+  };
   ApiKeyCredential: ApiKeyCredentialConstructor;
   JsBoxliteRestOptions: NativeBoxliteRestOptionsConstructor;
   [key: string]: unknown;

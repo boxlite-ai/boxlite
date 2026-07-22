@@ -6,6 +6,7 @@ mod exec;
 mod images;
 mod info;
 mod metrics;
+mod network;
 mod options;
 mod runtime;
 mod snapshot_options;
@@ -18,6 +19,7 @@ use crate::exec::{PyExecStderr, PyExecStdin, PyExecStdout, PyExecution};
 use crate::images::{PyImageHandle, PyImageInfo, PyImagePullResult};
 use crate::info::{PyBoxInfo, PyBoxStateInfo, PyHealthState, PyHealthStatus};
 use crate::metrics::{PyBoxMetrics, PyRuntimeMetrics};
+use crate::network::{PyBoxTunnel, PyNetworkHandle};
 use crate::options::{
     PyAccessToken, PyApiKeyCredential, PyBoxOptions, PyBoxliteRestOptions, PyCopyOptions,
     PyImageRegistry, PyNetworkSpec, PyOptions, PySecret,
@@ -51,6 +53,8 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyHealthStatus>()?;
     m.add_class::<PyRuntimeMetrics>()?;
     m.add_class::<PyBoxMetrics>()?;
+    m.add_class::<PyNetworkHandle>()?;
+    m.add_class::<PyBoxTunnel>()?;
     m.add_class::<PyCopyOptions>()?;
     m.add_class::<PySnapshotInfo>()?;
     m.add_class::<PySnapshotHandle>()?;

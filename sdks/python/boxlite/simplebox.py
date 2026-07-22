@@ -6,6 +6,7 @@ Provides common functionality for all specialized boxes (CodeBox, BrowserBox, et
 
 import asyncio
 import logging
+import socket
 from enum import IntEnum
 from typing import Optional, TYPE_CHECKING
 
@@ -16,7 +17,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("boxlite.simplebox")
 
-__all__ = ["SimpleBox"]
+__all__ = ["BoxTunnel", "SimpleBox"]
 
 
 class StreamType(IntEnum):
@@ -24,6 +25,37 @@ class StreamType(IntEnum):
 
     STDOUT = 1
     STDERR = 2
+
+
+class BoxTunnel:
+    """Prepared async tunnel handle for a box service port."""
+
+    def __init__(self, tunnel) -> None:
+        self._tunnel = tunnel
+
+    async def connect(self) -> socket.socket:
+        """Open a non-blocking socket to the target service."""
+        return await self._tunnel.connect()
+
+    async def endpoint(self) -> str | int:
+        """Return the cloud URI or borrowed local file descriptor."""
+        return await self._tunnel.endpoint()
+
+
+class _SimpleBoxNetwork:
+    """Network operations for a ``SimpleBox``."""
+
+    def __init__(self, box: "SimpleBox") -> None:
+        self._owner = box
+
+    async def tunnel(self, port: int) -> BoxTunnel:
+        """Establish and return a tunnel handle for a port inside the box."""
+        if not self._owner._started:
+            raise RuntimeError(
+                "Box not started. Use 'async with SimpleBox(...) as box:' "
+                "or call 'await box.start()' first."
+            )
+        return BoxTunnel(await self._owner._create_tunnel(port))
 
 
 class SimpleBox:
@@ -103,6 +135,15 @@ class SimpleBox:
         self._box = None
         self._started = False
         self._created: Optional[bool] = None
+        self._network = _SimpleBoxNetwork(self)
+
+    async def _create_tunnel(self, port: int):
+        """Establish a native tunnel handle for a service port."""
+        if self._box is None:
+            raise RuntimeError("Box not created")
+        if not isinstance(port, int) or not 1 <= port <= 65535:
+            raise ValueError("port must be an integer between 1 and 65535")
+        return await self._box.network.tunnel(port)
 
     async def __aenter__(self):
         """Async context manager entry - creates or reuses an existing box.
@@ -171,6 +212,13 @@ class SimpleBox:
         Returns None if the box hasn't been started yet.
         """
         return self._created
+
+    @property
+    def network(self) -> _SimpleBoxNetwork:
+        """Get the box-scoped network handle."""
+        if not hasattr(self, "_network"):
+            self._network = _SimpleBoxNetwork(self)
+        return self._network
 
     async def exec(
         self,
@@ -291,6 +339,10 @@ class SimpleBox:
             stderr=stderr,
             error_message=error_message,
         )
+
+    async def tunnel(self, port: int) -> BoxTunnel:
+        """Establish and return a tunnel handle for a port inside this box."""
+        return await self.network.tunnel(port)
 
     async def metrics(self):
         """Get box metrics (CPU, memory usage)."""
