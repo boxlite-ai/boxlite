@@ -133,8 +133,7 @@ pub(crate) trait BoxBackend: Send + Sync {
 /// network data-plane capabilities directly.
 #[async_trait]
 pub(crate) trait BoxNetworkBackend: Send + Sync {
-    /// Prepare a reusable tunnel target without opening a data connection.
-    /// Remote backends attach a public URL; local backends attach a Unix socket.
+    /// Establish a one-shot tunnel and return its prepared endpoint and connection.
     async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>;
 }
 

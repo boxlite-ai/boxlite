@@ -24,13 +24,15 @@ impl<T> BoxConnection for T where T: tokio::io::AsyncRead + tokio::io::AsyncWrit
 
 enum TunnelState {
     LocalReady(OwnedFd),
-    RemoteReady(Box<dyn BoxConnection>),
+    RemoteReady {
+        uri: String,
+        connection: Box<dyn BoxConnection>,
+    },
     Connected,
 }
 
 /// A one-shot box service tunnel target.
 pub struct BoxTunnel {
-    uri: Option<String>,
     state: tokio::sync::Mutex<TunnelState>,
 }
 
@@ -39,9 +41,8 @@ impl BoxTunnel {
     where
         C: BoxConnection + 'static,
     {
-        let fd = connection_fd(Box::new(connection)).await?;
+        let fd = connection_fd(connection).await?;
         Ok(Self {
-            uri: None,
             state: tokio::sync::Mutex::new(TunnelState::LocalReady(fd)),
         })
     }
@@ -51,8 +52,10 @@ impl BoxTunnel {
         C: BoxConnection + 'static,
     {
         Self {
-            uri: Some(uri),
-            state: tokio::sync::Mutex::new(TunnelState::RemoteReady(Box::new(connection))),
+            state: tokio::sync::Mutex::new(TunnelState::RemoteReady {
+                uri,
+                connection: Box::new(connection),
+            }),
         }
     }
 
@@ -60,11 +63,7 @@ impl BoxTunnel {
     pub async fn endpoint(&self) -> BoxliteResult<BoxEndpoint> {
         match &*self.state.lock().await {
             TunnelState::LocalReady(fd) => Ok(BoxEndpoint::FileDescriptor(fd.as_raw_fd())),
-            TunnelState::RemoteReady(_) => Ok(BoxEndpoint::Uri(
-                self.uri
-                    .clone()
-                    .expect("remote tunnel must have a URI endpoint"),
-            )),
+            TunnelState::RemoteReady { uri, .. } => Ok(BoxEndpoint::Uri(uri.clone())),
             TunnelState::Connected => Err(BoxliteError::InvalidState(
                 "tunnel connection has already been consumed".into(),
             )),
@@ -86,7 +85,7 @@ impl BoxTunnel {
                         BoxliteError::Network(format!("open tunnel descriptor: {error}"))
                     })
             }
-            TunnelState::RemoteReady(connection) => Ok(connection),
+            TunnelState::RemoteReady { connection, .. } => Ok(connection),
             TunnelState::Connected => Err(BoxliteError::InvalidState(
                 "tunnel connection has already been consumed".into(),
             )),
@@ -94,7 +93,10 @@ impl BoxTunnel {
     }
 }
 
-async fn connection_fd(mut connection: Box<dyn BoxConnection>) -> BoxliteResult<OwnedFd> {
+async fn connection_fd<C>(mut connection: C) -> BoxliteResult<OwnedFd>
+where
+    C: BoxConnection + 'static,
+{
     let (sdk, mut bridge) = tokio::net::UnixStream::pair().map_err(|error| {
         BoxliteError::Network(format!("create tunnel descriptor bridge: {error}"))
     })?;

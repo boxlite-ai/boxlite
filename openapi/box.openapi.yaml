@@ -842,8 +842,7 @@ paths:
       operationId: describeBoxTunnel
       summary: Prepare a box service tunnel connection
       description: |
-        Returns the public service URI, CONNECT proxy URI, and a short-lived
-        single-use CONNECT credential.
+        Returns the URI used to establish the box service tunnel.
       tags: [Network]
       responses:
         "200":
