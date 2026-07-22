@@ -402,6 +402,11 @@ jobs:
           persist-credentials: false
           submodules: recursive
           clean: false
+          # checkout v5.1.0+ refuses fork-PR checkouts under
+          # pull_request_target unless opted in. Safe here: the run is
+          # label-gated to the maintainer-approved head SHA, this job holds
+          # no secrets, and the token is read-only and not persisted.
+          allow-unsafe-pr-checkout: true
 
       - name: Verify KVM access
         run: |
