@@ -1,9 +1,7 @@
 //! Network sub-resource on LiteBox.
 
-use std::future::Future;
 use std::net::SocketAddr;
 use std::os::fd::{AsRawFd, OwnedFd};
-use std::pin::Pin;
 use std::sync::Arc;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -24,81 +22,59 @@ pub trait BoxConnection: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + U
 
 impl<T> BoxConnection for T where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin {}
 
-type ConnectFuture = Pin<Box<dyn Future<Output = BoxliteResult<Box<dyn BoxConnection>>> + Send>>;
-type Connector = Arc<dyn Fn() -> ConnectFuture + Send + Sync>;
-
 enum TunnelState {
-    Pending,
     LocalReady(OwnedFd),
+    RemoteReady(Box<dyn BoxConnection>),
     Connected,
 }
 
 /// A one-shot box service tunnel target.
 pub struct BoxTunnel {
     uri: Option<String>,
-    connector: Connector,
     state: tokio::sync::Mutex<TunnelState>,
 }
 
 impl BoxTunnel {
-    pub(crate) fn new<F, Fut, C>(uri: Option<String>, connect: F) -> Self
+    pub(crate) async fn local<C>(connection: C) -> BoxliteResult<Self>
     where
-        F: Fn() -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = BoxliteResult<C>> + Send + 'static,
         C: BoxConnection + 'static,
     {
-        let connector = Arc::new(move || {
-            let future = connect();
-            Box::pin(async move {
-                future
-                    .await
-                    .map(|stream| Box::new(stream) as Box<dyn BoxConnection>)
-            }) as ConnectFuture
-        });
+        let fd = connection_fd(Box::new(connection)).await?;
+        Ok(Self {
+            uri: None,
+            state: tokio::sync::Mutex::new(TunnelState::LocalReady(fd)),
+        })
+    }
+
+    pub(crate) fn remote<C>(uri: String, connection: C) -> Self
+    where
+        C: BoxConnection + 'static,
+    {
         Self {
-            uri,
-            connector,
-            state: tokio::sync::Mutex::new(TunnelState::Pending),
+            uri: Some(uri),
+            state: tokio::sync::Mutex::new(TunnelState::RemoteReady(Box::new(connection))),
         }
     }
 
-    /// Return the remote URI or prepare and borrow the local connection descriptor.
+    /// Describe the prepared tunnel without opening another connection.
     pub async fn endpoint(&self) -> BoxliteResult<BoxEndpoint> {
-        if let Some(uri) = &self.uri {
-            return Ok(BoxEndpoint::Uri(uri.clone()));
+        match &*self.state.lock().await {
+            TunnelState::LocalReady(fd) => Ok(BoxEndpoint::FileDescriptor(fd.as_raw_fd())),
+            TunnelState::RemoteReady(_) => Ok(BoxEndpoint::Uri(
+                self.uri
+                    .clone()
+                    .expect("remote tunnel must have a URI endpoint"),
+            )),
+            TunnelState::Connected => Err(BoxliteError::InvalidState(
+                "tunnel connection has already been consumed".into(),
+            )),
         }
-
-        let mut state = self.state.lock().await;
-        match &*state {
-            TunnelState::LocalReady(fd) => {
-                return Ok(BoxEndpoint::FileDescriptor(fd.as_raw_fd()));
-            }
-            TunnelState::Connected => {
-                return Err(BoxliteError::InvalidState(
-                    "tunnel connection has already been consumed".into(),
-                ));
-            }
-            TunnelState::Pending => {}
-        }
-
-        let connection = (self.connector)().await?;
-        let fd = connection_fd(connection).await?;
-        let raw_fd = fd.as_raw_fd();
-        *state = TunnelState::LocalReady(fd);
-        Ok(BoxEndpoint::FileDescriptor(raw_fd))
     }
 
     /// Consume this tunnel's single connection.
     pub async fn connect(&self) -> BoxliteResult<Box<dyn BoxConnection>> {
         let mut state = self.state.lock().await;
         match std::mem::replace(&mut *state, TunnelState::Connected) {
-            TunnelState::Pending => match (self.connector)().await {
-                Ok(connection) => Ok(connection),
-                Err(error) => {
-                    *state = TunnelState::Pending;
-                    Err(error)
-                }
-            },
             TunnelState::LocalReady(fd) => {
                 let stream = std::os::unix::net::UnixStream::from(fd);
                 stream.set_nonblocking(true).map_err(|error| {
@@ -110,6 +86,7 @@ impl BoxTunnel {
                         BoxliteError::Network(format!("open tunnel descriptor: {error}"))
                     })
             }
+            TunnelState::RemoteReady(connection) => Ok(connection),
             TunnelState::Connected => Err(BoxliteError::InvalidState(
                 "tunnel connection has already been consumed".into(),
             )),
@@ -142,7 +119,7 @@ impl NetworkHandle {
         Self { network_backend }
     }
 
-    /// Prepare a one-shot tunnel endpoint without opening a data connection.
+    /// Establish a one-shot tunnel and return its prepared endpoint and connection.
     pub async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
         self.network_backend.tunnel(target).await
     }
@@ -157,31 +134,17 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn remote_tunnel_connects_once_lazily() {
-        let (peer_tx, mut peer_rx) = tokio::sync::mpsc::unbounded_channel();
-        let tunnel = BoxTunnel::new(
-            Some("https://3000-box.proxy.example.test".to_string()),
-            move || {
-                let peer_tx = peer_tx.clone();
-                async move {
-                    let (stream, peer) = UnixStream::pair().map_err(|error| {
-                        BoxliteError::Network(format!("test socket pair failed: {error}"))
-                    })?;
-                    peer_tx.send(peer).unwrap();
-                    Ok(stream)
-                }
-            },
-        );
+    async fn remote_tunnel_exposes_and_consumes_prepared_connection() {
+        let (stream, mut peer) = UnixStream::pair().unwrap();
+        let tunnel = BoxTunnel::remote("https://3000-box.proxy.example.test".to_string(), stream);
 
         assert_eq!(
             tunnel.endpoint().await.unwrap(),
             BoxEndpoint::Uri("https://3000-box.proxy.example.test".to_string())
         );
-        assert!(peer_rx.try_recv().is_err(), "tunnel() must not connect");
 
         let mut first = tunnel.connect().await.unwrap();
-        let mut first_peer = peer_rx.recv().await.unwrap();
-        first_peer.write_all(b"one").await.unwrap();
+        peer.write_all(b"one").await.unwrap();
         let mut first_response = [0; 3];
         first.read_exact(&mut first_response).await.unwrap();
         assert_eq!(&first_response, b"one");
@@ -192,18 +155,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_endpoint_prepares_fd_consumed_by_connect() {
-        let (peer_tx, mut peer_rx) = tokio::sync::mpsc::unbounded_channel();
-        let tunnel = BoxTunnel::new(None, move || {
-            let peer_tx = peer_tx.clone();
-            async move {
-                let (stream, peer) = UnixStream::pair().map_err(|error| {
-                    BoxliteError::Network(format!("test socket pair failed: {error}"))
-                })?;
-                peer_tx.send(peer).unwrap();
-                Ok(stream)
-            }
-        });
+    async fn local_tunnel_exposes_fd_and_consumes_prepared_connection() {
+        let (stream, mut peer) = UnixStream::pair().unwrap();
+        let tunnel = BoxTunnel::local(stream).await.unwrap();
 
         let endpoint = tunnel.endpoint().await.unwrap();
         assert!(matches!(endpoint, BoxEndpoint::FileDescriptor(fd) if fd >= 0));
@@ -211,8 +165,7 @@ mod tests {
         assert_eq!(endpoint, same_endpoint);
 
         let mut first = tunnel.connect().await.unwrap();
-        let mut first_peer = peer_rx.recv().await.unwrap();
-        first_peer.write_all(b"one").await.unwrap();
+        peer.write_all(b"one").await.unwrap();
         let mut first_response = [0; 3];
         first.read_exact(&mut first_response).await.unwrap();
         assert_eq!(&first_response, b"one");

@@ -1181,10 +1181,7 @@ impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
             .network
             .clone()
             .ok_or_else(|| BoxliteError::Unsupported("box networking is disabled".into()))?;
-        Ok(BoxTunnel::new(None, move || {
-            let network = Arc::clone(&network);
-            async move { network.tunnel(target).await }
-        }))
+        BoxTunnel::local(network.tunnel(target).await?).await
     }
 }
 
