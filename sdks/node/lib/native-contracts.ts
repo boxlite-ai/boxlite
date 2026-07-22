@@ -270,10 +270,11 @@ export interface JsSnapshotHandle {
 
 export interface JsNetworkHandle {
   /** Establish a tunnel to a service port inside the box. */
-  tunnel(port: number): Promise<JsBoxTunnel>;
+  tunnel(port: number): Promise<NativeBoxTunnel>;
 }
 
-export interface JsBoxTunnel {
+/** Internal contract implemented by the native N-API tunnel binding. */
+export interface NativeBoxTunnel {
   /** Return the public endpoint for this tunnel. */
   endpoint(): string | number;
   /** Open the tunnel and return its native file descriptor. */
@@ -353,7 +354,7 @@ export interface JsBoxliteConstructor {
 export interface NativeModule {
   JsBoxlite: JsBoxliteConstructor;
   JsBoxTunnel: {
-    readonly prototype: JsBoxTunnel & { connect?: () => Promise<unknown> };
+    readonly prototype: NativeBoxTunnel & { connect?: () => Promise<unknown> };
   };
   ApiKeyCredential: ApiKeyCredentialConstructor;
   JsBoxliteRestOptions: NativeBoxliteRestOptionsConstructor;

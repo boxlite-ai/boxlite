@@ -15,14 +15,14 @@ import { getJsBoxlite } from "./native.js";
 import type {
   JsBox,
   JsBoxOptions,
-  JsBoxTunnel,
+  NativeBoxTunnel,
   JsExecStderr,
   JsExecStdout,
 } from "./native-contracts.js";
 
 type BoxLike = Omit<JsBox, "network"> & {
   readonly network: {
-    tunnel(port: number): Promise<JsBoxTunnel | BoxTunnel>;
+    tunnel(port: number): Promise<NativeBoxTunnel | BoxTunnel>;
   };
 };
 
@@ -281,7 +281,7 @@ export class NetworkHandle {
 
 export class BoxTunnel {
   /** Wrap the native tunnel handle for a box service port. */
-  constructor(private readonly tunnel: JsBoxTunnel) {}
+  constructor(private readonly tunnel: NativeBoxTunnel) {}
 
   /** Return the public endpoint for this service. */
   endpoint(): string | number {
