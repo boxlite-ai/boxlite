@@ -38,6 +38,8 @@ type Client struct {
 	volumeCleanupMutex sync.Mutex
 	lastVolumeCleanup  time.Time
 	volumeCleanup      volumeCleanupConfig
+	portTransportMu    sync.Mutex
+	portTransports     map[guestPortTransportKey]*guestPortTransportEntry
 }
 
 // ClientConfig holds configuration for the BoxLite client.
@@ -178,6 +180,7 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 		awsAccessKeyId:     config.AWSAccessKeyId,
 		awsSecretAccessKey: config.AWSSecretAccessKey,
 		volumeMutexes:      make(map[string]*sync.Mutex),
+		portTransports:     make(map[guestPortTransportKey]*guestPortTransportEntry),
 		volumeCleanup: volumeCleanupConfig{
 			interval:        config.VolumeCleanupInterval,
 			dryRun:          config.VolumeCleanupDryRun,
@@ -204,6 +207,8 @@ func (c *Client) Shutdown(ctx context.Context, timeout time.Duration) error {
 // Close releases the BoxLite runtime handle. Prefer calling `Shutdown` first
 // so boxes get a graceful stop before the C handle is freed.
 func (c *Client) Close() error {
+	c.closeGuestPortTransports("")
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -331,6 +336,7 @@ func (c *Client) Stop(ctx context.Context, boxId string, force bool) error {
 		return err
 	}
 	err = bx.Stop(ctx)
+	c.closeGuestPortTransports(boxId)
 
 	c.mu.Lock()
 	delete(c.boxes, boxId)
@@ -341,6 +347,8 @@ func (c *Client) Stop(ctx context.Context, boxId string, force bool) error {
 
 // Destroy removes a box entirely.
 func (c *Client) Destroy(ctx context.Context, boxId string) error {
+	c.closeGuestPortTransports(boxId)
+
 	c.mu.Lock()
 	if bx, ok := c.boxes[boxId]; ok {
 		bx.Close()

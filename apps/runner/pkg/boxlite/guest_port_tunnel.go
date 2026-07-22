@@ -6,7 +6,79 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"time"
 )
+
+const (
+	guestPortTransportIdleTTL = 5 * time.Minute
+	guestPortTransportLimit   = 128
+)
+
+type guestPortTransportKey struct {
+	boxId string
+	port  uint16
+}
+
+type guestPortTransportEntry struct {
+	transport *http.Transport
+	lastUsed  time.Time
+}
+
+// GuestPortTransport returns a pooled transport for a box service endpoint.
+func (c *Client) GuestPortTransport(boxId string, port uint16, logger *slog.Logger) *http.Transport {
+	now := time.Now()
+	key := guestPortTransportKey{boxId: boxId, port: port}
+
+	c.portTransportMu.Lock()
+	defer c.portTransportMu.Unlock()
+
+	if c.portTransports == nil {
+		c.portTransports = make(map[guestPortTransportKey]*guestPortTransportEntry)
+	}
+	c.evictGuestPortTransportsLocked(now)
+	if entry, ok := c.portTransports[key]; ok {
+		entry.lastUsed = now
+		return entry.transport
+	}
+
+	transport := c.NewGuestPortTransport(boxId, port, logger)
+	c.portTransports[key] = &guestPortTransportEntry{transport: transport, lastUsed: now}
+	return transport
+}
+
+func (c *Client) evictGuestPortTransportsLocked(now time.Time) {
+	for key, entry := range c.portTransports {
+		if now.Sub(entry.lastUsed) >= guestPortTransportIdleTTL {
+			entry.transport.CloseIdleConnections()
+			delete(c.portTransports, key)
+		}
+	}
+
+	for len(c.portTransports) >= guestPortTransportLimit {
+		var oldestKey guestPortTransportKey
+		var oldest *guestPortTransportEntry
+		for key, entry := range c.portTransports {
+			if oldest == nil || entry.lastUsed.Before(oldest.lastUsed) {
+				oldestKey = key
+				oldest = entry
+			}
+		}
+		oldest.transport.CloseIdleConnections()
+		delete(c.portTransports, oldestKey)
+	}
+}
+
+func (c *Client) closeGuestPortTransports(boxId string) {
+	c.portTransportMu.Lock()
+	defer c.portTransportMu.Unlock()
+
+	for key, entry := range c.portTransports {
+		if boxId == "" || key.boxId == boxId {
+			entry.transport.CloseIdleConnections()
+			delete(c.portTransports, key)
+		}
+	}
+}
 
 func (c *Client) NewGuestPortTransport(boxId string, port uint16, logger *slog.Logger) *http.Transport {
 	if logger == nil {

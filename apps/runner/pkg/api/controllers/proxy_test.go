@@ -179,10 +179,10 @@ func TestGuestPortProxyErrorMessageHidesTunnelResetDetails(t *testing.T) {
 	}
 }
 
-func TestGuestPortProxyErrorMessageKeepsUnexpectedErrors(t *testing.T) {
+func TestGuestPortProxyErrorMessageHidesUnexpectedErrors(t *testing.T) {
 	err := errors.New("runner lookup failed")
 	got := guestPortProxyErrorMessage(3030, err)
-	want := "guest port proxy failed: runner lookup failed"
+	want := "guest port proxy failed"
 	if got != want {
 		t.Fatalf("guestPortProxyErrorMessage = %q, want %q", got, want)
 	}

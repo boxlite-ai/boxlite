@@ -5,12 +5,15 @@ package proxy
 
 import (
 	"bufio"
+	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
+
+	common_cache "github.com/boxlite-ai/common-go/pkg/cache"
 )
 
 type closeWriteConn struct {
@@ -88,6 +91,24 @@ func TestTunnelTargetUsesPreviewAuthority(t *testing.T) {
 	}
 	if boxID != "AbCdEf123456" || port != 3000 {
 		t.Fatalf("unexpected tunnel target: %s:%d", boxID, port)
+	}
+}
+
+func TestTunnelConnectRejectsPrivateBoxBeforeRunnerDial(t *testing.T) {
+	ctx := context.Background()
+	publicCache := common_cache.NewMapCache[bool](ctx)
+	if err := publicCache.Set(ctx, "AbCdEf123456", false, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	proxy := &Proxy{boxPublicCache: publicCache}
+	request := httptest.NewRequest(http.MethodConnect, "http://proxy.test", nil)
+	request.Host = "3000-d-416243644566313233343536.proxy.test:443"
+	response := httptest.NewRecorder()
+
+	proxy.handleTunnelConnect(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusForbidden)
 	}
 }
 

@@ -234,8 +234,7 @@ func handleGuestPortProxy(ctx *gin.Context, r *runner.Runner, boxId string, port
 		Host:   net.JoinHostPort(sdk.GuestIP, strconv.Itoa(int(port))),
 	}
 	setEscapedURLPath(target, targetPath)
-	transport := r.Boxlite.NewGuestPortTransport(boxId, port, logger)
-	defer transport.CloseIdleConnections()
+	transport := r.Boxlite.GuestPortTransport(boxId, port, logger)
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(req *httputil.ProxyRequest) {
 			configureGuestPortProxyRequest(req.Out, target, forwarded)
@@ -261,7 +260,7 @@ func guestPortProxyErrorMessage(port uint16, err error) string {
 		lower == "eof" {
 		return fmt.Sprintf("guest service on port %d is not accepting connections", port)
 	}
-	return "guest port proxy failed: " + message
+	return "guest port proxy failed"
 }
 
 func configureGuestPortProxyRequest(req *http.Request, target *url.URL, forwarded common_proxy.ForwardedRequestInfo) {
