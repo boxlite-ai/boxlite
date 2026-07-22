@@ -160,4 +160,19 @@ impl PyBoxConnection {
             Ok(())
         })
     }
+
+    fn shutdown_write<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let writer = Arc::clone(&self.writer);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mut writer = writer.lock().await;
+            if let Some(stream) = writer.as_mut() {
+                stream.shutdown().await.map_err(|error| {
+                    map_err(boxlite::BoxliteError::Network(format!(
+                        "shut down tunnel writer: {error}"
+                    )))
+                })?;
+            }
+            Ok(())
+        })
+    }
 }

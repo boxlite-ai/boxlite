@@ -30,33 +30,23 @@ async function requestOverTunnel(
     throw new Error('expected REST tunnel endpoint URL for the cloud box')
   }
   const socket = await tunnel.connect()
-  return await new Promise<Buffer>((resolve, reject) => {
-    const chunks: Buffer[] = []
-    let settled = false
-    let timer: ReturnType<typeof setTimeout>
-
-    const finish = (error?: Error) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      socket.destroy()
-      if (error) reject(error)
-      else resolve(Buffer.concat(chunks))
-    }
-
-    timer = setTimeout(() => finish(new Error('HTTP response timed out')), 5_000)
-    socket.once('error', (error) => finish(error))
-    socket.on('data', (chunk: Buffer) => {
+  const chunks: Buffer[] = []
+  try {
+    await socket.write(Buffer.isBuffer(request) ? request : Buffer.from(request))
+    if (readDelay) await delay(readDelay)
+    while (true) {
+      const chunk = await Promise.race([
+        socket.read(64 * 1024),
+        delay(5_000).then(() => { throw new Error('HTTP response timed out') }),
+      ])
+      if (!chunk.length) break
       chunks.push(chunk)
-      if (marker && Buffer.concat(chunks).includes(marker)) finish()
-    })
-    socket.once('end', () => finish())
-    socket.write(request)
-    if (readDelay) {
-      socket.pause()
-      setTimeout(() => socket.resume(), readDelay)
+      if (marker && Buffer.concat(chunks).includes(marker)) break
     }
-  })
+    return Buffer.concat(chunks)
+  } finally {
+    await socket.close()
+  }
 }
 
 async function getOverTunnel(box: SimpleBox, port: number, marker: string): Promise<string> {
@@ -76,26 +66,23 @@ async function websocketEcho(box: SimpleBox, port: number, marker: string): Prom
   const socket = await (await box.network.tunnel(port)).connect()
   const key = randomBytes(16).toString('base64')
   let response = Buffer.alloc(0)
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('WebSocket echo timed out')), 5_000)
-    socket.once('error', reject)
-    socket.on('data', (chunk: Buffer) => {
-      response = Buffer.concat([response, chunk])
-      if (!response.includes('\r\n\r\n')) return
-      if (!response.includes(`${marker}:node-ws`)) return
-      clearTimeout(timer)
-      resolve()
-    })
-    socket.write(
+  try {
+    await socket.write(Buffer.from(
       `GET /ws HTTP/1.1\r\nHost: tunnel.test\r\nUpgrade: websocket\r\n` +
         `Connection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\n\r\n`,
-    )
+    ))
     const payload = Buffer.from('node-ws')
     const mask = Buffer.from([1, 2, 3, 4])
     const masked = Buffer.from(payload.map((value, index) => value ^ mask[index % 4]))
-    socket.write(Buffer.concat([Buffer.from([0x81, 0x80 | payload.length]), mask, masked]))
-  })
-  socket.destroy()
+    await socket.write(Buffer.concat([Buffer.from([0x81, 0x80 | payload.length]), mask, masked]))
+    const deadline = Date.now() + 5_000
+    while (Date.now() < deadline) {
+      response = Buffer.concat([response, await socket.read(4096)])
+      if (response.includes('\r\n\r\n') && response.includes(`${marker}:node-ws`)) break
+    }
+  } finally {
+    await socket.close()
+  }
   if (!response.toString().startsWith('HTTP/1.1 101')) {
     throw new Error('WebSocket upgrade did not return 101')
   }
@@ -153,19 +140,12 @@ async function main(): Promise<void> {
     }
 
     const preparedSocket = await preparedTunnel.connect()
-    const prepared = await new Promise<string>((resolve, reject) => {
-      let response = ''
-      preparedSocket.setEncoding('utf8')
-      preparedSocket.on('data', (chunk: string) => {
-        response += chunk
-        if (response.includes(SERVICES[0].marker)) {
-          preparedSocket.destroy()
-          resolve(response)
-        }
-      })
-      preparedSocket.once('error', reject)
-      preparedSocket.write('GET / HTTP/1.0\r\nHost: tunnel.test\r\n\r\n')
-    })
+    await preparedSocket.write(Buffer.from('GET / HTTP/1.0\r\nHost: tunnel.test\r\n\r\n'))
+    let prepared = ''
+    while (!prepared.includes(SERVICES[0].marker)) {
+      prepared += (await preparedSocket.read(8192)).toString()
+    }
+    await preparedSocket.close()
     if (!prepared.includes(SERVICES[0].marker)) {
       throw new Error('prepared tunnel did not reach the running service')
     }
@@ -196,7 +176,7 @@ async function main(): Promise<void> {
     if (slow.length <= 2 * 1024 * 1024) throw new Error('slow response was truncated')
 
     const cancelled = await (await box.network.tunnel(SERVICES[0].port)).connect()
-    cancelled.destroy()
+    await cancelled.close()
     await waitForHttp(box, SERVICES[0].port, SERVICES[0].marker)
     await Promise.all(
       Array.from({ length: 16 }, (_, index) => {
@@ -210,19 +190,12 @@ async function main(): Promise<void> {
     await waitForHttp(box, SERVICES[0].port, SERVICES[0].marker)
     const restartTunnel = await box.network.tunnel(SERVICES[0].port)
     const restartSocket = await restartTunnel.connect()
-    const restarted = await new Promise<string>((resolve, reject) => {
-      let response = ''
-      restartSocket.setEncoding('utf8')
-      restartSocket.on('data', (chunk: string) => {
-        response += chunk
-        if (response.includes(SERVICES[0].marker)) {
-          restartSocket.destroy()
-          resolve(response)
-        }
-      })
-      restartSocket.once('error', reject)
-      restartSocket.write('GET / HTTP/1.0\r\nHost: tunnel.test\r\n\r\n')
-    })
+    await restartSocket.write(Buffer.from('GET / HTTP/1.0\r\nHost: tunnel.test\r\n\r\n'))
+    let restarted = ''
+    while (!restarted.includes(SERVICES[0].marker)) {
+      restarted += (await restartSocket.read(8192)).toString()
+    }
+    await restartSocket.close()
     if (!restarted.includes(SERVICES[0].marker)) {
       throw new Error('new tunnel did not reach the restarted service')
     }
@@ -271,14 +244,15 @@ async function main(): Promise<void> {
       await startService(halfCloseBox, SERVICES[0].port, SERVICES[0].marker)
       await waitForHttp(halfCloseBox, SERVICES[0].port, SERVICES[0].marker)
       const halfCloseSocket = await (await halfCloseBox.network.tunnel(SERVICES[0].port)).connect()
-      const halfCloseResponse = await new Promise<string>((resolve, reject) => {
-        let response = ''
-        halfCloseSocket.setEncoding('utf8')
-        halfCloseSocket.on('data', (chunk: string) => (response += chunk))
-        halfCloseSocket.once('end', () => resolve(response))
-        halfCloseSocket.once('error', reject)
-        halfCloseSocket.end('GET / HTTP/1.0\r\nHost: tunnel.test\r\n\r\n')
-      })
+      await halfCloseSocket.write(Buffer.from('GET / HTTP/1.0\r\nHost: tunnel.test\r\n\r\n'))
+      await halfCloseSocket.shutdownWrite()
+      let halfCloseResponse = ''
+      while (true) {
+        const chunk = await halfCloseSocket.read(8192)
+        if (!chunk.length) break
+        halfCloseResponse += chunk.toString()
+      }
+      await halfCloseSocket.close()
       if (!halfCloseResponse.includes(SERVICES[0].marker)) {
         failures.push('half-closed tunnel dropped the guest response')
       }

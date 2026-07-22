@@ -1,22 +1,33 @@
 from __future__ import annotations
 
-import socket
-
 import pytest
 
 from boxlite.simplebox import SimpleBox
 
 
+class _FakeConnection:
+    def __init__(self) -> None:
+        self.writes: list[bytes] = []
+        self.closed = False
+
+    async def write(self, data: bytes) -> int:
+        self.writes.append(data)
+        return len(data)
+
+    async def close(self) -> None:
+        self.closed = True
+
+
 class _FakeTunnel:
-    def __init__(self, sockets: list[socket.socket], endpoint: str | int) -> None:
-        self.sockets = sockets
+    def __init__(self, connections: list[_FakeConnection], endpoint: str | int) -> None:
+        self.connections = connections
         self.endpoint_value = endpoint
 
     def endpoint(self) -> str | int:
         return self.endpoint_value
 
-    async def connect(self) -> socket.socket:
-        return self.sockets.pop(0)
+    async def connect(self) -> _FakeConnection:
+        return self.connections.pop(0)
 
 
 class _FakeNetwork:
@@ -47,21 +58,21 @@ async def test_endpoint_returns_local_file_descriptor():
 
 @pytest.mark.asyncio
 async def test_connect_consumes_tunnel_once():
-    first_local, first_peer = socket.socketpair()
+    connection = _FakeConnection()
     box = SimpleBox.__new__(SimpleBox)
     box._started = True
-    box._box = _FakeBox(_FakeTunnel([first_local], "unused"))
+    box._box = _FakeBox(_FakeTunnel([connection], "unused"))
 
     tunnel = await box.network.tunnel(3000)
     first = await tunnel.connect()
     try:
-        first.sendall(b"one")
-        assert first_peer.recv(3) == b"one"
+        assert await first.write(b"one") == 3
+        assert connection.writes == [b"one"]
         with pytest.raises(IndexError):
             await tunnel.connect()
     finally:
-        first.close()
-        first_peer.close()
+        await first.close()
+        assert connection.closed
 
 
 @pytest.mark.asyncio

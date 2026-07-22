@@ -128,4 +128,16 @@ impl JsBoxConnection {
         self.reader.lock().await.take();
         Ok(())
     }
+
+    #[napi]
+    pub async fn shutdown_write(&self) -> Result<()> {
+        let mut writer = self.writer.lock().await;
+        if let Some(stream) = writer.as_mut() {
+            stream
+                .shutdown()
+                .await
+                .map_err(|error| Error::from_reason(format!("shut down tunnel writer: {error}")))?;
+        }
+        Ok(())
+    }
 }

@@ -284,6 +284,7 @@ export interface NativeBoxTunnel {
 export interface NativeBoxConnection {
   read(maxBytes: number): Promise<Buffer>;
   write(data: Buffer): Promise<number>;
+  shutdownWrite(): Promise<void>;
   close(): Promise<void>;
 }
 
