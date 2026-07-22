@@ -44,16 +44,6 @@ use crate::{BoxID, BoxInfo, HealthCheckOptions, HealthState};
 /// Shared reference to BoxImpl.
 pub type SharedBoxImpl = Arc<BoxImpl>;
 
-async fn create_local_tunnel(
-    network: Arc<dyn NetworkBackend>,
-    target: SocketAddr,
-) -> BoxliteResult<BoxTunnel> {
-    Ok(BoxTunnel::new(None, move || {
-        let network = Arc::clone(&network);
-        async move { network.tunnel(target).await }
-    }))
-}
-
 // ============================================================================
 // LIVE STATE
 // ============================================================================
@@ -1191,7 +1181,10 @@ impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
             .network
             .clone()
             .ok_or_else(|| BoxliteError::Unsupported("box networking is disabled".into()))?;
-        create_local_tunnel(network, target).await
+        Ok(BoxTunnel::new(None, move || {
+            let network = Arc::clone(&network);
+            async move { network.tunnel(target).await }
+        }))
     }
 }
 
