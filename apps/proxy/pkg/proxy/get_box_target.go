@@ -86,10 +86,14 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 		}
 	}
 
-	doneCh := make(chan struct{})
+	controllerValue, exists := ctx.Get(ACTIVITY_POLL_STOP_KEY)
+	controller, ok := controllerValue.(*activityPollController)
+	if !exists || !ok {
+		controller = newActivityPollController()
+		ctx.Set(ACTIVITY_POLL_STOP_KEY, controller)
+	}
 	activityCtx := context.WithoutCancel(ctx.Request.Context())
-	go p.updateLastActivity(activityCtx, boxId, true, doneCh)
-	ctx.Set(ACTIVITY_POLL_STOP_KEY, func() { close(doneCh) })
+	go p.updateLastActivity(activityCtx, boxId, true, controller.done)
 
 	forwardedProto := "http"
 	if p.config != nil && p.config.ProxyProtocol != "" {
@@ -401,28 +405,7 @@ func isValidDirectPreviewBoxID(value string) bool {
 }
 
 func (p *Proxy) updateLastActivity(ctx context.Context, boxId string, shouldPoll bool, done <-chan struct{}) {
-	updateCtx, cancel := context.WithTimeout(ctx, activityUpdateTimeout)
-	defer cancel()
-
-	cached, err := p.boxLastActivityUpdateCache.Has(updateCtx, boxId)
-	if err != nil {
-		log.Errorf("failed to check last activity cache for box %s: %v", boxId, err)
-		return
-	}
-
 	const pollInterval = 50 * time.Second
-	if !cached {
-		if _, err := p.apiclient.BoxAPI.UpdateLastActivity(updateCtx, boxId).Execute(); err != nil {
-			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-				log.Errorf("failed to update last activity for box %s: %v", boxId, err)
-			}
-			return
-		}
-		if err := p.boxLastActivityUpdateCache.Set(updateCtx, boxId, true, pollInterval-5*time.Second); err != nil {
-			log.Errorf("failed to cache last activity update for box %s: %v", boxId, err)
-		}
-	}
-
 	if shouldPoll {
 		go func() {
 			ticker := time.NewTicker(pollInterval)
@@ -436,5 +419,26 @@ func (p *Proxy) updateLastActivity(ctx context.Context, boxId string, shouldPoll
 				}
 			}
 		}()
+	}
+
+	updateCtx, cancel := context.WithTimeout(ctx, activityUpdateTimeout)
+	defer cancel()
+
+	cached, err := p.boxLastActivityUpdateCache.Has(updateCtx, boxId)
+	if err != nil {
+		log.Errorf("failed to check last activity cache for box %s: %v", boxId, err)
+		return
+	}
+
+	if !cached {
+		if _, err := p.apiclient.BoxAPI.UpdateLastActivity(updateCtx, boxId).Execute(); err != nil {
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				log.Errorf("failed to update last activity for box %s: %v", boxId, err)
+			}
+			return
+		}
+		if err := p.boxLastActivityUpdateCache.Set(updateCtx, boxId, true, pollInterval-5*time.Second); err != nil {
+			log.Errorf("failed to cache last activity update for box %s: %v", boxId, err)
+		}
 	}
 }

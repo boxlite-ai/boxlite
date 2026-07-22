@@ -40,10 +40,23 @@ const BOX_AUTH_COOKIE_NAME = "boxlite-box-auth-"
 const ACTIVITY_POLL_STOP_KEY = "boxlite-activity-poll-stop"
 const TERMINAL_PORT = "22222"
 
+type activityPollController struct {
+	done chan struct{}
+	once sync.Once
+}
+
+func newActivityPollController() *activityPollController {
+	return &activityPollController{done: make(chan struct{})}
+}
+
+func (c *activityPollController) stop() {
+	c.once.Do(func() { close(c.done) })
+}
+
 func stopActivityPoll(ctx *gin.Context) {
-	if stopFn, exists := ctx.Get(ACTIVITY_POLL_STOP_KEY); exists {
-		if fn, ok := stopFn.(func()); ok {
-			fn()
+	if value, exists := ctx.Get(ACTIVITY_POLL_STOP_KEY); exists {
+		if controller, ok := value.(*activityPollController); ok {
+			controller.stop()
 		}
 	}
 }
@@ -111,6 +124,7 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 	router := gin.New()
 	router.Use(func(ctx *gin.Context) {
 		shutdownWg.Add(1)
+		ctx.Set(ACTIVITY_POLL_STOP_KEY, newActivityPollController())
 
 		cleanupOnce := sync.Once{}
 		cleanup := func() {

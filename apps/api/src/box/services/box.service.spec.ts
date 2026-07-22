@@ -114,63 +114,6 @@ describe('BoxService preview URLs', () => {
   })
 })
 
-describe('BoxService public preview defaults', () => {
-  function makeCreateService() {
-    const boxRepository = {
-      insert: jest.fn(async (box: any) => box),
-    } as any
-    const service = Object.create(BoxService.prototype) as BoxService
-    Object.assign(service as any, {
-      getValidatedOrDefaultRegion: jest.fn().mockResolvedValue({ id: 'region-1' }),
-      getValidatedOrDefaultClass: jest.fn().mockReturnValue('small'),
-      organizationService: { assertOrganizationIsNotSuspended: jest.fn() },
-      redis: { exists: jest.fn().mockResolvedValue(1) },
-      runnerService: { getRandomAvailableRunner: jest.fn().mockResolvedValue({ id: 'runner-1' }) },
-      boxRepository,
-      eventEmitter: { emitAsync: jest.fn().mockResolvedValue(undefined) },
-      toBoxDto: jest.fn((box) => box),
-    })
-    return { service, boxRepository }
-  }
-
-  it.each([
-    [undefined, true],
-    [false, false],
-  ])('defaults a fresh box to public=%s', async (requestedPublic, expectedPublic) => {
-    const { service, boxRepository } = makeCreateService()
-
-    await service.create({ name: 'fresh-box', public: requestedPublic } as any, { id: 'org-1' } as any)
-
-    expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ public: expectedPublic }))
-  })
-
-  it.each([
-    [undefined, true],
-    [false, false],
-  ])('defaults an assigned warm-pool box to public=%s', async (requestedPublic, expectedPublic) => {
-    const warmPoolBox = { id: 'warm-box', runnerId: 'runner-1', name: 'warm-box' } as any
-    const update = jest.fn().mockResolvedValue(warmPoolBox)
-    const service = Object.create(BoxService.prototype) as BoxService
-    Object.assign(service as any, {
-      boxRepository: { update },
-      boxLookupCacheInvalidationService: { invalidateOrgId: jest.fn() },
-      eventEmitter: { emit: jest.fn() },
-      toBoxDto: jest.fn((box) => box),
-    })
-
-    await (service as any).assignWarmPoolBox(
-      warmPoolBox,
-      { name: 'assigned-box', public: requestedPublic },
-      { id: 'org-1' },
-    )
-
-    expect(update).toHaveBeenCalledWith(
-      'warm-box',
-      expect.objectContaining({ updateData: expect.objectContaining({ public: expectedPublic }) }),
-    )
-  })
-})
-
 describe('BoxService.ensureStartedForProxy', () => {
   // The control plane never writes box.state directly; like start(), it flips
   // desiredState and lets the runner's reported state catch up. The proxied

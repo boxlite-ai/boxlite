@@ -219,3 +219,15 @@ func TestGuestPortTransportCarriesHTTPOverRunnerConnect(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestActivityPollControllerStopIsIdempotent(t *testing.T) {
+	controller := newActivityPollController()
+	controller.stop()
+	controller.stop()
+
+	select {
+	case <-controller.done:
+	default:
+		t.Fatal("activity poll was not stopped")
+	}
+}

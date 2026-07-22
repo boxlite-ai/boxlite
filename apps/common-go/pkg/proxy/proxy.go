@@ -149,6 +149,7 @@ func NewProxyRequestHandler(getProxyTarget func(*gin.Context) (*RequestTarget, e
 				}
 
 				req.Out.Header.Del("Forwarded")
+				req.Out.Header.Del("X-Forwarded-For")
 				req.Out.Header.Del("X-Forwarded-Port")
 				req.Out.Header.Del("X-Real-IP")
 				req.SetXForwarded()

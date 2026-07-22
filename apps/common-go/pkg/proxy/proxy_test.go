@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -52,6 +53,7 @@ func TestRewriteProxyRequestSetsTrustedForwardedHeaders(t *testing.T) {
 	in.Header.Set("X-Forwarded-Proto", "http")
 	in.Header.Set("X-Forwarded-Port", "1234")
 	in.Header.Set("Forwarded", `host="evil.example";proto=http`)
+	in.Header.Set("X-Forwarded-For", "198.51.100.10")
 	in.Header.Set("X-Real-IP", "198.51.100.10")
 
 	resp, err := proxyServer.Client().Do(in)
@@ -82,8 +84,8 @@ func assertTrustedForwardedRequest(t *testing.T, out *http.Request) {
 	if out.URL.RawQuery != "target=1&client=1" {
 		t.Fatalf("RawQuery = %q", out.URL.RawQuery)
 	}
-	if got := out.Header.Get("X-Forwarded-For"); got == "" {
-		t.Fatalf("X-Forwarded-For = %q", got)
+	if got := out.Header.Get("X-Forwarded-For"); got == "" || strings.Contains(got, "198.51.100.10") {
+		t.Fatalf("X-Forwarded-For retained the untrusted value: %q", got)
 	}
 	if got := out.Header.Get("X-Forwarded-Host"); got != "3999-token.proxy.dev.boxlite.ai" {
 		t.Fatalf("X-Forwarded-Host = %q", got)
