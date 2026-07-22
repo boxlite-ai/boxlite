@@ -22,7 +22,6 @@ func (c *Client) DialGuestPort(ctx context.Context, boxID string, port uint16) (
 	if err != nil {
 		return nil, fmt.Errorf("prepare guest TCP tunnel to %s port %d: %w", boxID, port, err)
 	}
-	defer tunnel.Close()
 
 	conn, err := tunnel.Connect(ctx)
 	if err != nil {

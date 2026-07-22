@@ -55,12 +55,11 @@ describe('BoxliteProxyController', () => {
 
   it('returns the public endpoint for JSON tunnel requests', async () => {
     const { controller, boxService } = makeHarness()
-    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() }
 
-    await controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, res as never)
+    const result = await controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)
 
     expect(boxService.getNetworkTunnelUrl).toHaveBeenCalledWith('public-box', 'org-1', 3000)
-    expect(res.json).toHaveBeenCalledWith({ uri: 'https://3000-box.proxy.test' })
+    expect(result).toEqual({ uri: 'https://3000-box.proxy.test' })
   })
 
   it('auto-resumes exec and files but treats metrics as observation-only', async () => {

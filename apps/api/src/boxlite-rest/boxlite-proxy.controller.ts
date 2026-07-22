@@ -17,6 +17,8 @@ import {
   Logger,
   NotFoundException,
   ForbiddenException,
+  HttpCode,
+  HttpStatus,
   ParseIntPipe,
   Post,
   Query,
@@ -197,18 +199,14 @@ export class BoxliteProxyController {
   }
 
   @Post(':boxId/network/tunnel')
+  @HttpCode(HttpStatus.OK)
   async proxyNetworkTunnel(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
     @Query('port', ParseIntPipe) port: number,
-    @Res() res: Response,
   ) {
-    if (port < 1 || port > 65535) {
-      return res.status(400).json({ error: 'port must be between 1 and 65535' })
-    }
-
     const uri = await this.boxService.getNetworkTunnelUrl(boxId, authContext.organizationId, port)
-    return res.status(200).json({ uri })
+    return { uri }
   }
 
   private async proxyToRunner(
