@@ -57,6 +57,12 @@ func BoxliteNetworkTunnel(logger *slog.Logger) gin.HandlerFunc {
 		if err := buffered.Flush(); err != nil {
 			return
 		}
-		common_proxy.ProxyBidirectionalStream(common_proxy.NewBufferedConn(clientConn, buffered.Reader), guestConn)
+		if err := common_proxy.ProxyBidirectionalStream(
+			ctx.Request.Context(),
+			common_proxy.NewBufferedConn(clientConn, buffered.Reader),
+			guestConn,
+		); err != nil {
+			logger.WarnContext(ctx.Request.Context(), "guest tunnel stream closed with error", "box", boxID, "port", port, "error", err)
+		}
 	}
 }

@@ -6,6 +6,7 @@ package proxy
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -39,21 +40,44 @@ func (c *bufferedConn) CloseWrite() error {
 }
 
 // ProxyBidirectionalStream relays both directions until both streams close.
-func ProxyBidirectionalStream(left, right net.Conn) {
-	copyStream := func(dst, src net.Conn) {
-		_, _ = io.Copy(dst, src)
+func ProxyBidirectionalStream(ctx context.Context, left, right net.Conn) error {
+	copyStream := func(dst, src net.Conn) error {
+		_, err := io.Copy(dst, src)
 		if closeWriter, ok := dst.(interface{ CloseWrite() error }); ok {
 			_ = closeWriter.CloseWrite()
 		}
+		return err
 	}
 
-	done := make(chan struct{})
-	go func() {
-		copyStream(left, right)
-		close(done)
-	}()
-	copyStream(right, left)
-	<-done
+	results := make(chan error, 2)
+	go func() { results <- copyStream(left, right) }()
+	go func() { results <- copyStream(right, left) }()
+
+	select {
+	case <-ctx.Done():
+		_ = left.Close()
+		_ = right.Close()
+		<-results
+		<-results
+		return ctx.Err()
+	case err := <-results:
+		if err != nil {
+			_ = left.Close()
+			_ = right.Close()
+			<-results
+			return err
+		}
+	}
+
+	select {
+	case <-ctx.Done():
+		_ = left.Close()
+		_ = right.Close()
+		<-results
+		return ctx.Err()
+	case err := <-results:
+		return err
+	}
 }
 
 var proxyTransport = &http.Transport{
