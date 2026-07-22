@@ -685,20 +685,20 @@ export class BoxService {
     if (port < 1 || port > 65535) {
       throw new BadRequestError('Invalid port')
     }
+    if (port !== TERMINAL_PREVIEW_PORT) {
+      throw new BadRequestError(`Port preview is only supported for terminal port ${TERMINAL_PREVIEW_PORT}`)
+    }
 
     const proxyDomain = this.configService.getOrThrow('proxy.domain')
     const proxyProtocol = this.configService.getOrThrow('proxy.protocol')
 
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
-    // Keep the established terminal hostname stable. Service previews use an
-    // encoded ID so mixed-case box IDs remain safe in DNS hostnames.
-    const previewBoxId = port === TERMINAL_PREVIEW_PORT ? box.id : encodeDirectPreviewBoxId(box.id)
-
-    let url = `${proxyProtocol}://${port}-${previewBoxId}.${proxyDomain}`
+    let url = `${proxyProtocol}://${port}-${box.id}.${proxyDomain}`
 
     const region = await this.regionService.findOne(box.region, true)
     if (region && region.proxyUrl) {
-      url = region.proxyUrl.replace(/(https?:\/)(\/)/, `$1/${port}-${previewBoxId}.`)
+      // Insert port and box.id into the custom proxy URL
+      url = region.proxyUrl.replace(/(https?:\/)(\/)/, `$1/${port}-${box.id}.`)
     }
 
     return {
@@ -706,6 +706,24 @@ export class BoxService {
       url,
       token: box.authToken,
     }
+  }
+
+  async getNetworkTunnelUrl(boxIdOrName: string, organizationId: string, port: number): Promise<string> {
+    if (port < 1 || port > 65535) {
+      throw new BadRequestError('Invalid port')
+    }
+
+    const proxyDomain = this.configService.getOrThrow('proxy.domain')
+    const proxyProtocol = this.configService.getOrThrow('proxy.protocol')
+    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+    const endpointId = `d-${Buffer.from(box.id, 'utf8').toString('hex')}`
+
+    let url = `${proxyProtocol}://${port}-${endpointId}.${proxyDomain}`
+    const region = await this.regionService.findOne(box.region, true)
+    if (region?.proxyUrl) {
+      url = region.proxyUrl.replace(/(https?:\/)(\/)/, `$1/${port}-${endpointId}.`)
+    }
+    return url
   }
 
   async getSignedPortPreviewUrl(
@@ -1546,8 +1564,4 @@ export class BoxService {
 
     return { valid: true, boxId: sshAccess.box.id }
   }
-}
-
-function encodeDirectPreviewBoxId(boxId: string): string {
-  return `d-${Buffer.from(boxId, 'utf8').toString('hex')}`
 }

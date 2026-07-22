@@ -23,7 +23,7 @@ function makeHarness() {
   const boxService = {
     findOneByIdOrName: jest.fn().mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1', autoResume: true }),
     updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
-    getPortPreviewUrl: jest.fn().mockResolvedValue({ url: 'https://3000-box.proxy.test' }),
+    getNetworkTunnelUrl: jest.fn().mockResolvedValue('https://3000-box.proxy.test'),
   }
   const runnerService = {
     findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }),
@@ -59,7 +59,7 @@ describe('BoxliteProxyController', () => {
 
     await controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, res as never)
 
-    expect(boxService.getPortPreviewUrl).toHaveBeenCalledWith('public-box', 'org-1', 3000)
+    expect(boxService.getNetworkTunnelUrl).toHaveBeenCalledWith('public-box', 'org-1', 3000)
     expect(res.json).toHaveBeenCalledWith({ uri: 'https://3000-box.proxy.test' })
   })
 

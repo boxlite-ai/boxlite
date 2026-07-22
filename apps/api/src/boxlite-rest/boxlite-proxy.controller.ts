@@ -207,7 +207,7 @@ export class BoxliteProxyController {
       return res.status(400).json({ error: 'port must be between 1 and 65535' })
     }
 
-    const { url: uri } = await this.boxService.getPortPreviewUrl(boxId, authContext.organizationId, port)
+    const uri = await this.boxService.getNetworkTunnelUrl(boxId, authContext.organizationId, port)
     return res.status(200).json({ uri })
   }
 

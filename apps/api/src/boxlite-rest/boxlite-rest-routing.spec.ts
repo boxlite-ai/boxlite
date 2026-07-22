@@ -109,7 +109,15 @@ describe('BoxLite REST routing', () => {
   })
 
   it('does not route HTTP duplex tunnels through the websocket proxy', () => {
-    const service = new BoxliteWsProxyService({} as any, {} as any, {} as any, {} as any, {} as any)
+    const service = new BoxliteWsProxyService(
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    )
 
     expect(service.matchAttachPath('/api/v1/boxes/box-1/network/tunnel?port=3000')).toBeNull()
   })
