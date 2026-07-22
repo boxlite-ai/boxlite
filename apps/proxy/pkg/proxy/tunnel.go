@@ -57,22 +57,11 @@ func (p *Proxy) handleTunnelConnect(writer http.ResponseWriter, request *http.Re
 	}
 	defer runnerConn.Close()
 
-	hijacker, ok := writer.(http.Hijacker)
-	if !ok {
-		http.Error(writer, "connection hijacking unavailable", http.StatusInternalServerError)
-		return
-	}
-	clientConn, buffered, err := hijacker.Hijack()
+	clientConn, err := common_proxy.AcceptConnect(writer)
 	if err != nil {
 		return
 	}
 	defer clientConn.Close()
-	if _, err := buffered.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
-		return
-	}
-	if err := buffered.Flush(); err != nil {
-		return
-	}
 
 	if err := common_proxy.ProxyBidirectionalStream(request.Context(), clientConn, runnerConn); err != nil {
 		log.WithError(err).WithFields(log.Fields{"box": boxID, "port": port}).Warn("tunnel stream closed with error")

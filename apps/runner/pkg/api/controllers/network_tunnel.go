@@ -38,28 +38,16 @@ func BoxliteNetworkTunnel(logger *slog.Logger) gin.HandlerFunc {
 			return
 		}
 
-		hijacker, ok := ctx.Writer.(http.Hijacker)
-		if !ok {
-			guestConn.Close()
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "connection hijacking unavailable"})
-			return
-		}
-		clientConn, buffered, err := hijacker.Hijack()
+		clientConn, err := common_proxy.AcceptConnect(ctx.Writer)
 		if err != nil {
 			guestConn.Close()
 			return
 		}
 		defer clientConn.Close()
 		defer guestConn.Close()
-		if _, err := buffered.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
-			return
-		}
-		if err := buffered.Flush(); err != nil {
-			return
-		}
 		if err := common_proxy.ProxyBidirectionalStream(
 			ctx.Request.Context(),
-			common_proxy.NewBufferedConn(clientConn, buffered.Reader),
+			clientConn,
 			guestConn,
 		); err != nil {
 			logger.WarnContext(ctx.Request.Context(), "guest tunnel stream closed with error", "box", boxID, "port", port, "error", err)
