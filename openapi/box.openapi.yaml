@@ -20,7 +20,8 @@ info:
   description: |
     HTTP API for BoxLite boxes — hardware-isolated VMs for secure code
     execution. Exposes box lifecycle management, command execution, file
-    transfer, and image management as a multi-tenant service.
+    transfer, service tunnels, and image management as a multi-tenant
+    service.
 
     ## Design Principles
 
@@ -123,10 +124,10 @@ tags:
     description: Command execution and streaming
   - name: Files
     description: File upload and download
-  - name: Metrics
-    description: Runtime and per-box metrics
   - name: Network
     description: Box networking and service access
+  - name: Metrics
+    description: Runtime and per-box metrics
   - name: Images
     description: Container image management
 
@@ -541,7 +542,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Box"
         "400":
-          $ref: "#/components/responses/ValidationError"
+          $ref: "#/components/responses/BadRequestError"
 
   # -------------------------------------------------------------------------
   # Execution
@@ -829,32 +830,44 @@ paths:
     parameters:
       - $ref: "#/components/parameters/prefix"
       - $ref: "#/components/parameters/boxId"
-      - name: port
-        in: query
-        required: true
-        description: TCP port listened to by the service inside the box
-        schema:
-          type: integer
-          minimum: 1
-          maximum: 65535
-        example: 3000
     post:
-      operationId: describeBoxTunnel
-      summary: Prepare a box service tunnel connection
+      operationId: prepareTunnel
+      summary: Prepare a box service tunnel
       description: |
-        Returns the URI used to establish the box service tunnel.
+        Returns the public URI for a TCP service inside the box.
+        Safe to repeat: the server may provision tunnel routing on
+        first call and returns the current descriptor thereafter.
+
+        HTTP services are reachable directly at the URI. For a raw
+        TCP byte stream to the service port, clients connect to the
+        URI and issue an HTTP/1.1 `CONNECT` for its authority; the
+        host upgrades each accepted `CONNECT` into one connection to
+        the in-box service. `CONNECT` is a transport handshake on the
+        URI's host, not an operation of this API.
       tags: [Network]
+      parameters:
+        - name: port
+          in: query
+          required: true
+          description: TCP port the service listens on inside the box
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 65535
+          example: 3000
       responses:
         "200":
           description: Service tunnel descriptor
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/BoxServiceEndpoint"
+                $ref: "#/components/schemas/TunnelDescriptor"
         "400":
           $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
 
   # -------------------------------------------------------------------------
   # Metrics
@@ -1293,15 +1306,6 @@ components:
               type: string
               description: How long idempotency keys are retained (ISO 8601 duration)
               example: PT24H
-
-    BoxServiceEndpoint:
-      type: object
-      required: [uri]
-      properties:
-        uri:
-          type: string
-          format: uri
-          description: Public URI for the box service.
 
     # =======================================================================
     # Authentication
@@ -1927,6 +1931,22 @@ components:
           minimum: 1
           description: Terminal height in rows
           example: 40
+
+    # =======================================================================
+    # Network
+    # =======================================================================
+    TunnelDescriptor:
+      type: object
+      description: Public descriptor for a box service tunnel.
+      required: [uri]
+      properties:
+        uri:
+          type: string
+          format: uri
+          description: |
+            Public URI for the box service. Clients MUST treat the
+            value as opaque — its shape is deployment-defined.
+          example: "https://3000-01hjk4tnrpqsxyz8wm6ncvt9r5.proxy.example.test"
 
     # =======================================================================
     # Metrics

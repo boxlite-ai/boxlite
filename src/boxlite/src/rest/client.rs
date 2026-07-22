@@ -382,8 +382,8 @@ impl ApiClient {
         Ok(local)
     }
 
-    /// Request the public descriptor for a box service tunnel.
-    pub(crate) async fn describe_box_tunnel(
+    /// Prepare a box service tunnel and return its public descriptor.
+    pub(crate) async fn prepare_box_tunnel(
         &self,
         box_id: impl AsRef<str>,
         port: u16,

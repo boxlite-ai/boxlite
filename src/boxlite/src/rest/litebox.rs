@@ -395,7 +395,7 @@ impl BoxNetworkBackend for RestBox {
 
         let port = target.port();
         let box_id = self.box_id_str();
-        let endpoint = self.client.describe_box_tunnel(&box_id, port).await?;
+        let endpoint = self.client.prepare_box_tunnel(&box_id, port).await?;
         let connection = self.client.connect_box_network_tunnel(&endpoint).await?;
         Ok(BoxTunnel::remote(endpoint, connection))
     }
