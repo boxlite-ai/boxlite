@@ -266,7 +266,11 @@ func (p *Proxy) getBoxPublic(ctx context.Context, boxId string) (*bool, error) {
 func (p *Proxy) getBoxRunning(ctx context.Context, boxId string) (bool, error) {
 	var isRunning bool
 	err := utils.RetryWithExponentialBackoff(ctx, "getBoxRunning", proxyMaxRetries, proxyBaseDelay, proxyMaxDelay, func() error {
-		running, res, err := p.apiclient.PreviewAPI.IsBoxRunning(ctx, boxId).Execute()
+		_, res, err := p.apiclient.PreviewAPI.IsBoxRunning(ctx, boxId).Execute()
+		if res != nil && res.StatusCode == http.StatusOK {
+			isRunning = true
+			return nil
+		}
 		if res != nil && res.StatusCode == http.StatusNotFound {
 			isRunning = false
 			return nil
@@ -274,9 +278,6 @@ func (p *Proxy) getBoxRunning(ctx context.Context, boxId string) (bool, error) {
 		openapiErr := common_errors.ConvertOpenAPIError(err)
 		if openapiErr != nil && !common_errors.IsRetryableOpenAPIError(openapiErr) {
 			return &utils.NonRetryableError{Err: openapiErr}
-		}
-		if openapiErr == nil {
-			isRunning = running
 		}
 		return openapiErr
 	})

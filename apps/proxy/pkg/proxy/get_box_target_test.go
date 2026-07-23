@@ -37,7 +37,6 @@ func TestGetBoxRunningUsesPreviewStatus(t *testing.T) {
 				if request.URL.Path != "/preview/AbCdEf123456/running" {
 					t.Fatalf("unexpected path: %s", request.URL.Path)
 				}
-				writer.Header().Set("Content-Type", "application/json")
 				writer.WriteHeader(tt.statusCode)
 				_, _ = writer.Write([]byte(tt.body))
 			}))
