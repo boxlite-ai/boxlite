@@ -15,7 +15,6 @@ import (
 	"time"
 
 	common_cache "github.com/boxlite-ai/common-go/pkg/cache"
-	common_proxy "github.com/boxlite-ai/common-go/pkg/proxy"
 )
 
 func TestRequestEscapedPathPreservesEscapedSlash(t *testing.T) {
@@ -46,16 +45,6 @@ func TestDecodeDirectPreviewBoxID(t *testing.T) {
 	}
 	if got != "53MOZ3jp5Zu1" {
 		t.Fatalf("decodeDirectPreviewBoxID = %q, want %q", got, "53MOZ3jp5Zu1")
-	}
-}
-
-func TestDecodeDirectPreviewBoxIDKeepsLegacyEncodedURLWorking(t *testing.T) {
-	got, ok, err := decodeDirectPreviewBoxID("35334d4f5a336a70355a7531")
-	if err != nil {
-		t.Fatalf("decodeDirectPreviewBoxID returned error: %v", err)
-	}
-	if !ok || got != "53MOZ3jp5Zu1" {
-		t.Fatalf("decodeDirectPreviewBoxID = %q, %t", got, ok)
 	}
 }
 
@@ -132,14 +121,6 @@ func TestForwardedPortFromHost(t *testing.T) {
 				t.Fatalf("forwardedPortFromHost(%q, %q) = %q, want %q", tt.host, tt.proto, got, tt.want)
 			}
 		})
-	}
-}
-
-func TestFormatForwardedHeader(t *testing.T) {
-	got := common_proxy.FormatForwardedHeader("3999-token.proxy.dev.boxlite.ai", "https")
-	want := `host="3999-token.proxy.dev.boxlite.ai";proto=https`
-	if got != want {
-		t.Fatalf("formatForwardedHeader = %q, want %q", got, want)
 	}
 }
 

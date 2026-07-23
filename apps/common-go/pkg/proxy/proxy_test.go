@@ -37,7 +37,6 @@ func TestRewriteProxyRequestSetsTrustedForwardedHeaders(t *testing.T) {
 				"X-Forwarded-Host":        "3999-token.proxy.dev.boxlite.ai",
 				"X-Forwarded-Proto":       "https",
 				"X-Forwarded-Port":        "443",
-				"Forwarded":               `host="3999-token.proxy.dev.boxlite.ai";proto=https`,
 			},
 		}, nil
 	}, nil))
@@ -96,8 +95,8 @@ func assertTrustedForwardedRequest(t *testing.T, out *http.Request) {
 	if got := out.Header.Get("X-Forwarded-Port"); got != "443" {
 		t.Fatalf("X-Forwarded-Port = %q", got)
 	}
-	if got := out.Header.Get("Forwarded"); got != `host="3999-token.proxy.dev.boxlite.ai";proto=https` {
-		t.Fatalf("Forwarded = %q", got)
+	if got := out.Header.Get("Forwarded"); got != "" {
+		t.Fatalf("Forwarded retained the untrusted value: %q", got)
 	}
 	if got := out.Header.Get("X-Real-IP"); got != "" {
 		t.Fatalf("X-Real-IP leaked to runner: %q", got)

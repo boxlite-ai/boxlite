@@ -26,10 +26,9 @@ import (
 )
 
 const (
-	activityUpdateTimeout          = 10 * time.Second
-	directPreviewBoxIDLength       = 12
-	directPreviewBoxIDPrefix       = "d-"
-	legacyDirectPreviewBoxIDLength = directPreviewBoxIDLength * 2
+	activityUpdateTimeout    = 10 * time.Second
+	directPreviewBoxIDLength = 12
+	directPreviewBoxIDPrefix = "d-"
 )
 
 func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, error) {
@@ -106,7 +105,6 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 		"X-Forwarded-Host":  forwardedHost,
 		"X-Forwarded-Proto": forwardedProto,
 		"X-Forwarded-Port":  forwardedPort,
-		"Forwarded":         common_proxy.FormatForwardedHeader(forwardedHost, forwardedProto),
 	}
 
 	if targetPort != TERMINAL_PORT {
@@ -368,11 +366,7 @@ func (p *Proxy) parseHost(host string) (targetPort string, boxIdOrSignedToken st
 func decodeDirectPreviewBoxID(value string) (string, bool, error) {
 	encoded, ok := strings.CutPrefix(value, directPreviewBoxIDPrefix)
 	if !ok {
-		// Keep URLs generated before direct IDs gained an explicit prefix working.
-		if len(value) != legacyDirectPreviewBoxIDLength {
-			return value, false, nil
-		}
-		encoded = value
+		return value, false, nil
 	}
 
 	decoded, err := hex.DecodeString(encoded)

@@ -8,13 +8,11 @@ import (
 	"bufio"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -95,17 +93,6 @@ type RequestTarget struct {
 	Host      string
 	Headers   map[string]string
 	Transport http.RoundTripper
-}
-
-func FormatForwardedHeader(host string, proto string) string {
-	parts := make([]string, 0, 2)
-	if host != "" {
-		parts = append(parts, fmt.Sprintf("host=%q", host))
-	}
-	if proto != "" {
-		parts = append(parts, "proto="+proto)
-	}
-	return strings.Join(parts, ";")
 }
 
 // ProxyRequest handles proxying requests to a box's container
