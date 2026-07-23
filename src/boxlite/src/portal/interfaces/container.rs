@@ -179,13 +179,31 @@ impl ContainerInterface {
     pub async fn start(&mut self, container_id: &str) -> BoxliteResult<()> {
         use boxlite_shared::{ContainerStartRequest, container_start_response};
 
-        let response = self
+        let response = match self
             .client
             .start(ContainerStartRequest {
                 container_id: container_id.to_string(),
             })
-            .await?
-            .into_inner();
+            .await
+        {
+            Ok(response) => response.into_inner(),
+            // A guest agent that predates #988 has no `Container.Start`; tonic
+            // answers the unknown method with `Unimplemented`. On that agent the
+            // fused `Container.Init` — still called on every boot — already
+            // started the container, so `Start` is a redundant no-op here.
+            // Treat it as started rather than surfacing a cryptic gRPC error;
+            // the code must be read before `?` flattens it into `Rpc(String)`.
+            // (Recreate the box to regain attach-before-start semantics.)
+            Err(status) if status.code() == tonic::Code::Unimplemented => {
+                tracing::warn!(
+                    container_id = %container_id,
+                    "guest agent predates Container.Start (pre-#988); its Init already \
+                     started the container — treating as started"
+                );
+                return Ok(());
+            }
+            Err(status) => return Err(status.into()),
+        };
 
         match response.result {
             Some(container_start_response::Result::Success(_)) => {
@@ -203,5 +221,132 @@ impl ContainerInterface {
                 "ContainerStart response missing result".to_string(),
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use boxlite_shared::{
+        Container as ContainerService, ContainerInitRequest, ContainerInitResponse,
+        ContainerInitSuccess, ContainerServer, ContainerStartRequest, ContainerStartResponse,
+        ContainerStartSuccess, container_init_response, container_start_response,
+    };
+    use tonic::transport::{Endpoint, Server};
+    use tonic::{Request, Response, Status};
+
+    /// How the stub guest answers `Container.Start`.
+    #[derive(Clone, Copy)]
+    enum StartReply {
+        /// Emulates a pre-#988 agent that lacks the method: tonic answers an
+        /// unknown method with `Unimplemented` (empty message).
+        Unimplemented,
+        /// A genuine server-side failure that must NOT be swallowed.
+        RealError,
+        /// A current agent that starts the container.
+        Success,
+    }
+
+    struct StubGuest {
+        start_reply: StartReply,
+    }
+
+    #[tonic::async_trait]
+    impl ContainerService for StubGuest {
+        async fn init(
+            &self,
+            request: Request<ContainerInitRequest>,
+        ) -> Result<Response<ContainerInitResponse>, Status> {
+            let container_id = request.into_inner().container_id;
+            Ok(Response::new(ContainerInitResponse {
+                result: Some(container_init_response::Result::Success(
+                    ContainerInitSuccess { container_id },
+                )),
+            }))
+        }
+
+        async fn start(
+            &self,
+            request: Request<ContainerStartRequest>,
+        ) -> Result<Response<ContainerStartResponse>, Status> {
+            let container_id = request.into_inner().container_id;
+            match self.start_reply {
+                StartReply::Unimplemented => Err(Status::unimplemented("")),
+                StartReply::RealError => Err(Status::internal("guest blew up")),
+                StartReply::Success => Ok(Response::new(ContainerStartResponse {
+                    result: Some(container_start_response::Result::Success(
+                        ContainerStartSuccess { container_id },
+                    )),
+                })),
+            }
+        }
+    }
+
+    /// Serve `StubGuest` on an ephemeral loopback port and return a
+    /// `ContainerInterface` wired to it.
+    async fn interface_for(start_reply: StartReply) -> ContainerInterface {
+        // Bind with std to learn a free port, then hand the address to tonic.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+
+        tokio::spawn(async move {
+            Server::builder()
+                .add_service(ContainerServer::new(StubGuest { start_reply }))
+                .serve(addr)
+                .await
+                .unwrap();
+        });
+
+        let endpoint = Endpoint::from_shared(format!("http://{addr}")).unwrap();
+        let mut attempts = 0;
+        let channel = loop {
+            match endpoint.connect().await {
+                Ok(channel) => break channel,
+                Err(e) => {
+                    attempts += 1;
+                    assert!(
+                        attempts < 100,
+                        "stub guest never accepted a connection: {e}"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+            }
+        };
+        ContainerInterface::new(channel)
+    }
+
+    /// #988 regression: a guest agent that predates `Container.Start` answers
+    /// with gRPC `Unimplemented`. Its fused `Container.Init` already started the
+    /// container, so the host must treat the missing method as "already started"
+    /// rather than surfacing `code=16`. Without the degrade this returns
+    /// `BoxliteError::Rpc` and the restarted box fails to come up.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn container_start_tolerates_unimplemented_from_legacy_guest() {
+        let mut iface = interface_for(StartReply::Unimplemented).await;
+        let result = iface.start("box-legacy").await;
+        assert!(
+            result.is_ok(),
+            "legacy guest (Start Unimplemented) must be tolerated, got {result:?}"
+        );
+    }
+
+    /// The degrade must be narrow: a real server-side error on `Start` still
+    /// surfaces as an error, never swallowed as "started".
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn container_start_propagates_real_error() {
+        let mut iface = interface_for(StartReply::RealError).await;
+        let result = iface.start("box-broken").await;
+        assert!(
+            result.is_err(),
+            "a real Start error must not be swallowed: {result:?}"
+        );
+    }
+
+    /// Normal path against a current guest is unaffected.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn container_start_ok_on_success() {
+        let mut iface = interface_for(StartReply::Success).await;
+        assert!(iface.start("box-ok").await.is_ok());
     }
 }
