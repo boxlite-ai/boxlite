@@ -15,6 +15,8 @@ import (
 	"time"
 
 	common_cache "github.com/boxlite-ai/common-go/pkg/cache"
+	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
+	"github.com/gin-gonic/gin"
 )
 
 func TestRequestEscapedPathPreservesEscapedSlash(t *testing.T) {
@@ -121,6 +123,40 @@ func TestForwardedPortFromHost(t *testing.T) {
 				t.Fatalf("forwardedPortFromHost(%q, %q) = %q, want %q", tt.host, tt.proto, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestGetProxyTargetReportsOutOfRangePublicPortAsBadRequest(t *testing.T) {
+	cacheContext := context.Background()
+	publicCache := common_cache.NewMapCache[bool](cacheContext)
+	activityCache := common_cache.NewMapCache[bool](cacheContext)
+	boxID := "53MOZ3jp5Zu1"
+	if err := publicCache.Set(cacheContext, boxID, true, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := activityCache.Set(cacheContext, boxID, true, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+
+	proxy := &Proxy{
+		boxPublicCache:             publicCache,
+		boxLastActivityUpdateCache: activityCache,
+	}
+	request := httptest.NewRequest(http.MethodGet, "http://proxy.test/", nil)
+	request.Host = "70000-d-35334d4f5a336a70355a7531.proxy.test"
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = request
+
+	target, err := proxy.GetProxyTarget(ctx)
+	stopActivityPoll(ctx)
+	if err == nil || target != nil {
+		t.Fatalf("GetProxyTarget() = %#v, %v; want nil target and an error", target, err)
+	}
+	if len(ctx.Errors) != 1 {
+		t.Fatalf("context errors = %d, want 1", len(ctx.Errors))
+	}
+	if _, ok := ctx.Errors.Last().Err.(*common_errors.BadRequestError); !ok {
+		t.Fatalf("context error = %T, want *errors.BadRequestError", ctx.Errors.Last().Err)
 	}
 }
 

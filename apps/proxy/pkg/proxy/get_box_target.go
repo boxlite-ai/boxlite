@@ -109,7 +109,9 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 
 	if targetPort != TERMINAL_PORT {
 		if _, err := strconv.ParseUint(targetPort, 10, 16); err != nil {
-			return nil, fmt.Errorf("invalid target port: %w", err)
+			wrappedErr := fmt.Errorf("invalid target port: %w", err)
+			ctx.Error(common_errors.NewBadRequestError(wrappedErr))
+			return nil, wrappedErr
 		}
 		target, err := url.Parse("http://" + net.JoinHostPort(boxId, targetPort) + targetPath)
 		if err != nil {
