@@ -263,6 +263,26 @@ func (p *Proxy) getBoxPublic(ctx context.Context, boxId string) (*bool, error) {
 	return &isPublic, nil
 }
 
+func (p *Proxy) getBoxRunning(ctx context.Context, boxId string) (bool, error) {
+	var isRunning bool
+	err := utils.RetryWithExponentialBackoff(ctx, "getBoxRunning", proxyMaxRetries, proxyBaseDelay, proxyMaxDelay, func() error {
+		running, res, err := p.apiclient.PreviewAPI.IsBoxRunning(ctx, boxId).Execute()
+		if res != nil && res.StatusCode == http.StatusNotFound {
+			isRunning = false
+			return nil
+		}
+		openapiErr := common_errors.ConvertOpenAPIError(err)
+		if openapiErr != nil && !common_errors.IsRetryableOpenAPIError(openapiErr) {
+			return &utils.NonRetryableError{Err: openapiErr}
+		}
+		if openapiErr == nil {
+			isRunning = running
+		}
+		return openapiErr
+	})
+	return isRunning, err
+}
+
 func (p *Proxy) getBoxAuthKeyValid(ctx context.Context, boxId string, authKey string) (*bool, error) {
 	apiValidation := func() (bool, error) {
 		_, resp, err := p.apiclient.PreviewAPI.IsValidAuthToken(context.Background(), boxId, authKey).Execute()

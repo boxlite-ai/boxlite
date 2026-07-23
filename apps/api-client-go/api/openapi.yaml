@@ -2870,6 +2870,28 @@ paths:
       summary: Check if box is public
       tags:
       - preview
+  /preview/{boxId}/running:
+    get:
+      operationId: isBoxRunning
+      parameters:
+      - description: ID of the box
+        explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: boolean
+          description: Running status of the public box
+      summary: Check if a public box is running
+      tags:
+      - preview
   /preview/{boxId}/validate/{authToken}:
     get:
       operationId: isValidAuthToken

@@ -11,6 +11,7 @@ import { ApiResponse, ApiOperation, ApiParam, ApiTags, ApiOAuth2, ApiBearerAuth 
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { OrganizationUserService } from '../../organization/services/organization-user.service'
+import { BoxState } from '../enums/box-state.enum'
 
 @ApiTags('preview')
 @Controller('preview')
@@ -69,6 +70,29 @@ export class PreviewController {
       }
       throw ex
     }
+  }
+
+  @Get(':boxId/running')
+  @ApiOperation({
+    summary: 'Check if a public box is running',
+    operationId: 'isBoxRunning',
+  })
+  @ApiParam({
+    name: 'boxId',
+    description: 'ID of the box',
+    type: 'string',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Running status of the public box',
+    type: Boolean,
+  })
+  async isBoxRunning(@Param('boxId') boxId: string): Promise<boolean> {
+    const box = await this.boxService.findOne(boxId)
+    if (!box || !box.public || box.state !== BoxState.STARTED) {
+      throw new NotFoundException(`Box with ID ${boxId} not found`)
+    }
+    return true
   }
 
   @Get(':boxId/validate/:authToken')
