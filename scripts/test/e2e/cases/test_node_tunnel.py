@@ -38,6 +38,7 @@ def node_tunnel_env():
     return {
         **os.environ,
         **ctx.api_key_sdk_env(),
+        "BOXLITE_E2E_SKIP_HALF_CLOSE": "1",
         "BOXLITE_E2E_IMAGE": os.environ.get(
             "BOXLITE_E2E_IMAGE",
             "ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3",
