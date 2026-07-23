@@ -1,0 +1,551 @@
+# Run VM-based E2E integration tests on a persistent AWS EC2 runner.
+#
+# GitHub-hosted runners do not support nested virtualization / KVM.
+# This workflow starts a pre-configured EC2 instance, runs integration tests,
+# then stops it. The instance is never terminated — build caches persist.
+#
+# Architecture:
+#   start-runner (ubuntu-latest)  →  e2e-tests (self-hosted)  →  stop-runner (ubuntu-latest)
+#     Start stopped EC2               Build + run tests             Stop EC2
+#     Wait for runner online           50-min timeout               if: always()
+#
+# Concurrency: only ONE e2e run at a time (single persistent instance).
+# Queued runs wait; in-progress runs are cancelled by newer pushes.
+#
+# Cost: c8i.4xlarge on-demand rate only while running + ~$4/mo EBS storage.
+# Subsequent runs skip setup/compilation (cached) → ~5-10 min → ~$0.03/run.
+#
+# Authentication:
+#   AWS: GitHub OIDC → AWS STS (no stored AWS credentials)
+#   GitHub: GitHub App → short-lived installation token (no PAT)
+#
+# Fork PRs: plain `pull_request` withholds secrets AND repo variables from
+# fork runs, so start-runner cannot authenticate. The PR trigger is
+# therefore `pull_request_target` (base context: secrets available, workflow
+# definition always from main), gated by the maintainer-applied `e2e-local`
+# label. For forks the approval is per-push: only the labeling event runs,
+# pinned to the head SHA the maintainer approved — a new push needs a
+# re-label. Untrusted code runs only in e2e-tests, which holds no secrets
+# and a read-only token; the runner's instance profile can only terminate
+# the runner itself (see scripts/ci/setup-ci-runner.sh).
+#
+# Setup:   ./scripts/ci/setup-ci-runner.sh
+# Runbook: docs/ci/e2e-local.md
+name: E2E local
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/boxlite/**'
+      - 'src/shared/**'
+      - 'src/cli/**'
+      - 'src/guest/**'
+      - 'sdks/**'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/e2e-local.yml'
+  pull_request_target:
+    types: [labeled, synchronize]
+    branches: [main]
+    paths:
+      - 'src/boxlite/**'
+      - 'src/shared/**'
+      - 'src/cli/**'
+      - 'src/guest/**'
+      - 'sdks/**'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: 'Open SSH session on failure (via tmate)'
+        type: boolean
+        default: false
+
+# Single global concurrency group — only one e2e run at a time.
+# The persistent instance can only serve one job. Newer pushes cancel older runs.
+concurrency:
+  group: e2e-runner
+  cancel-in-progress: true
+
+# pull_request_target's default token is write-capable and e2e-tests runs
+# labeled fork code — keep the inherited token read-only. start-runner and
+# stop-runner declare their own id-token permissions.
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  AWS_ROLE_ARN: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-e2e-github-actions
+  EC2_INSTANCE_ID: ${{ vars.EC2_E2E_INSTANCE_ID }}
+  EC2_INSTANCE_TYPE: c8i.4xlarge
+  EC2_AMI_ID: ami-05cf1e9f73fbad2e2
+  EC2_SUBNET_IDS: ${{ vars.AWS_SUBNET_IDS || vars.AWS_SUBNET_ID }}
+  EC2_SECURITY_GROUP_ID: ${{ vars.AWS_SECURITY_GROUP_ID }}
+  RUNNER_VERSION: '2.334.0'
+  RUNNER_LABEL: boxlite-e2e
+
+jobs:
+  # =========================================================================
+  # Gate: PRs require 'e2e-local' label (only maintainers can add it).
+  # Same-repo PRs re-run while labeled; fork PRs run only on the labeling
+  # event itself, so every new fork push needs a fresh maintainer re-label.
+  # =========================================================================
+  should-run:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - name: Check trigger conditions
+        id: check
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          ADDED_LABEL: ${{ github.event.label.name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request_target" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"   # push / workflow_dispatch
+            exit 0
+          fi
+          if ! echo "$LABELS" | jq -e 'index("e2e-local")' > /dev/null 2>&1; then
+            echo "run=false" >> "$GITHUB_OUTPUT"  # label is the cost gate
+            exit 0
+          fi
+          if [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT_ACTION" = "labeled" ] && [ "$ADDED_LABEL" = "e2e-local" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Fork PR changed since its e2e-local approval. Remove and re-add the label to re-run e2e."
+          fi
+
+  # =========================================================================
+  # Job 1: Start the persistent EC2 instance and wait for runner
+  # =========================================================================
+  start-runner:
+    name: Start E2E Runner
+    needs: should-run
+    if: needs.should-run.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      instance-id: ${{ steps.ensure-instance.outputs.instance-id }}
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          # Least privilege: the registration-token and list-runners calls need
+          # repo Administration; `gh variable set EC2_E2E_INSTANCE_ID` needs
+          # Variables. Scope the token so it does not inherit other installation
+          # permissions.
+          permission-administration: write
+          permission-variables: write
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: e2e-start-${{ github.run_id }}
+
+      - name: Start or create EC2 instance
+        id: ensure-instance
+        run: |
+          INSTANCE_ID="${{ env.EC2_INSTANCE_ID }}"
+
+          # Fallback: discover by tag if variable is empty
+          if [ -z "$INSTANCE_ID" ]; then
+            INSTANCE_ID=$(aws ec2 describe-instances \
+              --filters "Name=tag:Name,Values=boxlite-e2e" "Name=instance-state-name,Values=running,stopped,stopping,pending" \
+              --query "Reservations[0].Instances[0].InstanceId" --output text 2>/dev/null || echo "")
+            [ "$INSTANCE_ID" = "None" ] && INSTANCE_ID=""
+          fi
+
+          # Check if instance exists and get its state
+          if [ -n "$INSTANCE_ID" ]; then
+            STATE=$(aws ec2 describe-instances \
+              --instance-ids "$INSTANCE_ID" \
+              --query "Reservations[0].Instances[0].State.Name" --output text 2>/dev/null || echo "not-found")
+          else
+            STATE="not-found"
+          fi
+
+          if [ "$STATE" = "running" ]; then
+            echo "Instance already running"
+            echo "instance-id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
+
+          elif [ "$STATE" = "stopped" ]; then
+            echo "Starting instance..."
+            aws ec2 start-instances --instance-ids "$INSTANCE_ID"
+            aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
+            echo "Instance started"
+            echo "instance-id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
+
+          elif [ "$STATE" = "stopping" ] || [ "$STATE" = "pending" ]; then
+            echo "Instance in transitional state ($STATE), waiting..."
+            aws ec2 wait instance-stopped --instance-ids "$INSTANCE_ID" 2>/dev/null || \
+              aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" 2>/dev/null || true
+            # Re-check and start if stopped
+            STATE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+              --query "Reservations[0].Instances[0].State.Name" --output text)
+            if [ "$STATE" = "stopped" ]; then
+              aws ec2 start-instances --instance-ids "$INSTANCE_ID"
+              aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
+            elif [ "$STATE" != "running" ]; then
+              echo "::error::Instance stuck in state: $STATE"
+              exit 1
+            fi
+            echo "instance-id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
+
+          else
+            echo "Instance not found or terminated. Creating new one..."
+
+            # Generate runner registration token for user-data
+            REG_TOKEN=$(curl -sf -X POST \
+              -H "Authorization: token ${{ steps.app-token.outputs.token }}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/runners/registration-token" \
+              | jq -r .token)
+
+            # Build user-data
+            cat > /tmp/user-data.sh << 'USERDATA'
+          #!/bin/bash
+          set -euo pipefail
+          export HOME=/root
+          modprobe kvm_intel 2>/dev/null || modprobe kvm_amd 2>/dev/null || true
+          chmod 666 /dev/kvm 2>/dev/null || true
+          usermod -aG kvm root 2>/dev/null || true
+          # User-data only installs the actions-runner. Build deps
+          # (apt + rustup + cargo-nextest) are installed by the
+          # e2e-tests job's "Install build dependencies" step so they
+          # stream to the GitHub Actions log and don't race the
+          # runner-online poll.
+          apt-get update -qq && apt-get install -y -qq curl jq tar
+          RUNNER_VERSION="__RUNNER_VERSION__"
+          mkdir -p /opt/actions-runner && cd /opt/actions-runner
+          if [ ! -f ./config.sh ]; then
+            curl -fsSL "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" | tar xz
+          fi
+          RUNNER_ALLOW_RUNASROOT=1 ./config.sh \
+            --url "https://github.com/__REPO__" \
+            --token "__REG_TOKEN__" \
+            --name "boxlite-e2e" \
+            --labels "self-hosted,linux,x64,kvm,boxlite-e2e" \
+            --unattended --disableupdate --replace || true
+          ./svc.sh install root || true
+          ./svc.sh start || true
+          USERDATA
+
+            sed -i "s|__REPO__|${{ github.repository }}|g" /tmp/user-data.sh
+            sed -i "s|__RUNNER_VERSION__|${{ env.RUNNER_VERSION }}|g" /tmp/user-data.sh
+            sed -i "s|__REG_TOKEN__|${REG_TOKEN}|g" /tmp/user-data.sh
+
+            # Launch instance — try each subnet (AZ) until one has capacity
+            INSTANCE_ID=""
+            IFS=',' read -ra SUBNET_LIST <<< "${{ env.EC2_SUBNET_IDS }}"
+            for SUBNET in "${SUBNET_LIST[@]}"; do
+              SUBNET=$(echo "$SUBNET" | xargs)
+              echo "Attempting launch in subnet $SUBNET..."
+              if RESULT=$(aws ec2 run-instances \
+                --instance-type "${{ env.EC2_INSTANCE_TYPE }}" \
+                --image-id "${{ env.EC2_AMI_ID }}" \
+                --subnet-id "$SUBNET" \
+                --security-group-ids "${{ env.EC2_SECURITY_GROUP_ID }}" \
+                --iam-instance-profile Name=boxlite-e2e-runner \
+                --cpu-options "NestedVirtualization=enabled" \
+                --user-data file:///tmp/user-data.sh \
+                --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":50,"VolumeType":"gp3","DeleteOnTermination":false}}]' \
+                --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=boxlite-e2e},{Key=Purpose,Value=boxlite-e2e}]" \
+                --metadata-options "HttpTokens=required,HttpEndpoint=enabled" \
+                --query "Instances[0].InstanceId" --output text 2>&1); then
+                INSTANCE_ID="$RESULT"
+                echo "Launched $INSTANCE_ID in subnet $SUBNET"
+                break
+              else
+                echo "::warning::Subnet $SUBNET unavailable: $RESULT"
+              fi
+            done
+
+            if [ -z "$INSTANCE_ID" ]; then
+              echo "::error::Failed to launch instance in any availability zone"
+              exit 1
+            fi
+
+            echo "Created instance: $INSTANCE_ID"
+            aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
+            echo "instance-id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
+
+            # Try to save instance ID for faster lookup on the next run.
+            # Best-effort: tag-based fallback (Name=boxlite-e2e) handles rediscovery
+            # if this fails (e.g., the auth token lacks variables:write).
+            if ! gh variable set EC2_E2E_INSTANCE_ID --body "$INSTANCE_ID" -R "${{ github.repository }}"; then
+              echo "::warning::Could not persist EC2_E2E_INSTANCE_ID. Future runs will rediscover by tag."
+            fi
+          fi
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+
+      - name: Wait for runner to come online
+        run: |
+          TIMEOUT=180
+          ELAPSED=0
+          INTERVAL=10
+
+          echo "Waiting for runner '${{ env.RUNNER_LABEL }}' to come online..."
+
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            STATUS=$(curl -sf \
+              -H "Authorization: token ${{ steps.app-token.outputs.token }}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/runners" \
+              | jq -r '.runners[] | select(.labels[].name == "${{ env.RUNNER_LABEL }}") | .status // empty' \
+              2>/dev/null || echo "")
+
+            if [ "$STATUS" = "online" ]; then
+              echo "Runner is online"
+              exit 0
+            fi
+
+            echo "  Waiting... (${ELAPSED}s / ${TIMEOUT}s)"
+            sleep $INTERVAL
+            ELAPSED=$((ELAPSED + INTERVAL))
+          done
+
+          echo "::error::Runner did not come online within ${TIMEOUT}s"
+          exit 1
+
+  # =========================================================================
+  # Job 2: Run integration tests on the persistent runner
+  # =========================================================================
+  e2e-tests:
+    name: E2E Integration Tests
+    needs: start-runner
+    runs-on:
+      - self-hosted
+      - boxlite-e2e
+    timeout-minutes: 50
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+      HOME: /root
+    steps:
+      - name: Clean workspace (persistent runner)
+        run: |
+          rm -rf /tmp/boxlite-* 2>/dev/null || true
+          if [ -d "$GITHUB_WORKSPACE/.git" ]; then
+            cd "$GITHUB_WORKSPACE"
+            git clean -ffd 2>/dev/null || true
+            git checkout -- . 2>/dev/null || true
+          fi
+
+      - name: Stage prior-run logs for rescue
+        # If a previous run died mid-step (e.g. Worker ENOSPC), its logs
+        # are still on this persistent runner under /var/log/boxlite-ci/.
+        # Move them aside so the upload step below can ship them as a
+        # separate artifact, then clear them off the runner volume.
+        #
+        # Namespace key is "<run_id>-<run_attempt>": reruns of the same
+        # workflow share github.run_id and only github.run_attempt
+        # increments, so run_id alone would let attempt N misidentify
+        # attempt N-1's directory as its own and skip rescuing it.
+        env:
+          GH_RUN_ID: ${{ github.run_id }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -u
+          BASE=/var/log/boxlite-ci
+          STAGE=/tmp/boxlite-rescue
+          CURRENT="${GH_RUN_ID}-${GH_RUN_ATTEMPT}"
+          rm -rf "$STAGE" && mkdir -p "$STAGE"
+          if [ -d "$BASE" ]; then
+            for d in "$BASE"/*; do
+              [ -d "$d" ] || continue
+              [ "$(basename "$d")" = "$CURRENT" ] && continue
+              mv "$d" "$STAGE/"
+            done
+          fi
+
+      - name: Upload rescued prior-run logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-local-logs-rescued-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp/boxlite-rescue/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Pre-flight runner cleanup (runner internals only — never caches)
+        # Housekeeping for actions-runner's own diagnostic logs so they
+        # don't accumulate over the runner's lifetime. Build/image caches
+        # (~/.boxlite/, ~/.cargo/, target/) are LEFT ALONE — they are why
+        # this runner is persistent.
+        #
+        # Triggered by run 25726812554 where _diag was the canary for a
+        # 50→500GB root-volume migration: _diag was the first write to
+        # hit ENOSPC, but the actual disk fill came from build artifacts
+        # under _work/.../target/, not from _diag itself. This step is
+        # preventative housekeeping, not the fix for that incident.
+        run: |
+          find /opt/actions-runner/_diag -maxdepth 1 -type f -name 'Worker_*.log' -mtime +1 -delete 2>/dev/null || true
+          find /opt/actions-runner/_diag -maxdepth 1 -type f -name 'Runner_*.log' -mtime +1 -delete 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          # pull_request_target resolves to the BASE branch by default, which
+          # would silently test main instead of the PR. Pin the head SHA the
+          # maintainer approved when labeling; push/dispatch keep github.sha.
+          # No credentials persist on the runner: fork code runs after this.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: recursive
+          clean: false
+          # checkout v5.1.0+ refuses fork-PR checkouts under
+          # pull_request_target unless opted in. Safe here: the run is
+          # label-gated to the maintainer-approved head SHA, this job holds
+          # no secrets, and the token is read-only and not persisted.
+          allow-unsafe-pr-checkout: true
+
+      - name: Verify KVM access
+        run: |
+          test -c /dev/kvm && test -r /dev/kvm -a -w /dev/kvm && echo "/dev/kvm is accessible" || {
+            echo "::error::/dev/kvm not accessible"; exit 1
+          }
+
+      - name: Install build dependencies (make setup)
+        run: |
+          # First run on a fresh instance: ~5–10 min (apt + rustup +
+          # cargo-nextest; CI=true so prek install is skipped).
+          # Subsequent runs reuse the persistent EBS volume and are
+          # idempotent fast-paths (~10–30 s).
+          bash scripts/setup/setup-ubuntu.sh
+
+      - name: Disk-pressure cache eviction
+        # Replaces the prior hard-fail precheck (run 25726812554 post-mortem):
+        # at >=THRESHOLD_PCT root use, evict e2e caches in place, re-check,
+        # and only fail if disk is still over threshold afterward. Caches
+        # re-warm on next run. Runner-internals housekeeping is separate
+        # (see "Pre-flight runner cleanup" step above).
+        #
+        # df parse-contract is validated before any comparison so a silent
+        # df format change surfaces as ::error::, not a fake "disk OK".
+        env:
+          THRESHOLD_PCT: '80'
+          MIN_FREE_GB: '20'
+        run: |
+          set -euo pipefail
+
+          read_df() {
+            DF_AVAIL=$(df --output=avail -BG / | tail -n 1)
+            DF_PCENT=$(df --output=pcent / | tail -n 1)
+            FREE_GB=$(printf '%s' "$DF_AVAIL" | tr -dc '0-9')
+            USED_PCT=$(printf '%s' "$DF_PCENT" | tr -dc '0-9')
+            if ! [[ "$FREE_GB" =~ ^[0-9]+$ ]] || ! [[ "$USED_PCT" =~ ^[0-9]+$ ]]; then
+              echo "::error::Could not parse df output (FREE_GB='${FREE_GB}' USED_PCT='${USED_PCT}') — df contract may have changed."
+              echo "Raw df --output=avail -BG / tail: ${DF_AVAIL}"
+              echo "Raw df --output=pcent  /  tail: ${DF_PCENT}"
+              exit 1
+            fi
+          }
+
+          read_df
+          echo "Root volume: ${FREE_GB} GB free (${USED_PCT}% used)"
+
+          if [ "${USED_PCT}" -ge "${THRESHOLD_PCT}" ]; then
+            echo "── Disk >=${THRESHOLD_PCT}% used — evicting e2e caches ──"
+            for path in target/boxlite-test /tmp/boxlite-* "$HOME/.boxlite"; do
+              for resolved in $path; do
+                [ -e "$resolved" ] || continue
+                size=$(du -sh "$resolved" 2>/dev/null | cut -f1 || echo "?")
+                echo "  clearing $resolved (was: $size)"
+                rm -rf "$resolved" 2>/dev/null || true
+              done
+            done
+            read_df
+            echo "Post-eviction: ${FREE_GB} GB free (${USED_PCT}% used)"
+            if [ "${USED_PCT}" -ge "${THRESHOLD_PCT}" ]; then
+              echo "::error::Disk still ${USED_PCT}% used after clearing all e2e caches — manual cleanup needed."
+              exit 1
+            fi
+          fi
+
+          if [ "${FREE_GB}" -lt "${MIN_FREE_GB}" ]; then
+            echo "::error::Only ${FREE_GB} GB free on / (floor=${MIN_FREE_GB}) — refusing to run integration tests."
+            exit 1
+          fi
+
+      - name: Run integration tests
+        env:
+          GH_RUN_ID: ${{ github.run_id }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          source "$HOME/.cargo/env" 2>/dev/null || true
+          export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
+          LOG_DIR="/var/log/boxlite-ci/${GH_RUN_ID}-${GH_RUN_ATTEMPT}"
+          mkdir -p "$LOG_DIR"
+          # tee to persistent volume so logs survive runner Worker death.
+          # The next run's Stage step rescues + uploads "$LOG_DIR".
+          set -o pipefail
+          make test:integration 2>&1 | tee "${LOG_DIR}/integration.log"
+
+      - name: Upload test logs on failure or cancellation
+        # `failure()` alone misses cancelled jobs (concurrency cancellation,
+        # host reboot, timeout — all surface as `cancelled()`, not failure).
+        # We want logs for every non-success outcome.
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-local-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            target/nextest/
+            /tmp/boxlite-*/
+            !/tmp/boxlite-rescue/
+            /var/log/boxlite-ci/${{ github.run_id }}-${{ github.run_attempt }}/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Debug via SSH on failure
+        if: failure() && inputs.debug
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: true
+          timeout-minutes: 30
+
+  # =========================================================================
+  # Job 3: Stop the instance (always runs)
+  # =========================================================================
+  stop-runner:
+    name: Stop E2E Runner
+    needs: [start-runner, e2e-tests]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    if: always() && needs.start-runner.outputs.instance-id != ''
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: e2e-stop-${{ github.run_id }}
+
+      - name: Stop EC2 instance
+        if: ${{ !(needs.e2e-tests.result == 'failure' && inputs.debug) }}
+        run: |
+          echo "Stopping instance ${{ needs.start-runner.outputs.instance-id }}..."
+          aws ec2 stop-instances --instance-ids "${{ needs.start-runner.outputs.instance-id }}" \
+            && echo "Instance stopping" \
+            || echo "::warning::Failed to stop instance"
+
+      - name: Skip stop (debug mode — tests failed with SSH active)
+        if: ${{ needs.e2e-tests.result == 'failure' && inputs.debug }}
+        run: echo "::warning::Instance left running for SSH debug session. Will auto-stop after 30 min idle."
