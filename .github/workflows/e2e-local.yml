@@ -143,6 +143,12 @@ jobs:
         with:
           app-id: ${{ vars.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          # Least privilege: the registration-token and list-runners calls need
+          # repo Administration; `gh variable set EC2_E2E_INSTANCE_ID` needs
+          # Variables. Scope the token so it does not inherit other installation
+          # permissions.
+          permission-administration: write
+          permission-variables: write
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4

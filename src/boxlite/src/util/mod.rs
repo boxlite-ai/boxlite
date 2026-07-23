@@ -100,10 +100,19 @@ pub fn configure_library_env(cmd: &mut Command, addr: *const libc::c_void) {
         lib_dirs.push(dylibs.to_path_buf());
     }
 
-    // 2. Embedded runtime cache (extracted include_bytes! binaries)
-    #[cfg(feature = "embedded-runtime")]
-    if let Some(runtime) = crate::runtime::embedded::EmbeddedRuntime::get() {
-        lib_dirs.push(runtime.dir().to_path_buf());
+    // 2. Explicit runtime override or embedded runtime cache.
+    let explicit_runtime = std::env::var("BOXLITE_RUNTIME_DIR")
+        .ok()
+        .filter(|value| !value.is_empty());
+    if let Some(runtime_dir) = explicit_runtime {
+        cmd.env("BOXLITE_RUNTIME_DIR", &runtime_dir);
+        lib_dirs.extend(std::env::split_paths(&runtime_dir));
+    } else {
+        #[cfg(feature = "embedded-runtime")]
+        if let Some(runtime) = crate::runtime::embedded::EmbeddedRuntime::get() {
+            cmd.env("BOXLITE_RUNTIME_DIR", runtime.dir());
+            lib_dirs.push(runtime.dir().to_path_buf());
+        }
     }
 
     if lib_dirs.is_empty() {

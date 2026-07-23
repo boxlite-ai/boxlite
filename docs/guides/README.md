@@ -59,8 +59,8 @@ scripts/
 │   ├── manylinux.sh
 │   └── musllinux.sh
 ├── build/              # Build scripts
-│   ├── guest.sh        # Guest binary (cross-compile)
-│   ├── shim.sh         # Shim binary
+│   ├── build-guest.sh  # Guest binary (cross-compile)
+│   ├── build-shim.sh   # Shim binary
 │   └── build-runtime.sh
 ├── package/            # Packaging scripts
 └── common.sh           # Shared utilities

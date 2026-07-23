@@ -12,7 +12,7 @@ make cli
 
 This builds the debug runtime first (if needed) via `make runtime:debug`, then runs `cargo build -p boxlite-cli`. The binary is produced at:
 
-```
+```text
 ./target/debug/boxlite
 ```
 

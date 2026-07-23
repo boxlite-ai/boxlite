@@ -5,12 +5,9 @@
 //! under the platform's local data dir, then serves that directory to
 //! [`RuntimeBinaryFinder`](crate::util::RuntimeBinaryFinder) for binary discovery.
 //!
-//! The extraction path depends on the build profile:
-//! - **Release**: `~/.local/share/boxlite/runtimes/v{VERSION}/` — clean, predictable
-//!   paths for published packages where all users on the same version have identical binaries.
-//! - **Debug**: `~/.local/share/boxlite/runtimes/v{VERSION}-{HASH}/` — the `{HASH}` suffix
-//!   is a 12-char SHA256 prefix of all embedded file contents, ensuring cache invalidation
-//!   when binaries change during development without a version bump.
+//! Every profile uses `~/.local/share/boxlite/runtimes/v{VERSION}-{HASH}/`, where
+//! `{HASH}` is a 12-character SHA256 prefix of all embedded file contents. This
+//! prevents same-version builds with different assets from sharing a stale cache.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -197,14 +194,9 @@ impl EmbeddedRuntime {
         let data_dir = dirs::data_local_dir()
             .ok_or_else(|| BoxliteError::Storage("No local data directory".into()))?;
 
-        // Release builds use clean version paths (all users on same version have identical
-        // binaries). Debug builds include the manifest hash for cache invalidation during
-        // development when binaries change without a version bump.
-        let dir_name = if env!("BOXLITE_BUILD_PROFILE") == "release" {
-            format!("v{}", crate::VERSION)
-        } else {
-            format!("v{}-{}", crate::VERSION, env!("BOXLITE_MANIFEST_HASH"))
-        };
+        // Include the manifest hash for every profile so rebuilding the same version
+        // with different runtime assets cannot reuse a stale extracted cache.
+        let dir_name = format!("v{}-{}", crate::VERSION, env!("BOXLITE_MANIFEST_HASH"));
 
         let dir = data_dir.join("boxlite").join("runtimes").join(dir_name);
         let parent = dir.parent().ok_or_else(|| {
@@ -246,28 +238,18 @@ mod tests {
         let dir = EmbeddedRuntime::versioned_dir().unwrap();
         let dir_str = dir.to_string_lossy();
 
-        // Verify path structure: .../boxlite/runtimes/v{VERSION}[-{HASH}]
+        // Verify path structure: .../boxlite/runtimes/v{VERSION}-{HASH}
         assert!(
             dir_str.contains("boxlite/runtimes/"),
             "Expected path to contain boxlite/runtimes/, got {}",
             dir.display()
         );
         let dir_name = dir.file_name().unwrap().to_string_lossy();
-        assert!(
-            dir_name.starts_with(&format!("v{}", crate::VERSION)),
-            "Expected dir to start with v{}, got {}",
-            crate::VERSION,
-            dir.display()
+        let expected = format!("v{}-{}", crate::VERSION, env!("BOXLITE_MANIFEST_HASH"));
+        assert_eq!(
+            dir_name, expected,
+            "Runtime dir should include the manifest hash"
         );
-
-        // Debug builds include manifest hash suffix for cache invalidation
-        if env!("BOXLITE_BUILD_PROFILE") != "release" {
-            let expected = format!("v{}-{}", crate::VERSION, env!("BOXLITE_MANIFEST_HASH"));
-            assert_eq!(
-                dir_name, expected,
-                "Debug build dir should include hash suffix"
-            );
-        }
     }
 
     #[test]
