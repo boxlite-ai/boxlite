@@ -32,7 +32,10 @@ func testGvproxyConfig() GvproxyConfig {
 }
 
 func TestBuildTapConfig_UsesHostAliasDNSZone(t *testing.T) {
-	tapConfig := buildTapConfig(testGvproxyConfig(), types.QemuProtocol)
+	tapConfig, err := buildTapConfig(testGvproxyConfig(), types.QemuProtocol)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if len(tapConfig.DNS) == 0 {
 		t.Fatal("expected at least one DNS zone")
@@ -57,7 +60,10 @@ func TestBuildTapConfig_KeepsBuiltinZonesBeforeAllowNet(t *testing.T) {
 	config := testGvproxyConfig()
 	config.AllowNet = []string{"example.com"}
 
-	tapConfig := buildTapConfig(config, types.QemuProtocol)
+	tapConfig, err := buildTapConfig(config, types.QemuProtocol)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if len(tapConfig.DNS) < 2 {
 		t.Fatalf("expected built-in and allowlist DNS zones, got %d", len(tapConfig.DNS))
@@ -72,7 +78,10 @@ func TestBuildTapConfig_KeepsBuiltinZonesBeforeAllowNet(t *testing.T) {
 }
 
 func TestBuildTapConfig_RoutesHostAliasToLoopback(t *testing.T) {
-	tapConfig := buildTapConfig(testGvproxyConfig(), types.QemuProtocol)
+	tapConfig, err := buildTapConfig(testGvproxyConfig(), types.QemuProtocol)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if got := tapConfig.NAT["192.168.127.254"]; got != "127.0.0.1" {
 		t.Fatalf("expected host IP NAT to loopback, got %q", got)
