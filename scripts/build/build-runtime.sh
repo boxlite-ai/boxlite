@@ -1,5 +1,5 @@
 #!/bin/bash
-# Assemble the BoxLite runtime from pre-built shim and guest binaries.
+# Assemble the BoxLite runtime from pre-built assets, shim, and guest binaries.
 
 set -e
 
@@ -14,9 +14,9 @@ print_help() {
 Usage: $0 [--profile debug|release]
 
 Assemble pre-built BoxLite components into a runtime containing:
+  - runtime assets from scripts/build/build-runtime-assets.sh
   - boxlite-shim
   - boxlite-guest
-  - packaged libkrunfw artifacts, when enabled
 
 Use make runtime to build prerequisites. Output is written to
 target/boxlite-runtime/<profile>.
@@ -63,40 +63,18 @@ for binary in "$SHIM_BINARY" "$GUEST_BINARY"; do
     fi
 done
 
-cargo_args=(build --lib -p boxlite --message-format=json)
-if [ -n "$CARGO_PROFILE_ARG" ]; then
-    cargo_args+=("$CARGO_PROFILE_ARG")
-fi
-
-cd "$PROJECT_ROOT"
-rm -rf "$DEST_DIR"
-cargo_messages=$(mktemp)
-trap 'rm -f "$cargo_messages"' EXIT INT TERM
-cargo "${cargo_args[@]}" >"$cargo_messages"
-
-runtime_src=$(grep '"reason":"build-script-executed"' "$cargo_messages" | grep '/src/boxlite#' | sed -n -E 's/.*"out_dir":"([^"]*)".*/\1/p' | tail -1)
-if [ -z "$runtime_src" ] || [ ! -d "$runtime_src/runtime" ]; then
-    echo "Cargo did not report a BoxLite runtime directory" >&2
+if [ ! -d "$DEST_DIR" ]; then
+    echo "Required runtime assets not found: $DEST_DIR" >&2
+    echo "Build the runtime through make so its prerequisites run first." >&2
     exit 1
 fi
-runtime_src="$runtime_src/runtime"
 
-mkdir -p "$DEST_DIR"
-cp -a "$runtime_src/." "$DEST_DIR/"
 cp "$SHIM_BINARY" "$GUEST_BINARY" "$DEST_DIR/"
 
-krunfw_count=0
-while IFS= read -r -d '' asset; do
-    cp "$asset" "$DEST_DIR/"
-    krunfw_count=$((krunfw_count + 1))
-done < <(find "$CARGO_TARGET_ROOT" -maxdepth 1 -type f -name 'libkrunfw.*' -print0)
-
-if [ "$krunfw_count" -eq 0 ]; then
-    echo "No libkrunfw runtime assets found in $CARGO_TARGET_ROOT" >&2
+if ! find "$DEST_DIR" -maxdepth 1 -type f -name 'libkrunfw.*' -print -quit | grep -q .; then
+    echo "No libkrunfw runtime assets found in $DEST_DIR" >&2
     exit 1
 fi
-
-printf 'Copied %d libkrunfw asset(s)\n' "$krunfw_count"
 
 if [ "$(detect_os)" = "macos" ]; then
     "$SCRIPT_BUILD_DIR/sign.sh" "$DEST_DIR/boxlite-shim"

@@ -37,6 +37,7 @@ dev\:python: $(if $(SETUP_DONE),,runtime) _ensure-python-deps
 dev\:c: $(if $(SETUP_DONE),,runtime)
 	@echo "🔨 Building C SDK (debug)..."
 	@cargo build -p boxlite-c
+	@bash $(SCRIPT_DIR)/build/fix-go-symbols.sh target/debug/libboxlite.a
 	@echo "✅ C SDK built:"
 	@echo "   Library: target/debug/libboxlite.{dylib,so,a}"
 	@echo "   Header:  sdks/c/include/boxlite.h"

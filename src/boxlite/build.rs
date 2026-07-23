@@ -14,7 +14,6 @@ struct CargoBuildContext {
     out_dir: PathBuf,
     // Resolve lazily so registry/prebuilt builds do not require a source workspace.
     workspace_root: OnceCell<Option<PathBuf>>,
-    primary_package: bool,
 }
 
 impl CargoBuildContext {
@@ -22,13 +21,11 @@ impl CargoBuildContext {
     fn new() -> Self {
         let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
         let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-        let primary_package = env::var_os("CARGO_PRIMARY_PACKAGE").is_some();
 
         Self {
             manifest_dir,
             out_dir,
             workspace_root: OnceCell::new(),
-            primary_package,
         }
     }
 
@@ -44,33 +41,9 @@ impl CargoBuildContext {
             .as_deref()
     }
 
-    /// Return true when BoxLite is being built by a downstream consumer.
-    fn is_dependency_build(&self) -> bool {
-        if self.primary_package {
-            return false;
-        }
-
-        match Self::target_dir_for_workspace(self.workspace_root()) {
-            Some(target_dir) => !self.out_dir.starts_with(target_dir),
-            None => true,
-        }
-    }
-
-    /// Resolve Cargo's target directory for the source workspace.
-    fn target_dir_for_workspace(workspace_root: Option<&Path>) -> Option<PathBuf> {
-        let workspace_root = workspace_root?;
-        Some(
-            env::var_os("CARGO_TARGET_DIR")
-                .map(PathBuf::from)
-                .map(|target_dir| {
-                    if target_dir.is_absolute() {
-                        target_dir
-                    } else {
-                        workspace_root.join(target_dir)
-                    }
-                })
-                .unwrap_or_else(|| workspace_root.join("target")),
-        )
+    /// Cargo includes this file in crates produced by `cargo package`.
+    fn is_packaged(&self) -> bool {
+        self.manifest_dir.join(".cargo_vcs_info.json").is_file()
     }
 
     /// Find the cargo workspace root by walking up from CARGO_MANIFEST_DIR.
@@ -97,185 +70,6 @@ impl CargoBuildContext {
             };
         }
     }
-}
-
-/// Copies all dynamic library files from source directory to destination.
-/// Only copies files with library extensions (.dylib, .so, .so.*, .dll).
-/// Preserves symlinks to avoid duplicating the same library multiple times.
-fn copy_libs(source: &Path, dest: &Path) -> Result<(), String> {
-    if !source.exists() {
-        return Err(format!(
-            "Source directory does not exist: {}",
-            source.display()
-        ));
-    }
-
-    fs::create_dir_all(dest).map_err(|e| {
-        format!(
-            "Failed to create destination directory {}: {}",
-            dest.display(),
-            e
-        )
-    })?;
-
-    for entry in fs::read_dir(source).map_err(|e| {
-        format!(
-            "Failed to read source directory {}: {}",
-            source.display(),
-            e
-        )
-    })? {
-        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-        let source_path = entry.path();
-
-        let file_name = source_path.file_name().ok_or("Failed to get filename")?;
-
-        // Only process library files
-        if !is_library_file(&source_path) {
-            continue;
-        }
-
-        let dest_path = dest.join(file_name);
-
-        // Check if source is a symlink
-        let metadata = fs::symlink_metadata(&source_path).map_err(|e| {
-            format!(
-                "Failed to read metadata for {}: {}",
-                source_path.display(),
-                e
-            )
-        })?;
-
-        if metadata.file_type().is_symlink() {
-            // Skip symlinks - runtime linker uses the full versioned name embedded in the binary
-            // (e.g., @rpath/libkrun.1.15.1.dylib, not @rpath/libkrun.dylib)
-            // Symlinks are only needed during build-time linking
-            continue;
-        }
-
-        if metadata.is_file() {
-            // Regular file - remove existing file first (maybe read-only)
-            if dest_path.exists() {
-                fs::remove_file(&dest_path).map_err(|e| {
-                    format!(
-                        "Failed to remove existing file {}: {}",
-                        dest_path.display(),
-                        e
-                    )
-                })?;
-            }
-
-            // Copy the file
-            fs::copy(&source_path, &dest_path).map_err(|e| {
-                format!(
-                    "Failed to copy {} -> {}: {}",
-                    source_path.display(),
-                    dest_path.display(),
-                    e
-                )
-            })?;
-
-            println!(
-                "cargo:warning=Bundled library: {}",
-                file_name.to_string_lossy()
-            );
-        }
-    }
-
-    Ok(())
-}
-
-/// Checks if a file is a dynamic library based on its extension.
-fn is_library_file(path: &Path) -> bool {
-    let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
-    // macOS: .dylib
-    if filename.ends_with(".dylib") {
-        return true;
-    }
-
-    // Linux: .so or .so.VERSION
-    if filename.contains(".so") {
-        return true;
-    }
-
-    // Windows: .dll
-    if filename.ends_with(".dll") {
-        return true;
-    }
-
-    false
-}
-
-/// Auto-discovers and bundles all dependencies from -sys crates.
-///
-/// Convention: Each -sys crate emits `cargo:{NAME}_BOXLITE_DEP=<path>`
-/// which becomes `DEP_{LINKS}_{NAME}_BOXLITE_DEP` env var.
-///
-/// The path can be either:
-/// - A directory: copies all library files (.dylib, .so, .dll) from it
-/// - A file: copies that single file
-///
-/// Returns a list of (name, bundled_path) pairs.
-fn bundle_boxlite_deps(runtime_dir: &Path) -> Vec<(String, PathBuf)> {
-    // Pattern: DEP_{LINKS}_{NAME}_BOXLITE_DEP
-    // Example: DEP_KRUN_LIBKRUN_BOXLITE_DEP -> libkrun (directory)
-    // Example: DEP_E2FSPROGS_MKE2FS_BOXLITE_DEP -> mke2fs (file)
-    let re = Regex::new(r"^DEP_[A-Z0-9]+_([A-Z0-9]+)_BOXLITE_DEP$").unwrap();
-
-    let mut collected = Vec::new();
-
-    for (key, source_path_str) in env::vars() {
-        if let Some(caps) = re.captures(&key) {
-            let name = caps[1].to_lowercase();
-            let source_path = Path::new(&source_path_str);
-
-            if !source_path.exists() {
-                panic!("Dependency path does not exist: {}", source_path_str);
-            }
-
-            println!(
-                "cargo:warning=Found dependency: {} at {}",
-                name, source_path_str
-            );
-
-            if source_path.is_dir() {
-                // Directory: copy library files
-                match copy_libs(source_path, runtime_dir) {
-                    Ok(()) => {
-                        collected.push((name, runtime_dir.to_path_buf()));
-                    }
-                    Err(e) => {
-                        panic!("Failed to copy {}: {}", name, e);
-                    }
-                }
-            } else {
-                // File: copy single file
-                let file_name = source_path.file_name().expect("Failed to get filename");
-                let dest_path = runtime_dir.join(file_name);
-
-                if dest_path.exists() {
-                    fs::remove_file(&dest_path).unwrap_or_else(|e| {
-                        panic!("Failed to remove {}: {}", dest_path.display(), e)
-                    });
-                }
-
-                fs::copy(source_path, &dest_path).unwrap_or_else(|e| {
-                    panic!(
-                        "Failed to copy {} -> {}: {}",
-                        source_path.display(),
-                        dest_path.display(),
-                        e
-                    )
-                });
-
-                println!("cargo:warning=Bundled: {}", file_name.to_string_lossy());
-                collected.push((name, dest_path));
-            }
-        }
-    }
-
-    collected
 }
 
 /// Compiles seccomp JSON filters to BPF bytecode at build time.
@@ -585,7 +379,7 @@ impl PrebuiltRuntime {
 
     /// Downloads prebuilt runtime binaries from GitHub Releases.
     ///
-    /// Called when BOXLITE_DEPS_STUB is set (i.e., -sys crates skipped their builds).
+    /// Used by packaged crates, whose repository-built runtime is unavailable.
     /// Downloads the full `boxlite-runtime-v{version}-{target}.tar.gz` tarball which contains
     /// all native libraries (libkrun, libgvproxy, etc.) and tool binaries.
     fn download(&self) -> bool {
@@ -662,41 +456,6 @@ impl PrebuiltRuntime {
                 println!("cargo:warning=Failed to extract runtime tarball: {}", e);
                 false
             }
-        }
-    }
-}
-
-/// How native dependencies are resolved.
-///
-/// Controlled by the `BOXLITE_DEPS_STUB` environment variable:
-/// - unset  → `Source`:   build -sys crates from source, bundle outputs
-/// - `1`    → `Stub`:     skip everything, for CI `cargo check`/`cargo clippy`
-/// - `2`    → `Prebuilt`: skip -sys builds, download prebuilt from GitHub Releases
-enum DepsMode {
-    Source,
-    Stub,
-    Prebuilt,
-}
-
-impl DepsMode {
-    /// Convert BOXLITE_DEPS_STUB into the native dependency resolution mode.
-    fn from_env() -> Self {
-        match env::var("BOXLITE_DEPS_STUB").ok().as_deref() {
-            Some("2") => Self::Prebuilt,
-            Some(_) => Self::Stub,
-            None => Self::Source,
-        }
-    }
-}
-
-/// Auto-set BOXLITE_DEPS_STUB=2 when downloaded from a registry (crates.io).
-/// Cargo adds .cargo_vcs_info.json to published packages.
-fn auto_detect_registry() {
-    if env::var("BOXLITE_DEPS_STUB").is_err() {
-        let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-        if manifest_dir.join(".cargo_vcs_info.json").exists() {
-            // SAFETY: build.rs is single-threaded; no concurrent env var access.
-            unsafe { env::set_var("BOXLITE_DEPS_STUB", "2") };
         }
     }
 }
@@ -841,12 +600,10 @@ impl EmbeddedManifest {
 
     /// Top-level entry point for embedded manifest generation.
     ///
-    /// When `embedded-runtime` feature is enabled and deps are available (Source mode),
-    /// finds pre-built shim/guest binaries, copies them to the runtime dir, and generates
-    /// an `include_bytes!` manifest for all files in the runtime dir.
+    /// Embeds files from the prepared runtime directory.
     ///
-    /// When the feature is off or in Stub mode, generates an empty manifest.
-    fn generate(&self, mode: &DepsMode, cargo: &CargoBuildContext) {
+    /// When the feature is off, generates an empty manifest.
+    fn generate(&self, cargo: &CargoBuildContext) {
         let manifest_path = cargo.out_dir().join("embedded_manifest.rs");
 
         let enabled = env::var("CARGO_FEATURE_EMBEDDED_RUNTIME").is_ok();
@@ -856,265 +613,21 @@ impl EmbeddedManifest {
             return;
         }
 
-        if matches!(mode, DepsMode::Stub) {
-            Self::emit_manifest(&manifest_path, &[]);
-            return;
-        }
-
-        if matches!(mode, DepsMode::Prebuilt) {
-            let entries = self.scan_entries();
-            Self::emit_manifest(&manifest_path, &entries);
-            return;
-        }
-
-        let prebuilt_runtime = PrebuiltRuntime::new(&self.runtime_dir);
-        if cargo.is_dependency_build() && prebuilt_runtime.is_complete() {
-            let entries = self.scan_entries();
-            Self::emit_manifest(&manifest_path, &entries);
-            return;
-        }
-
-        // Feature enabled: collect pre-built binaries into runtime_dir,
-        // then generate include_bytes! for all files.
-        let Some(workspace_root) = cargo.workspace_root() else {
-            let entries = self.scan_entries();
-            Self::emit_manifest(&manifest_path, &entries);
-            return;
-        };
-
-        fs::create_dir_all(&self.runtime_dir)
-            .unwrap_or_else(|e| panic!("Failed to create runtime directory: {}", e));
-
-        let profile = env::var("PROFILE").unwrap();
-
-        self.copy_prebuilt_binary(
-            workspace_root,
-            "boxlite-shim",
-            &profile,
-            Self::find_prebuilt_shim,
-        );
-        self.copy_prebuilt_binary(
-            workspace_root,
-            "boxlite-guest",
-            &profile,
-            Self::find_prebuilt_guest,
-        );
-
         let entries = self.scan_entries();
         Self::emit_manifest(&manifest_path, &entries);
     }
-
-    /// Copy a pre-built binary into the runtime directory.
-    ///
-    /// Always overwrites the destination to avoid stale binaries when the source
-    /// is rebuilt. Emits `cargo:rerun-if-changed` for the source path so cargo
-    /// re-runs build.rs when the binary changes.
-    ///
-    /// Uses the provided `finder` function to locate the binary. If not found,
-    /// warns and skips — this happens when building boxlite-shim itself (the
-    /// binary doesn't exist yet). The embedded manifest will simply omit it.
-    fn copy_prebuilt_binary(
-        &self,
-        workspace_root: &Path,
-        name: &str,
-        profile: &str,
-        finder: fn(&Path, &str) -> Option<PathBuf>,
-    ) {
-        let Some(source) = finder(workspace_root, profile) else {
-            println!("cargo:warning={} not found, skipping embed", name);
-            return;
-        };
-
-        // Re-run build.rs when the source binary changes.
-        println!("cargo:rerun-if-changed={}", source.display());
-
-        let dest = self.runtime_dir.join(name);
-        fs::copy(&source, &dest).unwrap_or_else(|e| {
-            panic!(
-                "Failed to copy {} -> {}: {}",
-                source.display(),
-                dest.display(),
-                e
-            )
-        });
-
-        // Ensure boxlite-shim has the hypervisor entitlement on macOS. Cargo's
-        // implicit bin-target rebuild (triggered by any `cargo test -p boxlite`)
-        // produces an unsigned shim; without this step the embedded copy — and
-        // therefore every integration test — would fail with
-        // "Hypervisor.framework access denied".
-        if name == "boxlite-shim" && cfg!(target_os = "macos") {
-            sign_shim_with_entitlements(&dest);
-        }
-
-        println!(
-            "cargo:warning=Embedded {}: {} ({:.1} MB)",
-            name,
-            source.display(),
-            fs::metadata(&dest).map(|m| m.len()).unwrap_or(0) as f64 / (1024.0 * 1024.0)
-        );
-    }
-
-    /// Find pre-built boxlite-shim binary for the given build profile.
-    ///
-    /// Search order:
-    /// 1. Current Cargo target: `target/{TARGET}/{profile}/boxlite-shim`
-    /// 2. Native build output: `target/{profile}/boxlite-shim`
-    fn find_prebuilt_shim(workspace_root: &Path, profile: &str) -> Option<PathBuf> {
-        let target_dir = workspace_root.join("target");
-
-        if let Ok(target) = env::var("TARGET") {
-            let target_path = target_dir.join(target).join(profile).join("boxlite-shim");
-            if target_path.is_file() {
-                return Some(target_path);
-            }
-        }
-
-        let native = target_dir.join(profile).join("boxlite-shim");
-        if native.is_file() {
-            return Some(native);
-        }
-
-        None
-    }
-
-    /// Find pre-built boxlite-guest binary for the given build profile.
-    ///
-    /// Checks matching architecture first to avoid picking wrong binary on
-    /// multi-arch machines (e.g., x86_64 guest embedded into aarch64 build).
-    fn find_prebuilt_guest(workspace_root: &Path, profile: &str) -> Option<PathBuf> {
-        let target_dir = workspace_root.join("target");
-
-        // Check matching architecture first, then fall back to others
-        for arch in Self::preferred_arches() {
-            let path = target_dir
-                .join(format!("{}-unknown-linux-musl", arch))
-                .join(profile)
-                .join("boxlite-guest");
-            if path.is_file() {
-                return Some(path);
-            }
-        }
-
-        None
-    }
-
-    /// Return architecture list with the build target's arch first.
-    ///
-    /// On multi-arch machines with both x86_64 and aarch64 binaries built,
-    /// this ensures we pick the one matching the current build target.
-    fn preferred_arches() -> Vec<&'static str> {
-        let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
-        match arch.as_str() {
-            "aarch64" => vec!["aarch64", "x86_64"],
-            "x86_64" => vec!["x86_64", "aarch64"],
-            _ => vec!["x86_64", "aarch64"],
-        }
-    }
 }
-
-/// Sign a macOS binary with the hypervisor entitlement (ad-hoc).
-///
-/// A freshly built shim can be unsigned even when a previous build output was
-/// signed by `scripts/build/sign.sh`. Signing the runtime-dir copy here makes
-/// the embed step self-sufficient and prevents VM startup failures with
-/// "Hypervisor.framework access denied".
-fn sign_shim_with_entitlements(binary: &Path) {
-    const ENTITLEMENTS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>com.apple.security.hypervisor</key>
-    <true/>
-    <key>com.apple.security.cs.disable-library-validation</key>
-    <true/>
-</dict>
-</plist>
-"#;
-
-    // codesign's --entitlements needs a real file path; pass a temp plist
-    // written next to the binary.
-    let plist_path = binary.with_file_name(format!(
-        "{}.entitlements.plist",
-        binary
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("shim")
-    ));
-    if let Err(e) = fs::write(&plist_path, ENTITLEMENTS) {
-        println!(
-            "cargo:warning=failed to write entitlements plist for {}: {}",
-            binary.display(),
-            e
-        );
-        return;
-    }
-
-    let output = Command::new("codesign")
-        .args([
-            "-s",
-            "-",
-            "--force",
-            "--entitlements",
-            plist_path
-                .to_str()
-                .expect("entitlements path must be UTF-8"),
-            binary.to_str().expect("shim path must be valid UTF-8"),
-        ])
-        .output();
-
-    let _ = fs::remove_file(&plist_path);
-
-    match output {
-        Ok(out) if out.status.success() => {
-            println!(
-                "cargo:warning=Signed {} with hypervisor entitlement",
-                binary.display()
-            );
-        }
-        Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            println!(
-                "cargo:warning=codesign on {} failed ({}): {}",
-                binary.display(),
-                out.status,
-                stderr.trim()
-            );
-        }
-        Err(e) => {
-            println!(
-                "cargo:warning=codesign could not be spawned for {}: {}",
-                binary.display(),
-                e
-            );
-        }
-    }
-}
-/// Computes and embeds the `boxlite-guest` binary hash.
-///
-/// Search order:
-/// 1. Direct build output: `target/{target-triple}/{profile}/boxlite-guest`
-/// 2. `runtime_dir` (OUT_DIR/runtime/ — for prebuilt mode)
-///
-/// IMPORTANT: The source binary (direct build output) must be checked FIRST because
-/// this runs before embedded manifest generation in main(). The OUT_DIR/runtime/ copy
-/// may be from a previous build and stale when the guest binary was rebuilt.
+/// Computes and embeds the `boxlite-guest` hash from the assembled runtime.
 ///
 /// If the binary isn't found, silently skips — runtime will compute the hash as fallback.
 struct GuestBinaryHash<'a> {
     runtime_dir: &'a Path,
-    mode: &'a DepsMode,
-    cargo: &'a CargoBuildContext,
 }
 
 impl<'a> GuestBinaryHash<'a> {
     /// Create a guest binary hash emitter.
-    fn new(runtime_dir: &'a Path, mode: &'a DepsMode, cargo: &'a CargoBuildContext) -> Self {
-        Self {
-            runtime_dir,
-            mode,
-            cargo,
-        }
+    fn new(runtime_dir: &'a Path) -> Self {
+        Self { runtime_dir }
     }
 
     /// Emit BOXLITE_GUEST_HASH when a guest binary is available.
@@ -1144,25 +657,8 @@ impl<'a> GuestBinaryHash<'a> {
         }
     }
 
-    /// Pick the best available guest binary for hashing.
+    /// Find the guest binary in the assembled runtime.
     fn guest_path(&self) -> Option<PathBuf> {
-        let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
-        self.source_guest_path(&profile)
-            .or_else(|| self.runtime_guest_path())
-    }
-
-    /// Find the workspace-built guest binary in source builds.
-    fn source_guest_path(&self, profile: &str) -> Option<PathBuf> {
-        if !matches!(self.mode, DepsMode::Source) {
-            return None;
-        }
-
-        let workspace_root = self.cargo.workspace_root()?;
-        EmbeddedManifest::find_prebuilt_guest(workspace_root, profile)
-    }
-
-    /// Find the guest binary already copied into OUT_DIR/runtime.
-    fn runtime_guest_path(&self) -> Option<PathBuf> {
         let path = self.runtime_dir.join("boxlite-guest");
         path.is_file().then_some(path)
     }
@@ -1188,9 +684,6 @@ impl<'a> GuestBinaryHash<'a> {
 /// bundle all required libraries and binaries together.
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-env-changed=BOXLITE_DEPS_STUB");
-
-    auto_detect_registry();
 
     // Compile KVM smoke test helper (C, Linux only).
     // Rust's libc::ioctl() variadic FFI has ABI issues with some KVM ioctls
@@ -1207,7 +700,7 @@ fn main() {
     compile_seccomp_filters();
 
     let cargo = CargoBuildContext::new();
-    let mode = DepsMode::from_env();
+    let packaged = cargo.is_packaged();
     let embedded_runtime = env::var("CARGO_FEATURE_EMBEDDED_RUNTIME").is_ok();
 
     let runtime_dir = cargo.out_dir().join("runtime");
@@ -1233,90 +726,41 @@ fn main() {
     if let Some(source_dir) = &canonical_runtime {
         println!("cargo:rerun-if-changed={}", source_dir.display());
     }
-    if matches!(mode, DepsMode::Source)
-        && let Some(source_dir) = canonical_runtime.filter(|path| path.is_dir())
-    {
+    if !packaged && let Some(source_dir) = canonical_runtime.filter(|path| path.is_dir()) {
         println!("cargo:rustc-link-search=native={}", source_dir.display());
         println!("cargo:runtime_dir={}", source_dir.display());
-        let existing_runtime_mode = DepsMode::Prebuilt;
-        GuestBinaryHash::new(&source_dir, &existing_runtime_mode, &cargo).emit();
-        EmbeddedManifest::new(&source_dir).generate(&existing_runtime_mode, &cargo);
+        GuestBinaryHash::new(&source_dir).emit();
+        EmbeddedManifest::new(&source_dir).generate(&cargo);
         return;
     }
+    if !packaged {
+        println!(
+            "cargo:warning=No assembled runtime found; run `make runtime` before building an embedded artifact"
+        );
+        println!("cargo:runtime_dir=/nonexistent");
+        EmbeddedManifest::new(&runtime_dir).generate(&cargo);
+        return;
+    }
+
+    // Packaged crates have no repository-assembled runtime, so download the
+    // release artifact matching the crate version and target.
     let prebuilt_runtime = PrebuiltRuntime::new(&runtime_dir);
-
-    match &mode {
-        DepsMode::Stub => {
-            // Check-only mode: skip dependency bundling but still generate
-            // the embedded manifest (needed for env!() macros in embedded.rs)
-            println!("cargo:warning=BOXLITE_DEPS_STUB=1: skipping dependency bundling");
-            println!("cargo:runtime_dir=/nonexistent");
-            EmbeddedManifest::new(&runtime_dir).generate(&mode, &cargo);
-            return;
-        }
-        DepsMode::Prebuilt => {
-            // Download prebuilt runtime from GitHub Releases
-            println!("cargo:warning=BOXLITE_DEPS_STUB=2: downloading prebuilt runtime");
-            fs::create_dir_all(&runtime_dir)
-                .unwrap_or_else(|e| panic!("Failed to create runtime directory: {}", e));
-            if !prebuilt_runtime.download() {
-                panic!(
-                    "Failed to prepare complete prebuilt BoxLite runtime in {}",
-                    runtime_dir.display()
-                );
-            }
-            // Embed runtime directory for compile-time fallback by RuntimeBinaryFinder.
-            // Runtime override remains BOXLITE_RUNTIME_DIR (read via std::env::var).
-            // Compile-time embed is only needed in prebuilt mode.
-            println!(
-                "cargo:rustc-env=BOXLITE_RUNTIME_DIR={}",
-                runtime_dir.display()
-            );
-        }
-        DepsMode::Source => {
-            // Normal: rebuild staging from current -sys crate outputs.
-            if runtime_dir.exists() {
-                fs::remove_dir_all(&runtime_dir).unwrap_or_else(|e| {
-                    panic!(
-                        "Failed to clean runtime directory {}: {}",
-                        runtime_dir.display(),
-                        e
-                    )
-                });
-            }
-            fs::create_dir_all(&runtime_dir)
-                .unwrap_or_else(|e| panic!("Failed to create runtime directory: {}", e));
-            let collected = bundle_boxlite_deps(&runtime_dir);
-            if !collected.is_empty() {
-                let names: Vec<_> = collected.iter().map(|(name, _)| name.as_str()).collect();
-                println!("cargo:warning=Bundled: {}", names.join(", "));
-            }
-            if cargo.is_dependency_build() && !prebuilt_runtime.is_complete() {
-                let incomplete = prebuilt_runtime.incomplete_reasons();
-                println!(
-                    "cargo:warning=Dependency build has incomplete runtime [{}]; downloading prebuilt runtime",
-                    incomplete.join(", ")
-                );
-                if !prebuilt_runtime.download() {
-                    panic!(
-                        "Failed to prepare complete prebuilt BoxLite runtime in {}",
-                        runtime_dir.display()
-                    );
-                }
-            }
-        }
-    };
-
-    // Tell the linker where to find the bundled libraries.
-    println!("cargo:rustc-link-search=native={}", runtime_dir.display());
+    fs::create_dir_all(&runtime_dir)
+        .unwrap_or_else(|e| panic!("Failed to create runtime directory: {}", e));
+    if !prebuilt_runtime.download() {
+        panic!(
+            "Failed to prepare complete prebuilt BoxLite runtime in {}",
+            runtime_dir.display()
+        );
+    }
 
     // Expose the runtime directory to downstream crates (e.g., Python SDK)
     println!("cargo:runtime_dir={}", runtime_dir.display());
 
     // Compute and embed guest binary hash at compile time (best-effort).
     // Falls back to runtime computation if the binary isn't available yet.
-    GuestBinaryHash::new(&runtime_dir, &mode, &cargo).emit();
+    GuestBinaryHash::new(&runtime_dir).emit();
 
     // Generate embedded runtime manifest (include_bytes! for self-contained SDKs)
-    EmbeddedManifest::new(&runtime_dir).generate(&mode, &cargo);
+    EmbeddedManifest::new(&runtime_dir).generate(&cargo);
 }

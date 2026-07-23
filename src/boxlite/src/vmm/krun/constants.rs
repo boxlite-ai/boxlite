@@ -1,3 +1,15 @@
+/// Disk format constants from libkrun's public C API.
+pub const KRUN_DISK_FORMAT_RAW: u32 = 0;
+pub const KRUN_DISK_FORMAT_QCOW2: u32 = 1;
+
+/// Kernel format constants from libkrun's public C API.
+pub const KRUN_KERNEL_FORMAT_RAW: u32 = 0;
+pub const KRUN_KERNEL_FORMAT_ELF: u32 = 1;
+pub const KRUN_KERNEL_FORMAT_PE_GZ: u32 = 2;
+pub const KRUN_KERNEL_FORMAT_IMAGE_BZ2: u32 = 3;
+pub const KRUN_KERNEL_FORMAT_IMAGE_GZ: u32 = 4;
+pub const KRUN_KERNEL_FORMAT_IMAGE_ZSTD: u32 = 5;
+
 /// TSI (Transparent Socket Impersonation) feature configuration for vsock devices.
 #[derive(Debug, Clone, Copy)]
 pub enum TsiFeatures {

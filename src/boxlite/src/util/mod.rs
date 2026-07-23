@@ -121,13 +121,10 @@ pub fn configure_library_env(cmd: &mut Command, addr: *const libc::c_void) {
 
     #[cfg(target_os = "macos")]
     {
-        let mut paths: Vec<String> = lib_dirs.iter().map(|d| d.display().to_string()).collect();
-        if let Ok(existing) = std::env::var("DYLD_FALLBACK_LIBRARY_PATH") {
-            paths.push(existing);
-        }
-        let fallback_path = paths.join(":");
-        cmd.env("DYLD_FALLBACK_LIBRARY_PATH", &fallback_path);
-        tracing::debug!(path = %fallback_path, "Set DYLD_FALLBACK_LIBRARY_PATH");
+        let library_path = std::env::join_paths(&lib_dirs)
+            .expect("library search paths must not contain the platform separator");
+        cmd.env("DYLD_LIBRARY_PATH", &library_path);
+        tracing::debug!(path = %library_path.display(), "Set DYLD_LIBRARY_PATH");
     }
 
     #[cfg(target_os = "linux")]

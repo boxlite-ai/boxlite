@@ -199,12 +199,5 @@ lint\:go:
 
 clippy: _ensure-python-deps
 	@echo "🔍 Running Rust clippy checks..."
-	@# Vendored libkrun crates are auto-enrolled as path-dependency workspace members;
-	@# compile them through BoxLite's selected features, but do not apply workspace
-	@# all-features or -D warnings to upstream code.
-	@if [ "$$(uname)" = "Darwin" ]; then \
-		BOXLITE_DEPS_STUB=1 cargo clippy --workspace --all-targets --all-features --no-deps --exclude boxlite-guest --exclude libkrun --exclude 'krun-*' -- -D warnings && \
-		BOXLITE_DEPS_STUB=1 cargo clippy -p boxlite-guest --target "$$(bash scripts/util.sh --target)" --all-targets --all-features --no-deps -- -D warnings; \
-	else \
-		BOXLITE_DEPS_STUB=1 cargo clippy --workspace --all-targets --all-features --no-deps --exclude libkrun --exclude 'krun-*' -- -D warnings; \
-	fi
+	@cargo clippy --workspace --all-targets --all-features --features libgvproxy-sys/skip-native-build --no-deps --exclude boxlite-guest -- -D warnings
+	@cargo clippy -p boxlite-guest --target "$$(bash scripts/util.sh --target)" --all-targets --all-features --no-deps -- -D warnings

@@ -301,17 +301,14 @@ jobs:
 
   # Publish Rust crates to crates.io after runtime tarballs are on GitHub Release.
   # Runtime tarballs must exist first because crates.io consumers download them
-  # via boxlite/build.rs (auto_detect_registry -> download_prebuilt_runtime).
+  # directly from packaged-crate detection in boxlite/build.rs.
   #
   # Publish order matters: leaf crates (Tier 1) before boxlite (Tier 2).
-  # BOXLITE_DEPS_STUB=1 skips native builds during cargo publish verification.
   publish_crates:
     name: Publish to crates.io
     needs: upload_to_release
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
-    env:
-      BOXLITE_DEPS_STUB: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -351,19 +348,14 @@ jobs:
           # Pure-Rust crate verifies normally
           publish_crate boxlite-shared
 
-          # Temporarily skipped: the vendored libkrun path dependency is not
-          # publishable as-is. Follow-up: #962.
-          # publish_crate libkrun-sys --no-verify
-          publish_crate e2fsprogs-sys --no-verify
+          # TODO: Stop publishing this FFI-only package or ship prebuilt archives.
           publish_crate libgvproxy-sys --no-verify
-          publish_crate bubblewrap-sys --no-verify
 
       - name: Wait for crates.io indexing
         run: sleep 60
 
-      # boxlite uses --no-verify because the boxlite-shim binary links libkrun,
-      # which isn't available in stub mode. The real build already succeeded in the
-      # build job, so skipping verification is safe.
+      # boxlite uses --no-verify because release verification would download and
+      # embed the prebuilt runtime that this workflow has just uploaded.
       - name: Publish boxlite (Tier 2)
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

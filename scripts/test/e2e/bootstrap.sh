@@ -250,10 +250,10 @@ if [[ "$GO_INSTALL" == "1" ]]; then
 fi
 
 # 7c. C build-dependency stack + libboxlite.{a,so}.
-# Fresh Ubuntu doesn't have meson / ninja / build-essential and the
-# repo's bubblewrap-sys / e2fsprogs-sys / libkrun-sys crates all shell
-# out to those during `cargo build`. `make setup:build` is the
-# canonical installer (routes to scripts/setup/setup-ubuntu.sh).
+# Fresh Ubuntu doesn't have the native toolchain used by the explicit runtime
+# asset scripts. `make setup:build` is the canonical installer (routes to
+# scripts/setup/setup-ubuntu.sh), and `make dist:c` builds and assembles the
+# runtime before packaging the C SDK.
 # `make dist:c` then runs the C SDK release build AND stages the
 # libraries to sdks/c/dist/lib/. Direct `cargo build -p boxlite-c`
 # would skip the staging step that future tooling (e.g. fix-go-symbols)

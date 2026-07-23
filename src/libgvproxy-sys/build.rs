@@ -67,22 +67,19 @@ fn main() {
         }
     }
     println!("cargo:rerun-if-changed=gvproxy-bridge"); // also watch for new files
-    println!("cargo:rerun-if-env-changed=BOXLITE_DEPS_STUB");
 
-    // Auto-detect crates.io download: Cargo injects .cargo_vcs_info.json into
-    // published packages. When present, enter stub mode since Go sources are
-    // excluded from the package and building from source is not possible.
-    if env::var("BOXLITE_DEPS_STUB").is_err() {
-        let manifest_dir = std::path::PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-        if manifest_dir.join(".cargo_vcs_info.json").exists() {
-            // SAFETY: build.rs is single-threaded; no concurrent env var access.
-            unsafe { env::set_var("BOXLITE_DEPS_STUB", "1") };
-        }
+    if env::var_os("CARGO_FEATURE_SKIP_NATIVE_BUILD").is_some() {
+        println!("cargo:warning=skip-native-build enabled: skipping libgvproxy Go build");
+        return;
     }
 
-    // Check for stub mode (for CI linting or crates.io install)
-    if env::var("BOXLITE_DEPS_STUB").is_ok() {
-        println!("cargo:warning=BOXLITE_DEPS_STUB mode: skipping libgvproxy build");
+    let manifest_dir = std::path::PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    if manifest_dir.join(".cargo_vcs_info.json").exists() {
+        // TODO: Published libgvproxy-sys packages exclude the Go bridge and
+        // therefore provide FFI declarations only; they cannot satisfy a final
+        // native link on their own. Stop publishing this crate or ship a
+        // target-specific prebuilt libgvproxy archive before removing this skip.
+        println!("cargo:warning=published package: skipping excluded libgvproxy Go sources");
         return;
     }
 

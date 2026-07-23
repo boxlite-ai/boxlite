@@ -48,15 +48,11 @@ use std::path::{Path, PathBuf};
 /// macOS = 104, Linux = 108. Use the smaller value for cross-platform safety.
 const MAX_SUN_PATH: usize = 104;
 
-/// The longest socket path bound inside a box's sockets directory.
+/// Suffix reserved for libkrun's local endpoint of the Unix datagram pair.
 ///
-/// Not a socket we create directly: libkrun derives its side of the network
-/// datagram pair by appending `-krun.sock` to the gvproxy socket path
-/// (`net.sock`) — see the vendored
-/// `libkrun/src/devices/src/virtio/net/unixgram.rs`. With unconditional
-/// short binding this is only a sanity check on the SHORT path; a vendor-pin
-/// test asserts the derivation still exists upstream.
-const LONGEST_SOCKET_NAME: &str = "net.sock-krun.sock";
+/// This is a BoxLite/libkrun compatibility contract. If libkrun changes its
+/// endpoint naming, update this constant and the socket-budget tests together.
+pub const KRUN_NET_SOCKET_SUFFIX: &str = "-krun.sock";
 
 /// gRPC control socket filename.
 const BOX_SOCK: &str = "box.sock";
@@ -124,8 +120,7 @@ impl BoxSockets {
         self.binding_dir().join(READY_SOCK)
     }
 
-    /// Network backend socket (gvproxy binds; libkrun derives a sibling
-    /// `net.sock-krun.sock` from this path — the longest path in the dir).
+    /// Network backend socket bound by gvproxy.
     pub fn net_backend_sock(&self) -> PathBuf {
         self.binding_dir().join(NET_SOCK)
     }
@@ -136,20 +131,23 @@ impl BoxSockets {
         let parent = Self::parent_dir();
         ensure_owned_private_dir(&parent)?;
 
-        // Sanity: even the short path must fit. With a /tmp base and minted
-        // box ids this is unreachable; it guards absurd ids/bases loudly.
-        let longest = self.binding_dir().join(LONGEST_SOCKET_NAME);
-        if longest.as_os_str().len() >= MAX_SUN_PATH {
+        let symlink_path = self.binding_dir();
+        // Account for the filename and suffix libkrun appends without allocating
+        // a derived PathBuf. With a /tmp base and minted box ids this is
+        // unreachable; it guards absurd ids or naming changes loudly.
+        let longest_len = symlink_path.as_os_str().len()
+            + std::path::MAIN_SEPARATOR_STR.len()
+            + NET_SOCK.len()
+            + KRUN_NET_SOCKET_SUFFIX.len();
+        if longest_len >= MAX_SUN_PATH {
             return Err(BoxliteError::Internal(format!(
-                "Socket path '{}' ({} bytes) exceeds sun_path limit ({} bytes) \
-                 even via the binding symlink.",
-                longest.display(),
-                longest.as_os_str().len(),
+                "Derived network socket under '{}' ({} bytes) exceeds sun_path \
+                 limit ({} bytes) even via the binding symlink.",
+                symlink_path.display(),
+                longest_len,
                 MAX_SUN_PATH,
             )));
         }
-
-        let symlink_path = self.binding_dir();
 
         // Handle an existing entry at the symlink location.
         match std::fs::symlink_metadata(&symlink_path) {
@@ -327,8 +325,11 @@ mod tests {
         assert_eq!(s.ready_sock(), expect.join("ready.sock"));
         assert_eq!(s.net_backend_sock(), expect.join("net.sock"));
         for p in [s.box_sock(), s.ready_sock(), s.net_backend_sock()] {
-            assert!(p.as_os_str().len() + "-krun.sock".len() < MAX_SUN_PATH);
+            assert!(p.as_os_str().len() < MAX_SUN_PATH);
         }
+        assert!(
+            s.net_backend_sock().as_os_str().len() + KRUN_NET_SOCKET_SUFFIX.len() < MAX_SUN_PATH
+        );
     }
 
     #[test]
@@ -342,7 +343,9 @@ mod tests {
         let deep = tmp.path().join("p".repeat(88 - base_len - 1));
         std::fs::create_dir_all(&deep).unwrap();
         let ready = deep.join("ready.sock").as_os_str().len();
-        let krun = deep.join(LONGEST_SOCKET_NAME).as_os_str().len();
+        let mut krun = deep.join(NET_SOCK).into_os_string();
+        krun.push(KRUN_NET_SOCKET_SUFFIX);
+        let krun = PathBuf::from(krun).as_os_str().len();
         assert!(
             ready < MAX_SUN_PATH && krun >= MAX_SUN_PATH,
             "test setup: want dead zone, got ready.sock={ready}, krun={krun}",
@@ -351,8 +354,8 @@ mod tests {
         let s = BoxSockets::new("deadzone1", &deep);
         s.ensure().unwrap();
         assert!(
-            s.net_backend_sock().as_os_str().len() + "-krun.sock".len() < MAX_SUN_PATH,
-            "binding path must fit with krun's derived suffix"
+            s.net_backend_sock().as_os_str().len() + KRUN_NET_SOCKET_SUFFIX.len() < MAX_SUN_PATH,
+            "binding path must fit with the derived network endpoint"
         );
         assert_eq!(std::fs::read_link(s.binding_dir()).unwrap(), deep);
         s.remove();
@@ -526,7 +529,9 @@ mod tests {
             .join("and_another_long_segment_here_too")
             .join("sockets");
         std::fs::create_dir_all(&deep).unwrap();
-        assert!(deep.join(LONGEST_SOCKET_NAME).as_os_str().len() >= MAX_SUN_PATH);
+        let mut longest = deep.join(NET_SOCK).into_os_string();
+        longest.push(KRUN_NET_SOCKET_SUFFIX);
+        assert!(PathBuf::from(longest).as_os_str().len() >= MAX_SUN_PATH);
 
         let short_link = tmp.path().join("s");
         symlink(&deep, &short_link).unwrap();
@@ -539,25 +544,5 @@ mod tests {
         let _stream = std::os::unix::net::UnixStream::connect(&short_path).unwrap();
         assert!(deep.join("kernel_test.sock").exists());
         drop(listener);
-    }
-
-    // ========================================================================
-    // Vendor pin: LONGEST_SOCKET_NAME tracks libkrun's derivation
-    // ========================================================================
-
-    #[test]
-    fn vendored_libkrun_still_derives_krun_sock_suffix() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../deps/libkrun-sys/vendor/libkrun/src/devices/src/virtio/net/unixgram.rs"
-        );
-        let src = std::fs::read_to_string(path)
-            .unwrap_or_else(|e| panic!("cannot read vendored libkrun source {path}: {e}"));
-        assert!(
-            src.contains("-krun.sock"),
-            "vendored libkrun no longer derives a '-krun.sock' sibling socket; \
-             re-derive LONGEST_SOCKET_NAME in net/socket_path.rs from the new \
-             vendored behavior before trusting the sun_path sanity check"
-        );
     }
 }

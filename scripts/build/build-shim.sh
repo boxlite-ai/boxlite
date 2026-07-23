@@ -82,7 +82,7 @@ build_shim_binary() {
     else
         # libkrun always builds a Linux init binary, even when its host library
         # targets macOS. Configure the cross compiler before Cargo starts building
-        # dependencies; libkrun-sys/build.rs runs too late to affect them.
+        # the dependency graph.
         configure_libkrun_cc_linux || return 1
         cargo_args=(build -p boxlite-shim)
         if [ -n "$CARGO_PROFILE_ARG" ]; then

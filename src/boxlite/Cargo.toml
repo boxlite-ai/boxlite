@@ -22,13 +22,9 @@ path = "src/lib.rs"
 crate-type = ["rlib"]
 
 [features]
-default = ["embedded-runtime", "krunfw", "e2fsprogs", "bubblewrap"]
-gvproxy = ["dep:libgvproxy-sys"]                             # Shim-side libgvproxy CGO shared library
-e2fsprogs = ["dep:e2fsprogs-sys"]                            # Bundled mke2fs for ext4 image creation
-bubblewrap = ["dep:bubblewrap-sys"]                          # Bundled bwrap for sandbox isolation (Linux)
-krunfw = ["dep:libkrun-sys", "libkrun-sys/krunfw"]           # Package libkrunfw artifacts
-krunfw-source = ["krunfw", "libkrun-sys/krunfw-source"]      # Package source-built raw kernel and shared library; static musl packages only the raw kernel
-krun = ["krunfw", "libkrun-sys/krun"]                         # Compile the vendored libkrun runtime (and package required libkrunfw artifacts)
+default = ["embedded-runtime"]
+gvproxy = ["dep:libgvproxy-sys"]                             # Shim-side libgvproxy CGO static library
+krun = ["dep:libkrun"]                                      # Compile the libkrun Rust runtime
 rest = ["dep:hyper-rustls", "dep:reqwest", "dep:rustls", "dep:urlencoding", "dep:tokio-tungstenite"]  # REST API client backend
 embedded-runtime = []                                        # Embed runtime binaries via include_bytes!
 test-support = []                                            # Expose internal constructors for cross-crate tests
@@ -36,9 +32,8 @@ test-support = []                                            # Expose internal c
 [dependencies]
 boxlite-shared.workspace = true
 
-e2fsprogs-sys = { workspace = true, optional = true }
 libgvproxy-sys = { workspace = true, optional = true }
-libkrun-sys = { workspace = true, optional = true }
+libkrun = { workspace = true, optional = true }
 
 thiserror = "1.0"
 async-trait = "0.1"
@@ -102,8 +97,6 @@ tokio-tungstenite = { version = "0.24", optional = true, default-features = fals
 
 # Linux-specific dependencies for bind mount support
 [target.'cfg(target_os = "linux")'.dependencies]
-bubblewrap-sys = { workspace = true, optional = true }  # Bundled bwrap for sandbox isolation
-
 caps = "0.5"
 fuse-backend-rs = { version = "0.12", features = ["fusedev"] }
 seccompiler = "0.4"  # Generate seccomp BPF filters for jailer
@@ -113,7 +106,6 @@ landlock = "0.4"    # Landlock LSM filesystem/network restrictions (defense-in-d
 pathrs = "0.2"      # openat2(RESOLVE_IN_ROOT) safe path resolution for OCI extraction (GHSA-f396-4rp4-7v2j)
 
 [build-dependencies]
-pkg-config = "0.3"
 regex = "1"
 sha2 = "0.10"
 

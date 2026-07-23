@@ -17,7 +17,8 @@ comment:
   require_changes: true   # Only comment if coverage changed
 
 ignore:
-  - "src/deps/**"         # Vendored dependencies
+  - "src/libgvproxy-sys/**" # Native FFI bindings
+  - "vendor/**"            # Vendored dependencies
   - "**/tests/**"         # Test files themselves
   - "src/guest/**"        # Guest agent (tested separately)
   - "sdks/**"             # SDKs (have their own test suites)

@@ -72,8 +72,8 @@ Builds BoxLite runtime, uploads to GitHub Release, and publishes Rust crates to 
 **What it builds:**
 - `boxlite-guest` - VM guest agent
 - `boxlite-shim` - Process isolation shim
-- `libkrun`, `libkrunfw`, `libgvproxy` - Hypervisor libraries
-- `debugfs`, `mke2fs` - Filesystem tools
+- `libkrun` and `libgvproxy` - shim code dependencies
+- `libkrunfw`, `debugfs`, `mke2fs`, and `bwrap` - shell-built runtime assets
 
 **Jobs:**
 1. `config` - Load shared configuration

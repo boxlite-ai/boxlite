@@ -9,6 +9,7 @@ repository = "https://github.com/boxlite-ai/boxlite"
 
 # This tells Cargo that this crate links with libgvproxy
 links = "gvproxy"
+# Kept for compatibility with the existing crates.io package shape.
 exclude = ["gvproxy-bridge"]
 
 [lints]
@@ -23,3 +24,4 @@ libc = "0.2"
 
 [features]
 default = []
+skip-native-build = []

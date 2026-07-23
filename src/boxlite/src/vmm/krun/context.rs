@@ -8,9 +8,11 @@
 
 use std::{ffi::CString, ptr};
 
-use crate::vmm::krun::check_status;
+use crate::vmm::krun::{
+    check_status, constants::KRUN_DISK_FORMAT_QCOW2, constants::KRUN_DISK_FORMAT_RAW,
+};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use libkrun_sys::{
+use krun::{
     krun_add_disk2, krun_add_net_unixgram, krun_add_net_unixstream, krun_add_virtiofs3,
     krun_add_vsock, krun_add_vsock_port2, krun_create_ctx, krun_disable_implicit_vsock,
     krun_free_ctx, krun_set_console_output, krun_set_env, krun_set_exec, krun_set_gpu_options,
@@ -33,7 +35,7 @@ impl KrunContext {
     #[allow(unsafe_op_in_unsafe_fn)]
     pub unsafe fn create() -> BoxliteResult<Self> {
         tracing::trace!("Calling krun_create_ctx()");
-        let ctx = unsafe { krun_create_ctx() };
+        let ctx = krun_create_ctx();
         if ctx < 0 {
             tracing::error!(status = ctx, "krun_create_ctx failed");
             return Err(BoxliteError::Engine(format!(
@@ -45,9 +47,10 @@ impl KrunContext {
     }
 
     pub unsafe fn set_vm_config(&self, cpus: u8, memory_mib: u32) -> BoxliteResult<()> {
-        check_status("krun_set_vm_config", unsafe {
-            krun_set_vm_config(self.ctx_id, cpus, memory_mib)
-        })
+        check_status(
+            "krun_set_vm_config",
+            krun_set_vm_config(self.ctx_id, cpus, memory_mib),
+        )
     }
 
     pub unsafe fn set_rootfs(&self, rootfs: &str) -> BoxliteResult<()> {
@@ -250,9 +253,10 @@ impl KrunContext {
 
     pub unsafe fn split_irqchip(&self, enable: bool) -> BoxliteResult<()> {
         tracing::trace!("Setting split IRQ chip to: {}", enable);
-        check_status("krun_split_irqchip", unsafe {
-            krun_split_irqchip(self.ctx_id, enable)
-        })
+        check_status(
+            "krun_split_irqchip",
+            krun_split_irqchip(self.ctx_id, enable),
+        )
     }
 
     pub unsafe fn set_gpu_options(&self, virgl_flags: u32) -> BoxliteResult<()> {
@@ -378,18 +382,17 @@ impl KrunContext {
     ///
     /// Must be called before `add_vsock` to replace the implicit device with an explicit one.
     pub unsafe fn disable_implicit_vsock(&self) -> BoxliteResult<()> {
-        check_status("krun_disable_implicit_vsock", unsafe {
-            krun_disable_implicit_vsock(self.ctx_id)
-        })
+        check_status(
+            "krun_disable_implicit_vsock",
+            krun_disable_implicit_vsock(self.ctx_id),
+        )
     }
 
     /// Add an explicit vsock device with specified TSI features.
     pub unsafe fn add_vsock(&self, tsi: super::constants::TsiFeatures) -> BoxliteResult<()> {
         let raw = tsi.as_raw();
         tracing::debug!(?tsi, raw, "Adding explicit vsock device");
-        check_status("krun_add_vsock", unsafe {
-            krun_add_vsock(self.ctx_id, raw)
-        })
+        check_status("krun_add_vsock", krun_add_vsock(self.ctx_id, raw))
     }
 
     /// Add a virtiofs mount, sharing a host directory with the guest.
@@ -487,8 +490,8 @@ impl KrunContext {
 
         // Convert format string to libkrun constant
         let disk_format = match format {
-            "raw" => libkrun_sys::KRUN_DISK_FORMAT_RAW,
-            "qcow2" => libkrun_sys::KRUN_DISK_FORMAT_QCOW2,
+            "raw" => KRUN_DISK_FORMAT_RAW,
+            "qcow2" => KRUN_DISK_FORMAT_QCOW2,
             _ => {
                 return Err(BoxliteError::Engine(format!(
                     "unsupported disk format: {} (supported: raw, qcow2)",
@@ -513,7 +516,7 @@ impl KrunContext {
     /// This should be called before `start_enter`.
     pub unsafe fn setuid(&self, uid: libc::uid_t) -> BoxliteResult<()> {
         tracing::debug!(uid, "Setting VM process uid");
-        check_status("krun_setuid", unsafe { krun_setuid(self.ctx_id, uid) })
+        check_status("krun_setuid", krun_setuid(self.ctx_id, uid))
     }
 
     /// Set the gid for the microVM process.
@@ -521,7 +524,7 @@ impl KrunContext {
     /// This should be called before `start_enter`.
     pub unsafe fn setgid(&self, gid: libc::gid_t) -> BoxliteResult<()> {
         tracing::debug!(gid, "Setting VM process gid");
-        check_status("krun_setgid", unsafe { krun_setgid(self.ctx_id, gid) })
+        check_status("krun_setgid", krun_setgid(self.ctx_id, gid))
     }
 
     /// Redirect VM console output to a file.
@@ -542,7 +545,7 @@ impl KrunContext {
         let now = chrono::Utc::now().format("%H:%M:%S%.6f");
         tracing::trace!(ctx_id = self.ctx_id, "Calling krun_start_enter");
         eprintln!("[krun] {now} krun_start_enter called");
-        let status = unsafe { krun_start_enter(self.ctx_id) };
+        let status = krun_start_enter(self.ctx_id);
         let now = chrono::Utc::now().format("%H:%M:%S%.6f");
         tracing::trace!(
             ctx_id = self.ctx_id,
@@ -564,8 +567,6 @@ impl KrunContext {
 
 impl Drop for KrunContext {
     fn drop(&mut self) {
-        unsafe {
-            let _ = krun_free_ctx(self.ctx_id);
-        }
+        let _ = krun_free_ctx(self.ctx_id);
     }
 }

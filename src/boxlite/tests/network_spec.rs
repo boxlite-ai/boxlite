@@ -3,6 +3,8 @@
 mod common;
 
 use boxlite::net::constants::{HOST_HOSTNAME, HOST_IP};
+use boxlite::net::socket_path::KRUN_NET_SOCKET_SUFFIX;
+use boxlite::runtime::layout::{FilesystemLayout, FsLayoutConfig};
 use boxlite::runtime::options::{BoxOptions, BoxliteOptions, NetworkSpec};
 use boxlite::{BoxCommand, BoxliteRuntime};
 use futures::StreamExt;
@@ -131,6 +133,30 @@ async fn enabled_network_runs_with_eth0_and_host_alias_dns() {
 
     let litebox = runtime.create(common::alpine_opts(), None).await.unwrap();
     litebox.start().await.unwrap();
+
+    // Observe libkrun's live Unix datagram endpoint through the same socket-path
+    // authority used by production. libkrun appends its compatibility suffix to
+    // the configured gvproxy endpoint when it binds the local side of the pair.
+    let layout = FilesystemLayout::new(home.path.clone(), FsLayoutConfig::without_bind_mount());
+    let sockets = layout
+        .box_layout(litebox.id().as_str(), false)
+        .expect("derive box socket layout")
+        .sockets();
+    let mut krun_socket = sockets.net_backend_sock().into_os_string();
+    krun_socket.push(KRUN_NET_SOCKET_SUFFIX);
+    let krun_socket = std::path::PathBuf::from(krun_socket);
+    let metadata = std::fs::symlink_metadata(&krun_socket).unwrap_or_else(|error| {
+        panic!(
+            "libkrun did not bind its derived network socket {}: {error}",
+            krun_socket.display()
+        )
+    });
+    use std::os::unix::fs::FileTypeExt;
+    assert!(
+        metadata.file_type().is_socket(),
+        "libkrun endpoint {} exists but is not a Unix socket",
+        krun_socket.display()
+    );
 
     let has_eth0 = run_exit_code(&litebox, "sh", &["-c", "test -e /sys/class/net/eth0"]).await;
     assert_eq!(

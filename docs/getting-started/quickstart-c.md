@@ -83,22 +83,9 @@ int main() {
 Build and run:
 
 ```bash
-# macOS
-gcc -o hello hello.c \
-    -I/path/to/boxlite/sdks/c/include \
-    -L/path/to/boxlite/target/release \
-    -lboxlite
-
-export DYLD_LIBRARY_PATH=/path/to/boxlite/target/release:$DYLD_LIBRARY_PATH
-./hello
-
-# Linux
-gcc -o hello hello.c \
-    -I/path/to/boxlite/sdks/c/include \
-    -L/path/to/boxlite/target/release \
-    -lboxlite
-
-export LD_LIBRARY_PATH=/path/to/boxlite/target/release:$LD_LIBRARY_PATH
+cc -o hello hello.c \
+    /path/to/boxlite/target/release/libboxlite.a \
+    -I/path/to/boxlite/sdks/c/include
 ./hello
 ```
 

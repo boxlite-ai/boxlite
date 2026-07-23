@@ -7,7 +7,7 @@
 //!
 //! BoxLite looks for bwrap in this order:
 //! 1. **System bwrap** - Allows users to use their own version (in PATH)
-//! 2. **Bundled bwrap** - Falls back to the version built from bubblewrap-sys
+//! 2. **Bundled bwrap** - Falls back to the runtime-assets build
 //!
 //! ## What Bubblewrap Provides
 //!
@@ -45,7 +45,7 @@ static BWRAP_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
 ///
 /// Search order:
 /// 1. System bwrap (in PATH) - allows users to override with their own version
-/// 2. Bundled bwrap (from bubblewrap-sys) - fallback for SDK distribution
+/// 2. Bundled bwrap (from runtime assets) - fallback for SDK distribution
 ///
 /// Returns `None` if neither is available.
 fn get_bwrap_path() -> Option<&'static PathBuf> {
@@ -59,7 +59,7 @@ fn get_bwrap_path() -> Option<&'static PathBuf> {
                 return Some(PathBuf::from("bwrap"));
             }
 
-            // 2. Try bundled bwrap (from bubblewrap-sys)
+            // 2. Try bundled bwrap from the assembled runtime
             match find_binary("bwrap") {
                 Ok(bundled_path) if bundled_path.exists() => {
                     tracing::debug!(

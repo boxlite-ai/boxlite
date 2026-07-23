@@ -6,7 +6,7 @@
 //!
 //! Pre-fix:
 //! `virtualnetwork.New(tapConfig)` at
-//! `src/deps/libgvproxy-sys/gvproxy-bridge/main.go:412-418` returned
+//! `src/libgvproxy-sys/gvproxy-bridge/main.go:412-418` returned
 //! the bind error to the surrounding goroutine, which logged it to
 //! logrus and returned. `gvproxy_create` had already returned a valid
 //! id by then, so the FFI caller never learned about the failure.

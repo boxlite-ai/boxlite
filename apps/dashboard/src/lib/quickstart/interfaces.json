@@ -54,7 +54,7 @@
     "icon": "badge",
     "badge": "C",
     "install": "VERSION=v0.9.5\nPLATFORM=darwin-arm64\n# Linux: PLATFORM=linux-x64-gnu or linux-arm64-gnu\ncurl -fsSL \"https://github.com/boxlite-ai/boxlite/releases/download/${VERSION}/boxlite-c-${VERSION}-${PLATFORM}.tar.gz\" \\\n  | tar xz\nmv \"boxlite-c-${VERSION}-${PLATFORM}\" boxlite-c-sdk",
-    "run": "cc main.c -Iboxlite-c-sdk/include -Lboxlite-c-sdk/lib -lboxlite -pthread \\\n  -Wl,-rpath,\"$PWD/boxlite-c-sdk/lib\" -o quickstart\nBOXLITE_API_KEY=$KEY BOXLITE_REST_URL={{REST_API_URL}} ./quickstart",
+    "run": "cc main.c boxlite-c-sdk/lib/libboxlite.a -Iboxlite-c-sdk/include -o quickstart\nBOXLITE_API_KEY=$KEY BOXLITE_REST_URL={{REST_API_URL}} ./quickstart",
     "codeLanguage": "c",
     "setupLabel": "Download C SDK",
     "setupDescription": "Downloads the prebuilt C header and native library. The next step includes boxlite.h and links libboxlite.",

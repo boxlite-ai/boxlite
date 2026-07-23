@@ -1,6 +1,12 @@
 //! External libkrunfw kernel configuration.
 
-use super::context::KrunContext;
+use super::{
+    constants::{
+        KRUN_KERNEL_FORMAT_ELF, KRUN_KERNEL_FORMAT_IMAGE_BZ2, KRUN_KERNEL_FORMAT_IMAGE_GZ,
+        KRUN_KERNEL_FORMAT_IMAGE_ZSTD, KRUN_KERNEL_FORMAT_PE_GZ, KRUN_KERNEL_FORMAT_RAW,
+    },
+    context::KrunContext,
+};
 use crate::runtime::constants::envs::{
     BOXLITE_KRUNFW_EXTERNAL_KERNEL as ENV_KRUNFW_EXTERNAL_KERNEL,
     BOXLITE_KRUNFW_KERNEL_FORMAT as ENV_KRUNFW_KERNEL_FORMAT,
@@ -85,12 +91,12 @@ impl KrunfwKernelConfig {
 
     fn parse_format(value: &str) -> BoxliteResult<u32> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "raw" => Ok(libkrun_sys::KRUN_KERNEL_FORMAT_RAW),
-            "elf" => Ok(libkrun_sys::KRUN_KERNEL_FORMAT_ELF),
-            "pe-gz" => Ok(libkrun_sys::KRUN_KERNEL_FORMAT_PE_GZ),
-            "image-bz2" => Ok(libkrun_sys::KRUN_KERNEL_FORMAT_IMAGE_BZ2),
-            "image-gz" => Ok(libkrun_sys::KRUN_KERNEL_FORMAT_IMAGE_GZ),
-            "image-zstd" => Ok(libkrun_sys::KRUN_KERNEL_FORMAT_IMAGE_ZSTD),
+            "raw" => Ok(KRUN_KERNEL_FORMAT_RAW),
+            "elf" => Ok(KRUN_KERNEL_FORMAT_ELF),
+            "pe-gz" => Ok(KRUN_KERNEL_FORMAT_PE_GZ),
+            "image-bz2" => Ok(KRUN_KERNEL_FORMAT_IMAGE_BZ2),
+            "image-gz" => Ok(KRUN_KERNEL_FORMAT_IMAGE_GZ),
+            "image-zstd" => Ok(KRUN_KERNEL_FORMAT_IMAGE_ZSTD),
             other => Err(BoxliteError::Config(format!(
                 "unsupported {ENV_KRUNFW_KERNEL_FORMAT}={other}; use raw, elf, pe-gz, image-bz2, image-gz, or image-zstd"
             ))),
@@ -99,9 +105,9 @@ impl KrunfwKernelConfig {
 
     fn default_format() -> u32 {
         if cfg!(target_arch = "x86_64") {
-            libkrun_sys::KRUN_KERNEL_FORMAT_ELF
+            KRUN_KERNEL_FORMAT_ELF
         } else {
-            libkrun_sys::KRUN_KERNEL_FORMAT_RAW
+            KRUN_KERNEL_FORMAT_RAW
         }
     }
 
@@ -216,12 +222,12 @@ mod tests {
     #[test]
     fn parses_explicit_formats() {
         for (value, expected) in [
-            ("raw", libkrun_sys::KRUN_KERNEL_FORMAT_RAW),
-            ("elf", libkrun_sys::KRUN_KERNEL_FORMAT_ELF),
-            ("pe-gz", libkrun_sys::KRUN_KERNEL_FORMAT_PE_GZ),
-            ("image-bz2", libkrun_sys::KRUN_KERNEL_FORMAT_IMAGE_BZ2),
-            ("image-gz", libkrun_sys::KRUN_KERNEL_FORMAT_IMAGE_GZ),
-            ("image-zstd", libkrun_sys::KRUN_KERNEL_FORMAT_IMAGE_ZSTD),
+            ("raw", KRUN_KERNEL_FORMAT_RAW),
+            ("elf", KRUN_KERNEL_FORMAT_ELF),
+            ("pe-gz", KRUN_KERNEL_FORMAT_PE_GZ),
+            ("image-bz2", KRUN_KERNEL_FORMAT_IMAGE_BZ2),
+            ("image-gz", KRUN_KERNEL_FORMAT_IMAGE_GZ),
+            ("image-zstd", KRUN_KERNEL_FORMAT_IMAGE_ZSTD),
         ] {
             assert_eq!(KrunfwKernelConfig::parse_format(value).unwrap(), expected);
         }

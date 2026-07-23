@@ -17,6 +17,7 @@ dist\:python: _ensure-python-deps
 dist\:c:
 	@echo "🔨 Building C SDK (release)..."
 	@cargo build --release -p boxlite-c
+	@bash $(SCRIPT_DIR)/build/fix-go-symbols.sh target/release/libboxlite.a
 	@mkdir -p sdks/c/dist/lib sdks/c/dist/include
 	@cp sdks/c/include/boxlite.h sdks/c/dist/include/
 	@if [ "$$(uname)" = "Darwin" ]; then \

@@ -1,4 +1,4 @@
-PHONY_TARGETS += guest shim runtime cli skillbox-image build\:apps
+PHONY_TARGETS += guest shim runtime-assets runtime cli skillbox-image build\:apps
 
 BUILD_PROFILE ?= release
 export BUILD_PROFILE
@@ -9,7 +9,10 @@ guest:
 shim:
 	@bash $(SCRIPT_DIR)/build/build-shim.sh
 
-runtime: guest shim
+runtime-assets:
+	+@bash $(SCRIPT_DIR)/build/build-runtime-assets.sh
+
+runtime: runtime-assets guest shim
 	@bash $(SCRIPT_DIR)/build/build-runtime.sh
 
 cli: runtime

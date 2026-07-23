@@ -126,8 +126,7 @@ jobs:
           toolchain: stable
           components: clippy
 
-      - name: Install guest cross target (macOS)
-        if: runner.os == 'macOS'
+      - name: Install guest cross target
         run: rustup target add $(bash scripts/util.sh --target)
 
       - name: Install system dependencies (Linux)

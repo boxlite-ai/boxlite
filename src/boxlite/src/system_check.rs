@@ -207,8 +207,8 @@ fn smoke_test_kvm(kvm: &std::fs::File) -> BoxliteResult<()> {
 mod hvf_ffi {
     //! Direct FFI to Hypervisor.framework for diagnostic probing.
     //!
-    //! The shim links Hypervisor.framework via libkrun-sys (build.rs),
-    //! so these symbols are available at runtime.
+    //! The shim links Hypervisor.framework through its libkrun dependency, so
+    //! these symbols are available at runtime.
 
     // hv_return_t = i32 (mach_error_t)
     pub const HV_SUCCESS: i32 = 0;
@@ -245,7 +245,7 @@ impl HypervisorProbe for HvfProbe {
         //   a VM exists, our probe returns HV_BUSY (one VM per process on ARM64).
         //
         // SAFETY: hv_vm_create/hv_vm_destroy are C functions from Hypervisor.framework.
-        // The shim process links the framework via libkrun-sys.
+        // The shim process links the framework through libkrun.
         let ret = unsafe { hvf_ffi::hv_vm_create(std::ptr::null_mut()) };
 
         match ret {

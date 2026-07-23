@@ -14,6 +14,7 @@ This directory contains examples demonstrating the BoxLite C SDK v0.2.0 API.
    ```
 
    This creates:
+   - `target/release/libboxlite.a` - Static library used by the examples
    - `target/release/libboxlite.{dylib,so}` - Shared library
    - `sdks/c/include/boxlite.h` - Header file
 
@@ -361,7 +362,6 @@ export DYLD_LIBRARY_PATH=/path/to/boxlite/target/release:$DYLD_LIBRARY_PATH
 # Linux
 export LD_LIBRARY_PATH=/path/to/boxlite/target/release:$LD_LIBRARY_PATH
 ```
-
 **Header not found:**
 - Verify `sdks/c/include/boxlite.h` exists
 - Check CMakeLists.txt `BOXLITE_ROOT` path

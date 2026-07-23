@@ -176,8 +176,6 @@ jobs:
 
       - name: Run boxlite-cli unit tests
         # Only run tests in src/ (name contains "::tests::"); skip integration tests in tests/ (require VM)
-        env:
-          BOXLITE_DEPS_STUB: "1"
         run: cargo nextest run -p boxlite-cli --profile ci -E 'test(::tests::)'
 
   # Python SDK unit tests
