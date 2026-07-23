@@ -7,7 +7,7 @@ This directory contains integration tests for the BoxLite runtime. Tests run con
 1. **Build the runtime**: The tests require `boxlite-shim` and `boxlite-guest` binaries.
 
    ```bash
-   BUILD_PROFILE=debug make runtime
+   make runtime:debug
    ```
 
 2. **Platform requirements**:

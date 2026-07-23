@@ -13,10 +13,10 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use libkrun_sys::{
     krun_add_disk2, krun_add_net_unixgram, krun_add_net_unixstream, krun_add_virtiofs3,
     krun_add_vsock, krun_add_vsock_port2, krun_create_ctx, krun_disable_implicit_vsock,
-    krun_free_ctx, krun_set_console_output, krun_set_env, krun_set_exec, krun_set_gpu_options,
-    krun_set_kernel, krun_set_nested_virt, krun_set_port_map, krun_set_rlimits, krun_set_root,
-    krun_set_root_disk_remount, krun_set_vm_config, krun_set_workdir, krun_setgid, krun_setuid,
-    krun_split_irqchip, krun_start_enter,
+    krun_free_ctx, krun_init_log, krun_set_console_output, krun_set_env, krun_set_exec,
+    krun_set_gpu_options, krun_set_kernel, krun_set_nested_virt, krun_set_port_map,
+    krun_set_rlimits, krun_set_root, krun_set_root_disk_remount, krun_set_vm_config,
+    krun_set_workdir, krun_setgid, krun_setuid, krun_split_irqchip, krun_start_enter,
 };
 
 /// Thin wrapper that owns a libkrun context.
@@ -28,6 +28,47 @@ impl KrunContext {
     #[allow(dead_code)]
     pub fn id(&self) -> u32 {
         self.ctx_id
+    }
+
+    /// Initialize libkrun logging system based on RUST_LOG environment variable.
+    /// Must be called before creating any context.
+    pub unsafe fn init_logging() -> BoxliteResult<()> {
+        use libkrun_sys::{
+            KRUN_LOG_LEVEL_DEBUG, KRUN_LOG_LEVEL_ERROR, KRUN_LOG_LEVEL_INFO, KRUN_LOG_LEVEL_TRACE,
+            KRUN_LOG_STYLE_AUTO, KRUN_LOG_TARGET_STDERR,
+        };
+
+        // Determine log level from RUST_LOG environment variable
+        let log_level = match std::env::var("RUST_LOG").as_deref() {
+            Ok("trace") | Ok("boxlite=trace") => {
+                tracing::debug!("Initializing libkrun with TRACE log level");
+                KRUN_LOG_LEVEL_TRACE
+            }
+            Ok("debug") | Ok("boxlite=debug") => {
+                tracing::debug!("Initializing libkrun with DEBUG log level");
+                KRUN_LOG_LEVEL_DEBUG
+            }
+            Ok("info") | Ok("boxlite=info") => {
+                tracing::debug!("Initializing libkrun with INFO log level");
+                KRUN_LOG_LEVEL_INFO
+            }
+            _ => KRUN_LOG_LEVEL_ERROR, // Default: only show errors
+        };
+
+        let log_target = KRUN_LOG_TARGET_STDERR; // Output to stderr so it's captured
+        let log_style = KRUN_LOG_STYLE_AUTO; // Auto-detect color support
+        let flags = 0;
+        tracing::trace!(
+            "Calling krun_init_log({:?}) with log_target: {}, log_level: {}, log_style: {}, flags: {}",
+            krun_init_log as *const (),
+            log_target,
+            log_level,
+            log_style,
+            flags
+        );
+        check_status("krun_init_log", unsafe {
+            krun_init_log(log_target, log_level, log_style, flags)
+        })
     }
 
     #[allow(unsafe_op_in_unsafe_fn)]

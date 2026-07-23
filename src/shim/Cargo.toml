@@ -7,8 +7,6 @@ license.workspace = true
 publish = false
 description = "BoxLite VM subprocess shim"
 
-[lints]
-workspace = true
 [[bin]]
 name = "boxlite-shim"
 path = "src/main.rs"

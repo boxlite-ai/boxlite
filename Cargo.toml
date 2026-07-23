@@ -38,6 +38,3 @@ edition = "2024"
 authors = ["Dorian Zheng <https://github.com/dorianzheng>"]
 license = "Apache-2.0"
 rust-version = "1.88"
-
-[workspace.lints.rust]
-warnings = "deny"

@@ -7,8 +7,6 @@ license.workspace = true
 publish = false
 description = "Node.js bindings for BoxLite - embeddable VM runtime for secure code execution"
 
-[lints]
-workspace = true
 [lib]
 crate-type = ["cdylib"]
 

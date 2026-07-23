@@ -56,11 +56,11 @@ export SETUP_DONE
 # $(call run_integration_suites,<space-separated make targets>)
 # Like run_suites, but builds the shared runtime once up front (unless a parent
 # already did, signalled by SETUP_DONE) and runs every suite with SETUP_DONE=1
-# so no sub-make re-derives the phony runtime / warm-cache prereqs.
+# so no sub-make re-derives the phony runtime:debug / warm-cache prereqs.
 define run_integration_suites
 	@if [ -z "$(SETUP_DONE)" ]; then \
 		echo "🔧 Preparing shared test runtime (once)..."; \
-		BUILD_PROFILE=debug $(MAKE) runtime || exit 1; \
+		$(MAKE) runtime:debug || exit 1; \
 		if echo "$(1)" | grep -qE 'test:integration:(rust|core)'; then \
 			$(MAKE) test:warm-cache:rust SETUP_DONE=1 || exit 1; \
 		fi; \
@@ -207,8 +207,7 @@ test\:unit\:rust:
 	exit $$rc
 
 # Pre-warm Rust integration test image cache (internal helper, still callable).
-test\:warm-cache\:rust test\:integration\:rust test\:integration\:cli test\:stress\:disk: BUILD_PROFILE := debug
-test\:warm-cache\:rust: $(if $(SETUP_DONE),,runtime)
+test\:warm-cache\:rust: $(if $(SETUP_DONE),,runtime\:debug)
 	@echo "🔥 Warming Rust integration test image cache..."
 	@mkdir -p /tmp/boxlite-test
 	@./target/debug/boxlite --home /tmp/boxlite-test \
@@ -222,7 +221,7 @@ test\:warm-cache\:rust: $(if $(SETUP_DONE),,runtime)
 
 # Rust integration tests (requires VM environment).
 # FILTER works here and on every test target, e.g. make test:integration:rust FILTER=copy
-test\:integration\:rust: $(if $(SETUP_DONE),,runtime test\:warm-cache\:rust)
+test\:integration\:rust: $(if $(SETUP_DONE),,runtime\:debug test\:warm-cache\:rust)
 	@echo "🧪 Running Rust integration tests (requires VM)..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run -p boxlite --features krun,gvproxy --test '*' --no-fail-fast --profile vm \
@@ -242,7 +241,7 @@ test\:unit\:ffi:
 	fi
 
 # CLI integration tests.
-test\:integration\:cli: $(if $(SETUP_DONE),,runtime)
+test\:integration\:cli: $(if $(SETUP_DONE),,runtime\:debug)
 	@echo "🧪 Running CLI integration tests..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run -p boxlite-cli --tests --profile vm --no-fail-fast \
@@ -256,7 +255,7 @@ test\:integration\:cli: $(if $(SETUP_DONE),,runtime)
 		exit $$rc; \
 	fi
 
-test\:stress\:disk: $(if $(SETUP_DONE),,runtime)
+test\:stress\:disk: $(if $(SETUP_DONE),,runtime\:debug)
 	@echo "🧪 Running disk pressure stress tests..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run -p boxlite-cli --test stress_disk --profile vm --no-fail-fast \

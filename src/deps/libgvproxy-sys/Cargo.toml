@@ -11,9 +11,6 @@ repository = "https://github.com/boxlite-ai/boxlite"
 links = "gvproxy"
 exclude = ["gvproxy-bridge"]
 
-[lints]
-workspace = true
-
 [build-dependencies]
 # No dependencies needed - we use Make to build
 

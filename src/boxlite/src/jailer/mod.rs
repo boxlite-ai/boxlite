@@ -59,7 +59,6 @@ mod command;
 mod common;
 mod error;
 mod pre_exec;
-pub(crate) mod process_env;
 pub(crate) mod sandbox;
 pub(crate) mod shim_copy;
 

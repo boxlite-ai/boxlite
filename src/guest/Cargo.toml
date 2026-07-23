@@ -7,8 +7,6 @@ publish = false
 description = "Boxlite Guest Runtime"
 edition = "2021"
 
-[lints]
-workspace = true
 [[bin]]
 name = "boxlite-guest"
 path = "src/main.rs"

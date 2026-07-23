@@ -541,14 +541,14 @@ mod tests {
     /// owner-class bits): `while opening "gshadow" to copy`.
     ///
     /// Skipped (not failed) when the e2fsprogs binaries aren't assembled, so a
-    /// bare checkout without `BUILD_PROFILE=debug make runtime` doesn't spuriously fail.
+    /// bare checkout without `make runtime:debug` doesn't spuriously fail.
     #[test]
     fn create_ext4_preserves_unreadable_file_mode() {
         use std::os::unix::fs::PermissionsExt;
 
         if util::find_binary("mke2fs").is_err() || util::find_binary("debugfs").is_err() {
             eprintln!(
-                "skipping create_ext4_preserves_unreadable_file_mode: mke2fs/debugfs not found (run `BUILD_PROFILE=debug make runtime`)"
+                "skipping create_ext4_preserves_unreadable_file_mode: mke2fs/debugfs not found (run `make runtime:debug`)"
             );
             return;
         }
@@ -634,9 +634,7 @@ mod tests {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
         if util::find_binary("mke2fs").is_err() || util::find_binary("debugfs").is_err() {
-            eprintln!(
-                "skipping: mke2fs/debugfs not found (run `BUILD_PROFILE=debug make runtime`)"
-            );
+            eprintln!("skipping: mke2fs/debugfs not found (run `make runtime:debug`)");
             return;
         }
         if unsafe { libc::geteuid() } == 0 {

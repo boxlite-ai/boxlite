@@ -4,7 +4,6 @@ mod constants;
 pub mod context;
 pub mod engine;
 pub mod factory;
-mod kernel;
 
 use boxlite_shared::{BoxliteError, BoxliteResult};
 pub use engine::Krun;

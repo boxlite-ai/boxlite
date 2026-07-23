@@ -6,8 +6,6 @@ use crate::runtime::constants::vm_defaults::{DEFAULT_CPUS, DEFAULT_MEMORY_MIB};
 use crate::vmm::{InstanceSpec, Vmm, VmmConfig, VmmInstance, engine::VmmInstanceImpl};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
-use super::kernel::KrunfwKernelConfig;
-
 /// Libkrun-specific VMM instance implementation.
 struct KrunVmmInstance {
     context: KrunContext,
@@ -26,8 +24,7 @@ impl VmmInstanceImpl for KrunVmmInstance {
         // This means:
         // 1. Unit tests cannot test this functionality (process takeover incompatible with test harness)
         // 2. This must run in the main application process or a separate process
-        // 3. Firmware comes from an explicitly configured external kernel when
-        //    available, otherwise from libkrun's libkrunfw dlopen path.
+        // 3. libkrunfw must be available in system library paths for successful VM creation
         let status = unsafe { self.context.start_enter() };
 
         // If we reach here, either:
@@ -234,12 +231,14 @@ impl Vmm for Krun {
 
         // Create and configure libkrun context
         let ctx = unsafe {
+            tracing::debug!("Initializing libkrun logging system");
+            if let Err(e) = KrunContext::init_logging() {
+                tracing::warn!("Failed to initialize libkrun logging: {}", e);
+            }
+
             tracing::debug!("Creating libkrun context");
             let mut ctx = KrunContext::create()?;
 
-            if let Some(kernel) = KrunfwKernelConfig::from_env()? {
-                kernel.apply(&ctx)?;
-            }
             tracing::debug!(
                 cpus = config.cpus.unwrap_or(DEFAULT_CPUS),
                 memory_mib = config.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),

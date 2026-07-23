@@ -6,16 +6,19 @@
 #
 # Options:
 #   --dest-dir DIR    Directory to copy the shim binary to
-#   --profile PROFILE   Build profile: release or debug
-#
-# BUILD_PROFILE also selects the profile; the default is release.
+#   --profile PROFILE   Build profile: release or debug (default: release)
 #
 # Note: On macOS, the binary is automatically signed with hypervisor entitlements
+# Note: On Linux, the binary is statically linked using glibc (crt-static).
+#       Go c-archive is incompatible with musl TLS, so we use glibc static linking instead.
 
 set -e
 
-# Load canonical build-context utilities
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+# Load common utilities
+SCRIPT_BUILD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$SCRIPT_BUILD_DIR/.." && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$SCRIPT_DIR/common.sh"
 
 # Capture original working directory before any cd commands
 ORIG_DIR="$(pwd)"
@@ -23,7 +26,7 @@ ORIG_DIR="$(pwd)"
 # Parse command-line arguments
 parse_args() {
     DEST_DIR_ARG=""
-    PROFILE="${BUILD_PROFILE:-release}"
+    PROFILE="release"
 
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -43,8 +46,24 @@ parse_args() {
         esac
     done
 
-    set_cargo_profile "$PROFILE" || exit 1
-    DEST_DIR=$(resolve_path_from "$ORIG_DIR" "$DEST_DIR_ARG")
+    # Validate PROFILE value
+    if [ "$PROFILE" != "release" ] && [ "$PROFILE" != "debug" ]; then
+        echo "Invalid profile: $PROFILE"
+        echo "Run with --profile release or --profile debug"
+        exit 1
+    fi
+
+    # Resolve destination path to absolute path
+    if [ -n "$DEST_DIR_ARG" ]; then
+        # If relative, make it absolute relative to original working directory
+        if [[ "$DEST_DIR_ARG" != /* ]]; then
+            DEST_DIR="$ORIG_DIR/$DEST_DIR_ARG"
+        else
+            DEST_DIR="$DEST_DIR_ARG"
+        fi
+    else
+        DEST_DIR=""
+    fi
 }
 
 parse_args "$@"
@@ -53,42 +72,33 @@ parse_args "$@"
 OS=$(detect_os)
 print_header "🚀 Building boxlite-shim on $OS..."
 
-CARGO_TARGET_ROOT=$(cargo_target_dir)
-SHIM_BINARY_PATH="$CARGO_TARGET_ROOT/$PROFILE/boxlite-shim"
+SHIM_BINARY_PATH="$PROJECT_ROOT/target/$PROFILE/boxlite-shim"
 
 # Build the shim binary
 build_shim_binary() {
     cd "$PROJECT_ROOT"
     echo "🔨 Building shim binary $PROFILE..."
-    local cargo_args
+    local build_flag=""
+    if [ "$PROFILE" = "release" ]; then
+        build_flag="--release"
+    fi
 
     if [ "$OS" = "linux" ]; then
-        # Build from src/shim so Cargo applies the shim-only Linux rustflags in
-        # src/shim/.cargo/config.toml. The explicit target keeps those flags off
-        # host-built proc macros, which are dynamic libraries and cannot use
-        # crt-static. Cargo then writes the shim under target/<triple>/<profile>,
-        # so copy it back to target/<profile> for runtime assembly and embedding.
-        local target
-        target=$(shim_target_triple)
-
-        echo "🎯 Static PIE target: $target (crt-static)"
-        cargo_args=(build -p boxlite-shim --target "$target")
-        if [ -n "$CARGO_PROFILE_ARG" ]; then
-            cargo_args+=("$CARGO_PROFILE_ARG")
-        fi
-        (cd "$PROJECT_ROOT/src/shim" && CARGO_TARGET_DIR="$CARGO_TARGET_ROOT" cargo "${cargo_args[@]}")
-        mkdir -p "$(dirname "$SHIM_BINARY_PATH")"
-        cp "$CARGO_TARGET_ROOT/$target/$PROFILE/boxlite-shim" "$SHIM_BINARY_PATH"
+        # Go c-archive crashes with musl TLS; use glibc + crt-static instead.
+        # relocation-model=static avoids static-pie which is incompatible with Go c-archive relocations.
+        # --target is required so RUSTFLAGS (crt-static, relocation-model) don't leak into
+        # proc-macro compilation — proc-macros are dylibs and can't use crt-static.
+        # The downside is cargo outputs to target/<triple>/$PROFILE/ instead of target/$PROFILE/,
+        # so we copy the binary back to the canonical path after building.
+        local arch
+        arch=$(uname -m)
+        local target="${arch}-unknown-linux-gnu"
+        export RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=static -C link-arg=-Wl,-z,stack-size=2097152 -C link-arg=-Wl,--allow-multiple-definition"
+        echo "🎯 Static glibc binary (crt-static + relocation-model=static)"
+        cargo build $build_flag -p boxlite-shim --target "$target"
+        cp "$PROJECT_ROOT/target/$target/$PROFILE/boxlite-shim" "$SHIM_BINARY_PATH"
     else
-        # libkrun always builds a Linux init binary, even when its host library
-        # targets macOS. Configure the cross compiler before Cargo starts building
-        # dependencies; libkrun-sys/build.rs runs too late to affect them.
-        configure_libkrun_cc_linux || return 1
-        cargo_args=(build -p boxlite-shim)
-        if [ -n "$CARGO_PROFILE_ARG" ]; then
-            cargo_args+=("$CARGO_PROFILE_ARG")
-        fi
-        cargo "${cargo_args[@]}"
+        cargo build $build_flag -p boxlite-shim
     fi
 }
 

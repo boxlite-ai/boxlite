@@ -35,7 +35,6 @@ make dev:python
 | `make guest`       | Cross-compile guest binary (musl static) |
 | `make shim`        | Build boxlite-shim binary                |
 | `make runtime`     | Build complete BoxLite runtime           |
-| `make cli`         | Build the CLI (release by default)        |
 | `make dev:python`  | Local Python SDK development             |
 | `make dist:python` | Build portable Python wheels             |
 | `make clean`       | Clean build artifacts                    |
@@ -60,10 +59,9 @@ scripts/
 │   ├── manylinux.sh
 │   └── musllinux.sh
 ├── build/              # Build scripts
-│   ├── build-guest.sh    # Guest binary (cross-compile)
-│   ├── build-shim.sh     # Shim binary
-│   ├── build-runtime.sh  # Complete runtime
-│   └── build-cli.sh      # CLI build
+│   ├── guest.sh        # Guest binary (cross-compile)
+│   ├── shim.sh         # Shim binary
+│   └── build-runtime.sh
 ├── package/            # Packaging scripts
 └── common.sh           # Shared utilities
 ```

@@ -481,7 +481,7 @@ impl PrebuiltRuntime {
         self.incomplete_reasons().is_empty()
     }
 
-    /// Maps the Cargo build target to the runtime artifact target name.
+    /// Maps the host platform to the runtime artifact target name.
     /// Matches the naming convention from config.yml and build-runtime.yml.
     fn runtime_target() -> Option<&'static str> {
         let os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
@@ -958,21 +958,28 @@ impl EmbeddedManifest {
     /// Find pre-built boxlite-shim binary for the given build profile.
     ///
     /// Search order:
-    /// 1. Current Cargo target: `target/{TARGET}/{profile}/boxlite-shim`
-    /// 2. Native build output: `target/{profile}/boxlite-shim`
+    /// 1. Native: `target/{profile}/boxlite-shim` (macOS)
+    /// 2. Linux gnu: `target/{arch}-unknown-linux-gnu/{profile}/boxlite-shim` (static glibc)
     fn find_prebuilt_shim(workspace_root: &Path, profile: &str) -> Option<PathBuf> {
         let target_dir = workspace_root.join("target");
 
-        if let Ok(target) = env::var("TARGET") {
-            let target_path = target_dir.join(target).join(profile).join("boxlite-shim");
-            if target_path.is_file() {
-                return Some(target_path);
-            }
-        }
-
+        // Native path (macOS)
         let native = target_dir.join(profile).join("boxlite-shim");
         if native.is_file() {
             return Some(native);
+        }
+
+        // Linux gnu (static glibc — Go c-archive is incompatible with musl TLS)
+        // Check matching architecture first to avoid picking wrong binary on
+        // multi-arch machines.
+        for arch in Self::preferred_arches() {
+            let gnu = target_dir
+                .join(format!("{}-unknown-linux-gnu", arch))
+                .join(profile)
+                .join("boxlite-shim");
+            if gnu.is_file() {
+                return Some(gnu);
+            }
         }
 
         None
@@ -1208,41 +1215,8 @@ fn main() {
 
     let cargo = CargoBuildContext::new();
     let mode = DepsMode::from_env();
-    let embedded_runtime = env::var("CARGO_FEATURE_EMBEDDED_RUNTIME").is_ok();
 
     let runtime_dir = cargo.out_dir().join("runtime");
-    if !embedded_runtime {
-        if runtime_dir.exists() {
-            fs::remove_dir_all(&runtime_dir).unwrap_or_else(|e| {
-                panic!(
-                    "Failed to remove disabled embedded runtime directory {}: {}",
-                    runtime_dir.display(),
-                    e
-                )
-            });
-        }
-        println!("cargo:runtime_dir=/nonexistent");
-        return;
-    }
-
-    let canonical_runtime = cargo.workspace_root().map(|root| {
-        root.join("target")
-            .join("boxlite-runtime")
-            .join(env::var("PROFILE").unwrap())
-    });
-    if let Some(source_dir) = &canonical_runtime {
-        println!("cargo:rerun-if-changed={}", source_dir.display());
-    }
-    if matches!(mode, DepsMode::Source)
-        && let Some(source_dir) = canonical_runtime.filter(|path| path.is_dir())
-    {
-        println!("cargo:rustc-link-search=native={}", source_dir.display());
-        println!("cargo:runtime_dir={}", source_dir.display());
-        let existing_runtime_mode = DepsMode::Prebuilt;
-        GuestBinaryHash::new(&source_dir, &existing_runtime_mode, &cargo).emit();
-        EmbeddedManifest::new(&source_dir).generate(&existing_runtime_mode, &cargo);
-        return;
-    }
     let prebuilt_runtime = PrebuiltRuntime::new(&runtime_dir);
 
     match &mode {
@@ -1274,16 +1248,7 @@ fn main() {
             );
         }
         DepsMode::Source => {
-            // Normal: rebuild staging from current -sys crate outputs.
-            if runtime_dir.exists() {
-                fs::remove_dir_all(&runtime_dir).unwrap_or_else(|e| {
-                    panic!(
-                        "Failed to clean runtime directory {}: {}",
-                        runtime_dir.display(),
-                        e
-                    )
-                });
-            }
+            // Normal: -sys crates built from source, bundle outputs
             fs::create_dir_all(&runtime_dir)
                 .unwrap_or_else(|e| panic!("Failed to create runtime directory: {}", e));
             let collected = bundle_boxlite_deps(&runtime_dir);
@@ -1291,7 +1256,10 @@ fn main() {
                 let names: Vec<_> = collected.iter().map(|(name, _)| name.as_str()).collect();
                 println!("cargo:warning=Bundled: {}", names.join(", "));
             }
-            if cargo.is_dependency_build() && !prebuilt_runtime.is_complete() {
+            if env::var("CARGO_FEATURE_EMBEDDED_RUNTIME").is_ok()
+                && cargo.is_dependency_build()
+                && !prebuilt_runtime.is_complete()
+            {
                 let incomplete = prebuilt_runtime.incomplete_reasons();
                 println!(
                     "cargo:warning=Dependency build has incomplete runtime [{}]; downloading prebuilt runtime",
@@ -1309,6 +1277,13 @@ fn main() {
 
     // Tell the linker where to find the bundled libraries.
     println!("cargo:rustc-link-search=native={}", runtime_dir.display());
+
+    // libkrun is a Rust staticlib that embeds its own copy of std.
+    // When linked into integration test binaries (src/boxlite/tests/), std
+    // symbols conflict; --allow-multiple-definition lets the linker pick one.
+    // The shim binary needs the same flag — emitted from src/shim/build.rs.
+    #[cfg(target_os = "linux")]
+    println!("cargo:rustc-link-arg-tests=-Wl,--allow-multiple-definition");
 
     // Expose the runtime directory to downstream crates (e.g., Python SDK)
     println!("cargo:runtime_dir={}", runtime_dir.display());

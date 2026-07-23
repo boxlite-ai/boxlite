@@ -54,8 +54,6 @@ jobs:
       go: ${{ steps.filter.outputs.go }}
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
       - uses: dorny/paths-filter@v4
         id: filter
         with:
@@ -95,8 +93,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
-        with:
-          submodules: recursive
 
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -143,8 +139,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
-        with:
-          submodules: recursive
 
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -195,8 +189,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
-        with:
-          submodules: recursive
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -227,8 +219,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
-        with:
-          submodules: recursive
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -257,8 +247,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
-        with:
-          submodules: recursive
 
       - name: Set up Go
         uses: actions/setup-go@v5

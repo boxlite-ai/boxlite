@@ -7,8 +7,6 @@ license.workspace = true
 publish = false
 description = "C SDK for BoxLite"
 
-[lints]
-workspace = true
 [lib]
 name = "boxlite"
 crate-type = ["cdylib", "staticlib"]

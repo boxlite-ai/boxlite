@@ -7,21 +7,29 @@ This guide covers building, testing, and contributing to the BoxLite CLI (`boxli
 From the repository root:
 
 ```bash
-# Debug build
-BUILD_PROFILE=debug make cli
-
-# Release build
 make cli
 ```
 
-`make cli` builds the required runtime before compiling the CLI. The binary is produced at `./target/release/boxlite` by default or `./target/debug/boxlite` when `BUILD_PROFILE=debug`.
+This builds the debug runtime first (if needed) via `make runtime:debug`, then runs `cargo build -p boxlite-cli`. The binary is produced at:
+
+```
+./target/debug/boxlite
+```
+
+Run it with `./target/debug/boxlite --help`. For a release build, use:
+
+```bash
+cargo build -p boxlite-cli --release
+```
+
+The release binary is at `./target/release/boxlite`.
 
 ## Testing
 
 ### `make test` vs `make test:integration:cli`
 
 - **`make test`** runs the strict full matrix (unit + integration) across core and SDK suites.
-- **`make test:integration:cli`** runs only the CLI integration tests. It builds the runtime with `BUILD_PROFILE=debug` and then:
+- **`make test:integration:cli`** runs only the CLI integration tests. It depends on `runtime:debug` and then:
 
   ```bash
   cargo test -p boxlite-cli --tests --no-fail-fast -- --test-threads=1
@@ -75,8 +83,7 @@ fn test_run_exit_code_success() {
 
 | Command        | Description |
 |----------------|-------------|
-| `make cli`     | Build the CLI in release mode (default). |
-| `BUILD_PROFILE=debug make cli` | Build the CLI in debug mode. |
+| `make cli`     | Build the CLI (after building the debug runtime). |
 | `make test:integration:cli` | Run CLI integration tests (single-threaded). |
 | `make test`    | Run strict full matrix (unit + integration across core + SDK). |
 | `make test:integration:core` | Run core integration suites (Rust + CLI). |

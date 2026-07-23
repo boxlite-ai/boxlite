@@ -30,12 +30,11 @@
 
 set -e
 
-# Load shared build context in both sourced and standalone modes. The default
-# cache remains per-checkout under target/native.
+# Default cache lives under the project's target/native/ dir (per-checkout,
+# gitignored, cleaned by `cargo clean`). Resolved from this script's own
+# location so it works whether sourced or run directly.
 _BUILD_LIBSECCOMP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=./common.sh
-source "$_BUILD_LIBSECCOMP_DIR/common.sh"
-DEFAULT_BOXLITE_CACHE="$PROJECT_ROOT/target/native"
+DEFAULT_BOXLITE_CACHE="$(cd "$_BUILD_LIBSECCOMP_DIR/../.." && pwd)/target/native"
 
 LIBSECCOMP_VERSION="${LIBSECCOMP_VERSION:-2.5.5}"
 LIBSECCOMP_TARBALL_SHA256="${LIBSECCOMP_TARBALL_SHA256:-248a2c8a4d9b9858aa6baf52712c34afefcf9c9e94b76dce02c1c9aa25fb3375}"
@@ -119,13 +118,8 @@ ensure_libseccomp_for_target() {
 
     local arch_prefix
     arch_prefix=$(echo "$target" | cut -d'-' -f1)
-    local rustc_host
-    rustc_host=$(rustc_host_triple)
-
     local cc="${arch_prefix}-linux-musl-gcc"
-    if [ "$rustc_host" = "$target" ]; then
-        cc="${CC:-cc}"
-    elif ! command -v "$cc" >/dev/null 2>&1; then
+    if ! command -v "$cc" >/dev/null 2>&1; then
         echo "ERROR: musl cross-compiler $cc not found in PATH" >&2
         echo "  Run scripts/setup/setup-macos.sh (or setup-ubuntu.sh / setup-musllinux.sh)" >&2
         return 1

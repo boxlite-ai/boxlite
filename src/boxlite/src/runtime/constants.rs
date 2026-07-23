@@ -18,10 +18,6 @@ pub mod guest_paths {
 pub mod envs {
     pub const BOXLITE_HOME: &str = "BOXLITE_HOME";
 
-    pub(crate) const BOXLITE_KRUNFW_EXTERNAL_KERNEL: &str = "BOXLITE_KRUNFW_EXTERNAL_KERNEL";
-    pub(crate) const BOXLITE_KRUNFW_KERNEL_PATH: &str = "BOXLITE_KRUNFW_KERNEL_PATH";
-    pub(crate) const BOXLITE_KRUNFW_KERNEL_FORMAT: &str = "BOXLITE_KRUNFW_KERNEL_FORMAT";
-
     /// REST API base URL (required for REST mode).
     #[cfg(feature = "rest")]
     pub const BOXLITE_REST_URL: &str = "BOXLITE_REST_URL";

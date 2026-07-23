@@ -8,4 +8,10 @@ fn main() {
     println!("cargo:rustc-link-arg=-Wl,-rpath,@loader_path");
     #[cfg(target_os = "linux")]
     println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
+
+    // libkrun is a Rust staticlib that embeds its own copy of std; the shim
+    // binary that links it needs --allow-multiple-definition so the linker
+    // tolerates the duplicate std symbols.
+    #[cfg(target_os = "linux")]
+    println!("cargo:rustc-link-arg=-Wl,--allow-multiple-definition");
 }

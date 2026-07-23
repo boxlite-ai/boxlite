@@ -93,8 +93,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
-        with:
-          submodules: recursive
 
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -117,8 +115,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
-        with:
-          submodules: recursive
 
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -138,7 +134,7 @@ jobs:
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install protobuf FiloSottile/musl-cross/musl-cross
+        run: brew install protobuf
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.9

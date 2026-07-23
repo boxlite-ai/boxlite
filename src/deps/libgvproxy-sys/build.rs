@@ -83,6 +83,7 @@ fn main() {
     // Check for stub mode (for CI linting or crates.io install)
     if env::var("BOXLITE_DEPS_STUB").is_ok() {
         println!("cargo:warning=BOXLITE_DEPS_STUB mode: skipping libgvproxy build");
+        println!("cargo:LIBGVPROXY_BOXLITE_DEP=/nonexistent");
         return;
     }
 
@@ -111,19 +112,19 @@ fn main() {
     // Transitive dependencies from the Go runtime (embedded in the c-archive).
     // Go's net package uses the CGO resolver by default, which calls res_search
     // from libresolv for DNS lookups on both macOS and Linux.
-    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
-    if target_os == "macos" {
+    #[cfg(target_os = "macos")]
+    {
         println!("cargo:rustc-link-lib=framework=CoreFoundation");
         println!("cargo:rustc-link-lib=framework=Security");
     }
-    // On glibc Linux, force static linking of libresolv to ensure the shim binary
+    // On Linux, force static linking of libresolv to ensure the shim binary
     // remains fully static when built with crt-static. Without this, the linker
-    // can pick libresolv.so (dynamic), making the binary dynamically linked and
+    // picks libresolv.so (dynamic), making the binary dynamically linked and
     // causing SIGSEGV on TLS access (fs:[0x28]) on some VMs.
-    // Do not add these glibc system paths for musl targets; they can make the
-    // musl static link pick /usr/lib64/libc.so and fail.
-    if target_os == "linux" && target_env == "gnu" {
+    // When building with --target, Rust may not include the system library
+    // paths, so we add them explicitly for the linker to find libresolv.a.
+    #[cfg(target_os = "linux")]
+    {
         let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
         // Debian/Ubuntu: /usr/lib/<triple>
         let gnu_triple = match arch.as_str() {
@@ -136,7 +137,10 @@ fn main() {
         println!("cargo:rustc-link-search=native=/usr/lib64");
         println!("cargo:rustc-link-lib=static=resolv");
     }
-    if target_os != "linux" {
-        println!("cargo:rustc-link-lib=resolv");
-    }
+    #[cfg(not(target_os = "linux"))]
+    println!("cargo:rustc-link-lib=resolv");
+
+    // Expose library directory to downstream crates (used by boxlite/build.rs)
+    // Convention: {LIBNAME}_BOXLITE_DEP=<path> for auto-discovery
+    println!("cargo:LIBGVPROXY_BOXLITE_DEP={}", out_dir);
 }

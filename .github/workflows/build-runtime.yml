@@ -127,8 +127,10 @@ jobs:
 
           export SKIP_GUEST_BUILD=1
           export PATH="/usr/local/go/bin:$CARGO_HOME/bin:$PATH"
-          make setup:build
-          make cli
+          make setup:build runtime
+
+          # Build CLI binary (reuses compiled boxlite crate artifacts)
+          cargo build -p boxlite-cli --release
 
           command -v sccache &>/dev/null && sccache --show-stats || true
           CONTAINER_SCRIPT
@@ -152,15 +154,15 @@ jobs:
       - name: Build runtime (macOS)
         if: runner.os == 'macOS'
         run: |
-          make setup:build
-          make cli
+          make setup:build runtime
+          cargo build -p boxlite-cli --release
           command -v sccache &>/dev/null && sccache --show-stats || true
 
       - name: Package runtime
         run: |
           VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          RUNTIME_DIR=target/boxlite-runtime/release
-          [ -d "$RUNTIME_DIR" ] || { echo "ERROR: Runtime directory not found at $RUNTIME_DIR"; exit 1; }
+          RUNTIME_DIR=$(ls -dt target/release/build/boxlite-*/out/runtime 2>/dev/null | head -1)
+          [ -n "$RUNTIME_DIR" ] || { echo "ERROR: Runtime directory not found under target/"; exit 1; }
           cp -a "$RUNTIME_DIR" boxlite-runtime
           tar czf "boxlite-runtime-v${VERSION}-${{ matrix.target }}.tar.gz" boxlite-runtime/
           rm -rf boxlite-runtime
@@ -351,9 +353,9 @@ jobs:
           # Pure-Rust crate verifies normally
           publish_crate boxlite-shared
 
-          # Temporarily skipped: the vendored libkrun path dependency is not
-          # publishable as-is. Follow-up: #962.
-          # publish_crate libkrun-sys --no-verify
+          # -sys crates skip verification: vendor sources excluded from package,
+          # real build already succeeded in the build job above
+          publish_crate libkrun-sys --no-verify
           publish_crate e2fsprogs-sys --no-verify
           publish_crate libgvproxy-sys --no-verify
           publish_crate bubblewrap-sys --no-verify

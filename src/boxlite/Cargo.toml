@@ -11,8 +11,6 @@ keywords = ["vm", "sandbox", "isolation", "container", "security"]
 categories = ["virtualization"]
 links = "boxlite"
 
-[lints]
-workspace = true
 [package.metadata.docs.rs]
 no-default-features = true  # Build docs without native deps (API-only)
 
@@ -26,9 +24,8 @@ default = ["embedded-runtime", "krunfw", "e2fsprogs", "bubblewrap"]
 gvproxy = ["dep:libgvproxy-sys"]                             # Shim-side libgvproxy CGO shared library
 e2fsprogs = ["dep:e2fsprogs-sys"]                            # Bundled mke2fs for ext4 image creation
 bubblewrap = ["dep:bubblewrap-sys"]                          # Bundled bwrap for sandbox isolation (Linux)
-krunfw = ["dep:libkrun-sys", "libkrun-sys/krunfw"]           # Package libkrunfw artifacts
-krunfw-source = ["krunfw", "libkrun-sys/krunfw-source"]      # Package source-built raw kernel and shared library; static musl packages only the raw kernel
-krun = ["krunfw", "libkrun-sys/krun"]                         # Compile the vendored libkrun runtime (and package required libkrunfw artifacts)
+krunfw = ["dep:libkrun-sys", "libkrun-sys/krunfw"]           # Download libkrunfw firmware for runtime bundling
+krun = ["krunfw", "libkrun-sys/krun"]                        # Build + statically link libkrun.a (only for boxlite-shim)
 rest = ["dep:hyper-rustls", "dep:reqwest", "dep:rustls", "dep:urlencoding", "dep:tokio-tungstenite"]  # REST API client backend
 embedded-runtime = []                                        # Embed runtime binaries via include_bytes!
 test-support = []                                            # Expose internal constructors for cross-crate tests

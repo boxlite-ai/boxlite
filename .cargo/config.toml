@@ -1,4 +1,5 @@
-# TODO: maybe remove musl_v1_2_3 after upgrade libkrun?
-# ref https://github.com/libkrun/libkrun/pull/663
-[target.'cfg(target_env = "musl")']
-rustflags = ["--cfg", "musl_v1_2_3", "-C", "link-arg=-Wl,-z,stack-size=2097152"]
+[target.aarch64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=-Wl,-z,stack-size=2097152"]
+
+[target.x86_64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=-Wl,-z,stack-size=2097152"]

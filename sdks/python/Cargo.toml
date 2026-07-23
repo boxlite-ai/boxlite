@@ -7,8 +7,6 @@ license.workspace = true
 publish = false
 description = "Python bindings for Boxlite"
 
-[lints]
-workspace = true
 [lib]
 name = "boxlite_python"
 crate-type = ["cdylib"]

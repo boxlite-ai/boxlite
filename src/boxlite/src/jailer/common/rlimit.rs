@@ -9,12 +9,10 @@
 use crate::runtime::advanced_options::ResourceLimits;
 use std::io;
 
-/// Resource argument type for getrlimit/setrlimit, matching libc's `RLIMIT_*` constants.
-/// This is distinct from `libc::rlim_t`, which is the limit value type.
-#[cfg(all(target_os = "linux", not(target_env = "musl")))]
+/// Resource type alias for cross-platform compatibility.
+/// On Linux glibc, RLIMIT_* are u32; on macOS they're i32.
+#[cfg(target_os = "linux")]
 type RlimitResource = libc::__rlimit_resource_t;
-#[cfg(all(target_os = "linux", target_env = "musl"))]
-type RlimitResource = libc::c_int;
 #[cfg(not(target_os = "linux"))]
 type RlimitResource = libc::c_int;
 

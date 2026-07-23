@@ -1,105 +1,369 @@
 #!/bin/bash
-# Assemble the BoxLite runtime from pre-built shim and guest binaries.
+# Build boxlite-runtime directory with all binaries and libraries
+#
+# This script creates a complete runtime directory that contains everything
+# needed to run BoxLite: shim binary, guest binary, and all FFI libraries.
+#
+# Usage:
+#   ./build-runtime.sh [--dest-dir DIR] [--profile PROFILE]
+#
+# Options:
+#   --dest-dir DIR      Destination directory (default: cargo OUT_DIR/runtime)
+#   --profile PROFILE   Build profile: release or debug (default: release)
+#
+# The runtime directory will contain:
+#   - boxlite-shim      VM subprocess runner (statically links libkrun + libgvproxy)
+#   - boxlite-guest     Guest agent (Linux binary)
+#   - libkrunfw.*       libkrunfw library (dlopen'd at runtime)
 
 set -e
 
+# Load common utilities
 SCRIPT_BUILD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=./common.sh
-source "$SCRIPT_BUILD_DIR/common.sh"
+SCRIPT_DIR="$(cd "$SCRIPT_BUILD_DIR/.." && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$SCRIPT_DIR/common.sh"
 
-PROFILE="${BUILD_PROFILE:-release}"
+# Capture original working directory before any cd commands
+ORIG_DIR="$(pwd)"
 
+# Print help message
 print_help() {
     cat <<EOF
-Usage: $0 [--profile debug|release]
+Usage: build-runtime.sh [OPTIONS]
 
-Assemble pre-built BoxLite components into a runtime containing:
-  - boxlite-shim
-  - boxlite-guest
-  - packaged libkrunfw artifacts, when enabled
+Build boxlite-runtime directory with all binaries and libraries.
 
-Use make runtime to build prerequisites. Output is written to
-target/boxlite-runtime/<profile>.
+Options:
+  --dest-dir DIR      Destination directory (default: cargo OUT_DIR/runtime)
+  --profile PROFILE   Build profile: release or debug (default: release)
+  --libs-dir DIR      Directory containing FFI libraries (if not provided, will build and collect)
+  --help, -h          Show this help message
 
-BUILD_PROFILE also selects the profile; the default is release.
+The runtime directory will contain:
+  - boxlite-shim      VM subprocess runner (statically links libkrun + libgvproxy)
+  - boxlite-guest     Guest agent (Linux binary)
+  - libkrunfw.*       libkrunfw library (dlopen'd at runtime)
+
+Examples:
+  # Build release runtime in default location
+  ./build-runtime.sh
+
+  # Build debug runtime
+  ./build-runtime.sh --profile debug
+
+  # Build runtime in custom directory
+  ./build-runtime.sh --dest-dir /tmp/my-runtime
+
+  # Build runtime with pre-collected libraries
+  ./build-runtime.sh --libs-dir /path/to/libs
+
+  # Full workflow
+  bash scripts/build/build-guest.sh
+  bash scripts/build/build-shim.sh
+  ./build-runtime.sh
+
 EOF
 }
 
-while [ "$#" -gt 0 ]; do
-    case "$1" in
-        --profile)
-            if [ -z "${2:-}" ]; then
-                echo "--profile requires debug or release" >&2
-                exit 2
-            fi
-            PROFILE=$2
-            shift 2
-            ;;
-        --help|-h)
-            print_help
-            exit 0
-            ;;
-        *)
-            echo "Unknown option: $1" >&2
-            print_help >&2
-            exit 2
-            ;;
-    esac
-done
+# Parse command-line arguments
+parse_args() {
+    DEST_DIR_ARG=""
+    PROFILE="release"
+    LIBS_DIR_ARG=""
 
-set_cargo_profile "$PROFILE"
-CARGO_TARGET_ROOT=$(cargo_target_dir)
-DEST_DIR="$CARGO_TARGET_ROOT/boxlite-runtime/$PROFILE"
-# shellcheck source=../util.sh
-source "$SCRIPT_DIR/util.sh"
-SHIM_BINARY="$CARGO_TARGET_ROOT/$PROFILE/boxlite-shim"
-GUEST_BINARY="$CARGO_TARGET_ROOT/$GUEST_TARGET/$PROFILE/boxlite-guest"
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --dest-dir)
+                DEST_DIR_ARG="$2"
+                shift 2
+                ;;
+            --profile)
+                PROFILE="$2"
+                shift 2
+                ;;
+            --libs-dir)
+                LIBS_DIR_ARG="$2"
+                shift 2
+                ;;
+            --help|-h)
+                print_help
+                exit 0
+                ;;
+            *)
+                echo "Unknown option: $1"
+                echo "Run with --help for usage information"
+                exit 1
+                ;;
+        esac
+    done
 
-for binary in "$SHIM_BINARY" "$GUEST_BINARY"; do
-    if [ ! -f "$binary" ]; then
-        echo "Required runtime binary not found: $binary" >&2
-        echo "Build the runtime through make so its prerequisites run first." >&2
+    # Validate PROFILE value
+    if [ "$PROFILE" != "release" ] && [ "$PROFILE" != "debug" ]; then
+        echo "Invalid profile: $PROFILE"
+        echo "Run with --profile release or --profile debug"
         exit 1
     fi
-done
 
-cargo_args=(build --lib -p boxlite --message-format=json)
-if [ -n "$CARGO_PROFILE_ARG" ]; then
-    cargo_args+=("$CARGO_PROFILE_ARG")
-fi
+    # Set destination if provided (otherwise resolved after collect_libraries)
+    if [ -z "$DEST_DIR_ARG" ]; then
+        DEST_DIR=""
+    else
+        # Resolve destination path to absolute path
+        if [[ "$DEST_DIR_ARG" != /* ]]; then
+            DEST_DIR="$ORIG_DIR/$DEST_DIR_ARG"
+        else
+            DEST_DIR="$DEST_DIR_ARG"
+        fi
+    fi
 
-cd "$PROJECT_ROOT"
-rm -rf "$DEST_DIR"
-cargo_messages=$(mktemp)
-trap 'rm -f "$cargo_messages"' EXIT INT TERM
-cargo "${cargo_args[@]}" >"$cargo_messages"
+    # Resolve libs directory if provided
+    if [ -n "$LIBS_DIR_ARG" ]; then
+        if [[ "$LIBS_DIR_ARG" != /* ]]; then
+            LIBS_DIR="$ORIG_DIR/$LIBS_DIR_ARG"
+        else
+            LIBS_DIR="$LIBS_DIR_ARG"
+        fi
+    else
+        LIBS_DIR=""
+    fi
+}
 
-runtime_src=$(grep '"reason":"build-script-executed"' "$cargo_messages" | grep '/src/boxlite#' | sed -n -E 's/.*"out_dir":"([^"]*)".*/\1/p' | tail -1)
-if [ -z "$runtime_src" ] || [ ! -d "$runtime_src/runtime" ]; then
-    echo "Cargo did not report a BoxLite runtime directory" >&2
-    exit 1
-fi
-runtime_src="$runtime_src/runtime"
+# Detect OS
+detect_platform() {
+    OS=$(detect_os)
+    echo "🖥️  Platform: $OS"
+}
 
-mkdir -p "$DEST_DIR"
-cp -a "$runtime_src/." "$DEST_DIR/"
-cp "$SHIM_BINARY" "$GUEST_BINARY" "$DEST_DIR/"
+# Build boxlite-shim binary
+build_shim() {
+    echo ""
+    print_section "Building boxlite-shim binary..."
 
-krunfw_count=0
-while IFS= read -r -d '' asset; do
-    cp "$asset" "$DEST_DIR/"
-    krunfw_count=$((krunfw_count + 1))
-done < <(find "$CARGO_TARGET_ROOT" -maxdepth 1 -type f -name 'libkrunfw.*' -print0)
+    local shim_path="$PROJECT_ROOT/target/$PROFILE/boxlite-shim"
 
-if [ "$krunfw_count" -eq 0 ]; then
-    echo "No libkrunfw runtime assets found in $CARGO_TARGET_ROOT" >&2
-    exit 1
-fi
+    # Skip build if SKIP_SHIM_BUILD=1 and binary exists
+    # Used in CI when shim is pre-built on Ubuntu host
+    if [ "${SKIP_SHIM_BUILD:-0}" = "1" ]; then
+        if [ -f "$shim_path" ] && [ -x "$shim_path" ]; then
+            SHIM_BINARY="$shim_path"
+            print_success "Using pre-built: $shim_path (SKIP_SHIM_BUILD=1)"
+            return 0
+        else
+            print_error "SKIP_SHIM_BUILD=1 but shim binary not found at $shim_path"
+            exit 1
+        fi
+    fi
 
-printf 'Copied %d libkrunfw asset(s)\n' "$krunfw_count"
+    # Always build to ensure freshness (Cargo handles incremental compilation)
+    bash "$SCRIPT_BUILD_DIR/build-shim.sh" --profile "$PROFILE"
 
-if [ "$(detect_os)" = "macos" ]; then
-    "$SCRIPT_BUILD_DIR/sign.sh" "$DEST_DIR/boxlite-shim"
-fi
+    if [ -f "$shim_path" ]; then
+        SHIM_BINARY="$shim_path"
+        print_success "Built: $shim_path"
+    else
+        print_error "Failed to build boxlite-shim"
+        exit 1
+    fi
+}
 
-printf 'Runtime assembled at %s\n' "$DEST_DIR"
+# Build boxlite-guest binary
+build_guest() {
+    echo ""
+    print_section "Building boxlite-guest binary..."
+
+    source "$SCRIPT_DIR/util.sh"
+    local guest_path="$PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/boxlite-guest"
+
+    # Skip build if SKIP_GUEST_BUILD=1 and binary exists
+    # Used in CI when guest is pre-built on Ubuntu host
+    if [ "${SKIP_GUEST_BUILD:-0}" = "1" ]; then
+        if [ -f "$guest_path" ] && [ -x "$guest_path" ]; then
+            GUEST_BINARY="$guest_path"
+            print_success "Using pre-built: $guest_path (SKIP_GUEST_BUILD=1)"
+            return 0
+        else
+            print_error "SKIP_GUEST_BUILD=1 but guest binary not found at $guest_path"
+            exit 1
+        fi
+    fi
+
+    # Build guest binary
+    bash "$SCRIPT_BUILD_DIR/build-guest.sh" --profile "$PROFILE"
+
+    if [ -f "$guest_path" ]; then
+        GUEST_BINARY="$guest_path"
+        print_success "Built: $guest_path"
+    else
+        print_error "Failed to build boxlite-guest"
+        exit 1
+    fi
+}
+
+# Find and collect FFI libraries
+collect_libraries() {
+    # If caller provided libs directory, use it
+    if [ -n "$LIBS_DIR" ]; then
+        echo ""
+        print_section "Using provided libraries directory..."
+
+        if [ ! -d "$LIBS_DIR" ]; then
+            print_error "Libraries directory not found: $LIBS_DIR"
+            exit 1
+        fi
+
+        RUNTIME_LIBS_DIR="$LIBS_DIR"
+        print_success "Using libraries from: $RUNTIME_LIBS_DIR"
+        return 0
+    fi
+
+    # Otherwise, build and collect libraries
+    echo ""
+    print_section "Collecting FFI libraries..."
+
+    cd "$PROJECT_ROOT"
+
+    # Build boxlite crate to generate OUT_DIR with bundled libraries
+    local build_flag=""
+    if [ "$PROFILE" = "release" ]; then
+        build_flag="--release"
+    fi
+
+    # Build boxlite crate and capture the exact OUT_DIR from cargo's JSON output
+    # This is deterministic - no guessing based on directory names or timestamps
+    local runtime_src=""
+    runtime_src=$(cargo build $build_flag --lib -p boxlite --message-format=json 2>/dev/null | \
+        grep -o '"out_dir":"[^"]*"' | \
+        tail -1 | \
+        cut -d'"' -f4)
+
+    if [ -n "$runtime_src" ]; then
+        runtime_src="$runtime_src/runtime"
+    fi
+
+    # Fallback: if JSON parsing failed, find by modification time (newest first)
+    if [ -z "$runtime_src" ] || [ ! -d "$runtime_src" ]; then
+        local out_dir
+        out_dir=$(cargo metadata --format-version 1 2>/dev/null | \
+            grep -o '"target_directory":"[^"]*"' | \
+            cut -d'"' -f4)
+
+        if [ -z "$out_dir" ]; then
+            out_dir="$PROJECT_ROOT/target"
+        fi
+
+        # Sort by modification time (newest first) to get the most recent build
+        runtime_src=$(find "$out_dir/$PROFILE/build/boxlite-"*/out/runtime -type d -print0 2>/dev/null | \
+            xargs -0 ls -dt 2>/dev/null | head -1)
+    fi
+
+    if [ -z "$runtime_src" ] || [ ! -d "$runtime_src" ]; then
+        print_error "Could not find runtime libraries directory"
+        echo "Expected location: $out_dir/$PROFILE/build/boxlite-*/out/runtime"
+        exit 1
+    fi
+
+    RUNTIME_LIBS_DIR="$runtime_src"
+    print_success "Found libraries at: $RUNTIME_LIBS_DIR"
+}
+
+# Create runtime directory and copy all components
+assemble_runtime() {
+    echo ""
+    print_section "Assembling runtime directory..."
+
+    if [ "$DEST_DIR" = "$RUNTIME_LIBS_DIR" ]; then
+        # Outputting to cargo OUT_DIR/runtime — libs are already there, just add binaries
+        mkdir -p "$DEST_DIR"
+
+        print_step "Copying boxlite-shim... "
+        cp "$SHIM_BINARY" "$DEST_DIR/"
+        echo "✓"
+
+        print_step "Copying boxlite-guest... "
+        cp "$GUEST_BINARY" "$DEST_DIR/"
+        echo "✓"
+    else
+        # Separate destination — full copy
+        rm -rf "$DEST_DIR"
+        mkdir -p "$DEST_DIR"
+
+        # Copy binaries
+        print_step "Copying boxlite-shim... "
+        cp "$SHIM_BINARY" "$DEST_DIR/"
+        echo "✓"
+
+        print_step "Copying boxlite-guest... "
+        cp "$GUEST_BINARY" "$DEST_DIR/"
+        echo "✓"
+
+        # Copy all libraries (preserve symlinks)
+        print_step "Copying libraries... "
+        cp -P "$RUNTIME_LIBS_DIR"/* "$DEST_DIR/" 2>/dev/null || true
+        echo "✓"
+    fi
+
+    # Sign shim on macOS (always, to ensure proper entitlements)
+    if [ "$OS" = "macos" ] && [ -f "$DEST_DIR/boxlite-shim" ]; then
+        echo ""
+        print_section "Signing boxlite-shim... "
+        "$SCRIPT_BUILD_DIR/sign.sh" "$DEST_DIR/boxlite-shim"
+        echo "✓"
+    fi
+
+    print_success "Runtime directory assembled"
+}
+
+# Display runtime directory contents
+show_summary() {
+    echo ""
+    print_section "Runtime Directory Summary"
+    echo "Location: $DEST_DIR"
+    echo ""
+    echo "Contents:"
+    ls -lh "$DEST_DIR" | tail -n +2 | while read -r line; do
+        echo "  $line"
+    done
+    echo ""
+
+    # Show file types
+    echo "File types:"
+    for file in "$DEST_DIR"/*; do
+        if [ -f "$file" ]; then
+            local filename
+            local filetype
+            filename=$(basename "$file")
+            filetype=$(file "$file" | cut -d: -f2-)
+            echo "  $filename:$filetype"
+        fi
+    done
+}
+
+# Main execution
+main() {
+    parse_args "$@"
+
+    print_header "🔨 BoxLite Runtime Preparation"
+    echo "Profile: $PROFILE"
+    echo ""
+
+    detect_platform
+    build_shim
+    build_guest
+    collect_libraries
+
+    # Resolve default destination after collect_libraries discovers RUNTIME_LIBS_DIR
+    if [ -z "$DEST_DIR" ]; then
+        DEST_DIR="$RUNTIME_LIBS_DIR"
+    fi
+    echo "Destination: $DEST_DIR"
+
+    assemble_runtime
+    show_summary
+
+    echo ""
+    print_success "✅ Runtime preparation complete!"
+    echo ""
+}
+
+main "$@"
