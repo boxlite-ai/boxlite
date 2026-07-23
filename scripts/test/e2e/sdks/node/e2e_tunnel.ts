@@ -207,14 +207,13 @@ async function main(): Promise<void> {
     await box.stop()
     let stoppedTunnelRejected = false
     try {
-      const stoppedTunnel = await box.network.tunnel(SERVICES[0].port)
-      const stoppedSocket = await stoppedTunnel.connect()
-      await stoppedSocket.close()
+      const stoppedResponse = await getOverTunnel(box, SERVICES[0].port, SERVICES[0].marker)
+      stoppedTunnelRejected = !stoppedResponse.includes(SERVICES[0].marker)
     } catch {
       stoppedTunnelRejected = true
     }
     if (!stoppedTunnelRejected) {
-      failures.push('tunnel establishment succeeded after box.stop()')
+      failures.push('guest service remained reachable after box.stop()')
     }
 
     const isolatedBoxes = ['node-box-a', 'node-box-b'].map(

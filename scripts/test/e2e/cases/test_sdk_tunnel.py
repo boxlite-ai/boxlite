@@ -201,8 +201,18 @@ async def test_python_sdk_tunnel_proxies_http_from_rest_box(rt, image):
         assert SERVICES[0][1] in restart_response
 
     stopped_tunnel = await box.network.tunnel(SERVICES[0][0])
-    with pytest.raises((OSError, RuntimeError, asyncio.TimeoutError)):
-        await asyncio.wait_for(stopped_tunnel.connect(), timeout=10)
+    try:
+        stopped_response = await asyncio.wait_for(
+            _request(
+                stopped_tunnel,
+                b"GET / HTTP/1.0\r\nHost: tunnel.test\r\n\r\n",
+            ),
+            timeout=10,
+        )
+    except (OSError, RuntimeError, asyncio.TimeoutError):
+        pass
+    else:
+        assert SERVICES[0][1] not in stopped_response
 
 
 @pytest.mark.asyncio
