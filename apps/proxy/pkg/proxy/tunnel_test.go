@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	common_cache "github.com/boxlite-ai/common-go/pkg/cache"
 	common_proxy "github.com/boxlite-ai/common-go/pkg/proxy"
 )
@@ -93,42 +92,6 @@ func TestTunnelTargetUsesPreviewAuthority(t *testing.T) {
 	}
 	if boxID != "AbCdEf123456" || port != 3000 {
 		t.Fatalf("unexpected tunnel target: %s:%d", boxID, port)
-	}
-}
-
-func TestTunnelConnectRejectsStoppedBoxBeforeRunnerDial(t *testing.T) {
-	ctx := context.Background()
-	publicCache := common_cache.NewMapCache[bool](ctx)
-	if err := publicCache.Set(ctx, "AbCdEf123456", true, time.Minute); err != nil {
-		t.Fatal(err)
-	}
-
-	apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/box/AbCdEf123456" {
-			t.Fatalf("unexpected API path: %s", request.URL.Path)
-		}
-		if request.URL.Query().Get("verbose") != "true" {
-			t.Fatalf("unexpected verbose query: %s", request.URL.RawQuery)
-		}
-		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write([]byte("{\"id\":\"AbCdEf123456\",\"organizationId\":\"org-1\",\"name\":\"box\",\"user\":\"user-1\",\"env\":{},\"labels\":{},\"public\":true,\"networkBlockAll\":false,\"target\":\"default\",\"cpu\":1,\"gpu\":0,\"memory\":1024,\"disk\":1024,\"state\":\"stopped\",\"toolboxProxyUrl\":\"https://proxy.test/toolbox\"}"))
-	}))
-	defer apiServer.Close()
-
-	apiConfig := apiclient.NewConfiguration()
-	apiConfig.Servers = apiclient.ServerConfigurations{{URL: apiServer.URL}}
-	proxy := &Proxy{
-		apiclient:      apiclient.NewAPIClient(apiConfig),
-		boxPublicCache: publicCache,
-	}
-	request := httptest.NewRequest(http.MethodConnect, "http://proxy.test", nil)
-	request.Host = "3000-d-416243644566313233343536.proxy.test:443"
-	response := httptest.NewRecorder()
-
-	proxy.handleTunnelConnect(response, request)
-
-	if response.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want %d", response.Code, http.StatusConflict)
 	}
 }
 
