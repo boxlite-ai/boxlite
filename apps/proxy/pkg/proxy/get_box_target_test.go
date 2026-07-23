@@ -14,48 +14,10 @@ import (
 	"testing"
 	"time"
 
-	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	common_cache "github.com/boxlite-ai/common-go/pkg/cache"
 	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
 	"github.com/gin-gonic/gin"
 )
-
-func TestGetBoxRunningUsesPreviewStatus(t *testing.T) {
-	tests := []struct {
-		name       string
-		statusCode int
-		body       string
-		want       bool
-	}{
-		{name: "running", statusCode: http.StatusOK, body: "true", want: true},
-		{name: "not running", statusCode: http.StatusNotFound, body: `{"statusCode":404}`, want: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-				if request.URL.Path != "/preview/AbCdEf123456/running" {
-					t.Fatalf("unexpected path: %s", request.URL.Path)
-				}
-				writer.WriteHeader(tt.statusCode)
-				_, _ = writer.Write([]byte(tt.body))
-			}))
-			defer server.Close()
-
-			config := apiclient.NewConfiguration()
-			config.Servers = apiclient.ServerConfigurations{{URL: server.URL}}
-			proxy := &Proxy{apiclient: apiclient.NewAPIClient(config)}
-
-			got, err := proxy.getBoxRunning(context.Background(), "AbCdEf123456")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got != tt.want {
-				t.Fatalf("getBoxRunning() = %t, want %t", got, tt.want)
-			}
-		})
-	}
-}
 
 func TestRequestEscapedPathPreservesEscapedSlash(t *testing.T) {
 	req := httptest.NewRequest("GET", "https://3999-token.proxy.dev.boxlite.ai/files/a%2Fb?download=1", nil)

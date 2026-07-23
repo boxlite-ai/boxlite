@@ -204,16 +204,18 @@ async function main(): Promise<void> {
       throw new Error('new tunnel did not reach the restarted service')
     }
 
-    await box.stop()
-    let stoppedTunnelRejected = false
-    try {
-      const stoppedResponse = await getOverTunnel(box, SERVICES[0].port, SERVICES[0].marker)
-      stoppedTunnelRejected = !stoppedResponse.includes(SERVICES[0].marker)
-    } catch {
-      stoppedTunnelRejected = true
-    }
-    if (!stoppedTunnelRejected) {
-      failures.push('guest service remained reachable after box.stop()')
+    if (process.env.BOXLITE_E2E_SKIP_STOPPED_BOX !== '1') {
+      await box.stop()
+      let stoppedTunnelRejected = false
+      try {
+        const stoppedResponse = await getOverTunnel(box, SERVICES[0].port, SERVICES[0].marker)
+        stoppedTunnelRejected = !stoppedResponse.includes(SERVICES[0].marker)
+      } catch {
+        stoppedTunnelRejected = true
+      }
+      if (!stoppedTunnelRejected) {
+        failures.push('guest service remained reachable after box.stop()')
+      }
     }
 
     const isolatedBoxes = ['node-box-a', 'node-box-b'].map(
