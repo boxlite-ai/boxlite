@@ -278,6 +278,9 @@ impl BoxliteRuntime {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<LiteBox> {
+        // Reject incompatible option combinations at the create boundary (fail
+        // here, not at start), uniformly for the local and REST backends.
+        options.sanitize()?;
         self.backend.create(options, name).await
     }
 
@@ -291,6 +294,7 @@ impl BoxliteRuntime {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)> {
+        options.sanitize()?;
         self.backend.get_or_create(options, name).await
     }
 
@@ -523,3 +527,44 @@ const _: () = {
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<BoxliteRuntime>;
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn local_runtime() -> (BoxliteRuntime, TempDir) {
+        let temp_dir = TempDir::new_in("/tmp").expect("temp dir");
+        let runtime = BoxliteRuntime::new(BoxliteOptions {
+            home_dir: temp_dir.path().to_path_buf(),
+            image_registries: vec![],
+        })
+        .expect("local runtime");
+        (runtime, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn create_rejects_detached_remove_on_stop() {
+        // Remove-on-stop (auto_delete>0) with detach=true is contradictory. The
+        // create boundary must reject it up front rather than deferring to start().
+        let (runtime, _dir) = local_runtime();
+        let opts = BoxOptions {
+            auto_delete: Some(1),
+            detach: true,
+            ..Default::default()
+        };
+        let err = runtime
+            .create(opts, None)
+            .await
+            .err()
+            .expect("detached remove-on-stop must be rejected at create");
+        assert!(
+            matches!(err, BoxliteError::Config(_)),
+            "expected a Config error, got: {err:?}"
+        );
+        assert!(
+            err.to_string().contains("remove-on-stop is incompatible"),
+            "unexpected message: {err}"
+        );
+    }
+}
