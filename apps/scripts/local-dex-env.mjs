@@ -341,7 +341,7 @@ function startApps(config) {
     DASHBOARD_URL: config.dashboardUrl,
     DASHBOARD_BASE_API_URL: '',
     SKIP_CONNECTIONS: 'false',
-    DISABLE_CRON_JOBS: 'false',
+    DISABLE_CRON_JOBS: process.env.DISABLE_CRON_JOBS ?? 'false',
     NOTIFICATION_GATEWAY_DISABLED: 'true',
     DEFAULT_TEMPLATE: 'boxlite/base',
     BOXLITE_SYSTEM_BASE_IMAGE: runtimeImageRef(config, 'base'),

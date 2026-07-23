@@ -7,12 +7,7 @@ import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { IsNull, LessThan, Not, Repository } from 'typeorm'
 import { BoxUsagePeriod } from '../entities/box-usage-period.entity'
-import { OnEvent } from '@nestjs/event-emitter'
-import { BoxStateUpdatedEvent } from '../../box/events/box-state-updated.event'
-import { BoxState } from '../../box/enums/box-state.enum'
-import { BoxEvents } from '../../box/constants/box-events.constants'
 import { Cron, CronExpression } from '@nestjs/schedule'
-import { RedisLockProvider } from '../../box/common/redis-lock.provider'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../../box/constants/box.constants'
 import { BoxUsagePeriodArchive } from '../entities/box-usage-period-archive.entity'
 import { TrackableJobExecutions } from '../../common/interfaces/trackable-job-executions'
@@ -20,11 +15,8 @@ import { TrackJobExecution } from '../../common/decorators/track-job-execution.d
 import { setTimeout as sleep } from 'timers/promises'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
-import { BoxRepository } from '../../box/repositories/box.repository'
-import { BoxDesiredStateUpdatedEvent } from '../../box/events/box-desired-state-updated.event'
-import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
-import { Region } from '../../region/entities/region.entity'
-import { RegionType } from '../../region/enums/region-type.enum'
+import { Box } from '../../box/entities/box.entity'
+import { UsagePeriodWriter } from '../metering/usage-period-writer'
 
 const ARCHIVE_BATCH_SIZE = 1000
 
@@ -49,10 +41,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
   constructor(
     @InjectRepository(BoxUsagePeriod)
     private usagePeriodRepository: Repository<BoxUsagePeriod>,
-    private readonly redisLockProvider: RedisLockProvider,
-    private readonly boxRepository: BoxRepository,
-    @InjectRepository(Region)
-    private readonly regionRepository: Repository<Region>,
+    private readonly usagePeriodWriter: UsagePeriodWriter,
   ) {}
 
   async onApplicationShutdown() {
@@ -63,126 +52,16 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
     }
   }
 
-  @OnEvent(BoxEvents.DESIRED_STATE_UPDATED)
-  @TrackJobExecution()
-  async handleBoxDesiredStateUpdate(event: BoxDesiredStateUpdatedEvent) {
-    await this.waitForLock(event.box.id)
-
-    try {
-      switch (event.newDesiredState) {
-        case BoxDesiredState.DESTROYED: {
-          await this.closeBoxUsagePeriod(event.box.id)
-          break
-        }
-      }
-    } finally {
-      this.releaseLock(event.box.id).catch((error) => {
-        this.logger.error(`Error releasing lock for box ${event.box.id}`, error)
-      })
-    }
-  }
-
-  @OnEvent(BoxEvents.STATE_UPDATED)
-  @TrackJobExecution()
-  async handleBoxStateUpdate(event: BoxStateUpdatedEvent) {
-    await this.waitForLock(event.box.id)
-
-    try {
-      switch (event.newState) {
-        case BoxState.STARTED: {
-          await this.closeBoxUsagePeriod(event.box.id)
-          await this.createBoxUsagePeriod(event)
-          break
-        }
-        case BoxState.STOPPING:
-          await this.closeBoxUsagePeriod(event.box.id)
-          await this.createBoxUsagePeriod(event, true)
-          break
-        // Safeguard if STOPPING state is skipped.
-        case BoxState.STOPPED: {
-          const cpuUsagePeriod = await this.usagePeriodRepository.findOne({
-            where: {
-              boxId: event.box.id,
-              endAt: IsNull(),
-              cpu: Not(0),
-            },
-          })
-          if (cpuUsagePeriod) {
-            await this.closeBoxUsagePeriod(event.box.id)
-            await this.createBoxUsagePeriod(event, true)
-          }
-          break
-        }
-        case BoxState.ERROR:
-        case BoxState.ARCHIVED:
-        case BoxState.DESTROYING:
-        case BoxState.DESTROYED: {
-          await this.closeBoxUsagePeriod(event.box.id)
-          break
-        }
-      }
-    } finally {
-      this.releaseLock(event.box.id).catch((error) => {
-        this.logger.error(`Error releasing lock for box ${event.box.id}`, error)
-      })
-    }
-  }
-
-  private async createBoxUsagePeriod(event: BoxStateUpdatedEvent, diskOnly = false) {
-    if (event.box.organizationId === BOX_WARM_POOL_UNASSIGNED_ORGANIZATION) {
-      return
-    }
-
-    const usagePeriod = new BoxUsagePeriod()
-    usagePeriod.boxId = event.box.id
-    usagePeriod.startAt = new Date()
-    usagePeriod.endAt = null
-    if (!diskOnly) {
-      usagePeriod.cpu = event.box.cpu
-      usagePeriod.gpu = event.box.gpu
-      usagePeriod.mem = event.box.mem
-    } else {
-      usagePeriod.cpu = 0
-      usagePeriod.gpu = 0
-      usagePeriod.mem = 0
-    }
-    usagePeriod.disk = event.box.disk
-    usagePeriod.organizationId = event.box.organizationId
-    usagePeriod.region = event.box.region
-    usagePeriod.boxClass = event.box.class
-    usagePeriod.regionType = await this.getRegionType(event.box.region)
-
-    await this.usagePeriodRepository.save(usagePeriod)
-  }
-
-  private async closeBoxUsagePeriod(boxId: string) {
-    const lastUsagePeriod = await this.usagePeriodRepository.findOne({
-      where: {
-        boxId,
-        endAt: IsNull(),
-      },
-    })
-
-    if (lastUsagePeriod) {
-      lastUsagePeriod.endAt = new Date()
-      await this.usagePeriodRepository.save(lastUsagePeriod)
-    }
-  }
-
-  @Cron(CronExpression.EVERY_MINUTE, { name: 'close-and-reopen-usage-periods' })
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'close-and-reopen-usage-periods', waitForCompletion: true })
   @TrackJobExecution()
   @LogExecution('close-and-reopen-usage-periods')
   @WithInstrumentation()
   async closeAndReopenBoxUsagePeriods() {
-    if (!(await this.redisLockProvider.lock('close-and-reopen-usage-periods', 60))) {
-      return
-    }
-
+    const cutoff = new Date(Date.now() - 1000 * 60 * 60 * 24)
     const usagePeriods = await this.usagePeriodRepository.find({
       where: {
         endAt: IsNull(),
-        // 1 day ago
-        startAt: LessThan(new Date(Date.now() - 1000 * 60 * 60 * 24)),
+        startAt: LessThan(cutoff),
         organizationId: Not(BOX_WARM_POOL_UNASSIGNED_ORGANIZATION),
       },
       order: {
@@ -191,46 +70,44 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
       take: 100,
     })
 
-    for (const usagePeriod of usagePeriods) {
-      if (!(await this.aquireLock(usagePeriod.boxId))) {
-        continue
-      }
-
+    for (const candidate of usagePeriods) {
       try {
-        const box = await this.boxRepository.findOne({
-          where: {
-            id: usagePeriod.boxId,
-          },
-        })
-
         await this.usagePeriodRepository.manager.transaction(async (transactionalEntityManager) => {
-          const closeTime = new Date()
-          usagePeriod.endAt = closeTime
-          await transactionalEntityManager.save(usagePeriod)
+          const box = await transactionalEntityManager.findOne(Box, {
+            where: { id: candidate.boxId },
+            lock: { mode: 'pessimistic_write' },
+            relations: [],
+            loadEagerRelations: false,
+          })
 
-          if (
-            box &&
-            (box.state === BoxState.STARTED || box.state === BoxState.STOPPED || box.state === BoxState.STOPPING)
-          ) {
-            const newUsagePeriod = BoxUsagePeriod.fromBoxUsagePeriod(usagePeriod)
-            newUsagePeriod.startAt = closeTime
-            newUsagePeriod.endAt = null
-            if (box.state === BoxState.STOPPED) {
-              newUsagePeriod.cpu = 0
-              newUsagePeriod.gpu = 0
-              newUsagePeriod.mem = 0
-            }
-            await transactionalEntityManager.save(newUsagePeriod)
+          const currentPeriod = await transactionalEntityManager.findOne(BoxUsagePeriod, {
+            where: { id: candidate.id, endAt: IsNull() },
+            lock: { mode: 'pessimistic_write' },
+          })
+          if (!currentPeriod || currentPeriod.startAt.getTime() >= cutoff.getTime()) {
+            return
           }
+
+          const [{ now: databaseNow }] = await transactionalEntityManager.query(`SELECT clock_timestamp() AS "now"`)
+          const transitionAt = new Date(databaseNow)
+          if (!box) {
+            currentPeriod.endAt = transitionAt
+            await transactionalEntityManager.save(BoxUsagePeriod, currentPeriod)
+            return
+          }
+
+          await this.usagePeriodWriter.transition({
+            manager: transactionalEntityManager,
+            previousBox: box,
+            currentBox: box,
+            transitionAt,
+            forceBoundary: true,
+          })
         })
       } catch (error) {
-        this.logger.error(`Error closing and reopening usage period ${usagePeriod.boxId}`, error)
-      } finally {
-        await this.releaseLock(usagePeriod.boxId)
+        this.logger.error(`Error closing and reopening usage period ${candidate.boxId}`, error)
       }
     }
-
-    await this.redisLockProvider.unlock('close-and-reopen-usage-periods')
   }
 
   @Cron(CronExpression.EVERY_5_SECONDS, { name: 'archive-usage-periods', waitForCompletion: true })
@@ -289,40 +166,6 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
       this.logger.error(
         `Usage archive invariant conflict: claimed=${result.claimed} archived=${result.archived} deleted=${result.deleted}`,
       )
-    }
-  }
-
-  private async waitForLock(boxId: string) {
-    while (!(await this.aquireLock(boxId))) {
-      await new Promise((resolve) => setTimeout(resolve, 500))
-    }
-  }
-
-  private async aquireLock(boxId: string): Promise<boolean> {
-    return await this.redisLockProvider.lock(`usage-period-${boxId}`, 60)
-  }
-
-  private async releaseLock(boxId: string) {
-    await this.redisLockProvider.unlock(`usage-period-${boxId}`)
-  }
-
-  private async getRegionType(regionId: string): Promise<string> {
-    try {
-      const region = await this.regionRepository.findOne({
-        select: ['regionType'],
-        where: {
-          id: regionId,
-        },
-        cache: {
-          id: `region-type-${regionId}`,
-          milliseconds: 1000 * 60 * 60,
-        },
-      })
-
-      return region?.regionType ?? RegionType.SHARED
-    } catch (error) {
-      this.logger.error(`Error fetching region type for region ${regionId}`, error)
-      return RegionType.SHARED
     }
   }
 }

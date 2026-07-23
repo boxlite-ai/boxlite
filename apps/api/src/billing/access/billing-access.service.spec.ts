@@ -4,6 +4,7 @@
  */
 
 import { HttpException } from '@nestjs/common'
+import { BoxState } from '../../box/enums/box-state.enum'
 import { BillingAccessService } from './billing-access.service'
 
 const now = new Date('2026-07-13T00:00:00.000Z')
@@ -195,6 +196,16 @@ describe('BillingAccessService', () => {
     expect(walletService.getOrCreateWallet).toHaveBeenCalledWith('org-2')
   })
 
+  it('uses only confirmed STARTED Boxes as fallback running allocations', async () => {
+    const { service, boxes } = makeService({ periods: [], boxes: [] })
+
+    await service.evaluate('org-1', null, now)
+
+    expect(boxes.findBy).toHaveBeenCalledWith(
+      expect.objectContaining({ desiredState: 'started', state: BoxState.STARTED }),
+    )
+  })
+
   it('throws HTTP 402 when enforcement is enabled and a requested allocation cannot be funded', async () => {
     const { service } = makeService({
       wallets: [
@@ -253,8 +264,14 @@ describe('BillingAccessService', () => {
   })
 
   it('lists each organization with a desired running Box once for the sweep', async () => {
-    const { service } = makeService({ activeOrganizationIds: ['org-1', 'org-2'] })
+    const { service, boxes } = makeService({ activeOrganizationIds: ['org-1', 'org-2'] })
 
     await expect(service.listActiveOrganizationIds()).resolves.toEqual(['org-1', 'org-2'])
+
+    const builder = boxes.createQueryBuilder.mock.results[0].value
+    expect(builder.andWhere).toHaveBeenCalledWith('box.state = :state', { state: BoxState.STARTED })
+    expect(builder.andWhere).toHaveBeenCalledWith('box."organizationId" <> :warmPoolOrganizationId', {
+      warmPoolOrganizationId: '00000000-0000-0000-0000-000000000000',
+    })
   })
 })

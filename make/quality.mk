@@ -1,4 +1,4 @@
-PHONY_TARGETS += fmt lint clippy lint\:apps fmt\:apps fmt\:check\:apps
+PHONY_TARGETS += fmt lint clippy lint\:apps fmt\:apps fmt\:apps\:billing-archive fmt\:check\:apps
 
 # Smart format: only format changed components.
 fmt:
@@ -95,6 +95,9 @@ fmt\:check\:c:
 fmt\:apps: _ensure-apps-deps
 	@echo "🔧 Formatting apps workspace..."
 	@cd apps && yarn format
+
+fmt\:apps\:billing-archive: _ensure-apps-deps
+	@cd apps && yarn prettier --write $(BILLING_ARCHIVE_FORMAT_FILES)
 
 # apps/ has no `format:check` script; prettier --check over the same TS globs
 # `lint:ts` uses is the check counterpart.

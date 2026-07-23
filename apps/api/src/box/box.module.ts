@@ -51,6 +51,8 @@ import { BoxActivityService } from './services/box-activity.service'
 import { BoxStateWaiterService } from './services/box-state-waiter.service'
 import { BillingModule } from '../billing/billing.module'
 import { BillingEnforcementService } from './services/billing-enforcement.service'
+import { UsageMeteringModule } from '../usage/metering/usage-metering.module'
+import { UsagePeriodWriter } from '../usage/metering/usage-period-writer'
 
 @Module({
   imports: [
@@ -58,6 +60,7 @@ import { BillingEnforcementService } from './services/billing-enforcement.servic
     OrganizationModule,
     RegionModule,
     BillingModule,
+    UsageMeteringModule,
     TypeOrmModule.forFeature([Box, Runner, WarmPool, Volume, SshAccess, Region, Job, BoxLastActivity]),
   ],
   controllers: [BoxController, RunnerController, PreviewController, VolumeController, JobController],
@@ -89,12 +92,13 @@ import { BillingEnforcementService } from './services/billing-enforcement.servic
     SshGatewayGuard,
     {
       provide: BoxRepository,
-      inject: [DataSource, EventEmitter2, BoxLookupCacheInvalidationService],
+      inject: [DataSource, EventEmitter2, BoxLookupCacheInvalidationService, UsagePeriodWriter],
       useFactory: (
         dataSource: DataSource,
         eventEmitter: EventEmitter2,
         boxLookupCacheInvalidationService: BoxLookupCacheInvalidationService,
-      ) => new BoxRepository(dataSource, eventEmitter, boxLookupCacheInvalidationService),
+        usagePeriodWriter: UsagePeriodWriter,
+      ) => new BoxRepository(dataSource, eventEmitter, boxLookupCacheInvalidationService, usagePeriodWriter),
     },
   ],
   exports: [

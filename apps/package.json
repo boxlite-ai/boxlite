@@ -37,7 +37,7 @@
     "test:billing:db": "node scripts/billing-test-suite.mjs db",
     "test:billing:all": "node scripts/billing-test-suite.mjs all",
     "test:billing:verify": "node scripts/billing-test-suite.mjs verify",
-    "test:billing-edge": "BILLING_EDGE_DB_TESTS=1 jest --config api/jest.config.ts --runInBand api/src/billing/billing-edge-cases.integration.spec.ts",
+    "test:billing-edge": "BILLING_EDGE_DB_TESTS=1 jest --config api/jest.config.ts --runInBand api/src/billing/billing-edge-cases.integration.spec.ts api/src/usage/metering/metering-consistency.integration.spec.ts",
     "observability:agent-smoke": "node scripts/admin-observability-agent-smoke.mjs",
     "format": "nx run-many --target=format --all --parallel=$(getconf _NPROCESSORS_ONLN) && prettier --write \"*.{ts,js,json,yaml}\"",
     "lint": "yarn lint:ts",

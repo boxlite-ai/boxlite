@@ -185,15 +185,7 @@ describeWithDatabase('Billing common edge cases with PostgreSQL', () => {
   }
 
   function usageService(): UsageService {
-    const unexpectedRedisLock = () => {
-      throw new Error('usage period archiving must not use Redis locking')
-    }
-    return new UsageService(
-      billingDataSource.getRepository(BoxUsagePeriod),
-      { lock: unexpectedRedisLock, unlock: unexpectedRedisLock } as never,
-      {} as never,
-      {} as never,
-    )
+    return new UsageService(billingDataSource.getRepository(BoxUsagePeriod), { transition: jest.fn() } as never)
   }
 
   async function createUsagePeriods(

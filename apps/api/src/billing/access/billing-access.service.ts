@@ -6,8 +6,10 @@
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { In, Repository } from 'typeorm'
+import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../../box/constants/box.constants'
 import { Box } from '../../box/entities/box.entity'
 import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
+import { BoxState } from '../../box/enums/box-state.enum'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { BoxUsagePeriodArchive } from '../../usage/entities/box-usage-period-archive.entity'
 import { BoxUsagePeriod } from '../../usage/entities/box-usage-period.entity'
@@ -71,6 +73,7 @@ export class BillingAccessService {
       this.boxes.findBy({
         organizationId: In(uniqueOrganizationIds),
         desiredState: BoxDesiredState.STARTED,
+        state: BoxState.STARTED,
       }),
     ])
 
@@ -162,6 +165,10 @@ export class BillingAccessService {
       .createQueryBuilder('box')
       .select('DISTINCT box."organizationId"', 'organizationId')
       .where('box."desiredState" = :desiredState', { desiredState: BoxDesiredState.STARTED })
+      .andWhere('box.state = :state', { state: BoxState.STARTED })
+      .andWhere('box."organizationId" <> :warmPoolOrganizationId', {
+        warmPoolOrganizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+      })
       .orderBy('box."organizationId"', 'ASC')
       .getRawMany<{ organizationId: string }>()
     return rows.map((row) => row.organizationId)

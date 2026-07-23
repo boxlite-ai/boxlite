@@ -356,6 +356,12 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
             break
           }
 
+          const currentLockCode = await this.redisLockProvider.getCode(lockKey)
+          if (currentLockCode?.getCode() !== lockCode.getCode()) {
+            this.logger.warn(`Box ${boxId} state sync lost lock ownership; skipping stale ERROR transition`)
+            break
+          }
+
           this.logger.error(`Error processing desired state for box ${boxId}:`, error)
 
           const { recoverable, errorReason } = sanitizeBoxError(error)
@@ -366,8 +372,22 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
             recoverable,
           }
 
-          // Update box to error state without safeguards
-          await this.boxRepository.updateWhere(boxId, { updateData, whereCondition: {} })
+          try {
+            await this.boxRepository.updateWhere(boxId, {
+              updateData,
+              whereCondition: {
+                state: box.state,
+                desiredState: box.desiredState,
+                pending: box.pending,
+              },
+            })
+          } catch (updateError) {
+            if (updateError instanceof BoxConflictError) {
+              this.logger.warn(`Box ${boxId} changed while handling an action error; skipping stale ERROR transition`)
+              break
+            }
+            throw updateError
+          }
 
           // Break sync loop since box is in error state.
           break
@@ -385,7 +405,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
         }
       }
     } finally {
-      await this.redisLockProvider.unlock(lockKey)
+      await this.redisLockProvider.unlock(lockKey, lockCode)
     }
   }
 

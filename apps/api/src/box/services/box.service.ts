@@ -722,6 +722,20 @@ export class BoxService {
     return box.runnerId || null
   }
 
+  async getRunnerIdById(boxId: string): Promise<string | null> {
+    const box = await this.boxRepository.findOne({
+      where: { id: boxId },
+      select: ['runnerId'],
+      loadEagerRelations: false,
+    })
+
+    if (!box) {
+      throw new NotFoundException(`Box with ID ${boxId} not found`)
+    }
+
+    return box.runnerId || null
+  }
+
   async getRegionId(boxIdOrName: string): Promise<string> {
     const box = await this.boxRepository.findOne({
       where: [{ id: boxIdOrName }, { name: boxIdOrName }],
@@ -731,6 +745,20 @@ export class BoxService {
 
     if (!box) {
       throw new NotFoundException(`Box with ID or name ${boxIdOrName} not found`)
+    }
+
+    return box.region
+  }
+
+  async getRegionIdById(boxId: string): Promise<string> {
+    const box = await this.boxRepository.findOne({
+      where: { id: boxId },
+      select: ['region'],
+      loadEagerRelations: false,
+    })
+
+    if (!box) {
+      throw new NotFoundException(`Box with ID ${boxId} not found`)
     }
 
     return box.region

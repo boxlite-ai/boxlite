@@ -28,7 +28,7 @@ export class RegionBoxAccessGuard implements CanActivate {
 
     try {
       const regionContext = authContext as RegionProxyContext | RegionSSHGatewayContext
-      const boxRegionId = await this.boxService.getRegionId(boxId)
+      const boxRegionId = await this.boxService.getRegionIdById(boxId)
       if (boxRegionId !== regionContext.regionId) {
         throw new ForbiddenException(`Box region ID does not match region ${regionContext.role} region ID`)
       }

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm'
+import { Check, Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm'
 import { BoxClass } from '../../box/enums/box-class.enum'
 import { RegionType } from '../../region/enums/region-type.enum'
 
@@ -11,6 +11,7 @@ import { RegionType } from '../../region/enums/region-type.enum'
 @Index('box_usage_period_box_end_idx', ['boxId', 'endAt'])
 @Index('box_usage_period_organization_end_idx', ['organizationId', 'endAt'])
 @Index('box_usage_period_one_open_per_box_idx', ['boxId'], { unique: true, where: '"endAt" IS NULL' })
+@Check('box_usage_period_non_negative_duration', '"endAt" IS NULL OR "endAt" >= "startAt"')
 export class BoxUsagePeriod {
   @PrimaryGeneratedColumn('uuid')
   id: string

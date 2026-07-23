@@ -5,14 +5,14 @@
 
 import { Module } from '@nestjs/common'
 import { TypeOrmModule } from '@nestjs/typeorm'
-import { BoxModule } from '../box/box.module'
 import { BoxUsagePeriodArchive } from './entities/box-usage-period-archive.entity'
 import { BoxUsagePeriod } from './entities/box-usage-period.entity'
 import { UsageService } from './services/usage.service'
 import { Region } from '../region/entities/region.entity'
+import { UsageMeteringModule } from './metering/usage-metering.module'
 
 @Module({
-  imports: [BoxModule, TypeOrmModule.forFeature([BoxUsagePeriod, BoxUsagePeriodArchive, Region])],
+  imports: [UsageMeteringModule, TypeOrmModule.forFeature([BoxUsagePeriod, BoxUsagePeriodArchive, Region])],
   providers: [UsageService],
   exports: [UsageService],
 })

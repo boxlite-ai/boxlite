@@ -20,6 +20,7 @@ import { BoxDesiredStateUpdatedEvent } from '../events/box-desired-state-updated
 import { BoxPublicStatusUpdatedEvent } from '../events/box-public-status-updated.event'
 import { BoxOrganizationUpdatedEvent } from '../events/box-organization-updated.event'
 import { BoxLookupCacheInvalidationService } from '../services/box-lookup-cache-invalidation.service'
+import { UsagePeriodWriter } from '../../usage/metering/usage-period-writer'
 
 // Cap how long the proxy auto-start UPDATE waits to acquire the box row's
 // write lock. Concurrent start/stop/sync go through updateWhere(), which holds
@@ -35,6 +36,18 @@ const PROXY_START_LOCK_TIMEOUT_MS = 2000
 // lock_timeout to acquire a lock.
 const PG_LOCK_TIMEOUT_CODE = '55P03'
 
+const METERING_FIELDS = new Set<keyof Box>([
+  'state',
+  'desiredState',
+  'organizationId',
+  'cpu',
+  'gpu',
+  'mem',
+  'disk',
+  'region',
+  'class',
+])
+
 @Injectable()
 export class BoxRepository extends BaseRepository<Box> {
   private readonly logger = new Logger(BoxRepository.name)
@@ -43,25 +56,27 @@ export class BoxRepository extends BaseRepository<Box> {
     @InjectDataSource() dataSource: DataSource,
     eventEmitter: EventEmitter2,
     private readonly boxLookupCacheInvalidationService: BoxLookupCacheInvalidationService,
+    private readonly usagePeriodWriter: UsagePeriodWriter,
   ) {
     super(dataSource, eventEmitter, Box)
   }
 
   async insert(box: Box): Promise<Box> {
-    const now = new Date()
-    if (!box.createdAt) {
-      box.createdAt = now
-    }
-    if (!box.updatedAt) {
-      box.updatedAt = now
-    }
-
     box.assertValid()
     box.enforceInvariants()
 
     await this.dataSource.transaction(async (entityManager) => {
+      const transitionAt = await this.databaseNow(entityManager)
+      box.createdAt ??= transitionAt
+      box.updatedAt ??= transitionAt
       await entityManager.insert(Box, box)
-      await this.upsertLastActivity(entityManager, box.id, box.createdAt)
+      await this.usagePeriodWriter.transition({
+        manager: entityManager,
+        previousBox: null,
+        currentBox: box,
+        transitionAt,
+      })
+      await this.upsertLastActivity(entityManager, box.id, transitionAt)
     })
 
     this.invalidateLookupCacheOnInsert(box)
@@ -88,47 +103,52 @@ export class BoxRepository extends BaseRepository<Box> {
     const { updateData, entity } = params
 
     if (raw) {
+      this.assertRawUpdateIsNotMeteringRelevant(updateData)
       await this.repository.update(id, updateData)
       return
     }
 
-    const box = entity ?? (await this.findOneBy({ id }))
-    if (!box) {
-      throw new NotFoundException('Box not found')
-    }
-
-    const previousBox = { ...box }
-
-    Object.assign(box, updateData)
-    box.assertValid()
-    const invariantChanges = box.enforceInvariants()
-
-    await this.dataSource.transaction(async (entityManager) => {
-      const result = await entityManager.update(
-        Box,
-        {
-          id: previousBox.id,
-          state: previousBox.state,
-          desiredState: previousBox.desiredState,
-          pending: previousBox.pending,
-          organizationId: previousBox.organizationId,
-        },
-        { ...updateData, ...invariantChanges },
-      )
-      if (!result.affected) {
+    const result = await this.dataSource.transaction(async (entityManager) => {
+      const persistedBox = await entityManager.findOne(Box, {
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+        relations: [],
+        loadEagerRelations: false,
+      })
+      if (!persistedBox) {
+        throw new NotFoundException('Box not found')
+      }
+      if (entity && !this.sameConcurrencySnapshot(entity, persistedBox, updateData)) {
         throw new BoxConflictError()
       }
-      box.updatedAt = new Date()
 
-      if (previousBox.state !== box.state || previousBox.organizationId !== box.organizationId) {
-        await this.upsertLastActivity(entityManager, id, box.updatedAt)
+      const previousBox = { ...persistedBox } as Box
+      Object.assign(persistedBox, updateData)
+      persistedBox.assertValid()
+      const invariantChanges = persistedBox.enforceInvariants()
+      const transitionAt = await this.databaseNow(entityManager)
+      persistedBox.updatedAt = transitionAt
+
+      await entityManager.update(Box, id, { ...updateData, ...invariantChanges, updatedAt: transitionAt })
+      await this.usagePeriodWriter.transition({
+        manager: entityManager,
+        previousBox,
+        currentBox: persistedBox,
+        transitionAt,
+      })
+
+      if (previousBox.state !== persistedBox.state || previousBox.organizationId !== persistedBox.organizationId) {
+        await this.upsertLastActivity(entityManager, id, transitionAt)
       }
+
+      return { box: persistedBox, previousBox }
     })
 
-    this.emitUpdateEvents(box, previousBox)
-    this.invalidateLookupCacheOnUpdate(box, previousBox)
+    const updatedBox = entity ? Object.assign(entity, result.box) : result.box
+    this.emitUpdateEvents(updatedBox, result.previousBox)
+    this.invalidateLookupCacheOnUpdate(updatedBox, result.previousBox)
 
-    return box
+    return updatedBox
   }
 
   /**
@@ -151,7 +171,7 @@ export class BoxRepository extends BaseRepository<Box> {
   ): Promise<Box> {
     const { updateData, whereCondition } = params
 
-    return this.manager.transaction(async (entityManager) => {
+    const result = await this.manager.transaction(async (entityManager) => {
       const whereClause = {
         ...whereCondition,
         id,
@@ -168,24 +188,33 @@ export class BoxRepository extends BaseRepository<Box> {
         throw new BoxConflictError()
       }
 
-      const previousBox = { ...box }
+      const previousBox = { ...box } as Box
 
       Object.assign(box, updateData)
       box.assertValid()
       const invariantChanges = box.enforceInvariants()
+      const transitionAt = await this.databaseNow(entityManager)
+      box.updatedAt = transitionAt
 
-      await entityManager.update(Box, id, { ...updateData, ...invariantChanges })
-      box.updatedAt = new Date()
+      await entityManager.update(Box, id, { ...updateData, ...invariantChanges, updatedAt: transitionAt })
+      await this.usagePeriodWriter.transition({
+        manager: entityManager,
+        previousBox,
+        currentBox: box,
+        transitionAt,
+      })
 
       if (previousBox.state !== box.state || previousBox.organizationId !== box.organizationId) {
-        await this.upsertLastActivity(entityManager, id, box.updatedAt)
+        await this.upsertLastActivity(entityManager, id, transitionAt)
       }
 
-      this.emitUpdateEvents(box, previousBox)
-      this.invalidateLookupCacheOnUpdate(box, previousBox)
-
-      return box
+      return { box, previousBox }
     })
+
+    this.emitUpdateEvents(result.box, result.previousBox)
+    this.invalidateLookupCacheOnUpdate(result.box, result.previousBox)
+
+    return result.box
   }
 
   /**
@@ -206,7 +235,7 @@ export class BoxRepository extends BaseRepository<Box> {
    */
   async conditionalStartForProxy(boxId: string, organizationId: string): Promise<Box | null> {
     try {
-      return await this.manager.transaction(async (entityManager) => {
+      const updatedBox = await this.manager.transaction(async (entityManager) => {
         // Bound the row-lock wait at the DB level. SET LOCAL scopes the timeout
         // to this transaction only, so it never leaks to other queries sharing
         // the pooled connection. The value is a hardcoded constant — no
@@ -220,7 +249,7 @@ export class BoxRepository extends BaseRepository<Box> {
           .set({
             pending: true,
             desiredState: BoxDesiredState.STARTED,
-            updatedAt: new Date(),
+            updatedAt: () => 'clock_timestamp()',
           })
           .where('id = :id', { id: boxId })
           .andWhere('"organizationId" = :org', { org: organizationId })
@@ -237,18 +266,35 @@ export class BoxRepository extends BaseRepository<Box> {
         // value honors the Promise<Box> contract and downstream consumers (the
         // caller's events → toBoxDto) get an entity, not a raw row.
         const updated = entityManager.create(Box, raw)
+        const transitionAt = updated.updatedAt
+        const previousBox = entityManager.create(Box, {
+          ...raw,
+          pending: false,
+          desiredState: BoxDesiredState.STOPPED,
+        })
+
+        await this.usagePeriodWriter.transition({
+          manager: entityManager,
+          previousBox,
+          currentBox: updated,
+          transitionAt,
+        })
 
         // id / name / org haven't changed, but the cached entity snapshot still
         // holds the old desiredState/pending — invalidate so subsequent
         // findOneByIdOrName fetches fresh values.
-        this.invalidateLookupCacheOnUpdate(updated, {
-          organizationId: updated.organizationId,
-          name: updated.name,
-          authToken: updated.authToken,
-        })
-
         return updated
       })
+
+      if (updatedBox) {
+        this.invalidateLookupCacheOnUpdate(updatedBox, {
+          organizationId: updatedBox.organizationId,
+          name: updatedBox.name,
+          authToken: updatedBox.authToken,
+        })
+      }
+
+      return updatedBox
     } catch (err) {
       // Lock wait exceeded lock_timeout: the row is being started/stopped
       // concurrently, so we lost the race. No-op — same semantics as a zero-row
@@ -265,6 +311,35 @@ export class BoxRepository extends BaseRepository<Box> {
    */
   private async upsertLastActivity(entityManager: EntityManager, boxId: string, lastActivityAt: Date): Promise<void> {
     await entityManager.upsert(BoxLastActivity, { boxId, lastActivityAt }, ['boxId'])
+  }
+
+  private assertRawUpdateIsNotMeteringRelevant(updateData: Partial<Box>): void {
+    const forbiddenField = (Object.keys(updateData) as (keyof Box)[]).find((field) => METERING_FIELDS.has(field))
+    if (forbiddenField) {
+      throw new Error(`Raw Box update cannot modify metering field '${String(forbiddenField)}'`)
+    }
+  }
+
+  private sameConcurrencySnapshot(snapshot: Box, persisted: Box, updateData: Partial<Box>): boolean {
+    const ownsLifecycleJob = Object.prototype.hasOwnProperty.call(updateData, 'lifecycleJobId')
+    return (
+      snapshot.state === persisted.state &&
+      snapshot.desiredState === persisted.desiredState &&
+      snapshot.pending === persisted.pending &&
+      snapshot.organizationId === persisted.organizationId &&
+      snapshot.cpu === persisted.cpu &&
+      snapshot.gpu === persisted.gpu &&
+      snapshot.mem === persisted.mem &&
+      snapshot.disk === persisted.disk &&
+      snapshot.region === persisted.region &&
+      snapshot.class === persisted.class &&
+      (!ownsLifecycleJob || snapshot.lifecycleJobId === persisted.lifecycleJobId)
+    )
+  }
+
+  private async databaseNow(entityManager: EntityManager): Promise<Date> {
+    const [row] = await entityManager.query(`SELECT clock_timestamp() AS "now"`)
+    return new Date(row.now)
   }
 
   /**

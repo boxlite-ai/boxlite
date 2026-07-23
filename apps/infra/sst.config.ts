@@ -456,6 +456,7 @@ export default $config({
         PORT: String(PORTS.API),
         ENVIRONMENT: 'production',
         RUN_MIGRATIONS: 'true',
+        DISABLE_CRON_JOBS: envOr('DISABLE_CRON_JOBS', 'false'),
         VERSION: '0.1.0',
         DEFAULT_REGION_ENFORCE_QUOTAS: 'false',
         DEFAULT_TEMPLATE: envOr('DEFAULT_TEMPLATE', 'boxlite/base'),

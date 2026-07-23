@@ -30,6 +30,8 @@ import { RegionModule } from '../region/region.module'
 import { OrganizationRegionController } from './controllers/organization-region.controller'
 import { Region } from '../region/entities/region.entity'
 import { EncryptionModule } from '../encryption/encryption.module'
+import { UsageMeteringModule } from '../usage/metering/usage-metering.module'
+import { UsagePeriodWriter } from '../usage/metering/usage-period-writer'
 
 @Module({
   imports: [
@@ -45,6 +47,7 @@ import { EncryptionModule } from '../encryption/encryption.module'
       Region,
     ]),
     EncryptionModule,
+    UsageMeteringModule,
   ],
   controllers: [
     OrganizationController,
@@ -62,12 +65,13 @@ import { EncryptionModule } from '../encryption/encryption.module'
     BoxLookupCacheInvalidationService,
     {
       provide: BoxRepository,
-      inject: [DataSource, EventEmitter2, BoxLookupCacheInvalidationService],
+      inject: [DataSource, EventEmitter2, BoxLookupCacheInvalidationService, UsagePeriodWriter],
       useFactory: (
         dataSource: DataSource,
         eventEmitter: EventEmitter2,
         boxLookupCacheInvalidationService: BoxLookupCacheInvalidationService,
-      ) => new BoxRepository(dataSource, eventEmitter, boxLookupCacheInvalidationService),
+        usagePeriodWriter: UsagePeriodWriter,
+      ) => new BoxRepository(dataSource, eventEmitter, boxLookupCacheInvalidationService, usagePeriodWriter),
     },
   ],
   exports: [OrganizationService, OrganizationRoleService, OrganizationUserService, OrganizationInvitationService],

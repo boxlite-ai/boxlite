@@ -39,7 +39,7 @@ function makeRepository(execute: jest.Mock) {
     transaction: jest.fn(async (cb: (em: typeof entityManager) => Promise<unknown>) => cb(entityManager)),
   }
   const dataSource = { getRepository: () => ({ manager }) } as any
-  const repo = new BoxRepository(dataSource, {} as any, {} as any)
+  const repo = new (BoxRepository as any)(dataSource, {} as any, {} as any, { transition: jest.fn() } as any)
   // invalidateLookupCacheOnUpdate touches the real cache service; stub it out —
   // it is incidental to the lock-timeout behavior under test.
   jest.spyOn(repo as any, 'invalidateLookupCacheOnUpdate').mockImplementation(() => undefined)
@@ -54,6 +54,7 @@ const startedRow = {
   state: BoxState.STOPPED,
   desiredState: BoxDesiredState.STARTED,
   pending: true,
+  updatedAt: new Date('2026-07-22T00:00:00.000Z'),
 }
 
 describe('BoxRepository.conditionalStartForProxy', () => {
@@ -100,5 +101,170 @@ describe('BoxRepository.conditionalStartForProxy', () => {
     const { repo } = makeRepository(execute)
 
     await expect(repo.conditionalStartForProxy('box-1', 'org-1')).resolves.toBeNull()
+  })
+})
+
+describe('BoxRepository metering transaction', () => {
+  it('synchronizes usage in the same transaction that accepts a stop intent', async () => {
+    const box = new Box('region-1', 'box-1')
+    box.id = 'box000000001'
+    box.organizationId = '00000000-0000-0000-0000-000000000001'
+    box.state = BoxState.STARTED
+    box.desiredState = BoxDesiredState.STARTED
+    box.pending = false
+    box.createdAt = new Date('2026-07-22T00:00:00.000Z')
+    box.updatedAt = box.createdAt
+
+    const entityManager = {
+      findOne: jest.fn().mockResolvedValue(box),
+      query: jest.fn().mockResolvedValue([{ now: new Date('2026-07-22T00:00:01.000Z') }]),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+      upsert: jest.fn().mockResolvedValue(undefined),
+    }
+    const transaction = jest.fn(async (callback: (manager: typeof entityManager) => Promise<unknown>) =>
+      callback(entityManager),
+    )
+    const dataSource = {
+      getRepository: () => ({ manager: { transaction } }),
+    } as any
+    const usagePeriodWriter = {
+      transition: jest.fn().mockResolvedValue(undefined),
+    }
+    const repository = new (BoxRepository as any)(dataSource, { emit: jest.fn() }, {}, usagePeriodWriter)
+    jest.spyOn(repository as any, 'invalidateLookupCacheOnUpdate').mockImplementation(() => undefined)
+
+    await repository.updateWhere(box.id, {
+      updateData: { pending: true, desiredState: BoxDesiredState.STOPPED },
+      whereCondition: { pending: false, state: BoxState.STARTED },
+    })
+
+    expect(usagePeriodWriter.transition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        manager: entityManager,
+        previousBox: expect.objectContaining({ desiredState: BoxDesiredState.STARTED }),
+        currentBox: expect.objectContaining({ desiredState: BoxDesiredState.STOPPED }),
+        transitionAt: expect.any(Date),
+      }),
+    )
+  })
+
+  it('updates a supplied entity in place after the transaction commits', async () => {
+    const supplied = new Box('region-1', 'box-1')
+    supplied.id = 'box000000001'
+    supplied.organizationId = '00000000-0000-0000-0000-000000000001'
+    supplied.state = BoxState.STARTED
+    supplied.desiredState = BoxDesiredState.STARTED
+    supplied.pending = false
+    supplied.createdAt = new Date('2026-07-22T00:00:00.000Z')
+    supplied.updatedAt = supplied.createdAt
+    const persisted = Object.assign(new Box(supplied.region, supplied.name), supplied)
+
+    const entityManager = {
+      findOne: jest.fn().mockResolvedValue(persisted),
+      query: jest.fn().mockResolvedValue([{ now: new Date('2026-07-22T00:00:01.000Z') }]),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+      upsert: jest.fn().mockResolvedValue(undefined),
+    }
+    const dataSource = {
+      transaction: jest.fn(async (callback: (manager: typeof entityManager) => Promise<unknown>) =>
+        callback(entityManager),
+      ),
+      getRepository: () => ({
+        manager: {
+          transaction: jest.fn(async (callback: (manager: typeof entityManager) => Promise<unknown>) =>
+            callback(entityManager),
+          ),
+        },
+      }),
+    } as any
+    const repository = new (BoxRepository as any)(
+      dataSource,
+      { emit: jest.fn() } as never,
+      { invalidate: jest.fn() } as never,
+      { transition: jest.fn().mockResolvedValue(undefined) } as never,
+    )
+
+    const result = await repository.update(supplied.id, {
+      entity: supplied,
+      updateData: { desiredState: BoxDesiredState.STOPPED },
+    })
+
+    expect(result).toBe(supplied)
+    expect(supplied).toMatchObject({ desiredState: BoxDesiredState.STOPPED, pending: true })
+  })
+
+  it('allows the action that created a lifecycle Job to persist its transitional state', async () => {
+    const supplied = new Box('region-1', 'box-1')
+    supplied.id = 'box000000001'
+    supplied.organizationId = '00000000-0000-0000-0000-000000000001'
+    supplied.state = BoxState.STOPPED
+    supplied.desiredState = BoxDesiredState.STARTED
+    supplied.pending = true
+    supplied.createdAt = new Date('2026-07-22T00:00:00.000Z')
+    supplied.updatedAt = supplied.createdAt
+
+    const persisted = Object.assign(new Box(supplied.region, supplied.name), supplied, {
+      lifecycleJobId: '00000000-0000-0000-0000-000000000010',
+    })
+    const entityManager = {
+      findOne: jest.fn().mockResolvedValue(persisted),
+      query: jest.fn().mockResolvedValue([{ now: new Date('2026-07-22T00:00:01.000Z') }]),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+      upsert: jest.fn().mockResolvedValue(undefined),
+    }
+    const dataSource = {
+      transaction: jest.fn(async (callback: (manager: typeof entityManager) => Promise<unknown>) =>
+        callback(entityManager),
+      ),
+      getRepository: () => ({ manager: { transaction: jest.fn() } }),
+    } as any
+    const repository = new (BoxRepository as any)(
+      dataSource,
+      { emit: jest.fn() } as never,
+      { invalidate: jest.fn() } as never,
+      { transition: jest.fn().mockResolvedValue(undefined) } as never,
+    )
+
+    await expect(
+      repository.update(supplied.id, {
+        entity: supplied,
+        updateData: { state: BoxState.STARTING },
+      }),
+    ).resolves.toBe(supplied)
+    expect(supplied).toMatchObject({
+      state: BoxState.STARTING,
+      lifecycleJobId: persisted.lifecycleJobId,
+    })
+  })
+
+  it('rejects a terminal lifecycle update after ownership moved to another Job', async () => {
+    const supplied = new Box('region-1', 'box-1')
+    supplied.id = 'box000000001'
+    supplied.organizationId = '00000000-0000-0000-0000-000000000001'
+    supplied.state = BoxState.STARTING
+    supplied.desiredState = BoxDesiredState.STARTED
+    supplied.pending = true
+    supplied.lifecycleJobId = '00000000-0000-0000-0000-000000000010'
+    supplied.createdAt = new Date('2026-07-22T00:00:00.000Z')
+    supplied.updatedAt = supplied.createdAt
+
+    const persisted = Object.assign(new Box(supplied.region, supplied.name), supplied, {
+      lifecycleJobId: '00000000-0000-0000-0000-000000000011',
+    })
+    const entityManager = { findOne: jest.fn().mockResolvedValue(persisted) }
+    const dataSource = {
+      transaction: jest.fn(async (callback: (manager: typeof entityManager) => Promise<unknown>) =>
+        callback(entityManager),
+      ),
+      getRepository: () => ({ manager: { transaction: jest.fn() } }),
+    } as any
+    const repository = new (BoxRepository as any)(dataSource, {}, {}, { transition: jest.fn() })
+
+    await expect(
+      repository.update(supplied.id, {
+        entity: supplied,
+        updateData: { state: BoxState.STARTED, lifecycleJobId: null },
+      }),
+    ).rejects.toMatchObject({ name: 'BoxConflictError' })
   })
 })

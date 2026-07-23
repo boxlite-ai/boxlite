@@ -26,6 +26,7 @@ export class BoxAccessGuard implements CanActivate {
     // TODO: remove deprecated request.params.workspaceId param once we remove the deprecated workspace controller
     const boxIdOrName: string =
       request.params.boxIdOrName || request.params.boxId || request.params.id || request.params.workspaceId
+    const isExactBoxIdRoute = Boolean(request.params.boxId)
 
     // TODO: initialize authContext safely
     const authContext: BaseAuthContext = request.user
@@ -35,7 +36,9 @@ export class BoxAccessGuard implements CanActivate {
         case isRunnerContext(authContext): {
           // For runner authentication, verify that the runner ID matches the box's runner ID
           const runnerContext = authContext as RunnerContext
-          const boxRunnerId = await this.boxService.getRunnerId(boxIdOrName)
+          const boxRunnerId = isExactBoxIdRoute
+            ? await this.boxService.getRunnerIdById(boxIdOrName)
+            : await this.boxService.getRunnerId(boxIdOrName)
           if (boxRunnerId !== runnerContext.runnerId) {
             throw new ForbiddenException('Runner ID does not match box runner ID')
           }

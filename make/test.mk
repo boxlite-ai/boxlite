@@ -355,6 +355,20 @@ BILLING_ARCHIVE_FORMAT_FILES = \
 	infra/BILLING_USAGE_ARCHIVE_RUNBOOK.md \
 	infra/sst-billing-config.test.mjs \
 	scripts/local-dex-env.mjs
+BILLING_METERING_TEST_FILES = \
+	api/src/usage/metering/metering-policy.spec.ts \
+	api/src/usage/metering/usage-period-writer.spec.ts \
+	api/src/box/repositories/box.repository.spec.ts \
+	api/src/box/services/job.service.spec.ts \
+	api/src/box/services/job-state-handler.service.spec.ts \
+	api/src/box/services/box.service.spec.ts \
+	api/src/box/managers/box.manager.spec.ts \
+	api/src/box/guards/box-access.guard.spec.ts \
+	api/src/box/guards/region-box-access.guard.spec.ts \
+	api/src/boxlite-rest/boxlite-proxy.controller.spec.ts \
+	api/src/migrations/pre-deploy/1784707200000-migration.spec.ts \
+	api/src/usage/usage.service.spec.ts \
+	api/src/billing/access/billing-access.service.spec.ts
 
 test\:apps: _ensure-apps-deps dev\:go
 	@echo "🧪 Running apps workspace test matrix..."
@@ -370,6 +384,13 @@ test\:apps\:billing-archive: _ensure-apps-deps
 test\:apps\:billing-archive-db: _ensure-apps-deps
 	@cd apps && BILLING_EDGE_DB_TESTS=1 yarn jest --config api/jest.config.ts --runInBand \
 		api/src/billing/billing-edge-cases.integration.spec.ts
+
+test\:apps\:billing-metering: _ensure-apps-deps
+	@cd apps && yarn jest --config api/jest.config.ts --runInBand $(BILLING_METERING_TEST_FILES)
+
+test\:apps\:billing-metering-db: _ensure-apps-deps
+	@cd apps && BILLING_EDGE_DB_TESTS=1 yarn jest --config api/jest.config.ts --runInBand \
+		api/src/usage/metering/metering-consistency.integration.spec.ts
 
 test\:rest\:inventory: _ensure-apps-deps
 	@cd apps && yarn node ../scripts/test/rest/inventory.mjs
