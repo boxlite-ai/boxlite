@@ -1,14 +1,13 @@
 //! Guest service implementation.
 //!
 //! Handles guest initialization and management (Init, Ping, Shutdown,
-//! Quiesce, Thaw, SyncClock RPCs).
+//! Quiesce, Thaw RPCs).
 
 use crate::service::server::GuestServer;
 use boxlite_shared::{
     guest_init_response, Guest as GuestService, GuestInitError, GuestInitRequest,
     GuestInitResponse, GuestInitSuccess, PingRequest, PingResponse, QuiesceRequest,
-    QuiesceResponse, ShutdownRequest, ShutdownResponse, SyncClockRequest, SyncClockResponse,
-    ThawRequest, ThawResponse,
+    QuiesceResponse, ShutdownRequest, ShutdownResponse, ThawRequest, ThawResponse,
 };
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info};
@@ -153,35 +152,5 @@ impl GuestService for GuestServer {
         stored.clear();
 
         Ok(Response::new(ThawResponse { thawed_count }))
-    }
-
-    async fn sync_clock(
-        &self,
-        request: Request<SyncClockRequest>,
-    ) -> Result<Response<SyncClockResponse>, Status> {
-        let req = request.into_inner();
-        let host_unix_nanos = req.host_unix_nanos;
-        let force_host_timestamp = req.force_host_timestamp;
-        info!("Received sync clock request");
-
-        match crate::clock::sync_clock(host_unix_nanos, force_host_timestamp) {
-            Ok(outcome) => {
-                info!(
-                    correction_secs = outcome.correction_nanos / 1_000_000_000,
-                    ?outcome.source,
-                    "Guest clock synchronized"
-                );
-                Ok(Response::new(SyncClockResponse {
-                    guest_unix_nanos_before: outcome.guest_unix_nanos_before,
-                    guest_unix_nanos_after: outcome.guest_unix_nanos_after,
-                    correction_nanos: outcome.correction_nanos,
-                    source: outcome.source as i32,
-                }))
-            }
-            Err(reason) => {
-                error!("Guest clock sync failed: {}", reason);
-                Err(Status::internal(reason))
-            }
-        }
     }
 }

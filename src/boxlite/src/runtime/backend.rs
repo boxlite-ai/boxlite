@@ -124,13 +124,6 @@ pub(crate) trait BoxBackend: Send + Sync {
     ) -> BoxliteResult<Vec<LiteBox>>;
 
     async fn export_box(&self, options: ExportOptions, dest: &Path) -> BoxliteResult<BoxArchive>;
-
-    /// Set guest CLOCK_REALTIME behind host time (integration tests only).
-    async fn simulate_guest_clock_drift(&self, _behind_secs: i64) -> BoxliteResult<()> {
-        Err(BoxliteError::Unsupported(
-            "guest clock drift simulation is only supported on local VM backends".into(),
-        ))
-    }
 }
 
 /// Backend abstraction for snapshot lifecycle operations on a box.

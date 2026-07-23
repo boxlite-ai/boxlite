@@ -171,16 +171,6 @@ impl LiteBox {
     pub async fn export(&self, options: ExportOptions, dest: &Path) -> BoxliteResult<BoxArchive> {
         self.box_backend.export_box(options, dest).await
     }
-
-    /// Simulate guest wall clock drift for integration tests.
-    ///
-    /// Container exec lacks `CAP_SYS_TIME`, so tests use this guest-agent hook instead of `date -s`.
-    #[doc(hidden)]
-    pub async fn simulate_clock_drift_secs(&self, behind_secs: i64) -> BoxliteResult<()> {
-        self.box_backend
-            .simulate_guest_clock_drift(behind_secs)
-            .await
-    }
 }
 
 // ============================================================================

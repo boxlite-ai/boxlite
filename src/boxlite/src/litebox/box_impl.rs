@@ -994,15 +994,6 @@ impl BoxImpl {
         }
         let thaw_ms = t_thaw.elapsed().as_millis() as u64;
 
-        // Phase 6: Resync guest wall clock after vCPU resume (best-effort).
-        if let Err(e) = self.sync_guest_clock("quiesce_resume").await {
-            tracing::warn!(
-                box_id = %self.id(),
-                error = %e,
-                "Guest clock sync after quiesce failed"
-            );
-        }
-
         tracing::info!(
             box_id = %self.id(),
             total_ms = t0.elapsed().as_millis() as u64,
@@ -1075,64 +1066,6 @@ impl BoxImpl {
                 tracing::warn!("Guest thaw timed out");
             }
         }
-    }
-
-    /// Best-effort guest wall-clock sync with the host (RTC or host timestamp).
-    pub(crate) async fn sync_guest_clock(&self, trigger: &'static str) -> BoxliteResult<i64> {
-        self.sync_guest_clock_at(crate::util::host_realtime_nanos(), false, trigger)
-            .await
-    }
-
-    async fn sync_guest_clock_at(
-        &self,
-        host_nanos: i64,
-        force_host_timestamp: bool,
-        trigger: &'static str,
-    ) -> BoxliteResult<i64> {
-        if !self.state.read().status.is_running() {
-            return Ok(0);
-        }
-
-        let Ok(live) = self.live_state().await else {
-            return Ok(0);
-        };
-
-        let result = timeout(Duration::from_secs(5), async {
-            let mut guest = live.guest_session.guest().await?;
-            guest.sync_clock(host_nanos, force_host_timestamp).await
-        })
-        .await;
-
-        match result {
-            Ok(Ok(response)) => {
-                tracing::info!(
-                    box_id = %self.id(),
-                    trigger,
-                    correction_secs = response.correction_nanos / 1_000_000_000,
-                    source = response.source,
-                    "Guest clock synchronized"
-                );
-                Ok(response.correction_nanos)
-            }
-            Ok(Err(e)) => Err(e),
-            Err(_) => Err(BoxliteError::Internal(
-                "Guest clock sync timed out after 5s".to_string(),
-            )),
-        }
-    }
-
-    /// Set guest wall clock behind host time (integration tests only).
-    pub(crate) async fn simulate_guest_clock_drift(&self, behind_secs: i64) -> BoxliteResult<()> {
-        if behind_secs <= 0 {
-            return Err(BoxliteError::Internal(
-                "simulate_guest_clock_drift requires behind_secs > 0".into(),
-            ));
-        }
-        let host_nanos =
-            crate::util::host_realtime_nanos() - behind_secs * 1_000_000_000;
-        self.sync_guest_clock_at(host_nanos, true, "test_drift")
-            .await?;
-        Ok(())
     }
 }
 
@@ -1210,10 +1143,6 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         dest: &std::path::Path,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
         BoxImpl::export_box(self, options, dest).await
-    }
-
-    async fn simulate_guest_clock_drift(&self, behind_secs: i64) -> BoxliteResult<()> {
-        self.simulate_guest_clock_drift(behind_secs).await
     }
 }
 

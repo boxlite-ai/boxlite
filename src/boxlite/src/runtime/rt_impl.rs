@@ -286,8 +286,6 @@ impl RuntimeImpl {
         // Recover boxes from database
         inner.recover_boxes()?;
 
-        super::host_sleep_watcher::spawn(Arc::clone(&inner), inner.shutdown_token.clone());
-
         Ok(inner)
     }
 
@@ -707,34 +705,6 @@ impl RuntimeImpl {
                 errors.join(", ")
             )))
         }
-    }
-
-    /// Synchronize guest wall clocks for all running boxes (best-effort).
-    pub(crate) async fn sync_running_box_clocks(&self, trigger: &'static str) {
-        let boxes: Vec<SharedBoxImpl> = {
-            let sync = self.sync_state.read().unwrap();
-            sync.active_boxes_by_id
-                .values()
-                .filter_map(|weak| weak.upgrade())
-                .filter(|box_impl| box_impl.state.read().status == BoxStatus::Running)
-                .collect()
-        };
-
-        let sync_futures = boxes.iter().map(|box_impl| {
-            let box_impl = Arc::clone(box_impl);
-            async move {
-                if let Err(e) = box_impl.sync_guest_clock(trigger).await {
-                    tracing::warn!(
-                        box_id = %box_impl.id(),
-                        trigger,
-                        error = %e,
-                        "Guest clock sync failed"
-                    );
-                }
-            }
-        });
-
-        futures::future::join_all(sync_futures).await;
     }
 
     /// Synchronous shutdown for atexit/Drop contexts.

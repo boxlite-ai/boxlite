@@ -358,6 +358,19 @@ impl LibBuilder {
             cmd.env("CC_LINUX", cc_linux);
         }
 
+        // Compile the guest init's clock_worker into init.c (`-D__TIMESYNC__`).
+        // It binds vsock port 123 and applies host timestamps via clock_settime,
+        // so the guest clock tracks the host across host sleep and vCPU pause.
+        //
+        // macOS targets only: the VMM-side sender (the vsock muxer's
+        // TimesyncThread) is itself macOS-gated, so enabling this elsewhere would
+        // fork a guest child that blocks in recvfrom on port 123 forever with
+        // nothing ever sending. Keyed off the target rather than the build host
+        // because this function cross-compiles.
+        if env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "macos" {
+            cmd.env("TIMESYNC", "1");
+        }
+
         // Apply environment overrides (e.g., PATH with llvm/lld directories)
         for (key, value) in env_overrides {
             cmd.env(key, value);
