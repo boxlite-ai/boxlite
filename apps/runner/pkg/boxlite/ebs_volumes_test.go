@@ -53,3 +53,21 @@ func TestEBSProviderResourceIDValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestFirstAvailableEBSDevice(t *testing.T) {
+	got, err := firstAvailableEBSDevice([]string{"/dev/sda1", "/dev/sdf", "/dev/sdg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "/dev/sdh" {
+		t.Fatalf("got %s, want /dev/sdh", got)
+	}
+
+	all := make([]string, 0, 21)
+	for suffix := 'f'; suffix <= 'z'; suffix++ {
+		all = append(all, "/dev/sd"+string(suffix))
+	}
+	if _, err := firstAvailableEBSDevice(all); err == nil {
+		t.Fatal("expected device exhaustion error")
+	}
+}

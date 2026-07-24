@@ -54,13 +54,32 @@ func (c *Client) ensureEBSVolumeMounted(
 	if err != nil {
 		return err
 	}
-	if err := runCommand(ctx, "aws", "ec2", "attach-volume",
-		"--region", c.awsRegion,
-		"--volume-id", providerResourceID,
-		"--instance-id", instanceID,
-		"--device", "/dev/sdf",
-		"--output", "json",
-	); err != nil {
+	c.ebsAttachMutex.Lock()
+	attachedInstance, describeErr := c.ebsAttachmentInstance(ctx, providerResourceID)
+	if describeErr != nil {
+		c.ebsAttachMutex.Unlock()
+		return describeErr
+	}
+	if attachedInstance != "" && attachedInstance != instanceID {
+		c.ebsAttachMutex.Unlock()
+		return fmt.Errorf("EBS volume %s is attached to another runner %s", providerResourceID, attachedInstance)
+	}
+	if attachedInstance == "" {
+		deviceName, deviceErr := c.nextEBSDeviceName(ctx, instanceID)
+		if deviceErr != nil {
+			c.ebsAttachMutex.Unlock()
+			return deviceErr
+		}
+		err = runCommand(ctx, "aws", "ec2", "attach-volume",
+			"--region", c.awsRegion,
+			"--volume-id", providerResourceID,
+			"--instance-id", instanceID,
+			"--device", deviceName,
+			"--output", "json",
+		)
+	}
+	c.ebsAttachMutex.Unlock()
+	if err != nil {
 		return fmt.Errorf("attach EBS volume %s: %w", providerResourceID, err)
 	}
 
@@ -85,6 +104,50 @@ func (c *Client) ensureEBSVolumeMounted(
 		return fmt.Errorf("mount EBS volume %s: %w", providerResourceID, err)
 	}
 	return c.waitForMountReady(ctx, mountPath)
+}
+
+func (c *Client) ebsAttachmentInstance(ctx context.Context, providerResourceID string) (string, error) {
+	out, err := commandOutput(ctx, "aws", "ec2", "describe-volumes",
+		"--region", c.awsRegion,
+		"--volume-ids", providerResourceID,
+		"--query", "Volumes[0].Attachments[0].InstanceId",
+		"--output", "text",
+	)
+	if err != nil {
+		return "", fmt.Errorf("describe EBS volume %s: %w", providerResourceID, err)
+	}
+	value := strings.TrimSpace(out)
+	if value == "None" {
+		return "", nil
+	}
+	return value, nil
+}
+
+func (c *Client) nextEBSDeviceName(ctx context.Context, instanceID string) (string, error) {
+	out, err := commandOutput(ctx, "aws", "ec2", "describe-instances",
+		"--region", c.awsRegion,
+		"--instance-ids", instanceID,
+		"--query", "Reservations[0].Instances[0].BlockDeviceMappings[].DeviceName",
+		"--output", "text",
+	)
+	if err != nil {
+		return "", fmt.Errorf("list block devices for instance %s: %w", instanceID, err)
+	}
+	return firstAvailableEBSDevice(strings.Fields(out))
+}
+
+func firstAvailableEBSDevice(existing []string) (string, error) {
+	used := make(map[string]bool)
+	for _, name := range existing {
+		used[name] = true
+	}
+	for suffix := 'f'; suffix <= 'z'; suffix++ {
+		name := "/dev/sd" + string(suffix)
+		if !used[name] {
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf("no free EBS device names")
 }
 
 func (c *Client) releaseEBSVolume(

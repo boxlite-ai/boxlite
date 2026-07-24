@@ -848,7 +848,7 @@ export default $config({
         Statement: [
           {
             Effect: 'Allow',
-            Action: ['ec2:AttachVolume', 'ec2:DetachVolume', 'ec2:DescribeVolumes'],
+            Action: ['ec2:AttachVolume', 'ec2:DetachVolume', 'ec2:DescribeVolumes', 'ec2:DescribeInstances'],
             Resource: '*',
           },
         ],

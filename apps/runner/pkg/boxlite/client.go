@@ -35,6 +35,7 @@ type Client struct {
 	awsSecretAccessKey string
 	volumeMutexes      map[string]*sync.Mutex
 	volumeMutexesMutex sync.Mutex
+	ebsAttachMutex     sync.Mutex
 	volumeCleanupMutex sync.Mutex
 	lastVolumeCleanup  time.Time
 	volumeCleanup      volumeCleanupConfig
