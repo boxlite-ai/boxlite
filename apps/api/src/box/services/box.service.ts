@@ -33,6 +33,8 @@ import { BoxStartedEvent } from '../events/box-started.event'
 import { BoxDesiredStateUpdatedEvent } from '../events/box-desired-state-updated.event'
 import { BoxStoppedEvent } from '../events/box-stopped.event'
 import { OrganizationService } from '../../organization/services/organization.service'
+import { OrganizationUsageService, PendingBoxReservation } from '../../organization/services/organization-usage.service'
+import { resizeQuotaDeltas } from '../../organization/services/box-usage'
 import { OrganizationEvents } from '../../organization/constants/organization-events.constant'
 import { OrganizationSuspendedBoxStoppedEvent } from '../../organization/events/organization-suspended-box-stopped.event'
 import { TypedConfigService } from '../../config/typed-config.service'
@@ -107,6 +109,7 @@ export class BoxService {
     private readonly warmPoolService: BoxWarmPoolService,
     private readonly eventEmitter: EventEmitter2,
     private readonly organizationService: OrganizationService,
+    private readonly organizationUsageService: OrganizationUsageService,
     private readonly runnerAdapterFactory: RunnerAdapterFactory,
     private readonly redisLockProvider: RedisLockProvider,
     @InjectRedis() private readonly redis: Redis,
@@ -157,6 +160,10 @@ export class BoxService {
   async create(createBoxDto: CreateBoxDto, organization: Organization): Promise<BoxDto> {
     const region = await this.getValidatedOrDefaultRegion(organization, createBoxDto.target)
 
+    // Released on the failure path; on success the box's CREATED/STATE_UPDATED event
+    // realizes the reservation into current usage.
+    let quotaReservation: PendingBoxReservation | null = null
+
     try {
       const boxClass = this.getValidatedOrDefaultClass(createBoxDto.class)
 
@@ -175,6 +182,8 @@ export class BoxService {
       const image = assertSupportedImage(createBoxDto.image)
 
       this.organizationService.assertOrganizationIsNotSuspended(organization)
+
+      quotaReservation = await this.organizationUsageService.validateOrganizationQuotas(organization, cpu, mem, disk, gpu)
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
@@ -268,6 +277,10 @@ export class BoxService {
 
       return this.toBoxDto(insertedBox)
     } catch (error) {
+      if (quotaReservation) {
+        await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
+      }
+
       if (error.code === '23505') {
         throw new ConflictException(
           createBoxDto.name
@@ -839,16 +852,34 @@ export class BoxService {
 
     this.organizationService.assertOrganizationIsNotSuspended(organization)
 
+    // A stopped box holds only disk; starting it re-adds compute and a running slot,
+    // so re-check the org quota. excludeBoxId keeps the box's own disk from being
+    // double counted. Realized into current usage once the box leaves STOPPED.
+    const quotaReservation = await this.organizationUsageService.validateOrganizationQuotas(
+      organization,
+      box.cpu,
+      box.mem,
+      box.disk,
+      box.gpu,
+      box.id,
+    )
+
     const updateData: Partial<Box> = {
       pending: true,
       desiredState: BoxDesiredState.STARTED,
       authToken: nanoid(32).toLocaleLowerCase(),
     }
 
-    const updatedBox = await this.boxRepository.updateWhere(box.id, {
-      updateData,
-      whereCondition: { pending: false, state: box.state },
-    })
+    let updatedBox: Box
+    try {
+      updatedBox = await this.boxRepository.updateWhere(box.id, {
+        updateData,
+        whereCondition: { pending: false, state: box.state },
+      })
+    } catch (error) {
+      await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
+      throw error
+    }
 
     this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updatedBox))
 
@@ -870,8 +901,27 @@ export class BoxService {
       return box
     }
 
-    const updated = await this.boxRepository.conditionalStartForProxy(box.id, organization.id)
+    // Auto-resume also brings a stopped box back to running, so it must honor the
+    // org quota just like start(). Released if the box does not actually start.
+    const quotaReservation = await this.organizationUsageService.validateOrganizationQuotas(
+      organization,
+      box.cpu,
+      box.mem,
+      box.disk,
+      box.gpu,
+      box.id,
+    )
+
+    let updated: Box
+    try {
+      updated = await this.boxRepository.conditionalStartForProxy(box.id, organization.id)
+    } catch (error) {
+      await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
+      throw error
+    }
+
     if (!updated) {
+      await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
       return this.findOneByIdOrName(box.id, organization.id)
     }
 
@@ -1026,6 +1076,9 @@ export class BoxService {
 
     this.organizationService.assertOrganizationIsNotSuspended(organization)
 
+    // The resized dimensions must still fit the org's per-box ceilings.
+    assertWithinPerBoxLimits(newCpu, newMem, newDisk, organization)
+
     // Get runner and validate before changing state
     if (!box.runnerId) {
       throw new BadRequestError('Box has no runner assigned')
@@ -1041,17 +1094,26 @@ export class BoxService {
       throw new BadRequestError('Box must be in started or stopped state to resize')
     }
 
-    // Now transition to RESIZING state
-    const updateData: Partial<Box> = {
-      state: BoxState.RESIZING,
-    }
-
-    await this.boxRepository.updateWhere(box.id, {
-      updateData,
-      whereCondition: { pending: false, state: previousState },
-    })
+    // Aggregate quota: only growth can breach. A cold (stopped) resize doesn't
+    // charge cpu/memory — a stopped box consumes no compute — but disk is charged
+    // in both states. Released on the failure path below.
+    const resizeDeltas = resizeQuotaDeltas(box, { cpu: newCpu, mem: newMem, disk: newDisk }, isHotResize)
+    const quotaReservation = await this.organizationUsageService.validateResizeQuota(
+      organization,
+      resizeDeltas.cpu,
+      resizeDeltas.memory,
+      resizeDeltas.disk,
+    )
 
     try {
+      // Transition to RESIZING. Inside the try so a failure here also releases
+      // the quota reservation via the catch (the whereCondition on the revert
+      // below is a no-op if this transition never happened).
+      await this.boxRepository.updateWhere(box.id, {
+        updateData: { state: BoxState.RESIZING },
+        whereCondition: { pending: false, state: previousState },
+      })
+
       const runnerAdapter = await this.runnerAdapterFactory.create(runner)
 
       await runnerAdapter.resizeBox(box.id, resizeDto.cpu, resizeDto.memory, resizeDto.disk)
@@ -1074,6 +1136,8 @@ export class BoxService {
 
       return await this.findOneByIdOrName(box.id, organization.id)
     } catch (error) {
+      await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
+
       // Return to previous state on error
       const updateData: Partial<Box> = {
         state: previousState,
