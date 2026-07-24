@@ -160,6 +160,23 @@ Structured network configuration for outbound connectivity.
   reaching host loopback services and is not governed by `allow_net`.
 - Security: when networking is enabled, any service bound to host loopback can
   be reached from inside the box via `host.boxlite.internal` or `192.168.127.254`.
+- Each allow-listed hostname is resolved on the **host** at box creation
+  time and the IPs are pinned into the guest's DNS sinkhole. The lookup
+  retries with exponential backoff to ride out transient host-side DNS
+  hiccups (VPN flap, slow corp resolver). If a hostname still cannot be
+  resolved after all retries — or if it resolves only to AAAA (IPv6)
+  addresses, since gvisor-tap-vsock zones can only carry A records —
+  `box.create` fails by design, so a half-baked sinkhole never silently
+  sinkholes an allow-listed host to `0.0.0.0`. Make sure the host can
+  resolve every entry in `allow_net` to at least one IPv4 address before
+  creating the box.
+- Latency: a hostname that fails every retry attempt costs roughly
+  `attempts × per-attempt-timeout + cumulative backoff` ≈ 12s on the
+  defaults (4 attempts, 2s timeout, 100ms × 3× backoff). Hosts are
+  resolved sequentially, so an `allow_net` of N dead hosts costs ≈ 12s
+  × N to fail. Cancelling the runtime context (e.g. Ctrl-C in the host
+  process) breaks out of both the in-flight lookup and the inter-attempt
+  backoff sleep promptly.
 
 **Supported patterns:**
 - Exact hostname: `"api.openai.com"`
