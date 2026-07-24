@@ -20,8 +20,9 @@ export class CreateBoxDto {
   name?: string
 
   @ApiPropertyOptional({
-    description: 'The image to use for the box',
-    example: 'boxlite/base',
+    description:
+      'Image to boot the box from: a supported image name (e.g. "base") or its full OCI ref. Omit for the default.',
+    example: 'base',
   })
   @IsOptional()
   @IsString()

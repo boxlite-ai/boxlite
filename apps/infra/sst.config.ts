@@ -456,11 +456,12 @@ export default $config({
         VERSION: '0.1.0',
         DEFAULT_REGION_ENFORCE_QUOTAS: 'false',
         DEFAULT_TEMPLATE: envOr('DEFAULT_TEMPLATE', 'boxlite/base'),
-        // Box base images: only the three digest-pinned *_IMAGE refs below are live — the
-        // API gates box creation to that curated set (apps/api curated-images.constant.ts)
-        // and the runner pulls them straight from ghcr.io with its GHCR_TOKEN. IMAGE_TAG and
-        // the SOURCE_REGISTRY_* block are inert Daytona-port residue (no consumer — see
-        // apps/api configuration.ts), kept only as reserved names for a future registry path.
+        // Box base images: the three *_IMAGE refs below are the built-in curated set the API
+        // gates box creation to (apps/api curated-images.constant.ts); the runner pulls them
+        // straight from ghcr.io with its GHCR_TOKEN. BOXLITE_SYSTEM_IMAGES appends more images
+        // (comma-separated `name=ref`) without a code deploy — empty means built-ins only.
+        // IMAGE_TAG and the SOURCE_REGISTRY_* block are inert Daytona-port residue (no consumer
+        // — see apps/api configuration.ts), kept only as reserved names for a future registry path.
         BOXLITE_SYSTEM_IMAGE_TAG: envOr('BOXLITE_SYSTEM_IMAGE_TAG', '20260605-p0-r3'),
         BOXLITE_SYSTEM_BASE_IMAGE: envOr(
           'BOXLITE_SYSTEM_BASE_IMAGE',
@@ -474,6 +475,7 @@ export default $config({
           'BOXLITE_SYSTEM_NODE_IMAGE',
           'ghcr.io/boxlite-ai/boxlite-agent-node:20260605-p0-r3',
         ),
+        BOXLITE_SYSTEM_IMAGES: envOr('BOXLITE_SYSTEM_IMAGES', ''),
         ...(process.env.BOXLITE_SYSTEM_SOURCE_REGISTRY_URL && {
           BOXLITE_SYSTEM_SOURCE_REGISTRY_NAME: envOr(
             'BOXLITE_SYSTEM_SOURCE_REGISTRY_NAME',
