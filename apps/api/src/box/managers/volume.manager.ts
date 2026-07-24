@@ -11,6 +11,13 @@ import { Volume } from '../entities/volume.entity'
 import { VolumeState } from '../enums/volume-state.enum'
 import { Cron, CronExpression, SchedulerRegistry } from '@nestjs/schedule'
 import { S3Client, CreateBucketCommand, ListObjectsV2Command, PutBucketTaggingCommand } from '@aws-sdk/client-s3'
+import {
+  CreateVolumeCommand,
+  DeleteVolumeCommand,
+  EC2Client,
+  waitUntilVolumeAvailable,
+  waitUntilVolumeDeleted,
+} from '@aws-sdk/client-ec2'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
 import { RedisLockProvider } from '../common/redis-lock.provider'
@@ -22,6 +29,7 @@ import { TrackJobExecution } from '../../common/decorators/track-job-execution.d
 import { setTimeout } from 'timers/promises'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
+import { VolumeBackend } from '../enums/volume-backend.enum'
 
 const VOLUME_STATE_LOCK_KEY = 'volume-state-'
 
@@ -35,6 +43,7 @@ export class VolumeManager
   private processingVolumes: Set<string> = new Set()
   private skipTestConnection = false
   private s3Client: S3Client | null = null
+  private ebsClient: EC2Client | null = null
 
   constructor(
     @InjectRepository(Volume)
@@ -44,10 +53,15 @@ export class VolumeManager
     private readonly redisLockProvider: RedisLockProvider,
     private readonly schedulerRegistry: SchedulerRegistry,
   ) {
-    if (!this.configService.get('s3.endpoint')) {
-      return
+    const ebsRegion = this.configService.get('ebs.region')
+    if (ebsRegion && this.configService.get('ebs.availabilityZone')) {
+      this.ebsClient = new EC2Client({ region: ebsRegion })
     }
 
+    if (!this.configService.get('s3.endpoint')) {
+      this.skipTestConnection = this.configService.get('skipConnections')
+      return
+    }
     const endpoint = this.configService.getOrThrow('s3.endpoint')
     const region = this.configService.getOrThrow('s3.region')
     const accessKeyId = this.configService.get('s3.accessKey')
@@ -77,7 +91,7 @@ export class VolumeManager
   }
 
   async onModuleInit() {
-    if (!this.s3Client) {
+    if (!this.s3Client && !this.ebsClient) {
       return
     }
 
@@ -90,7 +104,7 @@ export class VolumeManager
   }
 
   onApplicationBootstrap() {
-    if (!this.s3Client) {
+    if (!this.s3Client && !this.ebsClient) {
       return
     }
 
@@ -208,37 +222,14 @@ export class VolumeManager
         state: VolumeState.CREATING,
       })
 
-      // Refresh lock before S3 operation
+      // Refresh lock before provider operation
       await this.redis.setex(lockKey, 30, '1')
 
-      // Create bucket in Minio/S3
-      const createBucketCommand = new CreateBucketCommand({
-        Bucket: volume.getBucketName(),
-      })
-
-      await this.s3Client.send(createBucketCommand)
-
-      await this.s3Client.send(
-        new PutBucketTaggingCommand({
-          Bucket: volume.getBucketName(),
-          Tagging: {
-            TagSet: [
-              {
-                Key: 'VolumeId',
-                Value: volume.id,
-              },
-              {
-                Key: 'OrganizationId',
-                Value: volume.organizationId,
-              },
-              {
-                Key: 'Environment',
-                Value: this.configService.get('environment'),
-              },
-            ],
-          },
-        }),
-      )
+      if (volume.backend === VolumeBackend.EBS) {
+        await this.createEbsVolume(volume)
+      } else {
+        await this.createS3Volume(volume)
+      }
 
       // Refresh lock before final state update
       await this.redis.setex(lockKey, 30, '1')
@@ -270,20 +261,13 @@ export class VolumeManager
         state: VolumeState.DELETING,
       })
 
-      // Refresh lock before S3 operation
+      // Refresh lock before provider operation
       await this.redis.setex(lockKey, 30, '1')
 
-      // Delete bucket from Minio/S3
-      try {
-        await deleteS3Bucket(this.s3Client, volume.getBucketName())
-      } catch (error) {
-        if (error.name === 'NoSuchBucket') {
-          this.logger.warn(`Bucket for volume ${volume.id} does not exist, treating as already deleted`)
-        } else if (error.name === 'BucketNotEmpty') {
-          throw new Error('Volume deletion failed because the bucket is not empty. You may retry deletion.')
-        } else {
-          throw error
-        }
+      if (volume.backend === VolumeBackend.EBS) {
+        await this.deleteEbsVolume(volume)
+      } else {
+        await this.deleteS3Volume(volume)
       }
 
       // Refresh lock before final state update
@@ -311,5 +295,92 @@ export class VolumeManager
         errorReason: error.message,
       })
     }
+  }
+
+  private async createS3Volume(volume: Volume): Promise<void> {
+    if (!this.s3Client) {
+      throw new Error('S3 volume storage is not configured')
+    }
+
+    await this.s3Client.send(new CreateBucketCommand({ Bucket: volume.getBucketName() }))
+    await this.s3Client.send(
+      new PutBucketTaggingCommand({
+        Bucket: volume.getBucketName(),
+        Tagging: {
+          TagSet: [
+            { Key: 'VolumeId', Value: volume.id },
+            { Key: 'OrganizationId', Value: volume.organizationId },
+            { Key: 'Environment', Value: this.configService.get('environment') },
+          ],
+        },
+      }),
+    )
+  }
+
+  private async createEbsVolume(volume: Volume): Promise<void> {
+    if (!this.ebsClient) {
+      throw new Error('EBS volume storage is not configured')
+    }
+
+    const response = await this.ebsClient.send(
+      new CreateVolumeCommand({
+        AvailabilityZone: this.configService.getOrThrow('ebs.availabilityZone'),
+        ClientToken: volume.id,
+        Encrypted: true,
+        KmsKeyId: this.configService.get('ebs.kmsKeyId') || undefined,
+        Size: volume.sizeGiB,
+        VolumeType: this.configService.get('ebs.volumeType') as 'gp3',
+        TagSpecifications: [
+          {
+            ResourceType: 'volume',
+            Tags: [
+              { Key: 'Name', Value: `boxlite-volume-${volume.id}` },
+              { Key: 'BoxLiteVolumeId', Value: volume.id },
+              { Key: 'OrganizationId', Value: volume.organizationId },
+              { Key: 'Environment', Value: this.configService.get('environment') },
+            ],
+          },
+        ],
+      }),
+    )
+    if (!response.VolumeId) {
+      throw new Error(`EC2 did not return a volume id for ${volume.id}`)
+    }
+
+    await waitUntilVolumeAvailable({ client: this.ebsClient, maxWaitTime: 120 }, { VolumeIds: [response.VolumeId] })
+    volume.providerResourceId = response.VolumeId
+  }
+
+  private async deleteS3Volume(volume: Volume): Promise<void> {
+    if (!this.s3Client) {
+      throw new Error('S3 volume storage is not configured')
+    }
+    try {
+      await deleteS3Bucket(this.s3Client, volume.getBucketName())
+    } catch (error) {
+      if (error.name === 'NoSuchBucket') {
+        this.logger.warn(`Bucket for volume ${volume.id} does not exist, treating as already deleted`)
+      } else if (error.name === 'BucketNotEmpty') {
+        throw new Error('Volume deletion failed because the bucket is not empty. You may retry deletion.')
+      } else {
+        throw error
+      }
+    }
+  }
+
+  private async deleteEbsVolume(volume: Volume): Promise<void> {
+    if (!this.ebsClient) {
+      throw new Error('EBS volume storage is not configured')
+    }
+    if (!volume.providerResourceId) {
+      this.logger.warn(`EBS provider resource for volume ${volume.id} is missing, treating as already deleted`)
+      return
+    }
+
+    await this.ebsClient.send(new DeleteVolumeCommand({ VolumeId: volume.providerResourceId }))
+    await waitUntilVolumeDeleted(
+      { client: this.ebsClient, maxWaitTime: 120 },
+      { VolumeIds: [volume.providerResourceId] },
+    )
   }
 }

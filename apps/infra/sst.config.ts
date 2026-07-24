@@ -367,6 +367,7 @@ export default $config({
       },
     })
     const otelCollectorOtlpHttpUrl = stripTrailingSlash(otelCollector.url).apply((url) => `${url}:${PORTS.OTLP_HTTP}`)
+    const runnerAvailabilityZone = aws.ec2.getSubnetOutput({ id: vpc.publicSubnets[0] }).availabilityZone
 
     // ─── 6. API (NestJS control plane) ───────────────────────────────────────
     const api = new sst.aws.Service('Api', {
@@ -445,6 +446,16 @@ export default $config({
           ],
           resources: ['arn:aws:s3:::boxlite-volume-*', 'arn:aws:s3:::boxlite-volume-*/*'],
         },
+        {
+          actions: [
+            'ec2:CreateVolume',
+            'ec2:DeleteVolume',
+            'ec2:DescribeVolumes',
+            'ec2:DescribeVolumeStatus',
+            'ec2:CreateTags',
+          ],
+          resources: ['*'],
+        },
       ],
       scaling: { min: 1, max: 4 },
       environment: {
@@ -452,6 +463,11 @@ export default $config({
         NODE_ENV: 'production',
         PORT: String(PORTS.API),
         ENVIRONMENT: 'production',
+        AWS_REGION: REGION,
+        EBS_REGION: REGION,
+        EBS_AVAILABILITY_ZONE: runnerAvailabilityZone,
+        EBS_VOLUME_TYPE: envOr('EBS_VOLUME_TYPE', 'gp3'),
+        VOLUME_DEFAULT_BACKEND: envOr('VOLUME_DEFAULT_BACKEND', 'ebs'),
         RUN_MIGRATIONS: 'true',
         VERSION: '0.1.0',
         DEFAULT_REGION_ENFORCE_QUOTAS: 'false',
@@ -825,6 +841,19 @@ export default $config({
         ],
       }),
     })
+    new aws.iam.RolePolicy('RunnerVolumeEbsPolicy', {
+      role: runnerRole.name,
+      policy: JSON.stringify({
+        Version: '2012-10-17',
+        Statement: [
+          {
+            Effect: 'Allow',
+            Action: ['ec2:AttachVolume', 'ec2:DetachVolume', 'ec2:DescribeVolumes'],
+            Resource: '*',
+          },
+        ],
+      }),
+    })
     const runnerInstanceProfile = new aws.iam.InstanceProfile('RunnerProfile', { role: runnerRole.name })
 
     // Dedicated runner security group (least-privilege, explicit in IaC).
@@ -1072,7 +1101,7 @@ set -euo pipefail
 while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 5; done
 
 apt-get update
-apt-get install -y curl
+apt-get install -y curl awscli nvme-cli e2fsprogs
 
 # Install Mountpoint for Amazon S3, used by volume mounts
 MOUNT_S3_VERSION=1.20.0

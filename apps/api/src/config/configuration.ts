@@ -94,6 +94,13 @@ const configuration = {
     accountId: process.env.S3_ACCOUNT_ID,
     roleName: process.env.S3_ROLE_NAME,
   },
+  ebs: {
+    region: process.env.EBS_REGION || process.env.AWS_REGION,
+    availabilityZone: process.env.EBS_AVAILABILITY_ZONE,
+    volumeType: process.env.EBS_VOLUME_TYPE || 'gp3',
+    kmsKeyId: process.env.EBS_KMS_KEY_ID,
+  },
+  volumeDefaultBackend: process.env.VOLUME_DEFAULT_BACKEND || 's3',
   notificationGatewayDisabled: process.env.NOTIFICATION_GATEWAY_DISABLED === 'true',
   skipConnections: process.env.SKIP_CONNECTIONS === 'true',
   maintananceMode: process.env.MAINTENANCE_MODE === 'true',

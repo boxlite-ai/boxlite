@@ -327,6 +327,8 @@ export class RunnerAdapterV0 implements RunnerAdapter {
         volumeId: volume.volumeId,
         mountPath: volume.mountPath,
         subpath: volume.subpath,
+        backend: volume.backend,
+        providerResourceId: volume.providerResourceId,
       })),
       networkBlockAll: box.networkBlockAll,
       networkAllowList: box.networkAllowList,

@@ -5,11 +5,25 @@
  */
 
 import { ApiProperty, ApiSchema } from '@nestjs/swagger'
-import { IsString } from 'class-validator'
+import { IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator'
+import { VolumeBackend } from '../enums/volume-backend.enum'
 
 @ApiSchema({ name: 'CreateVolume' })
 export class CreateVolumeDto {
   @ApiProperty()
   @IsString()
+  @IsOptional()
   name?: string
+
+  @ApiProperty({ enum: VolumeBackend, default: VolumeBackend.S3, required: false })
+  @IsEnum(VolumeBackend)
+  @IsOptional()
+  backend?: VolumeBackend
+
+  @ApiProperty({ minimum: 1, maximum: 16384, default: 10, required: false })
+  @IsInt()
+  @Min(1)
+  @Max(16384)
+  @IsOptional()
+  sizeGiB?: number
 }

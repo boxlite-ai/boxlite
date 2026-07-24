@@ -8,6 +8,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger'
 import { IsEnum } from 'class-validator'
 import { VolumeState } from '../enums/volume-state.enum'
 import { Volume } from '../entities/volume.entity'
+import { VolumeBackend } from '../enums/volume-backend.enum'
 
 export class VolumeDto {
   @ApiProperty({
@@ -36,6 +37,12 @@ export class VolumeDto {
   })
   @IsEnum(VolumeState)
   state: VolumeState
+
+  @ApiProperty({ enum: VolumeBackend, enumName: 'VolumeBackend' })
+  backend: VolumeBackend
+
+  @ApiProperty({ description: 'Provisioned capacity in GiB' })
+  sizeGiB: number
 
   @ApiProperty({
     description: 'Creation timestamp',
@@ -69,6 +76,8 @@ export class VolumeDto {
       name: volume.name,
       organizationId: volume.organizationId,
       state: volume.state,
+      backend: volume.backend,
+      sizeGiB: volume.sizeGiB,
       createdAt: volume.createdAt?.toISOString(),
       updatedAt: volume.updatedAt?.toISOString(),
       lastUsedAt: volume.lastUsedAt?.toISOString(),

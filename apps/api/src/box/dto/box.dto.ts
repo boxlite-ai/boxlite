@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
+import { ApiHideProperty, ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
+import { VolumeBackend } from '../enums/volume-backend.enum'
 import { BoxState } from '../enums/box-state.enum'
 import { IsEnum, IsOptional } from 'class-validator'
 import { Box } from '../entities/box.entity'
@@ -31,6 +32,12 @@ export class BoxVolume {
     example: 'users/alice',
   })
   subpath?: string
+
+  @ApiHideProperty()
+  backend?: VolumeBackend
+
+  @ApiHideProperty()
+  providerResourceId?: string
 }
 
 @ApiSchema({ name: 'Box' })
@@ -269,7 +276,7 @@ export class BoxDto {
       networkBlockAll: box.networkBlockAll,
       networkAllowList: box.networkAllowList,
       labels: box.labels,
-      volumes: box.volumes,
+      volumes: box.volumes.map(({ volumeId, mountPath, subpath }) => ({ volumeId, mountPath, subpath })),
       state: this.getBoxState(box),
       desiredState: box.desiredState,
       errorReason: box.errorReason,

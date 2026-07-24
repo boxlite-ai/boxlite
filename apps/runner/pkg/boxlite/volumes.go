@@ -31,14 +31,25 @@ type volumeCleanupConfig struct {
 }
 
 type volumeMount struct {
-	hostPath  string
-	mountPath string
-	rootPath  string
+	hostPath           string
+	mountPath          string
+	rootPath           string
+	backend            string
+	volumeID           string
+	providerResourceID string
 }
 
 type boxVolumeMountRecord struct {
-	BoxID string   `json:"boxId"`
-	Paths []string `json:"paths"`
+	BoxID   string              `json:"boxId"`
+	Paths   []string            `json:"paths,omitempty"`
+	Volumes []volumeMountRecord `json:"volumes,omitempty"`
+}
+
+type volumeMountRecord struct {
+	Path               string `json:"path"`
+	Backend            string `json:"backend"`
+	VolumeID           string `json:"volumeId"`
+	ProviderResourceID string `json:"providerResourceId,omitempty"`
 }
 
 func getVolumeMountBasePath() string {
@@ -48,7 +59,7 @@ func getVolumeMountBasePath() string {
 	return "/mnt"
 }
 
-func (c *Client) getVolumeMounts(ctx context.Context, volumes []dto.VolumeDTO) ([]volumeMount, error) {
+func (c *Client) getVolumeMounts(ctx context.Context, boxID string, volumes []dto.VolumeDTO) ([]volumeMount, error) {
 	volumeMounts := make([]volumeMount, 0, len(volumes))
 
 	fuseMountedVolumes := make(map[string]bool)
@@ -62,8 +73,18 @@ func (c *Client) getVolumeMounts(ctx context.Context, volumes []dto.VolumeDTO) (
 			subpathStr = *vol.Subpath
 		}
 
+		backend := vol.Backend
+		if backend == "" {
+			backend = "s3"
+		}
+
 		if !fuseMountedVolumes[volumeIdPrefixed] {
-			err := c.ensureVolumeFuseMounted(ctx, volumeIdPrefixed, baseMountPath)
+			var err error
+			if backend == "ebs" {
+				err = c.ensureEBSVolumeMounted(ctx, boxID, vol.VolumeId, vol.ProviderResourceID, baseMountPath)
+			} else {
+				err = c.ensureVolumeFuseMounted(ctx, volumeIdPrefixed, baseMountPath)
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -84,9 +105,12 @@ func (c *Client) getVolumeMounts(ctx context.Context, volumes []dto.VolumeDTO) (
 
 		c.logger.DebugContext(ctx, "binding volume subpath", "volumeId", volumeIdPrefixed, "subpath", subpathStr, "mountPath", vol.MountPath)
 		volumeMounts = append(volumeMounts, volumeMount{
-			hostPath:  bindSource,
-			mountPath: vol.MountPath,
-			rootPath:  baseMountPath,
+			hostPath:           bindSource,
+			mountPath:          vol.MountPath,
+			rootPath:           baseMountPath,
+			backend:            backend,
+			volumeID:           vol.VolumeId,
+			providerResourceID: vol.ProviderResourceID,
 		})
 	}
 
@@ -111,7 +135,7 @@ func (c *Client) ensureVolumeMountsFromMetadata(ctx context.Context, boxID strin
 		return nil
 	}
 
-	volumeMounts, err := c.getVolumeMounts(ctx, volumes)
+	volumeMounts, err := c.getVolumeMounts(ctx, boxID, volumes)
 	if err != nil {
 		return err
 	}
@@ -269,6 +293,14 @@ func (c *Client) recordBoxVolumeMounts(ctx context.Context, boxID string, mounts
 		BoxID: boxID,
 		Paths: paths,
 	}
+	for _, mount := range mounts {
+		record.Volumes = append(record.Volumes, volumeMountRecord{
+			Path:               normalizeVolumePath(mount.rootPath),
+			Backend:            mount.backend,
+			VolumeID:           mount.volumeID,
+			ProviderResourceID: mount.providerResourceID,
+		})
+	}
 
 	data, err := json.Marshal(record)
 	if err != nil {
@@ -302,6 +334,31 @@ func (c *Client) removeBoxVolumeMountRecord(ctx context.Context, boxID string) e
 
 	c.logger.DebugContext(ctx, "removed box volume mount record", "box", boxID)
 	return nil
+}
+
+func (c *Client) releaseBoxVolumeMounts(ctx context.Context, boxID string) error {
+	path := filepath.Join(getVolumeMountRecordDir(), boxID+".json")
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	var record boxVolumeMountRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		return err
+	}
+	for _, volume := range record.Volumes {
+		if volume.Backend != "ebs" {
+			continue
+		}
+		if err := c.releaseEBSVolume(ctx, boxID, volume.VolumeID, volume.ProviderResourceID, volume.Path); err != nil {
+			return err
+		}
+	}
+	return c.removeBoxVolumeMountRecord(ctx, boxID)
 }
 
 func getVolumeMountRecordDir() string {
