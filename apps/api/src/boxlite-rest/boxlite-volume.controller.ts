@@ -1,4 +1,5 @@
 import { Controller, Delete, Get, HttpCode, NotFoundException, Param, Post, Query, UseGuards } from '@nestjs/common'
+import { ApiExcludeController } from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
@@ -15,6 +16,7 @@ type RestVolumeResponse = {
 }
 
 @Controller(['v1/volumes', 'v1/:prefix/volumes'])
+@ApiExcludeController()
 @UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard)
 export class BoxliteVolumeController {
   constructor(private readonly volumeService: VolumeService) {}

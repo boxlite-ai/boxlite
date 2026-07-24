@@ -142,6 +142,7 @@ docs/UpdateRegion.md
 docs/User.md
 docs/UserPublicKey.md
 docs/UsersApi.md
+docs/VolumeBackend.md
 docs/VolumeDto.md
 docs/VolumeState.md
 docs/VolumesApi.md
@@ -260,6 +261,7 @@ models/update-organization-role.ts
 models/update-region.ts
 models/user-public-key.ts
 models/user.ts
+models/volume-backend.ts
 models/volume-dto.ts
 models/volume-state.ts
 models/webhook-app-portal-access.ts

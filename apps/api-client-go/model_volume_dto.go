@@ -29,6 +29,9 @@ type VolumeDto struct {
 	OrganizationId string `json:"organizationId"`
 	// Volume state
 	State VolumeState `json:"state"`
+	Backend VolumeBackend `json:"backend"`
+	// Provisioned capacity in GiB
+	SizeGiB float32 `json:"sizeGiB"`
 	// Creation timestamp
 	CreatedAt string `json:"createdAt"`
 	// Last update timestamp
@@ -46,12 +49,14 @@ type _VolumeDto VolumeDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewVolumeDto(id string, name string, organizationId string, state VolumeState, createdAt string, updatedAt string, errorReason NullableString) *VolumeDto {
+func NewVolumeDto(id string, name string, organizationId string, state VolumeState, backend VolumeBackend, sizeGiB float32, createdAt string, updatedAt string, errorReason NullableString) *VolumeDto {
 	this := VolumeDto{}
 	this.Id = id
 	this.Name = name
 	this.OrganizationId = organizationId
 	this.State = state
+	this.Backend = backend
+	this.SizeGiB = sizeGiB
 	this.CreatedAt = createdAt
 	this.UpdatedAt = updatedAt
 	this.ErrorReason = errorReason
@@ -160,6 +165,54 @@ func (o *VolumeDto) GetStateOk() (*VolumeState, bool) {
 // SetState sets field value
 func (o *VolumeDto) SetState(v VolumeState) {
 	o.State = v
+}
+
+// GetBackend returns the Backend field value
+func (o *VolumeDto) GetBackend() VolumeBackend {
+	if o == nil {
+		var ret VolumeBackend
+		return ret
+	}
+
+	return o.Backend
+}
+
+// GetBackendOk returns a tuple with the Backend field value
+// and a boolean to check if the value has been set.
+func (o *VolumeDto) GetBackendOk() (*VolumeBackend, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.Backend, true
+}
+
+// SetBackend sets field value
+func (o *VolumeDto) SetBackend(v VolumeBackend) {
+	o.Backend = v
+}
+
+// GetSizeGiB returns the SizeGiB field value
+func (o *VolumeDto) GetSizeGiB() float32 {
+	if o == nil {
+		var ret float32
+		return ret
+	}
+
+	return o.SizeGiB
+}
+
+// GetSizeGiBOk returns a tuple with the SizeGiB field value
+// and a boolean to check if the value has been set.
+func (o *VolumeDto) GetSizeGiBOk() (*float32, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.SizeGiB, true
+}
+
+// SetSizeGiB sets field value
+func (o *VolumeDto) SetSizeGiB(v float32) {
+	o.SizeGiB = v
 }
 
 // GetCreatedAt returns the CreatedAt field value
@@ -292,6 +345,8 @@ func (o VolumeDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["name"] = o.Name
 	toSerialize["organizationId"] = o.OrganizationId
 	toSerialize["state"] = o.State
+	toSerialize["backend"] = o.Backend
+	toSerialize["sizeGiB"] = o.SizeGiB
 	toSerialize["createdAt"] = o.CreatedAt
 	toSerialize["updatedAt"] = o.UpdatedAt
 	if o.LastUsedAt.IsSet() {
@@ -315,6 +370,8 @@ func (o *VolumeDto) UnmarshalJSON(data []byte) (err error) {
 		"name",
 		"organizationId",
 		"state",
+		"backend",
+		"sizeGiB",
 		"createdAt",
 		"updatedAt",
 		"errorReason",
@@ -351,6 +408,8 @@ func (o *VolumeDto) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "name")
 		delete(additionalProperties, "organizationId")
 		delete(additionalProperties, "state")
+		delete(additionalProperties, "backend")
+		delete(additionalProperties, "sizeGiB")
 		delete(additionalProperties, "createdAt")
 		delete(additionalProperties, "updatedAt")
 		delete(additionalProperties, "lastUsedAt")

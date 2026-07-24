@@ -7353,12 +7353,19 @@ components:
       - deleted
       - error
       type: string
+    VolumeBackend:
+      enum:
+      - s3
+      - ebs
+      type: string
     VolumeDto:
       example:
         id: vol-12345678
         name: my-volume
         organizationId: 123e4567-e89b-12d3-a456-426614174000
         state: ready
+        backend: ""
+        sizeGiB: 0.8008281904610115
         createdAt: 2023-01-01T00:00:00.000Z
         updatedAt: 2023-01-01T00:00:00.000Z
         lastUsedAt: 2023-01-01T00:00:00.000Z
@@ -7381,6 +7388,12 @@ components:
           - $ref: "#/components/schemas/VolumeState"
           description: Volume state
           example: ready
+        backend:
+          allOf:
+          - $ref: "#/components/schemas/VolumeBackend"
+        sizeGiB:
+          description: Provisioned capacity in GiB
+          type: number
         createdAt:
           description: Creation timestamp
           example: 2023-01-01T00:00:00.000Z
@@ -7400,20 +7413,35 @@ components:
           nullable: true
           type: string
       required:
+      - backend
       - createdAt
       - errorReason
       - id
       - name
       - organizationId
+      - sizeGiB
       - state
       - updatedAt
       type: object
     CreateVolume:
       example:
         name: name
+        backend: s3
+        sizeGiB: 1312.9968244322752
       properties:
         name:
           type: string
+        backend:
+          default: s3
+          enum:
+          - s3
+          - ebs
+          type: string
+        sizeGiB:
+          default: 10
+          maximum: 16384
+          minimum: 1
+          type: number
       required:
       - name
       type: object

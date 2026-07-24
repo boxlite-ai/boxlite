@@ -22,6 +22,8 @@ var _ MappedNullable = &CreateVolume{}
 // CreateVolume struct for CreateVolume
 type CreateVolume struct {
 	Name string `json:"name"`
+	Backend *string `json:"backend,omitempty"`
+	SizeGiB *float32 `json:"sizeGiB,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -34,6 +36,10 @@ type _CreateVolume CreateVolume
 func NewCreateVolume(name string) *CreateVolume {
 	this := CreateVolume{}
 	this.Name = name
+	var backend string = "s3"
+	this.Backend = &backend
+	var sizeGiB float32 = 10
+	this.SizeGiB = &sizeGiB
 	return &this
 }
 
@@ -42,6 +48,10 @@ func NewCreateVolume(name string) *CreateVolume {
 // but it doesn't guarantee that properties required by API are set
 func NewCreateVolumeWithDefaults() *CreateVolume {
 	this := CreateVolume{}
+	var backend string = "s3"
+	this.Backend = &backend
+	var sizeGiB float32 = 10
+	this.SizeGiB = &sizeGiB
 	return &this
 }
 
@@ -69,6 +79,70 @@ func (o *CreateVolume) SetName(v string) {
 	o.Name = v
 }
 
+// GetBackend returns the Backend field value if set, zero value otherwise.
+func (o *CreateVolume) GetBackend() string {
+	if o == nil || IsNil(o.Backend) {
+		var ret string
+		return ret
+	}
+	return *o.Backend
+}
+
+// GetBackendOk returns a tuple with the Backend field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *CreateVolume) GetBackendOk() (*string, bool) {
+	if o == nil || IsNil(o.Backend) {
+		return nil, false
+	}
+	return o.Backend, true
+}
+
+// HasBackend returns a boolean if a field has been set.
+func (o *CreateVolume) HasBackend() bool {
+	if o != nil && !IsNil(o.Backend) {
+		return true
+	}
+
+	return false
+}
+
+// SetBackend gets a reference to the given string and assigns it to the Backend field.
+func (o *CreateVolume) SetBackend(v string) {
+	o.Backend = &v
+}
+
+// GetSizeGiB returns the SizeGiB field value if set, zero value otherwise.
+func (o *CreateVolume) GetSizeGiB() float32 {
+	if o == nil || IsNil(o.SizeGiB) {
+		var ret float32
+		return ret
+	}
+	return *o.SizeGiB
+}
+
+// GetSizeGiBOk returns a tuple with the SizeGiB field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *CreateVolume) GetSizeGiBOk() (*float32, bool) {
+	if o == nil || IsNil(o.SizeGiB) {
+		return nil, false
+	}
+	return o.SizeGiB, true
+}
+
+// HasSizeGiB returns a boolean if a field has been set.
+func (o *CreateVolume) HasSizeGiB() bool {
+	if o != nil && !IsNil(o.SizeGiB) {
+		return true
+	}
+
+	return false
+}
+
+// SetSizeGiB gets a reference to the given float32 and assigns it to the SizeGiB field.
+func (o *CreateVolume) SetSizeGiB(v float32) {
+	o.SizeGiB = &v
+}
+
 func (o CreateVolume) MarshalJSON() ([]byte, error) {
 	toSerialize,err := o.ToMap()
 	if err != nil {
@@ -80,6 +154,12 @@ func (o CreateVolume) MarshalJSON() ([]byte, error) {
 func (o CreateVolume) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["name"] = o.Name
+	if !IsNil(o.Backend) {
+		toSerialize["backend"] = o.Backend
+	}
+	if !IsNil(o.SizeGiB) {
+		toSerialize["sizeGiB"] = o.SizeGiB
+	}
 
 	for key, value := range o.AdditionalProperties {
 		toSerialize[key] = value
@@ -124,6 +204,8 @@ func (o *CreateVolume) UnmarshalJSON(data []byte) (err error) {
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "name")
+		delete(additionalProperties, "backend")
+		delete(additionalProperties, "sizeGiB")
 		o.AdditionalProperties = additionalProperties
 	}
 
