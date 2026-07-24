@@ -6,9 +6,19 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/boxlite-ai/runner/cmd/runner/config"
 )
 
 func TestEBSVolumeClaimIsSingleWriter(t *testing.T) {
+	t.Setenv("BOXLITE_API_URL", "http://127.0.0.1")
+	t.Setenv("BOXLITE_RUNNER_TOKEN", "test-token")
+	t.Setenv("RUNNER_DOMAIN", "127.0.0.1")
+	t.Setenv("ENVIRONMENT", "development")
+	if _, err := config.GetConfig(); err != nil {
+		t.Fatalf("initialize runner config: %v", err)
+	}
+
 	volumeID := fmt.Sprintf("test-%d", time.Now().UnixNano())
 	t.Cleanup(func() {
 		_ = os.Remove(filepath.Join(getVolumeMountRecordDir(), volumeID+".owner"))
