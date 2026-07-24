@@ -124,3 +124,25 @@ describe('CreateBoxDto network validation', () => {
     expect(JSON.stringify(errors)).toContain('isIn')
   })
 })
+
+describe('CreateBoxDto managed volumes', () => {
+  it('accepts read-write managed volume mounts', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        volumes: [{ host_path: 'volume-123', guest_path: '/data', read_only: false }],
+      }),
+    )
+
+    expect(errors).toHaveLength(0)
+  })
+
+  it('rejects read-only cloud volume mounts until the backend supports them', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        volumes: [{ host_path: 'volume-123', guest_path: '/data', read_only: true }],
+      }),
+    )
+
+    expect(errors).not.toHaveLength(0)
+  })
+})

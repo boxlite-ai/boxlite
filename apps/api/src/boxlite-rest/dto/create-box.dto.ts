@@ -45,6 +45,18 @@ export class NetworkSpecDto {
   allow_net?: string[]
 }
 
+export class VolumeSpecDto {
+  @IsString()
+  host_path: string
+
+  @IsString()
+  guest_path: string
+
+  @IsOptional()
+  @IsIn([false])
+  read_only?: false
+}
+
 export class CreateBoxDto {
   @IsOptional()
   @IsString()
@@ -114,4 +126,10 @@ export class CreateBoxDto {
   @ValidateNested()
   @Type(() => NetworkSpecDto)
   network?: NetworkSpecDto
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => VolumeSpecDto)
+  volumes?: VolumeSpecDto[]
 }
